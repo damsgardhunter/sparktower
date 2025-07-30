@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+@keyframes boltFillFade {
+  0% {
+    fill: white;
+  }
+  50% {
+    fill: #38bdf8; /* Light blue */
+  }
+  100% {
+    fill: #22c55e; /* Green */
+  }
+}
+
+.bolt-fill-fade {
+  animation: boltFillFade 2.5s ease-in-out forwards;
+}
+
+@keyframes streamWeave {
+  0% {
+    stroke-dasharray: 1000;
+    stroke-dashoffset: 1000;
+    opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+}
+
+#data-stream {
+  stroke-dasharray: 1000;
+  stroke-dashoffset: 1000;
+}
