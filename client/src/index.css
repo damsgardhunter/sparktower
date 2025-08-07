@@ -3,35 +3,58 @@
 @tailwind utilities;
 
 
-@keyframes boltFillFade {
-  0% {
-    fill: white;
-  }
-  50% {
-    fill: #38bdf8; /* Light blue */
-  }
-  100% {
-    fill: #22c55e; /* Green */
-  }
-}
-
 .bolt-fill-fade {
   animation: boltFillFade 2.5s ease-in-out forwards;
 }
 
 @keyframes streamWeave {
   0% {
-    stroke-dasharray: 1000;
-    stroke-dashoffset: 1000;
+    stroke-dasharray: 1350;
+    stroke-dashoffset: 1350;
     opacity: 1;
   }
   100% {
+    stroke-dasharray: 1325;
     stroke-dashoffset: 0;
     opacity: 1;
   }
 }
 
 #data-stream {
-  stroke-dasharray: 1000;
-  stroke-dashoffset: 1000;
+  stroke-dasharray: 1350;
+  stroke-dashoffset: 1350;
+}
+
+@keyframes signupCharge {
+  0% { width: 0; }
+  50% { width: 100%; }
+  100% { width: 0; }
+}
+
+.signup-charge {
+  position: relative;
+  overflow: hidden;
+  transition: filter 10s ease-in-out;
+  will-change: filter;
+}
+.signup-charge::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 100%;
+  background-color: #00F0AA;
+  z-index: 0;
+  animation: signupCharge 14s infinite;
+  animation-delay: 6900ms;
+}
+.signup-charge span {
+  position: relative;
+  z-index: 1;
+}
+
+.signup-charge.charged {
+  filter: grayscale(0%);
+  transition-delay: 10s; /* Delay after class is added */
 }
