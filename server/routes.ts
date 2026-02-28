@@ -16,6 +16,32 @@ const openai = new OpenAI({
   baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
 });
 
+function generateFallbackScenes(style: string): { prompt: string; caption: string; imageUrl: string }[] {
+  const colors: Record<string, { bg1: string; bg2: string; accent: string; text: string }> = {
+    professional: { bg1: "#1a1a2e", bg2: "#16213e", accent: "#4a90d9", text: "#ffffff" },
+    futuristic: { bg1: "#0a0a0a", bg2: "#1a0033", accent: "#00fff5", text: "#ffffff" },
+    funny: { bg1: "#FFE066", bg2: "#FF6B35", accent: "#FF1493", text: "#333333" },
+    cartoon: { bg1: "#87CEEB", bg2: "#98FB98", accent: "#FF6347", text: "#333333" },
+  };
+  const c = colors[style] || colors.professional;
+  const captions = ["Welcome to the Project", "Core Features", "Technical Architecture", "User Experience", "Join Us Today"];
+  const icons = [
+    `<circle cx="640" cy="300" r="80" fill="${c.accent}" opacity="0.3"/><circle cx="640" cy="300" r="50" fill="${c.accent}" opacity="0.6"/><polygon points="620,275 620,325 670,300" fill="${c.text}"/>`,
+    `<rect x="540" y="250" width="60" height="120" rx="5" fill="${c.accent}" opacity="0.7"/><rect x="610" y="210" width="60" height="160" rx="5" fill="${c.accent}" opacity="0.85"/><rect x="680" y="280" width="60" height="90" rx="5" fill="${c.accent}" opacity="0.55"/>`,
+    `<circle cx="640" cy="300" r="60" fill="none" stroke="${c.accent}" stroke-width="3"/><circle cx="540" cy="250" r="30" fill="none" stroke="${c.accent}" stroke-width="2" opacity="0.6"/><circle cx="740" cy="250" r="30" fill="none" stroke="${c.accent}" stroke-width="2" opacity="0.6"/><line x1="600" y1="280" x2="565" y2="265" stroke="${c.accent}" stroke-width="2" opacity="0.5"/><line x1="680" y1="280" x2="715" y2="265" stroke="${c.accent}" stroke-width="2" opacity="0.5"/>`,
+    `<rect x="570" y="240" width="140" height="100" rx="10" fill="none" stroke="${c.accent}" stroke-width="3"/><circle cx="610" cy="275" r="8" fill="${c.accent}"/><rect x="630" y="270" width="60" height="4" rx="2" fill="${c.accent}" opacity="0.5"/><rect x="630" y="282" width="40" height="4" rx="2" fill="${c.accent}" opacity="0.3"/>`,
+    `<polygon points="640,240 680,310 600,310" fill="${c.accent}" opacity="0.8"/><rect x="615" y="320" width="50" height="6" rx="3" fill="${c.accent}" opacity="0.4"/>`,
+  ];
+  return captions.map((caption, i) => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720"><defs><linearGradient id="bg${i}" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="${c.bg1}"/><stop offset="100%" stop-color="${c.bg2}"/></linearGradient></defs><rect width="1280" height="720" fill="url(#bg${i})"/>${icons[i]}<text x="640" y="440" text-anchor="middle" fill="${c.text}" font-size="36" font-family="sans-serif" font-weight="bold">${caption}</text><text x="640" y="480" text-anchor="middle" fill="${c.text}" font-size="18" font-family="sans-serif" opacity="0.6">Scene ${i + 1} of 5</text></svg>`;
+    return {
+      prompt: caption,
+      caption,
+      imageUrl: `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`,
+    };
+  });
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -357,7 +383,15 @@ Only include fields you have enough info to fill. Start empty if needed.`;
         cartoon: "animated cartoon style, colorful, illustrated, hand-drawn feel, Pixar-like, vibrant",
       };
 
+      const svgStyleGuides: Record<string, string> = {
+        professional: "Use a dark navy (#1a1a2e) to deep blue (#16213e) gradient background. Use clean geometric shapes, thin lines, and a muted color palette of blues, grays, and whites. Add subtle grid patterns. Text in white or light gray. Modern sans-serif feel. Include simple data visualization elements like bars or circles.",
+        futuristic: "Use a black (#0a0a0a) to dark purple (#1a0033) gradient background. Use neon cyan (#00fff5), electric purple (#bf00ff), and hot pink (#ff0066) for accents. Add glowing effects with semi-transparent shapes, circuit board patterns, hexagonal grids, and scan lines. Text with glow effects.",
+        funny: "Use a bright warm gradient background (yellow #FFE066 to orange #FF6B35 to pink #FF1493). Use bold, rounded shapes in saturated primary colors. Add fun elements like stars, squiggles, speech bubbles, and bouncy shapes. Playful and energetic layout with thick outlines.",
+        cartoon: "Use a sky blue (#87CEEB) to mint green (#98FB98) gradient background. Use bold outlines (3-4px), flat bright colors, and rounded shapes. Include cloud-like shapes, stars, and simple character silhouettes. Vibrant palette with red, blue, yellow, green accents. Hand-drawn feel.",
+      };
+
       const styleDesc = styleModifiers[style] || styleModifiers.professional;
+      const svgGuide = svgStyleGuides[style] || svgStyleGuides.professional;
 
       const storyboardResponse = await openai.chat.completions.create({
         model: "gpt-5.2",
@@ -377,17 +411,32 @@ Only include fields you have enough info to fill. Start empty if needed.`;
         messages: [
           {
             role: "system",
-            content: `You are an AI that extracts scene descriptions from storyboards. Given a storyboard, extract exactly 5 scenes. For each scene, provide:
-1. A concise image generation prompt (2-3 sentences describing the visual scene in detail, incorporating the style: ${styleDesc})
-2. A short caption (1 sentence summary for display)
+            content: `You are an AI that extracts scene descriptions from storyboards and creates SVG illustrations. Given a storyboard, extract exactly 5 scenes.
 
-Respond ONLY with valid JSON in this exact format:
+For each scene, provide:
+1. "caption": A short 1-sentence summary for display
+2. "svg": A complete, valid SVG image (viewBox="0 0 1280 720") that visually represents the scene.
+
+SVG Style Guide: ${svgGuide}
+
+SVG Rules:
+- viewBox must be "0 0 1280 720" (16:9 widescreen)
+- Include a full background rectangle covering the entire viewBox
+- Use at least 8-12 visual elements (shapes, paths, text) per scene
+- Include a short text overlay (1-3 words) relevant to the scene content
+- Make each scene visually distinct and interesting
+- Use proper SVG elements: rect, circle, ellipse, path, polygon, text, line, g, defs, linearGradient, radialGradient, filter
+- Do NOT use <image>, <foreignObject>, or external references
+- Keep SVG self-contained and valid XML
+- Ensure all colors use hex values
+
+Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
 [
-  {"prompt": "detailed image description...", "caption": "Short caption text"},
-  {"prompt": "detailed image description...", "caption": "Short caption text"},
-  {"prompt": "detailed image description...", "caption": "Short caption text"},
-  {"prompt": "detailed image description...", "caption": "Short caption text"},
-  {"prompt": "detailed image description...", "caption": "Short caption text"}
+  {"caption": "Short caption", "svg": "<svg xmlns=\\"http://www.w3.org/2000/svg\\" viewBox=\\"0 0 1280 720\\">...</svg>"},
+  {"caption": "Short caption", "svg": "<svg xmlns=\\"http://www.w3.org/2000/svg\\" viewBox=\\"0 0 1280 720\\">...</svg>"},
+  {"caption": "Short caption", "svg": "<svg xmlns=\\"http://www.w3.org/2000/svg\\" viewBox=\\"0 0 1280 720\\">...</svg>"},
+  {"caption": "Short caption", "svg": "<svg xmlns=\\"http://www.w3.org/2000/svg\\" viewBox=\\"0 0 1280 720\\">...</svg>"},
+  {"caption": "Short caption", "svg": "<svg xmlns=\\"http://www.w3.org/2000/svg\\" viewBox=\\"0 0 1280 720\\">...</svg>"}
 ]`
           },
           { role: "user", content: storyboard }
@@ -399,21 +448,24 @@ Respond ONLY with valid JSON in this exact format:
         const rawContent = scenesResponse.choices[0].message.content || "[]";
         const jsonMatch = rawContent.match(/\[[\s\S]*\]/);
         const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : rawContent);
-        scenes = parsed.slice(0, 5).map((s: any) => ({
-          prompt: s.prompt || "",
-          caption: s.caption || "",
-          imageUrl: "",
-        }));
+        scenes = parsed.slice(0, 5).map((s: any) => {
+          let svgContent = s.svg || "";
+          if (svgContent && !svgContent.includes("xmlns")) {
+            svgContent = svgContent.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
+          }
+          const dataUri = svgContent
+            ? `data:image/svg+xml;base64,${Buffer.from(svgContent).toString("base64")}`
+            : "";
+          return {
+            prompt: s.prompt || s.caption || "",
+            caption: s.caption || "",
+            imageUrl: dataUri,
+          };
+        });
         if (scenes.length === 0) throw new Error("Empty scenes array");
       } catch (parseErr) {
         console.error("Error parsing scenes:", parseErr);
-        scenes = [
-          { prompt: "Opening scene for the project showcase", caption: "Welcome to the project", imageUrl: "" },
-          { prompt: "Key features demonstration", caption: "Core features overview", imageUrl: "" },
-          { prompt: "Technical architecture overview", caption: "Built with modern tech", imageUrl: "" },
-          { prompt: "User experience showcase", caption: "Designed for users", imageUrl: "" },
-          { prompt: "Closing scene with call to action", caption: "Join us today", imageUrl: "" },
-        ];
+        scenes = generateFallbackScenes(style);
       }
 
       res.json({
