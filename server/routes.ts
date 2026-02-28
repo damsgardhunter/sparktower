@@ -9,8 +9,18 @@ import { registerObjectStorageRoutes, ObjectStorageService } from "./replit_inte
 import { insertUserProfileSchema, insertProjectSchema, insertDonationSchema, insertContestSchema } from "@shared/schema";
 import { z } from "zod";
 import OpenAI from "openai";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
+import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
+
+function getFeaturesForTier(tier: string): string[] {
+  const features: Record<string, string[]> = {
+    spark_pro: ["100 AI credits/month", "Create public projects", "Priority support", "Community access"],
+    spark_business: ["250 AI credits/month", "Private projects", "Priority support", "Advanced analytics"],
+    spark_unlimited: ["Unlimited AI credits", "Private projects", "AI roadmap generation", "Premium support", "All features"],
+  };
+  return features[tier] || ["20 AI credits/month", "Create public projects", "Join contests", "Community access"];
+}
 
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
@@ -73,6 +83,13 @@ export async function registerRoutes(
   // General AI Chat for project creation (no project ID needed yet)
   app.post("/api/chat", isAuthenticated, async (req: any, res) => {
     try {
+      const userId = req.user.claims.sub;
+      const hasCredits = await storage.checkCredits(userId, 1);
+      if (!hasCredits) {
+        const sub = await storage.getUserSubscription(userId);
+        return res.status(403).json({ message: "Insufficient credits", creditsRemaining: sub.creditsRemaining, tier: sub.tier });
+      }
+
       const { message, history = [] } = req.body;
       if (!message) return res.status(400).json({ message: "Message is required" });
 
@@ -149,6 +166,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
         } catch {}
       }
 
+      await storage.deductCredits(userId, 1);
       res.json({ reply, projectUpdates });
     } catch (error) {
       console.error("Chat error:", error);
@@ -224,7 +242,14 @@ Only include fields you have enough info to fill. Start empty if needed.`;
 
   app.post("/api/projects/:id/chat", isAuthenticated, async (req: any, res) => {
     const projectId = req.params.id;
+    const userId = req.user.claims.sub;
     const { message } = req.body;
+
+    const hasCredits = await storage.checkCredits(userId, 1);
+    if (!hasCredits) {
+      const sub = await storage.getUserSubscription(userId);
+      return res.status(403).json({ message: "Insufficient credits", creditsRemaining: sub.creditsRemaining, tier: sub.tier });
+    }
     
     const project = await storage.getProject(projectId);
     if (!project) return res.status(404).json({ message: "Project not found" });
@@ -248,6 +273,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     const aiContent = response.choices[0].message.content || "I'm sorry, I couldn't generate a response.";
     const aiMessage = await storage.addProjectChatMessage(projectId, "assistant", aiContent);
     
+    await storage.deductCredits(userId, 1);
     res.json(aiMessage);
   });
 
@@ -370,6 +396,13 @@ Only include fields you have enough info to fill. Start empty if needed.`;
 
   app.post("/api/projects/:id/generate-video", isAuthenticated, async (req: any, res) => {
     try {
+      const userId = req.user.claims.sub;
+      const hasCredits = await storage.checkCredits(userId, 5);
+      if (!hasCredits) {
+        const sub = await storage.getUserSubscription(userId);
+        return res.status(403).json({ message: "Insufficient credits. Video generation costs 5 credits.", creditsRemaining: sub.creditsRemaining, tier: sub.tier });
+      }
+
       const project = await storage.getProject(req.params.id);
       if (!project) return res.status(404).json({ message: "Project not found" });
       if (project.ownerId !== req.user.claims.sub) return res.status(403).json({ message: "Unauthorized" });
@@ -513,6 +546,8 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
         console.error("Object storage upload failed (non-fatal):", storageErr);
       }
 
+      await storage.deductCredits(userId, 5);
+
       res.json({
         storyboard,
         scenes,
@@ -608,6 +643,186 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
     } catch (error) {
       console.error("Error submitting to contest:", error);
       res.status(500).json({ message: "Failed to submit" });
+    }
+  });
+
+  // Subscription & Stripe routes
+  app.get("/api/subscription", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const sub = await storage.getUserSubscription(userId);
+      res.json(sub);
+    } catch (error) {
+      console.error("Error fetching subscription:", error);
+      res.status(500).json({ message: "Failed to fetch subscription" });
+    }
+  });
+
+  app.get("/api/plans", async (_req, res) => {
+    try {
+      const result = await db.execute(
+        sql`SELECT p.id as product_id, p.name, p.description, p.metadata,
+                   pr.id as price_id, pr.unit_amount, pr.currency, pr.recurring
+            FROM stripe.products p
+            JOIN stripe.prices pr ON pr.product = p.id AND pr.active = true
+            WHERE p.active = true
+            ORDER BY pr.unit_amount ASC`
+      );
+
+      const plans = [
+        {
+          id: "free",
+          name: "Free",
+          description: "Get started with 20 AI credits per month",
+          price: 0,
+          priceId: null,
+          features: ["20 AI credits/month", "Create public projects", "Join contests", "Community access"],
+          tier: "free",
+          credits: 20,
+        },
+      ];
+
+      for (const row of result.rows as any[]) {
+        const metadata = typeof row.metadata === "string" ? JSON.parse(row.metadata) : row.metadata || {};
+        plans.push({
+          id: row.product_id,
+          name: row.name,
+          description: row.description || "",
+          price: row.unit_amount / 100,
+          priceId: row.price_id,
+          features: getFeaturesForTier(metadata.tier),
+          tier: metadata.tier || "free",
+          credits: metadata.credits === "unlimited" ? -1 : parseInt(metadata.credits || "0"),
+        });
+      }
+
+      res.json(plans);
+    } catch (error) {
+      console.error("Error fetching plans:", error);
+      const fallbackPlans = [
+        { id: "free", name: "Free", description: "Get started with 20 AI credits per month", price: 0, priceId: null, features: ["20 AI credits/month", "Create public projects", "Join contests", "Community access"], tier: "free", credits: 20 },
+        { id: "spark_pro", name: "Spark Pro", description: "100 AI credits/month for power users", price: 4.99, priceId: null, features: ["100 AI credits/month", "Create public projects", "Priority support", "Community access"], tier: "spark_pro", credits: 100 },
+        { id: "spark_business", name: "Spark Business", description: "250 AI credits/month + private projects", price: 9.99, priceId: null, features: ["250 AI credits/month", "Private projects", "Priority support", "Advanced analytics"], tier: "spark_business", credits: 250 },
+        { id: "spark_unlimited", name: "Spark Unlimited", description: "Unlimited AI credits + all features", price: 29.99, priceId: null, features: ["Unlimited AI credits", "Private projects", "AI roadmap generation", "Premium support", "All features"], tier: "spark_unlimited", credits: -1 },
+      ];
+      res.json(fallbackPlans);
+    }
+  });
+
+  app.post("/api/checkout", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { priceId } = req.body;
+      if (!priceId) return res.status(400).json({ message: "priceId is required" });
+
+      const priceCheck = await db.execute(
+        sql`SELECT pr.id FROM stripe.prices pr
+            JOIN stripe.products p ON pr.product = p.id
+            WHERE pr.id = ${priceId} AND pr.active = true AND p.active = true`
+      );
+      if ((priceCheck.rows as any[]).length === 0) {
+        return res.status(400).json({ message: "Invalid price" });
+      }
+
+      const stripe = await getUncachableStripeClient();
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ message: "User not found" });
+
+      let customerId = user.stripeCustomerId;
+      if (!customerId) {
+        const customer = await stripe.customers.create({
+          email: user.email || undefined,
+          metadata: { userId },
+        });
+        await storage.updateUserStripeInfo(userId, { stripeCustomerId: customer.id });
+        customerId = customer.id;
+      }
+
+      const session = await stripe.checkout.sessions.create({
+        customer: customerId,
+        payment_method_types: ["card"],
+        line_items: [{ price: priceId, quantity: 1 }],
+        mode: "subscription",
+        success_url: `${req.protocol}://${req.get("host")}/pricing?success=true`,
+        cancel_url: `${req.protocol}://${req.get("host")}/pricing?canceled=true`,
+        metadata: { userId },
+      });
+
+      res.json({ url: session.url });
+    } catch (error) {
+      console.error("Checkout error:", error);
+      res.status(500).json({ message: "Failed to create checkout session" });
+    }
+  });
+
+  app.post("/api/billing-portal", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const user = await storage.getUser(userId);
+      if (!user?.stripeCustomerId) {
+        return res.status(400).json({ message: "No active subscription" });
+      }
+
+      const stripe = await getUncachableStripeClient();
+      const session = await stripe.billingPortal.sessions.create({
+        customer: user.stripeCustomerId,
+        return_url: `${req.protocol}://${req.get("host")}/pricing`,
+      });
+
+      res.json({ url: session.url });
+    } catch (error) {
+      console.error("Billing portal error:", error);
+      res.status(500).json({ message: "Failed to create portal session" });
+    }
+  });
+
+  app.get("/api/stripe/publishable-key", async (_req, res) => {
+    try {
+      const key = await getStripePublishableKey();
+      res.json({ publishableKey: key });
+    } catch (error) {
+      console.error("Error getting publishable key:", error);
+      res.status(500).json({ message: "Failed to get publishable key" });
+    }
+  });
+
+  app.post("/api/stripe/sync-subscription", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const user = await storage.getUser(userId);
+      if (!user?.stripeCustomerId) {
+        return res.json({ tier: "free" });
+      }
+
+      const stripe = await getUncachableStripeClient();
+      const subscriptions = await stripe.subscriptions.list({
+        customer: user.stripeCustomerId,
+        status: "active",
+        limit: 1,
+      });
+
+      if (subscriptions.data.length === 0) {
+        await storage.updateUserStripeInfo(userId, { subscriptionTier: "free", stripeSubscriptionId: undefined });
+        return res.json({ tier: "free" });
+      }
+
+      const sub = subscriptions.data[0];
+      const priceId = sub.items.data[0]?.price?.id;
+      if (priceId) {
+        const price = await stripe.prices.retrieve(priceId);
+        const metadata = price.metadata || {};
+        const tier = metadata.tier || "free";
+        await storage.updateUserStripeInfo(userId, {
+          subscriptionTier: tier,
+          stripeSubscriptionId: sub.id,
+        });
+        return res.json({ tier });
+      }
+
+      res.json({ tier: user.subscriptionTier || "free" });
+    } catch (error) {
+      console.error("Sync subscription error:", error);
+      res.status(500).json({ message: "Failed to sync subscription" });
     }
   });
 

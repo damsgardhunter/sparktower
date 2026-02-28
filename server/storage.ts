@@ -87,6 +87,13 @@ export interface IStorage {
   getContestParticipants(contestId: string): Promise<(ContestParticipant & { user: User; profile?: UserProfile })[]>;
   submitToContest(contestId: string, userId: string, submissionUrl: string, submissionNote?: string): Promise<ContestParticipant>;
   isContestParticipant(contestId: string, userId: string): Promise<boolean>;
+
+  // Subscription & Credits
+  getUserSubscription(userId: string): Promise<{ tier: string; creditsUsed: number; creditsLimit: number; creditsRemaining: number; stripeCustomerId: string | null; stripeSubscriptionId: string | null }>;
+  checkCredits(userId: string, amount: number): Promise<boolean>;
+  deductCredits(userId: string, amount: number): Promise<boolean>;
+  resetCreditsIfNeeded(userId: string): Promise<void>;
+  updateUserStripeInfo(userId: string, data: { stripeCustomerId?: string; stripeSubscriptionId?: string; subscriptionTier?: string }): Promise<User>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -399,6 +406,68 @@ export class DatabaseStorage implements IStorage {
   async isContestParticipant(contestId: string, userId: string): Promise<boolean> {
     const [p] = await db.select().from(contestParticipants).where(and(eq(contestParticipants.contestId, contestId), eq(contestParticipants.userId, userId)));
     return !!p;
+  }
+
+  private getCreditLimit(tier: string): number {
+    const limits: Record<string, number> = {
+      free: 20,
+      spark_pro: 100,
+      spark_business: 250,
+      spark_unlimited: Infinity,
+    };
+    return limits[tier] || 20;
+  }
+
+  async resetCreditsIfNeeded(userId: string): Promise<void> {
+    const user = await this.getUser(userId);
+    if (!user) return;
+
+    const now = new Date();
+    const resetAt = user.creditsResetAt;
+
+    if (!resetAt || now.getMonth() !== resetAt.getMonth() || now.getFullYear() !== resetAt.getFullYear()) {
+      await db.update(users).set({ creditsUsed: 0, creditsResetAt: now }).where(eq(users.id, userId));
+    }
+  }
+
+  async getUserSubscription(userId: string) {
+    await this.resetCreditsIfNeeded(userId);
+    const user = await this.getUser(userId);
+    if (!user) {
+      return { tier: "free", creditsUsed: 0, creditsLimit: 20, creditsRemaining: 20, stripeCustomerId: null, stripeSubscriptionId: null };
+    }
+    const tier = user.subscriptionTier || "free";
+    const creditsLimit = this.getCreditLimit(tier);
+    const creditsUsed = user.creditsUsed || 0;
+    const creditsRemaining = creditsLimit === Infinity ? Infinity : Math.max(0, creditsLimit - creditsUsed);
+    return {
+      tier,
+      creditsUsed,
+      creditsLimit,
+      creditsRemaining,
+      stripeCustomerId: user.stripeCustomerId,
+      stripeSubscriptionId: user.stripeSubscriptionId,
+    };
+  }
+
+  async checkCredits(userId: string, amount: number): Promise<boolean> {
+    const sub = await this.getUserSubscription(userId);
+    if (sub.tier === "spark_unlimited") return true;
+    return sub.creditsRemaining >= amount;
+  }
+
+  async deductCredits(userId: string, amount: number): Promise<boolean> {
+    const canUse = await this.checkCredits(userId, amount);
+    if (!canUse) return false;
+    const sub = await this.getUserSubscription(userId);
+    if (sub.tier === "spark_unlimited") return true;
+    await db.update(users).set({ creditsUsed: sql`${users.creditsUsed} + ${amount}` }).where(eq(users.id, userId));
+    return true;
+  }
+
+  async updateUserStripeInfo(userId: string, data: { stripeCustomerId?: string; stripeSubscriptionId?: string; subscriptionTier?: string }): Promise<User> {
+    const [user] = await db.update(users).set(data).where(eq(users.id, userId)).returning();
+    return user;
   }
 }
 

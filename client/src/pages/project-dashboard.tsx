@@ -115,9 +115,18 @@ export default function ProjectDashboard() {
         queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
       }
     },
-    onError: () => {
+    onError: (error: any) => {
       setGenerationStatus("");
-      toast({ title: "Generation failed", description: "Could not generate video storyboard.", variant: "destructive" });
+      const errorMsg = error.message || "";
+      if (errorMsg.includes("403") || errorMsg.includes("Insufficient credits")) {
+        toast({
+          title: "Insufficient credits",
+          description: "Video generation costs 5 credits. Upgrade your plan for more!",
+          variant: "destructive",
+        });
+      } else {
+        toast({ title: "Generation failed", description: "Could not generate video storyboard.", variant: "destructive" });
+      }
     },
   });
 

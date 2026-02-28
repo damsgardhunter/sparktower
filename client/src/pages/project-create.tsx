@@ -226,6 +226,23 @@ export default function ProjectCreate() {
       if (data.projectUpdates) {
         setProjectData((prev) => ({ ...prev, ...data.projectUpdates }));
       }
+      queryClient.invalidateQueries({ queryKey: ["/api/subscription"] });
+    },
+    onError: (error: any) => {
+      const errorMsg = error.message || "";
+      if (errorMsg.includes("403") || errorMsg.includes("Insufficient credits")) {
+        toast({
+          title: "Out of AI credits",
+          description: "You've used all your AI credits for this month. Upgrade your plan for more!",
+          variant: "destructive",
+        });
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: "It looks like you've run out of AI credits for this month. Head to the **Pricing** page to upgrade your plan and continue our conversation! 🚀" },
+        ]);
+      } else {
+        toast({ title: "Chat error", description: "Failed to send message. Please try again.", variant: "destructive" });
+      }
     },
   });
 

@@ -20,6 +20,7 @@ import Discover from "@/pages/discover";
 import Onboarding from "@/pages/onboarding";
 import Profile from "@/pages/profile";
 import Contests from "@/pages/contests";
+import Pricing from "@/pages/pricing";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "@tanstack/react-query";
 import type { UserProfile } from "@shared/schema";
@@ -87,6 +88,7 @@ function Router() {
             <Route path="/leaderboard" component={Leaderboard} />
             <Route path="/discover" component={Discover} />
             <Route path="/contests" component={Contests} />
+            <Route path="/pricing" component={Pricing} />
             <Route component={NotFound} />
           </Switch>
         </main>
