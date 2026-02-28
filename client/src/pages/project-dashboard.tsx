@@ -9,6 +9,7 @@ import { UserAvatar } from "@/components/user-avatar";
 import { SkillBadge } from "@/components/skill-badge";
 import { DonationButton } from "@/components/donation-button";
 import { MediaGallery } from "@/components/media-gallery";
+import { StoryboardSlideshow } from "@/components/storyboard-slideshow";
 import {
   Dialog,
   DialogContent,
@@ -28,12 +29,29 @@ import {
   MessageSquare,
   Video,
   Sparkles,
+  Briefcase,
+  Zap,
+  Laugh,
+  Palette,
 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import type { Project, ProjectMember, UserProfile, User } from "@shared/schema";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
+
+type StyleOption = "professional" | "futuristic" | "funny" | "cartoon";
+
+const STYLE_OPTIONS: { value: StyleOption; label: string; description: string; icon: typeof Briefcase; gradient: string }[] = [
+  { value: "professional", label: "Professional", description: "Clean, corporate, modern", icon: Briefcase, gradient: "from-slate-700 to-blue-900" },
+  { value: "futuristic", label: "Futuristic", description: "Cyberpunk, neon, sci-fi", icon: Zap, gradient: "from-purple-800 to-cyan-900" },
+  { value: "funny", label: "Funny", description: "Playful, bright, comic", icon: Laugh, gradient: "from-yellow-500 to-pink-500" },
+  { value: "cartoon", label: "Cartoon", description: "Illustrated, colorful", icon: Palette, gradient: "from-green-400 to-purple-500" },
+];
+
+interface SceneData {
+  prompt: string;
+  caption: string;
+  imageUrl: string;
+}
 
 export default function ProjectDashboard() {
   const [, params] = useRoute("/projects/:id");
@@ -43,8 +61,14 @@ export default function ProjectDashboard() {
   const projectId = params?.id;
   const [videoModalOpen, setVideoModalOpen] = useState(false);
   const [videoPrompt, setVideoPrompt] = useState("");
-  const [storyboard, setStoryboard] = useState<string | null>(null);
-  const [storyboardOpen, setStoryboardOpen] = useState(false);
+  const [selectedStyle, setSelectedStyle] = useState<StyleOption>("professional");
+  const [generationStatus, setGenerationStatus] = useState("");
+  const [slideshowData, setSlideshowData] = useState<{
+    scenes: SceneData[];
+    storyboard: string;
+    style: string;
+  } | null>(null);
+  const [slideshowOpen, setSlideshowOpen] = useState(false);
 
   const { data: project, isLoading: projectLoading } = useQuery<Project>({
     queryKey: ["/api/projects", projectId],
@@ -67,17 +91,25 @@ export default function ProjectDashboard() {
   });
 
   const videoMutation = useMutation({
-    mutationFn: async (prompt: string) => {
-      const res = await apiRequest("POST", `/api/projects/${projectId}/generate-video`, { prompt });
+    mutationFn: async ({ prompt, style }: { prompt: string; style: string }) => {
+      setGenerationStatus("Generating storyboard...");
+      const res = await apiRequest("POST", `/api/projects/${projectId}/generate-video`, { prompt, style });
+      setGenerationStatus("Processing scenes...");
       return res.json();
     },
     onSuccess: (data) => {
-      setStoryboard(data.storyboard);
+      setSlideshowData({
+        scenes: data.scenes || [],
+        storyboard: data.storyboard || "",
+        style: data.style || selectedStyle,
+      });
       setVideoModalOpen(false);
-      setStoryboardOpen(true);
-      toast({ title: "Storyboard Generated", description: "AI video storyboard has been created." });
+      setSlideshowOpen(true);
+      setGenerationStatus("");
+      toast({ title: "Storyboard Generated", description: `${data.scenes?.length || 0} scenes created in ${selectedStyle} style.` });
     },
     onError: () => {
+      setGenerationStatus("");
       toast({ title: "Generation failed", description: "Could not generate video storyboard.", variant: "destructive" });
     },
   });
@@ -136,12 +168,12 @@ export default function ProjectDashboard() {
             <div className="flex items-center justify-between">
               <h2 className="text-xl font-semibold">Media Gallery</h2>
               <div className="flex items-center gap-2">
-              {storyboard && (
+              {slideshowData && (
                 <Button
                   variant="outline"
                   size="sm"
                   className="gap-2"
-                  onClick={() => setStoryboardOpen(true)}
+                  onClick={() => setSlideshowOpen(true)}
                   data-testid="button-view-storyboard"
                 >
                   <Sparkles className="h-4 w-4" />
@@ -277,38 +309,71 @@ export default function ProjectDashboard() {
       </div>
 
       <Dialog open={videoModalOpen} onOpenChange={setVideoModalOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Sparkles className="h-5 w-5 text-primary" />
               Generate AI Showcase Video
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-4 py-2">
-            <p className="text-sm text-muted-foreground">
-              Describe the showcase video you'd like to create for your project. Nova will generate a detailed storyboard.
-            </p>
-            <Textarea
-              value={videoPrompt}
-              onChange={(e) => setVideoPrompt(e.target.value)}
-              placeholder="Describe your video..."
-              className="min-h-[120px]"
-              data-testid="textarea-video-prompt"
-            />
+          <div className="space-y-5 py-2">
+            <div className="space-y-3">
+              <label className="text-sm font-medium">Choose a visual style</label>
+              <div className="grid grid-cols-2 gap-3">
+                {STYLE_OPTIONS.map((opt) => {
+                  const Icon = opt.icon;
+                  const isSelected = selectedStyle === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      onClick={() => setSelectedStyle(opt.value)}
+                      className={`relative flex flex-col items-center gap-2 p-4 rounded-md border-2 transition-all text-left ${
+                        isSelected
+                          ? "border-primary bg-primary/5 shadow-sm"
+                          : "border-border hover:border-primary/40 bg-background"
+                      }`}
+                      data-testid={`button-style-${opt.value}`}
+                    >
+                      <div className={`w-10 h-10 rounded-full bg-gradient-to-br ${opt.gradient} flex items-center justify-center`}>
+                        <Icon className="h-5 w-5 text-white" />
+                      </div>
+                      <div className="text-center">
+                        <p className="text-sm font-medium">{opt.label}</p>
+                        <p className="text-xs text-muted-foreground">{opt.description}</p>
+                      </div>
+                      {isSelected && (
+                        <div className="absolute top-2 right-2 w-2 h-2 rounded-full bg-primary" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Describe your video</label>
+              <Textarea
+                value={videoPrompt}
+                onChange={(e) => setVideoPrompt(e.target.value)}
+                placeholder="Describe the showcase video you'd like to create..."
+                className="min-h-[100px]"
+                data-testid="textarea-video-prompt"
+              />
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setVideoModalOpen(false)} data-testid="button-cancel-video">
               Cancel
             </Button>
             <Button
-              onClick={() => videoMutation.mutate(videoPrompt)}
+              onClick={() => videoMutation.mutate({ prompt: videoPrompt, style: selectedStyle })}
               disabled={videoMutation.isPending || !videoPrompt.trim()}
               data-testid="button-submit-video"
             >
               {videoMutation.isPending ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                  Generating...
+                  {generationStatus || "Generating..."}
                 </>
               ) : (
                 <>
@@ -321,39 +386,15 @@ export default function ProjectDashboard() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={storyboardOpen} onOpenChange={setStoryboardOpen}>
-        <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Video className="h-5 w-5 text-primary" />
-              AI Video Storyboard
-            </DialogTitle>
-          </DialogHeader>
-          <ScrollArea className="flex-1 pr-4">
-            <div className="prose prose-sm dark:prose-invert max-w-none py-2" data-testid="storyboard-content">
-              <ReactMarkdown
-                components={{
-                  h2: ({ children }) => <h2 className="text-lg font-bold mt-6 mb-3 text-foreground border-b border-border pb-2">{children}</h2>,
-                  h3: ({ children }) => <h3 className="text-base font-semibold mt-4 mb-2 text-foreground">{children}</h3>,
-                  p: ({ children }) => <p className="mb-3 text-sm leading-relaxed text-muted-foreground">{children}</p>,
-                  strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
-                  ul: ({ children }) => <ul className="list-disc ml-4 mb-3 space-y-1">{children}</ul>,
-                  ol: ({ children }) => <ol className="list-decimal ml-4 mb-3 space-y-1">{children}</ol>,
-                  li: ({ children }) => <li className="text-sm text-muted-foreground">{children}</li>,
-                  hr: () => <hr className="my-4 border-border" />,
-                }}
-              >
-                {storyboard || ""}
-              </ReactMarkdown>
-            </div>
-          </ScrollArea>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setStoryboardOpen(false)} data-testid="button-close-storyboard">
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {slideshowOpen && slideshowData && (
+        <StoryboardSlideshow
+          scenes={slideshowData.scenes}
+          title={project.title}
+          style={slideshowData.style}
+          storyboard={slideshowData.storyboard}
+          onClose={() => setSlideshowOpen(false)}
+        />
+      )}
     </div>
   );
 }

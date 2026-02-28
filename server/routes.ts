@@ -347,25 +347,80 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       if (!project) return res.status(404).json({ message: "Project not found" });
       if (project.ownerId !== req.user.claims.sub) return res.status(403).json({ message: "Unauthorized" });
 
-      const { prompt } = req.body;
+      const { prompt, style = "professional" } = req.body;
       const videoPrompt = prompt || `Create a short showcase video for the project "${project.title}": ${project.description}`;
 
-      const response = await openai.chat.completions.create({
+      const styleModifiers: Record<string, string> = {
+        professional: "clean, corporate, modern design, professional photography style, polished, minimalist",
+        futuristic: "cyberpunk, neon glow, holographic, sci-fi, dark background, high-tech, digital",
+        funny: "humorous, exaggerated, playful, bright colors, comic style, whimsical, fun",
+        cartoon: "animated cartoon style, colorful, illustrated, hand-drawn feel, Pixar-like, vibrant",
+      };
+
+      const styleDesc = styleModifiers[style] || styleModifiers.professional;
+
+      const storyboardResponse = await openai.chat.completions.create({
         model: "gpt-5.2",
         messages: [
           {
             role: "system",
-            content: "You are a creative director. Generate a detailed video storyboard description for a 30-second project showcase video. Include scene descriptions, text overlays, and visual effects suggestions. Format as a structured storyboard."
+            content: `You are a creative director specializing in ${style} visual style. Generate a detailed video storyboard description for a 30-second project showcase video. The visual style should be: ${styleDesc}. Include exactly 5 scenes with clear scene descriptions, text overlays, and visual effects suggestions. Format as a structured storyboard with ## Scene 1, ## Scene 2, etc.`
           },
           { role: "user", content: videoPrompt }
         ],
       });
 
-      const storyboard = response.choices[0].message.content || "Video storyboard generation failed.";
+      const storyboard = storyboardResponse.choices[0].message.content || "Video storyboard generation failed.";
+
+      const scenesResponse = await openai.chat.completions.create({
+        model: "gpt-5.2",
+        messages: [
+          {
+            role: "system",
+            content: `You are an AI that extracts scene descriptions from storyboards. Given a storyboard, extract exactly 5 scenes. For each scene, provide:
+1. A concise image generation prompt (2-3 sentences describing the visual scene in detail, incorporating the style: ${styleDesc})
+2. A short caption (1 sentence summary for display)
+
+Respond ONLY with valid JSON in this exact format:
+[
+  {"prompt": "detailed image description...", "caption": "Short caption text"},
+  {"prompt": "detailed image description...", "caption": "Short caption text"},
+  {"prompt": "detailed image description...", "caption": "Short caption text"},
+  {"prompt": "detailed image description...", "caption": "Short caption text"},
+  {"prompt": "detailed image description...", "caption": "Short caption text"}
+]`
+          },
+          { role: "user", content: storyboard }
+        ],
+      });
+
+      let scenes: { prompt: string; caption: string; imageUrl: string }[] = [];
+      try {
+        const rawContent = scenesResponse.choices[0].message.content || "[]";
+        const jsonMatch = rawContent.match(/\[[\s\S]*\]/);
+        const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : rawContent);
+        scenes = parsed.slice(0, 5).map((s: any) => ({
+          prompt: s.prompt || "",
+          caption: s.caption || "",
+          imageUrl: "",
+        }));
+        if (scenes.length === 0) throw new Error("Empty scenes array");
+      } catch (parseErr) {
+        console.error("Error parsing scenes:", parseErr);
+        scenes = [
+          { prompt: "Opening scene for the project showcase", caption: "Welcome to the project", imageUrl: "" },
+          { prompt: "Key features demonstration", caption: "Core features overview", imageUrl: "" },
+          { prompt: "Technical architecture overview", caption: "Built with modern tech", imageUrl: "" },
+          { prompt: "User experience showcase", caption: "Designed for users", imageUrl: "" },
+          { prompt: "Closing scene with call to action", caption: "Join us today", imageUrl: "" },
+        ];
+      }
 
       res.json({
         storyboard,
-        message: "AI video storyboard generated. Full video generation coming soon!",
+        scenes,
+        style,
+        message: "AI storyboard and scenes generated successfully!",
         projectId: project.id,
       });
     } catch (error) {

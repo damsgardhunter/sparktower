@@ -9,7 +9,7 @@ SparkTower is a platform for entrepreneurs and freelancers to connect, collabora
 - **AI Matchmaking** - OpenAI-powered user matching based on skills/interests/experience
 - **Nova AI Chatbot** - AI project partner named "Nova" with animated intro, guided project creation flow
 - **Media Gallery** - Upload images/videos to showcase projects (via Replit Object Storage)
-- **AI Video Generation** - Generate AI showcase storyboards for projects
+- **AI Video Storyboard Slideshow** - Generate AI storyboards with 4 visual styles (Professional, Futuristic, Funny, Cartoon), displayed as animated slideshow with auto-advance, navigation, and gradient scene cards
 - **Project Dashboard** - Media gallery, donation widget, stats (views, donations)
 - **Leaderboard** - Ranked by most visited or most donations (gold/silver/bronze podium)
 - **Discover** - Search and find other users by skills/interests
@@ -46,6 +46,7 @@ client/src/
     skill-badge.tsx     - Skill tag badge
     donation-button.tsx - Donation modal + button
     media-gallery.tsx   - Media upload/display gallery with lightbox
+    storyboard-slideshow.tsx - AI storyboard slideshow viewer (auto-advance, navigation, gradient cards)
     ObjectUploader.tsx  - Uppy-based file upload component
     theme-toggle.tsx    - Dark/light mode toggle
     ThemeProvider.tsx    - Theme context
@@ -88,7 +89,7 @@ shared/
 - `GET /api/projects/:id` - Project details (auto-increments views)
 - `POST /api/projects/:id/media` - Add media URL to project
 - `DELETE /api/projects/:id/media/:index` - Remove media item
-- `POST /api/projects/:id/generate-video` - Generate AI video storyboard
+- `POST /api/projects/:id/generate-video` - Generate AI storyboard + scene descriptions (accepts style: professional|futuristic|funny|cartoon)
 - `POST /api/chat` - Nova AI chatbot for project planning (pre-creation)
 - `GET/POST /api/projects/:id/chat` - AI chatbot for existing project
 - `POST /api/projects/:id/donate` - Donate to a project
