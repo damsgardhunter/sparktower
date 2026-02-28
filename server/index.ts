@@ -22,6 +22,10 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
+app.get("/_health", (_req, res) => {
+  res.sendStatus(200);
+});
+
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
     hour: "numeric",
