@@ -19,6 +19,7 @@ import {
   Loader2,
   Send,
   Sparkles,
+  Cpu,
   Users,
   Clock,
   FolderOpen,
@@ -27,6 +28,9 @@ import {
   X,
   ImageIcon,
   Plus,
+  UserPlus,
+  Target,
+  Rocket,
 } from "lucide-react";
 import { SiGithub } from "react-icons/si";
 import { motion, AnimatePresence } from "framer-motion";
@@ -54,10 +58,10 @@ const CATEGORIES = [
 function NovaAvatar({ size = "md" }: { size?: "sm" | "md" | "lg" }) {
   const sizeMap = { sm: "h-8 w-8", md: "h-10 w-10", lg: "h-16 w-16" };
   return (
-    <div className={`relative ${sizeMap[size]} rounded-full flex items-center justify-center`}>
-      <div className="absolute inset-0 rounded-full bg-gradient-to-br from-green-400 via-emerald-500 to-purple-500 animate-pulse opacity-60 blur-sm" />
-      <div className="relative rounded-full bg-gradient-to-br from-green-400 via-emerald-500 to-purple-500 flex items-center justify-center w-full h-full">
-        <Sparkles className={size === "lg" ? "h-7 w-7 text-white" : "h-4 w-4 text-white"} />
+    <div className={`relative ${sizeMap[size]} rounded-lg flex items-center justify-center`}>
+      <div className="absolute inset-0 rounded-lg bg-gradient-to-br from-green-400 via-emerald-500 to-purple-500 animate-pulse opacity-60 blur-sm" />
+      <div className="relative rounded-lg bg-gradient-to-br from-green-400 via-emerald-500 to-purple-500 flex items-center justify-center w-full h-full">
+        <Cpu className={size === "lg" ? "h-7 w-7 text-white" : "h-4 w-4 text-white"} />
       </div>
     </div>
   );
@@ -99,6 +103,17 @@ function FormattedMessage({ content }: { content: string }) {
   );
 }
 
+function ReadinessItem({ label, done }: { label: string; done: boolean }) {
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <div className={`h-4 w-4 rounded-full flex items-center justify-center ${done ? "bg-emerald-500 text-white" : "border border-muted-foreground/30"}`}>
+        {done && <Target className="h-2.5 w-2.5" />}
+      </div>
+      <span className={done ? "text-foreground" : "text-muted-foreground"}>{label}</span>
+    </div>
+  );
+}
+
 export default function ProjectCreate() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
@@ -106,12 +121,14 @@ export default function ProjectCreate() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [techInput, setTechInput] = useState("");
+  const [roleInput, setRoleInput] = useState("");
   const [uploadedImages, setUploadedImages] = useState<{ path: string; preview: string }[]>([]);
   const [projectData, setProjectData] = useState<Partial<Project> & { repoUrl?: string; liveUrl?: string }>({
     title: "",
     description: "",
     category: "",
     techStack: [],
+    rolesNeeded: [],
     teamSize: 1,
     estimatedWeeks: 4,
     status: "planning",
@@ -208,6 +225,27 @@ export default function ProjectCreate() {
       techStack: [...(prev.techStack || []), tech],
     }));
     setTechInput("");
+  };
+
+  const handleAddRole = () => {
+    const role = roleInput.trim();
+    if (!role) return;
+    if (projectData.rolesNeeded?.includes(role)) {
+      setRoleInput("");
+      return;
+    }
+    setProjectData((prev) => ({
+      ...prev,
+      rolesNeeded: [...(prev.rolesNeeded || []), role],
+    }));
+    setRoleInput("");
+  };
+
+  const handleRemoveRole = (role: string) => {
+    setProjectData((prev) => ({
+      ...prev,
+      rolesNeeded: (prev.rolesNeeded || []).filter((r) => r !== role),
+    }));
   };
 
   const handleRemoveTech = (tech: string) => {
@@ -483,6 +521,49 @@ export default function ProjectCreate() {
                   </Button>
                 </div>
               </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                  <UserPlus className="h-3 w-3" /> Roles Needed
+                </label>
+                <div className="flex flex-wrap gap-1 mt-1 min-h-[28px]">
+                  {projectData.rolesNeeded?.map((role) => (
+                    <Badge key={role} variant="outline" className="text-xs flex items-center gap-1 border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
+                      {role}
+                      <button
+                        onClick={() => handleRemoveRole(role)}
+                        className="ml-0.5"
+                        data-testid={`button-remove-role-${role.replace(/\s/g, "-")}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </Badge>
+                  ))}
+                </div>
+                <div className="flex gap-1 mt-2">
+                  <Input
+                    value={roleInput}
+                    onChange={(e) => setRoleInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleAddRole();
+                      }
+                    }}
+                    placeholder="e.g. Frontend Dev, Designer..."
+                    className="text-xs h-8"
+                    data-testid="input-roles-needed"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleAddRole}
+                    className="h-8 px-2 shrink-0"
+                    data-testid="button-add-role"
+                  >
+                    <Plus className="h-3 w-3" />
+                  </Button>
+                </div>
+              </div>
             </CardContent>
           </Card>
 
@@ -558,6 +639,27 @@ export default function ProjectCreate() {
               </div>
             </CardContent>
           </Card>
+
+          {projectData.title && projectData.description && (
+            <Card className="border-emerald-500/20 bg-emerald-500/5 overflow-hidden">
+              <CardContent className="p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Rocket className="h-4 w-4 text-emerald-500" />
+                  <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">Project Readiness</span>
+                </div>
+                <div className="space-y-2">
+                  <ReadinessItem label="Title & Description" done={!!(projectData.title && projectData.description)} />
+                  <ReadinessItem label="Category Selected" done={!!projectData.category} />
+                  <ReadinessItem label="Tech Stack Defined" done={!!(projectData.techStack && projectData.techStack.length > 0)} />
+                  <ReadinessItem label="Roles Identified" done={!!(projectData.rolesNeeded && projectData.rolesNeeded.length > 0)} />
+                  <ReadinessItem label="Timeline Estimated" done={!!(projectData.estimatedWeeks && projectData.estimatedWeeks > 0)} />
+                </div>
+                <p className="text-xs text-muted-foreground italic mt-2" data-testid="text-motivation">
+                  Every great product started as an idea. You're already ahead by planning it out.
+                </p>
+              </CardContent>
+            </Card>
+          )}
 
           <Button
             className="w-full"

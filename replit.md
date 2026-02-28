@@ -72,7 +72,7 @@ shared/
 - `sessions` - Replit Auth sessions
 - `users` - Replit Auth users
 - `userProfiles` - Extended profile (skills, interests, experience, bio, links)
-- `projects` - Projects with mediaUrls (text[]), tech stack, stats
+- `projects` - Projects with mediaUrls (text[]), rolesNeeded (text[]), tech stack, stats
 - `projectMembers` - Team members per project
 - `projectChatMessages` - AI chatbot conversation history per project
 - `donations` - Donations to projects (in cents)
@@ -129,5 +129,6 @@ Environment variables: DEFAULT_OBJECT_STORAGE_BUCKET_ID, PUBLIC_OBJECT_SEARCH_PA
 - Auth: Always use `<a href="/api/login">` not wouter `<Link>` for login buttons
 - AI: gpt-5.2 model for all OpenAI calls
 - Query keys: Use array segments like `["/api/projects", id]` for proper cache invalidation
-- Nova: Named "Nova", friendly AI partner personality with animated intro (framer-motion)
+- Nova: Named "Nova", friendly AI partner personality, chip/CPU icon, decryption animation intro, emoji+bold formatting
+- Nova intro: /projects/new shows futuristic transition page with chip icon, decryption text animation, particle field
 - Design: Space Grotesk font, green primary (#96 85.19% 73.53%), radius: 0rem
