@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 
 const CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@#$%&*!?<>{}[]=/\\|~^";
 
-function useDecryptText(target: string, active: boolean, speed = 40) {
+function useDecryptText(target: string, active: boolean, speed = 70) {
   const [display, setDisplay] = useState("");
 
   useEffect(() => {
@@ -50,7 +50,7 @@ function DecryptionLine({ active }: { active: boolean }) {
     if (!active) return;
     const interval = setInterval(() => {
       setChars(prev => prev.map(() => CHARS[Math.floor(Math.random() * CHARS.length)]));
-    }, 60);
+    }, 150);
     return () => clearInterval(interval);
   }, [active]);
 
