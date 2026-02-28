@@ -36,7 +36,14 @@ export default function Profile() {
 
   const { data: profileData, isLoading: profileLoading } = useQuery<any>({
     queryKey: [id ? `/api/users/${id}` : "/api/profile"],
+    queryFn: async ({ queryKey }) => {
+      const res = await fetch(queryKey.join("/"), { credentials: "include" });
+      if (res.status === 404 || res.status === 401) return null;
+      if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
+      return res.json();
+    },
     enabled: !!userId,
+    retry: false,
   });
 
   const profile: UserProfile | undefined = id ? profileData?.profile : profileData;
@@ -106,6 +113,18 @@ export default function Profile() {
       <div className="container max-w-5xl mx-auto py-20 px-4 text-center">
         <h2 className="text-2xl font-bold">User profile not found</h2>
         <Button className="mt-4" onClick={() => setLocation("/")}>Go Home</Button>
+      </div>
+    );
+  }
+
+  if (!profile && isOwnProfile) {
+    return (
+      <div className="container max-w-5xl mx-auto py-20 px-4 text-center space-y-4">
+        <h2 className="text-2xl font-bold">Welcome to SparkTower!</h2>
+        <p className="text-muted-foreground">Complete your profile to get started and connect with other creators.</p>
+        <Button onClick={() => setLocation("/onboarding")} data-testid="button-complete-profile">
+          Complete Your Profile
+        </Button>
       </div>
     );
   }
