@@ -15,7 +15,6 @@ import { Badge } from "@/components/ui/badge";
 import { X, Plus, Github, Linkedin, Globe, MapPin, Loader2 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { motion, AnimatePresence } from "framer-motion";
 
 const STEPS = [
   "Basic Info",
@@ -125,34 +124,27 @@ export default function Onboarding() {
   const progress = ((step + 1) / STEPS.length) * 100;
 
   return (
-    <div className="container max-w-2xl mx-auto py-10 px-4 min-h-screen flex flex-col justify-center">
-      <div className="mb-8 space-y-2">
-        <h1 className="text-3xl font-bold text-center">Complete Your Profile</h1>
-        <p className="text-muted-foreground text-center">Let's get you ready to connect and collaborate.</p>
-        <div className="pt-4">
-          <Progress value={progress} className="h-2" data-testid="progress-onboarding" />
-          <div className="flex justify-between mt-2 text-sm text-muted-foreground">
-            <span>Step {step + 1} of {STEPS.length}: {STEPS[step]}</span>
-            <span>{Math.round(progress)}%</span>
+    <div className="h-full overflow-y-auto">
+      <div className="container max-w-2xl mx-auto py-10 px-4">
+        <div className="mb-8 space-y-2">
+          <h1 className="text-3xl font-bold text-center">Complete Your Profile</h1>
+          <p className="text-muted-foreground text-center">Let's get you ready to connect and collaborate.</p>
+          <div className="pt-4">
+            <Progress value={progress} className="h-2" data-testid="progress-onboarding" />
+            <div className="flex justify-between mt-2 text-sm text-muted-foreground">
+              <span>Step {step + 1} of {STEPS.length}: {STEPS[step]}</span>
+              <span>{Math.round(progress)}%</span>
+            </div>
           </div>
         </div>
-      </div>
 
-      <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={step}
-              initial={{ x: 20, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              exit={{ x: -20, opacity: 0 }}
-              transition={{ duration: 0.2 }}
-            >
-              <Card className="border-border/50">
-                <CardHeader>
-                  <CardTitle>{STEPS[step]}</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+            <Card className="border-border/50">
+              <CardHeader>
+                <CardTitle>{STEPS[step]}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
                   {step === 0 && (
                     <>
                       <FormField
@@ -450,12 +442,11 @@ export default function Onboarding() {
                       Next Step
                     </Button>
                   )}
-                </CardFooter>
-              </Card>
-            </motion.div>
-          </AnimatePresence>
-        </form>
-      </Form>
+              </CardFooter>
+            </Card>
+          </form>
+        </Form>
+      </div>
     </div>
   );
 }
