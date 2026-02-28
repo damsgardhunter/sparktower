@@ -11,6 +11,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import LandingPage from "@/pages/landing";
 import Home from "@/pages/home";
 import Projects from "@/pages/projects";
+import NovaIntro from "@/pages/nova-intro";
 import ProjectCreate from "@/pages/project-create";
 import ProjectDashboard from "@/pages/project-dashboard";
 import Matches from "@/pages/matches";
@@ -27,7 +28,14 @@ function Router() {
   const { user, isLoading: authLoading, isAuthenticated } = useAuth();
   const { data: profile, isLoading: profileLoading } = useQuery<UserProfile | null>({
     queryKey: ["/api/profile"],
+    queryFn: async () => {
+      const res = await fetch("/api/profile", { credentials: "include" });
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json();
+    },
     enabled: isAuthenticated,
+    retry: false,
   });
 
   if (authLoading || (isAuthenticated && profileLoading)) {
@@ -69,7 +77,8 @@ function Router() {
             <Route path="/" component={Home} />
             <Route path="/onboarding" component={Onboarding} />
             <Route path="/projects" component={Projects} />
-            <Route path="/projects/new" component={ProjectCreate} />
+            <Route path="/projects/new" component={NovaIntro} />
+            <Route path="/projects/new/create" component={ProjectCreate} />
             <Route path="/projects/:id" component={ProjectDashboard} />
             <Route path="/profile" component={Profile} />
             <Route path="/profile/:id" component={Profile} />

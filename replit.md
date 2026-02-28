@@ -33,7 +33,8 @@ client/src/
     onboarding.tsx      - Multi-step profile setup wizard
     profile.tsx         - User profile page (own + public)
     projects.tsx        - Browse all projects
-    project-create.tsx  - Nova AI-guided project creation
+    nova-intro.tsx      - Futuristic Nova AI intro/transition page
+    project-create.tsx  - Nova AI-guided project creation with image upload, integrations
     project-dashboard.tsx - Individual project page with media gallery
     matches.tsx         - AI-matched users
     leaderboard.tsx     - Project rankings
@@ -114,7 +115,8 @@ Environment variables: DEFAULT_OBJECT_STORAGE_BUCKET_ID, PUBLIC_OBJECT_SEARCH_PA
 - `/` → Landing page (unauthenticated) or Home dashboard (authenticated + onboarded)
 - `/onboarding` → Profile setup wizard (redirected here if not onboarded)
 - `/projects` → Browse projects
-- `/projects/new` → Create project (Nova AI-guided)
+- `/projects/new` → Nova AI intro/transition page (futuristic animation)
+- `/projects/new/create` → Create project (Nova AI-guided chat with image upload, integrations)
 - `/projects/:id` → Project dashboard with media gallery
 - `/profile` → My profile
 - `/profile/:id` → Public profile

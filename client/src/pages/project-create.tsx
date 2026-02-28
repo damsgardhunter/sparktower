@@ -8,15 +8,48 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Send, Sparkles, Users, Clock, FolderOpen } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Loader2,
+  Send,
+  Sparkles,
+  Users,
+  Clock,
+  FolderOpen,
+  Globe,
+  Upload,
+  X,
+  ImageIcon,
+  Plus,
+} from "lucide-react";
+import { SiGithub } from "react-icons/si";
 import { motion, AnimatePresence } from "framer-motion";
+import ReactMarkdown from "react-markdown";
 import type { Project } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
+import { useUpload } from "@/hooks/use-upload";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
 }
+
+const CATEGORIES = [
+  "Web App",
+  "Mobile App",
+  "AI/ML",
+  "SaaS",
+  "Fintech",
+  "Sustainability",
+  "IoT",
+  "Other",
+];
 
 function NovaAvatar({ size = "md" }: { size?: "sm" | "md" | "lg" }) {
   const sizeMap = { sm: "h-8 w-8", md: "h-10 w-10", lg: "h-16 w-16" };
@@ -45,13 +78,36 @@ function TypingIndicator() {
   );
 }
 
+function FormattedMessage({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      components={{
+        p: ({ children }) => <p className="mb-1 last:mb-0">{children}</p>,
+        strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+        ul: ({ children }) => <ul className="list-disc ml-4 mb-1">{children}</ul>,
+        ol: ({ children }) => <ol className="list-decimal ml-4 mb-1">{children}</ol>,
+        li: ({ children }) => <li className="mb-0.5">{children}</li>,
+        a: ({ href, children }) => (
+          <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary underline">
+            {children}
+          </a>
+        ),
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+}
+
 export default function ProjectCreate() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [showIntro, setShowIntro] = useState(true);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const [projectData, setProjectData] = useState<Partial<Project>>({
+  const [techInput, setTechInput] = useState("");
+  const [uploadedImages, setUploadedImages] = useState<{ path: string; preview: string }[]>([]);
+  const [projectData, setProjectData] = useState<Partial<Project> & { repoUrl?: string; liveUrl?: string }>({
     title: "",
     description: "",
     category: "",
@@ -59,9 +115,23 @@ export default function ProjectCreate() {
     teamSize: 1,
     estimatedWeeks: 4,
     status: "planning",
+    repoUrl: "",
+    liveUrl: "",
   });
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const { uploadFile, isUploading } = useUpload({
+    onSuccess: (response) => {
+      const publicUrl = `/api/objects/${response.objectPath}`;
+      setUploadedImages((prev) => [...prev, { path: response.objectPath, preview: publicUrl }]);
+      toast({ title: "Image uploaded" });
+    },
+    onError: (error) => {
+      toast({ title: "Upload failed", description: error.message, variant: "destructive" });
+    },
+  });
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -76,7 +146,7 @@ export default function ProjectCreate() {
         {
           role: "assistant",
           content:
-            "Hey! I'm Nova, your AI project partner. I'm here to help you shape your idea into a real project plan.\n\nWhat kind of project are you thinking about building?",
+            "Hey! I'm Nova, your AI project partner. \u{1F680} I'm here to help you shape your idea into a real project plan.\n\nWhat kind of project are you thinking about building?",
         },
       ]);
     }, 2200);
@@ -101,7 +171,11 @@ export default function ProjectCreate() {
 
   const createMutation = useMutation({
     mutationFn: async (data: Partial<Project>) => {
-      const res = await apiRequest("POST", "/api/projects", data);
+      const payload = {
+        ...data,
+        mediaUrls: uploadedImages.map((img) => img.preview),
+      };
+      const res = await apiRequest("POST", "/api/projects", payload);
       return res.json();
     },
     onSuccess: (project) => {
@@ -120,6 +194,44 @@ export default function ProjectCreate() {
     setMessages((prev) => [...prev, { role: "user", content: userMsg }]);
     setInput("");
     chatMutation.mutate(userMsg);
+  };
+
+  const handleAddTech = () => {
+    const tech = techInput.trim();
+    if (!tech) return;
+    if (projectData.techStack?.includes(tech)) {
+      setTechInput("");
+      return;
+    }
+    setProjectData((prev) => ({
+      ...prev,
+      techStack: [...(prev.techStack || []), tech],
+    }));
+    setTechInput("");
+  };
+
+  const handleRemoveTech = (tech: string) => {
+    setProjectData((prev) => ({
+      ...prev,
+      techStack: (prev.techStack || []).filter((t) => t !== tech),
+    }));
+  };
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+    for (const file of Array.from(files)) {
+      if (!file.type.startsWith("image/")) {
+        toast({ title: "Only images are supported", variant: "destructive" });
+        continue;
+      }
+      await uploadFile(file);
+    }
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleRemoveImage = (index: number) => {
+    setUploadedImages((prev) => prev.filter((_, i) => i !== index));
   };
 
   const filledFields = [
@@ -207,7 +319,7 @@ export default function ProjectCreate() {
                         : "bg-gradient-to-br from-card to-muted border border-border rounded-bl-md"
                     }`}
                   >
-                    {msg.content}
+                    <FormattedMessage content={msg.content} />
                   </div>
                 </motion.div>
               ))}
@@ -251,12 +363,12 @@ export default function ProjectCreate() {
         </div>
       </div>
 
-      <div className="w-[400px] flex flex-col bg-background">
+      <div className="w-[420px] flex flex-col bg-background">
         <header className="p-4 border-b border-border flex items-center justify-between">
           <span className="font-semibold">Project Preview</span>
           <span className="text-xs text-muted-foreground">{filledFields}/4 fields</span>
         </header>
-        <div className="flex-1 p-6 space-y-6 overflow-y-auto">
+        <div className="flex-1 p-5 space-y-4 overflow-y-auto">
           <Card className="border-border overflow-hidden">
             <div className="h-2 bg-gradient-to-r from-green-400 via-emerald-500 to-purple-500" />
             <CardContent className="p-4 space-y-4">
@@ -285,13 +397,21 @@ export default function ProjectCreate() {
                   <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1">
                     <FolderOpen className="h-3 w-3" /> Category
                   </label>
-                  <Input
+                  <Select
                     value={projectData.category || ""}
-                    onChange={(e) => setProjectData({ ...projectData, category: e.target.value })}
-                    placeholder="Web App"
-                    className="mt-1"
-                    data-testid="input-project-category"
-                  />
+                    onValueChange={(val) => setProjectData({ ...projectData, category: val })}
+                  >
+                    <SelectTrigger className="mt-1" data-testid="select-project-category">
+                      <SelectValue placeholder="Select..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {CATEGORIES.map((cat) => (
+                        <SelectItem key={cat} value={cat} data-testid={`select-category-${cat.toLowerCase().replace(/[/ ]/g, "-")}`}>
+                          {cat}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1">
@@ -326,13 +446,114 @@ export default function ProjectCreate() {
                 <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Tech Stack</label>
                 <div className="flex flex-wrap gap-1 mt-1 min-h-[28px]">
                   {projectData.techStack?.map((tech) => (
-                    <Badge key={tech} variant="secondary" className="text-xs">
+                    <Badge key={tech} variant="secondary" className="text-xs flex items-center gap-1">
                       {tech}
+                      <button
+                        onClick={() => handleRemoveTech(tech)}
+                        className="ml-0.5 hover:text-destructive"
+                        data-testid={`button-remove-tech-${tech}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
                     </Badge>
                   ))}
-                  {(!projectData.techStack || projectData.techStack.length === 0) && (
-                    <span className="text-xs text-muted-foreground italic">Chat with Nova to define</span>
-                  )}
+                </div>
+                <div className="flex gap-1 mt-2">
+                  <Input
+                    value={techInput}
+                    onChange={(e) => setTechInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleAddTech();
+                      }
+                    }}
+                    placeholder="Add tech (Enter to add)"
+                    className="text-xs h-8"
+                    data-testid="input-tech-stack"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleAddTech}
+                    className="h-8 px-2 shrink-0"
+                    data-testid="button-add-tech"
+                  >
+                    <Plus className="h-3 w-3" />
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-border overflow-hidden">
+            <CardContent className="p-4 space-y-3">
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                <ImageIcon className="h-3 w-3" /> Project Images
+              </label>
+              {uploadedImages.length > 0 && (
+                <div className="grid grid-cols-3 gap-2">
+                  {uploadedImages.map((img, i) => (
+                    <div key={i} className="relative group aspect-square rounded-lg overflow-hidden border border-border">
+                      <img src={img.preview} alt="" className="w-full h-full object-cover" />
+                      <button
+                        onClick={() => handleRemoveImage(i)}
+                        className="absolute top-1 right-1 bg-black/60 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                        data-testid={`button-remove-image-${i}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isUploading}
+                className="w-full border-2 border-dashed border-border rounded-lg p-4 flex flex-col items-center gap-2 text-muted-foreground hover:border-primary/50 hover:text-primary transition-colors cursor-pointer disabled:opacity-50"
+                data-testid="button-upload-image"
+              >
+                {isUploading ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  <Upload className="h-5 w-5" />
+                )}
+                <span className="text-xs">{isUploading ? "Uploading..." : "Click to upload images"}</span>
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={handleFileSelect}
+                className="hidden"
+              />
+            </CardContent>
+          </Card>
+
+          <Card className="border-border overflow-hidden">
+            <CardContent className="p-4 space-y-3">
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Integrations</label>
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <SiGithub className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <Input
+                    value={projectData.repoUrl || ""}
+                    onChange={(e) => setProjectData({ ...projectData, repoUrl: e.target.value })}
+                    placeholder="https://github.com/user/repo"
+                    className="text-xs h-8"
+                    data-testid="input-github-url"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <Globe className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <Input
+                    value={projectData.liveUrl || ""}
+                    onChange={(e) => setProjectData({ ...projectData, liveUrl: e.target.value })}
+                    placeholder="Live demo, Replit, or Colab link"
+                    className="text-xs h-8"
+                    data-testid="input-live-url"
+                  />
                 </div>
               </div>
             </CardContent>
