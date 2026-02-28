@@ -19,6 +19,10 @@ interface UserCardProps {
 export function UserCard({ profile, userName, matchScore, matchReasons }: UserCardProps) {
   const [, setLocation] = useLocation();
 
+  if (!profile) return null;
+
+  const displayLabel = profile.displayName || userName || profile.headline || "Unknown User";
+
   return (
     <Card
       className="hover-elevate cursor-pointer overflow-visible"
@@ -26,17 +30,22 @@ export function UserCard({ profile, userName, matchScore, matchReasons }: UserCa
       data-testid={`card-user-${profile.userId}`}
     >
       <CardHeader className="flex flex-row items-center gap-4 pb-2">
-        <UserAvatar src={profile.avatarUrl} name={userName} className="h-12 w-12" />
+        <UserAvatar src={profile.avatarUrl} name={displayLabel} className="h-12 w-12" />
         <div className="flex-1">
           <div className="flex items-center justify-between">
-            <h3 className="font-bold text-lg">{userName}</h3>
+            <h3 className="font-bold text-lg">{displayLabel}</h3>
             {matchScore !== undefined && (
               <Badge variant="default" className="bg-primary/20 text-primary border-transparent">
                 {matchScore}% Match
               </Badge>
             )}
           </div>
-          <p className="text-sm text-secondary line-clamp-1">{profile.headline}</p>
+          {profile.username && (
+            <p className="text-xs text-muted-foreground">@{profile.username}</p>
+          )}
+          {profile.headline && (
+            <p className="text-sm text-secondary line-clamp-1">{profile.headline}</p>
+          )}
         </div>
       </CardHeader>
       <CardContent>

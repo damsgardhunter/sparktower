@@ -10,6 +10,8 @@ import { users } from "./models/auth";
 export const userProfiles = pgTable("user_profiles", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull().references(() => users.id).unique(),
+  displayName: text("display_name"),
+  username: text("username"),
   headline: text("headline"),
   bio: text("bio"),
   skills: text("skills").array(),
@@ -37,6 +39,7 @@ export const projects = pgTable("projects", {
   totalDonations: integer("total_donations").default(0).notNull(),
   mediaUrls: text("media_urls").array().default([]),
   rolesNeeded: text("roles_needed").array().default([]),
+  techStack: text("tech_stack").array().default([]),
   liveUrl: text("live_url"),
   repoUrl: text("repo_url"),
   createdAt: timestamp("created_at").defaultNow().notNull(),

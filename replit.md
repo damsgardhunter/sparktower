@@ -71,8 +71,8 @@ shared/
 
 - `sessions` - Replit Auth sessions
 - `users` - Replit Auth users
-- `userProfiles` - Extended profile (skills, interests, experience, bio, links)
-- `projects` - Projects with mediaUrls (text[]), rolesNeeded (text[]), stats
+- `userProfiles` - Extended profile (displayName, username, skills, interests, experience, bio, resumeUrl, links)
+- `projects` - Projects with mediaUrls (text[]), rolesNeeded (text[]), techStack (text[]), repoUrl, liveUrl, stats
 - `projectMembers` - Team members per project
 - `projectChatMessages` - AI chatbot conversation history per project
 - `donations` - Donations to projects (in cents)
@@ -133,6 +133,6 @@ Environment variables: DEFAULT_OBJECT_STORAGE_BUCKET_ID, PUBLIC_OBJECT_SEARCH_PA
 - Nova intro: /projects/new shows futuristic transition page with chip icon, decryption text animation, particle field
 - Roles: Predefined selectable list (29 roles) — replaced free-text input with dropdown multi-select
 - Categories: Expanded to 21 categories (Web App, Mobile App, AI/ML, SaaS, Fintech, Sustainability, IoT, Design, Data Analytics, Marketing, E-Commerce, Education, Healthcare, Social Media, Gaming, Blockchain, Content Creation, DevOps, Research, Nonprofit, Other)
-- Tech stack removed from UI and schema — roles are the primary organizational concept
+- Tech stack: manual tag input on project creation + Nova can auto-populate via chat; displayed on project dashboard
 - Nova prompt encourages users to add GitHub/portfolio links for traction
 - Design: Space Grotesk font, green primary (#96 85.19% 73.53%), radius: 0rem

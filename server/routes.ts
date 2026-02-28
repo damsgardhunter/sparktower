@@ -82,6 +82,7 @@ As the conversation progresses, extract and suggest:
 - Team size needed
 - Estimated weeks to complete
 - Category (Web App, Mobile App, AI/ML, SaaS, Fintech, Sustainability, IoT, Design, Data Analytics, Marketing, E-Commerce, Education, Healthcare, Social Media, Gaming, Blockchain, Content Creation, DevOps, Research, Nonprofit, Other)
+- Tech stack being used (e.g. React, Python, Node.js, Firebase, etc.) as an array of strings
 - GitHub/repo URL if mentioned (repoUrl)
 - Live demo/deployment URL if mentioned (liveUrl)
 
@@ -92,7 +93,7 @@ When presenting the final summary, end with an encouraging note like "✨ This i
 After each user message, respond conversationally AND include a JSON block in your response with any updates you can extract.
 
 Format: Respond with your conversational message, then on a new line include:
-<project_update>{"title": "...", "description": "...", "rolesNeeded": [...], "teamSize": 2, "estimatedWeeks": 8, "category": "...", "repoUrl": "...", "liveUrl": "..."}</project_update>
+<project_update>{"title": "...", "description": "...", "rolesNeeded": [...], "techStack": [...], "teamSize": 2, "estimatedWeeks": 8, "category": "...", "repoUrl": "...", "liveUrl": "..."}</project_update>
 
 Only include fields you have enough info to fill. Start empty if needed.`;
 

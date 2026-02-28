@@ -165,6 +165,19 @@ export default function ProjectDashboard() {
             </section>
           )}
 
+          {project.techStack && project.techStack.length > 0 && (
+            <section className="space-y-4">
+              <h2 className="text-xl font-semibold">Tech Stack</h2>
+              <div className="flex flex-wrap gap-2">
+                {project.techStack.map((tech) => (
+                  <Badge key={tech} variant="outline" className="border-purple-500/30 text-purple-600 dark:text-purple-400" data-testid={`badge-dashboard-tech-${tech}`}>
+                    {tech}
+                  </Badge>
+                ))}
+              </div>
+            </section>
+          )}
+
           <div className="flex flex-wrap gap-4">
             {project.repoUrl && (
               <Button variant="outline" asChild className="gap-2" data-testid="link-repo">

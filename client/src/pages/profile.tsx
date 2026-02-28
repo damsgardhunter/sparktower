@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { MapPin, Globe, Github, Linkedin, Mail, MessageSquare, UserPlus, Edit, Loader2 } from "lucide-react";
+import { MapPin, Globe, Github, Linkedin, Mail, MessageSquare, UserPlus, Edit, Loader2, FileText } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
@@ -59,6 +59,8 @@ export default function Profile() {
     resolver: zodResolver(insertUserProfileSchema),
     values: profile ? {
       userId: profile.userId,
+      displayName: profile.displayName || "",
+      username: profile.username || "",
       headline: profile.headline || "",
       bio: profile.bio || "",
       location: profile.location || "",
@@ -138,20 +140,26 @@ export default function Profile() {
           <div className="absolute -top-12 left-6">
             <UserAvatar 
               src={profile?.avatarUrl} 
-              name={profile?.headline || "User"} 
+              name={profile?.displayName || profile?.headline || "User"} 
               className="h-24 w-24 border-4 border-background text-2xl" 
             />
           </div>
           <div className="pt-16 flex flex-col md:flex-row md:items-end justify-between gap-4">
             <div className="space-y-1">
-              <h1 className="text-2xl font-bold flex items-center gap-2">
-                {profile?.headline || "Untitled Profile"}
+              <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-profile-name">
+                {profile?.displayName || profile?.headline || "Untitled Profile"}
                 {profile?.experienceLevel && (
                   <Badge variant="outline" className="capitalize text-xs">
                     {profile.experienceLevel}
                   </Badge>
                 )}
               </h1>
+              {profile?.username && (
+                <p className="text-sm text-muted-foreground" data-testid="text-profile-username">@{profile.username}</p>
+              )}
+              {profile?.headline && profile?.displayName && (
+                <p className="text-sm text-muted-foreground">{profile.headline}</p>
+              )}
               <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground">
                 {profile?.location && (
                   <span className="flex items-center gap-1">
@@ -180,6 +188,34 @@ export default function Profile() {
                     </DialogHeader>
                     <Form {...form}>
                       <form onSubmit={form.handleSubmit(onUpdateProfile)} className="space-y-4 py-4">
+                        <div className="grid grid-cols-2 gap-4">
+                          <FormField
+                            control={form.control}
+                            name="displayName"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>Full Name</FormLabel>
+                                <FormControl>
+                                  <Input {...field} value={field.value || ''} data-testid="input-edit-display-name" />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                          <FormField
+                            control={form.control}
+                            name="username"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>Username</FormLabel>
+                                <FormControl>
+                                  <Input {...field} value={field.value || ''} data-testid="input-edit-username" />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                        </div>
                         <FormField
                           control={form.control}
                           name="headline"
@@ -313,6 +349,11 @@ export default function Profile() {
                 {profile?.websiteUrl && (
                   <a href={profile.websiteUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors">
                     <Globe className="h-4 w-4" /> Portfolio Website
+                  </a>
+                )}
+                {profile?.resumeUrl && (
+                  <a href={profile.resumeUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors" data-testid="link-resume">
+                    <FileText className="h-4 w-4" /> Resume
                   </a>
                 )}
               </div>

@@ -166,11 +166,12 @@ export default function ProjectCreate() {
   const [input, setInput] = useState("");
   const [roleSelectKey, setRoleSelectKey] = useState(0);
   const [uploadedImages, setUploadedImages] = useState<{ path: string; preview: string }[]>([]);
-  const [projectData, setProjectData] = useState<Partial<Project> & { repoUrl?: string; liveUrl?: string }>({
+  const [projectData, setProjectData] = useState<Partial<Project>>({
     title: "",
     description: "",
     category: "",
     rolesNeeded: [],
+    techStack: [],
     teamSize: 1,
     estimatedWeeks: 4,
     status: "planning",
@@ -293,6 +294,7 @@ export default function ProjectCreate() {
     projectData.description,
     projectData.category,
     projectData.rolesNeeded && projectData.rolesNeeded.length > 0,
+    projectData.techStack && projectData.techStack.length > 0,
   ].filter(Boolean).length;
 
   return (
@@ -420,7 +422,7 @@ export default function ProjectCreate() {
       <div className="w-[420px] flex flex-col bg-background">
         <header className="p-4 border-b border-border flex items-center justify-between">
           <span className="font-semibold">Project Preview</span>
-          <span className="text-xs text-muted-foreground">{filledFields}/4 fields</span>
+          <span className="text-xs text-muted-foreground">{filledFields}/5 fields</span>
         </header>
         <div className="flex-1 p-5 space-y-4 overflow-y-auto">
           <Card className="border-border overflow-hidden">
@@ -530,6 +532,46 @@ export default function ProjectCreate() {
                   </SelectContent>
                 </Select>
               </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                  <Sparkles className="h-3 w-3" /> Tech Stack
+                </label>
+                <div className="flex flex-wrap gap-1 mt-1 min-h-[28px]">
+                  {(projectData.techStack || []).map((tech) => (
+                    <Badge key={tech} variant="outline" className="text-xs flex items-center gap-1 border-purple-500/30 text-purple-600 dark:text-purple-400" data-testid={`badge-tech-${tech}`}>
+                      {tech}
+                      <button
+                        onClick={() => setProjectData((prev) => ({
+                          ...prev,
+                          techStack: (prev.techStack || []).filter((t) => t !== tech),
+                        }))}
+                        className="ml-0.5"
+                        data-testid={`button-remove-tech-${tech}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </Badge>
+                  ))}
+                </div>
+                <Input
+                  placeholder="Type a technology and press Enter..."
+                  className="mt-2 text-xs h-8"
+                  data-testid="input-tech-stack"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      const val = e.currentTarget.value.trim();
+                      if (val && !(projectData.techStack || []).includes(val)) {
+                        setProjectData((prev) => ({
+                          ...prev,
+                          techStack: [...(prev.techStack || []), val],
+                        }));
+                        e.currentTarget.value = "";
+                      }
+                    }
+                  }}
+                />
+              </div>
             </CardContent>
           </Card>
 
@@ -618,6 +660,7 @@ export default function ProjectCreate() {
                   <ReadinessItem label="Category Selected" done={!!projectData.category} />
                   <ReadinessItem label="Roles Identified" done={!!(projectData.rolesNeeded && projectData.rolesNeeded.length > 0)} />
                   <ReadinessItem label="Timeline Estimated" done={!!(projectData.estimatedWeeks && projectData.estimatedWeeks > 0)} />
+                  <ReadinessItem label="Tech Stack" done={!!(projectData.techStack && projectData.techStack.length > 0)} />
                   <ReadinessItem label="Links Added" done={!!(projectData.repoUrl || projectData.liveUrl)} />
                 </div>
                 <p className="text-xs text-muted-foreground italic mt-2" data-testid="text-motivation">
