@@ -29,6 +29,8 @@ import {
   Video,
   Sparkles,
 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import type { Project, ProjectMember, UserProfile, User } from "@shared/schema";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
@@ -41,6 +43,8 @@ export default function ProjectDashboard() {
   const projectId = params?.id;
   const [videoModalOpen, setVideoModalOpen] = useState(false);
   const [videoPrompt, setVideoPrompt] = useState("");
+  const [storyboard, setStoryboard] = useState<string | null>(null);
+  const [storyboardOpen, setStoryboardOpen] = useState(false);
 
   const { data: project, isLoading: projectLoading } = useQuery<Project>({
     queryKey: ["/api/projects", projectId],
@@ -68,8 +72,10 @@ export default function ProjectDashboard() {
       return res.json();
     },
     onSuccess: (data) => {
-      toast({ title: "Storyboard Generated", description: "AI video storyboard has been created." });
+      setStoryboard(data.storyboard);
       setVideoModalOpen(false);
+      setStoryboardOpen(true);
+      toast({ title: "Storyboard Generated", description: "AI video storyboard has been created." });
     },
     onError: () => {
       toast({ title: "Generation failed", description: "Could not generate video storyboard.", variant: "destructive" });
@@ -91,19 +97,19 @@ export default function ProjectDashboard() {
 
   return (
     <div className="h-full overflow-y-auto pb-20">
-      <div className="relative h-48 bg-muted border-b border-border flex items-end">
+      <div className="relative min-h-[12rem] bg-muted border-b border-border flex items-end">
         <div className="absolute inset-0 bg-gradient-to-t from-background to-transparent opacity-60" />
-        <div className="relative p-6 w-full max-w-5xl mx-auto flex items-end justify-between gap-4">
-          <div className="space-y-2">
+        <div className="relative p-6 w-full max-w-5xl mx-auto flex flex-col sm:flex-row items-start sm:items-end justify-between gap-4">
+          <div className="space-y-2 min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <Badge variant={project.status === "active" ? "default" : "secondary"}>
                 {project.status}
               </Badge>
               <span className="text-sm text-secondary font-medium">{project.category}</span>
             </div>
-            <h1 className="text-4xl font-bold tracking-tight">{project.title}</h1>
+            <h1 className="text-3xl sm:text-4xl font-bold tracking-tight break-words" data-testid="text-project-title">{project.title}</h1>
           </div>
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex items-center gap-2 shrink-0">
             <DonationButton projectId={project.id} projectTitle={project.title} />
             {!isMember && !isOwner && (
               <Button variant="outline" onClick={() => joinMutation.mutate()} disabled={joinMutation.isPending} data-testid="button-join-project">
@@ -129,6 +135,19 @@ export default function ProjectDashboard() {
           <section className="space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-xl font-semibold">Media Gallery</h2>
+              <div className="flex items-center gap-2">
+              {storyboard && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-2"
+                  onClick={() => setStoryboardOpen(true)}
+                  data-testid="button-view-storyboard"
+                >
+                  <Sparkles className="h-4 w-4" />
+                  View Storyboard
+                </Button>
+              )}
               {isOwner && (
                 <Button
                   variant="outline"
@@ -146,6 +165,7 @@ export default function ProjectDashboard() {
                   Generate AI Video
                 </Button>
               )}
+            </div>
             </div>
             <MediaGallery
               projectId={project.id}
@@ -296,6 +316,40 @@ export default function ProjectDashboard() {
                   Generate Storyboard
                 </>
               )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={storyboardOpen} onOpenChange={setStoryboardOpen}>
+        <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Video className="h-5 w-5 text-primary" />
+              AI Video Storyboard
+            </DialogTitle>
+          </DialogHeader>
+          <ScrollArea className="flex-1 pr-4">
+            <div className="prose prose-sm dark:prose-invert max-w-none py-2" data-testid="storyboard-content">
+              <ReactMarkdown
+                components={{
+                  h2: ({ children }) => <h2 className="text-lg font-bold mt-6 mb-3 text-foreground border-b border-border pb-2">{children}</h2>,
+                  h3: ({ children }) => <h3 className="text-base font-semibold mt-4 mb-2 text-foreground">{children}</h3>,
+                  p: ({ children }) => <p className="mb-3 text-sm leading-relaxed text-muted-foreground">{children}</p>,
+                  strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
+                  ul: ({ children }) => <ul className="list-disc ml-4 mb-3 space-y-1">{children}</ul>,
+                  ol: ({ children }) => <ol className="list-decimal ml-4 mb-3 space-y-1">{children}</ol>,
+                  li: ({ children }) => <li className="text-sm text-muted-foreground">{children}</li>,
+                  hr: () => <hr className="my-4 border-border" />,
+                }}
+              >
+                {storyboard || ""}
+              </ReactMarkdown>
+            </div>
+          </ScrollArea>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setStoryboardOpen(false)} data-testid="button-close-storyboard">
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>
