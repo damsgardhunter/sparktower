@@ -4,7 +4,7 @@ import { UserCard } from "@/components/user-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Trophy, Eye, ArrowRight } from "lucide-react";
+import { Trophy, Eye, ArrowRight, Plus } from "lucide-react";
 import { Link } from "wouter";
 import type { Project, UserProfile, User, UserMatch } from "@shared/schema";
 
@@ -32,6 +32,12 @@ export default function Home() {
       <section className="space-y-6">
         <div className="flex items-center justify-between gap-4">
           <h2 className="text-3xl font-bold tracking-tight">Recent Projects</h2>
+          <Button asChild className="gap-2" data-testid="button-create-project-home">
+            <Link href="/projects/new">
+              <Plus className="h-4 w-4" />
+              Create Project
+            </Link>
+          </Button>
         </div>
         {projectsLoading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

@@ -9,8 +9,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Link } from "wouter";
 import type { Project, User, UserProfile } from "@shared/schema";
-import { Loader2, Search } from "lucide-react";
+import { Loader2, Search, Plus } from "lucide-react";
 
 type ProjectWithDetails = Project & { owner: User; profile?: UserProfile };
 
@@ -36,7 +38,15 @@ export default function ProjectsPage() {
   return (
     <div className="p-6 space-y-6 overflow-y-auto h-full pb-20">
       <div className="flex flex-col gap-4">
-        <h1 className="text-3xl font-bold tracking-tight">Browse Projects</h1>
+        <div className="flex items-center justify-between">
+          <h1 className="text-3xl font-bold tracking-tight">Browse Projects</h1>
+          <Button asChild className="gap-2" data-testid="button-create-project-browse">
+            <Link href="/projects/new">
+              <Plus className="h-4 w-4" />
+              Create Project
+            </Link>
+          </Button>
+        </div>
         <div className="flex flex-col md:flex-row gap-4">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-tertiary" />

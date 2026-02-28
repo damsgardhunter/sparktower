@@ -10,8 +10,9 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
 } from "@/components/ui/sidebar";
-import { Home, Compass, FolderKanban, Users, Trophy, LogOut } from "lucide-react";
+import { Home, Compass, FolderKanban, Users, Trophy, LogOut, Plus } from "lucide-react";
 import { Link, useLocation } from "wouter";
+import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/user-avatar";
 import { useAuth } from "@/hooks/use-auth";
 
@@ -58,6 +59,18 @@ export function AppSidebar() {
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+        <SidebarGroup>
+          <SidebarGroupContent>
+            <div className="px-2">
+              <Button asChild className="w-full gap-2" data-testid="button-create-project-sidebar">
+                <Link href="/projects/new">
+                  <Plus className="h-4 w-4" />
+                  Create Project
+                </Link>
+              </Button>
+            </div>
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
