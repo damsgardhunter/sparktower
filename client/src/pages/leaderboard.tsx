@@ -107,8 +107,8 @@ function ProjectRankings({ projects, metric }: { projects: ProjectWithStats[], m
                     <p className="text-xs text-secondary">by {project.owner.firstName || project.owner.email}</p>
                   </div>
                   <div className="hidden sm:flex flex-wrap gap-1 max-w-[200px]">
-                    {project.techStack?.slice(0, 2).map((skill: string) => (
-                      <SkillBadge key={skill} skill={skill} />
+                    {project.rolesNeeded?.slice(0, 2).map((role: string) => (
+                      <SkillBadge key={role} skill={role} />
                     ))}
                   </div>
                   <div className="flex items-center gap-2 font-mono text-sm whitespace-nowrap min-w-[100px] justify-end">

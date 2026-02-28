@@ -72,7 +72,7 @@ shared/
 - `sessions` - Replit Auth sessions
 - `users` - Replit Auth users
 - `userProfiles` - Extended profile (skills, interests, experience, bio, links)
-- `projects` - Projects with mediaUrls (text[]), rolesNeeded (text[]), tech stack, stats
+- `projects` - Projects with mediaUrls (text[]), rolesNeeded (text[]), stats
 - `projectMembers` - Team members per project
 - `projectChatMessages` - AI chatbot conversation history per project
 - `donations` - Donations to projects (in cents)
@@ -83,7 +83,7 @@ shared/
 - `GET /api/auth/user` - Current authenticated user
 - `GET/POST /api/profile` - User profile management
 - `POST /api/profile/complete-onboarding` - Mark onboarding complete
-- `GET /api/projects` - Browse projects (filter by category, status, techStack)
+- `GET /api/projects` - Browse projects (filter by category, status)
 - `POST /api/projects` - Create project
 - `GET /api/projects/:id` - Project details (auto-increments views)
 - `POST /api/projects/:id/media` - Add media URL to project
@@ -131,4 +131,8 @@ Environment variables: DEFAULT_OBJECT_STORAGE_BUCKET_ID, PUBLIC_OBJECT_SEARCH_PA
 - Query keys: Use array segments like `["/api/projects", id]` for proper cache invalidation
 - Nova: Named "Nova", friendly AI partner personality, chip/CPU icon, decryption animation intro, emoji+bold formatting
 - Nova intro: /projects/new shows futuristic transition page with chip icon, decryption text animation, particle field
+- Roles: Predefined selectable list (29 roles) — replaced free-text input with dropdown multi-select
+- Categories: Expanded to 21 categories (Web App, Mobile App, AI/ML, SaaS, Fintech, Sustainability, IoT, Design, Data Analytics, Marketing, E-Commerce, Education, Healthcare, Social Media, Gaming, Blockchain, Content Creation, DevOps, Research, Nonprofit, Other)
+- Tech stack removed from UI and schema — roles are the primary organizational concept
+- Nova prompt encourages users to add GitHub/portfolio links for traction
 - Design: Space Grotesk font, green primary (#96 85.19% 73.53%), radius: 0rem

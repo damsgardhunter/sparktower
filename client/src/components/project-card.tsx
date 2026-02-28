@@ -41,12 +41,12 @@ export function ProjectCard({ project }: ProjectCardProps) {
           {project.description}
         </p>
         <div className="flex flex-wrap gap-1 mb-4">
-          {project.techStack?.slice(0, 3).map((tech) => (
-            <SkillBadge key={tech} skill={tech} />
+          {project.rolesNeeded?.slice(0, 3).map((role) => (
+            <SkillBadge key={role} skill={role} />
           ))}
-          {project.techStack && project.techStack.length > 3 && (
+          {project.rolesNeeded && project.rolesNeeded.length > 3 && (
             <span className="text-xs text-tertiary">
-              +{project.techStack.length - 3} more
+              +{project.rolesNeeded.length - 3} more
             </span>
           )}
         </div>

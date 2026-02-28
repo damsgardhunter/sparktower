@@ -30,7 +30,7 @@ export interface IStorage {
   completeOnboarding(userId: string): Promise<void>;
   
   // Projects
-  getProjects(filters?: { category?: string; status?: string; techStack?: string[] }): Promise<(Project & { owner: User; profile?: UserProfile })[]>;
+  getProjects(filters?: { category?: string; status?: string }): Promise<(Project & { owner: User; profile?: UserProfile })[]>;
   getProject(id: string): Promise<Project | undefined>;
   createProject(data: InsertProject): Promise<Project>;
   updateProject(id: string, data: Partial<InsertProject>): Promise<Project>;
@@ -91,7 +91,7 @@ export class DatabaseStorage implements IStorage {
       .where(eq(userProfiles.userId, userId));
   }
 
-  async getProjects(filters?: { category?: string; status?: string; techStack?: string[] }): Promise<(Project & { owner: User; profile?: UserProfile })[]> {
+  async getProjects(filters?: { category?: string; status?: string }): Promise<(Project & { owner: User; profile?: UserProfile })[]> {
     let query = db.select().from(projects);
     const conditions = [];
 
@@ -105,16 +105,9 @@ export class DatabaseStorage implements IStorage {
     const result = await (conditions.length > 0 
       ? query.where(and(...conditions)) 
       : query).orderBy(desc(projects.createdAt));
-      
-    let filtered = result;
-    if (filters?.techStack && filters.techStack.length > 0) {
-      filtered = result.filter(p => 
-        p.techStack?.some(tech => filters.techStack?.includes(tech))
-      );
-    }
     
     return await Promise.all(
-      filtered.map(async (project) => {
+      result.map(async (project) => {
         const [owner] = await db.select().from(users).where(eq(users.id, project.ownerId));
         const profile = await this.getUserProfile(project.ownerId);
         return { ...project, owner, profile };

@@ -44,17 +44,12 @@ function useDecryptText(target: string, active: boolean, speed = 40) {
 }
 
 function DecryptionLine({ active }: { active: boolean }) {
-  const [text, setText] = useState("");
+  const [chars, setChars] = useState<string[]>(Array(48).fill("\u00A0"));
 
   useEffect(() => {
     if (!active) return;
     const interval = setInterval(() => {
-      const len = 48;
-      let result = "";
-      for (let i = 0; i < len; i++) {
-        result += CHARS[Math.floor(Math.random() * CHARS.length)];
-      }
-      setText(result);
+      setChars(prev => prev.map(() => CHARS[Math.floor(Math.random() * CHARS.length)]));
     }, 60);
     return () => clearInterval(interval);
   }, [active]);
@@ -65,9 +60,14 @@ function DecryptionLine({ active }: { active: boolean }) {
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className="font-mono text-[10px] tracking-[0.3em] text-emerald-400/40 select-none mb-6"
+      className="font-mono text-[10px] text-emerald-400/40 select-none mb-6 overflow-hidden"
+      style={{ width: "28ch", letterSpacing: "0.3em" }}
     >
-      {text}
+      <div className="flex justify-center">
+        {chars.map((c, i) => (
+          <span key={i} className="inline-block w-[0.6em] text-center">{c}</span>
+        ))}
+      </div>
     </motion.div>
   );
 }

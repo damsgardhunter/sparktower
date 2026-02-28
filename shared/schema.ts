@@ -31,7 +31,6 @@ export const projects = pgTable("projects", {
   description: text("description").notNull(),
   category: text("category").notNull(),
   status: text("status", { enum: ["planning", "active", "completed"] }).default("planning").notNull(),
-  techStack: text("tech_stack").array(),
   teamSize: integer("team_size"),
   estimatedWeeks: integer("estimated_weeks"),
   views: integer("views").default(0).notNull(),

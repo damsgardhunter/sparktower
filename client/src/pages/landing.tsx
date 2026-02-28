@@ -77,7 +77,7 @@ export default function LandingPage() {
               </div>
               <h3 className="text-xl font-bold">AI Project Chat</h3>
               <p className="text-secondary leading-relaxed">
-                Guided project creation with an AI assistant that helps you plan roadmaps, teams, and tech stacks.
+                Guided project creation with an AI assistant that helps you plan roadmaps, teams, and roles.
               </p>
             </div>
             <div className="p-8 rounded-2xl bg-card border border-card-border space-y-4 hover-elevate">

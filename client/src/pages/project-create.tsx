@@ -27,7 +27,6 @@ import {
   Upload,
   X,
   ImageIcon,
-  Plus,
   UserPlus,
   Target,
   Rocket,
@@ -52,7 +51,52 @@ const CATEGORIES = [
   "Fintech",
   "Sustainability",
   "IoT",
+  "Design",
+  "Data Analytics",
+  "Marketing",
+  "E-Commerce",
+  "Education",
+  "Healthcare",
+  "Social Media",
+  "Gaming",
+  "Blockchain",
+  "Content Creation",
+  "DevOps",
+  "Research",
+  "Nonprofit",
   "Other",
+];
+
+const AVAILABLE_ROLES = [
+  "Frontend Developer",
+  "Backend Developer",
+  "Full Stack Developer",
+  "UI/UX Designer",
+  "Graphic Designer",
+  "Product Manager",
+  "Project Manager",
+  "Data Analyst",
+  "Data Scientist",
+  "ML Engineer",
+  "DevOps Engineer",
+  "QA Tester",
+  "Technical Writer",
+  "Content Creator",
+  "Marketing Specialist",
+  "Business Analyst",
+  "Community Manager",
+  "Mobile Developer",
+  "Game Developer",
+  "Security Engineer",
+  "Cloud Architect",
+  "Video Editor",
+  "Illustrator",
+  "Copywriter",
+  "SEO Specialist",
+  "Growth Hacker",
+  "Researcher",
+  "Legal Advisor",
+  "Financial Analyst",
 ];
 
 function NovaAvatar({ size = "md" }: { size?: "sm" | "md" | "lg" }) {
@@ -120,14 +164,12 @@ export default function ProjectCreate() {
   const [showIntro, setShowIntro] = useState(true);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const [techInput, setTechInput] = useState("");
-  const [roleInput, setRoleInput] = useState("");
+  const [roleSelectKey, setRoleSelectKey] = useState(0);
   const [uploadedImages, setUploadedImages] = useState<{ path: string; preview: string }[]>([]);
   const [projectData, setProjectData] = useState<Partial<Project> & { repoUrl?: string; liveUrl?: string }>({
     title: "",
     description: "",
     category: "",
-    techStack: [],
     rolesNeeded: [],
     teamSize: 1,
     estimatedWeeks: 4,
@@ -213,45 +255,19 @@ export default function ProjectCreate() {
     chatMutation.mutate(userMsg);
   };
 
-  const handleAddTech = () => {
-    const tech = techInput.trim();
-    if (!tech) return;
-    if (projectData.techStack?.includes(tech)) {
-      setTechInput("");
-      return;
-    }
-    setProjectData((prev) => ({
-      ...prev,
-      techStack: [...(prev.techStack || []), tech],
-    }));
-    setTechInput("");
-  };
-
-  const handleAddRole = () => {
-    const role = roleInput.trim();
-    if (!role) return;
-    if (projectData.rolesNeeded?.includes(role)) {
-      setRoleInput("");
-      return;
-    }
+  const handleAddRole = (role: string) => {
+    if (projectData.rolesNeeded?.includes(role)) return;
     setProjectData((prev) => ({
       ...prev,
       rolesNeeded: [...(prev.rolesNeeded || []), role],
     }));
-    setRoleInput("");
+    setRoleSelectKey((k) => k + 1);
   };
 
   const handleRemoveRole = (role: string) => {
     setProjectData((prev) => ({
       ...prev,
       rolesNeeded: (prev.rolesNeeded || []).filter((r) => r !== role),
-    }));
-  };
-
-  const handleRemoveTech = (tech: string) => {
-    setProjectData((prev) => ({
-      ...prev,
-      techStack: (prev.techStack || []).filter((t) => t !== tech),
     }));
   };
 
@@ -276,7 +292,7 @@ export default function ProjectCreate() {
     projectData.title,
     projectData.description,
     projectData.category,
-    projectData.techStack && projectData.techStack.length > 0,
+    projectData.rolesNeeded && projectData.rolesNeeded.length > 0,
   ].filter(Boolean).length;
 
   return (
@@ -481,47 +497,6 @@ export default function ProjectCreate() {
                 />
               </div>
               <div>
-                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Tech Stack</label>
-                <div className="flex flex-wrap gap-1 mt-1 min-h-[28px]">
-                  {projectData.techStack?.map((tech) => (
-                    <Badge key={tech} variant="secondary" className="text-xs flex items-center gap-1">
-                      {tech}
-                      <button
-                        onClick={() => handleRemoveTech(tech)}
-                        className="ml-0.5 hover:text-destructive"
-                        data-testid={`button-remove-tech-${tech}`}
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </Badge>
-                  ))}
-                </div>
-                <div className="flex gap-1 mt-2">
-                  <Input
-                    value={techInput}
-                    onChange={(e) => setTechInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        handleAddTech();
-                      }
-                    }}
-                    placeholder="Add tech (Enter to add)"
-                    className="text-xs h-8"
-                    data-testid="input-tech-stack"
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleAddTech}
-                    className="h-8 px-2 shrink-0"
-                    data-testid="button-add-tech"
-                  >
-                    <Plus className="h-3 w-3" />
-                  </Button>
-                </div>
-              </div>
-              <div>
                 <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1">
                   <UserPlus className="h-3 w-3" /> Roles Needed
                 </label>
@@ -539,30 +514,21 @@ export default function ProjectCreate() {
                     </Badge>
                   ))}
                 </div>
-                <div className="flex gap-1 mt-2">
-                  <Input
-                    value={roleInput}
-                    onChange={(e) => setRoleInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        handleAddRole();
-                      }
-                    }}
-                    placeholder="e.g. Frontend Dev, Designer..."
-                    className="text-xs h-8"
-                    data-testid="input-roles-needed"
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleAddRole}
-                    className="h-8 px-2 shrink-0"
-                    data-testid="button-add-role"
-                  >
-                    <Plus className="h-3 w-3" />
-                  </Button>
-                </div>
+                <Select
+                  key={roleSelectKey}
+                  onValueChange={(val) => handleAddRole(val)}
+                >
+                  <SelectTrigger className="mt-2 text-xs h-8" data-testid="select-roles-needed">
+                    <SelectValue placeholder="Select a role to add..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {AVAILABLE_ROLES.filter((r) => !projectData.rolesNeeded?.includes(r)).map((role) => (
+                      <SelectItem key={role} value={role} data-testid={`select-role-${role.replace(/\s/g, "-").toLowerCase()}`}>
+                        {role}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </CardContent>
           </Card>
@@ -650,9 +616,9 @@ export default function ProjectCreate() {
                 <div className="space-y-2">
                   <ReadinessItem label="Title & Description" done={!!(projectData.title && projectData.description)} />
                   <ReadinessItem label="Category Selected" done={!!projectData.category} />
-                  <ReadinessItem label="Tech Stack Defined" done={!!(projectData.techStack && projectData.techStack.length > 0)} />
                   <ReadinessItem label="Roles Identified" done={!!(projectData.rolesNeeded && projectData.rolesNeeded.length > 0)} />
                   <ReadinessItem label="Timeline Estimated" done={!!(projectData.estimatedWeeks && projectData.estimatedWeeks > 0)} />
+                  <ReadinessItem label="Links Added" done={!!(projectData.repoUrl || projectData.liveUrl)} />
                 </div>
                 <p className="text-xs text-muted-foreground italic mt-2" data-testid="text-motivation">
                   Every great product started as an idea. You're already ahead by planning it out.

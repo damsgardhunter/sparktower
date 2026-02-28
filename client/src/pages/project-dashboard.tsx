@@ -154,14 +154,16 @@ export default function ProjectDashboard() {
             />
           </section>
 
-          <section className="space-y-4">
-            <h2 className="text-xl font-semibold">Tech Stack</h2>
-            <div className="flex flex-wrap gap-2">
-              {project.techStack?.map((tech) => (
-                <SkillBadge key={tech} skill={tech} variant="outline" />
-              ))}
-            </div>
-          </section>
+          {project.rolesNeeded && project.rolesNeeded.length > 0 && (
+            <section className="space-y-4">
+              <h2 className="text-xl font-semibold">Roles Needed</h2>
+              <div className="flex flex-wrap gap-2">
+                {project.rolesNeeded.map((role) => (
+                  <SkillBadge key={role} skill={role} variant="outline" />
+                ))}
+              </div>
+            </section>
+          )}
 
           <div className="flex flex-wrap gap-4">
             {project.repoUrl && (

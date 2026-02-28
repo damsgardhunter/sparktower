@@ -62,27 +62,26 @@ Your guided flow:
 3. Ask what **tools and platforms** they're using or planning to use (GitHub, Replit, Google Colab, Figma, etc.). If they have existing repos or live demos, ask for links.
 4. Ask about their **target audience** — who will use this? What problem does it solve?
 5. Work through potential challenges: "🤔 Let me think about what could be tricky here..."
-6. Provide estimates: team size, timeline, tech stack recommendations, and a polished description.
+6. Provide estimates: team size, timeline, roles needed, and a polished description.
 7. Present a structured summary using this format:
    🚀 **Project Title**: ...
    📝 **Description**: ...
    🎯 **Category**: ...
-   ⚡ **Tech Stack**: ...
    🧑‍💻 **Roles Needed**: ...
    👥 **Team Size**: ...
    📅 **Timeline**: ... weeks
    🔗 **Repository**: ... (if provided)
    🌐 **Live URL**: ... (if provided)
-8. Confirm with the user before they create the project.
+8. IMPORTANT: When recommending timeline and team details, always encourage the user to add their **GitHub profile, portfolio, or previous work links**. Say something like: "💡 **Pro tip**: Adding your GitHub or portfolio link will help you gain traction and attract collaborators who can see your track record!"
+9. Confirm with the user before they create the project.
 
 As the conversation progresses, extract and suggest:
 - A clear project title
 - A concise description (2-3 sentences, professional)
-- The tech stack they plan to use (as an array)
-- Specific roles needed for the team (as an array, e.g. ["Frontend Developer", "UI/UX Designer", "Backend Engineer", "ML Engineer"])
+- Specific roles needed for the team (as an array). Choose from: Frontend Developer, Backend Developer, Full Stack Developer, UI/UX Designer, Graphic Designer, Product Manager, Project Manager, Data Analyst, Data Scientist, ML Engineer, DevOps Engineer, QA Tester, Technical Writer, Content Creator, Marketing Specialist, Business Analyst, Community Manager, Mobile Developer, Game Developer, Security Engineer, Cloud Architect, Video Editor, Illustrator, Copywriter, SEO Specialist, Growth Hacker, Researcher, Legal Advisor, Financial Analyst
 - Team size needed
 - Estimated weeks to complete
-- Category (Web App, Mobile App, AI/ML, SaaS, Fintech, Sustainability, IoT, Other)
+- Category (Web App, Mobile App, AI/ML, SaaS, Fintech, Sustainability, IoT, Design, Data Analytics, Marketing, E-Commerce, Education, Healthcare, Social Media, Gaming, Blockchain, Content Creation, DevOps, Research, Nonprofit, Other)
 - GitHub/repo URL if mentioned (repoUrl)
 - Live demo/deployment URL if mentioned (liveUrl)
 
@@ -93,7 +92,7 @@ When presenting the final summary, end with an encouraging note like "✨ This i
 After each user message, respond conversationally AND include a JSON block in your response with any updates you can extract.
 
 Format: Respond with your conversational message, then on a new line include:
-<project_update>{"title": "...", "description": "...", "techStack": [...], "rolesNeeded": [...], "teamSize": 2, "estimatedWeeks": 8, "category": "...", "repoUrl": "...", "liveUrl": "..."}</project_update>
+<project_update>{"title": "...", "description": "...", "rolesNeeded": [...], "teamSize": 2, "estimatedWeeks": 8, "category": "...", "repoUrl": "...", "liveUrl": "..."}</project_update>
 
 Only include fields you have enough info to fill. Start empty if needed.`;
 
@@ -131,11 +130,10 @@ Only include fields you have enough info to fill. Start empty if needed.`;
 
   // Projects
   app.get("/api/projects", async (req, res) => {
-    const { category, status, techStack } = req.query;
+    const { category, status } = req.query;
     const filters = {
       category: category as string,
       status: status as string,
-      techStack: techStack ? (Array.isArray(techStack) ? techStack : [techStack]) as string[] : undefined
     };
     const projects = await storage.getProjects(filters);
     res.json(projects);
@@ -410,7 +408,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
           description: "An AI-powered platform for collaboration.",
           category: "Software",
           status: "active" as const,
-          techStack: ["React", "Node.js", "OpenAI"],
+          rolesNeeded: ["Frontend Developer", "Backend Developer", "ML Engineer"],
           teamSize: 3,
           estimatedWeeks: 12,
           mediaUrls: [],
@@ -421,7 +419,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
           description: "Track your energy consumption and reduce your carbon footprint.",
           category: "Sustainability",
           status: "planning" as const,
-          techStack: ["Python", "Flask", "PostgreSQL"],
+          rolesNeeded: ["Data Analyst", "Backend Developer"],
           teamSize: 2,
           estimatedWeeks: 8,
         },
@@ -431,7 +429,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
           description: "A secure and easy-to-use crypto wallet.",
           category: "Fintech",
           status: "completed" as const,
-          techStack: ["React Native", "Solidity", "Go"],
+          rolesNeeded: ["Mobile Developer", "Full Stack Developer", "Security Engineer"],
           teamSize: 4,
           estimatedWeeks: 16,
         },
@@ -441,7 +439,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
           description: "Control your home with your voice.",
           category: "IoT",
           status: "active" as const,
-          techStack: ["Raspberry Pi", "MQTT", "Node-RED"],
+          rolesNeeded: ["DevOps Engineer", "Full Stack Developer"],
           teamSize: 1,
           estimatedWeeks: 6,
         }
