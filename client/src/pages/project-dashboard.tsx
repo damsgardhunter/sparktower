@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -7,7 +8,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { UserAvatar } from "@/components/user-avatar";
 import { SkillBadge } from "@/components/skill-badge";
 import { DonationButton } from "@/components/donation-button";
-import { CodeDisplay } from "@/components/code-display";
+import { MediaGallery } from "@/components/media-gallery";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Loader2,
   Users,
@@ -17,6 +26,8 @@ import {
   Github,
   Share2,
   MessageSquare,
+  Video,
+  Sparkles,
 } from "lucide-react";
 import type { Project, ProjectMember, UserProfile, User } from "@shared/schema";
 import { useAuth } from "@/hooks/use-auth";
@@ -28,6 +39,8 @@ export default function ProjectDashboard() {
   const { user } = useAuth();
   const { toast } = useToast();
   const projectId = params?.id;
+  const [videoModalOpen, setVideoModalOpen] = useState(false);
+  const [videoPrompt, setVideoPrompt] = useState("");
 
   const { data: project, isLoading: projectLoading } = useQuery<Project>({
     queryKey: ["/api/projects", projectId],
@@ -46,6 +59,20 @@ export default function ProjectDashboard() {
     onSuccess: () => {
       toast({ title: "Joined project!", description: "You are now a member of this project." });
       queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "members"] });
+    },
+  });
+
+  const videoMutation = useMutation({
+    mutationFn: async (prompt: string) => {
+      const res = await apiRequest("POST", `/api/projects/${projectId}/generate-video`, { prompt });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({ title: "Storyboard Generated", description: "AI video storyboard has been created." });
+      setVideoModalOpen(false);
+    },
+    onError: () => {
+      toast({ title: "Generation failed", description: "Could not generate video storyboard.", variant: "destructive" });
     },
   });
 
@@ -99,12 +126,33 @@ export default function ProjectDashboard() {
             </p>
           </section>
 
-          {project.codeSnippet && (
-            <section className="space-y-4">
-              <h2 className="text-xl font-semibold">Code Preview</h2>
-              <CodeDisplay code={project.codeSnippet} />
-            </section>
-          )}
+          <section className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-semibold">Media Gallery</h2>
+              {isOwner && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-2"
+                  onClick={() => {
+                    setVideoPrompt(
+                      `Create a showcase video for "${project.title}": ${project.description}`
+                    );
+                    setVideoModalOpen(true);
+                  }}
+                  data-testid="button-generate-video"
+                >
+                  <Video className="h-4 w-4" />
+                  Generate AI Video
+                </Button>
+              )}
+            </div>
+            <MediaGallery
+              projectId={project.id}
+              mediaUrls={project.mediaUrls || []}
+              isOwner={isOwner}
+            />
+          </section>
 
           <section className="space-y-4">
             <h2 className="text-xl font-semibold">Tech Stack</h2>
@@ -192,6 +240,51 @@ export default function ProjectDashboard() {
           </Card>
         </div>
       </div>
+
+      <Dialog open={videoModalOpen} onOpenChange={setVideoModalOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-primary" />
+              Generate AI Showcase Video
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              Describe the showcase video you'd like to create for your project. Nova will generate a detailed storyboard.
+            </p>
+            <Textarea
+              value={videoPrompt}
+              onChange={(e) => setVideoPrompt(e.target.value)}
+              placeholder="Describe your video..."
+              className="min-h-[120px]"
+              data-testid="textarea-video-prompt"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setVideoModalOpen(false)} data-testid="button-cancel-video">
+              Cancel
+            </Button>
+            <Button
+              onClick={() => videoMutation.mutate(videoPrompt)}
+              disabled={videoMutation.isPending || !videoPrompt.trim()}
+              data-testid="button-submit-video"
+            >
+              {videoMutation.isPending ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  Generating...
+                </>
+              ) : (
+                <>
+                  <Video className="h-4 w-4 mr-2" />
+                  Generate Storyboard
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -36,7 +36,7 @@ export const projects = pgTable("projects", {
   estimatedWeeks: integer("estimated_weeks"),
   views: integer("views").default(0).notNull(),
   totalDonations: integer("total_donations").default(0).notNull(),
-  codeSnippet: text("code_snippet"),
+  mediaUrls: text("media_urls").array().default([]),
   liveUrl: text("live_url"),
   repoUrl: text("repo_url"),
   createdAt: timestamp("created_at").defaultNow().notNull(),

@@ -2,12 +2,14 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { db } from "./db";
-import { users, projectMembers } from "@shared/schema";
+import { users, projectMembers, projects } from "@shared/schema";
 import { setupAuth, isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { registerAuthRoutes } from "./replit_integrations/auth/routes";
+import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
 import { insertUserProfileSchema, insertProjectSchema, insertDonationSchema } from "@shared/schema";
 import { z } from "zod";
 import OpenAI from "openai";
+import { eq } from "drizzle-orm";
 
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
@@ -18,9 +20,9 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-  // Setup Replit Auth
   await setupAuth(app);
   registerAuthRoutes(app);
+  registerObjectStorageRoutes(app);
 
   // User Profile
   app.get("/api/profile", isAuthenticated, async (req: any, res) => {
@@ -47,11 +49,18 @@ export async function registerRoutes(
       const { message, history = [] } = req.body;
       if (!message) return res.status(400).json({ message: "Message is required" });
 
-      const systemPrompt = `You are SparkTower's AI project planning assistant. Help the user define their project idea clearly.
+      const systemPrompt = `You are Nova, SparkTower's AI project partner. You have a friendly, knowledgeable personality. You always refer to yourself as "Nova" and use an encouraging, collaborative tone.
+
+Your guided flow:
+1. First, understand what kind of project the user wants to build. Ask about their vision.
+2. Ask clarifying questions about scope, target audience, and key features.
+3. Work through potential challenges: "Let me think about what could be tricky here..."
+4. Provide estimates: team size, timeline, tech stack recommendations, and a polished description.
+5. Summarize everything and confirm with the user before they create the project.
 
 As the conversation progresses, extract and suggest:
 - A clear project title
-- A concise description
+- A concise description (2-3 sentences, professional)
 - The tech stack they plan to use (as an array)
 - Team size needed
 - Estimated weeks to complete
@@ -268,12 +277,80 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     const user = await storage.getUser(req.params.id);
     if (!user) return res.status(404).json({ message: "User not found" });
     const profile = await storage.getUserProfile(req.params.id);
-    const projects = await storage.getProjects(); // Need to filter by ownerId
-    const userProjects = projects.filter(p => p.ownerId === req.params.id);
+    const allProjects = await storage.getProjects();
+    const userProjects = allProjects.filter(p => p.ownerId === req.params.id);
     res.json({ ...user, profile, projects: userProjects });
   });
 
-  // Seed Data
+  app.post("/api/projects/:id/media", isAuthenticated, async (req: any, res) => {
+    try {
+      const project = await storage.getProject(req.params.id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.ownerId !== req.user.claims.sub) return res.status(403).json({ message: "Unauthorized" });
+
+      const { objectPath } = req.body;
+      if (!objectPath || typeof objectPath !== "string") {
+        return res.status(400).json({ message: "objectPath is required and must be a string" });
+      }
+
+      const updated = await storage.addProjectMedia(req.params.id, objectPath);
+      res.json(updated);
+    } catch (error) {
+      console.error("Error adding media:", error);
+      res.status(500).json({ message: "Failed to add media" });
+    }
+  });
+
+  app.delete("/api/projects/:id/media/:index", isAuthenticated, async (req: any, res) => {
+    try {
+      const project = await storage.getProject(req.params.id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.ownerId !== req.user.claims.sub) return res.status(403).json({ message: "Unauthorized" });
+
+      const index = parseInt(req.params.index);
+      if (isNaN(index)) return res.status(400).json({ message: "Invalid index" });
+
+      const updated = await storage.removeProjectMedia(req.params.id, index);
+      res.json(updated);
+    } catch (error) {
+      console.error("Error removing media:", error);
+      res.status(500).json({ message: "Failed to remove media" });
+    }
+  });
+
+  app.post("/api/projects/:id/generate-video", isAuthenticated, async (req: any, res) => {
+    try {
+      const project = await storage.getProject(req.params.id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.ownerId !== req.user.claims.sub) return res.status(403).json({ message: "Unauthorized" });
+
+      const { prompt } = req.body;
+      const videoPrompt = prompt || `Create a short showcase video for the project "${project.title}": ${project.description}`;
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-5.2",
+        messages: [
+          {
+            role: "system",
+            content: "You are a creative director. Generate a detailed video storyboard description for a 30-second project showcase video. Include scene descriptions, text overlays, and visual effects suggestions. Format as a structured storyboard."
+          },
+          { role: "user", content: videoPrompt }
+        ],
+      });
+
+      const storyboard = response.choices[0].message.content || "Video storyboard generation failed.";
+
+      res.json({
+        storyboard,
+        message: "AI video storyboard generated. Full video generation coming soon!",
+        projectId: project.id,
+      });
+    } catch (error) {
+      console.error("Error generating video:", error);
+      res.status(500).json({ message: "Failed to generate video" });
+    }
+  });
+
   app.post("/api/seed", async (req, res) => {
     try {
       // 1. Create some users if they don't exist
@@ -312,7 +389,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
           techStack: ["React", "Node.js", "OpenAI"],
           teamSize: 3,
           estimatedWeeks: 12,
-          codeSnippet: "console.log('Hello SparkTower');",
+          mediaUrls: [],
         },
         {
           ownerId: "user2",

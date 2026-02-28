@@ -52,6 +52,10 @@ export interface IStorage {
   // Leaderboard
   getLeaderboard(sortBy: "views" | "donations", limit: number): Promise<(Project & { owner: User })[]>;
   
+  // Media
+  addProjectMedia(projectId: string, objectPath: string): Promise<Project>;
+  removeProjectMedia(projectId: string, index: number): Promise<Project>;
+
   // User Search
   searchUsers(query: string): Promise<(User & { profile?: UserProfile })[]>;
   getUser(id: string): Promise<User | undefined>;
@@ -236,6 +240,32 @@ export class DatabaseStorage implements IStorage {
         return { ...project, owner };
       })
     );
+  }
+
+  async addProjectMedia(projectId: string, objectPath: string): Promise<Project> {
+    const project = await this.getProject(projectId);
+    if (!project) throw new Error("Project not found");
+    const currentUrls = project.mediaUrls || [];
+    const [updated] = await db
+      .update(projects)
+      .set({ mediaUrls: [...currentUrls, objectPath] })
+      .where(eq(projects.id, projectId))
+      .returning();
+    return updated;
+  }
+
+  async removeProjectMedia(projectId: string, index: number): Promise<Project> {
+    const project = await this.getProject(projectId);
+    if (!project) throw new Error("Project not found");
+    const currentUrls = project.mediaUrls || [];
+    if (index < 0 || index >= currentUrls.length) throw new Error("Invalid index");
+    const newUrls = currentUrls.filter((_, i) => i !== index);
+    const [updated] = await db
+      .update(projects)
+      .set({ mediaUrls: newUrls })
+      .where(eq(projects.id, projectId))
+      .returning();
+    return updated;
   }
 
   async searchUsers(query: string): Promise<(User & { profile?: UserProfile })[]> {
