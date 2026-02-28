@@ -1,16 +1,361 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
+import { db } from "./db";
+import { users, projectMembers } from "@shared/schema";
+import { setupAuth, isAuthenticated } from "./replit_integrations/auth/replitAuth";
+import { registerAuthRoutes } from "./replit_integrations/auth/routes";
+import { insertUserProfileSchema, insertProjectSchema, insertDonationSchema } from "@shared/schema";
+import { z } from "zod";
+import OpenAI from "openai";
+
+const openai = new OpenAI({
+  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+});
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-  // put application routes here
-  // prefix all routes with /api
+  // Setup Replit Auth
+  await setupAuth(app);
+  registerAuthRoutes(app);
 
-  // use storage to perform CRUD operations on the storage interface
-  // e.g. storage.insertUser(user) or storage.getUserByUsername(username)
+  // User Profile
+  app.get("/api/profile", isAuthenticated, async (req: any, res) => {
+    const profile = await storage.getUserProfile(req.user.claims.sub);
+    if (!profile) return res.status(404).json({ message: "Profile not found" });
+    res.json(profile);
+  });
+
+  app.post("/api/profile", isAuthenticated, async (req: any, res) => {
+    const userId = req.user.claims.sub;
+    const validated = insertUserProfileSchema.parse({ ...req.body, userId });
+    const profile = await storage.upsertUserProfile(validated);
+    res.json(profile);
+  });
+
+  app.post("/api/profile/complete-onboarding", isAuthenticated, async (req: any, res) => {
+    await storage.completeOnboarding(req.user.claims.sub);
+    res.json({ success: true });
+  });
+
+  // General AI Chat for project creation (no project ID needed yet)
+  app.post("/api/chat", isAuthenticated, async (req: any, res) => {
+    try {
+      const { message, history = [] } = req.body;
+      if (!message) return res.status(400).json({ message: "Message is required" });
+
+      const systemPrompt = `You are SparkTower's AI project planning assistant. Help the user define their project idea clearly.
+
+As the conversation progresses, extract and suggest:
+- A clear project title
+- A concise description
+- The tech stack they plan to use (as an array)
+- Team size needed
+- Estimated weeks to complete
+- Category (Web App, Mobile App, AI/ML, SaaS, Fintech, Sustainability, IoT, Other)
+
+After each user message, respond conversationally AND include a JSON block in your response with any updates you can extract.
+
+Format: Respond with your conversational message, then on a new line include:
+<project_update>{"title": "...", "description": "...", "techStack": [...], "teamSize": 2, "estimatedWeeks": 8, "category": "..."}</project_update>
+
+Only include fields you have enough info to fill. Start empty if needed.`;
+
+      const messages = [
+        { role: "system" as const, content: systemPrompt },
+        ...history.map((m: any) => ({ role: m.role as "user" | "assistant", content: m.content })),
+        { role: "user" as const, content: message }
+      ];
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-5.2",
+        messages,
+      });
+
+      const rawReply = response.choices[0].message.content || "I'd love to help! Tell me more about your project idea.";
+      
+      // Extract project updates from response
+      const updateMatch = rawReply.match(/<project_update>([\s\S]*?)<\/project_update>/);
+      let projectUpdates = null;
+      let reply = rawReply;
+      
+      if (updateMatch) {
+        try {
+          projectUpdates = JSON.parse(updateMatch[1]);
+          reply = rawReply.replace(/<project_update>[\s\S]*?<\/project_update>/, "").trim();
+        } catch {}
+      }
+
+      res.json({ reply, projectUpdates });
+    } catch (error) {
+      console.error("Chat error:", error);
+      res.status(500).json({ message: "AI chat failed" });
+    }
+  });
+
+  // Projects
+  app.get("/api/projects", async (req, res) => {
+    const { category, status, techStack } = req.query;
+    const filters = {
+      category: category as string,
+      status: status as string,
+      techStack: techStack ? (Array.isArray(techStack) ? techStack : [techStack]) as string[] : undefined
+    };
+    const projects = await storage.getProjects(filters);
+    res.json(projects);
+  });
+
+  app.post("/api/projects", isAuthenticated, async (req: any, res) => {
+    const ownerId = req.user.claims.sub;
+    const validated = insertProjectSchema.parse({ ...req.body, ownerId });
+    const project = await storage.createProject(validated);
+    res.json(project);
+  });
+
+  app.get("/api/projects/:id", async (req, res) => {
+    const project = await storage.getProject(req.params.id);
+    if (!project) return res.status(404).json({ message: "Project not found" });
+    await storage.incrementProjectViews(req.params.id);
+    res.json(project);
+  });
+
+  app.get("/api/projects/:id/members", async (req, res) => {
+    const members = await storage.getProjectMembers(req.params.id);
+    res.json(members);
+  });
+
+  app.post("/api/projects/:id/join", isAuthenticated, async (req: any, res) => {
+    const userId = req.user.claims.sub;
+    const projectId = req.params.id;
+    const { role } = req.body;
+    
+    // Check if already a member
+    const members = await storage.getProjectMembers(projectId);
+    if (members.some(m => m.userId === userId)) {
+      return res.status(400).json({ message: "Already a member" });
+    }
+
+    const member = await db.insert(projectMembers).values({
+      projectId,
+      userId,
+      role: role || "member"
+    }).returning();
+    
+    res.json(member[0]);
+  });
+
+  app.patch("/api/projects/:id", isAuthenticated, async (req: any, res) => {
+    const project = await storage.getProject(req.params.id);
+    if (!project) return res.status(404).json({ message: "Project not found" });
+    if (project.ownerId !== req.user.claims.sub) return res.status(403).json({ message: "Unauthorized" });
+    
+    const validated = insertProjectSchema.partial().parse(req.body);
+    const updated = await storage.updateProject(req.params.id, validated);
+    res.json(updated);
+  });
+
+  // Project Chat
+  app.get("/api/projects/:id/chat", isAuthenticated, async (req, res) => {
+    const messages = await storage.getProjectChatMessages(req.params.id as string);
+    res.json(messages);
+  });
+
+  app.post("/api/projects/:id/chat", isAuthenticated, async (req: any, res) => {
+    const projectId = req.params.id;
+    const { message } = req.body;
+    
+    const project = await storage.getProject(projectId);
+    if (!project) return res.status(404).json({ message: "Project not found" });
+
+    // Save user message
+    await storage.addProjectChatMessage(projectId, "user", message);
+
+    // Get history
+    const history = await storage.getProjectChatMessages(projectId);
+    
+    // Call AI
+    const response = await openai.chat.completions.create({
+      model: "gpt-5.2",
+      messages: [
+        { role: "system", content: `You are an expert project consultant for SparkTower. Help the user plan their project: "${project.title}". Provide tips on timeline, team size, roadmap, and tech stack.` },
+        ...history.map(m => ({ role: m.role, content: m.content }))
+      ],
+      stream: false, // Session plan says streaming SSE but storage might not support it easily. Let's start with simple.
+    });
+
+    const aiContent = response.choices[0].message.content || "I'm sorry, I couldn't generate a response.";
+    const aiMessage = await storage.addProjectChatMessage(projectId, "assistant", aiContent);
+    
+    res.json(aiMessage);
+  });
+
+  // Donations
+  app.get("/api/projects/:id/donations", async (req, res) => {
+    const donations = await storage.getProjectDonations(req.params.id);
+    res.json(donations);
+  });
+
+  app.post("/api/projects/:id/donate", isAuthenticated, async (req: any, res) => {
+    const donorId = req.user.claims.sub;
+    const projectId = req.params.id;
+    const validated = insertDonationSchema.parse({ ...req.body, donorId, projectId });
+    const donation = await storage.createDonation(validated);
+    res.json(donation);
+  });
+
+  // Matches
+  app.get("/api/matches", isAuthenticated, async (req: any, res) => {
+    const userId = req.user.claims.sub;
+    const matches = await storage.getUserMatches(userId);
+    res.json(matches);
+  });
+
+  app.post("/api/matches/generate", isAuthenticated, async (req: any, res) => {
+    const userId = req.user.claims.sub;
+    const userProfile = await storage.getUserProfile(userId);
+    if (!userProfile) return res.status(400).json({ message: "Complete your profile first" });
+
+    const allProfiles = await storage.searchUsers(""); // Simple way to get all for now
+    const otherProfiles = allProfiles.filter(p => p.id !== userId && p.profile?.isOnboarded);
+
+    // AI logic for matching
+    const prompt = `Match the following user with others based on skills, interests, and experience level.
+    Current User: ${JSON.stringify(userProfile)}
+    Other Users: ${JSON.stringify(otherProfiles.map(p => ({ id: p.id, ...p.profile })))}
+    
+    Return a JSON array of matches with: { matchedUserId: string, score: number (0-100), reasons: string[] }`;
+
+    const response = await openai.chat.completions.create({
+      model: "gpt-5.2",
+      messages: [{ role: "system", content: "You are a matchmaking AI. Return only valid JSON." }, { role: "user", content: prompt }],
+      response_format: { type: "json_object" }
+    });
+
+    const result = JSON.parse(response.choices[0].message.content || '{"matches": []}');
+    const matches = result.matches || [];
+
+    const savedMatches = await Promise.all(matches.map((m: any) => 
+      storage.upsertUserMatch({
+        userId,
+        matchedUserId: m.matchedUserId,
+        score: m.score,
+        reasons: m.reasons
+      })
+    ));
+
+    res.json(savedMatches);
+  });
+
+  // Leaderboard
+  app.get("/api/leaderboard", async (req, res) => {
+    const sortBy = (req.query.sortBy as "views" | "donations") || "views";
+    const limit = parseInt(req.query.limit as string) || 10;
+    const leaderboard = await storage.getLeaderboard(sortBy, limit);
+    res.json(leaderboard);
+  });
+
+  // Users
+  app.get("/api/users/search", async (req, res) => {
+    const query = (req.query.q as string) || "";
+    const users = await storage.searchUsers(query);
+    res.json(users);
+  });
+
+  app.get("/api/users/:id", async (req, res) => {
+    const user = await storage.getUser(req.params.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+    const profile = await storage.getUserProfile(req.params.id);
+    const projects = await storage.getProjects(); // Need to filter by ownerId
+    const userProjects = projects.filter(p => p.ownerId === req.params.id);
+    res.json({ ...user, profile, projects: userProjects });
+  });
+
+  // Seed Data
+  app.post("/api/seed", async (req, res) => {
+    try {
+      // 1. Create some users if they don't exist
+      const demoUsers = [
+        { id: "user1", email: "alice@example.com", firstName: "Alice", lastName: "Smith" },
+        { id: "user2", email: "bob@example.com", firstName: "Bob", lastName: "Jones" },
+        { id: "user3", email: "charlie@example.com", firstName: "Charlie", lastName: "Brown" },
+      ];
+
+      for (const u of demoUsers) {
+        const existing = await storage.getUser(u.id);
+        if (!existing) {
+          await db.insert(users).values(u).onConflictDoNothing();
+          
+          await storage.upsertUserProfile({
+            userId: u.id,
+            headline: `${u.firstName}'s Headline`,
+            bio: `This is ${u.firstName}'s bio.`,
+            skills: ["React", "TypeScript", "Node.js"],
+            interests: ["Web Development", "AI"],
+            experienceLevel: "intermediate",
+            location: "Remote",
+            isOnboarded: true,
+          });
+        }
+      }
+
+      // 2. Create some projects
+      const projectsData = [
+        {
+          ownerId: "user1",
+          title: "SparkTower AI",
+          description: "An AI-powered platform for collaboration.",
+          category: "Software",
+          status: "active" as const,
+          techStack: ["React", "Node.js", "OpenAI"],
+          teamSize: 3,
+          estimatedWeeks: 12,
+          codeSnippet: "console.log('Hello SparkTower');",
+        },
+        {
+          ownerId: "user2",
+          title: "Green Energy Tracker",
+          description: "Track your energy consumption and reduce your carbon footprint.",
+          category: "Sustainability",
+          status: "planning" as const,
+          techStack: ["Python", "Flask", "PostgreSQL"],
+          teamSize: 2,
+          estimatedWeeks: 8,
+        },
+        {
+          ownerId: "user3",
+          title: "Crypto Wallet",
+          description: "A secure and easy-to-use crypto wallet.",
+          category: "Fintech",
+          status: "completed" as const,
+          techStack: ["React Native", "Solidity", "Go"],
+          teamSize: 4,
+          estimatedWeeks: 16,
+        },
+        {
+          ownerId: "user1",
+          title: "Smart Home Assistant",
+          description: "Control your home with your voice.",
+          category: "IoT",
+          status: "active" as const,
+          techStack: ["Raspberry Pi", "MQTT", "Node-RED"],
+          teamSize: 1,
+          estimatedWeeks: 6,
+        }
+      ];
+
+      for (const p of projectsData) {
+        await storage.createProject(p);
+      }
+
+      res.json({ message: "Seed data created successfully" });
+    } catch (error) {
+      console.error("Error seeding data:", error);
+      res.status(500).json({ message: "Failed to seed data", error: error instanceof Error ? error.message : String(error) });
+    }
+  });
 
   return httpServer;
 }

@@ -1,0 +1,72 @@
+import {
+  Card,
+  CardContent,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { UserAvatar } from "@/components/user-avatar";
+import { SkillBadge } from "@/components/skill-badge";
+import { useLocation } from "wouter";
+import { Eye, DollarSign } from "lucide-react";
+import type { Project, User, UserProfile } from "@shared/schema";
+import { Badge } from "@/components/ui/badge";
+
+interface ProjectCardProps {
+  project: Project & { owner: User; profile?: UserProfile };
+}
+
+export function ProjectCard({ project }: ProjectCardProps) {
+  const [, setLocation] = useLocation();
+  const ownerName = project.owner.firstName || project.owner.email || "Anonymous";
+  const ownerAvatar = project.profile?.avatarUrl;
+
+  return (
+    <Card
+      className="hover-elevate cursor-pointer overflow-visible"
+      onClick={() => setLocation(`/projects/${project.id}`)}
+      data-testid={`card-project-${project.id}`}
+    >
+      <CardHeader className="flex flex-row items-center justify-between gap-1 space-y-0 pb-2">
+        <CardTitle className="text-xl font-bold line-clamp-1">{project.title}</CardTitle>
+        <div className="flex items-center gap-2">
+          <Badge variant={project.status === "active" ? "default" : "secondary"}>
+            {project.status}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <p className="text-secondary line-clamp-2 min-h-[3rem] mb-4">
+          {project.description}
+        </p>
+        <div className="flex flex-wrap gap-1 mb-4">
+          {project.techStack?.slice(0, 3).map((tech) => (
+            <SkillBadge key={tech} skill={tech} />
+          ))}
+          {project.techStack && project.techStack.length > 3 && (
+            <span className="text-xs text-tertiary">
+              +{project.techStack.length - 3} more
+            </span>
+          )}
+        </div>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <UserAvatar src={ownerAvatar} name={ownerName} className="h-6 w-6" />
+            <span className="text-sm text-secondary">{ownerName}</span>
+          </div>
+          <div className="flex items-center gap-3 text-sm text-tertiary">
+            <div className="flex items-center gap-1">
+              <Eye className="h-4 w-4" />
+              <span>{project.views}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <DollarSign className="h-4 w-4" />
+              <span>{project.totalDonations / 100}</span>
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
