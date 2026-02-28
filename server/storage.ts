@@ -12,16 +12,28 @@ import {
   type InsertDonation,
   type UserMatch,
   type InsertUserMatch,
+  type Badge,
+  type InsertBadge,
+  type UserBadge,
+  type InsertUserBadge,
+  type Contest,
+  type InsertContest,
+  type ContestParticipant,
+  type InsertContestParticipant,
   users,
   userProfiles,
   projects,
   projectMembers,
   projectChatMessages,
   donations,
-  userMatches
+  userMatches,
+  badges,
+  userBadges,
+  contests,
+  contestParticipants,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, or, ilike, sql, and } from "drizzle-orm";
+import { eq, desc, or, ilike, sql, and, gte, lte } from "drizzle-orm";
 
 export interface IStorage {
   // User Profile
@@ -59,6 +71,22 @@ export interface IStorage {
   // User Search
   searchUsers(query: string): Promise<(User & { profile?: UserProfile })[]>;
   getUser(id: string): Promise<User | undefined>;
+
+  // Badges
+  getBadges(): Promise<Badge[]>;
+  getBadge(id: string): Promise<Badge | undefined>;
+  createBadge(data: InsertBadge): Promise<Badge>;
+  getUserBadges(userId: string): Promise<(UserBadge & { badge: Badge })[]>;
+  awardBadge(userId: string, badgeId: string): Promise<UserBadge>;
+
+  // Contests
+  getContests(filters?: { status?: string }): Promise<(Contest & { badge?: Badge; participantCount: number })[]>;
+  getContest(id: string): Promise<(Contest & { badge?: Badge; participantCount: number }) | undefined>;
+  createContest(data: InsertContest): Promise<Contest>;
+  joinContest(contestId: string, userId: string): Promise<ContestParticipant>;
+  getContestParticipants(contestId: string): Promise<(ContestParticipant & { user: User; profile?: UserProfile })[]>;
+  submitToContest(contestId: string, userId: string, submissionUrl: string, submissionNote?: string): Promise<ContestParticipant>;
+  isContestParticipant(contestId: string, userId: string): Promise<boolean>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -281,6 +309,96 @@ export class DatabaseStorage implements IStorage {
     );
 
     return results;
+  }
+
+  async getBadges(): Promise<Badge[]> {
+    return await db.select().from(badges);
+  }
+
+  async getBadge(id: string): Promise<Badge | undefined> {
+    const [badge] = await db.select().from(badges).where(eq(badges.id, id));
+    return badge;
+  }
+
+  async createBadge(data: InsertBadge): Promise<Badge> {
+    const [badge] = await db.insert(badges).values(data).returning();
+    return badge;
+  }
+
+  async getUserBadges(userId: string): Promise<(UserBadge & { badge: Badge })[]> {
+    const ubs = await db.select().from(userBadges).where(eq(userBadges.userId, userId)).orderBy(desc(userBadges.awardedAt));
+    const results = await Promise.all(
+      ubs.map(async (ub) => {
+        const [badge] = await db.select().from(badges).where(eq(badges.id, ub.badgeId));
+        if (!badge) return null;
+        return { ...ub, badge };
+      })
+    );
+    return results.filter((r): r is NonNullable<typeof r> => r !== null);
+  }
+
+  async awardBadge(userId: string, badgeId: string): Promise<UserBadge> {
+    const [ub] = await db.insert(userBadges).values({ userId, badgeId }).returning();
+    return ub;
+  }
+
+  async getContests(filters?: { status?: string }): Promise<(Contest & { badge?: Badge; participantCount: number })[]> {
+    let query = db.select().from(contests);
+    if (filters?.status) {
+      query = query.where(eq(contests.status, filters.status as any)) as any;
+    }
+    const result = await (query as any).orderBy(desc(contests.promoted), desc(contests.createdAt));
+
+    return await Promise.all(
+      result.map(async (contest: Contest) => {
+        const badge = contest.badgeId ? await this.getBadge(contest.badgeId) : undefined;
+        const participants = await db.select().from(contestParticipants).where(eq(contestParticipants.contestId, contest.id));
+        return { ...contest, badge, participantCount: participants.length };
+      })
+    );
+  }
+
+  async getContest(id: string): Promise<(Contest & { badge?: Badge; participantCount: number }) | undefined> {
+    const [contest] = await db.select().from(contests).where(eq(contests.id, id));
+    if (!contest) return undefined;
+    const badge = contest.badgeId ? await this.getBadge(contest.badgeId) : undefined;
+    const participants = await db.select().from(contestParticipants).where(eq(contestParticipants.contestId, id));
+    return { ...contest, badge, participantCount: participants.length };
+  }
+
+  async createContest(data: InsertContest): Promise<Contest> {
+    const [contest] = await db.insert(contests).values(data).returning();
+    return contest;
+  }
+
+  async joinContest(contestId: string, userId: string): Promise<ContestParticipant> {
+    const [participant] = await db.insert(contestParticipants).values({ contestId, userId }).returning();
+    return participant;
+  }
+
+  async getContestParticipants(contestId: string): Promise<(ContestParticipant & { user: User; profile?: UserProfile })[]> {
+    const parts = await db.select().from(contestParticipants).where(eq(contestParticipants.contestId, contestId));
+    return await Promise.all(
+      parts.map(async (p) => {
+        const [user] = await db.select().from(users).where(eq(users.id, p.userId));
+        const profile = await this.getUserProfile(p.userId);
+        return { ...p, user, profile };
+      })
+    );
+  }
+
+  async submitToContest(contestId: string, userId: string, submissionUrl: string, submissionNote?: string): Promise<ContestParticipant> {
+    const [updated] = await db
+      .update(contestParticipants)
+      .set({ submissionUrl, submissionNote })
+      .where(and(eq(contestParticipants.contestId, contestId), eq(contestParticipants.userId, userId)))
+      .returning();
+    return updated;
+  }
+
+  async isContestParticipant(contestId: string, userId: string): Promise<boolean> {
+    const [p] = await db.select().from(contestParticipants).where(and(eq(contestParticipants.contestId, contestId), eq(contestParticipants.userId, userId)));
+    return !!p;
   }
 }
 

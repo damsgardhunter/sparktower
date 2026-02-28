@@ -106,7 +106,14 @@ export default function ProjectDashboard() {
       setVideoModalOpen(false);
       setSlideshowOpen(true);
       setGenerationStatus("");
-      toast({ title: "Storyboard Generated", description: `${data.scenes?.length || 0} scenes created in ${selectedStyle} style.` });
+      const savedCount = data.savedMediaPaths?.length || 0;
+      toast({
+        title: "Storyboard Generated",
+        description: `${data.scenes?.length || 0} scenes created in ${selectedStyle} style.${savedCount > 0 ? ` ${savedCount} images saved to your gallery.` : ""}`,
+      });
+      if (savedCount > 0) {
+        queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
+      }
     },
     onError: () => {
       setGenerationStatus("");
@@ -382,6 +389,11 @@ export default function ProjectDashboard() {
                 </>
               )}
             </Button>
+            {videoMutation.isPending && (
+              <p className="text-xs text-muted-foreground text-center mt-2" data-testid="text-generation-wait">
+                This may take a couple minutes while Nova creates your scenes.
+              </p>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

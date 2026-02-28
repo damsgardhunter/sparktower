@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useParams, useLocation } from "wouter";
-import { type UserProfile, type Project, type User } from "@shared/schema";
+import { type UserProfile, type Project, type User, type UserBadge, type Badge as BadgeType } from "@shared/schema";
 import { UserAvatar } from "@/components/user-avatar";
 import { SkillBadge } from "@/components/skill-badge";
 import { ProjectCard } from "@/components/project-card";
@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { MapPin, Globe, Github, Linkedin, Mail, MessageSquare, UserPlus, Edit, Loader2, FileText } from "lucide-react";
+import { MapPin, Globe, Github, Linkedin, Mail, MessageSquare, UserPlus, Edit, Loader2, FileText, Award, Rocket, Star, Users as UsersIcon, Sparkles, Trophy } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
@@ -53,6 +53,16 @@ export default function Profile() {
     queryKey: [`/api/users/${userId}`],
     enabled: !!userId && !!isOwnProfile,
     select: (data: any) => data?.projects || [],
+  });
+
+  const { data: userBadges } = useQuery<(UserBadge & { badge: BadgeType })[]>({
+    queryKey: ["/api/users", userId, "badges"],
+    queryFn: async () => {
+      const res = await fetch(`/api/users/${userId}/badges`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!userId,
   });
 
   const form = useForm<InsertUserProfile>({
@@ -377,6 +387,48 @@ export default function Profile() {
               </div>
             </CardContent>
           </Card>
+          {userBadges && userBadges.length > 0 && (
+            <Card className="border-border/50">
+              <CardHeader>
+                <CardTitle className="text-sm font-semibold uppercase text-muted-foreground">Earned Badges</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-wrap gap-3">
+                  {userBadges.map((ub) => {
+                    const BADGE_ICONS: Record<string, typeof Award> = {
+                      rocket: Rocket,
+                      star: Star,
+                      trophy: Trophy,
+                      users: UsersIcon,
+                      sparkles: Sparkles,
+                      award: Award,
+                    };
+                    const RARITY_STYLES: Record<string, string> = {
+                      common: "bg-gray-100 dark:bg-gray-800 border-gray-300 dark:border-gray-600",
+                      rare: "bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-600",
+                      epic: "bg-purple-50 dark:bg-purple-900/30 border-purple-300 dark:border-purple-600",
+                      legendary: "bg-yellow-50 dark:bg-yellow-900/20 border-yellow-400 dark:border-yellow-500",
+                    };
+                    const IconComp = BADGE_ICONS[ub.badge.icon] || Award;
+                    return (
+                      <div
+                        key={ub.id}
+                        className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${RARITY_STYLES[ub.badge.rarity]} transition-colors`}
+                        title={ub.badge.description}
+                        data-testid={`badge-earned-${ub.badge.id}`}
+                      >
+                        <IconComp className="h-4 w-4" />
+                        <div>
+                          <p className="text-xs font-medium leading-tight">{ub.badge.name}</p>
+                          <p className="text-[10px] text-muted-foreground capitalize">{ub.badge.rarity}</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </div>
 
         {/* Right Column: Skills & Projects */}

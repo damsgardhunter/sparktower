@@ -9,7 +9,9 @@ SparkTower is a platform for entrepreneurs and freelancers to connect, collabora
 - **AI Matchmaking** - OpenAI-powered user matching based on skills/interests/experience
 - **Nova AI Chatbot** - AI project partner named "Nova" with animated intro, guided project creation flow
 - **Media Gallery** - Upload images/videos to showcase projects (via Replit Object Storage)
-- **AI Video Storyboard Slideshow** - Generate AI storyboards with 4 visual styles (Professional, Futuristic, Funny, Cartoon), displayed as animated slideshow with auto-advance, navigation, and gradient scene cards
+- **AI Video Storyboard Slideshow** - Generate AI storyboards with 4 visual styles (Professional, Futuristic, Funny, Cartoon), displayed as animated slideshow with auto-advance, navigation, and gradient scene cards. Generated scene images are automatically saved to Object Storage and added to project media gallery.
+- **Contests** - Compete in hackathons and challenges. Filter by status (active, upcoming, judging, completed). Join contests, submit entries, earn badges. Featured contests highlighted with promotional cards.
+- **Badges** - Earned badges system with 4 rarity tiers (common, rare, epic, legendary). Badges displayed on user profiles. Contest winners can earn special badges.
 - **Project Dashboard** - Media gallery, donation widget, stats (views, donations)
 - **Leaderboard** - Ranked by most visited or most donations (gold/silver/bronze podium)
 - **Discover** - Search and find other users by skills/interests
@@ -78,6 +80,10 @@ shared/
 - `projectChatMessages` - AI chatbot conversation history per project
 - `donations` - Donations to projects (in cents)
 - `userMatches` - AI-generated user matches with scores and reasons
+- `badges` - Badge definitions (name, description, icon, rarity, category)
+- `userBadges` - Badges awarded to users
+- `contests` - Contests/hackathons (title, description, category, difficulty, status, prize, dates, badgeId)
+- `contestParticipants` - Contest participants with submissions
 
 ## Key API Routes
 
@@ -100,7 +106,14 @@ shared/
 - `GET /api/users/:id` - Public user profile + projects
 - `POST /api/uploads/request-url` - Get presigned URL for file upload
 - `GET /objects/*` - Serve uploaded objects from storage
-- `POST /api/seed` - Seed demo data
+- `GET /api/badges` - List all badges
+- `GET /api/users/:userId/badges` - Get badges earned by a user
+- `GET /api/contests` - List contests (filter by ?status=active|upcoming|judging|completed)
+- `GET /api/contests/:id` - Contest details
+- `GET /api/contests/:id/participants` - Contest participants
+- `POST /api/contests/:id/join` - Join a contest
+- `POST /api/contests/:id/submit` - Submit entry to a contest
+- `POST /api/seed` - Seed demo data (users, projects, badges, contests)
 
 ## Object Storage
 
@@ -124,6 +137,7 @@ Environment variables: DEFAULT_OBJECT_STORAGE_BUCKET_ID, PUBLIC_OBJECT_SEARCH_PA
 - `/matches` → AI matches
 - `/leaderboard` → Leaderboard
 - `/discover` → Discover users
+- `/contests` → Contests & hackathons
 
 ## Important Notes
 

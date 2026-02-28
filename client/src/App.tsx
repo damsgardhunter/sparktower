@@ -19,6 +19,7 @@ import Leaderboard from "@/pages/leaderboard";
 import Discover from "@/pages/discover";
 import Onboarding from "@/pages/onboarding";
 import Profile from "@/pages/profile";
+import Contests from "@/pages/contests";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "@tanstack/react-query";
 import type { UserProfile } from "@shared/schema";
@@ -85,6 +86,7 @@ function Router() {
             <Route path="/matches" component={Matches} />
             <Route path="/leaderboard" component={Leaderboard} />
             <Route path="/discover" component={Discover} />
+            <Route path="/contests" component={Contests} />
             <Route component={NotFound} />
           </Switch>
         </main>

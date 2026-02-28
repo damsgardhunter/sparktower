@@ -10,7 +10,7 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
 } from "@/components/ui/sidebar";
-import { Home, Compass, FolderKanban, Users, Trophy, LogOut, Plus } from "lucide-react";
+import { Home, Compass, FolderKanban, Users, Trophy, LogOut, Plus, Medal } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/user-avatar";
@@ -22,6 +22,7 @@ const menuItems = [
   { title: "Projects", url: "/projects", icon: FolderKanban },
   { title: "Matches", url: "/matches", icon: Users },
   { title: "Leaderboard", url: "/leaderboard", icon: Trophy },
+  { title: "Contests", url: "/contests", icon: Medal },
 ];
 
 export function AppSidebar() {

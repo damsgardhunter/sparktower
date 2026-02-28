@@ -5,11 +5,12 @@ import { db } from "./db";
 import { users, projectMembers, projects } from "@shared/schema";
 import { setupAuth, isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { registerAuthRoutes } from "./replit_integrations/auth/routes";
-import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
-import { insertUserProfileSchema, insertProjectSchema, insertDonationSchema } from "@shared/schema";
+import { registerObjectStorageRoutes, ObjectStorageService } from "./replit_integrations/object_storage";
+import { insertUserProfileSchema, insertProjectSchema, insertDonationSchema, insertContestSchema } from "@shared/schema";
 import { z } from "zod";
 import OpenAI from "openai";
 import { eq } from "drizzle-orm";
+import { randomUUID } from "crypto";
 
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
@@ -468,16 +469,145 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
         scenes = generateFallbackScenes(style);
       }
 
+      try {
+        const allBadges = await storage.getBadges();
+        const aiExplorerBadge = allBadges.find(b => b.name === "AI Explorer");
+        if (aiExplorerBadge) {
+          const userId = req.user.claims.sub;
+          const existingBadges = await storage.getUserBadges(userId);
+          if (!existingBadges.some(ub => ub.badgeId === aiExplorerBadge.id)) {
+            await storage.awardBadge(userId, aiExplorerBadge.id);
+          }
+        }
+      } catch (badgeErr) {
+        console.error("Badge awarding failed (non-fatal):", badgeErr);
+      }
+
+      const savedObjectPaths: string[] = [];
+      try {
+        const objStorage = new ObjectStorageService();
+        for (let i = 0; i < scenes.length; i++) {
+          const scene = scenes[i];
+          if (!scene.imageUrl.startsWith("data:image/svg+xml;base64,")) continue;
+          try {
+            const base64Data = scene.imageUrl.replace("data:image/svg+xml;base64,", "");
+            const svgBuffer = Buffer.from(base64Data, "base64");
+
+            const uploadUrl = await objStorage.getObjectEntityUploadURL();
+            const uploadRes = await fetch(uploadUrl, {
+              method: "PUT",
+              headers: { "Content-Type": "image/svg+xml" },
+              body: svgBuffer,
+            });
+
+            if (uploadRes.ok) {
+              const objectPath = objStorage.normalizeObjectEntityPath(uploadUrl);
+              savedObjectPaths.push(objectPath);
+              await storage.addProjectMedia(project.id, objectPath);
+            }
+          } catch (uploadErr) {
+            console.error(`Failed to upload scene ${i}:`, uploadErr);
+          }
+        }
+      } catch (storageErr) {
+        console.error("Object storage upload failed (non-fatal):", storageErr);
+      }
+
       res.json({
         storyboard,
         scenes,
         style,
+        savedMediaPaths: savedObjectPaths,
         message: "AI storyboard and scenes generated successfully!",
         projectId: project.id,
       });
     } catch (error) {
       console.error("Error generating video:", error);
       res.status(500).json({ message: "Failed to generate video" });
+    }
+  });
+
+  // Badges
+  app.get("/api/badges", async (_req, res) => {
+    const allBadges = await storage.getBadges();
+    res.json(allBadges);
+  });
+
+  app.get("/api/users/:userId/badges", async (req, res) => {
+    const userBadges = await storage.getUserBadges(req.params.userId);
+    res.json(userBadges);
+  });
+
+  // Contests
+  app.get("/api/contests", async (req: any, res) => {
+    const { status } = req.query;
+    const allContests = await storage.getContests(status ? { status: status as string } : undefined);
+    const userId = req.user?.claims?.sub;
+    if (userId) {
+      const enriched = await Promise.all(
+        allContests.map(async (c) => ({
+          ...c,
+          isParticipant: await storage.isContestParticipant(c.id, userId),
+        }))
+      );
+      return res.json(enriched);
+    }
+    res.json(allContests.map(c => ({ ...c, isParticipant: false })));
+  });
+
+  app.get("/api/contests/:id", async (req: any, res) => {
+    const contest = await storage.getContest(req.params.id);
+    if (!contest) return res.status(404).json({ message: "Contest not found" });
+    const userId = req.user?.claims?.sub;
+    const isParticipant = userId ? await storage.isContestParticipant(contest.id, userId) : false;
+    res.json({ ...contest, isParticipant });
+  });
+
+  app.get("/api/contests/:id/participants", async (req, res) => {
+    const participants = await storage.getContestParticipants(req.params.id);
+    res.json(participants);
+  });
+
+  app.post("/api/contests/:id/join", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const contestId = req.params.id;
+      const contest = await storage.getContest(contestId);
+      if (!contest) return res.status(404).json({ message: "Contest not found" });
+      if (contest.status !== "active" && contest.status !== "upcoming") {
+        return res.status(400).json({ message: "Contest is not accepting participants" });
+      }
+      const already = await storage.isContestParticipant(contestId, userId);
+      if (already) return res.status(400).json({ message: "Already joined" });
+      if (contest.maxParticipants && contest.participantCount >= contest.maxParticipants) {
+        return res.status(400).json({ message: "Contest is full" });
+      }
+      const participant = await storage.joinContest(contestId, userId);
+      res.json(participant);
+    } catch (error) {
+      console.error("Error joining contest:", error);
+      res.status(500).json({ message: "Failed to join contest" });
+    }
+  });
+
+  app.post("/api/contests/:id/submit", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const contestId = req.params.id;
+      const { submissionUrl, submissionNote } = req.body;
+      if (!submissionUrl) return res.status(400).json({ message: "submissionUrl is required" });
+      const contest = await storage.getContest(contestId);
+      if (!contest) return res.status(404).json({ message: "Contest not found" });
+      if (contest.status !== "active") {
+        return res.status(400).json({ message: "Contest is not accepting submissions" });
+      }
+      const isParticipant = await storage.isContestParticipant(contestId, userId);
+      if (!isParticipant) return res.status(400).json({ message: "You must join the contest first" });
+      const updated = await storage.submitToContest(contestId, userId, submissionUrl, submissionNote);
+      res.json(updated);
+    } catch (error) {
+      console.error("Error submitting to contest:", error);
+      res.status(500).json({ message: "Failed to submit" });
     }
   });
 
@@ -555,6 +685,81 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
 
       for (const p of projectsData) {
         await storage.createProject(p);
+      }
+
+      // 3. Create badges
+      const badgesData = [
+        { name: "Early Adopter", description: "Joined SparkTower in its early days", icon: "rocket", rarity: "rare" as const, category: "community" },
+        { name: "First Project", description: "Created your first project on SparkTower", icon: "star", rarity: "common" as const, category: "milestone" },
+        { name: "Hackathon Winner", description: "Won a SparkTower hackathon", icon: "trophy", rarity: "legendary" as const, category: "competition" },
+        { name: "Team Player", description: "Joined 3 or more projects", icon: "users", rarity: "common" as const, category: "collaboration" },
+        { name: "AI Explorer", description: "Generated an AI storyboard", icon: "sparkles", rarity: "rare" as const, category: "innovation" },
+        { name: "Top Contributor", description: "Reached the top 10 on the leaderboard", icon: "award", rarity: "epic" as const, category: "competition" },
+      ];
+      for (const b of badgesData) {
+        await storage.createBadge(b);
+      }
+
+      // 4. Create contests
+      const badges = await storage.getBadges();
+      const hackathonBadge = badges.find(b => b.name === "Hackathon Winner");
+      const now = new Date();
+      const contestsData = [
+        {
+          title: "Build a Climate Dashboard",
+          description: "Create an interactive dashboard that visualizes climate data. Use any tech stack you prefer. Projects will be judged on design, functionality, and impact.",
+          category: "Sustainability",
+          difficulty: "intermediate" as const,
+          status: "active" as const,
+          prize: "$500 + Featured on SparkTower",
+          badgeId: hackathonBadge?.id || null,
+          startDate: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000),
+          endDate: new Date(now.getTime() + 21 * 24 * 60 * 60 * 1000),
+          maxParticipants: 50,
+          promoted: true,
+        },
+        {
+          title: "AI-Powered Portfolio Generator",
+          description: "Build a tool that uses AI to generate personalized developer portfolios. Bonus points for creative layouts and customization options.",
+          category: "AI/ML",
+          difficulty: "advanced" as const,
+          status: "active" as const,
+          prize: "$300 + SparkTower Pro Membership",
+          badgeId: null,
+          startDate: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000),
+          endDate: new Date(now.getTime() + 25 * 24 * 60 * 60 * 1000),
+          maxParticipants: 30,
+          promoted: false,
+        },
+        {
+          title: "Beginner Hackathon: Todo App Showdown",
+          description: "New to coding? Build the best todo app you can! Focus on user experience, clean code, and creative features. All skill levels welcome.",
+          category: "Web App",
+          difficulty: "beginner" as const,
+          status: "upcoming" as const,
+          prize: "SparkTower Swag Pack",
+          badgeId: null,
+          startDate: new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000),
+          endDate: new Date(now.getTime() + 28 * 24 * 60 * 60 * 1000),
+          maxParticipants: 100,
+          promoted: true,
+        },
+        {
+          title: "Open Source Contribution Sprint",
+          description: "Contribute to open source projects and earn points. The more impactful your contributions, the higher you score. Document your PRs and contributions.",
+          category: "DevOps",
+          difficulty: "intermediate" as const,
+          status: "completed" as const,
+          prize: "$200 + Badge",
+          badgeId: null,
+          startDate: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000),
+          endDate: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000),
+          maxParticipants: null,
+          promoted: false,
+        },
+      ];
+      for (const c of contestsData) {
+        await storage.createContest(c);
       }
 
       res.json({ message: "Seed data created successfully" });

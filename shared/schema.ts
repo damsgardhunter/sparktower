@@ -78,6 +78,48 @@ export const userMatches = pgTable("user_matches", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const badges = pgTable("badges", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description").notNull(),
+  icon: text("icon").notNull(),
+  rarity: text("rarity", { enum: ["common", "rare", "epic", "legendary"] }).notNull().default("common"),
+  category: text("category").notNull(),
+});
+
+export const userBadges = pgTable("user_badges", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  badgeId: varchar("badge_id").notNull().references(() => badges.id),
+  awardedAt: timestamp("awarded_at").defaultNow().notNull(),
+});
+
+export const contests = pgTable("contests", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  title: text("title").notNull(),
+  description: text("description").notNull(),
+  category: text("category").notNull(),
+  difficulty: text("difficulty", { enum: ["beginner", "intermediate", "advanced"] }).notNull().default("intermediate"),
+  status: text("status", { enum: ["upcoming", "active", "judging", "completed"] }).notNull().default("upcoming"),
+  prize: text("prize"),
+  badgeId: varchar("badge_id").references(() => badges.id),
+  startDate: timestamp("start_date").notNull(),
+  endDate: timestamp("end_date").notNull(),
+  maxParticipants: integer("max_participants"),
+  promoted: boolean("promoted").default(false).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const contestParticipants = pgTable("contest_participants", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  contestId: varchar("contest_id").notNull().references(() => contests.id),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  submissionUrl: text("submission_url"),
+  submissionNote: text("submission_note"),
+  score: integer("score"),
+  joinedAt: timestamp("joined_at").defaultNow().notNull(),
+});
+
 // Schemas
 export const insertUserProfileSchema = createInsertSchema(userProfiles).omit({
   id: true,
@@ -109,6 +151,25 @@ export const insertUserMatchSchema = createInsertSchema(userMatches).omit({
   createdAt: true,
 });
 
+export const insertBadgeSchema = createInsertSchema(badges).omit({
+  id: true,
+});
+
+export const insertUserBadgeSchema = createInsertSchema(userBadges).omit({
+  id: true,
+  awardedAt: true,
+});
+
+export const insertContestSchema = createInsertSchema(contests).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertContestParticipantSchema = createInsertSchema(contestParticipants).omit({
+  id: true,
+  joinedAt: true,
+});
+
 // Types
 export type UserProfile = typeof userProfiles.$inferSelect;
 export type InsertUserProfile = z.infer<typeof insertUserProfileSchema>;
@@ -122,3 +183,11 @@ export type Donation = typeof donations.$inferSelect;
 export type InsertDonation = z.infer<typeof insertDonationSchema>;
 export type UserMatch = typeof userMatches.$inferSelect;
 export type InsertUserMatch = z.infer<typeof insertUserMatchSchema>;
+export type Badge = typeof badges.$inferSelect;
+export type InsertBadge = z.infer<typeof insertBadgeSchema>;
+export type UserBadge = typeof userBadges.$inferSelect;
+export type InsertUserBadge = z.infer<typeof insertUserBadgeSchema>;
+export type Contest = typeof contests.$inferSelect;
+export type InsertContest = z.infer<typeof insertContestSchema>;
+export type ContestParticipant = typeof contestParticipants.$inferSelect;
+export type InsertContestParticipant = z.infer<typeof insertContestParticipantSchema>;
