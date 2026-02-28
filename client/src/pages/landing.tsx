@@ -1,6 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { Link } from "wouter";
-import { Rocket, Shield, Zap, Sparkles, MessageSquare, Target } from "lucide-react";
+import { Zap, MessageSquare, Target } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 
 export default function LandingPage() {
@@ -17,7 +16,7 @@ export default function LandingPage() {
         <div className="flex items-center gap-4">
           <ThemeToggle />
           <Button asChild data-testid="button-login">
-            <Link href="/api/login">Login with Replit</Link>
+            <a href="/api/login">Login with Replit</a>
           </Button>
         </div>
       </header>
@@ -43,7 +42,7 @@ export default function LandingPage() {
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <Button size="lg" className="h-12 px-8 text-lg" asChild data-testid="button-get-started">
-              <Link href="/api/login">Get Started</Link>
+              <a href="/api/login">Get Started</a>
             </Button>
             <Button size="lg" variant="outline" className="h-12 px-8 text-lg text-white border-white/20 bg-white/5 backdrop-blur-sm" asChild>
               <a href="#features">Learn More</a>
