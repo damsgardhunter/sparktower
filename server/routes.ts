@@ -299,39 +299,148 @@ Only include fields you have enough info to fill. Start empty if needed.`;
   });
 
   app.post("/api/matches/generate", isAuthenticated, async (req: any, res) => {
-    const userId = req.user.claims.sub;
-    const userProfile = await storage.getUserProfile(userId);
-    if (!userProfile) return res.status(400).json({ message: "Complete your profile first" });
+    try {
+      const userId = req.user.claims.sub;
+      const userProfile = await storage.getUserProfile(userId);
+      if (!userProfile) return res.status(400).json({ message: "Complete your profile first" });
 
-    const allProfiles = await storage.searchUsers(""); // Simple way to get all for now
-    const otherProfiles = allProfiles.filter(p => p.id !== userId && p.profile?.isOnboarded);
+      const allProfiles = await storage.searchUsers("");
+      const otherProfiles = allProfiles.filter(p => p.id !== userId && p.profile?.isOnboarded);
 
-    // AI logic for matching
-    const prompt = `Match the following user with others based on skills, interests, and experience level.
-    Current User: ${JSON.stringify(userProfile)}
-    Other Users: ${JSON.stringify(otherProfiles.map(p => ({ id: p.id, ...p.profile })))}
-    
-    Return a JSON array of matches with: { matchedUserId: string, score: number (0-100), reasons: string[] }`;
+      if (otherProfiles.length === 0) {
+        return res.json([]);
+      }
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-5.2",
-      messages: [{ role: "system", content: "You are a matchmaking AI. Return only valid JSON." }, { role: "user", content: prompt }],
-      response_format: { type: "json_object" }
-    });
+      const userProjects = await storage.getUserProjects(userId);
+      const userProjectCategories = new Set(userProjects.map(p => p.category));
+      const userProjectRoles = new Set(userProjects.flatMap(p => p.rolesNeeded || []));
 
-    const result = JSON.parse(response.choices[0].message.content || '{"matches": []}');
-    const matches = result.matches || [];
+      const userConnections = await storage.getConnections(userId);
+      const userConnectionIds = new Set(userConnections.map(c => c.user.id));
 
-    const savedMatches = await Promise.all(matches.map((m: any) => 
-      storage.upsertUserMatch({
-        userId,
-        matchedUserId: m.matchedUserId,
-        score: m.score,
-        reasons: m.reasons
-      })
-    ));
+      function jaccardSimilarity(a: string[] | null, b: string[] | null): number {
+        if (!a?.length || !b?.length) return 0;
+        const setA = new Set(a.map(s => s.toLowerCase()));
+        const setB = new Set(b.map(s => s.toLowerCase()));
+        const intersection = [...setA].filter(x => setB.has(x)).length;
+        const union = new Set([...setA, ...setB]).size;
+        return union === 0 ? 0 : intersection / union;
+      }
 
-    res.json(savedMatches);
+      const experienceLevels = ["beginner", "intermediate", "expert"];
+      function experienceCompatibility(a: string | null, b: string | null): number {
+        if (!a || !b) return 0.5;
+        const idxA = experienceLevels.indexOf(a);
+        const idxB = experienceLevels.indexOf(b);
+        if (idxA === -1 || idxB === -1) return 0.5;
+        const diff = Math.abs(idxA - idxB);
+        if (diff === 0) return 1;
+        if (diff === 1) return 0.7;
+        return 0.4;
+      }
+
+      const scoredMatches: { id: string; score: number; factors: Record<string, number> }[] = [];
+
+      for (const other of otherProfiles) {
+        const op = other.profile!;
+
+        const skillsScore = jaccardSimilarity(userProfile.skills, op.skills);
+        const interestsScore = jaccardSimilarity(userProfile.interests, op.interests);
+        const experienceScore = experienceCompatibility(userProfile.experienceLevel, op.experienceLevel);
+
+        const otherProjects = await storage.getUserProjects(other.id);
+        const otherCategories = new Set(otherProjects.map(p => p.category));
+        const otherRoles = new Set(otherProjects.flatMap(p => p.rolesNeeded || []));
+        const allCategories = new Set([...userProjectCategories, ...otherCategories]);
+        const categoryScore = allCategories.size > 0
+          ? [...userProjectCategories].filter(c => otherCategories.has(c)).length / allCategories.size
+          : 0;
+        const allRoles = new Set([...userProjectRoles, ...otherRoles]);
+        const roleComplementScore = allRoles.size > 0
+          ? [...userProjectRoles].filter(r => !otherRoles.has(r)).length / allRoles.size
+          : 0;
+        const projectScore = categoryScore * 0.6 + roleComplementScore * 0.4;
+
+        const mutualConns = await storage.getMutualConnections(userId, other.id);
+        const connectionScore = Math.min(1, mutualConns.length * 0.25);
+
+        const weightedScore = Math.round(
+          (skillsScore * 30 +
+           interestsScore * 25 +
+           experienceScore * 15 +
+           projectScore * 15 +
+           connectionScore * 15)
+        );
+
+        if (weightedScore > 5) {
+          scoredMatches.push({
+            id: other.id,
+            score: Math.min(100, weightedScore),
+            factors: { skills: skillsScore, interests: interestsScore, experience: experienceScore, projects: projectScore, connections: connectionScore }
+          });
+        }
+      }
+
+      scoredMatches.sort((a, b) => b.score - a.score);
+      const topMatches = scoredMatches.slice(0, 20);
+
+      if (topMatches.length === 0) {
+        return res.json([]);
+      }
+
+      const hasCredits = await storage.checkCredits(userId, 1);
+      let matchReasons: Record<string, string[]> = {};
+
+      if (hasCredits && topMatches.length > 0) {
+        try {
+          const matchSummary = topMatches.map(m => {
+            const other = otherProfiles.find(p => p.id === m.id);
+            return {
+              id: m.id,
+              name: other?.firstName || "User",
+              score: m.score,
+              factors: m.factors,
+              skills: other?.profile?.skills?.slice(0, 5),
+              interests: other?.profile?.interests?.slice(0, 5),
+              experience: other?.profile?.experienceLevel,
+            };
+          });
+
+          const response = await openai.chat.completions.create({
+            model: "gpt-5.2",
+            messages: [
+              { role: "system", content: "Generate concise match reasons. Return JSON: {\"reasons\": {\"userId\": [\"reason1\", \"reason2\"]}}. Each user gets 2-3 short reasons based on the factors provided." },
+              { role: "user", content: `User profile: skills=${userProfile.skills?.join(", ")}, interests=${userProfile.interests?.join(", ")}, experience=${userProfile.experienceLevel}.\n\nMatches: ${JSON.stringify(matchSummary)}` }
+            ],
+            response_format: { type: "json_object" }
+          });
+          const parsed = JSON.parse(response.choices[0].message.content || '{"reasons":{}}');
+          matchReasons = parsed.reasons || {};
+          await storage.deductCredits(userId, 1);
+        } catch (e) {
+          console.error("AI reason generation failed, using defaults:", e);
+        }
+      }
+
+      const savedMatches = await Promise.all(topMatches.map(async (m) => {
+        const reasons = matchReasons[m.id] || [
+          m.factors.skills > 0.3 ? "Overlapping technical skills" : "Complementary skill set",
+          m.factors.interests > 0.3 ? "Shared interests" : "Diverse perspectives",
+          m.factors.connections > 0 ? "Mutual connections" : "Potential new collaborator",
+        ];
+        return storage.upsertUserMatch({
+          userId,
+          matchedUserId: m.id,
+          score: m.score,
+          reasons,
+        });
+      }));
+
+      res.json(savedMatches);
+    } catch (error) {
+      console.error("Match generation error:", error);
+      res.status(500).json({ message: "Failed to generate matches" });
+    }
   });
 
   // Leaderboard
@@ -643,6 +752,323 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
     } catch (error) {
       console.error("Error submitting to contest:", error);
       res.status(500).json({ message: "Failed to submit" });
+    }
+  });
+
+  // Connections
+  app.post("/api/connections/request", isAuthenticated, async (req: any, res) => {
+    try {
+      const requesterId = req.user.claims.sub;
+      const { userId: receiverId } = req.body;
+      if (!receiverId) return res.status(400).json({ message: "userId is required" });
+      if (requesterId === receiverId) return res.status(400).json({ message: "Cannot connect with yourself" });
+      const conn = await storage.sendConnectionRequest(requesterId, receiverId);
+      res.json(conn);
+    } catch (error: any) {
+      if (error.message === "Connection already exists") {
+        return res.status(400).json({ message: error.message });
+      }
+      console.error("Connection request error:", error);
+      res.status(500).json({ message: "Failed to send connection request" });
+    }
+  });
+
+  app.post("/api/connections/:id/accept", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const existing = await storage.getConnectionById(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Connection not found" });
+      if (existing.receiverId !== userId) return res.status(403).json({ message: "Only the receiver can accept a connection request" });
+      if (existing.status !== "pending") return res.status(400).json({ message: "Connection is not pending" });
+      const conn = await storage.acceptConnection(req.params.id);
+      res.json(conn);
+    } catch (error) {
+      console.error("Accept connection error:", error);
+      res.status(500).json({ message: "Failed to accept connection" });
+    }
+  });
+
+  app.post("/api/connections/:id/reject", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const existing = await storage.getConnectionById(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Connection not found" });
+      if (existing.receiverId !== userId) return res.status(403).json({ message: "Only the receiver can reject a connection request" });
+      if (existing.status !== "pending") return res.status(400).json({ message: "Connection is not pending" });
+      const conn = await storage.rejectConnection(req.params.id);
+      res.json(conn);
+    } catch (error) {
+      console.error("Reject connection error:", error);
+      res.status(500).json({ message: "Failed to reject connection" });
+    }
+  });
+
+  app.delete("/api/connections/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const existing = await storage.getConnectionById(req.params.id);
+      if (!existing) return res.status(404).json({ message: "Connection not found" });
+      if (existing.requesterId !== userId && existing.receiverId !== userId) {
+        return res.status(403).json({ message: "You can only remove your own connections" });
+      }
+      await storage.removeConnection(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Remove connection error:", error);
+      res.status(500).json({ message: "Failed to remove connection" });
+    }
+  });
+
+  app.get("/api/connections", isAuthenticated, async (req: any, res) => {
+    try {
+      const conns = await storage.getConnections(req.user.claims.sub);
+      res.json(conns);
+    } catch (error) {
+      console.error("Get connections error:", error);
+      res.status(500).json({ message: "Failed to get connections" });
+    }
+  });
+
+  app.get("/api/connections/requests", isAuthenticated, async (req: any, res) => {
+    try {
+      const requests = await storage.getConnectionRequests(req.user.claims.sub);
+      res.json(requests);
+    } catch (error) {
+      console.error("Get connection requests error:", error);
+      res.status(500).json({ message: "Failed to get connection requests" });
+    }
+  });
+
+  app.get("/api/connections/status/:userId", isAuthenticated, async (req: any, res) => {
+    try {
+      const conn = await storage.getConnectionStatus(req.user.claims.sub, req.params.userId);
+      res.json(conn || { status: "none" });
+    } catch (error) {
+      console.error("Get connection status error:", error);
+      res.status(500).json({ message: "Failed to get connection status" });
+    }
+  });
+
+  // Direct Messages
+  app.get("/api/messages/conversations", isAuthenticated, async (req: any, res) => {
+    try {
+      const conversations = await storage.getConversationList(req.user.claims.sub);
+      res.json(conversations);
+    } catch (error) {
+      console.error("Get conversations error:", error);
+      res.status(500).json({ message: "Failed to get conversations" });
+    }
+  });
+
+  app.get("/api/messages/unread-count", isAuthenticated, async (req: any, res) => {
+    try {
+      const count = await storage.getUnreadCount(req.user.claims.sub);
+      res.json({ count });
+    } catch (error) {
+      console.error("Get unread count error:", error);
+      res.status(500).json({ message: "Failed to get unread count" });
+    }
+  });
+
+  app.get("/api/messages/:userId", isAuthenticated, async (req: any, res) => {
+    try {
+      const currentUserId = req.user.claims.sub;
+      const otherUserId = req.params.userId;
+      const conn = await storage.getConnectionStatus(currentUserId, otherUserId);
+      if (!conn || conn.status !== "accepted") {
+        return res.status(403).json({ message: "You can only view messages with connected users" });
+      }
+      const messages = await storage.getDirectMessages(currentUserId, otherUserId, 50);
+      res.json(messages);
+    } catch (error) {
+      console.error("Get messages error:", error);
+      res.status(500).json({ message: "Failed to get messages" });
+    }
+  });
+
+  app.post("/api/messages/:userId", isAuthenticated, async (req: any, res) => {
+    try {
+      const senderId = req.user.claims.sub;
+      const receiverId = req.params.userId;
+      const { content } = req.body;
+      if (!content || !content.trim()) return res.status(400).json({ message: "content is required" });
+
+      const conn = await storage.getConnectionStatus(senderId, receiverId);
+      if (!conn || conn.status !== "accepted") {
+        return res.status(403).json({ message: "You can only message connected users" });
+      }
+
+      const msg = await storage.sendDirectMessage(senderId, receiverId, content.trim());
+      res.json(msg);
+    } catch (error) {
+      console.error("Send message error:", error);
+      res.status(500).json({ message: "Failed to send message" });
+    }
+  });
+
+  app.post("/api/messages/:userId/read", isAuthenticated, async (req: any, res) => {
+    try {
+      await storage.markMessagesRead(req.user.claims.sub, req.params.userId);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Mark read error:", error);
+      res.status(500).json({ message: "Failed to mark messages as read" });
+    }
+  });
+
+  // Stripe Connect for donation payouts
+  app.post("/api/stripe/connect-account", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ message: "User not found" });
+
+      if (user.stripeConnectAccountId) {
+        return res.json({ accountId: user.stripeConnectAccountId });
+      }
+
+      const stripe = await getUncachableStripeClient();
+      const account = await stripe.accounts.create({
+        type: "express",
+        email: user.email || undefined,
+        metadata: { userId },
+        capabilities: {
+          card_payments: { requested: true },
+          transfers: { requested: true },
+        },
+      });
+
+      await db.update(users).set({ stripeConnectAccountId: account.id }).where(eq(users.id, userId));
+      res.json({ accountId: account.id });
+    } catch (error) {
+      console.error("Connect account error:", error);
+      res.status(500).json({ message: "Failed to create connect account" });
+    }
+  });
+
+  app.get("/api/stripe/connect-onboarding", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const user = await storage.getUser(userId);
+      if (!user?.stripeConnectAccountId) {
+        return res.status(400).json({ message: "No connect account. Create one first." });
+      }
+
+      const stripe = await getUncachableStripeClient();
+      const link = await stripe.accountLinks.create({
+        account: user.stripeConnectAccountId,
+        refresh_url: `${req.protocol}://${req.get("host")}/profile`,
+        return_url: `${req.protocol}://${req.get("host")}/profile?connect=success`,
+        type: "account_onboarding",
+      });
+
+      res.json({ url: link.url });
+    } catch (error) {
+      console.error("Connect onboarding error:", error);
+      res.status(500).json({ message: "Failed to get onboarding link" });
+    }
+  });
+
+  app.get("/api/stripe/connect-dashboard", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const user = await storage.getUser(userId);
+      if (!user?.stripeConnectAccountId) {
+        return res.status(400).json({ message: "No connect account" });
+      }
+
+      const stripe = await getUncachableStripeClient();
+      const link = await stripe.accounts.createLoginLink(user.stripeConnectAccountId);
+      res.json({ url: link.url });
+    } catch (error) {
+      console.error("Connect dashboard error:", error);
+      res.status(500).json({ message: "Failed to get dashboard link" });
+    }
+  });
+
+  app.get("/api/payouts", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const earnings = await storage.getUserDonationEarnings(userId);
+      const user = await storage.getUser(userId);
+      res.json({
+        totalEarnings: earnings.total,
+        donations: earnings.donations,
+        connectAccountId: user?.stripeConnectAccountId || null,
+      });
+    } catch (error) {
+      console.error("Payouts error:", error);
+      res.status(500).json({ message: "Failed to get payout info" });
+    }
+  });
+
+  // Stripe donation checkout
+  app.post("/api/projects/:id/donate-checkout", isAuthenticated, async (req: any, res) => {
+    try {
+      const donorId = req.user.claims.sub;
+      const projectId = req.params.id;
+      const { amount } = req.body;
+
+      if (!amount || amount < 100) return res.status(400).json({ message: "Minimum donation is $1.00" });
+
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+
+      const stripe = await getUncachableStripeClient();
+      const donor = await storage.getUser(donorId);
+
+      let customerId = donor?.stripeCustomerId;
+      if (!customerId) {
+        const customer = await stripe.customers.create({
+          email: donor?.email || undefined,
+          metadata: { userId: donorId },
+        });
+        await storage.updateUserStripeInfo(donorId, { stripeCustomerId: customer.id });
+        customerId = customer.id;
+      }
+
+      const owner = await storage.getUser(project.ownerId);
+      const sessionParams: any = {
+        customer: customerId,
+        payment_method_types: ["card"],
+        line_items: [{
+          price_data: {
+            currency: "usd",
+            product_data: { name: `Donation to ${project.title}` },
+            unit_amount: amount,
+          },
+          quantity: 1,
+        }],
+        mode: "payment",
+        success_url: `${req.protocol}://${req.get("host")}/projects/${projectId}?donated=true`,
+        cancel_url: `${req.protocol}://${req.get("host")}/projects/${projectId}`,
+        metadata: { type: "donation", projectId, donorId, amount: String(amount) },
+      };
+
+      if (owner?.stripeConnectAccountId) {
+        const platformFee = Math.round(amount * 0.1);
+        sessionParams.payment_intent_data = {
+          application_fee_amount: platformFee,
+          transfer_data: { destination: owner.stripeConnectAccountId },
+        };
+      }
+
+      const session = await stripe.checkout.sessions.create(sessionParams);
+      res.json({ url: session.url });
+    } catch (error) {
+      console.error("Donation checkout error:", error);
+      res.status(500).json({ message: "Failed to create donation checkout" });
+    }
+  });
+
+  // User projects (own + member of)
+  app.get("/api/user/projects", isAuthenticated, async (req: any, res) => {
+    try {
+      const userProjectsList = await storage.getUserProjects(req.user.claims.sub);
+      res.json(userProjectsList);
+    } catch (error) {
+      console.error("Get user projects error:", error);
+      res.status(500).json({ message: "Failed to get user projects" });
     }
   });
 

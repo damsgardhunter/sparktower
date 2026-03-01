@@ -21,6 +21,7 @@ import Onboarding from "@/pages/onboarding";
 import Profile from "@/pages/profile";
 import Contests from "@/pages/contests";
 import Pricing from "@/pages/pricing";
+import Messages from "@/pages/messages";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "@tanstack/react-query";
 import type { UserProfile } from "@shared/schema";
@@ -88,6 +89,7 @@ function Router() {
             <Route path="/leaderboard" component={Leaderboard} />
             <Route path="/discover" component={Discover} />
             <Route path="/contests" component={Contests} />
+            <Route path="/messages" component={Messages} />
             <Route path="/pricing" component={Pricing} />
             <Route component={NotFound} />
           </Switch>

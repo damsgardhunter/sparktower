@@ -26,6 +26,7 @@ export const users = pgTable("users", {
   subscriptionTier: varchar("subscription_tier").default("free"),
   creditsUsed: integer("credits_used").default(0).notNull(),
   creditsResetAt: timestamp("credits_reset_at"),
+  stripeConnectAccountId: varchar("stripe_connect_account_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

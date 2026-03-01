@@ -20,6 +20,8 @@ import {
   type InsertContest,
   type ContestParticipant,
   type InsertContestParticipant,
+  type Connection,
+  type DirectMessage,
   users,
   userProfiles,
   projects,
@@ -31,9 +33,11 @@ import {
   userBadges,
   contests,
   contestParticipants,
+  connections,
+  directMessages,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, or, ilike, sql, and, gte, lte } from "drizzle-orm";
+import { eq, desc, or, ilike, sql, and, gte, lte, asc, ne, inArray } from "drizzle-orm";
 
 export interface IStorage {
   // User Profile
@@ -87,6 +91,29 @@ export interface IStorage {
   getContestParticipants(contestId: string): Promise<(ContestParticipant & { user: User; profile?: UserProfile })[]>;
   submitToContest(contestId: string, userId: string, submissionUrl: string, submissionNote?: string): Promise<ContestParticipant>;
   isContestParticipant(contestId: string, userId: string): Promise<boolean>;
+
+  // Connections
+  getConnectionById(connectionId: string): Promise<Connection | undefined>;
+  sendConnectionRequest(requesterId: string, receiverId: string): Promise<Connection>;
+  acceptConnection(connectionId: string): Promise<Connection>;
+  rejectConnection(connectionId: string): Promise<Connection>;
+  removeConnection(connectionId: string): Promise<void>;
+  getConnections(userId: string): Promise<(Connection & { user: User; profile?: UserProfile })[]>;
+  getConnectionRequests(userId: string): Promise<(Connection & { user: User; profile?: UserProfile })[]>;
+  getConnectionStatus(userId1: string, userId2: string): Promise<Connection | undefined>;
+  getMutualConnections(userId1: string, userId2: string): Promise<string[]>;
+
+  // Direct Messages
+  sendDirectMessage(senderId: string, receiverId: string, content: string): Promise<DirectMessage>;
+  getDirectMessages(userId1: string, userId2: string, limit?: number, before?: string): Promise<DirectMessage[]>;
+  getConversationList(userId: string): Promise<{ userId: string; user: User; profile?: UserProfile; lastMessage: DirectMessage; unreadCount: number }[]>;
+  markMessagesRead(userId: string, otherUserId: string): Promise<void>;
+  getUnreadCount(userId: string): Promise<number>;
+
+  // Donation queries
+  getDonationsByDonor(donorId: string): Promise<(Donation & { project: Project })[]>;
+  getUserDonationEarnings(userId: string): Promise<{ total: number; donations: Donation[] }>;
+  getUserProjects(userId: string): Promise<Project[]>;
 
   // Subscription & Credits
   getUserSubscription(userId: string): Promise<{ tier: string; creditsUsed: number; creditsLimit: number; creditsRemaining: number; stripeCustomerId: string | null; stripeSubscriptionId: string | null }>;
@@ -463,6 +490,175 @@ export class DatabaseStorage implements IStorage {
     if (sub.tier === "spark_unlimited") return true;
     await db.update(users).set({ creditsUsed: sql`${users.creditsUsed} + ${amount}` }).where(eq(users.id, userId));
     return true;
+  }
+
+  // --- Connections ---
+  async sendConnectionRequest(requesterId: string, receiverId: string): Promise<Connection> {
+    const existing = await this.getConnectionStatus(requesterId, receiverId);
+    if (existing) throw new Error("Connection already exists");
+    const [conn] = await db.insert(connections).values({ requesterId, receiverId, status: "pending" }).returning();
+    return conn;
+  }
+
+  async getConnectionById(connectionId: string): Promise<Connection | undefined> {
+    const [conn] = await db.select().from(connections).where(eq(connections.id, connectionId));
+    return conn;
+  }
+
+  async acceptConnection(connectionId: string): Promise<Connection> {
+    const [conn] = await db.update(connections).set({ status: "accepted" }).where(and(eq(connections.id, connectionId), eq(connections.status, "pending"))).returning();
+    return conn;
+  }
+
+  async rejectConnection(connectionId: string): Promise<Connection> {
+    const [conn] = await db.update(connections).set({ status: "rejected" }).where(and(eq(connections.id, connectionId), eq(connections.status, "pending"))).returning();
+    return conn;
+  }
+
+  async removeConnection(connectionId: string): Promise<void> {
+    await db.delete(connections).where(eq(connections.id, connectionId));
+  }
+
+  async getConnections(userId: string): Promise<(Connection & { user: User; profile?: UserProfile })[]> {
+    const conns = await db.select().from(connections).where(
+      and(
+        or(eq(connections.requesterId, userId), eq(connections.receiverId, userId)),
+        eq(connections.status, "accepted")
+      )
+    ).orderBy(desc(connections.createdAt));
+
+    return await Promise.all(conns.map(async (conn) => {
+      const otherId = conn.requesterId === userId ? conn.receiverId : conn.requesterId;
+      const [user] = await db.select().from(users).where(eq(users.id, otherId));
+      const profile = await this.getUserProfile(otherId);
+      return { ...conn, user, profile };
+    }));
+  }
+
+  async getConnectionRequests(userId: string): Promise<(Connection & { user: User; profile?: UserProfile })[]> {
+    const conns = await db.select().from(connections).where(
+      and(eq(connections.receiverId, userId), eq(connections.status, "pending"))
+    ).orderBy(desc(connections.createdAt));
+
+    return await Promise.all(conns.map(async (conn) => {
+      const [user] = await db.select().from(users).where(eq(users.id, conn.requesterId));
+      const profile = await this.getUserProfile(conn.requesterId);
+      return { ...conn, user, profile };
+    }));
+  }
+
+  async getConnectionStatus(userId1: string, userId2: string): Promise<Connection | undefined> {
+    const [conn] = await db.select().from(connections).where(
+      or(
+        and(eq(connections.requesterId, userId1), eq(connections.receiverId, userId2)),
+        and(eq(connections.requesterId, userId2), eq(connections.receiverId, userId1))
+      )
+    );
+    return conn;
+  }
+
+  async getMutualConnections(userId1: string, userId2: string): Promise<string[]> {
+    const conns1 = await this.getConnections(userId1);
+    const conns2 = await this.getConnections(userId2);
+    const set1 = new Set(conns1.map(c => c.user.id));
+    const set2 = new Set(conns2.map(c => c.user.id));
+    return [...set1].filter(id => set2.has(id));
+  }
+
+  // --- Direct Messages ---
+  async sendDirectMessage(senderId: string, receiverId: string, content: string): Promise<DirectMessage> {
+    const [msg] = await db.insert(directMessages).values({ senderId, receiverId, content, read: false }).returning();
+    return msg;
+  }
+
+  async getDirectMessages(userId1: string, userId2: string, limit = 50, before?: string): Promise<DirectMessage[]> {
+    let conditions = [
+      or(
+        and(eq(directMessages.senderId, userId1), eq(directMessages.receiverId, userId2)),
+        and(eq(directMessages.senderId, userId2), eq(directMessages.receiverId, userId1))
+      )
+    ];
+    const msgs = await db.select().from(directMessages)
+      .where(and(...conditions))
+      .orderBy(desc(directMessages.createdAt))
+      .limit(limit);
+    return msgs.reverse();
+  }
+
+  async getConversationList(userId: string): Promise<{ userId: string; user: User; profile?: UserProfile; lastMessage: DirectMessage; unreadCount: number }[]> {
+    const allMsgs = await db.select().from(directMessages).where(
+      or(eq(directMessages.senderId, userId), eq(directMessages.receiverId, userId))
+    ).orderBy(desc(directMessages.createdAt));
+
+    const conversationMap = new Map<string, { lastMessage: DirectMessage; unreadCount: number }>();
+    for (const msg of allMsgs) {
+      const otherId = msg.senderId === userId ? msg.receiverId : msg.senderId;
+      if (!conversationMap.has(otherId)) {
+        conversationMap.set(otherId, { lastMessage: msg, unreadCount: 0 });
+      }
+      if (msg.receiverId === userId && !msg.read) {
+        const conv = conversationMap.get(otherId)!;
+        conv.unreadCount++;
+      }
+    }
+
+    const results = await Promise.all(
+      Array.from(conversationMap.entries()).map(async ([otherId, data]) => {
+        const [user] = await db.select().from(users).where(eq(users.id, otherId));
+        const profile = await this.getUserProfile(otherId);
+        return { userId: otherId, user, profile, ...data };
+      })
+    );
+
+    return results.sort((a, b) => b.lastMessage.createdAt.getTime() - a.lastMessage.createdAt.getTime());
+  }
+
+  async markMessagesRead(userId: string, otherUserId: string): Promise<void> {
+    await db.update(directMessages)
+      .set({ read: true })
+      .where(
+        and(
+          eq(directMessages.senderId, otherUserId),
+          eq(directMessages.receiverId, userId),
+          eq(directMessages.read, false)
+        )
+      );
+  }
+
+  async getUnreadCount(userId: string): Promise<number> {
+    const result = await db.select({ count: sql<number>`count(*)` })
+      .from(directMessages)
+      .where(and(eq(directMessages.receiverId, userId), eq(directMessages.read, false)));
+    return Number(result[0]?.count || 0);
+  }
+
+  // --- Donation queries ---
+  async getDonationsByDonor(donorId: string): Promise<(Donation & { project: Project })[]> {
+    const dons = await db.select().from(donations).where(eq(donations.donorId, donorId)).orderBy(desc(donations.createdAt));
+    return await Promise.all(dons.map(async (d) => {
+      const [project] = await db.select().from(projects).where(eq(projects.id, d.projectId));
+      return { ...d, project };
+    }));
+  }
+
+  async getUserDonationEarnings(userId: string): Promise<{ total: number; donations: Donation[] }> {
+    const userProjects = await db.select().from(projects).where(eq(projects.ownerId, userId));
+    if (userProjects.length === 0) return { total: 0, donations: [] };
+    const projectIds = userProjects.map(p => p.id);
+    const dons = await db.select().from(donations).where(inArray(donations.projectId, projectIds)).orderBy(desc(donations.createdAt));
+    const total = dons.reduce((sum, d) => sum + d.amount, 0);
+    return { total, donations: dons };
+  }
+
+  async getUserProjects(userId: string): Promise<Project[]> {
+    const owned = await db.select().from(projects).where(eq(projects.ownerId, userId)).orderBy(desc(projects.createdAt));
+    const memberOf = await db.select().from(projectMembers).where(eq(projectMembers.userId, userId));
+    const memberProjectIds = memberOf.map(m => m.projectId).filter(id => !owned.some(p => p.id === id));
+    let memberProjects: Project[] = [];
+    if (memberProjectIds.length > 0) {
+      memberProjects = await db.select().from(projects).where(inArray(projects.id, memberProjectIds));
+    }
+    return [...owned, ...memberProjects];
   }
 
   async updateUserStripeInfo(userId: string, data: { stripeCustomerId?: string; stripeSubscriptionId?: string; subscriptionTier?: string }): Promise<User> {

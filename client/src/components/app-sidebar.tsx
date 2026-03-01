@@ -10,7 +10,8 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
 } from "@/components/ui/sidebar";
-import { Home, Compass, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles } from "lucide-react";
+import { Home, Compass, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles, MessageSquare } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/user-avatar";
@@ -23,6 +24,7 @@ const menuItems = [
   { title: "Discover", url: "/discover", icon: Compass },
   { title: "Projects", url: "/projects", icon: FolderKanban },
   { title: "Matches", url: "/matches", icon: Users },
+  { title: "Messages", url: "/messages", icon: MessageSquare },
   { title: "Leaderboard", url: "/leaderboard", icon: Trophy },
   { title: "Contests", url: "/contests", icon: Medal },
   { title: "Pricing", url: "/pricing", icon: CreditCard },
@@ -50,6 +52,12 @@ export function AppSidebar() {
   const { data: subscription } = useQuery<Subscription>({
     queryKey: ["/api/subscription"],
   });
+
+  const { data: unreadData } = useQuery<{ count: number }>({
+    queryKey: ["/api/messages/unread-count"],
+    refetchInterval: 10000,
+  });
+  const unreadCount = unreadData?.count || 0;
 
   const isUnlimited = subscription?.tier === "spark_unlimited";
   const creditsUsed = subscription?.creditsUsed || 0;
@@ -81,7 +89,12 @@ export function AppSidebar() {
                   >
                     <Link href={item.url} data-testid={`link-${item.title.toLowerCase()}`}>
                       <item.icon className="h-4 w-4" />
-                      <span>{item.title}</span>
+                      <span className="flex-1">{item.title}</span>
+                      {item.title === "Messages" && unreadCount > 0 && (
+                        <Badge variant="default" className="no-default-hover-elevate no-default-active-elevate text-xs" data-testid="badge-unread-messages">
+                          {unreadCount > 99 ? "99+" : unreadCount}
+                        </Badge>
+                      )}
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

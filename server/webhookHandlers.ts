@@ -1,7 +1,7 @@
 import { getStripeSync, getUncachableStripeClient } from './stripeClient';
 import { db } from './db';
-import { users } from '@shared/schema';
-import { eq } from 'drizzle-orm';
+import { users, donations, projects } from '@shared/schema';
+import { eq, sql } from 'drizzle-orm';
 
 export class WebhookHandlers {
   static async processWebhook(payload: Buffer, signature: string): Promise<void> {
@@ -28,6 +28,7 @@ export class WebhookHandlers {
       try {
         const rawEvent = JSON.parse(payload.toString());
         await WebhookHandlers.handleSubscriptionEvent(rawEvent);
+        await WebhookHandlers.handleCheckoutCompleted(rawEvent);
       } catch (parseErr) {
         console.error("Failed to parse webhook event for tier sync:", parseErr);
       }
@@ -83,6 +84,32 @@ export class WebhookHandlers {
           console.error("Failed to retrieve price for tier mapping:", err);
         }
       }
+    }
+  }
+
+  static async handleCheckoutCompleted(event: any): Promise<void> {
+    if (event.type !== 'checkout.session.completed') return;
+
+    const session = event.data?.object;
+    if (!session?.metadata?.type || session.metadata.type !== 'donation') return;
+
+    const { projectId, donorId, amount } = session.metadata;
+    if (!projectId || !donorId || !amount) return;
+
+    try {
+      const amountCents = parseInt(amount);
+      await db.insert(donations).values({
+        projectId,
+        donorId,
+        amount: amountCents,
+        message: "Stripe donation",
+      });
+      await db.update(projects)
+        .set({ totalDonations: sql`${projects.totalDonations} + ${amountCents}` })
+        .where(eq(projects.id, projectId));
+      console.log(`Donation recorded: $${amountCents / 100} to project ${projectId} from ${donorId}`);
+    } catch (err) {
+      console.error("Failed to process donation webhook:", err);
     }
   }
 }

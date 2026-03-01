@@ -11,9 +11,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Heart } from "lucide-react";
+import { Heart, Loader2 } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
 interface DonationButtonProps {
@@ -21,26 +21,36 @@ interface DonationButtonProps {
   projectTitle: string;
 }
 
+const PRESET_AMOUNTS = [5, 10, 25, 50];
+
 export function DonationButton({ projectId, projectTitle }: DonationButtonProps) {
-  const [amount, setAmount] = useState("10");
-  const [message, setMessage] = useState("");
+  const [selectedPreset, setSelectedPreset] = useState<number | null>(10);
+  const [customAmount, setCustomAmount] = useState("");
+  const [isCustom, setIsCustom] = useState(false);
   const [open, setOpen] = useState(false);
   const { toast } = useToast();
 
+  const donationAmountCents = isCustom
+    ? Math.round(parseFloat(customAmount || "0") * 100)
+    : (selectedPreset || 0) * 100;
+
+  const displayAmount = isCustom
+    ? customAmount
+    : String(selectedPreset || 0);
+
+  const isValidAmount = donationAmountCents >= 100;
+
   const mutation = useMutation({
     mutationFn: async () => {
-      await apiRequest("POST", `/api/projects/${projectId}/donate`, {
-        amount: parseInt(amount) * 100, // to cents
-        message,
+      const res = await apiRequest("POST", `/api/projects/${projectId}/donate-checkout`, {
+        amount: donationAmountCents,
       });
-    },
-    onSuccess: () => {
-      toast({
-        title: "Thank you!",
-        description: `Your donation for ${projectTitle} was successful.`,
-      });
-      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
-      setOpen(false);
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        throw new Error("No checkout URL returned");
+      }
     },
     onError: (error) => {
       toast({
@@ -63,40 +73,76 @@ export function DonationButton({ projectId, projectTitle }: DonationButtonProps)
         <DialogHeader>
           <DialogTitle>Donate to {projectTitle}</DialogTitle>
           <DialogDescription>
-            Support this project with a small donation. Your contribution helps the creators stay motivated.
+            Support this project with a donation. Your contribution helps the creators stay motivated.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-4">
           <div className="grid gap-2">
-            <Label htmlFor="amount">Amount ($)</Label>
-            <Input
-              id="amount"
-              type="number"
-              min="1"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              data-testid="input-donation-amount"
-            />
+            <Label>Select Amount</Label>
+            <div className="flex flex-wrap gap-2">
+              {PRESET_AMOUNTS.map((amt) => (
+                <Button
+                  key={amt}
+                  variant={!isCustom && selectedPreset === amt ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => {
+                    setSelectedPreset(amt);
+                    setIsCustom(false);
+                  }}
+                  className="toggle-elevate"
+                  data-testid={`button-preset-${amt}`}
+                >
+                  ${amt}
+                </Button>
+              ))}
+              <Button
+                variant={isCustom ? "default" : "outline"}
+                size="sm"
+                onClick={() => {
+                  setIsCustom(true);
+                  setSelectedPreset(null);
+                }}
+                className="toggle-elevate"
+                data-testid="button-preset-custom"
+              >
+                Custom
+              </Button>
+            </div>
           </div>
-          <div className="grid gap-2">
-            <Label htmlFor="message">Message (Optional)</Label>
-            <Input
-              id="message"
-              placeholder="Good luck with the project!"
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              data-testid="input-donation-message"
-            />
-          </div>
+          {isCustom && (
+            <div className="grid gap-2">
+              <Label htmlFor="custom-amount">Custom Amount ($)</Label>
+              <Input
+                id="custom-amount"
+                type="number"
+                min="1"
+                step="0.01"
+                placeholder="Enter amount"
+                value={customAmount}
+                onChange={(e) => setCustomAmount(e.target.value)}
+                data-testid="input-donation-custom-amount"
+              />
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button
-            className="w-full"
+            className="w-full gap-2"
             onClick={() => mutation.mutate()}
-            disabled={mutation.isPending}
+            disabled={mutation.isPending || !isValidAmount}
             data-testid="button-submit-donation"
           >
-            {mutation.isPending ? "Processing..." : `Donate $${amount}`}
+            {mutation.isPending ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Redirecting to Stripe...
+              </>
+            ) : (
+              <>
+                <Heart className="h-4 w-4" />
+                Donate ${displayAmount}
+              </>
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>
