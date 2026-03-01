@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { MapPin, Globe, Github, Linkedin, Mail, MessageSquare, UserPlus, UserMinus, Edit, Loader2, FileText, Award, Rocket, Star, Users as UsersIcon, Sparkles, Trophy, Upload, CheckCircle, X, Clock, DollarSign, ExternalLink, Search } from "lucide-react";
+import { MapPin, Globe, Github, Linkedin, Mail, MessageSquare, UserPlus, UserMinus, Edit, Loader2, FileText, Award, Rocket, Star, Users as UsersIcon, Sparkles, Trophy, Upload, CheckCircle, X, Clock, DollarSign, ExternalLink, Search, Heart } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useState, useRef } from "react";
 import { useUpload } from "@/hooks/use-upload";
@@ -102,6 +102,11 @@ export default function Profile() {
 
   const { data: connectionRequests } = useQuery<(Connection & { user: User; profile?: UserProfile })[]>({
     queryKey: ["/api/connections/requests"],
+    enabled: !!isOwnProfile,
+  });
+
+  const { data: followedProjects } = useQuery<ProjectWithDetails[]>({
+    queryKey: ["/api/user/followed-projects"],
     enabled: !!isOwnProfile,
   });
 
@@ -477,6 +482,11 @@ export default function Profile() {
             </TabsTrigger>
           )}
           {isOwnProfile && (
+            <TabsTrigger value="following" data-testid="tab-following">
+              Following {followedProjects && followedProjects.length > 0 && `(${followedProjects.length})`}
+            </TabsTrigger>
+          )}
+          {isOwnProfile && (
             <TabsTrigger value="earnings" data-testid="tab-earnings">Earnings</TabsTrigger>
           )}
         </TabsList>
@@ -697,6 +707,35 @@ export default function Profile() {
                         Discover People
                       </Button>
                     )}
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+          </TabsContent>
+        )}
+
+        {isOwnProfile && (
+          <TabsContent value="following">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-bold flex items-center gap-2">
+                  <Heart className="h-5 w-5" /> Projects You Follow
+                </h2>
+              </div>
+              {followedProjects && followedProjects.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {followedProjects.map((follow: any) => (
+                    <ProjectCard key={follow.project?.id || follow.id} project={follow.project || follow} />
+                  ))}
+                </div>
+              ) : (
+                <Card className="border-dashed border-border/50 bg-transparent py-10">
+                  <CardContent className="flex flex-col items-center justify-center text-center space-y-2">
+                    <Heart className="h-8 w-8 text-muted-foreground" />
+                    <p className="text-muted-foreground">You haven't followed any projects yet.</p>
+                    <Button variant="outline" size="sm" onClick={() => setLocation("/discover")}>
+                      Discover Projects
+                    </Button>
                   </CardContent>
                 </Card>
               )}

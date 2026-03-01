@@ -22,6 +22,12 @@ import {
   type InsertContestParticipant,
   type Connection,
   type DirectMessage,
+  type ProjectApplication,
+  type ProjectFollow,
+  type ProjectKanbanTask,
+  type InsertProjectKanbanTask,
+  type ProjectPersona,
+  type InsertProjectPersona,
   users,
   userProfiles,
   projects,
@@ -35,6 +41,10 @@ import {
   contestParticipants,
   connections,
   directMessages,
+  projectApplications,
+  projectFollows,
+  projectKanbanTasks,
+  projectPersonas,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, or, ilike, sql, and, gte, lte, asc, ne, inArray } from "drizzle-orm";
@@ -114,6 +124,33 @@ export interface IStorage {
   getDonationsByDonor(donorId: string): Promise<(Donation & { project: Project })[]>;
   getUserDonationEarnings(userId: string): Promise<{ total: number; donations: Donation[] }>;
   getUserProjects(userId: string): Promise<Project[]>;
+
+  // Project Applications
+  createApplication(data: { projectId: string; userId: string; resumeUrl?: string; answers?: any; message?: string }): Promise<ProjectApplication>;
+  getProjectApplications(projectId: string): Promise<(ProjectApplication & { user: User; profile?: UserProfile })[]>;
+  getUserApplications(userId: string): Promise<(ProjectApplication & { project: Project })[]>;
+  getApplication(id: string): Promise<ProjectApplication | undefined>;
+  updateApplicationStatus(id: string, status: "accepted" | "rejected"): Promise<ProjectApplication>;
+
+  // Project Follows
+  followProject(userId: string, projectId: string): Promise<ProjectFollow>;
+  unfollowProject(userId: string, projectId: string): Promise<void>;
+  isFollowing(userId: string, projectId: string): Promise<boolean>;
+  getUserFollowedProjects(userId: string): Promise<(ProjectFollow & { project: Project & { owner: User } })[]>;
+  getProjectFollowerCount(projectId: string): Promise<number>;
+
+  // Kanban Tasks
+  getProjectKanbanTasks(projectId: string): Promise<(ProjectKanbanTask & { assignee?: User & { profile?: UserProfile } })[]>;
+  getKanbanTask(id: string): Promise<ProjectKanbanTask | undefined>;
+  createKanbanTask(data: InsertProjectKanbanTask): Promise<ProjectKanbanTask>;
+  updateKanbanTask(id: string, data: Partial<InsertProjectKanbanTask>): Promise<ProjectKanbanTask>;
+  deleteKanbanTask(id: string): Promise<void>;
+
+  // Personas
+  getProjectPersonas(projectId: string): Promise<ProjectPersona[]>;
+  getPersona(id: string): Promise<ProjectPersona | undefined>;
+  createPersona(data: InsertProjectPersona): Promise<ProjectPersona>;
+  deletePersona(id: string): Promise<void>;
 
   // Subscription & Credits
   getUserSubscription(userId: string): Promise<{ tier: string; creditsUsed: number; creditsLimit: number; creditsRemaining: number; stripeCustomerId: string | null; stripeSubscriptionId: string | null }>;
@@ -664,6 +701,124 @@ export class DatabaseStorage implements IStorage {
   async updateUserStripeInfo(userId: string, data: { stripeCustomerId?: string; stripeSubscriptionId?: string; subscriptionTier?: string }): Promise<User> {
     const [user] = await db.update(users).set(data).where(eq(users.id, userId)).returning();
     return user;
+  }
+
+  // --- Project Applications ---
+  async createApplication(data: { projectId: string; userId: string; resumeUrl?: string; answers?: any; message?: string }): Promise<ProjectApplication> {
+    const [app] = await db.insert(projectApplications).values({
+      projectId: data.projectId,
+      userId: data.userId,
+      status: "pending",
+      resumeUrl: data.resumeUrl || null,
+      answers: data.answers || [],
+      message: data.message || null,
+    }).returning();
+    return app;
+  }
+
+  async getProjectApplications(projectId: string): Promise<(ProjectApplication & { user: User; profile?: UserProfile })[]> {
+    const apps = await db.select().from(projectApplications).where(eq(projectApplications.projectId, projectId)).orderBy(desc(projectApplications.createdAt));
+    return await Promise.all(apps.map(async (app) => {
+      const [user] = await db.select().from(users).where(eq(users.id, app.userId));
+      const [profile] = await db.select().from(userProfiles).where(eq(userProfiles.userId, app.userId));
+      return { ...app, user, profile };
+    }));
+  }
+
+  async getUserApplications(userId: string): Promise<(ProjectApplication & { project: Project })[]> {
+    const apps = await db.select().from(projectApplications).where(eq(projectApplications.userId, userId)).orderBy(desc(projectApplications.createdAt));
+    return await Promise.all(apps.map(async (app) => {
+      const [project] = await db.select().from(projects).where(eq(projects.id, app.projectId));
+      return { ...app, project };
+    }));
+  }
+
+  async getApplication(id: string): Promise<ProjectApplication | undefined> {
+    const [app] = await db.select().from(projectApplications).where(eq(projectApplications.id, id));
+    return app;
+  }
+
+  async updateApplicationStatus(id: string, status: "accepted" | "rejected"): Promise<ProjectApplication> {
+    const [app] = await db.update(projectApplications).set({ status }).where(eq(projectApplications.id, id)).returning();
+    return app;
+  }
+
+  // --- Project Follows ---
+  async followProject(userId: string, projectId: string): Promise<ProjectFollow> {
+    const [follow] = await db.insert(projectFollows).values({ userId, projectId }).returning();
+    return follow;
+  }
+
+  async unfollowProject(userId: string, projectId: string): Promise<void> {
+    await db.delete(projectFollows).where(and(eq(projectFollows.userId, userId), eq(projectFollows.projectId, projectId)));
+  }
+
+  async isFollowing(userId: string, projectId: string): Promise<boolean> {
+    const [f] = await db.select().from(projectFollows).where(and(eq(projectFollows.userId, userId), eq(projectFollows.projectId, projectId)));
+    return !!f;
+  }
+
+  async getUserFollowedProjects(userId: string): Promise<(ProjectFollow & { project: Project & { owner: User } })[]> {
+    const follows = await db.select().from(projectFollows).where(eq(projectFollows.userId, userId)).orderBy(desc(projectFollows.createdAt));
+    return await Promise.all(follows.map(async (f) => {
+      const [project] = await db.select().from(projects).where(eq(projects.id, f.projectId));
+      const [owner] = await db.select().from(users).where(eq(users.id, project.ownerId));
+      return { ...f, project: { ...project, owner } };
+    }));
+  }
+
+  async getProjectFollowerCount(projectId: string): Promise<number> {
+    const result = await db.select({ count: sql<number>`count(*)` }).from(projectFollows).where(eq(projectFollows.projectId, projectId));
+    return Number(result[0]?.count || 0);
+  }
+
+  // --- Kanban Tasks ---
+  async getProjectKanbanTasks(projectId: string): Promise<(ProjectKanbanTask & { assignee?: User & { profile?: UserProfile } })[]> {
+    const tasks = await db.select().from(projectKanbanTasks).where(eq(projectKanbanTasks.projectId, projectId)).orderBy(asc(projectKanbanTasks.order), asc(projectKanbanTasks.createdAt));
+    return await Promise.all(tasks.map(async (task) => {
+      if (!task.assigneeId) return { ...task, assignee: undefined };
+      const [assigneeUser] = await db.select().from(users).where(eq(users.id, task.assigneeId));
+      const [assigneeProfile] = await db.select().from(userProfiles).where(eq(userProfiles.userId, task.assigneeId));
+      return { ...task, assignee: assigneeUser ? { ...assigneeUser, profile: assigneeProfile } : undefined };
+    }));
+  }
+
+  async getKanbanTask(id: string): Promise<ProjectKanbanTask | undefined> {
+    const [task] = await db.select().from(projectKanbanTasks).where(eq(projectKanbanTasks.id, id));
+    return task;
+  }
+
+  async createKanbanTask(data: InsertProjectKanbanTask): Promise<ProjectKanbanTask> {
+    const [task] = await db.insert(projectKanbanTasks).values(data).returning();
+    return task;
+  }
+
+  async updateKanbanTask(id: string, data: Partial<InsertProjectKanbanTask>): Promise<ProjectKanbanTask> {
+    const [task] = await db.update(projectKanbanTasks).set(data).where(eq(projectKanbanTasks.id, id)).returning();
+    return task;
+  }
+
+  async deleteKanbanTask(id: string): Promise<void> {
+    await db.delete(projectKanbanTasks).where(eq(projectKanbanTasks.id, id));
+  }
+
+  // --- Personas ---
+  async getProjectPersonas(projectId: string): Promise<ProjectPersona[]> {
+    return await db.select().from(projectPersonas).where(eq(projectPersonas.projectId, projectId)).orderBy(desc(projectPersonas.createdAt));
+  }
+
+  async getPersona(id: string): Promise<ProjectPersona | undefined> {
+    const [persona] = await db.select().from(projectPersonas).where(eq(projectPersonas.id, id));
+    return persona;
+  }
+
+  async createPersona(data: InsertProjectPersona): Promise<ProjectPersona> {
+    const [persona] = await db.insert(projectPersonas).values(data).returning();
+    return persona;
+  }
+
+  async deletePersona(id: string): Promise<void> {
+    await db.delete(projectPersonas).where(eq(projectPersonas.id, id));
   }
 }
 

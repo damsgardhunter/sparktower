@@ -22,6 +22,7 @@ import Profile from "@/pages/profile";
 import Contests from "@/pages/contests";
 import Pricing from "@/pages/pricing";
 import Messages from "@/pages/messages";
+import ProjectManager from "@/pages/project-manager";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "@tanstack/react-query";
 import type { UserProfile } from "@shared/schema";
@@ -82,6 +83,7 @@ function Router() {
             <Route path="/projects" component={Projects} />
             <Route path="/projects/new" component={NovaIntro} />
             <Route path="/projects/new/create" component={ProjectCreate} />
+            <Route path="/projects/:id/manage" component={ProjectManager} />
             <Route path="/projects/:id" component={ProjectDashboard} />
             <Route path="/profile" component={Profile} />
             <Route path="/profile/:id" component={Profile} />

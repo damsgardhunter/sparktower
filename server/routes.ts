@@ -2,14 +2,14 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { db } from "./db";
-import { users, projectMembers, projects } from "@shared/schema";
+import { users, projectMembers, projects, userProfiles } from "@shared/schema";
 import { setupAuth, isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { registerAuthRoutes } from "./replit_integrations/auth/routes";
 import { registerObjectStorageRoutes, ObjectStorageService } from "./replit_integrations/object_storage";
 import { insertUserProfileSchema, insertProjectSchema, insertDonationSchema, insertContestSchema } from "@shared/schema";
 import { z } from "zod";
 import OpenAI from "openai";
-import { eq, sql } from "drizzle-orm";
+import { eq, ne, and, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
 
@@ -20,6 +20,14 @@ function getFeaturesForTier(tier: string): string[] {
     spark_unlimited: ["Unlimited AI credits", "Private projects", "AI roadmap generation", "Premium support", "All features"],
   };
   return features[tier] || ["20 AI credits/month", "Create public projects", "Join contests", "Community access"];
+}
+
+async function isProjectMember(userId: string, projectId: string): Promise<boolean> {
+  const project = await storage.getProject(projectId);
+  if (!project) return false;
+  if (project.ownerId === userId) return true;
+  const members = await storage.getProjectMembers(projectId);
+  return members.some(m => m.userId === userId);
 }
 
 const openai = new OpenAI({
@@ -204,24 +212,420 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     res.json(members);
   });
 
-  app.post("/api/projects/:id/join", isAuthenticated, async (req: any, res) => {
-    const userId = req.user.claims.sub;
-    const projectId = req.params.id;
-    const { role } = req.body;
-    
-    // Check if already a member
-    const members = await storage.getProjectMembers(projectId);
-    if (members.some(m => m.userId === userId)) {
-      return res.status(400).json({ message: "Already a member" });
+  // --- Project Applications ---
+  app.post("/api/projects/:id/apply", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const projectId = req.params.id;
+      const { resumeUrl, answers, message } = req.body;
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.ownerId === userId) return res.status(400).json({ message: "Cannot apply to your own project" });
+      const members = await storage.getProjectMembers(projectId);
+      if (members.some(m => m.userId === userId)) return res.status(400).json({ message: "Already a member" });
+      const existing = await storage.getUserApplications(userId);
+      if (existing.some(a => a.projectId === projectId && a.status === "pending")) return res.status(400).json({ message: "Already applied" });
+      const app = await storage.createApplication({ projectId, userId, resumeUrl, answers, message });
+      res.json(app);
+    } catch (error) {
+      console.error("Apply error:", error);
+      res.status(500).json({ message: "Failed to submit application" });
     }
+  });
 
-    const member = await db.insert(projectMembers).values({
-      projectId,
-      userId,
-      role: role || "member"
-    }).returning();
-    
-    res.json(member[0]);
+  app.get("/api/projects/:id/applications", isAuthenticated, async (req: any, res) => {
+    try {
+      const project = await storage.getProject(req.params.id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.ownerId !== req.user.claims.sub) return res.status(403).json({ message: "Only the project owner can view applications" });
+      const apps = await storage.getProjectApplications(req.params.id);
+      res.json(apps);
+    } catch (error) {
+      console.error("Get applications error:", error);
+      res.status(500).json({ message: "Failed to get applications" });
+    }
+  });
+
+  app.get("/api/user/applications", isAuthenticated, async (req: any, res) => {
+    try {
+      const apps = await storage.getUserApplications(req.user.claims.sub);
+      res.json(apps);
+    } catch (error) {
+      console.error("Get user applications error:", error);
+      res.status(500).json({ message: "Failed to get applications" });
+    }
+  });
+
+  app.post("/api/applications/:id/accept", isAuthenticated, async (req: any, res) => {
+    try {
+      const application = await storage.getApplication(req.params.id);
+      if (!application) return res.status(404).json({ message: "Application not found" });
+      const project = await storage.getProject(application.projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.ownerId !== req.user.claims.sub) return res.status(403).json({ message: "Only the project owner can accept applications" });
+      if (application.status !== "pending") return res.status(400).json({ message: "Application is not pending" });
+      const updated = await storage.updateApplicationStatus(req.params.id, "accepted");
+      await db.insert(projectMembers).values({ projectId: application.projectId, userId: application.userId, role: req.body.role || "member" });
+      res.json(updated);
+    } catch (error) {
+      console.error("Accept application error:", error);
+      res.status(500).json({ message: "Failed to accept application" });
+    }
+  });
+
+  app.post("/api/applications/:id/reject", isAuthenticated, async (req: any, res) => {
+    try {
+      const application = await storage.getApplication(req.params.id);
+      if (!application) return res.status(404).json({ message: "Application not found" });
+      const project = await storage.getProject(application.projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.ownerId !== req.user.claims.sub) return res.status(403).json({ message: "Only the project owner can reject applications" });
+      if (application.status !== "pending") return res.status(400).json({ message: "Application is not pending" });
+      const updated = await storage.updateApplicationStatus(req.params.id, "rejected");
+      res.json(updated);
+    } catch (error) {
+      console.error("Reject application error:", error);
+      res.status(500).json({ message: "Failed to reject application" });
+    }
+  });
+
+  // --- Project Follows ---
+  app.post("/api/projects/:id/follow", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const projectId = req.params.id;
+      const following = await storage.isFollowing(userId, projectId);
+      if (following) {
+        await storage.unfollowProject(userId, projectId);
+        res.json({ following: false });
+      } else {
+        await storage.followProject(userId, projectId);
+        res.json({ following: true });
+      }
+    } catch (error) {
+      console.error("Follow error:", error);
+      res.status(500).json({ message: "Failed to toggle follow" });
+    }
+  });
+
+  app.get("/api/projects/:id/follow-status", isAuthenticated, async (req: any, res) => {
+    try {
+      const following = await storage.isFollowing(req.user.claims.sub, req.params.id);
+      const count = await storage.getProjectFollowerCount(req.params.id);
+      res.json({ following, count });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get follow status" });
+    }
+  });
+
+  app.get("/api/user/followed-projects", isAuthenticated, async (req: any, res) => {
+    try {
+      const followed = await storage.getUserFollowedProjects(req.user.claims.sub);
+      res.json(followed);
+    } catch (error) {
+      console.error("Get followed projects error:", error);
+      res.status(500).json({ message: "Failed to get followed projects" });
+    }
+  });
+
+  // --- Kanban Tasks ---
+  app.get("/api/projects/:id/kanban", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const tasks = await storage.getProjectKanbanTasks(req.params.id);
+      res.json(tasks);
+    } catch (error) {
+      console.error("Get kanban tasks error:", error);
+      res.status(500).json({ message: "Failed to get tasks" });
+    }
+  });
+
+  app.post("/api/projects/:id/kanban", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const { title, description, status, assigneeId, priority, dueDate, order } = req.body;
+      if (!title) return res.status(400).json({ message: "Title is required" });
+      const task = await storage.createKanbanTask({
+        projectId: req.params.id, title, description, status: status || "todo",
+        assigneeId: assigneeId || null, priority: priority || "medium",
+        dueDate: dueDate ? new Date(dueDate) : null, order: order || 0,
+      });
+      res.json(task);
+    } catch (error) {
+      console.error("Create kanban task error:", error);
+      res.status(500).json({ message: "Failed to create task" });
+    }
+  });
+
+  app.patch("/api/kanban/:taskId", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const existingTask = await storage.getKanbanTask(req.params.taskId);
+      if (!existingTask) return res.status(404).json({ message: "Task not found" });
+      if (!(await isProjectMember(userId, existingTask.projectId))) return res.status(403).json({ message: "Not a project member" });
+      const updates: any = {};
+      const { title, description, status, assigneeId, priority, dueDate, order } = req.body;
+      if (title !== undefined) updates.title = title;
+      if (description !== undefined) updates.description = description;
+      if (status !== undefined) updates.status = status;
+      if (assigneeId !== undefined) updates.assigneeId = assigneeId;
+      if (priority !== undefined) updates.priority = priority;
+      if (dueDate !== undefined) updates.dueDate = dueDate ? new Date(dueDate) : null;
+      if (order !== undefined) updates.order = order;
+      const task = await storage.updateKanbanTask(req.params.taskId, updates);
+      res.json(task);
+    } catch (error) {
+      console.error("Update kanban task error:", error);
+      res.status(500).json({ message: "Failed to update task" });
+    }
+  });
+
+  app.delete("/api/kanban/:taskId", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const existingTask = await storage.getKanbanTask(req.params.taskId);
+      if (!existingTask) return res.status(404).json({ message: "Task not found" });
+      if (!(await isProjectMember(userId, existingTask.projectId))) return res.status(403).json({ message: "Not a project member" });
+      await storage.deleteKanbanTask(req.params.taskId);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Delete kanban task error:", error);
+      res.status(500).json({ message: "Failed to delete task" });
+    }
+  });
+
+  app.post("/api/projects/:id/kanban/ai-generate", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      await storage.resetCreditsIfNeeded(userId);
+      const hasCredits = await storage.checkCredits(userId, 1);
+      if (!hasCredits) return res.status(403).json({ message: "Insufficient credits" });
+      const project = await storage.getProject(req.params.id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      const members = await storage.getProjectMembers(req.params.id);
+
+      const aiResponse = await fetch(`${process.env.AI_INTEGRATIONS_OPENAI_BASE_URL}/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${process.env.AI_INTEGRATIONS_OPENAI_API_KEY}` },
+        body: JSON.stringify({
+          model: "gpt-4o",
+          messages: [{
+            role: "system",
+            content: `You are Nova, a project management AI. Generate a Kanban board breakdown for the project. Return a JSON array of tasks with: title, description, status ("todo"), priority ("low"/"medium"/"high"), and suggested_role (which team role should handle it). Break the project into 8-12 actionable tasks covering planning, development, testing, and launch phases.`
+          }, {
+            role: "user",
+            content: `Project: "${project.title}"\nDescription: ${project.description}\nCategory: ${project.category}\nTech Stack: ${(project.techStack || []).join(", ")}\nRoles: ${(project.rolesNeeded || []).join(", ")}\nTeam Size: ${project.teamSize}\nTimeline: ${project.estimatedWeeks} weeks\nTeam Members: ${members.map(m => `${m.profile?.displayName || m.user.firstName || "Member"} (${m.role})`).join(", ")}`
+          }],
+          response_format: { type: "json_object" },
+          temperature: 0.7,
+        }),
+      });
+
+      const data = await aiResponse.json();
+      await storage.deductCredits(userId, 1);
+
+      const content = JSON.parse(data.choices[0].message.content);
+      const tasks = content.tasks || content;
+      const created = [];
+      for (let i = 0; i < tasks.length; i++) {
+        const t = tasks[i];
+        const task = await storage.createKanbanTask({
+          projectId: req.params.id,
+          title: t.title,
+          description: t.description || "",
+          status: "todo",
+          priority: t.priority || "medium",
+          assigneeId: null,
+          dueDate: null,
+          order: i,
+        });
+        created.push(task);
+      }
+      res.json(created);
+    } catch (error) {
+      console.error("AI kanban generate error:", error);
+      res.status(500).json({ message: "Failed to generate tasks" });
+    }
+  });
+
+  // --- Personas ---
+  app.get("/api/projects/:id/personas", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const personas = await storage.getProjectPersonas(req.params.id);
+      res.json(personas);
+    } catch (error) {
+      console.error("Get personas error:", error);
+      res.status(500).json({ message: "Failed to get personas" });
+    }
+  });
+
+  app.post("/api/projects/:id/personas", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const { name, age, occupation, bio, goals, painPoints, quote, avatarDescription } = req.body;
+      if (!name) return res.status(400).json({ message: "Name is required" });
+      const persona = await storage.createPersona({
+        projectId: req.params.id, name, age, occupation, bio,
+        goals: goals || [], painPoints: painPoints || [],
+        quote, avatarDescription, isAiGenerated: false,
+      });
+      res.json(persona);
+    } catch (error) {
+      console.error("Create persona error:", error);
+      res.status(500).json({ message: "Failed to create persona" });
+    }
+  });
+
+  app.post("/api/projects/:id/personas/generate", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      await storage.resetCreditsIfNeeded(userId);
+      const hasCredits = await storage.checkCredits(userId, 1);
+      if (!hasCredits) return res.status(403).json({ message: "Insufficient credits" });
+      const project = await storage.getProject(req.params.id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+
+      const aiResponse = await fetch(`${process.env.AI_INTEGRATIONS_OPENAI_BASE_URL}/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${process.env.AI_INTEGRATIONS_OPENAI_API_KEY}` },
+        body: JSON.stringify({
+          model: "gpt-4o",
+          messages: [{
+            role: "system",
+            content: `You are a UX research expert. Generate a realistic customer persona for the given project. Return a JSON object with: name (string), age (number), occupation (string), bio (string, 2-3 sentences), goals (array of 3 strings), painPoints (array of 3 strings), quote (string, a memorable quote from this persona), avatarDescription (string, brief physical/style description for illustration).`
+          }, {
+            role: "user",
+            content: `Project: "${project.title}"\nDescription: ${project.description}\nCategory: ${project.category}\n${req.body.context ? `Additional context: ${req.body.context}` : ""}`
+          }],
+          response_format: { type: "json_object" },
+          temperature: 0.9,
+        }),
+      });
+
+      const data = await aiResponse.json();
+      await storage.deductCredits(userId, 1);
+
+      const personaData = JSON.parse(data.choices[0].message.content);
+      const persona = await storage.createPersona({
+        projectId: req.params.id,
+        name: personaData.name,
+        age: personaData.age,
+        occupation: personaData.occupation,
+        bio: personaData.bio,
+        goals: personaData.goals || [],
+        painPoints: personaData.painPoints || [],
+        quote: personaData.quote,
+        avatarDescription: personaData.avatarDescription,
+        isAiGenerated: true,
+      });
+      res.json(persona);
+    } catch (error) {
+      console.error("Generate persona error:", error);
+      res.status(500).json({ message: "Failed to generate persona" });
+    }
+  });
+
+  app.delete("/api/personas/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const persona = await storage.getPersona(req.params.id);
+      if (!persona) return res.status(404).json({ message: "Persona not found" });
+      if (!(await isProjectMember(userId, persona.projectId))) return res.status(403).json({ message: "Not a project member" });
+      await storage.deletePersona(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Delete persona error:", error);
+      res.status(500).json({ message: "Failed to delete persona" });
+    }
+  });
+
+  // --- AI People Recommendations ---
+  app.post("/api/projects/:id/recommend-people", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      await storage.resetCreditsIfNeeded(userId);
+      const hasCredits = await storage.checkCredits(userId, 1);
+      if (!hasCredits) return res.status(403).json({ message: "Insufficient credits" });
+      const project = await storage.getProject(req.params.id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+
+      const allProfiles = await db.select().from(userProfiles).where(and(ne(userProfiles.userId, userId), eq(userProfiles.isOnboarded, true)));
+      const profileSummaries = allProfiles.slice(0, 50).map(p => ({
+        userId: p.userId,
+        name: p.displayName || p.username || "User",
+        skills: (p.skills || []).join(", "),
+        interests: (p.interests || []).join(", "),
+        experience: p.experienceLevel,
+        headline: p.headline,
+      }));
+
+      const aiResponse = await fetch(`${process.env.AI_INTEGRATIONS_OPENAI_BASE_URL}/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${process.env.AI_INTEGRATIONS_OPENAI_API_KEY}` },
+        body: JSON.stringify({
+          model: "gpt-4o",
+          messages: [{
+            role: "system",
+            content: `You are a talent matching expert. Given a project's needs and a list of users, recommend the top 5 most suitable people. Return a JSON object with "recommendations" array, each with: userId (string), reason (string, 1-2 sentences explaining why they're a good fit), matchStrength ("strong"/"moderate"/"good").`
+          }, {
+            role: "user",
+            content: `Project: "${project.title}"\nDescription: ${project.description}\nRoles Needed: ${(project.rolesNeeded || []).join(", ")}\nTech Stack: ${(project.techStack || []).join(", ")}\n\nAvailable Users:\n${JSON.stringify(profileSummaries)}`
+          }],
+          response_format: { type: "json_object" },
+          temperature: 0.7,
+        }),
+      });
+
+      const data = await aiResponse.json();
+      await storage.deductCredits(userId, 1);
+
+      const content = JSON.parse(data.choices[0].message.content);
+      const recs = content.recommendations || [];
+      const enriched = await Promise.all(recs.map(async (r: any) => {
+        const [user] = await db.select().from(users).where(eq(users.id, r.userId));
+        const [profile] = await db.select().from(userProfiles).where(eq(userProfiles.userId, r.userId));
+        return { ...r, user, profile };
+      }));
+      res.json(enriched.filter((r: any) => r.user));
+    } catch (error) {
+      console.error("Recommend people error:", error);
+      res.status(500).json({ message: "Failed to recommend people" });
+    }
+  });
+
+  // --- Business Plan ---
+  app.post("/api/projects/:id/business-plan", isAuthenticated, async (req: any, res) => {
+    try {
+      const project = await storage.getProject(req.params.id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.ownerId !== req.user.claims.sub) return res.status(403).json({ message: "Only the owner can update the business plan" });
+      const updated = await storage.updateProject(req.params.id, { businessPlanUrl: req.body.businessPlanUrl });
+      res.json(updated);
+    } catch (error) {
+      console.error("Business plan error:", error);
+      res.status(500).json({ message: "Failed to update business plan" });
+    }
+  });
+
+  // --- Application Questions ---
+  app.post("/api/projects/:id/application-questions", isAuthenticated, async (req: any, res) => {
+    try {
+      const project = await storage.getProject(req.params.id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.ownerId !== req.user.claims.sub) return res.status(403).json({ message: "Only the owner can set application questions" });
+      const updated = await storage.updateProject(req.params.id, { applicationQuestions: req.body.questions });
+      res.json(updated);
+    } catch (error) {
+      console.error("Application questions error:", error);
+      res.status(500).json({ message: "Failed to update application questions" });
+    }
   });
 
   app.patch("/api/projects/:id", isAuthenticated, async (req: any, res) => {

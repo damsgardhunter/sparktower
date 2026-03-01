@@ -42,6 +42,8 @@ export const projects = pgTable("projects", {
   techStack: text("tech_stack").array().default([]),
   liveUrl: text("live_url"),
   repoUrl: text("repo_url"),
+  businessPlanUrl: text("business_plan_url"),
+  applicationQuestions: jsonb("application_questions").default([]),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -139,6 +141,54 @@ export const directMessages = pgTable("direct_messages", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const projectApplications = pgTable("project_applications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  status: text("status", { enum: ["pending", "accepted", "rejected"] }).default("pending").notNull(),
+  resumeUrl: text("resume_url"),
+  answers: jsonb("answers").default([]),
+  message: text("message"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const projectFollows = pgTable("project_follows", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  userProjectUnique: unique().on(table.userId, table.projectId),
+}));
+
+export const projectKanbanTasks = pgTable("project_kanban_tasks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  title: text("title").notNull(),
+  description: text("description"),
+  status: text("status", { enum: ["todo", "in-progress", "review", "done"] }).default("todo").notNull(),
+  assigneeId: varchar("assignee_id").references(() => users.id),
+  priority: text("priority", { enum: ["low", "medium", "high"] }).default("medium").notNull(),
+  dueDate: timestamp("due_date"),
+  order: integer("order").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const projectPersonas = pgTable("project_personas", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  name: text("name").notNull(),
+  age: integer("age"),
+  occupation: text("occupation"),
+  bio: text("bio"),
+  goals: text("goals").array().default([]),
+  painPoints: text("pain_points").array().default([]),
+  quote: text("quote"),
+  avatarDescription: text("avatar_description"),
+  isAiGenerated: boolean("is_ai_generated").default(false).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // Schemas
 export const insertUserProfileSchema = createInsertSchema(userProfiles).omit({
   id: true,
@@ -199,6 +249,26 @@ export const insertDirectMessageSchema = createInsertSchema(directMessages).omit
   createdAt: true,
 });
 
+export const insertProjectApplicationSchema = createInsertSchema(projectApplications).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertProjectFollowSchema = createInsertSchema(projectFollows).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertProjectKanbanTaskSchema = createInsertSchema(projectKanbanTasks).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertProjectPersonaSchema = createInsertSchema(projectPersonas).omit({
+  id: true,
+  createdAt: true,
+});
+
 // Types
 export type UserProfile = typeof userProfiles.$inferSelect;
 export type InsertUserProfile = z.infer<typeof insertUserProfileSchema>;
@@ -224,3 +294,11 @@ export type Connection = typeof connections.$inferSelect;
 export type InsertConnection = z.infer<typeof insertConnectionSchema>;
 export type DirectMessage = typeof directMessages.$inferSelect;
 export type InsertDirectMessage = z.infer<typeof insertDirectMessageSchema>;
+export type ProjectApplication = typeof projectApplications.$inferSelect;
+export type InsertProjectApplication = z.infer<typeof insertProjectApplicationSchema>;
+export type ProjectFollow = typeof projectFollows.$inferSelect;
+export type InsertProjectFollow = z.infer<typeof insertProjectFollowSchema>;
+export type ProjectKanbanTask = typeof projectKanbanTasks.$inferSelect;
+export type InsertProjectKanbanTask = z.infer<typeof insertProjectKanbanTaskSchema>;
+export type ProjectPersona = typeof projectPersonas.$inferSelect;
+export type InsertProjectPersona = z.infer<typeof insertProjectPersonaSchema>;
