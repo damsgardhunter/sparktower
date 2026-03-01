@@ -71,27 +71,27 @@ export async function registerRoutes(
 
   // User Profile
   app.get("/api/profile", isAuthenticated, async (req: any, res) => {
-    const profile = await storage.getUserProfile(req.user.claims.sub);
+    const profile = await storage.getUserProfile((req.user as any).id);
     if (!profile) return res.status(404).json({ message: "Profile not found" });
     res.json(profile);
   });
 
   app.post("/api/profile", isAuthenticated, async (req: any, res) => {
-    const userId = req.user.claims.sub;
+    const userId = (req.user as any).id;
     const validated = insertUserProfileSchema.parse({ ...req.body, userId });
     const profile = await storage.upsertUserProfile(validated);
     res.json(profile);
   });
 
   app.post("/api/profile/complete-onboarding", isAuthenticated, async (req: any, res) => {
-    await storage.completeOnboarding(req.user.claims.sub);
+    await storage.completeOnboarding((req.user as any).id);
     res.json({ success: true });
   });
 
   // General AI Chat for project creation (no project ID needed yet)
   app.post("/api/chat", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const hasCredits = await storage.checkCredits(userId, 1);
       if (!hasCredits) {
         const sub = await storage.getUserSubscription(userId);
@@ -194,7 +194,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
   });
 
   app.post("/api/projects", isAuthenticated, async (req: any, res) => {
-    const ownerId = req.user.claims.sub;
+    const ownerId = (req.user as any).id;
     const validated = insertProjectSchema.parse({ ...req.body, ownerId });
     const project = await storage.createProject(validated);
     res.json(project);
@@ -215,7 +215,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
   // --- Project Applications ---
   app.post("/api/projects/:id/apply", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const projectId = req.params.id;
       const { resumeUrl, answers, message } = req.body;
       const project = await storage.getProject(projectId);
@@ -237,7 +237,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     try {
       const project = await storage.getProject(req.params.id);
       if (!project) return res.status(404).json({ message: "Project not found" });
-      if (project.ownerId !== req.user.claims.sub) return res.status(403).json({ message: "Only the project owner can view applications" });
+      if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Only the project owner can view applications" });
       const apps = await storage.getProjectApplications(req.params.id);
       res.json(apps);
     } catch (error) {
@@ -248,7 +248,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
 
   app.get("/api/user/applications", isAuthenticated, async (req: any, res) => {
     try {
-      const apps = await storage.getUserApplications(req.user.claims.sub);
+      const apps = await storage.getUserApplications((req.user as any).id);
       res.json(apps);
     } catch (error) {
       console.error("Get user applications error:", error);
@@ -262,7 +262,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       if (!application) return res.status(404).json({ message: "Application not found" });
       const project = await storage.getProject(application.projectId);
       if (!project) return res.status(404).json({ message: "Project not found" });
-      if (project.ownerId !== req.user.claims.sub) return res.status(403).json({ message: "Only the project owner can accept applications" });
+      if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Only the project owner can accept applications" });
       if (application.status !== "pending") return res.status(400).json({ message: "Application is not pending" });
       const updated = await storage.updateApplicationStatus(req.params.id, "accepted");
       await db.insert(projectMembers).values({ projectId: application.projectId, userId: application.userId, role: req.body.role || "member" });
@@ -279,7 +279,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       if (!application) return res.status(404).json({ message: "Application not found" });
       const project = await storage.getProject(application.projectId);
       if (!project) return res.status(404).json({ message: "Project not found" });
-      if (project.ownerId !== req.user.claims.sub) return res.status(403).json({ message: "Only the project owner can reject applications" });
+      if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Only the project owner can reject applications" });
       if (application.status !== "pending") return res.status(400).json({ message: "Application is not pending" });
       const updated = await storage.updateApplicationStatus(req.params.id, "rejected");
       res.json(updated);
@@ -292,7 +292,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
   // --- Project Follows ---
   app.post("/api/projects/:id/follow", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const projectId = req.params.id;
       const following = await storage.isFollowing(userId, projectId);
       if (following) {
@@ -310,7 +310,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
 
   app.get("/api/projects/:id/follow-status", isAuthenticated, async (req: any, res) => {
     try {
-      const following = await storage.isFollowing(req.user.claims.sub, req.params.id);
+      const following = await storage.isFollowing((req.user as any).id, req.params.id);
       const count = await storage.getProjectFollowerCount(req.params.id);
       res.json({ following, count });
     } catch (error) {
@@ -320,7 +320,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
 
   app.get("/api/user/followed-projects", isAuthenticated, async (req: any, res) => {
     try {
-      const followed = await storage.getUserFollowedProjects(req.user.claims.sub);
+      const followed = await storage.getUserFollowedProjects((req.user as any).id);
       res.json(followed);
     } catch (error) {
       console.error("Get followed projects error:", error);
@@ -331,7 +331,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
   // --- Kanban Tasks ---
   app.get("/api/projects/:id/kanban", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       const tasks = await storage.getProjectKanbanTasks(req.params.id);
       res.json(tasks);
@@ -343,7 +343,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
 
   app.post("/api/projects/:id/kanban", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       const { title, description, status, assigneeId, priority, dueDate, order } = req.body;
       if (!title) return res.status(400).json({ message: "Title is required" });
@@ -361,7 +361,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
 
   app.patch("/api/kanban/:taskId", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const existingTask = await storage.getKanbanTask(req.params.taskId);
       if (!existingTask) return res.status(404).json({ message: "Task not found" });
       if (!(await isProjectMember(userId, existingTask.projectId))) return res.status(403).json({ message: "Not a project member" });
@@ -384,7 +384,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
 
   app.delete("/api/kanban/:taskId", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const existingTask = await storage.getKanbanTask(req.params.taskId);
       if (!existingTask) return res.status(404).json({ message: "Task not found" });
       if (!(await isProjectMember(userId, existingTask.projectId))) return res.status(403).json({ message: "Not a project member" });
@@ -398,7 +398,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
 
   app.post("/api/projects/:id/kanban/ai-generate", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       await storage.resetCreditsIfNeeded(userId);
       const hasCredits = await storage.checkCredits(userId, 1);
       if (!hasCredits) return res.status(403).json({ message: "Insufficient credits" });
@@ -453,7 +453,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
   // --- Personas ---
   app.get("/api/projects/:id/personas", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       const personas = await storage.getProjectPersonas(req.params.id);
       res.json(personas);
@@ -465,7 +465,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
 
   app.post("/api/projects/:id/personas", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       const { name, age, occupation, bio, goals, painPoints, quote, avatarDescription } = req.body;
       if (!name) return res.status(400).json({ message: "Name is required" });
@@ -483,7 +483,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
 
   app.post("/api/projects/:id/personas/generate", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       await storage.resetCreditsIfNeeded(userId);
       const hasCredits = await storage.checkCredits(userId, 1);
@@ -533,7 +533,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
 
   app.delete("/api/personas/:id", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const persona = await storage.getPersona(req.params.id);
       if (!persona) return res.status(404).json({ message: "Persona not found" });
       if (!(await isProjectMember(userId, persona.projectId))) return res.status(403).json({ message: "Not a project member" });
@@ -548,7 +548,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
   // --- AI People Recommendations ---
   app.post("/api/projects/:id/recommend-people", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       await storage.resetCreditsIfNeeded(userId);
       const hasCredits = await storage.checkCredits(userId, 1);
@@ -605,7 +605,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     try {
       const project = await storage.getProject(req.params.id);
       if (!project) return res.status(404).json({ message: "Project not found" });
-      if (project.ownerId !== req.user.claims.sub) return res.status(403).json({ message: "Only the owner can update the business plan" });
+      if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Only the owner can update the business plan" });
       const updated = await storage.updateProject(req.params.id, { businessPlanUrl: req.body.businessPlanUrl });
       res.json(updated);
     } catch (error) {
@@ -619,7 +619,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     try {
       const project = await storage.getProject(req.params.id);
       if (!project) return res.status(404).json({ message: "Project not found" });
-      if (project.ownerId !== req.user.claims.sub) return res.status(403).json({ message: "Only the owner can set application questions" });
+      if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Only the owner can set application questions" });
       const updated = await storage.updateProject(req.params.id, { applicationQuestions: req.body.questions });
       res.json(updated);
     } catch (error) {
@@ -631,7 +631,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
   app.patch("/api/projects/:id", isAuthenticated, async (req: any, res) => {
     const project = await storage.getProject(req.params.id);
     if (!project) return res.status(404).json({ message: "Project not found" });
-    if (project.ownerId !== req.user.claims.sub) return res.status(403).json({ message: "Unauthorized" });
+    if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Unauthorized" });
     
     const validated = insertProjectSchema.partial().parse(req.body);
     const updated = await storage.updateProject(req.params.id, validated);
@@ -646,7 +646,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
 
   app.post("/api/projects/:id/chat", isAuthenticated, async (req: any, res) => {
     const projectId = req.params.id;
-    const userId = req.user.claims.sub;
+    const userId = (req.user as any).id;
     const { message } = req.body;
 
     const hasCredits = await storage.checkCredits(userId, 1);
@@ -688,7 +688,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
   });
 
   app.post("/api/projects/:id/donate", isAuthenticated, async (req: any, res) => {
-    const donorId = req.user.claims.sub;
+    const donorId = (req.user as any).id;
     const projectId = req.params.id;
     const validated = insertDonationSchema.parse({ ...req.body, donorId, projectId });
     const donation = await storage.createDonation(validated);
@@ -697,14 +697,14 @@ Only include fields you have enough info to fill. Start empty if needed.`;
 
   // Matches
   app.get("/api/matches", isAuthenticated, async (req: any, res) => {
-    const userId = req.user.claims.sub;
+    const userId = (req.user as any).id;
     const matches = await storage.getUserMatches(userId);
     res.json(matches);
   });
 
   app.post("/api/matches/generate", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const userProfile = await storage.getUserProfile(userId);
       if (!userProfile) return res.status(400).json({ message: "Complete your profile first" });
 
@@ -875,7 +875,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     try {
       const project = await storage.getProject(req.params.id);
       if (!project) return res.status(404).json({ message: "Project not found" });
-      if (project.ownerId !== req.user.claims.sub) return res.status(403).json({ message: "Unauthorized" });
+      if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Unauthorized" });
 
       const { objectPath } = req.body;
       if (!objectPath || typeof objectPath !== "string") {
@@ -894,7 +894,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     try {
       const project = await storage.getProject(req.params.id);
       if (!project) return res.status(404).json({ message: "Project not found" });
-      if (project.ownerId !== req.user.claims.sub) return res.status(403).json({ message: "Unauthorized" });
+      if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Unauthorized" });
 
       const index = parseInt(req.params.index);
       if (isNaN(index)) return res.status(400).json({ message: "Invalid index" });
@@ -909,7 +909,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
 
   app.post("/api/projects/:id/generate-video", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const hasCredits = await storage.checkCredits(userId, 5);
       if (!hasCredits) {
         const sub = await storage.getUserSubscription(userId);
@@ -918,7 +918,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
 
       const project = await storage.getProject(req.params.id);
       if (!project) return res.status(404).json({ message: "Project not found" });
-      if (project.ownerId !== req.user.claims.sub) return res.status(403).json({ message: "Unauthorized" });
+      if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Unauthorized" });
 
       const { prompt, style = "professional" } = req.body;
       const videoPrompt = prompt || `Create a short showcase video for the project "${project.title}": ${project.description}`;
@@ -1019,7 +1019,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
         const allBadges = await storage.getBadges();
         const aiExplorerBadge = allBadges.find(b => b.name === "AI Explorer");
         if (aiExplorerBadge) {
-          const userId = req.user.claims.sub;
+          const userId = (req.user as any).id;
           const existingBadges = await storage.getUserBadges(userId);
           if (!existingBadges.some(ub => ub.badgeId === aiExplorerBadge.id)) {
             await storage.awardBadge(userId, aiExplorerBadge.id);
@@ -1118,7 +1118,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
 
   app.post("/api/contests/:id/join", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const contestId = req.params.id;
       const contest = await storage.getContest(contestId);
       if (!contest) return res.status(404).json({ message: "Contest not found" });
@@ -1140,7 +1140,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
 
   app.post("/api/contests/:id/submit", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const contestId = req.params.id;
       const { submissionUrl, submissionNote } = req.body;
       if (!submissionUrl) return res.status(400).json({ message: "submissionUrl is required" });
@@ -1162,7 +1162,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
   // Connections
   app.post("/api/connections/request", isAuthenticated, async (req: any, res) => {
     try {
-      const requesterId = req.user.claims.sub;
+      const requesterId = (req.user as any).id;
       const { userId: receiverId } = req.body;
       if (!receiverId) return res.status(400).json({ message: "userId is required" });
       if (requesterId === receiverId) return res.status(400).json({ message: "Cannot connect with yourself" });
@@ -1179,7 +1179,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
 
   app.post("/api/connections/:id/accept", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const existing = await storage.getConnectionById(req.params.id);
       if (!existing) return res.status(404).json({ message: "Connection not found" });
       if (existing.receiverId !== userId) return res.status(403).json({ message: "Only the receiver can accept a connection request" });
@@ -1194,7 +1194,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
 
   app.post("/api/connections/:id/reject", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const existing = await storage.getConnectionById(req.params.id);
       if (!existing) return res.status(404).json({ message: "Connection not found" });
       if (existing.receiverId !== userId) return res.status(403).json({ message: "Only the receiver can reject a connection request" });
@@ -1209,7 +1209,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
 
   app.delete("/api/connections/:id", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const existing = await storage.getConnectionById(req.params.id);
       if (!existing) return res.status(404).json({ message: "Connection not found" });
       if (existing.requesterId !== userId && existing.receiverId !== userId) {
@@ -1225,7 +1225,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
 
   app.get("/api/connections", isAuthenticated, async (req: any, res) => {
     try {
-      const conns = await storage.getConnections(req.user.claims.sub);
+      const conns = await storage.getConnections((req.user as any).id);
       res.json(conns);
     } catch (error) {
       console.error("Get connections error:", error);
@@ -1235,7 +1235,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
 
   app.get("/api/connections/requests", isAuthenticated, async (req: any, res) => {
     try {
-      const requests = await storage.getConnectionRequests(req.user.claims.sub);
+      const requests = await storage.getConnectionRequests((req.user as any).id);
       res.json(requests);
     } catch (error) {
       console.error("Get connection requests error:", error);
@@ -1245,7 +1245,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
 
   app.get("/api/connections/status/:userId", isAuthenticated, async (req: any, res) => {
     try {
-      const conn = await storage.getConnectionStatus(req.user.claims.sub, req.params.userId);
+      const conn = await storage.getConnectionStatus((req.user as any).id, req.params.userId);
       res.json(conn || { status: "none" });
     } catch (error) {
       console.error("Get connection status error:", error);
@@ -1256,7 +1256,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
   // Direct Messages
   app.get("/api/messages/conversations", isAuthenticated, async (req: any, res) => {
     try {
-      const conversations = await storage.getConversationList(req.user.claims.sub);
+      const conversations = await storage.getConversationList((req.user as any).id);
       res.json(conversations);
     } catch (error) {
       console.error("Get conversations error:", error);
@@ -1266,7 +1266,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
 
   app.get("/api/messages/unread-count", isAuthenticated, async (req: any, res) => {
     try {
-      const count = await storage.getUnreadCount(req.user.claims.sub);
+      const count = await storage.getUnreadCount((req.user as any).id);
       res.json({ count });
     } catch (error) {
       console.error("Get unread count error:", error);
@@ -1276,7 +1276,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
 
   app.get("/api/messages/:userId", isAuthenticated, async (req: any, res) => {
     try {
-      const currentUserId = req.user.claims.sub;
+      const currentUserId = (req.user as any).id;
       const otherUserId = req.params.userId;
       const conn = await storage.getConnectionStatus(currentUserId, otherUserId);
       if (!conn || conn.status !== "accepted") {
@@ -1292,7 +1292,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
 
   app.post("/api/messages/:userId", isAuthenticated, async (req: any, res) => {
     try {
-      const senderId = req.user.claims.sub;
+      const senderId = (req.user as any).id;
       const receiverId = req.params.userId;
       const { content } = req.body;
       if (!content || !content.trim()) return res.status(400).json({ message: "content is required" });
@@ -1312,7 +1312,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
 
   app.post("/api/messages/:userId/read", isAuthenticated, async (req: any, res) => {
     try {
-      await storage.markMessagesRead(req.user.claims.sub, req.params.userId);
+      await storage.markMessagesRead((req.user as any).id, req.params.userId);
       res.json({ success: true });
     } catch (error) {
       console.error("Mark read error:", error);
@@ -1323,7 +1323,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
   // Stripe Connect for donation payouts
   app.post("/api/stripe/connect-account", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const user = await storage.getUser(userId);
       if (!user) return res.status(404).json({ message: "User not found" });
 
@@ -1352,7 +1352,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
 
   app.get("/api/stripe/connect-onboarding", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const user = await storage.getUser(userId);
       if (!user?.stripeConnectAccountId) {
         return res.status(400).json({ message: "No connect account. Create one first." });
@@ -1375,7 +1375,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
 
   app.get("/api/stripe/connect-dashboard", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const user = await storage.getUser(userId);
       if (!user?.stripeConnectAccountId) {
         return res.status(400).json({ message: "No connect account" });
@@ -1392,7 +1392,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
 
   app.get("/api/payouts", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const earnings = await storage.getUserDonationEarnings(userId);
       const user = await storage.getUser(userId);
       res.json({
@@ -1409,7 +1409,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
   // Stripe donation checkout
   app.post("/api/projects/:id/donate-checkout", isAuthenticated, async (req: any, res) => {
     try {
-      const donorId = req.user.claims.sub;
+      const donorId = (req.user as any).id;
       const projectId = req.params.id;
       const { amount } = req.body;
 
@@ -1468,7 +1468,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
   // User projects (own + member of)
   app.get("/api/user/projects", isAuthenticated, async (req: any, res) => {
     try {
-      const userProjectsList = await storage.getUserProjects(req.user.claims.sub);
+      const userProjectsList = await storage.getUserProjects((req.user as any).id);
       res.json(userProjectsList);
     } catch (error) {
       console.error("Get user projects error:", error);
@@ -1479,7 +1479,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
   // Subscription & Stripe routes
   app.get("/api/subscription", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const sub = await storage.getUserSubscription(userId);
       res.json(sub);
     } catch (error) {
@@ -1541,7 +1541,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
 
   app.post("/api/checkout", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const { priceId } = req.body;
       if (!priceId) return res.status(400).json({ message: "priceId is required" });
 
@@ -1587,7 +1587,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
 
   app.post("/api/billing-portal", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const user = await storage.getUser(userId);
       if (!user?.stripeCustomerId) {
         return res.status(400).json({ message: "No active subscription" });
@@ -1618,7 +1618,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
 
   app.post("/api/stripe/sync-subscription", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = (req.user as any).id;
       const user = await storage.getUser(userId);
       if (!user?.stripeCustomerId) {
         return res.json({ tier: "free" });

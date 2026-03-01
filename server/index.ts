@@ -62,6 +62,17 @@ export function log(message: string, source = "express") {
   console.log(`${formattedTime} [${source}] ${message}`);
 }
 
+function stripPasswordHash(obj: any): any {
+  if (obj === null || obj === undefined || typeof obj !== "object") return obj;
+  if (Array.isArray(obj)) return obj.map(stripPasswordHash);
+  const result: any = {};
+  for (const key of Object.keys(obj)) {
+    if (key === "passwordHash") continue;
+    result[key] = typeof obj[key] === "object" ? stripPasswordHash(obj[key]) : obj[key];
+  }
+  return result;
+}
+
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
@@ -69,8 +80,9 @@ app.use((req, res, next) => {
 
   const originalResJson = res.json;
   res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
+    const sanitized = stripPasswordHash(bodyJson);
+    capturedJsonResponse = sanitized;
+    return originalResJson.apply(res, [sanitized, ...args]);
   };
 
   res.on("finish", () => {

@@ -19,7 +19,7 @@ Do not make changes to the file `server/seed-stripe.ts`.
 
 **AI Integration:** OpenAI's gpt-4o model is utilized via Replit AI Integrations for various AI functionalities including chatbot interactions, weighted profile matching, AI storyboard generation, Kanban task generation, customer persona creation, and people recommendations.
 
-**Authentication:** Replit Auth (OIDC) handles user login and signup processes, supporting Google, GitHub, and email.
+**Authentication:** Custom auth system with email/password registration (bcrypt hashing) and Google OAuth 2.0. Uses passport-local and passport-google-oauth20 strategies with PostgreSQL session storage. Google OAuth requires GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET environment variables.
 
 **Storage:** Replit Object Storage (GCS) is used for media and document uploads, employing a presigned URL flow for direct client-to-storage uploads.
 
@@ -41,7 +41,7 @@ Do not make changes to the file `server/seed-stripe.ts`.
 ## External Dependencies
 
 *   **OpenAI:** Utilized for various AI functionalities (gpt-4o model) through Replit AI Integrations.
-*   **Replit Auth:** For user authentication and authorization.
+*   **Google OAuth 2.0:** For Google sign-in (requires GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET env vars).
 *   **Replit Object Storage (GCS):** For file storage (images, videos, resumes).
 *   **Stripe:** For payment processing (donations via Checkout, subscriptions, payouts via Connect Express, billing portal).
 *   **PostgreSQL:** The primary database for all application data, accessed via Drizzle ORM.
