@@ -14,12 +14,12 @@ import type { Project, User, UserProfile } from "@shared/schema";
 import { Badge } from "@/components/ui/badge";
 
 interface ProjectCardProps {
-  project: Project & { owner: User; profile?: UserProfile };
+  project: Project & { owner?: User; profile?: UserProfile };
 }
 
 export function ProjectCard({ project }: ProjectCardProps) {
   const [, setLocation] = useLocation();
-  const ownerName = project.owner.firstName || project.owner.email || "Anonymous";
+  const ownerName = project.owner?.firstName || project.owner?.email || "Anonymous";
   const ownerAvatar = project.profile?.avatarUrl;
 
   return (

@@ -1,4 +1,4 @@
-import { pgTable, text, varchar, timestamp, integer, boolean, index, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, integer, boolean, index, jsonb, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
@@ -76,7 +76,9 @@ export const userMatches = pgTable("user_matches", {
   score: integer("score").notNull(),
   reasons: text("reasons").array(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  userMatchUnique: unique().on(table.userId, table.matchedUserId),
+}));
 
 export const badges = pgTable("badges", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

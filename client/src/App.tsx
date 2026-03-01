@@ -75,7 +75,7 @@ function Router() {
             <ThemeToggle />
           </div>
         </header>
-        <main className="flex-1 overflow-hidden">
+        <main className="flex-1 overflow-y-auto">
           <Switch>
             <Route path="/" component={Home} />
             <Route path="/onboarding" component={Onboarding} />
