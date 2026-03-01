@@ -8,12 +8,14 @@ import { authStorage } from "./storage";
 import bcrypt from "bcryptjs";
 
 export function getSession() {
-  const sessionTtl = 7 * 24 * 60 * 60 * 1000;
+  const sessionTtlSeconds = 7 * 24 * 60 * 60;
+  const sessionTtlMs = sessionTtlSeconds * 1000;
+  const isProduction = process.env.NODE_ENV === "production";
   const pgStore = connectPg(session);
   const sessionStore = new pgStore({
     conString: process.env.DATABASE_URL,
     createTableIfMissing: false,
-    ttl: sessionTtl,
+    ttl: sessionTtlSeconds,
     tableName: "sessions",
   });
   return session({
@@ -23,8 +25,8 @@ export function getSession() {
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: true,
-      maxAge: sessionTtl,
+      secure: isProduction,
+      maxAge: sessionTtlMs,
     },
   });
 }
