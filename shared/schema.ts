@@ -44,6 +44,10 @@ export const projects = pgTable("projects", {
   repoUrl: text("repo_url"),
   businessPlanUrl: text("business_plan_url"),
   applicationQuestions: jsonb("application_questions").default([]),
+  problemStatement: text("problem_statement"),
+  targetUser: text("target_user"),
+  successMetrics: text("success_metrics"),
+  scope: jsonb("scope"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -52,6 +56,10 @@ export const projectMembers = pgTable("project_members", {
   projectId: varchar("project_id").notNull().references(() => projects.id),
   userId: varchar("user_id").notNull().references(() => users.id),
   role: text("role").notNull(),
+  timezone: text("timezone"),
+  availability: text("availability"),
+  hoursPerWeek: integer("hours_per_week"),
+  skills: text("skills").array(),
 });
 
 export const projectChatMessages = pgTable("project_chat_messages", {
@@ -171,6 +179,10 @@ export const projectKanbanTasks = pgTable("project_kanban_tasks", {
   priority: text("priority", { enum: ["low", "medium", "high"] }).default("medium").notNull(),
   dueDate: timestamp("due_date"),
   order: integer("order").default(0).notNull(),
+  tags: text("tags").array().default([]),
+  estimateHours: integer("estimate_hours"),
+  blockedByTaskId: varchar("blocked_by_task_id"),
+  subtasks: jsonb("subtasks").default([]),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -186,6 +198,70 @@ export const projectPersonas = pgTable("project_personas", {
   quote: text("quote"),
   avatarDescription: text("avatar_description"),
   isAiGenerated: boolean("is_ai_generated").default(false).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const projectMilestones = pgTable("project_milestones", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  title: text("title").notNull(),
+  description: text("description"),
+  status: text("status", { enum: ["planned", "in-progress", "completed"] }).default("planned").notNull(),
+  targetDate: timestamp("target_date"),
+  order: integer("order").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const projectActivityLog = pgTable("project_activity_log", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  userId: varchar("user_id").references(() => users.id),
+  action: text("action").notNull(),
+  entityType: text("entity_type"),
+  entityId: text("entity_id"),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const projectDecisions = pgTable("project_decisions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  title: text("title").notNull(),
+  decision: text("decision").notNull(),
+  context: text("context"),
+  status: text("status", { enum: ["proposed", "accepted", "revisited"] }).default("proposed").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const projectCheckIns = pgTable("project_check_ins", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  did: text("did").notNull(),
+  doing: text("doing").notNull(),
+  blockers: text("blockers"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const projectFiles = pgTable("project_files", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  uploaderId: varchar("uploader_id").notNull().references(() => users.id),
+  name: text("name").notNull(),
+  url: text("url").notNull(),
+  folder: text("folder").default("general"),
+  fileType: text("file_type"),
+  size: integer("size"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const projectLinks = pgTable("project_links", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  label: text("label").notNull(),
+  url: text("url").notNull(),
+  category: text("category", { enum: ["repo", "docs", "design", "drive", "notes", "other"] }).default("other").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -269,6 +345,36 @@ export const insertProjectPersonaSchema = createInsertSchema(projectPersonas).om
   createdAt: true,
 });
 
+export const insertProjectMilestoneSchema = createInsertSchema(projectMilestones).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertProjectActivityLogSchema = createInsertSchema(projectActivityLog).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertProjectDecisionSchema = createInsertSchema(projectDecisions).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertProjectCheckInSchema = createInsertSchema(projectCheckIns).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertProjectFileSchema = createInsertSchema(projectFiles).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertProjectLinkSchema = createInsertSchema(projectLinks).omit({
+  id: true,
+  createdAt: true,
+});
+
 // Types
 export type UserProfile = typeof userProfiles.$inferSelect;
 export type InsertUserProfile = z.infer<typeof insertUserProfileSchema>;
@@ -302,3 +408,15 @@ export type ProjectKanbanTask = typeof projectKanbanTasks.$inferSelect;
 export type InsertProjectKanbanTask = z.infer<typeof insertProjectKanbanTaskSchema>;
 export type ProjectPersona = typeof projectPersonas.$inferSelect;
 export type InsertProjectPersona = z.infer<typeof insertProjectPersonaSchema>;
+export type ProjectMilestone = typeof projectMilestones.$inferSelect;
+export type InsertProjectMilestone = z.infer<typeof insertProjectMilestoneSchema>;
+export type ProjectActivityLog = typeof projectActivityLog.$inferSelect;
+export type InsertProjectActivityLog = z.infer<typeof insertProjectActivityLogSchema>;
+export type ProjectDecision = typeof projectDecisions.$inferSelect;
+export type InsertProjectDecision = z.infer<typeof insertProjectDecisionSchema>;
+export type ProjectCheckIn = typeof projectCheckIns.$inferSelect;
+export type InsertProjectCheckIn = z.infer<typeof insertProjectCheckInSchema>;
+export type ProjectFile = typeof projectFiles.$inferSelect;
+export type InsertProjectFile = z.infer<typeof insertProjectFileSchema>;
+export type ProjectLink = typeof projectLinks.$inferSelect;
+export type InsertProjectLink = z.infer<typeof insertProjectLinkSchema>;

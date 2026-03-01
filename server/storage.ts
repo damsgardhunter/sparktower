@@ -28,6 +28,18 @@ import {
   type InsertProjectKanbanTask,
   type ProjectPersona,
   type InsertProjectPersona,
+  type ProjectMilestone,
+  type InsertProjectMilestone,
+  type ProjectActivityLog,
+  type InsertProjectActivityLog,
+  type ProjectDecision,
+  type InsertProjectDecision,
+  type ProjectCheckIn,
+  type InsertProjectCheckIn,
+  type ProjectFile,
+  type InsertProjectFile,
+  type ProjectLink,
+  type InsertProjectLink,
   users,
   userProfiles,
   projects,
@@ -45,6 +57,12 @@ import {
   projectFollows,
   projectKanbanTasks,
   projectPersonas,
+  projectMilestones,
+  projectActivityLog,
+  projectDecisions,
+  projectCheckIns,
+  projectFiles,
+  projectLinks,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, or, ilike, sql, and, gte, lte, asc, ne, inArray } from "drizzle-orm";
@@ -151,6 +169,39 @@ export interface IStorage {
   getPersona(id: string): Promise<ProjectPersona | undefined>;
   createPersona(data: InsertProjectPersona): Promise<ProjectPersona>;
   deletePersona(id: string): Promise<void>;
+
+  // Milestones
+  getProjectMilestones(projectId: string): Promise<ProjectMilestone[]>;
+  createMilestone(data: InsertProjectMilestone): Promise<ProjectMilestone>;
+  updateMilestone(id: string, data: Partial<InsertProjectMilestone>): Promise<ProjectMilestone>;
+  deleteMilestone(id: string): Promise<void>;
+
+  // Activity Log
+  logActivity(data: InsertProjectActivityLog): Promise<ProjectActivityLog>;
+  getProjectActivity(projectId: string, limit?: number): Promise<(ProjectActivityLog & { user?: User })[]>;
+
+  // Decisions
+  getProjectDecisions(projectId: string): Promise<(ProjectDecision & { user: User })[]>;
+  createDecision(data: InsertProjectDecision): Promise<ProjectDecision>;
+  updateDecision(id: string, data: Partial<InsertProjectDecision>): Promise<ProjectDecision>;
+  deleteDecision(id: string): Promise<void>;
+
+  // Check-ins
+  getProjectCheckIns(projectId: string): Promise<(ProjectCheckIn & { user: User; profile?: UserProfile })[]>;
+  createCheckIn(data: InsertProjectCheckIn): Promise<ProjectCheckIn>;
+
+  // Files
+  getProjectFiles(projectId: string): Promise<(ProjectFile & { uploader: User })[]>;
+  createProjectFile(data: InsertProjectFile): Promise<ProjectFile>;
+  deleteProjectFile(id: string): Promise<void>;
+
+  // Links
+  getProjectLinks(projectId: string): Promise<ProjectLink[]>;
+  createProjectLink(data: InsertProjectLink): Promise<ProjectLink>;
+  deleteProjectLink(id: string): Promise<void>;
+
+  // Project Members (enhanced)
+  updateProjectMember(projectId: string, userId: string, data: { timezone?: string; availability?: string; hoursPerWeek?: number; skills?: string[] }): Promise<ProjectMember>;
 
   // Subscription & Credits
   getUserSubscription(userId: string): Promise<{ tier: string; creditsUsed: number; creditsLimit: number; creditsRemaining: number; stripeCustomerId: string | null; stripeSubscriptionId: string | null }>;
@@ -819,6 +870,116 @@ export class DatabaseStorage implements IStorage {
 
   async deletePersona(id: string): Promise<void> {
     await db.delete(projectPersonas).where(eq(projectPersonas.id, id));
+  }
+
+  // --- Milestones ---
+  async getProjectMilestones(projectId: string): Promise<ProjectMilestone[]> {
+    return await db.select().from(projectMilestones).where(eq(projectMilestones.projectId, projectId)).orderBy(asc(projectMilestones.order), asc(projectMilestones.createdAt));
+  }
+
+  async createMilestone(data: InsertProjectMilestone): Promise<ProjectMilestone> {
+    const [milestone] = await db.insert(projectMilestones).values(data).returning();
+    return milestone;
+  }
+
+  async updateMilestone(id: string, data: Partial<InsertProjectMilestone>): Promise<ProjectMilestone> {
+    const [milestone] = await db.update(projectMilestones).set(data).where(eq(projectMilestones.id, id)).returning();
+    return milestone;
+  }
+
+  async deleteMilestone(id: string): Promise<void> {
+    await db.delete(projectMilestones).where(eq(projectMilestones.id, id));
+  }
+
+  // --- Activity Log ---
+  async logActivity(data: InsertProjectActivityLog): Promise<ProjectActivityLog> {
+    const [entry] = await db.insert(projectActivityLog).values(data).returning();
+    return entry;
+  }
+
+  async getProjectActivity(projectId: string, limit: number = 50): Promise<(ProjectActivityLog & { user?: User })[]> {
+    const entries = await db.select().from(projectActivityLog).where(eq(projectActivityLog.projectId, projectId)).orderBy(desc(projectActivityLog.createdAt)).limit(limit);
+    return await Promise.all(entries.map(async (entry) => {
+      if (!entry.userId) return { ...entry, user: undefined };
+      const [user] = await db.select().from(users).where(eq(users.id, entry.userId));
+      return { ...entry, user };
+    }));
+  }
+
+  // --- Decisions ---
+  async getProjectDecisions(projectId: string): Promise<(ProjectDecision & { user: User })[]> {
+    const decisions = await db.select().from(projectDecisions).where(eq(projectDecisions.projectId, projectId)).orderBy(desc(projectDecisions.createdAt));
+    return await Promise.all(decisions.map(async (d) => {
+      const [user] = await db.select().from(users).where(eq(users.id, d.userId));
+      return { ...d, user };
+    }));
+  }
+
+  async createDecision(data: InsertProjectDecision): Promise<ProjectDecision> {
+    const [decision] = await db.insert(projectDecisions).values(data).returning();
+    return decision;
+  }
+
+  async updateDecision(id: string, data: Partial<InsertProjectDecision>): Promise<ProjectDecision> {
+    const [decision] = await db.update(projectDecisions).set(data).where(eq(projectDecisions.id, id)).returning();
+    return decision;
+  }
+
+  async deleteDecision(id: string): Promise<void> {
+    await db.delete(projectDecisions).where(eq(projectDecisions.id, id));
+  }
+
+  // --- Check-ins ---
+  async getProjectCheckIns(projectId: string): Promise<(ProjectCheckIn & { user: User; profile?: UserProfile })[]> {
+    const checkIns = await db.select().from(projectCheckIns).where(eq(projectCheckIns.projectId, projectId)).orderBy(desc(projectCheckIns.createdAt));
+    return await Promise.all(checkIns.map(async (ci) => {
+      const [user] = await db.select().from(users).where(eq(users.id, ci.userId));
+      const [profile] = await db.select().from(userProfiles).where(eq(userProfiles.userId, ci.userId));
+      return { ...ci, user, profile };
+    }));
+  }
+
+  async createCheckIn(data: InsertProjectCheckIn): Promise<ProjectCheckIn> {
+    const [checkIn] = await db.insert(projectCheckIns).values(data).returning();
+    return checkIn;
+  }
+
+  // --- Files ---
+  async getProjectFiles(projectId: string): Promise<(ProjectFile & { uploader: User })[]> {
+    const files = await db.select().from(projectFiles).where(eq(projectFiles.projectId, projectId)).orderBy(desc(projectFiles.createdAt));
+    return await Promise.all(files.map(async (f) => {
+      const [uploader] = await db.select().from(users).where(eq(users.id, f.uploaderId));
+      return { ...f, uploader };
+    }));
+  }
+
+  async createProjectFile(data: InsertProjectFile): Promise<ProjectFile> {
+    const [file] = await db.insert(projectFiles).values(data).returning();
+    return file;
+  }
+
+  async deleteProjectFile(id: string): Promise<void> {
+    await db.delete(projectFiles).where(eq(projectFiles.id, id));
+  }
+
+  // --- Links ---
+  async getProjectLinks(projectId: string): Promise<ProjectLink[]> {
+    return await db.select().from(projectLinks).where(eq(projectLinks.projectId, projectId)).orderBy(desc(projectLinks.createdAt));
+  }
+
+  async createProjectLink(data: InsertProjectLink): Promise<ProjectLink> {
+    const [link] = await db.insert(projectLinks).values(data).returning();
+    return link;
+  }
+
+  async deleteProjectLink(id: string): Promise<void> {
+    await db.delete(projectLinks).where(eq(projectLinks.id, id));
+  }
+
+  // --- Project Members (enhanced) ---
+  async updateProjectMember(projectId: string, userId: string, data: { timezone?: string; availability?: string; hoursPerWeek?: number; skills?: string[] }): Promise<ProjectMember> {
+    const [member] = await db.update(projectMembers).set(data).where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId))).returning();
+    return member;
   }
 }
 

@@ -17,7 +17,7 @@ Do not make changes to the file `server/seed-stripe.ts`.
 
 **Backend:** The server-side is implemented using Express.js with TypeScript, Drizzle ORM for database interactions, and PostgreSQL as the primary database.
 
-**AI Integration:** OpenAI's gpt-4o model is utilized via Replit AI Integrations for various AI functionalities including chatbot interactions, weighted profile matching, AI storyboard generation, Kanban task generation, customer persona creation, and people recommendations.
+**AI Integration:** OpenAI's gpt-4o model is utilized via Replit AI Integrations for various AI functionalities including chatbot interactions, weighted profile matching, AI storyboard generation, Kanban task generation, customer persona creation, people recommendations, progress summarization, and gap detection.
 
 **Authentication:** Custom auth system with email/password registration (bcrypt hashing) and Google OAuth 2.0. Uses passport-local and passport-google-oauth20 strategies with PostgreSQL session storage. Google OAuth requires GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET environment variables.
 
@@ -30,11 +30,31 @@ Do not make changes to the file `server/seed-stripe.ts`.
 *   **Onboarding & Profile:** A multi-step wizard guides users through profile creation, capturing skills, interests, experience, and project showcasing. Profiles include tabs for About, Projects, Connections, Following, and Earnings.
 *   **Weighted Profile Matching:** An algorithm matches users based on skills (30%), interests (25%), experience (15%), projects (15%), and connections (15%), with AI-generated reasons for matches.
 *   **Nova AI Chatbot:** An AI project partner named "Nova" assists with guided project creation and provides support within project dashboards. Nova has a friendly personality, a chip/CPU icon, and uses emoji+bold formatting in its responses.
-*   **Project Management:** Project owners have a dedicated dashboard featuring an overview, a Kanban board (To Do, In Progress, Review, Done) with AI task generation, and AI-generated customer personas.
+*   **Project Manager Dashboard:** A comprehensive 7-tab project management suite:
+    *   **Setup Tab:** Project brief (problem statement, target user, success metrics), scope planning (MVP vs Nice-to-Have), links hub (repo, docs, design, drive, notes), business plan upload, application questions, and Nova AI Insights (progress summary + gap detection).
+    *   **Tasks Tab:** Kanban board (To Do, In Progress, Review, Done) with AI task generation. Tasks support subtasks (checklist with progress bar), tags (colored chips), hour estimates, blocked-by dependencies (lock icon), assignees, due dates, and priority levels.
+    *   **Milestones Tab:** Roadmap timeline view with milestone cards. Milestones have status transitions (planned → in-progress → completed) and target dates.
+    *   **Team Tab:** Enhanced member cards with timezone, availability, hours/week, skills, and contribution tracking (completed/in-progress task counts). Includes pending application review and AI people recommendations.
+    *   **Files Tab:** File upload with folder categories (general/design/docs/data), file list with metadata (name, type, uploader, date, size), folder filtering.
+    *   **Activity Tab:** Three sections — Activity Feed (chronological event log with user avatars), Decision Log (title/context/decision with proposed/accepted/revisited status), Weekly Check-ins (did/doing/blockers format).
+    *   **Personas Tab:** AI-generated and manually created customer personas with goals, pain points, and quotes.
 *   **Media & Content:** Users can upload images/videos to projects, and AI can generate animated video storyboard slideshows with various visual styles.
 *   **Community & Collaboration:** Features include connection requests, real-time private messaging between connected users, project following, and a system for applying to projects with custom questions and resume uploads.
 *   **Monetization & Gamification:** Stripe donations for projects, a badge system with rarity tiers, contests/hackathons, and a leaderboard (by visits or donations) are included.
-*   **AI Credit System:** A subscription model (Free, Spark Pro, Spark Business, Spark Unlimited) provides monthly AI credits for various AI features, with costs per AI operation (e.g., Chat = 1, Video = 5).
+*   **AI Credit System:** A subscription model (Free, Spark Pro, Spark Business, Spark Unlimited) provides monthly AI credits for various AI features, with costs per AI operation (Chat=1, Video=5, Match=1, Kanban AI=1, Persona AI=1, People Rec=1, Summarize=1, Detect Gaps=1).
+
+**Database Tables (new for Project Manager):**
+*   `projectMilestones` — id, projectId, title, description, status, targetDate, order, createdAt
+*   `projectActivityLog` — id, projectId, userId, action, entityType, entityId, metadata (jsonb), createdAt
+*   `projectDecisions` — id, projectId, userId, title, decision, context, status, createdAt
+*   `projectCheckIns` — id, projectId, userId, did, doing, blockers, createdAt
+*   `projectFiles` — id, projectId, uploaderId, name, url, folder, fileType, size, createdAt
+*   `projectLinks` — id, projectId, label, url, category, createdAt
+
+**Enhanced columns:**
+*   `projects` — added: problemStatement, targetUser, successMetrics, scope (jsonb)
+*   `projectKanbanTasks` — added: tags (text[]), estimateHours, blockedByTaskId, subtasks (jsonb)
+*   `projectMembers` — added: timezone, availability, hoursPerWeek, skills (text[])
 
 **Routing:** The application uses Wouter for client-side routing, with distinct paths for authenticated and unauthenticated users, onboarding, project creation, management, profiles, and community features. Specific routes are dedicated to Nova AI interactions, project applications, and various Stripe-related flows.
 
@@ -42,6 +62,6 @@ Do not make changes to the file `server/seed-stripe.ts`.
 
 *   **OpenAI:** Utilized for various AI functionalities (gpt-4o model) through Replit AI Integrations.
 *   **Google OAuth 2.0:** For Google sign-in (requires GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET env vars).
-*   **Replit Object Storage (GCS):** For file storage (images, videos, resumes).
+*   **Replit Object Storage (GCS):** For file storage (images, videos, resumes, project files).
 *   **Stripe:** For payment processing (donations via Checkout, subscriptions, payouts via Connect Express, billing portal).
 *   **PostgreSQL:** The primary database for all application data, accessed via Drizzle ORM.

@@ -1,0 +1,96 @@
+uped by what they help teams do.
+
+Core tools every project needs
+
+1) Project setup
+	•	Project brief (problem, target user, success definition)
+	•	Roles needed + “who owns what”
+	•	Scope + timeline (MVP vs nice-to-have)
+	•	Links hub (repo, docs, design, drive, meeting notes)
+
+2) Task management
+	•	Backlog (all tasks)
+	•	Kanban board (To Do / Doing / Review / Done)
+	•	Task details: owner, due date, priority, tags, estimate
+	•	Dependencies (“blocked by…”)
+	•	Subtasks + checklists
+	•	Templates (web app, data project, game, research, etc.)
+
+3) Communication
+	•	Project chat (channels per project + threads)
+	•	Announcements (pinned updates)
+	•	@mentions + notifications
+	•	Decision log (so teams don’t re-argue old choices)
+
+4) Documentation and knowledge
+	•	Wiki / Docs (living documentation)
+	•	Meeting notes + action items
+	•	Architecture / onboarding guide
+	•	FAQ / “how to run locally”
+	•	Auto-generated “Project Readme” from the brief + tasks
+
+5) File + asset management
+	•	File storage (uploads, folders)
+	•	Versioning (or tight integration with GitHub/Drive)
+	•	Design assets (Figma links, exports, brand kit)
+	•	Dataset registry (source, license, schema, update cadence)
+
+⸻
+
+Tools that make teams actually ship
+
+6) Milestones and planning
+	•	Milestones (MVP, Beta, v1)
+	•	Roadmap view (timeline)
+	•	Release checklist (QA, docs, deploy, announcement)
+
+7) Collaboration workflow
+	•	Review system (PR/review equivalent for non-code tasks too)
+	•	Approval gates (e.g., “design approved before build”)
+	•	Definition of Done (per task type)
+
+8) Quality and testing
+	•	Bug tracker (severity, reproduction steps)
+	•	Test checklist (manual) + integration to automated tests later
+	•	QA assignments (who tests what)
+
+9) Progress + accountability
+	•	Weekly check-ins (“what I did / doing / blocked”)
+	•	Burndown / velocity (optional, later)
+	•	Activity feed (what changed)
+	•	Risk flags (“behind schedule”, “blocked 7+ days”)
+
+10) Integrations that matter
+	•	GitHub/GitLab (issues, PRs, commits)
+	•	Discord/Slack (keep your chat or integrate)
+	•	Figma
+	•	Google Drive/Notion (if teams already live there)
+	•	CI/CD + deploy (Vercel, Render, Fly, etc.)
+	•	Calendar (meetings + reminders)
+
+⸻
+
+“SparkTower-specific” tools (what makes you different)
+
+11) Team formation + role clarity
+	•	Role cards: “Backend Dev”, “UI/UX”, “Data”, “PM”
+	•	Skill tags + availability + timezone
+	•	Contribution expectations (hours/week)
+	•	Team agreements (basic rules, communication norms)
+
+12) Contribution tracking + portfolio
+	•	Track: tasks completed, reviews, docs written, releases shipped
+	•	Auto-create a public portfolio page per project + per contributor
+	•	“Proof of work” links (PRs, designs, demos, writeups)
+
+13) AI copilots (only valuable if attached to workflow)
+	•	Turn project brief into a task plan
+	•	Suggest next tasks when blocked
+	•	Summarize weekly progress
+	•	Detect missing pieces (“no tests”, “no deployment plan”, “no owner”)
+	•	Convert chat into decisions + action items
+
+14) Incentives + trust
+	•	Reputation based on completed work, not hype
+	•	“Reliability” signals (shows up, finishes tasks)
+	•	Optional: escrow/donations/bounties later

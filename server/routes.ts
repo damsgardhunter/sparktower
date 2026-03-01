@@ -1063,6 +1063,239 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
     }
   });
 
+  // --- Milestones ---
+  app.get("/api/projects/:id/milestones", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
+      const milestones = await storage.getProjectMilestones(req.params.id);
+      res.json(milestones);
+    } catch (error) { res.status(500).json({ message: "Failed to get milestones" }); }
+  });
+
+  app.post("/api/projects/:id/milestones", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
+      const milestone = await storage.createMilestone({ ...req.body, projectId: req.params.id });
+      await storage.logActivity({ projectId: req.params.id, userId: (req.user as any).id, action: "created milestone", entityType: "milestone", entityId: milestone.id, metadata: { title: milestone.title } });
+      res.json(milestone);
+    } catch (error) { res.status(500).json({ message: "Failed to create milestone" }); }
+  });
+
+  app.patch("/api/milestones/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const milestone = await storage.updateMilestone(req.params.id, req.body);
+      if (req.body.status === "completed") {
+        await storage.logActivity({ projectId: milestone.projectId, userId: (req.user as any).id, action: "completed milestone", entityType: "milestone", entityId: milestone.id, metadata: { title: milestone.title } });
+      }
+      res.json(milestone);
+    } catch (error) { res.status(500).json({ message: "Failed to update milestone" }); }
+  });
+
+  app.delete("/api/milestones/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      await storage.deleteMilestone(req.params.id);
+      res.json({ success: true });
+    } catch (error) { res.status(500).json({ message: "Failed to delete milestone" }); }
+  });
+
+  // --- Activity Log ---
+  app.get("/api/projects/:id/activity", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
+      const limit = parseInt(req.query.limit as string) || 50;
+      const activity = await storage.getProjectActivity(req.params.id, limit);
+      res.json(activity);
+    } catch (error) { res.status(500).json({ message: "Failed to get activity" }); }
+  });
+
+  // --- Decisions ---
+  app.get("/api/projects/:id/decisions", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
+      const decisions = await storage.getProjectDecisions(req.params.id);
+      res.json(decisions);
+    } catch (error) { res.status(500).json({ message: "Failed to get decisions" }); }
+  });
+
+  app.post("/api/projects/:id/decisions", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
+      const decision = await storage.createDecision({ ...req.body, projectId: req.params.id, userId: (req.user as any).id });
+      await storage.logActivity({ projectId: req.params.id, userId: (req.user as any).id, action: "created decision", entityType: "decision", entityId: decision.id, metadata: { title: decision.title } });
+      res.json(decision);
+    } catch (error) { res.status(500).json({ message: "Failed to create decision" }); }
+  });
+
+  app.patch("/api/decisions/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const decision = await storage.updateDecision(req.params.id, req.body);
+      res.json(decision);
+    } catch (error) { res.status(500).json({ message: "Failed to update decision" }); }
+  });
+
+  app.delete("/api/decisions/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      await storage.deleteDecision(req.params.id);
+      res.json({ success: true });
+    } catch (error) { res.status(500).json({ message: "Failed to delete decision" }); }
+  });
+
+  // --- Check-ins ---
+  app.get("/api/projects/:id/check-ins", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
+      const checkIns = await storage.getProjectCheckIns(req.params.id);
+      res.json(checkIns);
+    } catch (error) { res.status(500).json({ message: "Failed to get check-ins" }); }
+  });
+
+  app.post("/api/projects/:id/check-ins", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
+      const checkIn = await storage.createCheckIn({ ...req.body, projectId: req.params.id, userId: (req.user as any).id });
+      await storage.logActivity({ projectId: req.params.id, userId: (req.user as any).id, action: "submitted check-in", entityType: "check-in", entityId: checkIn.id });
+      res.json(checkIn);
+    } catch (error) { res.status(500).json({ message: "Failed to create check-in" }); }
+  });
+
+  // --- Project Files ---
+  app.get("/api/projects/:id/files", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
+      const files = await storage.getProjectFiles(req.params.id);
+      res.json(files);
+    } catch (error) { res.status(500).json({ message: "Failed to get files" }); }
+  });
+
+  app.post("/api/projects/:id/files", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
+      const file = await storage.createProjectFile({ ...req.body, projectId: req.params.id, uploaderId: (req.user as any).id });
+      await storage.logActivity({ projectId: req.params.id, userId: (req.user as any).id, action: "uploaded file", entityType: "file", entityId: file.id, metadata: { name: file.name } });
+      res.json(file);
+    } catch (error) { res.status(500).json({ message: "Failed to create file" }); }
+  });
+
+  app.delete("/api/files/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      await storage.deleteProjectFile(req.params.id);
+      res.json({ success: true });
+    } catch (error) { res.status(500).json({ message: "Failed to delete file" }); }
+  });
+
+  // --- Project Links ---
+  app.get("/api/projects/:id/links", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
+      const links = await storage.getProjectLinks(req.params.id);
+      res.json(links);
+    } catch (error) { res.status(500).json({ message: "Failed to get links" }); }
+  });
+
+  app.post("/api/projects/:id/links", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
+      const link = await storage.createProjectLink({ ...req.body, projectId: req.params.id });
+      res.json(link);
+    } catch (error) { res.status(500).json({ message: "Failed to create link" }); }
+  });
+
+  app.delete("/api/links/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      await storage.deleteProjectLink(req.params.id);
+      res.json({ success: true });
+    } catch (error) { res.status(500).json({ message: "Failed to delete link" }); }
+  });
+
+  // --- Enhanced Project Members ---
+  app.patch("/api/projects/:id/members/:userId", isAuthenticated, async (req: any, res) => {
+    try {
+      const project = await storage.getProject(req.params.id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.ownerId !== (req.user as any).id && req.params.userId !== (req.user as any).id) return res.status(403).json({ message: "Unauthorized" });
+      const member = await storage.updateProjectMember(req.params.id, req.params.userId, req.body);
+      res.json(member);
+    } catch (error) { res.status(500).json({ message: "Failed to update member" }); }
+  });
+
+  // --- AI Copilot ---
+  app.post("/api/projects/:id/ai/summarize-progress", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
+      const hasCredits = await storage.checkCredits(userId, 1);
+      if (!hasCredits) return res.status(403).json({ message: "Insufficient credits" });
+
+      const project = await storage.getProject(req.params.id);
+      const tasks = await storage.getProjectKanbanTasks(req.params.id);
+      const checkIns = await storage.getProjectCheckIns(req.params.id);
+      const activity = await storage.getProjectActivity(req.params.id, 30);
+      const milestones = await storage.getProjectMilestones(req.params.id);
+
+      const taskSummary = {
+        total: tasks.length,
+        done: tasks.filter(t => t.status === "done").length,
+        inProgress: tasks.filter(t => t.status === "in-progress").length,
+        review: tasks.filter(t => t.status === "review").length,
+        todo: tasks.filter(t => t.status === "todo").length,
+      };
+
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [{
+          role: "system",
+          content: `You are Nova, SparkTower's AI project assistant. Generate a concise weekly progress summary for a project. Be specific and actionable. Format with markdown headers and bullet points.`
+        }, {
+          role: "user",
+          content: `Project: "${project?.title}"\nDescription: ${project?.description}\n\nTask Status: ${JSON.stringify(taskSummary)}\nRecent Tasks: ${JSON.stringify(tasks.slice(0, 10).map(t => ({ title: t.title, status: t.status, priority: t.priority })))}\nMilestones: ${JSON.stringify(milestones.map(m => ({ title: m.title, status: m.status, targetDate: m.targetDate })))}\nRecent Check-ins: ${JSON.stringify(checkIns.slice(0, 5).map(ci => ({ did: ci.did, doing: ci.doing, blockers: ci.blockers })))}\nRecent Activity: ${JSON.stringify(activity.slice(0, 10).map(a => a.action))}\n\nGenerate a progress summary covering: accomplishments, current focus, blockers, and next steps.`
+        }],
+        temperature: 0.7,
+      });
+
+      await storage.deductCredits(userId, 1);
+      res.json({ summary: completion.choices[0].message.content });
+    } catch (error) {
+      console.error("AI summarize error:", error);
+      res.status(500).json({ message: "Failed to generate summary" });
+    }
+  });
+
+  app.post("/api/projects/:id/ai/detect-gaps", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
+      const hasCredits = await storage.checkCredits(userId, 1);
+      if (!hasCredits) return res.status(403).json({ message: "Insufficient credits" });
+
+      const project = await storage.getProject(req.params.id);
+      const tasks = await storage.getProjectKanbanTasks(req.params.id);
+      const members = await storage.getProjectMembers(req.params.id);
+      const milestones = await storage.getProjectMilestones(req.params.id);
+      const files = await storage.getProjectFiles(req.params.id);
+
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [{
+          role: "system",
+          content: `You are Nova, SparkTower's AI project assistant. Analyze a project and detect gaps, missing pieces, or potential risks. You MUST respond with ONLY a valid JSON object (no markdown, no code fences) with a "gaps" array, each with: category (string: "missing", "risk", "suggestion"), title (string), description (string), severity ("high"/"medium"/"low").`
+        }, {
+          role: "user",
+          content: `Project: "${project?.title}"\nDescription: ${project?.description}\nRoles Needed: ${(project?.rolesNeeded || []).join(", ")}\nTech Stack: ${(project?.techStack || []).join(", ")}\n\nTeam: ${members.length} members with roles: ${members.map(m => m.role).join(", ")}\nTasks: ${tasks.length} total (${tasks.filter(t => t.status === "done").length} done, ${tasks.filter(t => t.status === "todo").length} todo)\nMilestones: ${milestones.length} (${milestones.filter(m => m.status === "completed").length} completed)\nFiles: ${files.length}\nHas business plan: ${!!project?.businessPlanUrl}\nHas problem statement: ${!!project?.problemStatement}\n\nAnalyze and flag any gaps.`
+        }],
+        temperature: 0.7,
+      });
+
+      await storage.deductCredits(userId, 1);
+      const rawContent = completion.choices[0].message.content || "{}";
+      const cleaned = rawContent.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+      const parsed = JSON.parse(cleaned);
+      res.json(parsed);
+    } catch (error) {
+      console.error("AI detect gaps error:", error);
+      res.status(500).json({ message: "Failed to detect gaps" });
+    }
+  });
+
   // Badges
   app.get("/api/badges", async (_req, res) => {
     const allBadges = await storage.getBadges();
