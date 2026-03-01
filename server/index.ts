@@ -65,6 +65,7 @@ export function log(message: string, source = "express") {
 function stripPasswordHash(obj: any): any {
   if (obj === null || obj === undefined || typeof obj !== "object") return obj;
   if (Array.isArray(obj)) return obj.map(stripPasswordHash);
+  if (obj instanceof Date) return obj;
   const result: any = {};
   for (const key of Object.keys(obj)) {
     if (key === "passwordHash") continue;

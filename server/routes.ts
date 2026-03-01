@@ -406,27 +406,23 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       if (!project) return res.status(404).json({ message: "Project not found" });
       const members = await storage.getProjectMembers(req.params.id);
 
-      const aiResponse = await fetch(`${process.env.AI_INTEGRATIONS_OPENAI_BASE_URL}/chat/completions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${process.env.AI_INTEGRATIONS_OPENAI_API_KEY}` },
-        body: JSON.stringify({
-          model: "gpt-4o",
-          messages: [{
-            role: "system",
-            content: `You are Nova, a project management AI. Generate a Kanban board breakdown for the project. Return a JSON array of tasks with: title, description, status ("todo"), priority ("low"/"medium"/"high"), and suggested_role (which team role should handle it). Break the project into 8-12 actionable tasks covering planning, development, testing, and launch phases.`
-          }, {
-            role: "user",
-            content: `Project: "${project.title}"\nDescription: ${project.description}\nCategory: ${project.category}\nTech Stack: ${(project.techStack || []).join(", ")}\nRoles: ${(project.rolesNeeded || []).join(", ")}\nTeam Size: ${project.teamSize}\nTimeline: ${project.estimatedWeeks} weeks\nTeam Members: ${members.map(m => `${m.profile?.displayName || m.user.firstName || "Member"} (${m.role})`).join(", ")}`
-          }],
-          response_format: { type: "json_object" },
-          temperature: 0.7,
-        }),
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [{
+          role: "system",
+          content: `You are Nova, a project management AI. Generate a Kanban board breakdown for the project. You MUST respond with ONLY a valid JSON object (no markdown, no code fences) with a "tasks" array. Each task should have: title, description, status ("todo"), priority ("low"/"medium"/"high"), and suggested_role (which team role should handle it). Break the project into 8-12 actionable tasks covering planning, development, testing, and launch phases.`
+        }, {
+          role: "user",
+          content: `Project: "${project.title}"\nDescription: ${project.description}\nCategory: ${project.category}\nTech Stack: ${(project.techStack || []).join(", ")}\nRoles: ${(project.rolesNeeded || []).join(", ")}\nTeam Size: ${project.teamSize}\nTimeline: ${project.estimatedWeeks} weeks\nTeam Members: ${members.map(m => `${m.profile?.displayName || m.user.firstName || "Member"} (${m.role})`).join(", ")}`
+        }],
+        temperature: 0.7,
       });
 
-      const data = await aiResponse.json();
       await storage.deductCredits(userId, 1);
 
-      const content = JSON.parse(data.choices[0].message.content);
+      const rawContent = completion.choices[0].message.content || "{}";
+      const cleaned = rawContent.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+      const content = JSON.parse(cleaned);
       const tasks = content.tasks || content;
       const created = [];
       for (let i = 0; i < tasks.length; i++) {
@@ -491,27 +487,23 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       const project = await storage.getProject(req.params.id);
       if (!project) return res.status(404).json({ message: "Project not found" });
 
-      const aiResponse = await fetch(`${process.env.AI_INTEGRATIONS_OPENAI_BASE_URL}/chat/completions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${process.env.AI_INTEGRATIONS_OPENAI_API_KEY}` },
-        body: JSON.stringify({
-          model: "gpt-4o",
-          messages: [{
-            role: "system",
-            content: `You are a UX research expert. Generate a realistic customer persona for the given project. Return a JSON object with: name (string), age (number), occupation (string), bio (string, 2-3 sentences), goals (array of 3 strings), painPoints (array of 3 strings), quote (string, a memorable quote from this persona), avatarDescription (string, brief physical/style description for illustration).`
-          }, {
-            role: "user",
-            content: `Project: "${project.title}"\nDescription: ${project.description}\nCategory: ${project.category}\n${req.body.context ? `Additional context: ${req.body.context}` : ""}`
-          }],
-          response_format: { type: "json_object" },
-          temperature: 0.9,
-        }),
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [{
+          role: "system",
+          content: `You are a UX research expert. Generate a realistic customer persona for the given project. You MUST respond with ONLY a valid JSON object (no markdown, no code fences) with these fields: name (string), age (number), occupation (string), bio (string, 2-3 sentences), goals (array of 3 strings), painPoints (array of 3 strings), quote (string, a memorable quote from this persona), avatarDescription (string, brief physical/style description for illustration).`
+        }, {
+          role: "user",
+          content: `Project: "${project.title}"\nDescription: ${project.description}\nCategory: ${project.category}\n${req.body.context ? `Additional context: ${req.body.context}` : ""}`
+        }],
+        temperature: 0.9,
       });
 
-      const data = await aiResponse.json();
       await storage.deductCredits(userId, 1);
 
-      const personaData = JSON.parse(data.choices[0].message.content);
+      const rawContent = completion.choices[0].message.content || "{}";
+      const cleaned = rawContent.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+      const personaData = JSON.parse(cleaned);
       const persona = await storage.createPersona({
         projectId: req.params.id,
         name: personaData.name,
@@ -566,27 +558,23 @@ Only include fields you have enough info to fill. Start empty if needed.`;
         headline: p.headline,
       }));
 
-      const aiResponse = await fetch(`${process.env.AI_INTEGRATIONS_OPENAI_BASE_URL}/chat/completions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${process.env.AI_INTEGRATIONS_OPENAI_API_KEY}` },
-        body: JSON.stringify({
-          model: "gpt-4o",
-          messages: [{
-            role: "system",
-            content: `You are a talent matching expert. Given a project's needs and a list of users, recommend the top 5 most suitable people. Return a JSON object with "recommendations" array, each with: userId (string), reason (string, 1-2 sentences explaining why they're a good fit), matchStrength ("strong"/"moderate"/"good").`
-          }, {
-            role: "user",
-            content: `Project: "${project.title}"\nDescription: ${project.description}\nRoles Needed: ${(project.rolesNeeded || []).join(", ")}\nTech Stack: ${(project.techStack || []).join(", ")}\n\nAvailable Users:\n${JSON.stringify(profileSummaries)}`
-          }],
-          response_format: { type: "json_object" },
-          temperature: 0.7,
-        }),
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [{
+          role: "system",
+          content: `You are a talent matching expert. Given a project's needs and a list of users, recommend the top 5 most suitable people. You MUST respond with ONLY a valid JSON object (no markdown, no code fences) with a "recommendations" array, each with: userId (string), reason (string, 1-2 sentences explaining why they're a good fit), matchStrength ("strong"/"moderate"/"good").`
+        }, {
+          role: "user",
+          content: `Project: "${project.title}"\nDescription: ${project.description}\nRoles Needed: ${(project.rolesNeeded || []).join(", ")}\nTech Stack: ${(project.techStack || []).join(", ")}\n\nAvailable Users:\n${JSON.stringify(profileSummaries)}`
+        }],
+        temperature: 0.7,
       });
 
-      const data = await aiResponse.json();
       await storage.deductCredits(userId, 1);
 
-      const content = JSON.parse(data.choices[0].message.content);
+      const rawContent = completion.choices[0].message.content || "{}";
+      const cleaned = rawContent.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+      const content = JSON.parse(cleaned);
       const recs = content.recommendations || [];
       const enriched = await Promise.all(recs.map(async (r: any) => {
         const [user] = await db.select().from(users).where(eq(users.id, r.userId));
