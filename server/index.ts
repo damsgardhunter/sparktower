@@ -19,6 +19,14 @@ app.get("/_health", (_req, res) => {
   res.sendStatus(200);
 });
 
+let appReady = false;
+app.use((req, res, next) => {
+  if (!appReady && req.path === "/" && req.method === "GET") {
+    return res.status(200).send("OK");
+  }
+  next();
+});
+
 app.post(
   "/api/stripe/webhook",
   express.raw({ type: "application/json" }),
@@ -161,6 +169,7 @@ app.use((req, res, next) => {
       reusePort: true,
     },
     () => {
+      appReady = true;
       log(`serving on port ${port}`);
     },
   );
