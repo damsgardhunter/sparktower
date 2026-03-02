@@ -52,6 +52,16 @@ export const projects = pgTable("projects", {
   valueProposition: text("value_proposition"),
   targetCustomerProfile: text("target_customer_profile"),
   landingPageConfig: jsonb("landing_page_config"),
+  novaOnboardingComplete: boolean("nova_onboarding_complete").default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const novaGuideMessages = pgTable("nova_guide_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  role: text("role").notNull(),
+  content: text("content").notNull(),
+  actionsTaken: jsonb("actions_taken").default([]),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -600,6 +610,8 @@ export const insertDeployChecklistItemSchema = createInsertSchema(projectDeployC
 export const insertSupportTicketSchema = createInsertSchema(projectSupportTickets).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertLaunchTaskSchema = createInsertSchema(projectLaunchTasks).omit({ id: true, createdAt: true });
 
+export const insertNovaGuideMessageSchema = createInsertSchema(novaGuideMessages).omit({ id: true, createdAt: true });
+
 // Game insert schemas
 export const insertGameLeaderboardSchema = createInsertSchema(gameLeaderboard).omit({
   id: true,
@@ -712,3 +724,5 @@ export type SupportTicket = typeof projectSupportTickets.$inferSelect;
 export type InsertSupportTicket = z.infer<typeof insertSupportTicketSchema>;
 export type LaunchTask = typeof projectLaunchTasks.$inferSelect;
 export type InsertLaunchTask = z.infer<typeof insertLaunchTaskSchema>;
+export type NovaGuideMessage = typeof novaGuideMessages.$inferSelect;
+export type InsertNovaGuideMessage = z.infer<typeof insertNovaGuideMessageSchema>;

@@ -261,7 +261,7 @@ export default function ProjectCreate() {
         description: "Your project has been successfully created.",
       });
       queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
-      setLocation(`/projects/${project.id}`);
+      setLocation(`/projects/${project.id}/manage`);
     },
   });
 

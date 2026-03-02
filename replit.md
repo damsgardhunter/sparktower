@@ -30,8 +30,17 @@ Do not make changes to the file `server/seed-stripe.ts`.
 *   **Onboarding & Profile:** A multi-step wizard guides users through profile creation, capturing skills, interests, experience, and project showcasing. Profiles include tabs for About, Projects, Connections, Following, and Earnings.
 *   **Weighted Profile Matching:** An algorithm matches users based on skills (30%), interests (25%), experience (15%), projects (15%), and connections (15%), with AI-generated reasons for matches.
 *   **Nova AI Chatbot:** An AI project partner named "Nova" assists with guided project creation and provides support within project dashboards. Nova has a friendly personality, a chip/CPU icon, and uses emoji+bold formatting in its responses.
-*   **Project Manager Dashboard:** A comprehensive 7-tab project management suite:
-    *   **Setup Tab:** Project brief (problem statement, target user, success metrics), scope planning (MVP vs Nice-to-Have), links hub (repo, docs, design, drive, notes), business plan upload, application questions, and Nova AI Insights (progress summary + gap detection).
+*   **Nova AI Guide:** An intelligent onboarding assistant and persistent project partner:
+    *   **Onboarding Mode:** Full-screen overlay chat on first visit to PM. Walks user through project brief, positioning (one-liner, value prop, target customer), scope, tasks, and milestones. Quick-reply buttons for common starting points.
+    *   **Widget Mode:** After onboarding, appears as floating Cpu icon button in bottom-right corner. Expands to chat panel. Context-aware (knows current tab).
+    *   **AI Actions:** Nova can directly update project fields (`update_project`), create kanban tasks (`create_tasks`), create milestones (`create_milestones` - premium only), and update scope (`update_scope`). Actions show as inline cards in chat.
+    *   **Routes:** GET/POST `/api/projects/:id/nova-guide` (message history), POST `/api/projects/:id/nova-guide/complete-onboarding`
+    *   **Table:** `nova_guide_messages` (id, projectId, role, content, actionsTaken jsonb, createdAt)
+    *   **Column:** `nova_onboarding_complete` boolean on projects table
+    *   **Credit cost:** 1 per message. Welcome message is free (client-side).
+    *   **Component:** `client/src/components/nova-guide.tsx`
+*   **Project Manager Dashboard:** A comprehensive 13-tab project management suite:
+    *   **Setup Tab:** Project brief (one-liner positioning, value proposition, target customer profile, problem statement, target user, success metrics), scope planning (MVP vs Nice-to-Have), links hub (repo, docs, design, drive, notes), business plan upload, application questions, and Nova AI Insights (progress summary + gap detection).
     *   **Tasks Tab:** Kanban board (To Do, In Progress, Review, Done) with AI task generation. Tasks support subtasks (checklist with progress bar), tags (colored chips), hour estimates, blocked-by dependencies (lock icon), assignees, due dates, and priority levels.
     *   **Milestones Tab:** Roadmap timeline view with milestone cards. Milestones have status transitions (planned → in-progress → completed) and target dates.
     *   **Team Tab:** Enhanced member cards with timezone, availability, hours/week, skills, and contribution tracking (completed/in-progress task counts). Includes pending application review and AI people recommendations.

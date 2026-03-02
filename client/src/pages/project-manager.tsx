@@ -25,6 +25,7 @@ import {
   Beaker, DollarSign, Shield, Rocket, Headphones, Crosshair,
 } from "lucide-react";
 import { ResearchTab, StrategyTab, LaunchTab, AnalyticsTab, SupportTab } from "./pm-extended-tabs";
+import { NovaGuide } from "@/components/nova-guide";
 import type {
   Project, ProjectMember, UserProfile, User, ProjectKanbanTask,
   ProjectPersona, ProjectMilestone, ProjectFile, ProjectLink,
@@ -618,6 +619,17 @@ export default function ProjectManager() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {projectId && project && (
+        <NovaGuide
+          projectId={projectId}
+          currentTab={activeTab}
+          project={project}
+          onProjectUpdate={() => {
+            queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
+          }}
+        />
+      )}
     </div>
   );
 }

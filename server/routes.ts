@@ -627,6 +627,259 @@ Only include fields you have enough info to fill. Start empty if needed.`;
   });
 
   // Project Chat
+  // Nova Guide AI - Onboarding & Persistent Assistant
+  app.get("/api/projects/:id/nova-guide", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const messages = await storage.getNovaGuideMessages(req.params.id);
+      res.json(messages);
+    } catch (e) { res.status(500).json({ message: "Failed to get Nova guide messages" }); }
+  });
+
+  app.post("/api/projects/:id/nova-guide", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+      if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
+
+      const hasCredits = await storage.checkCredits(userId, 1);
+      if (!hasCredits) {
+        const sub = await storage.getUserSubscription(userId);
+        return res.status(403).json({ message: "Insufficient credits", creditsRemaining: sub.creditsRemaining, tier: sub.tier });
+      }
+
+      const { message, currentTab } = req.body;
+      if (!message || typeof message !== "string") return res.status(400).json({ message: "Message is required" });
+      if (message.length > 5000) return res.status(400).json({ message: "Message too long (max 5000 chars)" });
+
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+
+      const members = await storage.getProjectMembers(projectId);
+      const sub = await storage.getUserSubscription(userId);
+      const isPremium = sub.tier !== "free";
+
+      await storage.addNovaGuideMessage({ projectId, role: "user", content: message, actionsTaken: [] });
+
+      const history = await storage.getNovaGuideMessages(projectId);
+
+      const projectContext = `
+PROJECT CONTEXT:
+- Title: ${project.title}
+- Description: ${project.description || "Not set"}
+- Category: ${project.category}
+- Status: ${project.status}
+- One-Liner: ${(project as any).oneLiner || "Not set"}
+- Value Proposition: ${(project as any).valueProposition || "Not set"}
+- Target Customer: ${(project as any).targetCustomerProfile || "Not set"}
+- Problem Statement: ${project.problemStatement || "Not set"}
+- Target User: ${project.targetUser || "Not set"}
+- Success Metrics: ${project.successMetrics || "Not set"}
+- Team Size: ${project.teamSize}
+- Timeline: ${project.estimatedWeeks} weeks
+- Tech Stack: ${(project.techStack || []).join(", ") || "Not set"}
+- Roles Needed: ${(project.rolesNeeded || []).join(", ") || "Not set"}
+- Scope: ${JSON.stringify(project.scope) || "Not set"}
+- Team Members: ${members.length}
+- Onboarding Complete: ${(project as any).novaOnboardingComplete ? "Yes" : "No"}
+- User Tier: ${sub.tier} (${isPremium ? "Premium" : "Free"})
+- Current Tab: ${currentTab || "setup"}`;
+
+      const systemPrompt = `You are Nova, SparkTower's AI project partner. You have a warm, encouraging, knowledgeable personality. You always refer to yourself as "Nova" and use emojis naturally.
+
+YOUR ROLE: You are the user's dedicated project advisor. You guide them through building their project from the ground up — from defining their vision to launching their product.
+
+${projectContext}
+
+CONVERSATION GUIDELINES:
+- Be warm, supportive, and encouraging. Starting a project is scary!
+- Be concise but thorough. Don't overwhelm with too much at once.
+- Ask ONE focused question at a time to guide the user
+- Remember context from earlier in the conversation
+- If information is already filled in (not "Not set"), acknowledge it and build on it
+- Adapt to the user's current tab context and help with relevant tasks
+
+GUIDED ONBOARDING FLOW (for new projects):
+1. Welcome them warmly, acknowledge their project "${project.title}"
+2. Help define their ONE-LINER positioning (who they help, what they do, how)
+3. Help articulate their VALUE PROPOSITION and TARGET CUSTOMER
+4. Work through their PROBLEM STATEMENT and SUCCESS METRICS
+5. Help define their SCOPE (MVP features vs nice-to-have)
+6. Create initial TASKS to get started
+7. ${isPremium ? "Create MILESTONES/ROADMAP for their journey" : "Suggest upgrading to premium for AI-powered roadmap creation"}
+8. Ask what they want to FOCUS ON FIRST
+
+CONTEXT-AWARE ASSISTANCE (based on current tab):
+- Setup tab: Help with brief, positioning, scope, links
+- Kanban tab: Help create/prioritize tasks, suggest what to work on next
+- Milestones tab: ${isPremium ? "Help create milestones and roadmap" : "Explain milestones, suggest upgrading for AI roadmap creation"}
+- Team tab: Advise on roles needed, team structure
+- Research tab: Help plan user interviews, design experiments
+- Strategy tab: Help with pricing strategy, legal document templates
+- Launch tab: Help with landing page copy, waitlist strategy, deploy checklist, launch plan
+- Analytics tab: Suggest key metrics to track for their type of project
+- Support tab: Help set up support workflow
+
+TAKING ACTIONS:
+You can take actions to update the project. When you want to take an action, include it in your response using this format:
+<nova_action>{"type": "ACTION_TYPE", "data": {...}}</nova_action>
+
+Available actions:
+1. update_project: Update project fields
+   <nova_action>{"type": "update_project", "data": {"oneLiner": "...", "valueProposition": "...", "targetCustomerProfile": "...", "problemStatement": "...", "targetUser": "...", "successMetrics": "..."}}</nova_action>
+   Only include fields you're updating. Valid fields: oneLiner, valueProposition, targetCustomerProfile, problemStatement, targetUser, successMetrics
+
+2. update_scope: Update project scope
+   <nova_action>{"type": "update_scope", "data": {"mvp": ["feature1", "feature2"], "niceToHave": ["feature3"]}}</nova_action>
+
+3. create_tasks: Create kanban tasks
+   <nova_action>{"type": "create_tasks", "data": {"tasks": [{"title": "...", "description": "...", "priority": "high|medium|low"}]}}</nova_action>
+
+4. create_milestones: Create project milestones (${isPremium ? "AVAILABLE - user is premium" : "NOT AVAILABLE - user is free tier. Mention they can upgrade for this feature."})
+   <nova_action>{"type": "create_milestones", "data": {"milestones": [{"title": "...", "description": "...", "targetDate": "YYYY-MM-DD"}]}}</nova_action>
+
+5. complete_onboarding: Mark onboarding as complete
+   <nova_action>{"type": "complete_onboarding", "data": {}}</nova_action>
+
+RULES:
+- Always explain what you're about to do before taking an action
+- After taking an action, confirm what was done
+- Don't take too many actions at once — guide the user step by step
+- When creating tasks, create 3-5 actionable, specific tasks
+- Present information you've extracted for the user to confirm before saving
+- Use markdown formatting: **bold** for key terms, bullet points for lists`;
+
+      const messages = [
+        { role: "system" as const, content: systemPrompt },
+        ...history.slice(0, -1).map((m: any) => ({ role: m.role as "user" | "assistant", content: m.content })),
+        { role: "user" as const, content: message }
+      ];
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages,
+        temperature: 0.7,
+      });
+
+      const rawReply = response.choices[0].message.content || "I'm here to help! Tell me more about your project.";
+
+      const actionMatches = [...rawReply.matchAll(/<nova_action>([\s\S]*?)<\/nova_action>/g)];
+      const actionsTaken: any[] = [];
+      let cleanReply = rawReply;
+
+      for (const match of actionMatches) {
+        try {
+          const action = JSON.parse(match[1]);
+          cleanReply = cleanReply.replace(match[0], "");
+
+          switch (action.type) {
+            case "update_project": {
+              const allowedFields = ["oneLiner", "valueProposition", "targetCustomerProfile", "problemStatement", "targetUser", "successMetrics"];
+              const updateData: any = {};
+              for (const field of allowedFields) {
+                if (action.data[field] !== undefined && typeof action.data[field] === "string" && action.data[field].length <= 2000) {
+                  updateData[field] = action.data[field];
+                }
+              }
+              if (Object.keys(updateData).length > 0) {
+                await storage.updateProject(projectId, updateData);
+                actionsTaken.push({ type: "update_project", data: updateData });
+              }
+              break;
+            }
+            case "update_scope": {
+              const scopeData: any = {};
+              if (Array.isArray(action.data.mvp)) scopeData.mvp = action.data.mvp.filter((s: any) => typeof s === "string").slice(0, 20);
+              if (Array.isArray(action.data.niceToHave)) scopeData.niceToHave = action.data.niceToHave.filter((s: any) => typeof s === "string").slice(0, 20);
+              if (Object.keys(scopeData).length > 0) {
+                await storage.updateProject(projectId, { scope: scopeData });
+                actionsTaken.push({ type: "update_scope", data: scopeData });
+              }
+              break;
+            }
+            case "create_tasks": {
+              if (Array.isArray(action.data.tasks)) {
+                const tasks = action.data.tasks.slice(0, 12);
+                const created = [];
+                for (let i = 0; i < tasks.length; i++) {
+                  const t = tasks[i];
+                  if (!t.title || typeof t.title !== "string") continue;
+                  const task = await storage.createKanbanTask({
+                    projectId,
+                    title: t.title.slice(0, 200),
+                    description: (t.description || "").slice(0, 1000),
+                    status: "todo",
+                    priority: ["low", "medium", "high"].includes(t.priority) ? t.priority : "medium",
+                    assigneeId: null,
+                    dueDate: null,
+                    order: i,
+                  });
+                  created.push(task);
+                }
+                actionsTaken.push({ type: "create_tasks", data: { count: created.length, tasks: created.map(t => t.title) } });
+              }
+              break;
+            }
+            case "create_milestones": {
+              if (!isPremium) {
+                actionsTaken.push({ type: "create_milestones", data: { error: "Premium required" } });
+                break;
+              }
+              if (Array.isArray(action.data.milestones)) {
+                const milestones = action.data.milestones.slice(0, 10);
+                const created = [];
+                for (let i = 0; i < milestones.length; i++) {
+                  const m = milestones[i];
+                  if (!m.title || typeof m.title !== "string") continue;
+                  const parsedDate = m.targetDate ? new Date(m.targetDate) : null;
+                  const validDate = parsedDate && !isNaN(parsedDate.getTime()) ? parsedDate : null;
+                  const milestone = await storage.createProjectMilestone({
+                    projectId,
+                    title: m.title.slice(0, 200),
+                    description: (m.description || "").slice(0, 1000),
+                    status: "planned",
+                    targetDate: validDate,
+                    order: i,
+                  });
+                  created.push(milestone);
+                }
+                actionsTaken.push({ type: "create_milestones", data: { count: created.length, milestones: created.map(m => m.title) } });
+              }
+              break;
+            }
+            case "complete_onboarding": {
+              await storage.updateProject(projectId, { novaOnboardingComplete: true } as any);
+              actionsTaken.push({ type: "complete_onboarding", data: {} });
+              break;
+            }
+          }
+        } catch (e) {
+          console.error("Nova action parse error:", e);
+        }
+      }
+
+      cleanReply = cleanReply.trim();
+
+      await storage.addNovaGuideMessage({ projectId, role: "assistant", content: cleanReply, actionsTaken });
+      await storage.deductCredits(userId, 1);
+
+      res.json({ reply: cleanReply, actionsTaken });
+    } catch (error) {
+      console.error("Nova guide error:", error);
+      res.status(500).json({ message: "Nova AI failed" });
+    }
+  });
+
+  app.post("/api/projects/:id/nova-guide/complete-onboarding", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      await storage.updateProject(req.params.id, { novaOnboardingComplete: true } as any);
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ message: "Failed to complete onboarding" }); }
+  });
+
   app.get("/api/projects/:id/chat", isAuthenticated, async (req, res) => {
     const messages = await storage.getProjectChatMessages(req.params.id as string);
     res.json(messages);

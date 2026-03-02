@@ -98,6 +98,9 @@ import {
   type InsertSupportTicket,
   type LaunchTask,
   type InsertLaunchTask,
+  type NovaGuideMessage,
+  type InsertNovaGuideMessage,
+  novaGuideMessages,
   gameLeaderboard,
   tacticsGames,
   tacticsPlayers,
@@ -192,6 +195,10 @@ export interface IStorage {
   createLaunchTask(data: InsertLaunchTask): Promise<LaunchTask>;
   updateLaunchTask(id: string, data: Partial<InsertLaunchTask>): Promise<LaunchTask>;
   deleteLaunchTask(id: string): Promise<void>;
+
+  // Nova Guide Messages
+  getNovaGuideMessages(projectId: string): Promise<NovaGuideMessage[]>;
+  addNovaGuideMessage(data: InsertNovaGuideMessage): Promise<NovaGuideMessage>;
 
   // Donations
   createDonation(data: InsertDonation): Promise<Donation>;
@@ -608,6 +615,15 @@ export class DatabaseStorage implements IStorage {
   }
   async deleteLaunchTask(id: string): Promise<void> {
     await db.delete(projectLaunchTasks).where(eq(projectLaunchTasks.id, id));
+  }
+
+  async getNovaGuideMessages(projectId: string): Promise<NovaGuideMessage[]> {
+    return db.select().from(novaGuideMessages).where(eq(novaGuideMessages.projectId, projectId)).orderBy(asc(novaGuideMessages.createdAt));
+  }
+
+  async addNovaGuideMessage(data: InsertNovaGuideMessage): Promise<NovaGuideMessage> {
+    const [msg] = await db.insert(novaGuideMessages).values(data).returning();
+    return msg;
   }
 
   async createDonation(data: InsertDonation): Promise<Donation> {
