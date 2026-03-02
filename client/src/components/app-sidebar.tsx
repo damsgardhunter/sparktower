@@ -10,7 +10,7 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
 } from "@/components/ui/sidebar";
-import { Home, Compass, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles, MessageSquare } from "lucide-react";
+import { Home, Compass, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles, MessageSquare, Handshake } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,7 @@ const menuItems = [
   { title: "Discover", url: "/discover", icon: Compass },
   { title: "Projects", url: "/projects", icon: FolderKanban },
   { title: "Matches", url: "/matches", icon: Users },
+  { title: "Sprints", url: "/sprints", icon: Handshake },
   { title: "Messages", url: "/messages", icon: MessageSquare },
   { title: "Leaderboard", url: "/leaderboard", icon: Trophy },
   { title: "Contests", url: "/contests", icon: Medal },

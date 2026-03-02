@@ -9,7 +9,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { MapPin, Globe, Github, Linkedin, Mail, MessageSquare, UserPlus, UserMinus, Edit, Loader2, FileText, Award, Rocket, Star, Users as UsersIcon, Sparkles, Trophy, Upload, CheckCircle, X, Clock, DollarSign, ExternalLink, Search, Heart } from "lucide-react";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useAuth } from "@/hooks/use-auth";
 import { useState, useRef } from "react";
 import { useUpload } from "@/hooks/use-upload";
@@ -195,6 +197,12 @@ export default function Profile() {
       linkedinUrl: profile.linkedinUrl || "",
       websiteUrl: profile.websiteUrl || "",
       resumeUrl: profile.resumeUrl || "",
+      hoursPerWeek: profile.hoursPerWeek ?? undefined,
+      riskTolerance: profile.riskTolerance ?? undefined,
+      speedVsPolish: profile.speedVsPolish ?? undefined,
+      scheduleStyle: profile.scheduleStyle ?? undefined,
+      conflictStyle: profile.conflictStyle ?? undefined,
+      builderType: profile.builderType ?? undefined,
       isOnboarded: profile.isOnboarded,
     } : undefined,
   });
@@ -420,6 +428,121 @@ export default function Profile() {
                               <FormMessage />
                             </FormItem>
                           )} />
+                        </div>
+
+                        <div className="border-t pt-4 mt-2">
+                          <p className="text-sm font-medium mb-3">Co-Founder Preferences</p>
+                          <div className="grid grid-cols-2 gap-4">
+                            <FormField control={form.control} name="hoursPerWeek" render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>Hours/Week</FormLabel>
+                                <FormControl>
+                                  <Input
+                                    type="number"
+                                    min={1}
+                                    max={80}
+                                    placeholder="e.g. 20"
+                                    {...field}
+                                    value={field.value ?? ""}
+                                    onChange={(e) => field.onChange(e.target.value ? parseInt(e.target.value) : undefined)}
+                                    data-testid="input-edit-hours-per-week"
+                                  />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )} />
+                            <FormField control={form.control} name="riskTolerance" render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>Risk Tolerance</FormLabel>
+                                <Select onValueChange={field.onChange} value={field.value || undefined}>
+                                  <FormControl>
+                                    <SelectTrigger data-testid="select-edit-risk-tolerance">
+                                      <SelectValue placeholder="Select" />
+                                    </SelectTrigger>
+                                  </FormControl>
+                                  <SelectContent>
+                                    <SelectItem value="low">Low</SelectItem>
+                                    <SelectItem value="moderate">Moderate</SelectItem>
+                                    <SelectItem value="high">High</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                                <FormMessage />
+                              </FormItem>
+                            )} />
+                            <FormField control={form.control} name="speedVsPolish" render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>Speed vs Polish</FormLabel>
+                                <Select onValueChange={field.onChange} value={field.value || undefined}>
+                                  <FormControl>
+                                    <SelectTrigger data-testid="select-edit-speed-vs-polish">
+                                      <SelectValue placeholder="Select" />
+                                    </SelectTrigger>
+                                  </FormControl>
+                                  <SelectContent>
+                                    <SelectItem value="speed">Speed First</SelectItem>
+                                    <SelectItem value="balanced">Balanced</SelectItem>
+                                    <SelectItem value="polish">Polish First</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                                <FormMessage />
+                              </FormItem>
+                            )} />
+                            <FormField control={form.control} name="scheduleStyle" render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>Schedule Style</FormLabel>
+                                <Select onValueChange={field.onChange} value={field.value || undefined}>
+                                  <FormControl>
+                                    <SelectTrigger data-testid="select-edit-schedule-style">
+                                      <SelectValue placeholder="Select" />
+                                    </SelectTrigger>
+                                  </FormControl>
+                                  <SelectContent>
+                                    <SelectItem value="structured">Structured</SelectItem>
+                                    <SelectItem value="flexible">Flexible</SelectItem>
+                                    <SelectItem value="hybrid">Hybrid</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                                <FormMessage />
+                              </FormItem>
+                            )} />
+                            <FormField control={form.control} name="conflictStyle" render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>Conflict Style</FormLabel>
+                                <Select onValueChange={field.onChange} value={field.value || undefined}>
+                                  <FormControl>
+                                    <SelectTrigger data-testid="select-edit-conflict-style">
+                                      <SelectValue placeholder="Select" />
+                                    </SelectTrigger>
+                                  </FormControl>
+                                  <SelectContent>
+                                    <SelectItem value="direct">Direct</SelectItem>
+                                    <SelectItem value="diplomatic">Diplomatic</SelectItem>
+                                    <SelectItem value="avoidant">Avoidant</SelectItem>
+                                    <SelectItem value="collaborative">Collaborative</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                                <FormMessage />
+                              </FormItem>
+                            )} />
+                            <FormField control={form.control} name="builderType" render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>Builder Type</FormLabel>
+                                <Select onValueChange={field.onChange} value={field.value || undefined}>
+                                  <FormControl>
+                                    <SelectTrigger data-testid="select-edit-builder-type">
+                                      <SelectValue placeholder="Select" />
+                                    </SelectTrigger>
+                                  </FormControl>
+                                  <SelectContent>
+                                    <SelectItem value="long-term">Long-Term</SelectItem>
+                                    <SelectItem value="experimental">Experimenter</SelectItem>
+                                    <SelectItem value="both">Both</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                                <FormMessage />
+                              </FormItem>
+                            )} />
+                          </div>
                         </div>
 
                         <div className="space-y-2">

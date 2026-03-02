@@ -1,12 +1,14 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { UserCard } from "@/components/user-card";
 import { Button } from "@/components/ui/button";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { UserMatch, UserProfile, User } from "@shared/schema";
-import { Loader2, Sparkles, UserPlus } from "lucide-react";
+import { Loader2, Sparkles, UserPlus, Users } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 export default function Matches() {
+  const [, setLocation] = useLocation();
   const { toast } = useToast();
   const { data: matches, isLoading } = useQuery<(UserMatch & { matchedUser: User; matchedProfile: UserProfile })[]>({
     queryKey: ["/api/matches"],
@@ -69,13 +71,24 @@ export default function Matches() {
         {matches && matches.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {matches.map((match) => (
-              <UserCard
-                key={match.id}
-                profile={match.matchedProfile}
-                userName={(match.matchedUser.firstName || match.matchedUser.email || "Anonymous") as string}
-                matchScore={match.score}
-                matchReasons={match.reasons || []}
-              />
+              <div key={match.id} className="flex flex-col">
+                <UserCard
+                  profile={match.matchedProfile}
+                  userName={(match.matchedUser.firstName || match.matchedUser.email || "Anonymous") as string}
+                  matchScore={match.score}
+                  matchReasons={match.reasons || []}
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-2"
+                  onClick={() => setLocation(`/sprints/new?partnerId=${match.matchedUserId}`)}
+                  data-testid={`button-start-sprint-${match.matchedUserId}`}
+                >
+                  <Users className="h-3.5 w-3.5 mr-1.5" />
+                  Start Trial Sprint
+                </Button>
+              </div>
             ))}
           </div>
         ) : (

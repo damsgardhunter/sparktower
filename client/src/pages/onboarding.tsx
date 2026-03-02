@@ -12,7 +12,8 @@ import { Progress } from "@/components/ui/progress";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { X, Plus, Github, Linkedin, Globe, MapPin, Loader2, Upload, FileText, CheckCircle } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { X, Plus, Github, Linkedin, Globe, MapPin, Loader2, Upload, FileText, CheckCircle, Clock, Zap, Shield, Users, Handshake } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useUpload } from "@/hooks/use-upload";
@@ -22,6 +23,7 @@ const STEPS = [
   "Skills",
   "Interests",
   "Experience",
+  "Co-Founder Preferences",
   "Resume",
   "Links",
   "Review"
@@ -67,6 +69,12 @@ export default function Onboarding() {
       skills: [],
       interests: [],
       experienceLevel: "beginner",
+      hoursPerWeek: undefined,
+      riskTolerance: undefined,
+      speedVsPolish: undefined,
+      scheduleStyle: undefined,
+      conflictStyle: undefined,
+      builderType: undefined,
       resumeUrl: "",
       githubUrl: "",
       linkedinUrl: "",
@@ -109,7 +117,7 @@ export default function Onboarding() {
   const next = async () => {
     const fieldsToValidate: (keyof InsertUserProfile)[] = [];
     if (step === 0) fieldsToValidate.push("displayName", "bio", "location");
-    if (step === 5) fieldsToValidate.push("githubUrl", "linkedinUrl", "websiteUrl");
+    if (step === 6) fieldsToValidate.push("githubUrl", "linkedinUrl", "websiteUrl");
 
     if (fieldsToValidate.length > 0) {
       const isValid = await form.trigger(fieldsToValidate);
@@ -383,6 +391,255 @@ export default function Onboarding() {
                 )}
 
                 {step === 4 && (
+                  <div className="space-y-5">
+                    <p className="text-sm text-muted-foreground">
+                      These preferences help us find your ideal co-founder match. All fields are optional.
+                    </p>
+
+                    <FormField
+                      control={form.control}
+                      name="hoursPerWeek"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Hours per Week</FormLabel>
+                          <FormControl>
+                            <Input
+                              type="number"
+                              min={1}
+                              max={80}
+                              placeholder="e.g. 20"
+                              {...field}
+                              value={field.value ?? ""}
+                              onChange={(e) => field.onChange(e.target.value ? parseInt(e.target.value) : undefined)}
+                              data-testid="input-hours-per-week"
+                            />
+                          </FormControl>
+                          <FormDescription>How many hours per week can you dedicate to a co-founder project?</FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="riskTolerance"
+                      render={({ field }) => (
+                        <FormItem className="space-y-3">
+                          <FormLabel>Risk Tolerance</FormLabel>
+                          <FormControl>
+                            <RadioGroup
+                              onValueChange={field.onChange}
+                              value={field.value || undefined}
+                              className="grid grid-cols-1 gap-3"
+                            >
+                              <FormItem className="flex items-start space-x-3 space-y-0 p-3 border rounded-md cursor-pointer hover:bg-accent/50 transition-colors">
+                                <FormControl>
+                                  <RadioGroupItem value="low" data-testid="radio-risk-low" />
+                                </FormControl>
+                                <div className="space-y-0.5">
+                                  <FormLabel className="font-medium">Low Risk</FormLabel>
+                                  <p className="text-xs text-muted-foreground">Prefer proven ideas with stable revenue potential. Cautious approach.</p>
+                                </div>
+                              </FormItem>
+                              <FormItem className="flex items-start space-x-3 space-y-0 p-3 border rounded-md cursor-pointer hover:bg-accent/50 transition-colors">
+                                <FormControl>
+                                  <RadioGroupItem value="moderate" data-testid="radio-risk-moderate" />
+                                </FormControl>
+                                <div className="space-y-0.5">
+                                  <FormLabel className="font-medium">Moderate Risk</FormLabel>
+                                  <p className="text-xs text-muted-foreground">Open to some uncertainty with calculated bets. Balanced approach.</p>
+                                </div>
+                              </FormItem>
+                              <FormItem className="flex items-start space-x-3 space-y-0 p-3 border rounded-md cursor-pointer hover:bg-accent/50 transition-colors">
+                                <FormControl>
+                                  <RadioGroupItem value="high" data-testid="radio-risk-high" />
+                                </FormControl>
+                                <div className="space-y-0.5">
+                                  <FormLabel className="font-medium">High Risk</FormLabel>
+                                  <p className="text-xs text-muted-foreground">Comfortable with moonshots and high-uncertainty ventures. Bold approach.</p>
+                                </div>
+                              </FormItem>
+                            </RadioGroup>
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="speedVsPolish"
+                      render={({ field }) => (
+                        <FormItem className="space-y-3">
+                          <FormLabel>Speed vs Polish</FormLabel>
+                          <FormControl>
+                            <RadioGroup
+                              onValueChange={field.onChange}
+                              value={field.value || undefined}
+                              className="grid grid-cols-1 gap-3"
+                            >
+                              <FormItem className="flex items-start space-x-3 space-y-0 p-3 border rounded-md cursor-pointer hover:bg-accent/50 transition-colors">
+                                <FormControl>
+                                  <RadioGroupItem value="speed" data-testid="radio-speed-speed" />
+                                </FormControl>
+                                <div className="space-y-0.5">
+                                  <FormLabel className="font-medium">Speed First</FormLabel>
+                                  <p className="text-xs text-muted-foreground">Ship fast, iterate later. Get feedback early even if rough.</p>
+                                </div>
+                              </FormItem>
+                              <FormItem className="flex items-start space-x-3 space-y-0 p-3 border rounded-md cursor-pointer hover:bg-accent/50 transition-colors">
+                                <FormControl>
+                                  <RadioGroupItem value="balanced" data-testid="radio-speed-balanced" />
+                                </FormControl>
+                                <div className="space-y-0.5">
+                                  <FormLabel className="font-medium">Balanced</FormLabel>
+                                  <p className="text-xs text-muted-foreground">Move quickly but maintain reasonable quality standards.</p>
+                                </div>
+                              </FormItem>
+                              <FormItem className="flex items-start space-x-3 space-y-0 p-3 border rounded-md cursor-pointer hover:bg-accent/50 transition-colors">
+                                <FormControl>
+                                  <RadioGroupItem value="polish" data-testid="radio-speed-polish" />
+                                </FormControl>
+                                <div className="space-y-0.5">
+                                  <FormLabel className="font-medium">Polish First</FormLabel>
+                                  <p className="text-xs text-muted-foreground">Take time to get it right. Quality over speed.</p>
+                                </div>
+                              </FormItem>
+                            </RadioGroup>
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="scheduleStyle"
+                      render={({ field }) => (
+                        <FormItem className="space-y-3">
+                          <FormLabel>Schedule Style</FormLabel>
+                          <FormControl>
+                            <RadioGroup
+                              onValueChange={field.onChange}
+                              value={field.value || undefined}
+                              className="grid grid-cols-1 gap-3"
+                            >
+                              <FormItem className="flex items-start space-x-3 space-y-0 p-3 border rounded-md cursor-pointer hover:bg-accent/50 transition-colors">
+                                <FormControl>
+                                  <RadioGroupItem value="structured" data-testid="radio-schedule-structured" />
+                                </FormControl>
+                                <div className="space-y-0.5">
+                                  <FormLabel className="font-medium">Structured</FormLabel>
+                                  <p className="text-xs text-muted-foreground">Fixed daily/weekly schedule. Clear deadlines and milestones.</p>
+                                </div>
+                              </FormItem>
+                              <FormItem className="flex items-start space-x-3 space-y-0 p-3 border rounded-md cursor-pointer hover:bg-accent/50 transition-colors">
+                                <FormControl>
+                                  <RadioGroupItem value="flexible" data-testid="radio-schedule-flexible" />
+                                </FormControl>
+                                <div className="space-y-0.5">
+                                  <FormLabel className="font-medium">Flexible</FormLabel>
+                                  <p className="text-xs text-muted-foreground">Work when inspired. Async-first communication style.</p>
+                                </div>
+                              </FormItem>
+                              <FormItem className="flex items-start space-x-3 space-y-0 p-3 border rounded-md cursor-pointer hover:bg-accent/50 transition-colors">
+                                <FormControl>
+                                  <RadioGroupItem value="hybrid" data-testid="radio-schedule-hybrid" />
+                                </FormControl>
+                                <div className="space-y-0.5">
+                                  <FormLabel className="font-medium">Hybrid</FormLabel>
+                                  <p className="text-xs text-muted-foreground">Some scheduled check-ins, but flexible work hours.</p>
+                                </div>
+                              </FormItem>
+                            </RadioGroup>
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="conflictStyle"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Conflict Resolution Style</FormLabel>
+                          <Select onValueChange={field.onChange} value={field.value || undefined}>
+                            <FormControl>
+                              <SelectTrigger data-testid="select-conflict-style">
+                                <SelectValue placeholder="Select your conflict style" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              <SelectItem value="direct" data-testid="option-conflict-direct">
+                                Direct — Address issues head-on with honest feedback
+                              </SelectItem>
+                              <SelectItem value="diplomatic" data-testid="option-conflict-diplomatic">
+                                Diplomatic — Navigate disagreements with tact and empathy
+                              </SelectItem>
+                              <SelectItem value="avoidant" data-testid="option-conflict-avoidant">
+                                Avoidant — Prefer to step back and let things cool down
+                              </SelectItem>
+                              <SelectItem value="collaborative" data-testid="option-conflict-collaborative">
+                                Collaborative — Work through issues together as a team
+                              </SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <FormDescription>How do you prefer to handle disagreements with a partner?</FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="builderType"
+                      render={({ field }) => (
+                        <FormItem className="space-y-3">
+                          <FormLabel>Builder Type</FormLabel>
+                          <FormControl>
+                            <RadioGroup
+                              onValueChange={field.onChange}
+                              value={field.value || undefined}
+                              className="grid grid-cols-1 gap-3"
+                            >
+                              <FormItem className="flex items-start space-x-3 space-y-0 p-3 border rounded-md cursor-pointer hover:bg-accent/50 transition-colors">
+                                <FormControl>
+                                  <RadioGroupItem value="long-term" data-testid="radio-builder-longterm" />
+                                </FormControl>
+                                <div className="space-y-0.5">
+                                  <FormLabel className="font-medium">Long-Term Builder</FormLabel>
+                                  <p className="text-xs text-muted-foreground">Committed to growing a product over months or years.</p>
+                                </div>
+                              </FormItem>
+                              <FormItem className="flex items-start space-x-3 space-y-0 p-3 border rounded-md cursor-pointer hover:bg-accent/50 transition-colors">
+                                <FormControl>
+                                  <RadioGroupItem value="experimental" data-testid="radio-builder-experimental" />
+                                </FormControl>
+                                <div className="space-y-0.5">
+                                  <FormLabel className="font-medium">Experimenter</FormLabel>
+                                  <p className="text-xs text-muted-foreground">Love trying new ideas quickly. Build, test, move on.</p>
+                                </div>
+                              </FormItem>
+                              <FormItem className="flex items-start space-x-3 space-y-0 p-3 border rounded-md cursor-pointer hover:bg-accent/50 transition-colors">
+                                <FormControl>
+                                  <RadioGroupItem value="both" data-testid="radio-builder-both" />
+                                </FormControl>
+                                <div className="space-y-0.5">
+                                  <FormLabel className="font-medium">Both</FormLabel>
+                                  <p className="text-xs text-muted-foreground">Happy with either approach depending on the project.</p>
+                                </div>
+                              </FormItem>
+                            </RadioGroup>
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                )}
+
+                {step === 5 && (
                   <div className="space-y-4">
                     <p className="text-sm text-muted-foreground">
                       Upload your resume so collaborators and project leads can learn more about your background. Accepted formats: PDF, DOC, DOCX.
@@ -441,7 +698,7 @@ export default function Onboarding() {
                   </div>
                 )}
 
-                {step === 5 && (
+                {step === 6 && (
                   <div className="space-y-4">
                     <FormField
                       control={form.control}
@@ -494,7 +751,7 @@ export default function Onboarding() {
                   </div>
                 )}
 
-                {step === 6 && (
+                {step === 7 && (
                   <div className="space-y-6">
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-1">
@@ -535,6 +792,49 @@ export default function Onboarding() {
                             <span className="text-sm">{resumeFileName || "Uploaded"}</span>
                           </div>
                         </div>
+                      )}
+                      {(form.getValues("riskTolerance") || form.getValues("scheduleStyle") || form.getValues("hoursPerWeek")) && (
+                        <>
+                          <div className="col-span-2 pt-2">
+                            <Label className="text-xs text-muted-foreground uppercase">Co-Founder Preferences</Label>
+                          </div>
+                          {form.getValues("hoursPerWeek") && (
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">Hours/Week</Label>
+                              <p className="text-sm">{form.getValues("hoursPerWeek")}h</p>
+                            </div>
+                          )}
+                          {form.getValues("riskTolerance") && (
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">Risk Tolerance</Label>
+                              <Badge variant="outline" className="capitalize">{form.getValues("riskTolerance")}</Badge>
+                            </div>
+                          )}
+                          {form.getValues("speedVsPolish") && (
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">Speed vs Polish</Label>
+                              <Badge variant="outline" className="capitalize">{form.getValues("speedVsPolish")}</Badge>
+                            </div>
+                          )}
+                          {form.getValues("scheduleStyle") && (
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">Schedule</Label>
+                              <Badge variant="outline" className="capitalize">{form.getValues("scheduleStyle")}</Badge>
+                            </div>
+                          )}
+                          {form.getValues("conflictStyle") && (
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">Conflict Style</Label>
+                              <Badge variant="outline" className="capitalize">{form.getValues("conflictStyle")}</Badge>
+                            </div>
+                          )}
+                          {form.getValues("builderType") && (
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">Builder Type</Label>
+                              <Badge variant="outline" className="capitalize">{form.getValues("builderType")}</Badge>
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
                   </div>

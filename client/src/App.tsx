@@ -26,6 +26,9 @@ import ProjectManager from "@/pages/project-manager";
 import TacticsArena from "@/pages/games/tactics-arena";
 import TypingArena from "@/pages/games/typing-arena";
 import SignalNoise from "@/pages/games/signal-noise";
+import Sprints from "@/pages/sprints";
+import SprintMatchmaking from "@/pages/sprint-matchmaking";
+import SprintDashboard from "@/pages/sprint-dashboard";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "@tanstack/react-query";
 import type { UserProfile } from "@shared/schema";
@@ -99,6 +102,9 @@ function Router() {
             <Route path="/games/typing/:id" component={TypingArena} />
             <Route path="/games/typing" component={TypingArena} />
             <Route path="/games/signal-noise" component={SignalNoise} />
+            <Route path="/sprints" component={Sprints} />
+            <Route path="/sprints/new" component={SprintMatchmaking} />
+            <Route path="/sprints/:id" component={SprintDashboard} />
             <Route path="/messages" component={Messages} />
             <Route path="/pricing" component={Pricing} />
             <Route component={NotFound} />

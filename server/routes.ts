@@ -6,6 +6,7 @@ import { users, projectMembers, projects, userProfiles } from "@shared/schema";
 import { setupAuth, isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { registerAuthRoutes } from "./replit_integrations/auth/routes";
 import { registerObjectStorageRoutes, ObjectStorageService } from "./replit_integrations/object_storage";
+import { registerSprintRoutes } from "./sprint-routes";
 import { insertUserProfileSchema, insertProjectSchema, insertDonationSchema, insertContestSchema, insertProjectLiveChatMessageSchema, insertWaitlistEntrySchema, insertInterviewSchema, insertExperimentSchema, insertPricingTierSchema, insertAnalyticsEventSchema, insertLegalDocSchema, insertDeployChecklistItemSchema, insertSupportTicketSchema, insertLaunchTaskSchema } from "@shared/schema";
 import { z } from "zod";
 import OpenAI from "openai";
@@ -69,6 +70,7 @@ export async function registerRoutes(
   await setupAuth(app);
   registerAuthRoutes(app);
   registerObjectStorageRoutes(app);
+  registerSprintRoutes(app);
 
   // User Profile
   app.get("/api/profile", isAuthenticated, async (req: any, res) => {
@@ -1259,6 +1261,63 @@ RULES:
         return 0.4;
       }
 
+      const userReputation = await storage.getUserReputation(userId);
+      const userBuilderIndex = userReputation?.builderIndex || 0;
+
+      function cofounderCompatibility(a: any, b: any): number {
+        let score = 0;
+        let factors = 0;
+
+        if (a.riskTolerance && b.riskTolerance) {
+          const levels = ["low", "moderate", "high"];
+          const diff = Math.abs(levels.indexOf(a.riskTolerance) - levels.indexOf(b.riskTolerance));
+          score += diff === 0 ? 1.0 : diff === 1 ? 0.5 : 0.1;
+          factors++;
+        }
+
+        if (a.scheduleStyle && b.scheduleStyle) {
+          if (a.scheduleStyle === b.scheduleStyle) score += 1.0;
+          else if (a.scheduleStyle === "hybrid" || b.scheduleStyle === "hybrid") score += 0.7;
+          else score += 0.3;
+          factors++;
+        }
+
+        if (a.conflictStyle && b.conflictStyle) {
+          const complementary: Record<string, string[]> = {
+            direct: ["diplomatic", "collaborative"],
+            diplomatic: ["direct", "collaborative"],
+            avoidant: ["collaborative", "diplomatic"],
+            collaborative: ["direct", "diplomatic", "collaborative"],
+          };
+          if (a.conflictStyle === b.conflictStyle) score += 0.7;
+          else if (complementary[a.conflictStyle]?.includes(b.conflictStyle)) score += 1.0;
+          else score += 0.3;
+          factors++;
+        }
+
+        if (a.hoursPerWeek && b.hoursPerWeek) {
+          const diff = Math.abs(a.hoursPerWeek - b.hoursPerWeek);
+          score += diff <= 5 ? 1.0 : diff <= 10 ? 0.6 : 0.2;
+          factors++;
+        }
+
+        if (a.builderType && b.builderType) {
+          if (a.builderType === b.builderType) score += 1.0;
+          else if (a.builderType === "both" || b.builderType === "both") score += 0.7;
+          else score += 0.3;
+          factors++;
+        }
+
+        if (a.speedVsPolish && b.speedVsPolish) {
+          const levels = ["speed", "balanced", "polish"];
+          const diff = Math.abs(levels.indexOf(a.speedVsPolish) - levels.indexOf(b.speedVsPolish));
+          score += diff === 0 ? 1.0 : diff === 1 ? 0.6 : 0.2;
+          factors++;
+        }
+
+        return factors > 0 ? score / factors : 0.5;
+      }
+
       const scoredMatches: { id: string; score: number; factors: Record<string, number> }[] = [];
 
       for (const other of otherProfiles) {
@@ -1284,19 +1343,28 @@ RULES:
         const mutualConns = await storage.getMutualConnections(userId, other.id);
         const connectionScore = Math.min(1, mutualConns.length * 0.25);
 
+        const cofounderScore = cofounderCompatibility(userProfile, op);
+
+        const otherReputation = await storage.getUserReputation(other.id);
+        const otherBuilderIndex = otherReputation?.builderIndex || 0;
+        const indexDiff = Math.abs(userBuilderIndex - otherBuilderIndex);
+        const builderScore = indexDiff <= 10 ? 1.0 : indexDiff <= 25 ? 0.7 : 0.4;
+
         const weightedScore = Math.round(
-          (skillsScore * 30 +
-           interestsScore * 25 +
-           experienceScore * 15 +
-           projectScore * 15 +
-           connectionScore * 15)
+          (skillsScore * 25 +
+           interestsScore * 20 +
+           experienceScore * 10 +
+           projectScore * 10 +
+           connectionScore * 10 +
+           cofounderScore * 15 +
+           builderScore * 10)
         );
 
         if (weightedScore > 5) {
           scoredMatches.push({
             id: other.id,
             score: Math.min(100, weightedScore),
-            factors: { skills: skillsScore, interests: interestsScore, experience: experienceScore, projects: projectScore, connections: connectionScore }
+            factors: { skills: skillsScore, interests: interestsScore, experience: experienceScore, projects: projectScore, connections: connectionScore, cofounder: cofounderScore, builder: builderScore }
           });
         }
       }
@@ -1327,14 +1395,14 @@ RULES:
           });
 
           const response = await openai.chat.completions.create({
-            model: "gpt-5.2",
+            model: "gpt-4o",
             messages: [
-              { role: "system", content: "Generate concise match reasons. Return JSON: {\"reasons\": {\"userId\": [\"reason1\", \"reason2\"]}}. Each user gets 2-3 short reasons based on the factors provided." },
+              { role: "system", content: "Generate concise match reasons. Return ONLY valid JSON (no markdown): {\"reasons\": {\"userId\": [\"reason1\", \"reason2\"]}}. Each user gets 2-3 short reasons. Include co-founder compatibility insights when relevant." },
               { role: "user", content: `User profile: skills=${userProfile.skills?.join(", ")}, interests=${userProfile.interests?.join(", ")}, experience=${userProfile.experienceLevel}.\n\nMatches: ${JSON.stringify(matchSummary)}` }
             ],
-            response_format: { type: "json_object" }
           });
-          const parsed = JSON.parse(response.choices[0].message.content || '{"reasons":{}}');
+          const rawContent = (response.choices[0].message.content || '{"reasons":{}}').replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+          const parsed = JSON.parse(rawContent);
           matchReasons = parsed.reasons || {};
           await storage.deductCredits(userId, 1);
         } catch (e) {

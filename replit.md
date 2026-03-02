@@ -1,98 +1,53 @@
 # SparkTower
 
 ## Overview
-
-SparkTower is an AI-powered platform designed for entrepreneurs and freelancers to connect, collaborate, and build projects. It merges professional networking akin to LinkedIn with project showcasing features similar to Kaggle. The platform aims to foster project creation, team formation, and collaboration through intelligent matching and AI-guided tools, providing a comprehensive ecosystem for innovators to bring their ideas to life.
+SparkTower is an AI-powered platform designed for entrepreneurs and freelancers, merging professional networking with project showcasing. It aims to foster project creation, team formation, and collaboration through intelligent matching and AI-guided tools, providing a comprehensive ecosystem for innovators to bring their ideas to life.
 
 ## User Preferences
-
 I want iterative development.
 Ask before making major changes.
 Do not make changes to the folder `shared/`.
 Do not make changes to the file `server/seed-stripe.ts`.
 
 ## System Architecture
+**Frontend:** Built with React, TypeScript, Vite, Wouter, TanStack Query, Shadcn UI, Tailwind CSS, and Framer Motion. Features a green primary color, 0rem border-radius, Space Grotesk font, and full dark/light mode support.
 
-**Frontend:** The user interface is built with React, TypeScript, Vite, Wouter for routing, TanStack Query for data fetching, Shadcn UI, and Tailwind CSS for styling, enhanced with Framer Motion for animations. The design uses the Space Grotesk font, a green primary color, and a border-radius of 0rem. Dark/Light mode is fully supported.
+**Backend:** Uses Express.js with TypeScript, Drizzle ORM, and PostgreSQL.
 
-**Backend:** The server-side is implemented using Express.js with TypeScript, Drizzle ORM for database interactions, and PostgreSQL as the primary database.
+**AI Integration:** Leverages OpenAI's gpt-4o model via Replit AI Integrations for features like weighted profile matching, AI chatbot (Nova), storyboard generation, Kanban task generation, customer persona creation, people recommendations, progress summarization, gap detection, and co-founder sprint assistance.
 
-**AI Integration:** OpenAI's gpt-4o model is utilized via Replit AI Integrations for various AI functionalities including chatbot interactions, weighted profile matching, AI storyboard generation, Kanban task generation, customer persona creation, people recommendations, progress summarization, and gap detection.
+**Authentication:** Custom system with email/password (bcrypt) and Google OAuth 2.0, utilizing Passport strategies and PostgreSQL session storage.
 
-**Authentication:** Custom auth system with email/password registration (bcrypt hashing) and Google OAuth 2.0. Uses passport-local and passport-google-oauth20 strategies with PostgreSQL session storage. Google OAuth requires GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET environment variables.
+**Storage:** Replit Object Storage (GCS) handles media and document uploads via presigned URLs.
 
-**Storage:** Replit Object Storage (GCS) is used for media and document uploads, employing a presigned URL flow for direct client-to-storage uploads.
-
-**Payments:** Stripe is integrated for managing donations, subscriptions, and payouts. This includes Stripe Checkout for one-time donations, Stripe Connect Express for project owner payouts (with a 10% platform fee), and `stripe-replit-sync` for managing subscription products and prices.
+**Payments:** Stripe is integrated for donations (Checkout), subscriptions, and project owner payouts (Connect Express with a 10% platform fee), managed with `stripe-replit-sync`.
 
 **Core Features:**
+*   **Onboarding & Profile:** Multi-step wizard for profile creation, including skills, interests, experience, and project showcasing. Profiles feature tabs for About, Projects, Connections, Following, and Earnings.
+*   **Weighted Profile Matching:** An algorithm matches users based on skills, interests, experience, projects, connections, co-founder compatibility, and builder score proximity, with AI-generated reasons.
+*   **Nova AI Guide:** An intelligent, context-aware AI assistant (Nova) helps with project creation and management. It can update project fields, create tasks, and manage milestones.
+*   **Project Manager Dashboard:** A 13-tab suite for project management, including:
+    *   **Setup:** Project brief, scope planning, links hub, business plan upload, and Nova AI Insights.
+    *   **Tasks:** Kanban board with AI task generation, subtasks, tags, estimates, dependencies, assignees, due dates, and priority.
+    *   **Milestones:** Roadmap timeline view with status transitions and target dates.
+    *   **Team:** Enhanced member cards with timezone, availability, skills, contribution tracking, and AI people recommendations.
+    *   **Files:** File upload with categories, metadata, and filtering.
+    *   **Activity:** Activity Feed, Decision Log, and Weekly Check-ins.
+    *   **Personas:** AI-generated and manual customer personas.
+    *   **Chat:** Real-time team chat.
+*   **Media & Content:** Image/video uploads with AI-generated animated video storyboard slideshows.
+*   **Community & Collaboration:** Connection requests, private messaging, project following, and project application system.
+*   **Monetization & Gamification:** Stripe donations, badge system, contests/hackathons, and leaderboards.
+*   **AI Credit System:** Subscription model (Free, Spark Pro, Spark Business, Spark Unlimited) providing monthly AI credits.
+*   **Builder Reputation Index:** A multi-dimensional scoring system (Execution, Contribution, Market Signal, Strategic Thinking) with tiers and solo builder mode.
+*   **Co-Founder Matching Engine:** A 3-step system including enhanced profile preferences, builder score comparison, and Trial Collaboration Mini Sprints (24h or 72h) with guided phases (Ideation, Alignment, Building, Validation, Review) and Nova AI assistance.
+*   **Games Arena:** Three competitive games (Team Tactics Arena, Velocity Type Arena, Signal vs. Noise) with leaderboards and badge rewards.
 
-*   **Onboarding & Profile:** A multi-step wizard guides users through profile creation, capturing skills, interests, experience, and project showcasing. Profiles include tabs for About, Projects, Connections, Following, and Earnings.
-*   **Weighted Profile Matching:** An algorithm matches users based on skills (30%), interests (25%), experience (15%), projects (15%), and connections (15%), with AI-generated reasons for matches.
-*   **Nova AI Chatbot:** An AI project partner named "Nova" assists with guided project creation and provides support within project dashboards. Nova has a friendly personality, a chip/CPU icon, and uses emoji+bold formatting in its responses.
-*   **Nova AI Guide:** An intelligent onboarding assistant and persistent project partner:
-    *   **Onboarding Mode:** Full-screen overlay chat on first visit to PM. Walks user through project brief, positioning (one-liner, value prop, target customer), scope, tasks, and milestones. Quick-reply buttons for common starting points.
-    *   **Widget Mode:** After onboarding, appears as floating Cpu icon button in bottom-right corner. Expands to chat panel. Context-aware (knows current tab).
-    *   **AI Actions:** Nova can directly update project fields (`update_project`), create kanban tasks (`create_tasks`), create milestones (`create_milestones` - premium only), and update scope (`update_scope`). Actions show as inline cards in chat.
-    *   **Routes:** GET/POST `/api/projects/:id/nova-guide` (message history), POST `/api/projects/:id/nova-guide/complete-onboarding`
-    *   **Table:** `nova_guide_messages` (id, projectId, role, content, actionsTaken jsonb, createdAt)
-    *   **Column:** `nova_onboarding_complete` boolean on projects table
-    *   **Credit cost:** 1 per message. Welcome message is free (client-side).
-    *   **Component:** `client/src/components/nova-guide.tsx`
-*   **Project Manager Dashboard:** A comprehensive 13-tab project management suite:
-    *   **Setup Tab:** Project brief (one-liner positioning, value proposition, target customer profile, problem statement, target user, success metrics), scope planning (MVP vs Nice-to-Have), links hub (repo, docs, design, drive, notes), business plan upload, application questions, and Nova AI Insights (progress summary + gap detection).
-    *   **Tasks Tab:** Kanban board (To Do, In Progress, Review, Done) with AI task generation. Tasks support subtasks (checklist with progress bar), tags (colored chips), hour estimates, blocked-by dependencies (lock icon), assignees, due dates, and priority levels.
-    *   **Milestones Tab:** Roadmap timeline view with milestone cards. Milestones have status transitions (planned → in-progress → completed) and target dates.
-    *   **Team Tab:** Enhanced member cards with timezone, availability, hours/week, skills, and contribution tracking (completed/in-progress task counts). Includes pending application review and AI people recommendations.
-    *   **Files Tab:** File upload with folder categories (general/design/docs/data), file list with metadata (name, type, uploader, date, size), folder filtering.
-    *   **Activity Tab:** Three sections — Activity Feed (chronological event log with user avatars), Decision Log (title/context/decision with proposed/accepted/revisited status), Weekly Check-ins (did/doing/blockers format).
-    *   **Personas Tab:** AI-generated and manually created customer personas with goals, pain points, and quotes.
-    *   **Chat Tab:** Live team chat for project members. Real-time messaging with 3-second polling, message bubbles aligned by sender, user avatars. Only accessible to project owner and members.
-*   **Media & Content:** Users can upload images/videos to projects, and AI can generate animated video storyboard slideshows with various visual styles.
-*   **Community & Collaboration:** Features include connection requests, real-time private messaging between connected users, project following, and a system for applying to projects with custom questions and resume uploads.
-*   **Monetization & Gamification:** Stripe donations for projects, a badge system with rarity tiers, contests/hackathons, and a leaderboard (by visits or donations) are included.
-*   **AI Credit System:** A subscription model (Free, Spark Pro, Spark Business, Spark Unlimited) provides monthly AI credits for various AI features, with costs per AI operation (Chat=1, Video=5, Match=1, Kanban AI=1, Persona AI=1, People Rec=1, Summarize=1, Detect Gaps=1, Nova Guide=1, Reputation Calc=1).
-*   **Builder Reputation Index:** Multi-dimensional scoring system measuring builder capability:
-    *   **Execution Score (30%):** Milestones completed, deadlines met, sprint consistency (check-ins), project completion rate.
-    *   **Contribution Score (25%):** Projects involved in, task completion %, projects followed, solo build completions.
-    *   **Market Signal Score (25%):** Donations received, project applications, activity/engagement, external traction uploads.
-    *   **Strategic Thinking Score (20%):** Contest wins, game scores, AI evaluation of project descriptions (0-100).
-    *   **Builder Index:** Weighted composite of all 4 dimensions (0-100). Tiers: New Builder (0-19), Emerging (20-39), Rising (40-59), Advanced (60-79), Elite (80-100).
-    *   **Solo Builder Mode:** Projects can be marked as solo builds. Leaderboard supports solo/team/all filtering.
-    *   **Routes:** GET `/api/reputation/:userId`, POST `/api/reputation/calculate` (1 credit), GET `/api/leaderboard/reputation`
-    *   **Table:** `user_reputation_scores` (userId, executionScore, contributionScore, marketSignalScore, strategicThinkingScore, builderIndex, details jsonb)
-    *   **Engine:** `server/reputation.ts` — calculates scores using DB stats + AI evaluation for strategic thinking
-    *   **Components:** `client/src/components/reputation-card.tsx` (profile integration), enhanced `leaderboard.tsx` with Builder Index tab
-
-**Database Tables (new for Project Manager):**
-*   `projectMilestones` — id, projectId, title, description, status, targetDate, order, createdAt
-*   `projectActivityLog` — id, projectId, userId, action, entityType, entityId, metadata (jsonb), createdAt
-*   `projectDecisions` — id, projectId, userId, title, decision, context, status, createdAt
-*   `projectCheckIns` — id, projectId, userId, did, doing, blockers, createdAt
-*   `projectFiles` — id, projectId, uploaderId, name, url, folder, fileType, size, createdAt
-*   `projectLinks` — id, projectId, label, url, category, createdAt
-*   `projectLiveChatMessages` — id, projectId, userId (ref users), content, createdAt
-
-**Enhanced columns:**
-*   `projects` — added: problemStatement, targetUser, successMetrics, scope (jsonb), soloMode (boolean), externalTractionUrl (text)
-*   `user_reputation_scores` — id, userId (unique FK), executionScore, contributionScore, marketSignalScore, strategicThinkingScore, builderIndex, lastCalculatedAt, details (jsonb)
-*   `projectKanbanTasks` — added: tags (text[]), estimateHours, blockedByTaskId, subtasks (jsonb)
-*   `projectMembers` — added: timezone, availability, hoursPerWeek, skills (text[])
-
-**Games Arena (Contests System):**
-Three competitive games integrated into the Contests page, each with leaderboards and badge rewards:
-
-*   **Team Tactics Arena** (`/games/tactics`, `/games/tactics/:id`): Turn-based tactical strategy on an 8x8 grid. 5 roles (Commander, Warrior, Strategist, Scout, Engineer) with asymmetric stats. Teams of 1-5 coordinate via discussion phases. Routes: create, lobby, join, start, move, resolve. Tables: `tacticsGames`, `tacticsPlayers`, `tacticsMoves`. Badges: first-game, veteran, legend.
-*   **Velocity Type Arena** (`/games/typing`, `/games/typing/:id`): Competitive typing races with 20+ builder-focused prompts (startup pitches, code snippets, product specs). 2-6 players race with live progress bars. Scoring: WPM × accuracy. Routes: create, lobby, join, start, progress, finish. Tables: `typingRaces`, `typingRacePlayers`. Badges: first-race, speed-demon (80+ WPM), perfect-accuracy.
-*   **Signal vs. Noise** (`/games/signal-noise`): Solo decision-making game. Sort cards into Signal (keep) or Noise (discard) under time pressure across 10 scenarios (MVP Launch, Fundraising, Hiring, etc.) with 3 difficulty levels. Routes: scenarios, start, decide, complete. Table: `signalNoiseGames`. Badges: first-game, streak-10, ace (90%+ advanced).
-*   **Shared Leaderboard**: `gameLeaderboard` table stores scores for all three games by gameType.
-
-**Routing:** The application uses Wouter for client-side routing, with distinct paths for authenticated and unauthenticated users, onboarding, project creation, management, profiles, and community features. Specific routes are dedicated to Nova AI interactions, project applications, various Stripe-related flows, and the Games Arena.
+**Routing:** Uses Wouter for client-side routing, managing paths for authentication, onboarding, project management, profiles, community features, Nova AI, Stripe, and the Games Arena.
 
 ## External Dependencies
-
-*   **OpenAI:** Utilized for various AI functionalities (gpt-4o model) through Replit AI Integrations.
-*   **Google OAuth 2.0:** For Google sign-in (requires GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET env vars).
-*   **Replit Object Storage (GCS):** For file storage (images, videos, resumes, project files).
-*   **Stripe:** For payment processing (donations via Checkout, subscriptions, payouts via Connect Express, billing portal).
-*   **PostgreSQL:** The primary database for all application data, accessed via Drizzle ORM.
+*   **OpenAI:** Used for AI functionalities (gpt-4o model) via Replit AI Integrations.
+*   **Google OAuth 2.0:** For Google sign-in.
+*   **Replit Object Storage (GCS):** For storing files (images, videos, documents).
+*   **Stripe:** For payment processing (donations, subscriptions, payouts).
+*   **PostgreSQL:** The primary database, accessed via Drizzle ORM.

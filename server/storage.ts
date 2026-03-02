@@ -102,8 +102,28 @@ import {
   type InsertNovaGuideMessage,
   type UserReputation,
   type InsertUserReputation,
+  type CofounderSprint,
+  type InsertCofounderSprint,
+  type SprintResponse,
+  type SprintDeliverable,
+  type SprintRating,
+  type SprintDecision,
+  type SprintMessage,
+  type SprintKanbanTask,
+  type SprintBehavioralMetrics,
+  type SprintCompatibilityReport,
   novaGuideMessages,
   userReputationScores,
+  cofounderSprints,
+  sprintResponses,
+  sprintDeliverables,
+  sprintRatings,
+  sprintDecisions,
+  sprintMessages,
+  sprintKanbanTasks,
+  sprintBehavioralMetrics,
+  sprintCompatibilityReports,
+  sprintMatchmakingQueue,
   gameLeaderboard,
   tacticsGames,
   tacticsPlayers,
@@ -357,6 +377,32 @@ export interface IStorage {
   getSignalNoiseGame(id: string): Promise<SignalNoiseGame | undefined>;
   updateSignalNoiseGame(id: string, data: Partial<SignalNoiseGame>): Promise<SignalNoiseGame>;
   getUserSignalNoiseHistory(userId: string, limit?: number): Promise<SignalNoiseGame[]>;
+
+  // Co-Founder Sprints
+  createSprint(data: InsertCofounderSprint): Promise<CofounderSprint>;
+  getSprint(id: string): Promise<CofounderSprint | undefined>;
+  updateSprint(id: string, data: Partial<CofounderSprint>): Promise<CofounderSprint>;
+  getSprintsByUser(userId: string): Promise<(CofounderSprint & { user1: User; user2: User })[]>;
+  addSprintResponse(data: { sprintId: string; userId: string; questionKey: string; answer: string }): Promise<SprintResponse>;
+  getSprintResponses(sprintId: string, userId?: string): Promise<SprintResponse[]>;
+  addSprintDeliverable(data: { sprintId: string; type: string; content: any; userId?: string }): Promise<SprintDeliverable>;
+  getSprintDeliverables(sprintId: string): Promise<SprintDeliverable[]>;
+  addSprintRating(data: { sprintId: string; raterId: string; rateeId: string; communicationClarity: number; reliability: number; wouldBuildLongTerm: boolean; stressLevel: number }): Promise<SprintRating>;
+  getSprintRatings(sprintId: string): Promise<SprintRating[]>;
+  addSprintDecision(data: { sprintId: string; userId: string; decision: string; reason: string }): Promise<SprintDecision>;
+  getSprintDecisions(sprintId: string): Promise<SprintDecision[]>;
+  sendSprintMessage(data: { sprintId: string; userId: string; content: string }): Promise<SprintMessage>;
+  getSprintMessages(sprintId: string): Promise<(SprintMessage & { user: User })[]>;
+  getSprintTasks(sprintId: string): Promise<SprintKanbanTask[]>;
+  createSprintTask(data: { sprintId: string; title: string; description?: string; order?: number; assigneeId?: string }): Promise<SprintKanbanTask>;
+  updateSprintTask(id: string, data: Partial<SprintKanbanTask>): Promise<SprintKanbanTask>;
+  upsertSprintBehavioralMetrics(data: { sprintId: string; userId: string } & Partial<SprintBehavioralMetrics>): Promise<SprintBehavioralMetrics>;
+  getSprintBehavioralMetrics(sprintId: string): Promise<SprintBehavioralMetrics[]>;
+  saveCompatibilityReport(data: { sprintId: string; overallScore: number; strengths: any; risks: any; recommendation: string }): Promise<SprintCompatibilityReport>;
+  getCompatibilityReport(sprintId: string): Promise<SprintCompatibilityReport | undefined>;
+  joinMatchmakingQueue(data: { userId: string; duration: string; productStyle?: string }): Promise<any>;
+  findMatchmakingPartner(userId: string): Promise<any>;
+  removeFromMatchmakingQueue(userId: string): Promise<void>;
 
   // Reputation
   getUserReputation(userId: string): Promise<UserReputation | undefined>;
@@ -1545,6 +1591,159 @@ export class DatabaseStorage implements IStorage {
       contestWins,
       bestGameScores,
     };
+  }
+  // Co-Founder Sprint Storage
+  async createSprint(data: InsertCofounderSprint): Promise<CofounderSprint> {
+    const [sprint] = await db.insert(cofounderSprints).values(data).returning();
+    return sprint;
+  }
+
+  async getSprint(id: string): Promise<CofounderSprint | undefined> {
+    const [sprint] = await db.select().from(cofounderSprints).where(eq(cofounderSprints.id, id));
+    return sprint;
+  }
+
+  async updateSprint(id: string, data: Partial<CofounderSprint>): Promise<CofounderSprint> {
+    const [updated] = await db.update(cofounderSprints).set(data).where(eq(cofounderSprints.id, id)).returning();
+    return updated;
+  }
+
+  async getSprintsByUser(userId: string): Promise<(CofounderSprint & { user1: User; user2: User })[]> {
+    const sprints = await db.select().from(cofounderSprints)
+      .where(or(eq(cofounderSprints.user1Id, userId), eq(cofounderSprints.user2Id, userId)))
+      .orderBy(desc(cofounderSprints.createdAt));
+    return Promise.all(sprints.map(async (s) => {
+      const [u1] = await db.select().from(users).where(eq(users.id, s.user1Id));
+      const [u2] = await db.select().from(users).where(eq(users.id, s.user2Id));
+      return { ...s, user1: u1, user2: u2 };
+    }));
+  }
+
+  async addSprintResponse(data: { sprintId: string; userId: string; questionKey: string; answer: string }): Promise<SprintResponse> {
+    const existing = await db.select().from(sprintResponses)
+      .where(and(eq(sprintResponses.sprintId, data.sprintId), eq(sprintResponses.userId, data.userId), eq(sprintResponses.questionKey, data.questionKey)));
+    if (existing.length > 0) {
+      const [updated] = await db.update(sprintResponses).set({ answer: data.answer }).where(eq(sprintResponses.id, existing[0].id)).returning();
+      return updated;
+    }
+    const [resp] = await db.insert(sprintResponses).values(data).returning();
+    return resp;
+  }
+
+  async getSprintResponses(sprintId: string, userId?: string): Promise<SprintResponse[]> {
+    const conditions = [eq(sprintResponses.sprintId, sprintId)];
+    if (userId) conditions.push(eq(sprintResponses.userId, userId));
+    return db.select().from(sprintResponses).where(and(...conditions)).orderBy(asc(sprintResponses.createdAt));
+  }
+
+  async addSprintDeliverable(data: { sprintId: string; type: string; content: any; userId?: string }): Promise<SprintDeliverable> {
+    const existing = await db.select().from(sprintDeliverables)
+      .where(and(eq(sprintDeliverables.sprintId, data.sprintId), eq(sprintDeliverables.type, data.type)));
+    if (existing.length > 0) {
+      const [updated] = await db.update(sprintDeliverables).set({ content: data.content, userId: data.userId || null }).where(eq(sprintDeliverables.id, existing[0].id)).returning();
+      return updated;
+    }
+    const [del] = await db.insert(sprintDeliverables).values(data).returning();
+    return del;
+  }
+
+  async getSprintDeliverables(sprintId: string): Promise<SprintDeliverable[]> {
+    return db.select().from(sprintDeliverables).where(eq(sprintDeliverables.sprintId, sprintId));
+  }
+
+  async addSprintRating(data: { sprintId: string; raterId: string; rateeId: string; communicationClarity: number; reliability: number; wouldBuildLongTerm: boolean; stressLevel: number }): Promise<SprintRating> {
+    const [rating] = await db.insert(sprintRatings).values(data).returning();
+    return rating;
+  }
+
+  async getSprintRatings(sprintId: string): Promise<SprintRating[]> {
+    return db.select().from(sprintRatings).where(eq(sprintRatings.sprintId, sprintId));
+  }
+
+  async addSprintDecision(data: { sprintId: string; userId: string; decision: string; reason: string }): Promise<SprintDecision> {
+    const [dec] = await db.insert(sprintDecisions).values(data).returning();
+    return dec;
+  }
+
+  async getSprintDecisions(sprintId: string): Promise<SprintDecision[]> {
+    return db.select().from(sprintDecisions).where(eq(sprintDecisions.sprintId, sprintId));
+  }
+
+  async sendSprintMessage(data: { sprintId: string; userId: string; content: string }): Promise<SprintMessage> {
+    const [msg] = await db.insert(sprintMessages).values(data).returning();
+    return msg;
+  }
+
+  async getSprintMessages(sprintId: string): Promise<(SprintMessage & { user: User })[]> {
+    const msgs = await db.select().from(sprintMessages).where(eq(sprintMessages.sprintId, sprintId)).orderBy(asc(sprintMessages.createdAt));
+    return Promise.all(msgs.map(async (m) => {
+      const [user] = await db.select().from(users).where(eq(users.id, m.userId));
+      return { ...m, user };
+    }));
+  }
+
+  async getSprintTasks(sprintId: string): Promise<SprintKanbanTask[]> {
+    return db.select().from(sprintKanbanTasks).where(eq(sprintKanbanTasks.sprintId, sprintId)).orderBy(asc(sprintKanbanTasks.order));
+  }
+
+  async createSprintTask(data: { sprintId: string; title: string; description?: string; order?: number; assigneeId?: string }): Promise<SprintKanbanTask> {
+    const [task] = await db.insert(sprintKanbanTasks).values(data).returning();
+    return task;
+  }
+
+  async updateSprintTask(id: string, data: Partial<SprintKanbanTask>): Promise<SprintKanbanTask> {
+    const [task] = await db.update(sprintKanbanTasks).set(data).where(eq(sprintKanbanTasks.id, id)).returning();
+    return task;
+  }
+
+  async upsertSprintBehavioralMetrics(data: { sprintId: string; userId: string } & Partial<SprintBehavioralMetrics>): Promise<SprintBehavioralMetrics> {
+    const existing = await db.select().from(sprintBehavioralMetrics)
+      .where(and(eq(sprintBehavioralMetrics.sprintId, data.sprintId), eq(sprintBehavioralMetrics.userId, data.userId)));
+    if (existing.length > 0) {
+      const { sprintId, userId, ...updates } = data;
+      const [updated] = await db.update(sprintBehavioralMetrics).set({ ...updates, updatedAt: new Date() }).where(eq(sprintBehavioralMetrics.id, existing[0].id)).returning();
+      return updated;
+    }
+    const [metrics] = await db.insert(sprintBehavioralMetrics).values(data).returning();
+    return metrics;
+  }
+
+  async getSprintBehavioralMetrics(sprintId: string): Promise<SprintBehavioralMetrics[]> {
+    return db.select().from(sprintBehavioralMetrics).where(eq(sprintBehavioralMetrics.sprintId, sprintId));
+  }
+
+  async saveCompatibilityReport(data: { sprintId: string; overallScore: number; strengths: any; risks: any; recommendation: string }): Promise<SprintCompatibilityReport> {
+    const existing = await db.select().from(sprintCompatibilityReports).where(eq(sprintCompatibilityReports.sprintId, data.sprintId));
+    if (existing.length > 0) {
+      const [updated] = await db.update(sprintCompatibilityReports).set(data).where(eq(sprintCompatibilityReports.id, existing[0].id)).returning();
+      return updated;
+    }
+    const [report] = await db.insert(sprintCompatibilityReports).values(data).returning();
+    return report;
+  }
+
+  async getCompatibilityReport(sprintId: string): Promise<SprintCompatibilityReport | undefined> {
+    const [report] = await db.select().from(sprintCompatibilityReports).where(eq(sprintCompatibilityReports.sprintId, sprintId));
+    return report;
+  }
+
+  async joinMatchmakingQueue(data: { userId: string; duration: string; productStyle?: string }): Promise<any> {
+    const existing = await db.select().from(sprintMatchmakingQueue).where(eq(sprintMatchmakingQueue.userId, data.userId));
+    if (existing.length > 0) {
+      const [updated] = await db.update(sprintMatchmakingQueue).set(data).where(eq(sprintMatchmakingQueue.id, existing[0].id)).returning();
+      return updated;
+    }
+    const [entry] = await db.insert(sprintMatchmakingQueue).values(data).returning();
+    return entry;
+  }
+
+  async findMatchmakingPartner(userId: string): Promise<any> {
+    const results = await db.select().from(sprintMatchmakingQueue).where(ne(sprintMatchmakingQueue.userId, userId)).orderBy(asc(sprintMatchmakingQueue.createdAt)).limit(1);
+    return results[0] || null;
+  }
+
+  async removeFromMatchmakingQueue(userId: string): Promise<void> {
+    await db.delete(sprintMatchmakingQueue).where(eq(sprintMatchmakingQueue.userId, userId));
   }
 }
 

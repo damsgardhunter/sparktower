@@ -195,6 +195,21 @@ export default function Contests() {
                 </div>
               </CardContent>
             </Card>
+            <Card className="cursor-pointer hover:border-primary/50 transition-colors group" onClick={() => setLocation("/sprints/new")} data-testid="card-game-sprint">
+              <CardHeader className="pb-2">
+                <div className="h-10 w-10 rounded-lg bg-orange-500/10 flex items-center justify-center mb-2">
+                  <Users className="h-5 w-5 text-orange-500" />
+                </div>
+                <CardTitle className="text-base group-hover:text-primary transition-colors">Co-Founder Sprint</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm text-muted-foreground mb-3">24h or 72h trial collaboration with a potential co-founder. Build, validate, and discover compatibility.</p>
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="text-xs">2-Player</Badge>
+                  <Badge variant="outline" className="text-xs">Collaboration</Badge>
+                </div>
+              </CardContent>
+            </Card>
           </div>
         </section>
 

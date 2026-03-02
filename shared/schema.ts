@@ -24,6 +24,12 @@ export const userProfiles = pgTable("user_profiles", {
   websiteUrl: text("website_url"),
   location: text("location"),
   avatarUrl: text("avatar_url"),
+  hoursPerWeek: integer("hours_per_week"),
+  riskTolerance: text("risk_tolerance", { enum: ["low", "moderate", "high"] }),
+  speedVsPolish: text("speed_vs_polish", { enum: ["speed", "balanced", "polish"] }),
+  scheduleStyle: text("schedule_style", { enum: ["structured", "flexible", "hybrid"] }),
+  conflictStyle: text("conflict_style", { enum: ["direct", "diplomatic", "avoidant", "collaborative"] }),
+  builderType: text("builder_type", { enum: ["long-term", "experimental", "both"] }),
 });
 
 export const projects = pgTable("projects", {
@@ -628,6 +634,127 @@ export const userReputationScores = pgTable("user_reputation_scores", {
 
 export const insertUserReputationSchema = createInsertSchema(userReputationScores).omit({ id: true, lastCalculatedAt: true });
 
+// Co-Founder Sprint Tables
+export const cofounderSprints = pgTable("cofounder_sprints", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  user1Id: varchar("user1_id").notNull().references(() => users.id),
+  user2Id: varchar("user2_id").notNull().references(() => users.id),
+  duration: text("duration", { enum: ["24h", "72h"] }).notNull(),
+  status: text("status", { enum: ["setup", "ideation", "alignment", "building", "validation", "review", "completed"] }).default("setup").notNull(),
+  productStyle: text("product_style", { enum: ["past", "modern", "futuristic"] }),
+  productName: text("product_name"),
+  productDescription: text("product_description"),
+  agreedProblem: text("agreed_problem"),
+  agreedIcp: text("agreed_icp"),
+  agreedValueProp: text("agreed_value_prop"),
+  validationQuestions: jsonb("validation_questions"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+});
+
+export const sprintResponses = pgTable("sprint_responses", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sprintId: varchar("sprint_id").notNull().references(() => cofounderSprints.id),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  questionKey: text("question_key").notNull(),
+  answer: text("answer").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const sprintDeliverables = pgTable("sprint_deliverables", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sprintId: varchar("sprint_id").notNull().references(() => cofounderSprints.id),
+  type: text("type").notNull(),
+  content: jsonb("content").notNull(),
+  userId: varchar("user_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const sprintRatings = pgTable("sprint_ratings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sprintId: varchar("sprint_id").notNull().references(() => cofounderSprints.id),
+  raterId: varchar("rater_id").notNull().references(() => users.id),
+  rateeId: varchar("ratee_id").notNull().references(() => users.id),
+  communicationClarity: integer("communication_clarity").notNull(),
+  reliability: integer("reliability").notNull(),
+  wouldBuildLongTerm: boolean("would_build_long_term").notNull(),
+  stressLevel: integer("stress_level").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const sprintDecisions = pgTable("sprint_decisions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sprintId: varchar("sprint_id").notNull().references(() => cofounderSprints.id),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  decision: text("decision", { enum: ["pivot", "proceed", "kill"] }).notNull(),
+  reason: text("reason").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const sprintMessages = pgTable("sprint_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sprintId: varchar("sprint_id").notNull().references(() => cofounderSprints.id),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  content: text("content").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const sprintKanbanTasks = pgTable("sprint_kanban_tasks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sprintId: varchar("sprint_id").notNull().references(() => cofounderSprints.id),
+  title: text("title").notNull(),
+  description: text("description"),
+  status: text("status", { enum: ["todo", "in-progress", "done"] }).default("todo").notNull(),
+  assigneeId: varchar("assignee_id").references(() => users.id),
+  order: integer("order").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const sprintBehavioralMetrics = pgTable("sprint_behavioral_metrics", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sprintId: varchar("sprint_id").notNull().references(() => cofounderSprints.id),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  avgResponseTimeMinutes: integer("avg_response_time_minutes").default(0),
+  tasksCompleted: integer("tasks_completed").default(0),
+  totalTasks: integer("total_tasks").default(0),
+  initiativeScore: integer("initiative_score").default(0),
+  deadlinesRespected: integer("deadlines_respected").default(0),
+  deadlinesTotal: integer("deadlines_total").default(0),
+  conflictMarkers: integer("conflict_markers").default(0),
+  decisionLatencyMinutes: integer("decision_latency_minutes").default(0),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const sprintCompatibilityReports = pgTable("sprint_compatibility_reports", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sprintId: varchar("sprint_id").notNull().references(() => cofounderSprints.id).unique(),
+  overallScore: integer("overall_score").default(0).notNull(),
+  strengths: jsonb("strengths").default([]),
+  risks: jsonb("risks").default([]),
+  recommendation: text("recommendation"),
+  generatedAt: timestamp("generated_at").defaultNow().notNull(),
+});
+
+export const sprintMatchmakingQueue = pgTable("sprint_matchmaking_queue", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id).unique(),
+  duration: text("duration", { enum: ["24h", "72h"] }).notNull(),
+  productStyle: text("product_style", { enum: ["past", "modern", "futuristic"] }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// Sprint insert schemas
+export const insertCofounderSprintSchema = createInsertSchema(cofounderSprints).omit({ id: true, createdAt: true });
+export const insertSprintResponseSchema = createInsertSchema(sprintResponses).omit({ id: true, createdAt: true });
+export const insertSprintDeliverableSchema = createInsertSchema(sprintDeliverables).omit({ id: true, createdAt: true });
+export const insertSprintRatingSchema = createInsertSchema(sprintRatings).omit({ id: true, createdAt: true });
+export const insertSprintDecisionSchema = createInsertSchema(sprintDecisions).omit({ id: true, createdAt: true });
+export const insertSprintMessageSchema = createInsertSchema(sprintMessages).omit({ id: true, createdAt: true });
+export const insertSprintKanbanTaskSchema = createInsertSchema(sprintKanbanTasks).omit({ id: true, createdAt: true });
+export const insertSprintBehavioralMetricsSchema = createInsertSchema(sprintBehavioralMetrics).omit({ id: true, updatedAt: true });
+export const insertSprintCompatibilityReportSchema = createInsertSchema(sprintCompatibilityReports).omit({ id: true, generatedAt: true });
+
 // Game insert schemas
 export const insertGameLeaderboardSchema = createInsertSchema(gameLeaderboard).omit({
   id: true,
@@ -744,3 +871,22 @@ export type NovaGuideMessage = typeof novaGuideMessages.$inferSelect;
 export type InsertNovaGuideMessage = z.infer<typeof insertNovaGuideMessageSchema>;
 export type UserReputation = typeof userReputationScores.$inferSelect;
 export type InsertUserReputation = z.infer<typeof insertUserReputationSchema>;
+export type CofounderSprint = typeof cofounderSprints.$inferSelect;
+export type InsertCofounderSprint = z.infer<typeof insertCofounderSprintSchema>;
+export type SprintResponse = typeof sprintResponses.$inferSelect;
+export type InsertSprintResponse = z.infer<typeof insertSprintResponseSchema>;
+export type SprintDeliverable = typeof sprintDeliverables.$inferSelect;
+export type InsertSprintDeliverable = z.infer<typeof insertSprintDeliverableSchema>;
+export type SprintRating = typeof sprintRatings.$inferSelect;
+export type InsertSprintRating = z.infer<typeof insertSprintRatingSchema>;
+export type SprintDecision = typeof sprintDecisions.$inferSelect;
+export type InsertSprintDecision = z.infer<typeof insertSprintDecisionSchema>;
+export type SprintMessage = typeof sprintMessages.$inferSelect;
+export type InsertSprintMessage = z.infer<typeof insertSprintMessageSchema>;
+export type SprintKanbanTask = typeof sprintKanbanTasks.$inferSelect;
+export type InsertSprintKanbanTask = z.infer<typeof insertSprintKanbanTaskSchema>;
+export type SprintBehavioralMetrics = typeof sprintBehavioralMetrics.$inferSelect;
+export type InsertSprintBehavioralMetrics = z.infer<typeof insertSprintBehavioralMetricsSchema>;
+export type SprintCompatibilityReport = typeof sprintCompatibilityReports.$inferSelect;
+export type InsertSprintCompatibilityReport = z.infer<typeof insertSprintCompatibilityReportSchema>;
+export type SprintMatchmakingQueueEntry = typeof sprintMatchmakingQueue.$inferSelect;
