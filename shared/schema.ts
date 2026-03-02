@@ -644,6 +644,8 @@ export const cofounderSprints = pgTable("cofounder_sprints", {
   productStyle: text("product_style", { enum: ["past", "modern", "futuristic"] }),
   productName: text("product_name"),
   productDescription: text("product_description"),
+  user1ProposedName: text("user1_proposed_name"),
+  user2ProposedName: text("user2_proposed_name"),
   agreedProblem: text("agreed_problem"),
   agreedIcp: text("agreed_icp"),
   agreedValueProp: text("agreed_value_prop"),

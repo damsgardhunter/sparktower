@@ -4,8 +4,6 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useLocation, useSearch } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import {
   Loader2,
@@ -14,8 +12,6 @@ import {
   History,
   Monitor,
   Rocket,
-  Sparkles,
-  PenLine,
   ArrowLeft,
   ArrowRight,
   Check,
@@ -26,7 +22,6 @@ import { useToast } from "@/hooks/use-toast";
 
 type Duration = "24h" | "72h";
 type ProductStyle = "past" | "modern" | "futuristic";
-type ProductSource = "nova" | "custom";
 
 const DURATION_OPTIONS: { value: Duration; label: string; description: string; icon: typeof Clock }[] = [
   {
@@ -74,31 +69,6 @@ export default function SprintMatchmaking() {
   const [step, setStep] = useState(1);
   const [duration, setDuration] = useState<Duration | null>(null);
   const [productStyle, setProductStyle] = useState<ProductStyle | null>(null);
-  const [productSource, setProductSource] = useState<ProductSource | null>(null);
-  const [productName, setProductName] = useState("");
-  const [productDescription, setProductDescription] = useState("");
-
-  const novaSuggestMutation = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/sprints/nova-suggest", {
-        productStyle,
-        partnerId,
-      });
-      return res.json();
-    },
-    onSuccess: (data: { name: string; description: string }) => {
-      setProductName(data.name);
-      setProductDescription(data.description);
-    },
-    onError: (error: any) => {
-      const msg = error.message || "";
-      if (msg.includes("403") || msg.includes("Insufficient credits")) {
-        toast({ title: "Out of AI credits", description: "Upgrade your plan for more credits.", variant: "destructive" });
-      } else {
-        toast({ title: "Failed to generate suggestion", variant: "destructive" });
-      }
-    },
-  });
 
   const createSprintMutation = useMutation({
     mutationFn: async () => {
@@ -106,13 +76,11 @@ export default function SprintMatchmaking() {
         partnerId,
         duration,
         productStyle,
-        productName: productName || undefined,
-        productDescription: productDescription || undefined,
       });
       return res.json();
     },
     onSuccess: (sprint) => {
-      toast({ title: "Sprint created!", description: "Your co-founder sprint has been started." });
+      toast({ title: "Sprint created!", description: "Head to the sprint dashboard to meet your partner and propose a product name." });
       queryClient.invalidateQueries({ queryKey: ["/api/sprints"] });
       setLocation(`/sprints/${sprint.id}`);
     },
@@ -135,7 +103,8 @@ export default function SprintMatchmaking() {
         queryClient.invalidateQueries({ queryKey: ["/api/sprints"] });
         setLocation(`/sprints/${data.sprint.id}`);
       } else {
-        toast({ title: "Joined queue", description: "You'll be notified when a partner is found." });
+        toast({ title: "Joined queue", description: "We'll match you as soon as a partner joins. Check back on the Sprints page." });
+        queryClient.invalidateQueries({ queryKey: ["/api/sprints/queue/status"] });
         setLocation("/sprints");
       }
     },
@@ -146,14 +115,7 @@ export default function SprintMatchmaking() {
 
   const handleNext = () => {
     if (step === 1 && !duration) return;
-    if (step === 2 && !productStyle) return;
-    if (step === 3 && !productSource) return;
-
-    if (step === 3 && productSource === "nova") {
-      novaSuggestMutation.mutate();
-    }
-
-    if (step < 4) setStep(step + 1);
+    if (step < 2) setStep(step + 1);
   };
 
   const handleBack = () => {
@@ -188,7 +150,7 @@ export default function SprintMatchmaking() {
         </div>
 
         <div className="flex items-center justify-center gap-2 mb-10">
-          {[1, 2, 3, 4].map((s) => (
+          {[1, 2].map((s) => (
             <div key={s} className="flex items-center gap-2">
               <div
                 className={`h-8 w-8 rounded-full flex items-center justify-center text-sm font-medium transition-colors ${
@@ -202,7 +164,7 @@ export default function SprintMatchmaking() {
               >
                 {s < step ? <Check className="h-4 w-4" /> : s}
               </div>
-              {s < 4 && <div className={`w-12 h-0.5 ${s < step ? "bg-primary" : "bg-muted"}`} />}
+              {s < 2 && <div className={`w-12 h-0.5 ${s < step ? "bg-primary" : "bg-muted"}`} />}
             </div>
           ))}
         </div>
@@ -276,104 +238,8 @@ export default function SprintMatchmaking() {
                 );
               })}
             </div>
-          </div>
-        )}
 
-        {step === 3 && (
-          <div className="space-y-4">
-            <h2 className="text-lg font-semibold text-center mb-6">How would you like to pick a product idea?</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Card
-                className={`cursor-pointer transition-colors ${
-                  productSource === "nova" ? "border-primary bg-primary/5" : "hover-elevate"
-                }`}
-                onClick={() => setProductSource("nova")}
-                data-testid="card-source-nova"
-              >
-                <CardContent className="p-6 text-center">
-                  <div className={`mx-auto p-3 rounded-md w-fit mb-3 ${productSource === "nova" ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
-                    <Sparkles className="h-6 w-6" />
-                  </div>
-                  <h3 className="font-semibold">Let Nova Choose</h3>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Nova will suggest a product idea based on your profiles and chosen style. Uses 1 AI credit.
-                  </p>
-                  {productSource === "nova" && (
-                    <Badge variant="default" className="mt-3">Selected</Badge>
-                  )}
-                </CardContent>
-              </Card>
-              <Card
-                className={`cursor-pointer transition-colors ${
-                  productSource === "custom" ? "border-primary bg-primary/5" : "hover-elevate"
-                }`}
-                onClick={() => setProductSource("custom")}
-                data-testid="card-source-custom"
-              >
-                <CardContent className="p-6 text-center">
-                  <div className={`mx-auto p-3 rounded-md w-fit mb-3 ${productSource === "custom" ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
-                    <PenLine className="h-6 w-6" />
-                  </div>
-                  <h3 className="font-semibold">I'll Describe My Own</h3>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Enter your own product name and description to start the sprint with.
-                  </p>
-                  {productSource === "custom" && (
-                    <Badge variant="default" className="mt-3">Selected</Badge>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
-          </div>
-        )}
-
-        {step === 4 && (
-          <div className="space-y-6">
-            <h2 className="text-lg font-semibold text-center mb-6">Product Details</h2>
-
-            {novaSuggestMutation.isPending && (
-              <Card>
-                <CardContent className="p-8 flex flex-col items-center gap-3">
-                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                  <p className="text-sm text-muted-foreground">Nova is crafting a product idea...</p>
-                </CardContent>
-              </Card>
-            )}
-
-            {!novaSuggestMutation.isPending && (
-              <Card>
-                <CardContent className="p-6 space-y-4">
-                  {productSource === "nova" && productName && (
-                    <div className="flex items-center gap-2 mb-2">
-                      <Sparkles className="h-4 w-4 text-primary" />
-                      <span className="text-xs text-muted-foreground">Suggested by Nova — feel free to edit</span>
-                    </div>
-                  )}
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Product Name</label>
-                    <Input
-                      value={productName}
-                      onChange={(e) => setProductName(e.target.value)}
-                      placeholder="Enter a product name"
-                      className="mt-1"
-                      data-testid="input-product-name"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Product Description</label>
-                    <Textarea
-                      value={productDescription}
-                      onChange={(e) => setProductDescription(e.target.value)}
-                      placeholder="Describe your product idea in 2-3 sentences"
-                      className="mt-1 min-h-[100px]"
-                      data-testid="textarea-product-description"
-                    />
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            <Card>
+            <Card className="mt-6">
               <CardContent className="p-5">
                 <h3 className="text-sm font-semibold mb-3">Sprint Summary</h3>
                 <div className="space-y-2 text-sm">
@@ -381,18 +247,14 @@ export default function SprintMatchmaking() {
                     <span className="text-muted-foreground">Duration</span>
                     <Badge variant="outline" data-testid="badge-summary-duration">{duration}</Badge>
                   </div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-muted-foreground">Product Style</span>
-                    <Badge variant="outline" data-testid="badge-summary-style">
-                      {STYLE_OPTIONS.find((o) => o.value === productStyle)?.label || productStyle}
-                    </Badge>
-                  </div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-muted-foreground">Idea Source</span>
-                    <Badge variant="outline" data-testid="badge-summary-source">
-                      {productSource === "nova" ? "Nova AI" : "Custom"}
-                    </Badge>
-                  </div>
+                  {productStyle && (
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-muted-foreground">Product Style</span>
+                      <Badge variant="outline" data-testid="badge-summary-style">
+                        {STYLE_OPTIONS.find((o) => o.value === productStyle)?.label || productStyle}
+                      </Badge>
+                    </div>
+                  )}
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-muted-foreground">Partner</span>
                     <Badge variant="outline" data-testid="badge-summary-partner">
@@ -404,6 +266,9 @@ export default function SprintMatchmaking() {
                     </Badge>
                   </div>
                 </div>
+                <p className="text-xs text-muted-foreground mt-4">
+                  You'll propose a product name after being matched with your partner.
+                </p>
               </CardContent>
             </Card>
           </div>
@@ -415,14 +280,10 @@ export default function SprintMatchmaking() {
             Back
           </Button>
 
-          {step < 4 ? (
+          {step < 2 ? (
             <Button
               onClick={handleNext}
-              disabled={
-                (step === 1 && !duration) ||
-                (step === 2 && !productStyle) ||
-                (step === 3 && !productSource)
-              }
+              disabled={step === 1 && !duration}
               data-testid="button-step-next"
             >
               Next
@@ -431,7 +292,7 @@ export default function SprintMatchmaking() {
           ) : (
             <Button
               onClick={handleCreate}
-              disabled={isCreating || novaSuggestMutation.isPending}
+              disabled={isCreating || !productStyle}
               data-testid="button-create-sprint"
             >
               {isCreating ? (

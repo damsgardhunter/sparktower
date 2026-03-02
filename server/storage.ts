@@ -403,6 +403,7 @@ export interface IStorage {
   joinMatchmakingQueue(data: { userId: string; duration: string; productStyle?: string }): Promise<any>;
   findMatchmakingPartner(userId: string): Promise<any>;
   removeFromMatchmakingQueue(userId: string): Promise<void>;
+  getQueueEntry(userId: string): Promise<any>;
 
   // Reputation
   getUserReputation(userId: string): Promise<UserReputation | undefined>;
@@ -1744,6 +1745,11 @@ export class DatabaseStorage implements IStorage {
 
   async removeFromMatchmakingQueue(userId: string): Promise<void> {
     await db.delete(sprintMatchmakingQueue).where(eq(sprintMatchmakingQueue.userId, userId));
+  }
+
+  async getQueueEntry(userId: string): Promise<any> {
+    const results = await db.select().from(sprintMatchmakingQueue).where(eq(sprintMatchmakingQueue.userId, userId));
+    return results[0] || null;
   }
 }
 

@@ -22,7 +22,7 @@ import {
   FileText, LayoutList, User as UserIcon,
   Star, ThumbsUp, ThumbsDown, AlertTriangle,
   Shield, TrendingUp, Rocket, Mail, Share2,
-  HelpCircle, Camera, Handshake,
+  HelpCircle, Camera, Handshake, PenLine, Cpu, Dice5,
 } from "lucide-react";
 
 const SPRINT_PHASES = ["setup", "ideation", "alignment", "building", "validation", "review", "completed"] as const;
@@ -388,7 +388,7 @@ export default function SprintDashboard() {
           )}
 
           {sprint.status === "setup" && (
-            <SetupPhase sprint={sprint} onAdvance={() => advanceMutation.mutate()} isPending={advanceMutation.isPending} />
+            <SetupPhase sprint={sprint} user={user!} onAdvance={() => advanceMutation.mutate()} isPending={advanceMutation.isPending} />
           )}
           {sprint.status === "ideation" && (
             <IdeationPhase
@@ -544,26 +544,204 @@ export default function SprintDashboard() {
   );
 }
 
-function SetupPhase({ sprint, onAdvance, isPending }: {
+function SetupPhase({ sprint, user, onAdvance, isPending }: {
   sprint: SprintWithUsers;
+  user: User;
   onAdvance: () => void;
   isPending: boolean;
 }) {
+  const { toast } = useToast();
+  const isUser1 = sprint.user1Id === user.id;
+  const partner = isUser1 ? sprint.user2 : sprint.user1;
+  const myProposal = isUser1 ? sprint.user1ProposedName : sprint.user2ProposedName;
+  const partnerProposal = isUser1 ? sprint.user2ProposedName : sprint.user1ProposedName;
+
+  const [proposedName, setProposedName] = useState(myProposal || "");
+  const [useNova, setUseNova] = useState(false);
+
+  const proposeNameMutation = useMutation({
+    mutationFn: async (name: string) => {
+      const res = await apiRequest("POST", `/api/sprints/${sprint.id}/propose-name`, { name });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Name proposed!" });
+      queryClient.invalidateQueries({ queryKey: ["/api/sprints", sprint.id] });
+    },
+    onError: () => {
+      toast({ title: "Failed to propose name", variant: "destructive" });
+    },
+  });
+
+  const novaSuggestMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/sprints/nova-suggest", {
+        productStyle: sprint.productStyle,
+        partnerId: partner?.id,
+      });
+      return res.json();
+    },
+    onSuccess: (data: { name: string; description: string }) => {
+      setProposedName(data.name);
+      toast({ title: "Nova suggested a name!", description: data.name });
+    },
+    onError: () => {
+      toast({ title: "Failed to get Nova suggestion", variant: "destructive" });
+    },
+  });
+
+  const handlePropose = () => {
+    if (!proposedName.trim()) return;
+    proposeNameMutation.mutate(proposedName.trim());
+  };
+
+  const productNameChosen = !!sprint.productName;
+
   return (
-    <div className="flex flex-col items-center justify-center gap-6 py-12">
-      <Sparkles className="h-12 w-12 text-primary" />
-      <div className="text-center max-w-md">
-        <h2 className="text-2xl font-bold mb-2" data-testid="text-setup-title">Ready to Begin?</h2>
+    <div className="space-y-8 max-w-2xl mx-auto py-6">
+      <div className="text-center">
+        <h2 className="text-2xl font-bold mb-2" data-testid="text-setup-title">Meet Your Sprint Partner</h2>
         <p className="text-muted-foreground">
-          Your {sprint.duration} co-founder trial sprint is set up.
-          {sprint.productName && <> You'll be working on <strong>{sprint.productName}</strong>.</>}
-          {" "}Click below to start the ideation phase where you and your partner will independently answer key questions.
+          You've been matched for a {sprint.duration} co-founder trial sprint. Get to know your partner and propose a product name.
         </p>
       </div>
-      <Button onClick={onAdvance} disabled={isPending} data-testid="button-start-sprint">
-        {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <ArrowRight className="h-4 w-4 mr-2" />}
-        Start Sprint
-      </Button>
+
+      {partner && (
+        <Card data-testid="card-partner-profile">
+          <CardContent className="p-6">
+            <div className="flex items-center gap-4 mb-4">
+              <UserAvatar src={partner.profileImageUrl} name={partner.firstName || "Partner"} className="h-14 w-14" />
+              <div>
+                <h3 className="text-lg font-semibold">{partner.firstName} {partner.lastName}</h3>
+                {partner.headline && <p className="text-sm text-muted-foreground">{partner.headline}</p>}
+              </div>
+            </div>
+            {partner.bio && (
+              <p className="text-sm text-muted-foreground mb-3">{partner.bio}</p>
+            )}
+            <div className="flex flex-wrap gap-2">
+              {(partner.skills as string[] | null)?.slice(0, 6).map((skill, i) => (
+                <Badge key={i} variant="secondary">{skill}</Badge>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {!productNameChosen ? (
+        <Card data-testid="card-name-proposal">
+          <CardContent className="p-6 space-y-4">
+            <div className="flex items-center gap-2 mb-2">
+              <PenLine className="h-5 w-5 text-primary" />
+              <h3 className="font-semibold">Propose a Product Name</h3>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Each partner proposes a name independently. Once both have proposed, one will be randomly selected as your sprint project.
+            </p>
+
+            {myProposal ? (
+              <div className="bg-muted rounded-md p-4 text-center">
+                <CheckCircle2 className="h-5 w-5 text-green-500 mx-auto mb-2" />
+                <p className="text-sm font-medium" data-testid="text-my-proposal">Your proposal: <strong>{myProposal}</strong></p>
+                {!partnerProposal && (
+                  <p className="text-xs text-muted-foreground mt-1">Waiting for your partner to propose...</p>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex gap-2">
+                  <Button
+                    variant={!useNova ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setUseNova(false)}
+                    data-testid="button-name-custom"
+                  >
+                    <PenLine className="h-3.5 w-3.5 mr-1" />
+                    My Own Name
+                  </Button>
+                  <Button
+                    variant={useNova ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => {
+                      setUseNova(true);
+                      if (!proposedName) novaSuggestMutation.mutate();
+                    }}
+                    disabled={novaSuggestMutation.isPending}
+                    data-testid="button-name-nova"
+                  >
+                    {novaSuggestMutation.isPending ? (
+                      <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                    ) : (
+                      <Cpu className="h-3.5 w-3.5 mr-1" />
+                    )}
+                    Ask Nova (1 credit)
+                  </Button>
+                </div>
+
+                <div className="flex gap-2">
+                  <Input
+                    value={proposedName}
+                    onChange={(e) => setProposedName(e.target.value)}
+                    placeholder="Enter a product name"
+                    data-testid="input-propose-name"
+                  />
+                  <Button
+                    onClick={handlePropose}
+                    disabled={!proposedName.trim() || proposeNameMutation.isPending}
+                    data-testid="button-submit-proposal"
+                  >
+                    {proposeNameMutation.isPending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      "Propose"
+                    )}
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {partnerProposal && myProposal && (
+              <div className="bg-muted rounded-md p-4 text-center">
+                <p className="text-sm text-muted-foreground">Partner also proposed: <strong>{partnerProposal}</strong></p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      ) : (
+        <Card className="border-primary/30 bg-primary/5" data-testid="card-name-selected">
+          <CardContent className="p-6 text-center">
+            <Dice5 className="h-8 w-8 text-primary mx-auto mb-3" />
+            <h3 className="text-lg font-semibold mb-1" data-testid="text-chosen-name">
+              {sprint.productName}
+            </h3>
+            <p className="text-sm text-muted-foreground">
+              Randomly selected from both proposals. This is your sprint project!
+            </p>
+            {sprint.user1ProposedName && sprint.user2ProposedName && (
+              <div className="flex items-center justify-center gap-4 mt-3 text-xs text-muted-foreground">
+                <span>{isUser1 ? "You" : partner?.firstName}: {sprint.user1ProposedName}</span>
+                <span>vs</span>
+                <span>{isUser1 ? partner?.firstName : "You"}: {sprint.user2ProposedName}</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="text-center">
+        <Button
+          onClick={onAdvance}
+          disabled={isPending || !productNameChosen}
+          size="lg"
+          data-testid="button-start-sprint"
+        >
+          {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <ArrowRight className="h-4 w-4 mr-2" />}
+          Start Sprint
+        </Button>
+        {!productNameChosen && (
+          <p className="text-xs text-muted-foreground mt-2">Both partners must propose a name before you can start</p>
+        )}
+      </div>
     </div>
   );
 }

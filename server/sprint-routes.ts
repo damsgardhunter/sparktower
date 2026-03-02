@@ -47,7 +47,7 @@ const SPRINT_72H_EXTRA_TASKS = [
 export function registerSprintRoutes(app: Express) {
   app.post("/api/sprints", isAuthenticated, async (req: any, res) => {
     try {
-      const { partnerId, duration, productStyle, productName, productDescription } = req.body;
+      const { partnerId, duration, productStyle } = req.body;
       if (!partnerId || !duration) {
         return res.status(400).json({ message: "Partner and duration are required" });
       }
@@ -57,8 +57,6 @@ export function registerSprintRoutes(app: Express) {
         duration,
         status: "setup",
         productStyle: productStyle || null,
-        productName: productName || null,
-        productDescription: productDescription || null,
       });
       res.json(sprint);
     } catch (error: any) {
@@ -535,13 +533,88 @@ ${metrics.map(m => {
           status: "setup",
           productStyle: productStyle || partner.productStyle || null,
         });
-        return res.json({ matched: true, sprint });
+        const sprintWithUsers = await storage.getSprint(sprint.id);
+        const user1 = await storage.getUser(sprint.user1Id);
+        const user2 = await storage.getUser(sprint.user2Id);
+        return res.json({ matched: true, sprint: { ...sprintWithUsers, user1, user2 } });
       }
 
       await storage.joinMatchmakingQueue({ userId: req.user.id, duration, productStyle });
       res.json({ matched: false, message: "Added to queue. Waiting for a partner..." });
     } catch (error) {
       res.status(500).json({ message: "Failed to join queue" });
+    }
+  });
+
+  app.get("/api/sprints/queue/status", isAuthenticated, async (req: any, res) => {
+    try {
+      const entry = await storage.getQueueEntry(req.user.id);
+      if (!entry) return res.json({ inQueue: false });
+
+      const partner = await storage.findMatchmakingPartner(req.user.id);
+      if (partner) {
+        await storage.removeFromMatchmakingQueue(partner.userId);
+        await storage.removeFromMatchmakingQueue(req.user.id);
+        const sprint = await storage.createSprint({
+          user1Id: req.user.id,
+          user2Id: partner.userId,
+          duration: entry.duration,
+          status: "setup",
+          productStyle: entry.productStyle || partner.productStyle || null,
+        });
+        const user1 = await storage.getUser(sprint.user1Id);
+        const user2 = await storage.getUser(sprint.user2Id);
+        return res.json({ inQueue: false, matched: true, sprint: { ...sprint, user1, user2 } });
+      }
+
+      res.json({ inQueue: true, entry });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to check queue" });
+    }
+  });
+
+  app.delete("/api/sprints/queue", isAuthenticated, async (req: any, res) => {
+    try {
+      await storage.removeFromMatchmakingQueue(req.user.id);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to leave queue" });
+    }
+  });
+
+  app.post("/api/sprints/:id/propose-name", isAuthenticated, async (req: any, res) => {
+    try {
+      const sprint = await storage.getSprint(req.params.id);
+      if (!sprint) return res.status(404).json({ message: "Sprint not found" });
+      if (sprint.user1Id !== req.user.id && sprint.user2Id !== req.user.id) {
+        return res.status(403).json({ message: "Not a participant" });
+      }
+      if (sprint.status !== "setup") {
+        return res.status(400).json({ message: "Can only propose names during setup" });
+      }
+      if (sprint.productName) {
+        return res.status(400).json({ message: "Product name already selected" });
+      }
+
+      const { name } = req.body;
+      if (!name || !name.trim()) return res.status(400).json({ message: "Name required" });
+
+      const isUser1 = sprint.user1Id === req.user.id;
+      const updateData: any = isUser1
+        ? { user1ProposedName: name.trim() }
+        : { user2ProposedName: name.trim() };
+
+      const otherProposed = isUser1 ? sprint.user2ProposedName : sprint.user1ProposedName;
+      if (otherProposed) {
+        const names = [name.trim(), otherProposed];
+        const chosen = names[Math.floor(Math.random() * 2)];
+        updateData.productName = chosen;
+      }
+
+      const updated = await storage.updateSprint(sprint.id, updateData);
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to propose name" });
     }
   });
 

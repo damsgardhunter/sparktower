@@ -40,7 +40,7 @@ Do not make changes to the file `server/seed-stripe.ts`.
 *   **Monetization & Gamification:** Stripe donations, badge system, contests/hackathons, and leaderboards.
 *   **AI Credit System:** Subscription model (Free, Spark Pro, Spark Business, Spark Unlimited) providing monthly AI credits.
 *   **Builder Reputation Index:** A multi-dimensional scoring system (Execution, Contribution, Market Signal, Strategic Thinking) with tiers and solo builder mode.
-*   **Co-Founder Matching Engine:** A 3-step system including enhanced profile preferences, builder score comparison, and Trial Collaboration Mini Sprints (24h or 72h) with guided phases (Ideation, Alignment, Building, Validation, Review) and Nova AI assistance.
+*   **Co-Founder Matching Engine:** A 3-step system including enhanced profile preferences, builder score comparison, and Trial Collaboration Mini Sprints (24h or 72h) with guided phases (Ideation, Alignment, Building, Validation, Review) and Nova AI assistance. Sprint creation is a 2-step flow (duration + style), then queue-based matchmaking with polling. After matching, each partner sees the other's profile and independently proposes a product name (or asks Nova AI); one is randomly selected. Key routes: POST/GET/DELETE `/api/sprints/queue`, GET `/api/sprints/queue/status`, POST `/api/sprints/:id/propose-name`. Schema includes `user1ProposedName` and `user2ProposedName` on `cofounder_sprints` table.
 *   **Games Arena:** Three competitive games (Team Tactics Arena, Velocity Type Arena, Signal vs. Noise) with leaderboards and badge rewards.
 
 **Routing:** Uses Wouter for client-side routing, managing paths for authentication, onboarding, project management, profiles, community features, Nova AI, Stripe, and the Games Arena.

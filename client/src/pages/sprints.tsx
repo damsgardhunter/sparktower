@@ -1,14 +1,17 @@
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { UserAvatar } from "@/components/user-avatar";
 import { useAuth } from "@/hooks/use-auth";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { CofounderSprint, User } from "@shared/schema";
 import {
   Loader2, Plus, Users, Timer, Sparkles,
-  CheckCircle2, Clock, ArrowRight,
+  CheckCircle2, Clock, ArrowRight, XCircle,
 } from "lucide-react";
 
 type SprintWithUsers = CofounderSprint & { user1?: User; user2?: User };
@@ -26,10 +29,42 @@ const STATUS_STYLES: Record<string, { label: string; variant: "default" | "secon
 export default function Sprints() {
   const { user } = useAuth();
   const [, setLocation] = useLocation();
+  const { toast } = useToast();
 
   const { data: sprints, isLoading } = useQuery<SprintWithUsers[]>({
     queryKey: ["/api/sprints"],
   });
+
+  const { data: queueStatus } = useQuery<{
+    inQueue: boolean;
+    matched?: boolean;
+    sprint?: SprintWithUsers;
+    entry?: { duration: string; productStyle: string; createdAt: string };
+  }>({
+    queryKey: ["/api/sprints/queue/status"],
+    refetchInterval: 5000,
+  });
+
+  const leaveQueueMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("DELETE", "/api/sprints/queue");
+    },
+    onSuccess: () => {
+      toast({ title: "Left queue", description: "You've been removed from the matchmaking queue." });
+      queryClient.invalidateQueries({ queryKey: ["/api/sprints/queue/status"] });
+    },
+  });
+
+  const matchHandled = useRef(false);
+  useEffect(() => {
+    if (queueStatus?.matched && queueStatus.sprint && !matchHandled.current) {
+      matchHandled.current = true;
+      queryClient.invalidateQueries({ queryKey: ["/api/sprints"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/sprints/queue/status"] });
+      toast({ title: "Match found!", description: "You've been paired with a partner." });
+      setLocation(`/sprints/${queueStatus.sprint.id}`);
+    }
+  }, [queueStatus?.matched, queueStatus?.sprint]);
 
   if (isLoading) {
     return (
@@ -55,6 +90,45 @@ export default function Sprints() {
             New Sprint
           </Button>
         </div>
+
+        {queueStatus?.inQueue && queueStatus.entry && (
+          <section className="mb-8">
+            <Card className="border-primary/30 bg-primary/5">
+              <CardContent className="p-5">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-4">
+                    <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
+                      <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                    </div>
+                    <div>
+                      <h3 className="font-semibold" data-testid="text-queue-status">Waiting for a partner...</h3>
+                      <p className="text-sm text-muted-foreground">
+                        You're in the matchmaking queue for a {queueStatus.entry.duration} sprint.
+                        We'll match you as soon as another builder joins.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <Badge variant="outline">{queueStatus.entry.duration}</Badge>
+                    {queueStatus.entry.productStyle && (
+                      <Badge variant="outline">{queueStatus.entry.productStyle}</Badge>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => leaveQueueMutation.mutate()}
+                      disabled={leaveQueueMutation.isPending}
+                      data-testid="button-leave-queue"
+                    >
+                      <XCircle className="h-4 w-4 mr-1" />
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </section>
+        )}
 
         {activeSprints.length > 0 && (
           <section className="mb-8">
@@ -150,7 +224,7 @@ export default function Sprints() {
           </section>
         )}
 
-        {(!sprints || sprints.length === 0) && (
+        {(!sprints || sprints.length === 0) && !queueStatus?.inQueue && (
           <div className="flex flex-col items-center justify-center py-20 text-center border-2 border-dashed rounded-lg bg-card/50">
             <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center mb-4">
               <Users className="h-6 w-6 text-primary" />
