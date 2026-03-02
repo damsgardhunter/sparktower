@@ -38,6 +38,7 @@ Do not make changes to the file `server/seed-stripe.ts`.
     *   **Files Tab:** File upload with folder categories (general/design/docs/data), file list with metadata (name, type, uploader, date, size), folder filtering.
     *   **Activity Tab:** Three sections — Activity Feed (chronological event log with user avatars), Decision Log (title/context/decision with proposed/accepted/revisited status), Weekly Check-ins (did/doing/blockers format).
     *   **Personas Tab:** AI-generated and manually created customer personas with goals, pain points, and quotes.
+    *   **Chat Tab:** Live team chat for project members. Real-time messaging with 3-second polling, message bubbles aligned by sender, user avatars. Only accessible to project owner and members.
 *   **Media & Content:** Users can upload images/videos to projects, and AI can generate animated video storyboard slideshows with various visual styles.
 *   **Community & Collaboration:** Features include connection requests, real-time private messaging between connected users, project following, and a system for applying to projects with custom questions and resume uploads.
 *   **Monetization & Gamification:** Stripe donations for projects, a badge system with rarity tiers, contests/hackathons, and a leaderboard (by visits or donations) are included.
@@ -50,6 +51,7 @@ Do not make changes to the file `server/seed-stripe.ts`.
 *   `projectCheckIns` — id, projectId, userId, did, doing, blockers, createdAt
 *   `projectFiles` — id, projectId, uploaderId, name, url, folder, fileType, size, createdAt
 *   `projectLinks` — id, projectId, label, url, category, createdAt
+*   `projectLiveChatMessages` — id, projectId, userId (ref users), content, createdAt
 
 **Enhanced columns:**
 *   `projects` — added: problemStatement, targetUser, successMetrics, scope (jsonb)

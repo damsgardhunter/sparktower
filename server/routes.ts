@@ -6,7 +6,7 @@ import { users, projectMembers, projects, userProfiles } from "@shared/schema";
 import { setupAuth, isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { registerAuthRoutes } from "./replit_integrations/auth/routes";
 import { registerObjectStorageRoutes, ObjectStorageService } from "./replit_integrations/object_storage";
-import { insertUserProfileSchema, insertProjectSchema, insertDonationSchema, insertContestSchema } from "@shared/schema";
+import { insertUserProfileSchema, insertProjectSchema, insertDonationSchema, insertContestSchema, insertProjectLiveChatMessageSchema } from "@shared/schema";
 import { z } from "zod";
 import OpenAI from "openai";
 import { eq, ne, and, sql } from "drizzle-orm";
@@ -667,6 +667,32 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     
     await storage.deductCredits(userId, 1);
     res.json(aiMessage);
+  });
+
+  // Project Live Chat (Team)
+  app.get("/api/projects/:id/live-chat", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const messages = await storage.getProjectLiveChatMessages(req.params.id);
+      res.json(messages);
+    } catch (error) { res.status(500).json({ message: "Failed to get chat messages" }); }
+  });
+
+  app.post("/api/projects/:id/live-chat", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const validated = insertProjectLiveChatMessageSchema.parse({
+        projectId: req.params.id,
+        userId,
+        content: (req.body.content || "").trim(),
+      });
+      if (!validated.content) return res.status(400).json({ message: "Message content required" });
+      const message = await storage.createProjectLiveChatMessage(validated);
+      const user = await storage.getUser(userId);
+      res.json({ ...message, user });
+    } catch (error) { console.error("Live chat error:", error); res.status(500).json({ message: "Failed to send message" }); }
   });
 
   // Donations

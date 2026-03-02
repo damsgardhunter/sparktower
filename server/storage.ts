@@ -8,6 +8,8 @@ import {
   type InsertProjectMember,
   type ProjectChatMessage,
   type InsertProjectChatMessage,
+  type ProjectLiveChatMessage,
+  type InsertProjectLiveChatMessage,
   type Donation,
   type InsertDonation,
   type UserMatch,
@@ -45,6 +47,7 @@ import {
   projects,
   projectMembers,
   projectChatMessages,
+  projectLiveChatMessages,
   donations,
   userMatches,
   badges,
@@ -102,9 +105,13 @@ export interface IStorage {
   incrementProjectViews(id: string): Promise<void>;
   getProjectMembers(projectId: string): Promise<(ProjectMember & { user: User; profile?: UserProfile })[]>;
   
-  // Project Chat
+  // Project Chat (AI - Nova)
   getProjectChatMessages(projectId: string): Promise<ProjectChatMessage[]>;
   addProjectChatMessage(projectId: string, role: "user" | "assistant", content: string): Promise<ProjectChatMessage>;
+
+  // Project Live Chat (Team)
+  getProjectLiveChatMessages(projectId: string, limit?: number): Promise<(ProjectLiveChatMessage & { user: User })[]>;
+  createProjectLiveChatMessage(data: InsertProjectLiveChatMessage): Promise<ProjectLiveChatMessage>;
   
   // Donations
   createDonation(data: InsertDonation): Promise<Donation>;
@@ -369,6 +376,25 @@ export class DatabaseStorage implements IStorage {
     const [message] = await db
       .insert(projectChatMessages)
       .values({ projectId, role, content })
+      .returning();
+    return message;
+  }
+
+  async getProjectLiveChatMessages(projectId: string, limit = 100): Promise<(ProjectLiveChatMessage & { user: User })[]> {
+    const results = await db
+      .select()
+      .from(projectLiveChatMessages)
+      .innerJoin(users, eq(projectLiveChatMessages.userId, users.id))
+      .where(eq(projectLiveChatMessages.projectId, projectId))
+      .orderBy(desc(projectLiveChatMessages.createdAt))
+      .limit(limit);
+    return results.map(r => ({ ...r.project_live_chat_messages, user: r.users })).reverse();
+  }
+
+  async createProjectLiveChatMessage(data: InsertProjectLiveChatMessage): Promise<ProjectLiveChatMessage> {
+    const [message] = await db
+      .insert(projectLiveChatMessages)
+      .values(data)
       .returning();
     return message;
   }

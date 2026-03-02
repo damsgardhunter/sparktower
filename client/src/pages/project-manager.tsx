@@ -33,7 +33,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { useUpload } from "@/hooks/use-upload";
 
-type TabId = "setup" | "kanban" | "milestones" | "team" | "files" | "activity" | "personas";
+type TabId = "setup" | "kanban" | "milestones" | "team" | "files" | "activity" | "personas" | "chat";
 
 const KANBAN_COLUMNS = [
   { id: "todo" as const, label: "To Do", icon: Circle, color: "text-muted-foreground" },
@@ -383,6 +383,7 @@ export default function ProjectManager() {
     { id: "files", label: "Files", icon: FolderOpen },
     { id: "activity", label: "Activity", icon: Activity },
     { id: "personas", label: "Personas", icon: Target },
+    { id: "chat", label: "Chat", icon: MessageSquare },
   ];
 
   return (
@@ -475,6 +476,9 @@ export default function ProjectManager() {
             onDelete={(id) => deletePersonaMutation.mutate(id)}
             aiPending={aiGeneratePersonaMutation.isPending}
           />
+        )}
+        {activeTab === "chat" && projectId && (
+          <LiveChatTab projectId={projectId} />
         )}
       </div>
 
@@ -1447,6 +1451,92 @@ function PersonasTab({ personas, isLoading, onCreateManual, onAiGenerate, onDele
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function LiveChatTab({ projectId }: { projectId: string }) {
+  const [message, setMessage] = useState("");
+  const { user } = useAuth();
+  const { toast } = useToast();
+
+  const { data: messages, isLoading } = useQuery<any[]>({
+    queryKey: ["/api/projects", projectId, "live-chat"],
+    refetchInterval: 3000,
+  });
+
+  const sendMutation = useMutation({
+    mutationFn: async (content: string) => {
+      const res = await apiRequest("POST", `/api/projects/${projectId}/live-chat`, { content });
+      return res.json();
+    },
+    onSuccess: () => {
+      setMessage("");
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "live-chat"] });
+    },
+    onError: () => toast({ title: "Failed to send message", variant: "destructive" }),
+  });
+
+  const handleSend = () => {
+    if (!message.trim()) return;
+    sendMutation.mutate(message.trim());
+  };
+
+  return (
+    <div className="space-y-4" data-testid="live-chat-tab">
+      <div className="flex items-center justify-between">
+        <h3 className="text-lg font-semibold">Team Chat</h3>
+        <Badge variant="secondary" className="text-xs">{messages?.length || 0} messages</Badge>
+      </div>
+      <Card className="h-[500px] flex flex-col">
+        <CardContent className="flex-1 overflow-y-auto p-4 space-y-3" data-testid="chat-messages">
+          {isLoading ? (
+            <div className="flex items-center justify-center h-full">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : !messages?.length ? (
+            <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+              <MessageSquare className="h-12 w-12 mb-3 opacity-30" />
+              <p className="text-sm">No messages yet. Start the conversation!</p>
+            </div>
+          ) : (
+            messages.map((msg: any) => {
+              const isMe = msg.userId === user?.id;
+              return (
+                <div key={msg.id} className={`flex ${isMe ? "justify-end" : "justify-start"}`} data-testid={`chat-message-${msg.id}`}>
+                  <div className={`flex gap-2 max-w-[75%] ${isMe ? "flex-row-reverse" : ""}`}>
+                    <UserAvatar user={msg.user} size="sm" />
+                    <div>
+                      <div className={`flex items-center gap-2 mb-0.5 ${isMe ? "justify-end" : ""}`}>
+                        <span className="text-xs font-medium">{msg.user?.firstName || "User"}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {new Date(msg.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        </span>
+                      </div>
+                      <div className={`rounded-lg px-3 py-2 text-sm ${isMe ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
+                        {msg.content}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </CardContent>
+        <div className="border-t p-3 flex gap-2">
+          <Input
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder="Type a message..."
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
+            disabled={sendMutation.isPending}
+            data-testid="input-chat-message"
+          />
+          <Button onClick={handleSend} disabled={!message.trim() || sendMutation.isPending} data-testid="button-send-chat">
+            {sendMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Send"}
+          </Button>
+        </div>
+      </Card>
     </div>
   );
 }

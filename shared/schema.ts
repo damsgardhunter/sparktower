@@ -62,14 +62,6 @@ export const projectMembers = pgTable("project_members", {
   skills: text("skills").array(),
 });
 
-export const projectChatMessages = pgTable("project_chat_messages", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
-  role: text("role", { enum: ["user", "assistant"] }).notNull(),
-  content: text("content").notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
-
 export const donations = pgTable("donations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   projectId: varchar("project_id").notNull().references(() => projects.id),
@@ -262,6 +254,26 @@ export const projectLinks = pgTable("project_links", {
   label: text("label").notNull(),
   url: text("url").notNull(),
   category: text("category", { enum: ["repo", "docs", "design", "drive", "notes", "other"] }).default("other").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// === PROJECT CHAT (AI - Nova) ===
+
+export const projectChatMessages = pgTable("project_chat_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  role: text("role").notNull(),
+  content: text("content").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// === PROJECT LIVE CHAT (Team) ===
+
+export const projectLiveChatMessages = pgTable("project_live_chat_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  content: text("content").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -461,6 +473,11 @@ export const insertProjectLinkSchema = createInsertSchema(projectLinks).omit({
   createdAt: true,
 });
 
+export const insertProjectLiveChatMessageSchema = createInsertSchema(projectLiveChatMessages).omit({
+  id: true,
+  createdAt: true,
+});
+
 // Game insert schemas
 export const insertGameLeaderboardSchema = createInsertSchema(gameLeaderboard).omit({
   id: true,
@@ -501,8 +518,6 @@ export type Project = typeof projects.$inferSelect;
 export type InsertProject = z.infer<typeof insertProjectSchema>;
 export type ProjectMember = typeof projectMembers.$inferSelect;
 export type InsertProjectMember = z.infer<typeof insertProjectMemberSchema>;
-export type ProjectChatMessage = typeof projectChatMessages.$inferSelect;
-export type InsertProjectChatMessage = z.infer<typeof insertProjectChatMessageSchema>;
 export type Donation = typeof donations.$inferSelect;
 export type InsertDonation = z.infer<typeof insertDonationSchema>;
 export type UserMatch = typeof userMatches.$inferSelect;
@@ -539,6 +554,10 @@ export type ProjectFile = typeof projectFiles.$inferSelect;
 export type InsertProjectFile = z.infer<typeof insertProjectFileSchema>;
 export type ProjectLink = typeof projectLinks.$inferSelect;
 export type InsertProjectLink = z.infer<typeof insertProjectLinkSchema>;
+export type ProjectChatMessage = typeof projectChatMessages.$inferSelect;
+export type InsertProjectChatMessage = z.infer<typeof insertProjectChatMessageSchema>;
+export type ProjectLiveChatMessage = typeof projectLiveChatMessages.$inferSelect;
+export type InsertProjectLiveChatMessage = z.infer<typeof insertProjectLiveChatMessageSchema>;
 export type GameLeaderboardEntry = typeof gameLeaderboard.$inferSelect;
 export type InsertGameLeaderboardEntry = z.infer<typeof insertGameLeaderboardSchema>;
 export type TacticsGame = typeof tacticsGames.$inferSelect;
