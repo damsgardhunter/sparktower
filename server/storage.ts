@@ -80,6 +80,24 @@ import {
   type InsertTypingRacePlayer,
   type SignalNoiseGame,
   type InsertSignalNoiseGame,
+  type WaitlistEntry,
+  type InsertWaitlistEntry,
+  type ProjectInterview,
+  type InsertProjectInterview,
+  type ProjectExperiment,
+  type InsertProjectExperiment,
+  type PricingTier,
+  type InsertPricingTier,
+  type AnalyticsEvent,
+  type InsertAnalyticsEvent,
+  type LegalDoc,
+  type InsertLegalDoc,
+  type DeployChecklistItem,
+  type InsertDeployChecklistItem,
+  type SupportTicket,
+  type InsertSupportTicket,
+  type LaunchTask,
+  type InsertLaunchTask,
   gameLeaderboard,
   tacticsGames,
   tacticsPlayers,
@@ -87,6 +105,15 @@ import {
   typingRaces,
   typingRacePlayers,
   signalNoiseGames,
+  projectWaitlistEntries,
+  projectInterviews,
+  projectExperiments,
+  projectPricingTiers,
+  projectAnalyticsEvents,
+  projectLegalDocs,
+  projectDeployChecklistItems,
+  projectSupportTickets,
+  projectLaunchTasks,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, or, ilike, sql, and, gte, lte, asc, ne, inArray } from "drizzle-orm";
@@ -112,7 +139,60 @@ export interface IStorage {
   // Project Live Chat (Team)
   getProjectLiveChatMessages(projectId: string, limit?: number): Promise<(ProjectLiveChatMessage & { user: User })[]>;
   createProjectLiveChatMessage(data: InsertProjectLiveChatMessage): Promise<ProjectLiveChatMessage>;
-  
+
+  // Waitlist
+  getWaitlistEntries(projectId: string): Promise<WaitlistEntry[]>;
+  createWaitlistEntry(data: InsertWaitlistEntry): Promise<WaitlistEntry>;
+  deleteWaitlistEntry(id: string): Promise<void>;
+
+  // Interviews
+  getProjectInterviews(projectId: string): Promise<ProjectInterview[]>;
+  createProjectInterview(data: InsertProjectInterview): Promise<ProjectInterview>;
+  updateProjectInterview(id: string, data: Partial<InsertProjectInterview>): Promise<ProjectInterview>;
+  deleteProjectInterview(id: string): Promise<void>;
+
+  // Experiments
+  getProjectExperiments(projectId: string): Promise<ProjectExperiment[]>;
+  createProjectExperiment(data: InsertProjectExperiment): Promise<ProjectExperiment>;
+  updateProjectExperiment(id: string, data: Partial<InsertProjectExperiment>): Promise<ProjectExperiment>;
+  deleteProjectExperiment(id: string): Promise<void>;
+
+  // Pricing Tiers
+  getProjectPricingTiers(projectId: string): Promise<PricingTier[]>;
+  createPricingTier(data: InsertPricingTier): Promise<PricingTier>;
+  updatePricingTier(id: string, data: Partial<InsertPricingTier>): Promise<PricingTier>;
+  deletePricingTier(id: string): Promise<void>;
+
+  // Analytics Events
+  getProjectAnalyticsEvents(projectId: string): Promise<AnalyticsEvent[]>;
+  createAnalyticsEvent(data: InsertAnalyticsEvent): Promise<AnalyticsEvent>;
+  updateAnalyticsEvent(id: string, data: Partial<InsertAnalyticsEvent>): Promise<AnalyticsEvent>;
+  deleteAnalyticsEvent(id: string): Promise<void>;
+
+  // Legal Docs
+  getProjectLegalDocs(projectId: string): Promise<LegalDoc[]>;
+  createLegalDoc(data: InsertLegalDoc): Promise<LegalDoc>;
+  updateLegalDoc(id: string, data: Partial<InsertLegalDoc>): Promise<LegalDoc>;
+  deleteLegalDoc(id: string): Promise<void>;
+
+  // Deploy Checklist
+  getDeployChecklistItems(projectId: string): Promise<DeployChecklistItem[]>;
+  createDeployChecklistItem(data: InsertDeployChecklistItem): Promise<DeployChecklistItem>;
+  updateDeployChecklistItem(id: string, data: Partial<InsertDeployChecklistItem>): Promise<DeployChecklistItem>;
+  deleteDeployChecklistItem(id: string): Promise<void>;
+
+  // Support Tickets
+  getProjectSupportTickets(projectId: string): Promise<SupportTicket[]>;
+  createSupportTicket(data: InsertSupportTicket): Promise<SupportTicket>;
+  updateSupportTicket(id: string, data: Partial<InsertSupportTicket>): Promise<SupportTicket>;
+  deleteSupportTicket(id: string): Promise<void>;
+
+  // Launch Tasks
+  getProjectLaunchTasks(projectId: string): Promise<LaunchTask[]>;
+  createLaunchTask(data: InsertLaunchTask): Promise<LaunchTask>;
+  updateLaunchTask(id: string, data: Partial<InsertLaunchTask>): Promise<LaunchTask>;
+  deleteLaunchTask(id: string): Promise<void>;
+
   // Donations
   createDonation(data: InsertDonation): Promise<Donation>;
   getProjectDonations(projectId: string): Promise<Donation[]>;
@@ -397,6 +477,137 @@ export class DatabaseStorage implements IStorage {
       .values(data)
       .returning();
     return message;
+  }
+
+  async getWaitlistEntries(projectId: string): Promise<WaitlistEntry[]> {
+    return db.select().from(projectWaitlistEntries).where(eq(projectWaitlistEntries.projectId, projectId)).orderBy(desc(projectWaitlistEntries.createdAt));
+  }
+  async createWaitlistEntry(data: InsertWaitlistEntry): Promise<WaitlistEntry> {
+    const [entry] = await db.insert(projectWaitlistEntries).values(data).returning();
+    return entry;
+  }
+  async deleteWaitlistEntry(id: string): Promise<void> {
+    await db.delete(projectWaitlistEntries).where(eq(projectWaitlistEntries.id, id));
+  }
+
+  async getProjectInterviews(projectId: string): Promise<ProjectInterview[]> {
+    return db.select().from(projectInterviews).where(eq(projectInterviews.projectId, projectId)).orderBy(desc(projectInterviews.createdAt));
+  }
+  async createProjectInterview(data: InsertProjectInterview): Promise<ProjectInterview> {
+    const [entry] = await db.insert(projectInterviews).values(data).returning();
+    return entry;
+  }
+  async updateProjectInterview(id: string, data: Partial<InsertProjectInterview>): Promise<ProjectInterview> {
+    const [entry] = await db.update(projectInterviews).set(data).where(eq(projectInterviews.id, id)).returning();
+    return entry;
+  }
+  async deleteProjectInterview(id: string): Promise<void> {
+    await db.delete(projectInterviews).where(eq(projectInterviews.id, id));
+  }
+
+  async getProjectExperiments(projectId: string): Promise<ProjectExperiment[]> {
+    return db.select().from(projectExperiments).where(eq(projectExperiments.projectId, projectId)).orderBy(desc(projectExperiments.createdAt));
+  }
+  async createProjectExperiment(data: InsertProjectExperiment): Promise<ProjectExperiment> {
+    const [entry] = await db.insert(projectExperiments).values(data).returning();
+    return entry;
+  }
+  async updateProjectExperiment(id: string, data: Partial<InsertProjectExperiment>): Promise<ProjectExperiment> {
+    const [entry] = await db.update(projectExperiments).set(data).where(eq(projectExperiments.id, id)).returning();
+    return entry;
+  }
+  async deleteProjectExperiment(id: string): Promise<void> {
+    await db.delete(projectExperiments).where(eq(projectExperiments.id, id));
+  }
+
+  async getProjectPricingTiers(projectId: string): Promise<PricingTier[]> {
+    return db.select().from(projectPricingTiers).where(eq(projectPricingTiers.projectId, projectId)).orderBy(asc(projectPricingTiers.sortOrder));
+  }
+  async createPricingTier(data: InsertPricingTier): Promise<PricingTier> {
+    const [entry] = await db.insert(projectPricingTiers).values(data).returning();
+    return entry;
+  }
+  async updatePricingTier(id: string, data: Partial<InsertPricingTier>): Promise<PricingTier> {
+    const [entry] = await db.update(projectPricingTiers).set(data).where(eq(projectPricingTiers.id, id)).returning();
+    return entry;
+  }
+  async deletePricingTier(id: string): Promise<void> {
+    await db.delete(projectPricingTiers).where(eq(projectPricingTiers.id, id));
+  }
+
+  async getProjectAnalyticsEvents(projectId: string): Promise<AnalyticsEvent[]> {
+    return db.select().from(projectAnalyticsEvents).where(eq(projectAnalyticsEvents.projectId, projectId)).orderBy(desc(projectAnalyticsEvents.createdAt));
+  }
+  async createAnalyticsEvent(data: InsertAnalyticsEvent): Promise<AnalyticsEvent> {
+    const [entry] = await db.insert(projectAnalyticsEvents).values(data).returning();
+    return entry;
+  }
+  async updateAnalyticsEvent(id: string, data: Partial<InsertAnalyticsEvent>): Promise<AnalyticsEvent> {
+    const [entry] = await db.update(projectAnalyticsEvents).set(data).where(eq(projectAnalyticsEvents.id, id)).returning();
+    return entry;
+  }
+  async deleteAnalyticsEvent(id: string): Promise<void> {
+    await db.delete(projectAnalyticsEvents).where(eq(projectAnalyticsEvents.id, id));
+  }
+
+  async getProjectLegalDocs(projectId: string): Promise<LegalDoc[]> {
+    return db.select().from(projectLegalDocs).where(eq(projectLegalDocs.projectId, projectId)).orderBy(desc(projectLegalDocs.createdAt));
+  }
+  async createLegalDoc(data: InsertLegalDoc): Promise<LegalDoc> {
+    const [entry] = await db.insert(projectLegalDocs).values(data).returning();
+    return entry;
+  }
+  async updateLegalDoc(id: string, data: Partial<InsertLegalDoc>): Promise<LegalDoc> {
+    const [entry] = await db.update(projectLegalDocs).set(data).where(eq(projectLegalDocs.id, id)).returning();
+    return entry;
+  }
+  async deleteLegalDoc(id: string): Promise<void> {
+    await db.delete(projectLegalDocs).where(eq(projectLegalDocs.id, id));
+  }
+
+  async getDeployChecklistItems(projectId: string): Promise<DeployChecklistItem[]> {
+    return db.select().from(projectDeployChecklistItems).where(eq(projectDeployChecklistItems.projectId, projectId)).orderBy(asc(projectDeployChecklistItems.sortOrder));
+  }
+  async createDeployChecklistItem(data: InsertDeployChecklistItem): Promise<DeployChecklistItem> {
+    const [entry] = await db.insert(projectDeployChecklistItems).values(data).returning();
+    return entry;
+  }
+  async updateDeployChecklistItem(id: string, data: Partial<InsertDeployChecklistItem>): Promise<DeployChecklistItem> {
+    const [entry] = await db.update(projectDeployChecklistItems).set(data).where(eq(projectDeployChecklistItems.id, id)).returning();
+    return entry;
+  }
+  async deleteDeployChecklistItem(id: string): Promise<void> {
+    await db.delete(projectDeployChecklistItems).where(eq(projectDeployChecklistItems.id, id));
+  }
+
+  async getProjectSupportTickets(projectId: string): Promise<SupportTicket[]> {
+    return db.select().from(projectSupportTickets).where(eq(projectSupportTickets.projectId, projectId)).orderBy(desc(projectSupportTickets.createdAt));
+  }
+  async createSupportTicket(data: InsertSupportTicket): Promise<SupportTicket> {
+    const [entry] = await db.insert(projectSupportTickets).values(data).returning();
+    return entry;
+  }
+  async updateSupportTicket(id: string, data: Partial<InsertSupportTicket>): Promise<SupportTicket> {
+    const [entry] = await db.update(projectSupportTickets).set(data).where(eq(projectSupportTickets.id, id)).returning();
+    return entry;
+  }
+  async deleteSupportTicket(id: string): Promise<void> {
+    await db.delete(projectSupportTickets).where(eq(projectSupportTickets.id, id));
+  }
+
+  async getProjectLaunchTasks(projectId: string): Promise<LaunchTask[]> {
+    return db.select().from(projectLaunchTasks).where(eq(projectLaunchTasks.projectId, projectId)).orderBy(asc(projectLaunchTasks.createdAt));
+  }
+  async createLaunchTask(data: InsertLaunchTask): Promise<LaunchTask> {
+    const [entry] = await db.insert(projectLaunchTasks).values(data).returning();
+    return entry;
+  }
+  async updateLaunchTask(id: string, data: Partial<InsertLaunchTask>): Promise<LaunchTask> {
+    const [entry] = await db.update(projectLaunchTasks).set(data).where(eq(projectLaunchTasks.id, id)).returning();
+    return entry;
+  }
+  async deleteLaunchTask(id: string): Promise<void> {
+    await db.delete(projectLaunchTasks).where(eq(projectLaunchTasks.id, id));
   }
 
   async createDonation(data: InsertDonation): Promise<Donation> {

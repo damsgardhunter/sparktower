@@ -48,6 +48,10 @@ export const projects = pgTable("projects", {
   targetUser: text("target_user"),
   successMetrics: text("success_metrics"),
   scope: jsonb("scope"),
+  oneLiner: text("one_liner"),
+  valueProposition: text("value_proposition"),
+  targetCustomerProfile: text("target_customer_profile"),
+  landingPageConfig: jsonb("landing_page_config"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -277,6 +281,113 @@ export const projectLiveChatMessages = pgTable("project_live_chat_messages", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// === PROJECT MANAGER EXTENDED TABLES ===
+
+export const projectWaitlistEntries = pgTable("project_waitlist_entries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  email: text("email").notNull(),
+  name: text("name"),
+  source: text("source"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const projectInterviews = pgTable("project_interviews", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  intervieweeName: text("interviewee_name").notNull(),
+  intervieweeRole: text("interviewee_role"),
+  date: timestamp("date"),
+  notes: text("notes"),
+  keyInsights: text("key_insights"),
+  sentiment: text("sentiment").default("neutral"),
+  status: text("status").default("planned"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const projectExperiments = pgTable("project_experiments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  hypothesis: text("hypothesis").notNull(),
+  method: text("method"),
+  status: text("status").default("planned"),
+  result: text("result"),
+  startDate: timestamp("start_date"),
+  endDate: timestamp("end_date"),
+  metrics: text("metrics"),
+  learnings: text("learnings"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const projectPricingTiers = pgTable("project_pricing_tiers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  name: text("name").notNull(),
+  price: integer("price").default(0),
+  billingPeriod: text("billing_period").default("monthly"),
+  features: jsonb("features").default([]),
+  limits: jsonb("limits").default({}),
+  isFeatured: boolean("is_featured").default(false),
+  sortOrder: integer("sort_order").default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const projectAnalyticsEvents = pgTable("project_analytics_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  eventName: text("event_name").notNull(),
+  category: text("category").default("activation"),
+  description: text("description"),
+  trackingStatus: text("tracking_status").default("planned"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const projectLegalDocs = pgTable("project_legal_docs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  docType: text("doc_type").notNull(),
+  title: text("title").notNull(),
+  content: text("content"),
+  status: text("status").default("draft"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const projectDeployChecklistItems = pgTable("project_deploy_checklist_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  item: text("item").notNull(),
+  category: text("category").default("other"),
+  isCompleted: boolean("is_completed").default(false),
+  sortOrder: integer("sort_order").default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const projectSupportTickets = pgTable("project_support_tickets", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  submitterEmail: text("submitter_email"),
+  submitterName: text("submitter_name"),
+  subject: text("subject").notNull(),
+  description: text("description"),
+  status: text("status").default("open"),
+  priority: text("priority").default("medium"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const projectLaunchTasks = pgTable("project_launch_tasks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  channel: text("channel").notNull(),
+  task: text("task").notNull(),
+  status: text("status").default("planned"),
+  targetDate: timestamp("target_date"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // === GAME TABLES ===
 
 export const gameLeaderboard = pgTable("game_leaderboard", {
@@ -478,6 +589,17 @@ export const insertProjectLiveChatMessageSchema = createInsertSchema(projectLive
   createdAt: true,
 });
 
+// PM Extended insert schemas
+export const insertWaitlistEntrySchema = createInsertSchema(projectWaitlistEntries).omit({ id: true, createdAt: true });
+export const insertInterviewSchema = createInsertSchema(projectInterviews).omit({ id: true, createdAt: true });
+export const insertExperimentSchema = createInsertSchema(projectExperiments).omit({ id: true, createdAt: true });
+export const insertPricingTierSchema = createInsertSchema(projectPricingTiers).omit({ id: true, createdAt: true });
+export const insertAnalyticsEventSchema = createInsertSchema(projectAnalyticsEvents).omit({ id: true, createdAt: true });
+export const insertLegalDocSchema = createInsertSchema(projectLegalDocs).omit({ id: true, createdAt: true });
+export const insertDeployChecklistItemSchema = createInsertSchema(projectDeployChecklistItems).omit({ id: true, createdAt: true });
+export const insertSupportTicketSchema = createInsertSchema(projectSupportTickets).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertLaunchTaskSchema = createInsertSchema(projectLaunchTasks).omit({ id: true, createdAt: true });
+
 // Game insert schemas
 export const insertGameLeaderboardSchema = createInsertSchema(gameLeaderboard).omit({
   id: true,
@@ -572,3 +694,21 @@ export type TypingRacePlayer = typeof typingRacePlayers.$inferSelect;
 export type InsertTypingRacePlayer = z.infer<typeof insertTypingRacePlayerSchema>;
 export type SignalNoiseGame = typeof signalNoiseGames.$inferSelect;
 export type InsertSignalNoiseGame = z.infer<typeof insertSignalNoiseGameSchema>;
+export type WaitlistEntry = typeof projectWaitlistEntries.$inferSelect;
+export type InsertWaitlistEntry = z.infer<typeof insertWaitlistEntrySchema>;
+export type ProjectInterview = typeof projectInterviews.$inferSelect;
+export type InsertProjectInterview = z.infer<typeof insertInterviewSchema>;
+export type ProjectExperiment = typeof projectExperiments.$inferSelect;
+export type InsertProjectExperiment = z.infer<typeof insertExperimentSchema>;
+export type PricingTier = typeof projectPricingTiers.$inferSelect;
+export type InsertPricingTier = z.infer<typeof insertPricingTierSchema>;
+export type AnalyticsEvent = typeof projectAnalyticsEvents.$inferSelect;
+export type InsertAnalyticsEvent = z.infer<typeof insertAnalyticsEventSchema>;
+export type LegalDoc = typeof projectLegalDocs.$inferSelect;
+export type InsertLegalDoc = z.infer<typeof insertLegalDocSchema>;
+export type DeployChecklistItem = typeof projectDeployChecklistItems.$inferSelect;
+export type InsertDeployChecklistItem = z.infer<typeof insertDeployChecklistItemSchema>;
+export type SupportTicket = typeof projectSupportTickets.$inferSelect;
+export type InsertSupportTicket = z.infer<typeof insertSupportTicketSchema>;
+export type LaunchTask = typeof projectLaunchTasks.$inferSelect;
+export type InsertLaunchTask = z.infer<typeof insertLaunchTaskSchema>;

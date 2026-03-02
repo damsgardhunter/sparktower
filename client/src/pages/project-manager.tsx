@@ -22,7 +22,9 @@ import {
   Link2, ExternalLink, Flag, Target, Lightbulb, ChevronRight,
   GitBranch, Palette, BookOpen, HardDrive, StickyNote, Globe,
   BarChart3, AlertTriangle, CheckSquare, Square, X,
+  Beaker, DollarSign, Shield, Rocket, Headphones, Crosshair,
 } from "lucide-react";
+import { ResearchTab, StrategyTab, LaunchTab, AnalyticsTab, SupportTab } from "./pm-extended-tabs";
 import type {
   Project, ProjectMember, UserProfile, User, ProjectKanbanTask,
   ProjectPersona, ProjectMilestone, ProjectFile, ProjectLink,
@@ -33,7 +35,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { useUpload } from "@/hooks/use-upload";
 
-type TabId = "setup" | "kanban" | "milestones" | "team" | "files" | "activity" | "personas" | "chat";
+type TabId = "setup" | "kanban" | "milestones" | "team" | "files" | "activity" | "personas" | "chat" | "research" | "strategy" | "launch" | "analytics" | "support";
 
 const KANBAN_COLUMNS = [
   { id: "todo" as const, label: "To Do", icon: Circle, color: "text-muted-foreground" },
@@ -383,6 +385,11 @@ export default function ProjectManager() {
     { id: "files", label: "Files", icon: FolderOpen },
     { id: "activity", label: "Activity", icon: Activity },
     { id: "personas", label: "Personas", icon: Target },
+    { id: "research", label: "Research", icon: Beaker },
+    { id: "strategy", label: "Strategy", icon: Crosshair },
+    { id: "launch", label: "Launch", icon: Rocket },
+    { id: "analytics", label: "Analytics", icon: BarChart3 },
+    { id: "support", label: "Support", icon: Headphones },
     { id: "chat", label: "Chat", icon: MessageSquare },
   ];
 
@@ -476,6 +483,21 @@ export default function ProjectManager() {
             onDelete={(id) => deletePersonaMutation.mutate(id)}
             aiPending={aiGeneratePersonaMutation.isPending}
           />
+        )}
+        {activeTab === "research" && projectId && (
+          <ResearchTab projectId={projectId} />
+        )}
+        {activeTab === "strategy" && projectId && (
+          <StrategyTab projectId={projectId} />
+        )}
+        {activeTab === "launch" && projectId && project && (
+          <LaunchTab projectId={projectId} project={project} />
+        )}
+        {activeTab === "analytics" && projectId && (
+          <AnalyticsTab projectId={projectId} />
+        )}
+        {activeTab === "support" && projectId && (
+          <SupportTab projectId={projectId} />
         )}
         {activeTab === "chat" && projectId && (
           <LiveChatTab projectId={projectId} />
@@ -651,6 +673,9 @@ function SetupTab({ project, isOwner, links, isUploadingPlan, onUploadPlan, onUp
     problemStatement: project.problemStatement || "",
     targetUser: project.targetUser || "",
     successMetrics: project.successMetrics || "",
+    oneLiner: (project as any).oneLiner || "",
+    valueProposition: (project as any).valueProposition || "",
+    targetCustomerProfile: (project as any).targetCustomerProfile || "",
   });
   const [scopeItem, setScopeItem] = useState("");
   const [scopeType, setScopeType] = useState<"mvp" | "niceToHave">("mvp");
@@ -670,6 +695,9 @@ function SetupTab({ project, isOwner, links, isUploadingPlan, onUploadPlan, onUp
         <CardContent>
           {editingBrief ? (
             <div className="space-y-4">
+              <div className="space-y-2"><Label>One-Liner Positioning</Label><Input value={briefForm.oneLiner} onChange={e => setBriefForm(p => ({ ...p, oneLiner: e.target.value }))} placeholder="We help [who] do [what] by [how]" data-testid="input-one-liner" /></div>
+              <div className="space-y-2"><Label>Value Proposition</Label><Textarea value={briefForm.valueProposition} onChange={e => setBriefForm(p => ({ ...p, valueProposition: e.target.value }))} placeholder="What unique value do you provide?" data-testid="textarea-value-prop" /></div>
+              <div className="space-y-2"><Label>Target Customer Profile</Label><Textarea value={briefForm.targetCustomerProfile} onChange={e => setBriefForm(p => ({ ...p, targetCustomerProfile: e.target.value }))} placeholder="Demographics, behaviors, pain points..." data-testid="textarea-customer-profile" /></div>
               <div className="space-y-2"><Label>Problem Statement</Label><Textarea value={briefForm.problemStatement} onChange={e => setBriefForm(p => ({ ...p, problemStatement: e.target.value }))} placeholder="What problem does this project solve?" data-testid="textarea-problem" /></div>
               <div className="space-y-2"><Label>Target User</Label><Input value={briefForm.targetUser} onChange={e => setBriefForm(p => ({ ...p, targetUser: e.target.value }))} placeholder="Who is the target user?" data-testid="input-target-user" /></div>
               <div className="space-y-2"><Label>Success Metrics</Label><Textarea value={briefForm.successMetrics} onChange={e => setBriefForm(p => ({ ...p, successMetrics: e.target.value }))} placeholder="How do you define success?" data-testid="textarea-success" /></div>
@@ -679,19 +707,43 @@ function SetupTab({ project, isOwner, links, isUploadingPlan, onUploadPlan, onUp
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div>
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">Problem</p>
-                <p className="text-sm" data-testid="text-problem">{project.problemStatement || <span className="text-muted-foreground italic">Not defined yet</span>}</p>
+            <div className="space-y-4">
+              {(project as any).oneLiner && (
+                <div className="bg-primary/5 border border-primary/20 rounded-lg p-4">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">One-Liner</p>
+                  <p className="text-base font-medium" data-testid="text-one-liner">{(project as any).oneLiner}</p>
+                </div>
+              )}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">Problem</p>
+                  <p className="text-sm" data-testid="text-problem">{project.problemStatement || <span className="text-muted-foreground italic">Not defined yet</span>}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">Target User</p>
+                  <p className="text-sm" data-testid="text-target-user">{project.targetUser || <span className="text-muted-foreground italic">Not defined yet</span>}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">Success Metrics</p>
+                  <p className="text-sm" data-testid="text-success">{project.successMetrics || <span className="text-muted-foreground italic">Not defined yet</span>}</p>
+                </div>
               </div>
-              <div>
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">Target User</p>
-                <p className="text-sm" data-testid="text-target-user">{project.targetUser || <span className="text-muted-foreground italic">Not defined yet</span>}</p>
-              </div>
-              <div>
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">Success Metrics</p>
-                <p className="text-sm" data-testid="text-success">{project.successMetrics || <span className="text-muted-foreground italic">Not defined yet</span>}</p>
-              </div>
+              {((project as any).valueProposition || (project as any).targetCustomerProfile) && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {(project as any).valueProposition && (
+                    <div>
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">Value Proposition</p>
+                      <p className="text-sm" data-testid="text-value-prop">{(project as any).valueProposition}</p>
+                    </div>
+                  )}
+                  {(project as any).targetCustomerProfile && (
+                    <div>
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">Target Customer</p>
+                      <p className="text-sm" data-testid="text-customer-profile">{(project as any).targetCustomerProfile}</p>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </CardContent>
