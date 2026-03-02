@@ -31,6 +31,7 @@ import {
   Target,
   Rocket,
 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { SiGithub } from "react-icons/si";
 import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
@@ -487,6 +488,26 @@ export default function ProjectCreate() {
                   </Select>
                 </div>
                 <div>
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1 mb-2">
+                    <Rocket className="h-3 w-3" /> Solo Builder Mode
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      checked={!!(projectData as any).soloMode}
+                      onCheckedChange={(checked) =>
+                        setProjectData({ ...projectData, soloMode: checked, teamSize: checked ? 1 : projectData.teamSize } as any)
+                      }
+                      data-testid="switch-solo-mode"
+                    />
+                    <span className="text-xs text-muted-foreground">
+                      {(projectData as any).soloMode ? "Building solo" : "Team project"}
+                    </span>
+                    {(projectData as any).soloMode && (
+                      <Badge variant="outline" className="text-xs border-primary/30 text-primary">Solo Builder</Badge>
+                    )}
+                  </div>
+                </div>
+                <div>
                   <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1">
                     <Users className="h-3 w-3" /> Team Size
                   </label>
@@ -497,6 +518,7 @@ export default function ProjectCreate() {
                       setProjectData({ ...projectData, teamSize: e.target.value ? parseInt(e.target.value) : 1 })
                     }
                     className="mt-1"
+                    disabled={!!(projectData as any).soloMode}
                     data-testid="input-project-teamsize"
                   />
                 </div>

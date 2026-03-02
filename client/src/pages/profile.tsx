@@ -23,6 +23,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { UserCard } from "@/components/user-card";
+import { ReputationCard } from "@/components/reputation-card";
 
 type ProjectWithDetails = Project & { owner: User; profile?: UserProfile };
 
@@ -587,6 +588,10 @@ export default function Profile() {
                   </div>
                 </CardContent>
               </Card>
+
+              {userId && (
+                <ReputationCard userId={userId} isOwnProfile={!!isOwnProfile} />
+              )}
             </div>
           </div>
         </TabsContent>

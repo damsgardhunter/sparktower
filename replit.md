@@ -51,7 +51,18 @@ Do not make changes to the file `server/seed-stripe.ts`.
 *   **Media & Content:** Users can upload images/videos to projects, and AI can generate animated video storyboard slideshows with various visual styles.
 *   **Community & Collaboration:** Features include connection requests, real-time private messaging between connected users, project following, and a system for applying to projects with custom questions and resume uploads.
 *   **Monetization & Gamification:** Stripe donations for projects, a badge system with rarity tiers, contests/hackathons, and a leaderboard (by visits or donations) are included.
-*   **AI Credit System:** A subscription model (Free, Spark Pro, Spark Business, Spark Unlimited) provides monthly AI credits for various AI features, with costs per AI operation (Chat=1, Video=5, Match=1, Kanban AI=1, Persona AI=1, People Rec=1, Summarize=1, Detect Gaps=1).
+*   **AI Credit System:** A subscription model (Free, Spark Pro, Spark Business, Spark Unlimited) provides monthly AI credits for various AI features, with costs per AI operation (Chat=1, Video=5, Match=1, Kanban AI=1, Persona AI=1, People Rec=1, Summarize=1, Detect Gaps=1, Nova Guide=1, Reputation Calc=1).
+*   **Builder Reputation Index:** Multi-dimensional scoring system measuring builder capability:
+    *   **Execution Score (30%):** Milestones completed, deadlines met, sprint consistency (check-ins), project completion rate.
+    *   **Contribution Score (25%):** Projects involved in, task completion %, projects followed, solo build completions.
+    *   **Market Signal Score (25%):** Donations received, project applications, activity/engagement, external traction uploads.
+    *   **Strategic Thinking Score (20%):** Contest wins, game scores, AI evaluation of project descriptions (0-100).
+    *   **Builder Index:** Weighted composite of all 4 dimensions (0-100). Tiers: New Builder (0-19), Emerging (20-39), Rising (40-59), Advanced (60-79), Elite (80-100).
+    *   **Solo Builder Mode:** Projects can be marked as solo builds. Leaderboard supports solo/team/all filtering.
+    *   **Routes:** GET `/api/reputation/:userId`, POST `/api/reputation/calculate` (1 credit), GET `/api/leaderboard/reputation`
+    *   **Table:** `user_reputation_scores` (userId, executionScore, contributionScore, marketSignalScore, strategicThinkingScore, builderIndex, details jsonb)
+    *   **Engine:** `server/reputation.ts` — calculates scores using DB stats + AI evaluation for strategic thinking
+    *   **Components:** `client/src/components/reputation-card.tsx` (profile integration), enhanced `leaderboard.tsx` with Builder Index tab
 
 **Database Tables (new for Project Manager):**
 *   `projectMilestones` — id, projectId, title, description, status, targetDate, order, createdAt
@@ -63,7 +74,8 @@ Do not make changes to the file `server/seed-stripe.ts`.
 *   `projectLiveChatMessages` — id, projectId, userId (ref users), content, createdAt
 
 **Enhanced columns:**
-*   `projects` — added: problemStatement, targetUser, successMetrics, scope (jsonb)
+*   `projects` — added: problemStatement, targetUser, successMetrics, scope (jsonb), soloMode (boolean), externalTractionUrl (text)
+*   `user_reputation_scores` — id, userId (unique FK), executionScore, contributionScore, marketSignalScore, strategicThinkingScore, builderIndex, lastCalculatedAt, details (jsonb)
 *   `projectKanbanTasks` — added: tags (text[]), estimateHours, blockedByTaskId, subtasks (jsonb)
 *   `projectMembers` — added: timezone, availability, hoursPerWeek, skills (text[])
 

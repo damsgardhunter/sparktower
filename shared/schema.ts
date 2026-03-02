@@ -53,6 +53,8 @@ export const projects = pgTable("projects", {
   targetCustomerProfile: text("target_customer_profile"),
   landingPageConfig: jsonb("landing_page_config"),
   novaOnboardingComplete: boolean("nova_onboarding_complete").default(false),
+  soloMode: boolean("solo_mode").default(false),
+  externalTractionUrl: text("external_traction_url"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -612,6 +614,20 @@ export const insertLaunchTaskSchema = createInsertSchema(projectLaunchTasks).omi
 
 export const insertNovaGuideMessageSchema = createInsertSchema(novaGuideMessages).omit({ id: true, createdAt: true });
 
+export const userReputationScores = pgTable("user_reputation_scores", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id).unique(),
+  executionScore: integer("execution_score").default(0).notNull(),
+  contributionScore: integer("contribution_score").default(0).notNull(),
+  marketSignalScore: integer("market_signal_score").default(0).notNull(),
+  strategicThinkingScore: integer("strategic_thinking_score").default(0).notNull(),
+  builderIndex: integer("builder_index").default(0).notNull(),
+  details: jsonb("details"),
+  lastCalculatedAt: timestamp("last_calculated_at").defaultNow().notNull(),
+});
+
+export const insertUserReputationSchema = createInsertSchema(userReputationScores).omit({ id: true, lastCalculatedAt: true });
+
 // Game insert schemas
 export const insertGameLeaderboardSchema = createInsertSchema(gameLeaderboard).omit({
   id: true,
@@ -726,3 +742,5 @@ export type LaunchTask = typeof projectLaunchTasks.$inferSelect;
 export type InsertLaunchTask = z.infer<typeof insertLaunchTaskSchema>;
 export type NovaGuideMessage = typeof novaGuideMessages.$inferSelect;
 export type InsertNovaGuideMessage = z.infer<typeof insertNovaGuideMessageSchema>;
+export type UserReputation = typeof userReputationScores.$inferSelect;
+export type InsertUserReputation = z.infer<typeof insertUserReputationSchema>;

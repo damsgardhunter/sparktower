@@ -11,6 +11,7 @@ import { z } from "zod";
 import OpenAI from "openai";
 import { eq, ne, and, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
+import { calculateUserReputation } from "./reputation";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
 
 function getFeaturesForTier(tier: string): string[] {
@@ -1366,8 +1367,46 @@ RULES:
   app.get("/api/leaderboard", async (req, res) => {
     const sortBy = (req.query.sortBy as "views" | "donations") || "views";
     const limit = parseInt(req.query.limit as string) || 10;
-    const leaderboard = await storage.getLeaderboard(sortBy, limit);
+    const filter = (req.query.filter as "solo" | "team" | "all") || "all";
+    const leaderboard = await storage.getLeaderboard(sortBy, limit, filter);
     res.json(leaderboard);
+  });
+
+  // Reputation
+  app.get("/api/reputation/:userId", async (req, res) => {
+    try {
+      const rep = await storage.getUserReputation(req.params.userId);
+      res.json(rep || { executionScore: 0, contributionScore: 0, marketSignalScore: 0, strategicThinkingScore: 0, builderIndex: 0, details: null });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get reputation" });
+    }
+  });
+
+  app.post("/api/reputation/calculate", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const hasCredits = await storage.checkCredits(userId, 1);
+      if (!hasCredits) {
+        return res.status(403).json({ message: "Insufficient credits for AI evaluation" });
+      }
+      await storage.deductCredits(userId, 1);
+      const reputation = await calculateUserReputation(userId, storage);
+      res.json(reputation);
+    } catch (error: any) {
+      console.error("Reputation calculation error:", error);
+      res.status(500).json({ message: "Failed to calculate reputation" });
+    }
+  });
+
+  app.get("/api/leaderboard/reputation", async (req, res) => {
+    try {
+      const limit = parseInt(req.query.limit as string) || 20;
+      const filter = (req.query.filter as "solo" | "team" | "all") || "all";
+      const leaderboard = await storage.getReputationLeaderboard(limit, filter);
+      res.json(leaderboard);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to get reputation leaderboard" });
+    }
   });
 
   // Users

@@ -100,7 +100,10 @@ import {
   type InsertLaunchTask,
   type NovaGuideMessage,
   type InsertNovaGuideMessage,
+  type UserReputation,
+  type InsertUserReputation,
   novaGuideMessages,
+  userReputationScores,
   gameLeaderboard,
   tacticsGames,
   tacticsPlayers,
@@ -119,7 +122,7 @@ import {
   projectLaunchTasks,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, or, ilike, sql, and, gte, lte, asc, ne, inArray } from "drizzle-orm";
+import { eq, desc, or, ilike, sql, and, gte, lte, asc, ne, inArray, isNull } from "drizzle-orm";
 
 export interface IStorage {
   // User Profile
@@ -209,7 +212,7 @@ export interface IStorage {
   upsertUserMatch(data: InsertUserMatch): Promise<UserMatch>;
   
   // Leaderboard
-  getLeaderboard(sortBy: "views" | "donations", limit: number): Promise<(Project & { owner: User })[]>;
+  getLeaderboard(sortBy: "views" | "donations", limit: number, filter?: "solo" | "team" | "all"): Promise<(Project & { owner: User })[]>;
   
   // Media
   addProjectMedia(projectId: string, objectPath: string): Promise<Project>;
@@ -354,6 +357,24 @@ export interface IStorage {
   getSignalNoiseGame(id: string): Promise<SignalNoiseGame | undefined>;
   updateSignalNoiseGame(id: string, data: Partial<SignalNoiseGame>): Promise<SignalNoiseGame>;
   getUserSignalNoiseHistory(userId: string, limit?: number): Promise<SignalNoiseGame[]>;
+
+  // Reputation
+  getUserReputation(userId: string): Promise<UserReputation | undefined>;
+  upsertUserReputation(data: InsertUserReputation): Promise<UserReputation>;
+  getReputationLeaderboard(limit: number, filter?: "solo" | "team" | "all"): Promise<(UserReputation & { user: User; profile?: UserProfile })[]>;
+  getReputationStats(userId: string): Promise<{
+    ownedProjects: Project[];
+    memberProjects: ProjectMember[];
+    milestones: { total: number; completed: number };
+    tasks: { total: number; done: number; onTime: number };
+    checkIns: number;
+    followedProjects: number;
+    donationsReceived: number;
+    applicationsSubmitted: number;
+    activityLogCount: number;
+    contestWins: number;
+    bestGameScores: { gameType: string; score: number }[];
+  }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -673,13 +694,17 @@ export class DatabaseStorage implements IStorage {
     return match;
   }
 
-  async getLeaderboard(sortBy: "views" | "donations", limit: number): Promise<(Project & { owner: User })[]> {
+  async getLeaderboard(sortBy: "views" | "donations", limit: number, filter?: "solo" | "team" | "all"): Promise<(Project & { owner: User })[]> {
     const orderCol = sortBy === "views" ? projects.views : projects.totalDonations;
-    const result = await db
-      .select()
-      .from(projects)
-      .orderBy(desc(orderCol))
-      .limit(limit);
+    const conditions = [];
+    if (filter === "solo") conditions.push(eq(projects.soloMode, true));
+    else if (filter === "team") conditions.push(or(eq(projects.soloMode, false), isNull(projects.soloMode))!);
+    
+    const query = conditions.length > 0
+      ? db.select().from(projects).where(and(...conditions)).orderBy(desc(orderCol)).limit(limit)
+      : db.select().from(projects).orderBy(desc(orderCol)).limit(limit);
+    
+    const result = await query;
 
     return await Promise.all(
       result.map(async (project) => {
@@ -1406,6 +1431,120 @@ export class DatabaseStorage implements IStorage {
 
   async getUserSignalNoiseHistory(userId: string, limit: number = 20): Promise<SignalNoiseGame[]> {
     return db.select().from(signalNoiseGames).where(eq(signalNoiseGames.userId, userId)).orderBy(desc(signalNoiseGames.createdAt)).limit(limit);
+  }
+
+  async getUserReputation(userId: string): Promise<UserReputation | undefined> {
+    const [rep] = await db.select().from(userReputationScores).where(eq(userReputationScores.userId, userId));
+    return rep;
+  }
+
+  async upsertUserReputation(data: InsertUserReputation): Promise<UserReputation> {
+    const [rep] = await db
+      .insert(userReputationScores)
+      .values({ ...data, lastCalculatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: userReputationScores.userId,
+        set: { ...data, lastCalculatedAt: new Date() },
+      })
+      .returning();
+    return rep;
+  }
+
+  async getReputationLeaderboard(limit: number, filter?: "solo" | "team" | "all"): Promise<(UserReputation & { user: User; profile?: UserProfile })[]> {
+    const reps = await db.select().from(userReputationScores).orderBy(desc(userReputationScores.builderIndex)).limit(limit * 2);
+    
+    const results: (UserReputation & { user: User; profile?: UserProfile })[] = [];
+    for (const rep of reps) {
+      const [user] = await db.select().from(users).where(eq(users.id, rep.userId));
+      if (!user) continue;
+      
+      if (filter === "solo" || filter === "team") {
+        const userProjects = await db.select().from(projects).where(eq(projects.ownerId, rep.userId));
+        const hasSolo = userProjects.some(p => p.soloMode === true);
+        const hasTeam = userProjects.some(p => p.soloMode !== true);
+        if (filter === "solo" && !hasSolo) continue;
+        if (filter === "team" && !hasTeam) continue;
+      }
+      
+      const [profile] = await db.select().from(userProfiles).where(eq(userProfiles.userId, rep.userId));
+      results.push({ ...rep, user, profile: profile || undefined });
+      if (results.length >= limit) break;
+    }
+    return results;
+  }
+
+  async getReputationStats(userId: string) {
+    const ownedProjects = await db.select().from(projects).where(eq(projects.ownerId, userId));
+    const memberRecords = await db.select().from(projectMembers).where(eq(projectMembers.userId, userId));
+    
+    const allProjectIds = [
+      ...ownedProjects.map(p => p.id),
+      ...memberRecords.map(m => m.projectId),
+    ];
+    
+    let totalMilestones = 0, completedMilestones = 0;
+    let totalTasks = 0, doneTasks = 0, onTimeTasks = 0;
+    let checkInCount = 0;
+    
+    for (const pid of [...new Set(allProjectIds)]) {
+      const milestones = await db.select().from(projectMilestones).where(eq(projectMilestones.projectId, pid));
+      totalMilestones += milestones.length;
+      completedMilestones += milestones.filter(m => m.status === "completed").length;
+      
+      const tasks = await db.select().from(projectKanbanTasks).where(eq(projectKanbanTasks.projectId, pid));
+      const userTasks = tasks.filter(t => t.assigneeId === userId || ownedProjects.some(p => p.id === pid));
+      totalTasks += userTasks.length;
+      doneTasks += userTasks.filter(t => t.status === "done").length;
+      onTimeTasks += userTasks.filter(t => t.status === "done" && t.dueDate && new Date() <= new Date(t.dueDate)).length;
+      
+      const checkIns = await db.select().from(projectCheckIns).where(and(eq(projectCheckIns.projectId, pid), eq(projectCheckIns.userId, userId)));
+      checkInCount += checkIns.length;
+    }
+    
+    const follows = await db.select().from(projectFollows).where(eq(projectFollows.userId, userId));
+    
+    let donationsReceived = 0;
+    for (const p of ownedProjects) {
+      donationsReceived += p.totalDonations || 0;
+    }
+    
+    const applications = await db.select().from(projectApplications).where(eq(projectApplications.userId, userId));
+    
+    let activityLogCount = 0;
+    for (const pid of [...new Set(allProjectIds)]) {
+      const logs = await db.select().from(projectActivityLog).where(and(eq(projectActivityLog.projectId, pid), eq(projectActivityLog.userId, userId)));
+      activityLogCount += logs.length;
+    }
+    
+    const allContestParticipants = await db.select().from(contestParticipants).where(eq(contestParticipants.userId, userId));
+    let contestWins = 0;
+    for (const cp of allContestParticipants) {
+      const allInContest = await db.select().from(contestParticipants).where(eq(contestParticipants.contestId, cp.contestId));
+      const sorted = allInContest.filter(p => p.score !== null).sort((a, b) => (b.score || 0) - (a.score || 0));
+      if (sorted.length > 0 && sorted[0].userId === userId) contestWins++;
+    }
+    
+    const gameScores = await db.select().from(gameLeaderboard).where(eq(gameLeaderboard.userId, userId));
+    const bestByType = new Map<string, number>();
+    for (const gs of gameScores) {
+      const current = bestByType.get(gs.gameType) || 0;
+      if (gs.score > current) bestByType.set(gs.gameType, gs.score);
+    }
+    const bestGameScores = Array.from(bestByType.entries()).map(([gameType, score]) => ({ gameType, score }));
+    
+    return {
+      ownedProjects,
+      memberProjects: memberRecords,
+      milestones: { total: totalMilestones, completed: completedMilestones },
+      tasks: { total: totalTasks, done: doneTasks, onTime: onTimeTasks },
+      checkIns: checkInCount,
+      followedProjects: follows.length,
+      donationsReceived,
+      applicationsSubmitted: applications.length,
+      activityLogCount,
+      contestWins,
+      bestGameScores,
+    };
   }
 }
 
