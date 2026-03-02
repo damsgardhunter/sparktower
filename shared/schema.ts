@@ -265,6 +265,92 @@ export const projectLinks = pgTable("project_links", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// === GAME TABLES ===
+
+export const gameLeaderboard = pgTable("game_leaderboard", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  gameType: text("game_type", { enum: ["tactics", "typing", "signal"] }).notNull(),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  score: integer("score").notNull().default(0),
+  metadata: jsonb("metadata").default({}),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const tacticsGames = pgTable("tactics_games", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  status: text("status", { enum: ["waiting", "discussion", "resolving", "completed"] }).notNull().default("waiting"),
+  mapSize: integer("map_size").notNull().default(8),
+  mapData: jsonb("map_data").default({}),
+  currentRound: integer("current_round").notNull().default(0),
+  maxRounds: integer("max_rounds").notNull().default(10),
+  winnerId: text("winner_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const tacticsPlayers = pgTable("tactics_players", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  gameId: varchar("game_id").notNull().references(() => tacticsGames.id),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  teamId: integer("team_id").notNull(),
+  role: text("role", { enum: ["commander", "warrior", "strategist", "scout", "engineer"] }).notNull(),
+  health: integer("health").notNull().default(100),
+  position: jsonb("position").default({ x: 0, y: 0 }),
+  resources: integer("resources").notNull().default(50),
+  isAlive: boolean("is_alive").notNull().default(true),
+  buffs: jsonb("buffs").default([]),
+});
+
+export const tacticsMoves = pgTable("tactics_moves", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  gameId: varchar("game_id").notNull().references(() => tacticsGames.id),
+  round: integer("round").notNull(),
+  playerId: varchar("player_id").notNull().references(() => tacticsPlayers.id),
+  actionType: text("action_type", { enum: ["move", "attack", "ability", "defend"] }).notNull(),
+  targetPosition: jsonb("target_position"),
+  targetPlayerId: varchar("target_player_id"),
+  resolved: boolean("resolved").notNull().default(false),
+  result: jsonb("result"),
+});
+
+export const typingRaces = pgTable("typing_races", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  status: text("status", { enum: ["waiting", "countdown", "active", "finished"] }).notNull().default("waiting"),
+  promptText: text("prompt_text").notNull(),
+  promptCategory: text("prompt_category").notNull(),
+  maxPlayers: integer("max_players").notNull().default(6),
+  startedAt: timestamp("started_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const typingRacePlayers = pgTable("typing_race_players", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  raceId: varchar("race_id").notNull().references(() => typingRaces.id),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  wpm: integer("wpm").default(0),
+  accuracy: integer("accuracy").default(100),
+  progress: integer("progress").default(0),
+  charsTyped: integer("chars_typed").default(0),
+  errors: integer("errors").default(0),
+  finishTimeMs: integer("finish_time_ms"),
+  status: text("status", { enum: ["waiting", "racing", "finished", "dnf"] }).notNull().default("waiting"),
+  score: integer("score").default(0),
+});
+
+export const signalNoiseGames = pgTable("signal_noise_games", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  scenario: text("scenario").notNull(),
+  difficulty: text("difficulty", { enum: ["beginner", "intermediate", "advanced"] }).notNull().default("intermediate"),
+  cards: jsonb("cards").default([]),
+  decisions: jsonb("decisions").default([]),
+  score: integer("score").default(0),
+  streak: integer("streak").default(0),
+  accuracy: integer("accuracy").default(0),
+  avgReactionMs: integer("avg_reaction_ms").default(0),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // Schemas
 export const insertUserProfileSchema = createInsertSchema(userProfiles).omit({
   id: true,
@@ -375,6 +461,39 @@ export const insertProjectLinkSchema = createInsertSchema(projectLinks).omit({
   createdAt: true,
 });
 
+// Game insert schemas
+export const insertGameLeaderboardSchema = createInsertSchema(gameLeaderboard).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertTacticsGameSchema = createInsertSchema(tacticsGames).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertTacticsPlayerSchema = createInsertSchema(tacticsPlayers).omit({
+  id: true,
+});
+
+export const insertTacticsMoveSchema = createInsertSchema(tacticsMoves).omit({
+  id: true,
+});
+
+export const insertTypingRaceSchema = createInsertSchema(typingRaces).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertTypingRacePlayerSchema = createInsertSchema(typingRacePlayers).omit({
+  id: true,
+});
+
+export const insertSignalNoiseGameSchema = createInsertSchema(signalNoiseGames).omit({
+  id: true,
+  createdAt: true,
+});
+
 // Types
 export type UserProfile = typeof userProfiles.$inferSelect;
 export type InsertUserProfile = z.infer<typeof insertUserProfileSchema>;
@@ -420,3 +539,17 @@ export type ProjectFile = typeof projectFiles.$inferSelect;
 export type InsertProjectFile = z.infer<typeof insertProjectFileSchema>;
 export type ProjectLink = typeof projectLinks.$inferSelect;
 export type InsertProjectLink = z.infer<typeof insertProjectLinkSchema>;
+export type GameLeaderboardEntry = typeof gameLeaderboard.$inferSelect;
+export type InsertGameLeaderboardEntry = z.infer<typeof insertGameLeaderboardSchema>;
+export type TacticsGame = typeof tacticsGames.$inferSelect;
+export type InsertTacticsGame = z.infer<typeof insertTacticsGameSchema>;
+export type TacticsPlayer = typeof tacticsPlayers.$inferSelect;
+export type InsertTacticsPlayer = z.infer<typeof insertTacticsPlayerSchema>;
+export type TacticsMove = typeof tacticsMoves.$inferSelect;
+export type InsertTacticsMove = z.infer<typeof insertTacticsMoveSchema>;
+export type TypingRace = typeof typingRaces.$inferSelect;
+export type InsertTypingRace = z.infer<typeof insertTypingRaceSchema>;
+export type TypingRacePlayer = typeof typingRacePlayers.$inferSelect;
+export type InsertTypingRacePlayer = z.infer<typeof insertTypingRacePlayerSchema>;
+export type SignalNoiseGame = typeof signalNoiseGames.$inferSelect;
+export type InsertSignalNoiseGame = z.infer<typeof insertSignalNoiseGameSchema>;

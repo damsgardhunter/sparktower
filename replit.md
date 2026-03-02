@@ -56,7 +56,15 @@ Do not make changes to the file `server/seed-stripe.ts`.
 *   `projectKanbanTasks` — added: tags (text[]), estimateHours, blockedByTaskId, subtasks (jsonb)
 *   `projectMembers` — added: timezone, availability, hoursPerWeek, skills (text[])
 
-**Routing:** The application uses Wouter for client-side routing, with distinct paths for authenticated and unauthenticated users, onboarding, project creation, management, profiles, and community features. Specific routes are dedicated to Nova AI interactions, project applications, and various Stripe-related flows.
+**Games Arena (Contests System):**
+Three competitive games integrated into the Contests page, each with leaderboards and badge rewards:
+
+*   **Team Tactics Arena** (`/games/tactics`, `/games/tactics/:id`): Turn-based tactical strategy on an 8x8 grid. 5 roles (Commander, Warrior, Strategist, Scout, Engineer) with asymmetric stats. Teams of 1-5 coordinate via discussion phases. Routes: create, lobby, join, start, move, resolve. Tables: `tacticsGames`, `tacticsPlayers`, `tacticsMoves`. Badges: first-game, veteran, legend.
+*   **Velocity Type Arena** (`/games/typing`, `/games/typing/:id`): Competitive typing races with 20+ builder-focused prompts (startup pitches, code snippets, product specs). 2-6 players race with live progress bars. Scoring: WPM × accuracy. Routes: create, lobby, join, start, progress, finish. Tables: `typingRaces`, `typingRacePlayers`. Badges: first-race, speed-demon (80+ WPM), perfect-accuracy.
+*   **Signal vs. Noise** (`/games/signal-noise`): Solo decision-making game. Sort cards into Signal (keep) or Noise (discard) under time pressure across 10 scenarios (MVP Launch, Fundraising, Hiring, etc.) with 3 difficulty levels. Routes: scenarios, start, decide, complete. Table: `signalNoiseGames`. Badges: first-game, streak-10, ace (90%+ advanced).
+*   **Shared Leaderboard**: `gameLeaderboard` table stores scores for all three games by gameType.
+
+**Routing:** The application uses Wouter for client-side routing, with distinct paths for authenticated and unauthenticated users, onboarding, project creation, management, profiles, and community features. Specific routes are dedicated to Nova AI interactions, project applications, various Stripe-related flows, and the Games Arena.
 
 ## External Dependencies
 

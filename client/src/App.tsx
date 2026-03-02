@@ -23,6 +23,9 @@ import Contests from "@/pages/contests";
 import Pricing from "@/pages/pricing";
 import Messages from "@/pages/messages";
 import ProjectManager from "@/pages/project-manager";
+import TacticsArena from "@/pages/games/tactics-arena";
+import TypingArena from "@/pages/games/typing-arena";
+import SignalNoise from "@/pages/games/signal-noise";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "@tanstack/react-query";
 import type { UserProfile } from "@shared/schema";
@@ -91,6 +94,11 @@ function Router() {
             <Route path="/leaderboard" component={Leaderboard} />
             <Route path="/discover" component={Discover} />
             <Route path="/contests" component={Contests} />
+            <Route path="/games/tactics/:id" component={TacticsArena} />
+            <Route path="/games/tactics" component={TacticsArena} />
+            <Route path="/games/typing/:id" component={TypingArena} />
+            <Route path="/games/typing" component={TypingArena} />
+            <Route path="/games/signal-noise" component={SignalNoise} />
             <Route path="/messages" component={Messages} />
             <Route path="/pricing" component={Pricing} />
             <Route component={NotFound} />

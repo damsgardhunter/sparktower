@@ -63,6 +63,27 @@ import {
   projectCheckIns,
   projectFiles,
   projectLinks,
+  type GameLeaderboardEntry,
+  type InsertGameLeaderboardEntry,
+  type TacticsGame,
+  type InsertTacticsGame,
+  type TacticsPlayer,
+  type InsertTacticsPlayer,
+  type TacticsMove,
+  type InsertTacticsMove,
+  type TypingRace,
+  type InsertTypingRace,
+  type TypingRacePlayer,
+  type InsertTypingRacePlayer,
+  type SignalNoiseGame,
+  type InsertSignalNoiseGame,
+  gameLeaderboard,
+  tacticsGames,
+  tacticsPlayers,
+  tacticsMoves,
+  typingRaces,
+  typingRacePlayers,
+  signalNoiseGames,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, or, ilike, sql, and, gte, lte, asc, ne, inArray } from "drizzle-orm";
@@ -209,6 +230,36 @@ export interface IStorage {
   deductCredits(userId: string, amount: number): Promise<boolean>;
   resetCreditsIfNeeded(userId: string): Promise<void>;
   updateUserStripeInfo(userId: string, data: { stripeCustomerId?: string; stripeSubscriptionId?: string; subscriptionTier?: string }): Promise<User>;
+
+  // Game Leaderboard
+  createLeaderboardEntry(data: InsertGameLeaderboardEntry): Promise<GameLeaderboardEntry>;
+  getGameLeaderboard(gameType: string, limit?: number): Promise<(GameLeaderboardEntry & { user: User; profile?: UserProfile })[]>;
+
+  // Tactics
+  createTacticsGame(data: InsertTacticsGame): Promise<TacticsGame>;
+  getTacticsGame(id: string): Promise<TacticsGame | undefined>;
+  updateTacticsGame(id: string, data: Partial<TacticsGame>): Promise<TacticsGame>;
+  getWaitingTacticsGames(): Promise<TacticsGame[]>;
+  createTacticsPlayer(data: InsertTacticsPlayer): Promise<TacticsPlayer>;
+  getTacticsPlayers(gameId: string): Promise<(TacticsPlayer & { user: User })[]>;
+  updateTacticsPlayer(id: string, data: Partial<TacticsPlayer>): Promise<TacticsPlayer>;
+  createTacticsMove(data: InsertTacticsMove): Promise<TacticsMove>;
+  getTacticsMovesForRound(gameId: string, round: number): Promise<TacticsMove[]>;
+
+  // Typing
+  createTypingRace(data: InsertTypingRace): Promise<TypingRace>;
+  getTypingRace(id: string): Promise<TypingRace | undefined>;
+  updateTypingRace(id: string, data: Partial<TypingRace>): Promise<TypingRace>;
+  getWaitingTypingRaces(): Promise<TypingRace[]>;
+  createTypingRacePlayer(data: InsertTypingRacePlayer): Promise<TypingRacePlayer>;
+  getTypingRacePlayers(raceId: string): Promise<(TypingRacePlayer & { user: User; profile?: UserProfile })[]>;
+  updateTypingRacePlayer(id: string, data: Partial<TypingRacePlayer>): Promise<TypingRacePlayer>;
+
+  // Signal/Noise
+  createSignalNoiseGame(data: InsertSignalNoiseGame): Promise<SignalNoiseGame>;
+  getSignalNoiseGame(id: string): Promise<SignalNoiseGame | undefined>;
+  updateSignalNoiseGame(id: string, data: Partial<SignalNoiseGame>): Promise<SignalNoiseGame>;
+  getUserSignalNoiseHistory(userId: string, limit?: number): Promise<SignalNoiseGame[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -980,6 +1031,128 @@ export class DatabaseStorage implements IStorage {
   async updateProjectMember(projectId: string, userId: string, data: { timezone?: string; availability?: string; hoursPerWeek?: number; skills?: string[] }): Promise<ProjectMember> {
     const [member] = await db.update(projectMembers).set(data).where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId))).returning();
     return member;
+  }
+
+  // === GAME METHODS ===
+
+  async createLeaderboardEntry(data: InsertGameLeaderboardEntry): Promise<GameLeaderboardEntry> {
+    const [entry] = await db.insert(gameLeaderboard).values(data).returning();
+    return entry;
+  }
+
+  async getGameLeaderboard(gameType: string, limit: number = 50): Promise<(GameLeaderboardEntry & { user: User; profile?: UserProfile })[]> {
+    const entries = await db.select().from(gameLeaderboard).where(eq(gameLeaderboard.gameType, gameType)).orderBy(desc(gameLeaderboard.score)).limit(limit);
+    return await Promise.all(entries.map(async (e) => {
+      const [user] = await db.select().from(users).where(eq(users.id, e.userId));
+      const [profile] = await db.select().from(userProfiles).where(eq(userProfiles.userId, e.userId));
+      return { ...e, user, profile };
+    }));
+  }
+
+  // --- Tactics ---
+  async createTacticsGame(data: InsertTacticsGame): Promise<TacticsGame> {
+    const [game] = await db.insert(tacticsGames).values(data).returning();
+    return game;
+  }
+
+  async getTacticsGame(id: string): Promise<TacticsGame | undefined> {
+    const [game] = await db.select().from(tacticsGames).where(eq(tacticsGames.id, id));
+    return game;
+  }
+
+  async updateTacticsGame(id: string, data: Partial<TacticsGame>): Promise<TacticsGame> {
+    const [game] = await db.update(tacticsGames).set(data).where(eq(tacticsGames.id, id)).returning();
+    return game;
+  }
+
+  async getWaitingTacticsGames(): Promise<TacticsGame[]> {
+    return db.select().from(tacticsGames).where(eq(tacticsGames.status, "waiting")).orderBy(desc(tacticsGames.createdAt));
+  }
+
+  async createTacticsPlayer(data: InsertTacticsPlayer): Promise<TacticsPlayer> {
+    const [player] = await db.insert(tacticsPlayers).values(data).returning();
+    return player;
+  }
+
+  async getTacticsPlayers(gameId: string): Promise<(TacticsPlayer & { user: User })[]> {
+    const players = await db.select().from(tacticsPlayers).where(eq(tacticsPlayers.gameId, gameId));
+    return await Promise.all(players.map(async (p) => {
+      const [user] = await db.select().from(users).where(eq(users.id, p.userId));
+      return { ...p, user };
+    }));
+  }
+
+  async updateTacticsPlayer(id: string, data: Partial<TacticsPlayer>): Promise<TacticsPlayer> {
+    const [player] = await db.update(tacticsPlayers).set(data).where(eq(tacticsPlayers.id, id)).returning();
+    return player;
+  }
+
+  async createTacticsMove(data: InsertTacticsMove): Promise<TacticsMove> {
+    const [move] = await db.insert(tacticsMoves).values(data).returning();
+    return move;
+  }
+
+  async getTacticsMovesForRound(gameId: string, round: number): Promise<TacticsMove[]> {
+    return db.select().from(tacticsMoves).where(and(eq(tacticsMoves.gameId, gameId), eq(tacticsMoves.round, round)));
+  }
+
+  // --- Typing ---
+  async createTypingRace(data: InsertTypingRace): Promise<TypingRace> {
+    const [race] = await db.insert(typingRaces).values(data).returning();
+    return race;
+  }
+
+  async getTypingRace(id: string): Promise<TypingRace | undefined> {
+    const [race] = await db.select().from(typingRaces).where(eq(typingRaces.id, id));
+    return race;
+  }
+
+  async updateTypingRace(id: string, data: Partial<TypingRace>): Promise<TypingRace> {
+    const [race] = await db.update(typingRaces).set(data).where(eq(typingRaces.id, id)).returning();
+    return race;
+  }
+
+  async getWaitingTypingRaces(): Promise<TypingRace[]> {
+    return db.select().from(typingRaces).where(eq(typingRaces.status, "waiting")).orderBy(desc(typingRaces.createdAt));
+  }
+
+  async createTypingRacePlayer(data: InsertTypingRacePlayer): Promise<TypingRacePlayer> {
+    const [player] = await db.insert(typingRacePlayers).values(data).returning();
+    return player;
+  }
+
+  async getTypingRacePlayers(raceId: string): Promise<(TypingRacePlayer & { user: User; profile?: UserProfile })[]> {
+    const players = await db.select().from(typingRacePlayers).where(eq(typingRacePlayers.raceId, raceId));
+    return await Promise.all(players.map(async (p) => {
+      const [user] = await db.select().from(users).where(eq(users.id, p.userId));
+      const [profile] = await db.select().from(userProfiles).where(eq(userProfiles.userId, p.userId));
+      return { ...p, user, profile };
+    }));
+  }
+
+  async updateTypingRacePlayer(id: string, data: Partial<TypingRacePlayer>): Promise<TypingRacePlayer> {
+    const [player] = await db.update(typingRacePlayers).set(data).where(eq(typingRacePlayers.id, id)).returning();
+    return player;
+  }
+
+  // --- Signal/Noise ---
+  async createSignalNoiseGame(data: InsertSignalNoiseGame): Promise<SignalNoiseGame> {
+    const [game] = await db.insert(signalNoiseGames).values(data).returning();
+    return game;
+  }
+
+  async getSignalNoiseGame(id: string): Promise<SignalNoiseGame | undefined> {
+    const [game] = await db.select().from(signalNoiseGames).where(eq(signalNoiseGames.id, id));
+    return game;
+  }
+
+  async updateSignalNoiseGame(id: string, data: Partial<SignalNoiseGame>): Promise<SignalNoiseGame> {
+    const [game] = await db.update(signalNoiseGames).set(data).where(eq(signalNoiseGames.id, id)).returning();
+    return game;
+  }
+
+  async getUserSignalNoiseHistory(userId: string, limit: number = 20): Promise<SignalNoiseGame[]> {
+    return db.select().from(signalNoiseGames).where(eq(signalNoiseGames.userId, userId)).orderBy(desc(signalNoiseGames.createdAt)).limit(limit);
   }
 }
 
