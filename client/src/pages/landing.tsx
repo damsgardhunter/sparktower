@@ -45,14 +45,14 @@ export default function LandingPage() {
       </header>
 
       <section className="relative h-screen flex items-end justify-center px-4 pb-20 bg-white overflow-hidden">
-        <div className="absolute inset-0 z-0 overflow-hidden">
+        <div className="absolute left-0 right-0 z-0 overflow-hidden" style={{ top: '200px', bottom: 0 }}>
           <video
             src={heroVideo}
             autoPlay
             loop
             muted
             playsInline
-            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 min-w-full min-h-[120%] object-cover"
+            className="w-full h-full object-cover object-top"
             data-testid="video-hero"
           />
         </div>
@@ -74,7 +74,7 @@ export default function LandingPage() {
               >
                 Get Started
               </Button>
-              <Button size="lg" variant="outline" className="h-12 px-8 text-lg border-black/10" asChild>
+              <Button size="lg" variant="outline" className="h-12 px-8 text-lg border-black/10 bg-white/80 backdrop-blur-md hover:bg-white/90" asChild>
                 <a href="#features">Learn More</a>
               </Button>
             </div>
