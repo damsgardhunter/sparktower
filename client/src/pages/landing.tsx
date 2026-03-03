@@ -45,11 +45,10 @@ export default function LandingPage() {
       </header>
 
       <section className="relative h-screen flex items-end justify-center px-4 pb-20 bg-white overflow-hidden">
-        <div className="absolute left-0 right-0 z-0 overflow-hidden" style={{ top: '50px', bottom: 0 }}>
+        <div className="absolute left-0 right-0 z-0 overflow-hidden" style={{ top: '0px', bottom: 0 }}>
           <video
             src={heroVideo}
             autoPlay
-            loop
             muted
             playsInline
             className="w-full h-full object-cover object-top"
