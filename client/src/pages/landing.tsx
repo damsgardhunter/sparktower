@@ -44,7 +44,7 @@ export default function LandingPage() {
         </div>
       </header>
 
-      <section className="relative h-screen flex items-end justify-center px-4 pb-20 bg-white overflow-hidden">
+      <section className="relative h-screen flex items-start justify-center px-4 pt-24 bg-white overflow-hidden">
         <div className="absolute left-0 right-0 z-0 overflow-hidden" style={{ top: '0px', bottom: 0 }}>
           <video
             src={heroVideo}
@@ -56,15 +56,15 @@ export default function LandingPage() {
           />
         </div>
 
-        <div className="relative z-10 w-full max-w-5xl flex flex-col lg:flex-row items-center gap-12" style={{ animation: 'hero-fade-in 1.2s ease-out 2s both' }}>
-          <div className="flex-1 text-center lg:text-left space-y-6">
+        <div className="relative z-10 w-full max-w-5xl flex flex-col items-center gap-12" style={{ animation: 'hero-fade-in 1.2s ease-out 2s both' }}>
+          <div className="text-center space-y-6">
             <h1 className="text-4xl md:text-6xl font-bold text-black tracking-tight" style={{ opacity: 0, animation: 'hero-fade-in 1.2s ease-out 2s forwards' }} data-testid="text-hero-headline">
               Ignite your next <span className="text-primary">Collaborative Project</span>
             </h1>
-            <p className="text-xl text-gray-600 max-w-xl font-light" style={{ opacity: 0, animation: 'hero-fade-in 1.2s ease-out 2.6s forwards' }}>
+            <p className="text-xl text-gray-600 max-w-xl mx-auto font-light" style={{ opacity: 0, animation: 'hero-fade-in 1.2s ease-out 2.6s forwards' }}>
               Connect with entrepreneurs and freelancers. Use AI to find your perfect team and build something amazing together.
             </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start" style={{ opacity: 0, animation: 'hero-fade-in 1.2s ease-out 3.2s forwards' }}>
+            <div className="flex flex-col sm:flex-row gap-4 justify-center" style={{ opacity: 0, animation: 'hero-fade-in 1.2s ease-out 3.2s forwards' }}>
               <Button
                 size="lg"
                 className="h-12 px-8 text-lg"
