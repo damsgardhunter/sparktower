@@ -9,57 +9,63 @@ import { SiGoogle } from "react-icons/si";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
+import heroVideo from "@assets/Brooklyn_Tower_Tesla_Coil_Animation_1772567582595.mp4";
 
 export default function LandingPage() {
   const [activeTab, setActiveTab] = useState("login");
   const [showAuthModal, setShowAuthModal] = useState(false);
 
   return (
-    <div className="flex flex-col min-h-screen bg-background text-foreground">
-      <header className="fixed top-0 w-full z-50 flex items-center justify-between p-4 bg-background/80 backdrop-blur-md border-b border-border">
-        <div className="flex items-center gap-2">
-          <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center font-bold text-primary-foreground">
-            ST
+    <div className="flex flex-col min-h-screen bg-white text-foreground">
+      <header className="fixed top-0 w-full z-50" style={{ opacity: 0, animation: 'hero-fade-in-slow 1.5s ease-out 3.8s forwards' }}>
+        <div className="flex items-center justify-between p-4 bg-white/80 backdrop-blur-md border-b border-black/5">
+          <div className="flex items-center gap-2">
+            <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center font-bold text-primary-foreground">
+              ST
+            </div>
+            <span className="font-bold text-xl tracking-tight text-black">SparkTower</span>
           </div>
-          <span className="font-bold text-xl tracking-tight">SparkTower</span>
-        </div>
-        <div className="flex items-center gap-4">
-          <ThemeToggle />
-          <Button
-            data-testid="button-login"
-            onClick={() => { setActiveTab("login"); setShowAuthModal(true); }}
-          >
-            Log In
-          </Button>
-          <Button
-            variant="outline"
-            data-testid="button-signup-nav"
-            onClick={() => { setActiveTab("signup"); setShowAuthModal(true); }}
-          >
-            Sign Up
-          </Button>
+          <div className="flex items-center gap-4">
+            <ThemeToggle />
+            <Button
+              data-testid="button-login"
+              onClick={() => { setActiveTab("login"); setShowAuthModal(true); }}
+            >
+              Log In
+            </Button>
+            <Button
+              variant="outline"
+              data-testid="button-signup-nav"
+              onClick={() => { setActiveTab("signup"); setShowAuthModal(true); }}
+            >
+              Sign Up
+            </Button>
+          </div>
         </div>
       </header>
 
-      <section className="relative min-h-screen flex items-center justify-center pt-20 px-4">
-        <div className="absolute inset-0 z-0">
-          <img
-            src="https://images.unsplash.com/photo-1517048676732-d65bc937f952?q=80&w=2070&auto=format&fit=crop"
-            alt="Collaboration Hero"
-            className="w-full h-full object-cover"
+      <section className="relative h-screen flex items-end justify-center px-4 pb-20 bg-white overflow-hidden">
+        <div className="absolute inset-0 z-0 overflow-hidden">
+          <video
+            src={heroVideo}
+            autoPlay
+            loop
+            muted
+            playsInline
+            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 min-w-full min-h-[120%] object-cover"
+            data-testid="video-hero"
           />
-          <div className="absolute inset-0 bg-gradient-to-b from-black/80 via-black/60 to-black/80" />
         </div>
 
-        <div className="relative z-10 w-full max-w-5xl flex flex-col lg:flex-row items-center gap-12">
+        <div className="relative z-10 w-full max-w-5xl flex flex-col lg:flex-row items-center gap-12" style={{ animation: 'hero-fade-in 1.2s ease-out 2s both' }}>
           <div className="flex-1 text-center lg:text-left space-y-6">
-            <h1 className="text-4xl md:text-6xl font-bold text-white tracking-tight">
+            <h1 className="text-4xl md:text-6xl font-bold text-black tracking-tight" style={{ opacity: 0, animation: 'hero-fade-in 1.2s ease-out 2s forwards' }} data-testid="text-hero-headline">
               Ignite your next <span className="text-primary">Collaborative Project</span>
             </h1>
-            <p className="text-xl text-slate-300 max-w-xl font-light">
+            <p className="text-xl text-gray-600 max-w-xl font-light" style={{ opacity: 0, animation: 'hero-fade-in 1.2s ease-out 2.6s forwards' }}>
               Connect with entrepreneurs and freelancers. Use AI to find your perfect team and build something amazing together.
             </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start">
+            <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start" style={{ opacity: 0, animation: 'hero-fade-in 1.2s ease-out 3.2s forwards' }}>
               <Button
                 size="lg"
                 className="h-12 px-8 text-lg"
@@ -68,14 +74,14 @@ export default function LandingPage() {
               >
                 Get Started
               </Button>
-              <Button size="lg" variant="outline" className="h-12 px-8 text-lg text-white border-white/20 bg-white/5 backdrop-blur-sm" asChild>
+              <Button size="lg" variant="outline" className="h-12 px-8 text-lg border-black/10" asChild>
                 <a href="#features">Learn More</a>
               </Button>
             </div>
           </div>
 
           {showAuthModal && (
-            <div className="w-full max-w-md">
+            <div className="w-full max-w-md" style={{ opacity: 0, animation: 'hero-fade-in 1.2s ease-out 3.2s forwards' }}>
               <AuthCard activeTab={activeTab} onTabChange={setActiveTab} />
             </div>
           )}

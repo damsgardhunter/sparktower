@@ -10,7 +10,7 @@ Do not make changes to the folder `shared/`.
 Do not make changes to the file `server/seed-stripe.ts`.
 
 ## System Architecture
-**Frontend:** Built with React, TypeScript, Vite, Wouter, TanStack Query, Shadcn UI, Tailwind CSS, and Framer Motion. Features a green primary color, 0rem border-radius, Space Grotesk font, and full dark/light mode support.
+**Frontend:** Built with React, TypeScript, Vite, Wouter, TanStack Query, Shadcn UI, Tailwind CSS, and Framer Motion. Features a green primary color, 0rem border-radius, Space Grotesk font, and full dark/light mode support. Landing page has a cinematic hero section with a Tesla Coil tower video (`@assets/Brooklyn_Tower_Tesla_Coil_Animation_1772567582595.mp4`) filling the viewport on a white background, with staggered fade-in animations for headline (2s), subtext (2.6s), CTA buttons (3.2s), and header (3.8s).
 
 **Backend:** Uses Express.js with TypeScript, Drizzle ORM, and PostgreSQL.
 

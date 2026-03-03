@@ -286,3 +286,33 @@
     inset: -1px;
   }
 }
+
+@keyframes hero-fade-in {
+  0% { opacity: 0; transform: translateY(20px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes hero-fade-in-slow {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+.hero-headline {
+  opacity: 0;
+  animation: hero-fade-in 1.2s ease-out 2s forwards;
+}
+
+.hero-subtext {
+  opacity: 0;
+  animation: hero-fade-in 1.2s ease-out 2.6s forwards;
+}
+
+.hero-cta {
+  opacity: 0;
+  animation: hero-fade-in 1.2s ease-out 3.2s forwards;
+}
+
+.hero-header-reveal {
+  opacity: 0;
+  animation: hero-fade-in-slow 1.5s ease-out 3.8s forwards;
+}
