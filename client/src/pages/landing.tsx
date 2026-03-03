@@ -58,11 +58,16 @@ export default function LandingPage() {
 
         <div className="relative z-10 w-full max-w-5xl flex flex-col items-center gap-12" style={{ animation: 'hero-fade-in 1.2s ease-out 2s both' }}>
           <div className="text-center space-y-6">
-            <h1 className="text-4xl md:text-6xl font-bold text-black tracking-tight" style={{ opacity: 0, animation: 'hero-fade-in 1.2s ease-out 2s forwards' }} data-testid="text-hero-headline">
-              Ignite your next <span className="text-primary">Collaborative Project</span>
+            <h1 className="text-3xl md:text-5xl font-bold text-black tracking-tight italic leading-tight" style={{ opacity: 0, animation: 'hero-fade-in 1.2s ease-out 2s forwards' }} data-testid="text-hero-headline">
+              "The present is theirs; the future, for which I really worked, <span className="text-primary">is mine.</span>"
             </h1>
-            <p className="text-xl text-gray-600 max-w-xl mx-auto font-light" style={{ opacity: 0, animation: 'hero-fade-in 1.2s ease-out 2.6s forwards' }}>
-              Connect with entrepreneurs and freelancers. Use AI to find your perfect team and build something amazing together.
+            <div className="flex justify-center" style={{ opacity: 0, animation: 'hero-fade-in 1.2s ease-out 2.4s forwards' }}>
+              <span className="inline-block px-4 py-1.5 bg-black text-white text-sm font-semibold tracking-wide">
+                — Nikola Tesla
+              </span>
+            </div>
+            <p className="text-lg text-gray-600 max-w-2xl mx-auto font-light leading-relaxed" style={{ opacity: 0, animation: 'hero-fade-in 1.2s ease-out 2.8s forwards' }}>
+              SparkTower is built for the builders who think ahead. Like Tesla, we believe the future belongs to those who create it — connect with visionary entrepreneurs, collaborate with AI, and launch the projects that shape tomorrow.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center" style={{ opacity: 0, animation: 'hero-fade-in 1.2s ease-out 3.2s forwards' }}>
               <Button
