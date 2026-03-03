@@ -646,6 +646,7 @@ export const cofounderSprints = pgTable("cofounder_sprints", {
   productDescription: text("product_description"),
   user1ProposedName: text("user1_proposed_name"),
   user2ProposedName: text("user2_proposed_name"),
+  isPractice: boolean("is_practice").default(false).notNull(),
   agreedProblem: text("agreed_problem"),
   agreedIcp: text("agreed_icp"),
   agreedValueProp: text("agreed_value_prop"),

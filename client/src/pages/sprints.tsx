@@ -11,7 +11,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { CofounderSprint, User } from "@shared/schema";
 import {
   Loader2, Plus, Users, Timer, Sparkles,
-  CheckCircle2, Clock, ArrowRight, XCircle,
+  CheckCircle2, Clock, ArrowRight, XCircle, Cpu, GraduationCap,
 } from "lucide-react";
 
 type SprintWithUsers = CofounderSprint & { user1?: User; user2?: User };
@@ -85,10 +85,16 @@ export default function Sprints() {
             <h1 className="text-3xl font-bold tracking-tight" data-testid="text-sprints-title">Co-Founder Sprints</h1>
             <p className="text-muted-foreground mt-1">Trial collaborations to find your perfect co-founder</p>
           </div>
-          <Button onClick={() => setLocation("/sprints/new")} data-testid="button-new-sprint">
-            <Plus className="h-4 w-4 mr-2" />
-            New Sprint
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => setLocation("/sprints/practice")} data-testid="button-practice-sprint">
+              <GraduationCap className="h-4 w-4 mr-2" />
+              Practice
+            </Button>
+            <Button onClick={() => setLocation("/sprints/new")} data-testid="button-new-sprint">
+              <Plus className="h-4 w-4 mr-2" />
+              New Sprint
+            </Button>
+          </div>
         </div>
 
         {queueStatus?.inQueue && queueStatus.entry && (
@@ -160,14 +166,26 @@ export default function Sprints() {
                         <Badge variant={style.variant} data-testid={`badge-sprint-status-${sprint.id}`}>{style.label}</Badge>
                       </div>
                       <div className="flex items-center gap-4 mt-3">
-                        <div className="flex items-center gap-2">
-                          <UserAvatar src={partner?.profileImageUrl} name={partner?.firstName || "Partner"} className="h-6 w-6" />
-                          <span className="text-sm text-muted-foreground">{partner?.firstName || "Partner"}</span>
-                        </div>
+                        {sprint.isPractice ? (
+                          <div className="flex items-center gap-2">
+                            <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center">
+                              <Cpu className="h-3.5 w-3.5 text-primary" />
+                            </div>
+                            <span className="text-sm text-muted-foreground">Nova (AI)</span>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <UserAvatar src={partner?.profileImageUrl} name={partner?.firstName || "Partner"} className="h-6 w-6" />
+                            <span className="text-sm text-muted-foreground">{partner?.firstName || "Partner"}</span>
+                          </div>
+                        )}
                         <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
                           <Timer className="h-3.5 w-3.5" />
                           {sprint.duration}
                         </div>
+                        {sprint.isPractice && (
+                          <Badge variant="secondary" className="text-xs">Practice</Badge>
+                        )}
                         {sprint.productStyle && (
                           <Badge variant="outline" className="text-xs">{sprint.productStyle}</Badge>
                         )}

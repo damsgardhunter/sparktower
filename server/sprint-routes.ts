@@ -44,6 +44,61 @@ const SPRINT_72H_EXTRA_TASKS = [
   { title: "Compile final validation brief", description: "Combine all validation data into a comprehensive brief with insights", order: 10 },
 ];
 
+const NOVA_DECISION_PREFIX = "[Nova AI Practice Partner]";
+
+async function generatePracticeNovaContent(sprintId: string, phase: string, sprint: any) {
+  const novaUserId = sprint.user1Id;
+
+  if (phase === "ideation") {
+    const questions = [
+      { key: "real_problem", prompt: "What real problem does this product solve?" },
+      { key: "target_user", prompt: "Who is the target user?" },
+      { key: "riskiest_assumption", prompt: "What is the riskiest assumption?" },
+      { key: "success_criteria", prompt: "What does success look like?" },
+    ];
+    try {
+      const response = await getOpenAI().chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [{
+          role: "system",
+          content: `You are Nova, an AI co-founder partner in a practice sprint for the product "${sprint.productName}": ${sprint.productDescription || ""}. Answer these ideation questions as a thoughtful, experienced co-founder would. Be specific, practical, and insightful. Respond with ONLY valid JSON: {"real_problem": "answer", "target_user": "answer", "riskiest_assumption": "answer", "success_criteria": "answer"}`
+        }, {
+          role: "user",
+          content: questions.map(q => `${q.key}: ${q.prompt}`).join("\n")
+        }],
+        temperature: 0.7,
+        max_tokens: 600,
+      });
+      const content = response.choices[0]?.message?.content || "";
+      const cleaned = content.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+      const answers = JSON.parse(cleaned);
+      for (const q of questions) {
+        if (answers[q.key]) {
+          await storage.addSprintResponse({
+            sprintId, userId: novaUserId, questionKey: `nova_${q.key}`, answer: answers[q.key]
+          });
+        }
+      }
+    } catch (err) {
+      for (const q of questions) {
+        await storage.addSprintResponse({
+          sprintId, userId: novaUserId, questionKey: `nova_${q.key}`,
+          answer: `[Nova's practice response for: ${q.prompt}] This is a simulated answer for your practice sprint.`
+        });
+      }
+    }
+  }
+
+  if (phase === "review") {
+    try {
+      await storage.addSprintDecision({
+        sprintId, userId: novaUserId,
+        decision: "proceed", reason: "[Nova AI Practice Partner] This concept has solid foundations worth pursuing further. The ideation and building phases showed clear thinking and good execution."
+      });
+    } catch {}
+  }
+}
+
 export function registerSprintRoutes(app: Express) {
   app.post("/api/sprints", isAuthenticated, async (req: any, res) => {
     try {
@@ -61,6 +116,62 @@ export function registerSprintRoutes(app: Express) {
       res.json(sprint);
     } catch (error: any) {
       res.status(500).json({ message: "Failed to create sprint" });
+    }
+  });
+
+  app.post("/api/sprints/practice", isAuthenticated, async (req: any, res) => {
+    try {
+      const { duration, productStyle } = req.body;
+      if (!duration) return res.status(400).json({ message: "Duration required" });
+
+      const hasCredits = await storage.checkCredits(req.user.id, 1);
+      if (!hasCredits) return res.status(403).json({ message: "Insufficient credits. Practice sprints use 1 AI credit for Nova partner simulation." });
+      await storage.deductCredits(req.user.id, 1);
+
+      const profile = await storage.getUserProfile(req.user.id);
+      const styleDesc = {
+        past: "a reimagined classic product",
+        modern: "a modern innovation",
+        futuristic: "a futuristic product concept",
+      }[productStyle || "modern"];
+
+      let productName = "Practice Product";
+      let productDescription = "A practice sprint product idea.";
+      try {
+        const response = await getOpenAI().chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [{
+            role: "system",
+            content: `You are Nova, a creative product ideation assistant. Suggest ${styleDesc} for a solo practice sprint. Consider the builder's skills. Respond with ONLY valid JSON: {"name": "Product Name", "description": "2-3 sentence description"}`
+          }, {
+            role: "user",
+            content: `Builder skills: ${profile?.skills?.join(", ") || "general"}. Interests: ${profile?.interests?.join(", ") || "technology"}. Product style: ${productStyle || "modern"}`
+          }],
+          temperature: 0.9,
+          max_tokens: 200,
+        });
+        const content = response.choices[0]?.message?.content || "";
+        const cleaned = content.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+        const parsed = JSON.parse(cleaned);
+        productName = parsed.name || productName;
+        productDescription = parsed.description || productDescription;
+      } catch {}
+
+      const sprint = await storage.createSprint({
+        user1Id: req.user.id,
+        user2Id: req.user.id,
+        duration,
+        status: "setup",
+        productStyle: productStyle || null,
+        productName,
+        productDescription,
+        isPractice: true,
+      });
+
+      res.json(sprint);
+    } catch (error: any) {
+      console.error("Practice sprint error:", error);
+      res.status(500).json({ message: "Failed to create practice sprint" });
     }
   });
 
@@ -119,6 +230,12 @@ export function registerSprintRoutes(app: Express) {
         for (const t of tasks) {
           await storage.createSprintTask({ sprintId: sprint.id, ...t });
         }
+      }
+
+      if (sprint.isPractice) {
+        generatePracticeNovaContent(sprint.id, nextPhase, sprint).catch(err =>
+          console.error("Practice Nova content error:", err)
+        );
       }
 
       res.json(updated);

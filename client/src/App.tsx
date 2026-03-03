@@ -29,6 +29,7 @@ import SignalNoise from "@/pages/games/signal-noise";
 import Sprints from "@/pages/sprints";
 import SprintMatchmaking from "@/pages/sprint-matchmaking";
 import SprintDashboard from "@/pages/sprint-dashboard";
+import SprintPractice from "@/pages/sprint-practice";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "@tanstack/react-query";
 import type { UserProfile } from "@shared/schema";
@@ -104,6 +105,7 @@ function Router() {
             <Route path="/games/signal-noise" component={SignalNoise} />
             <Route path="/sprints" component={Sprints} />
             <Route path="/sprints/new" component={SprintMatchmaking} />
+            <Route path="/sprints/practice" component={SprintPractice} />
             <Route path="/sprints/:id" component={SprintDashboard} />
             <Route path="/messages" component={Messages} />
             <Route path="/pricing" component={Pricing} />

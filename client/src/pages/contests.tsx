@@ -195,7 +195,7 @@ export default function Contests() {
                 </div>
               </CardContent>
             </Card>
-            <Card className="cursor-pointer hover:border-primary/50 transition-colors group" onClick={() => setLocation("/sprints/new")} data-testid="card-game-sprint">
+            <Card className="hover:border-primary/50 transition-colors group" data-testid="card-game-sprint">
               <CardHeader className="pb-2">
                 <div className="h-10 w-10 rounded-lg bg-orange-500/10 flex items-center justify-center mb-2">
                   <Users className="h-5 w-5 text-orange-500" />
@@ -204,9 +204,13 @@ export default function Contests() {
               </CardHeader>
               <CardContent>
                 <p className="text-sm text-muted-foreground mb-3">24h or 72h trial collaboration with a potential co-founder. Build, validate, and discover compatibility.</p>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 mb-3">
                   <Badge variant="outline" className="text-xs">2-Player</Badge>
                   <Badge variant="outline" className="text-xs">Collaboration</Badge>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" onClick={() => setLocation("/sprints/practice")} data-testid="button-practice-sprint-contest">Practice</Button>
+                  <Button size="sm" onClick={() => setLocation("/sprints/new")} data-testid="button-real-sprint-contest">Real Sprint</Button>
                 </div>
               </CardContent>
             </Card>

@@ -22,7 +22,7 @@ import {
   FileText, LayoutList, User as UserIcon,
   Star, ThumbsUp, ThumbsDown, AlertTriangle,
   Shield, TrendingUp, Rocket, Mail, Share2,
-  HelpCircle, Camera, Handshake, PenLine, Cpu, Dice5,
+  HelpCircle, Camera, Handshake, PenLine, Cpu, Dice5, GraduationCap,
 } from "lucide-react";
 
 const SPRINT_PHASES = ["setup", "ideation", "alignment", "building", "validation", "review", "completed"] as const;
@@ -294,8 +294,12 @@ export default function SprintDashboard() {
   const currentUser = sprint.user1Id === user?.id ? sprint.user1 : sprint.user2;
   const currentPhaseIdx = SPRINT_PHASES.indexOf(sprint.status as any);
 
-  const myResponses = responses?.filter(r => r.userId === user?.id) || [];
-  const partnerResponses = responses?.filter(r => r.userId === partnerId) || [];
+  const myResponses = sprint.isPractice
+    ? (responses?.filter(r => r.userId === user?.id && !r.questionKey.startsWith("nova_")) || [])
+    : (responses?.filter(r => r.userId === user?.id) || []);
+  const partnerResponses = sprint.isPractice
+    ? (responses?.filter(r => r.questionKey.startsWith("nova_")) || [])
+    : (responses?.filter(r => r.userId === partnerId) || []);
   const allMyQuestionsAnswered = IDEATION_QUESTIONS.every(q => myResponses.some(r => r.questionKey === q.key));
 
   function handleSubmitAllResponses() {
@@ -346,9 +350,23 @@ export default function SprintDashboard() {
               </div>
               <Users className="h-4 w-4 text-muted-foreground" />
               <div className="flex items-center gap-2">
-                <UserAvatar src={partnerUser?.profileImageUrl} name={partnerUser?.firstName || "Partner"} className="h-8 w-8" />
-                <span className="text-sm font-medium" data-testid="text-partner-name">{partnerUser?.firstName || "Partner"}</span>
+                {sprint.isPractice ? (
+                  <>
+                    <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center">
+                      <Cpu className="h-4 w-4 text-primary" />
+                    </div>
+                    <span className="text-sm font-medium" data-testid="text-partner-name">Nova (AI)</span>
+                  </>
+                ) : (
+                  <>
+                    <UserAvatar src={partnerUser?.profileImageUrl} name={partnerUser?.firstName || "Partner"} className="h-8 w-8" />
+                    <span className="text-sm font-medium" data-testid="text-partner-name">{partnerUser?.firstName || "Partner"}</span>
+                  </>
+                )}
               </div>
+              {sprint.isPractice && (
+                <Badge variant="secondary" className="text-xs">Practice</Badge>
+              )}
             </div>
           </div>
 
@@ -401,6 +419,7 @@ export default function SprintDashboard() {
               onAdvance={() => advanceMutation.mutate()}
               advancePending={advanceMutation.isPending}
               partnerResponded={partnerResponses.length > 0}
+              isPractice={sprint.isPractice}
             />
           )}
           {sprint.status === "alignment" && (
@@ -597,6 +616,57 @@ function SetupPhase({ sprint, user, onAdvance, isPending }: {
 
   const productNameChosen = !!sprint.productName;
 
+  if (sprint.isPractice) {
+    return (
+      <div className="space-y-8 max-w-2xl mx-auto py-6">
+        <div className="text-center">
+          <h2 className="text-2xl font-bold mb-2" data-testid="text-setup-title">Practice Sprint</h2>
+          <p className="text-muted-foreground">
+            This is a practice {sprint.duration} sprint with Nova as your AI co-founder partner.
+            Go through all the phases to get familiar with the sprint process before doing a real one.
+          </p>
+        </div>
+
+        <Card data-testid="card-partner-profile">
+          <CardContent className="p-6">
+            <div className="flex items-center gap-4 mb-4">
+              <div className="h-14 w-14 rounded-full bg-primary/10 flex items-center justify-center">
+                <Cpu className="h-7 w-7 text-primary" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold">Nova (AI Partner)</h3>
+                <p className="text-sm text-muted-foreground">Your AI co-founder for this practice sprint</p>
+              </div>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Nova will provide AI-generated ideation responses, collaborate on alignment, and give you feedback at the end.
+              This sprint won't affect your real match history or reputation.
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-primary/30 bg-primary/5" data-testid="card-name-selected">
+          <CardContent className="p-6 text-center">
+            <Sparkles className="h-8 w-8 text-primary mx-auto mb-3" />
+            <h3 className="text-lg font-semibold mb-1" data-testid="text-chosen-name">
+              {sprint.productName}
+            </h3>
+            {sprint.productDescription && (
+              <p className="text-sm text-muted-foreground mt-2">{sprint.productDescription}</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <div className="text-center">
+          <Button onClick={onAdvance} disabled={isPending} size="lg" data-testid="button-start-sprint">
+            {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <ArrowRight className="h-4 w-4 mr-2" />}
+            Start Practice Sprint
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-8 max-w-2xl mx-auto py-6">
       <div className="text-center">
@@ -746,7 +816,7 @@ function SetupPhase({ sprint, user, onAdvance, isPending }: {
   );
 }
 
-function IdeationPhase({ myResponses, allMyQuestionsAnswered, ideationAnswers, setIdeationAnswers, onSubmitAll, isPending, onAdvance, advancePending, partnerResponded }: {
+function IdeationPhase({ myResponses, allMyQuestionsAnswered, ideationAnswers, setIdeationAnswers, onSubmitAll, isPending, onAdvance, advancePending, partnerResponded, isPractice }: {
   myResponses: SprintResponse[];
   allMyQuestionsAnswered: boolean;
   ideationAnswers: Record<string, string>;
@@ -756,13 +826,20 @@ function IdeationPhase({ myResponses, allMyQuestionsAnswered, ideationAnswers, s
   onAdvance: () => void;
   advancePending: boolean;
   partnerResponded: boolean;
+  isPractice?: boolean;
 }) {
+  const canAdvance = isPractice ? allMyQuestionsAnswered : (allMyQuestionsAnswered && partnerResponded);
+
   return (
     <div className="space-y-6">
       <div className="text-center mb-8">
-        <h2 className="text-xl font-bold mb-2" data-testid="text-ideation-title">Private Ideation</h2>
+        <h2 className="text-xl font-bold mb-2" data-testid="text-ideation-title">
+          {isPractice ? "Practice Ideation" : "Private Ideation"}
+        </h2>
         <p className="text-muted-foreground max-w-lg mx-auto">
-          Answer these questions independently. Your partner won't see your answers until the alignment phase.
+          {isPractice
+            ? "Answer these questions on your own. Nova has already submitted AI responses that you'll compare in the alignment phase."
+            : "Answer these questions independently. Your partner won't see your answers until the alignment phase."}
         </p>
       </div>
 
@@ -772,9 +849,11 @@ function IdeationPhase({ myResponses, allMyQuestionsAnswered, ideationAnswers, s
             <CheckCircle2 className="h-12 w-12 text-green-500" />
             <h3 className="text-lg font-semibold" data-testid="text-ideation-submitted">Responses Submitted</h3>
             <p className="text-muted-foreground text-center max-w-md">
-              {partnerResponded
-                ? "Both you and your partner have submitted responses. You can advance to the alignment phase."
-                : "Waiting for your partner to submit their responses..."}
+              {isPractice
+                ? "Your responses are in! Nova has also submitted AI-generated answers. Advance to compare them."
+                : partnerResponded
+                  ? "Both you and your partner have submitted responses. You can advance to the alignment phase."
+                  : "Waiting for your partner to submit their responses..."}
             </p>
             <div className="flex gap-3 mt-2">
               <Button onClick={onAdvance} disabled={advancePending} data-testid="button-advance-alignment">
@@ -858,7 +937,9 @@ function AlignmentPhase({ sprint, myResponses, partnerResponses, currentUser, pa
         <h3 className="text-lg font-semibold">Response Comparison</h3>
         {IDEATION_QUESTIONS.map((q) => {
           const myAnswer = myResponses.find(r => r.questionKey === q.key)?.answer;
-          const partnerAnswer = partnerResponses.find(r => r.questionKey === q.key)?.answer;
+          const partnerAnswer = sprint.isPractice
+            ? partnerResponses.find(r => r.questionKey === `nova_${q.key}`)?.answer
+            : partnerResponses.find(r => r.questionKey === q.key)?.answer;
           return (
             <Card key={q.key}>
               <CardHeader className="pb-2">
@@ -877,8 +958,19 @@ function AlignmentPhase({ sprint, myResponses, partnerResponses, currentUser, pa
                   </div>
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
-                      <UserAvatar src={partnerUser?.profileImageUrl} name={partnerUser?.firstName || "Partner"} className="h-5 w-5" />
-                      <span className="text-xs font-medium text-muted-foreground">{partnerUser?.firstName || "Partner"}</span>
+                      {sprint.isPractice ? (
+                        <>
+                          <div className="h-5 w-5 rounded-full bg-primary/10 flex items-center justify-center">
+                            <Cpu className="h-3 w-3 text-primary" />
+                          </div>
+                          <span className="text-xs font-medium text-muted-foreground">Nova (AI)</span>
+                        </>
+                      ) : (
+                        <>
+                          <UserAvatar src={partnerUser?.profileImageUrl} name={partnerUser?.firstName || "Partner"} className="h-5 w-5" />
+                          <span className="text-xs font-medium text-muted-foreground">{partnerUser?.firstName || "Partner"}</span>
+                        </>
+                      )}
                     </div>
                     <p className="text-sm bg-muted p-3 rounded-md" data-testid={`text-partner-response-${q.key}`}>
                       {partnerAnswer || "No response"}
@@ -1289,10 +1381,16 @@ function ReviewPhase({ sprint, decisions, ratings, userId, decisionForm, setDeci
   onSubmitRating: () => void; ratingPending: boolean;
   onAdvance: () => void; advancePending: boolean;
 }) {
-  const myDecision = decisions.find(d => d.userId === userId);
+  const isPractice = sprint.isPractice;
+  const novaDecision = isPractice ? decisions.find(d => d.reason?.startsWith("[Nova AI Practice Partner]")) : null;
+  const myDecision = isPractice
+    ? decisions.find(d => d.userId === userId && !d.reason?.startsWith("[Nova AI Practice Partner]"))
+    : decisions.find(d => d.userId === userId);
   const myRating = ratings.find(r => r.raterId === userId);
-  const partnerDecision = decisions.find(d => d.userId !== userId);
-  const bothSubmitted = !!myDecision && !!myRating && !!partnerDecision;
+  const partnerDecision = isPractice ? novaDecision : decisions.find(d => d.userId !== userId);
+  const bothSubmitted = isPractice
+    ? !!myDecision && !!myRating
+    : !!myDecision && !!myRating && !!partnerDecision;
 
   return (
     <div className="space-y-6">
@@ -1302,7 +1400,9 @@ function ReviewPhase({ sprint, decisions, ratings, userId, decisionForm, setDeci
             <Users className="h-5 w-5 text-primary" />
             Review Phase
           </h2>
-          <p className="text-sm text-muted-foreground">Submit your decision and rate your partner privately</p>
+          <p className="text-sm text-muted-foreground">
+            {isPractice ? "Submit your decision and rate the practice experience" : "Submit your decision and rate your partner privately"}
+          </p>
         </div>
         {bothSubmitted && (
           <Button onClick={onAdvance} disabled={advancePending} data-testid="button-advance-completed">
@@ -1371,7 +1471,7 @@ function ReviewPhase({ sprint, decisions, ratings, userId, decisionForm, setDeci
           <CardHeader>
             <CardTitle className="text-base flex items-center gap-2">
               <Star className="h-4 w-4" />
-              Rate Your Partner
+              {isPractice ? "Rate the Experience" : "Rate Your Partner"}
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -1416,7 +1516,7 @@ function ReviewPhase({ sprint, decisions, ratings, userId, decisionForm, setDeci
         </Card>
       </div>
 
-      {!bothSubmitted && (myDecision || myRating) && (
+      {!isPractice && !bothSubmitted && (myDecision || myRating) && (
         <Card className="bg-muted/50">
           <CardContent className="py-6 text-center">
             <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2 text-primary" />
@@ -1435,8 +1535,11 @@ function CompletedPhase({ sprint, report, decisions, ratings, userId, currentUse
   onGenerateReport: () => void; reportPending: boolean;
   onConvertProject: () => void; convertPending: boolean;
 }) {
-  const myDecision = decisions.find(d => d.userId === userId);
-  const partnerDecision = decisions.find(d => d.userId !== userId);
+  const novaDecision = sprint.isPractice ? decisions.find(d => d.reason?.startsWith("[Nova AI Practice Partner]")) : null;
+  const myDecision = sprint.isPractice
+    ? decisions.find(d => d.userId === userId && !d.reason?.startsWith("[Nova AI Practice Partner]"))
+    : decisions.find(d => d.userId === userId);
+  const partnerDecision = sprint.isPractice ? novaDecision : decisions.find(d => d.userId !== userId);
   const bothProceeded = myDecision?.decision === "proceed" && partnerDecision?.decision === "proceed";
 
   return (
@@ -1446,7 +1549,9 @@ function CompletedPhase({ sprint, report, decisions, ratings, userId, currentUse
           <CheckCircle2 className="h-8 w-8 text-primary" />
         </div>
         <h2 className="text-xl font-semibold" data-testid="text-sprint-complete">Sprint Complete!</h2>
-        <p className="text-sm text-muted-foreground mt-1">Here's the summary of your collaboration</p>
+        <p className="text-sm text-muted-foreground mt-1">
+          {sprint.isPractice ? "Here's the summary of your practice sprint" : "Here's the summary of your collaboration"}
+        </p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1454,13 +1559,19 @@ function CompletedPhase({ sprint, report, decisions, ratings, userId, currentUse
           <CardHeader><CardTitle className="text-base flex items-center gap-2"><Target className="h-4 w-4" />Decisions</CardTitle></CardHeader>
           <CardContent className="space-y-4">
             {[
-              { user: currentUser, decision: myDecision, label: "Your Decision" },
-              { user: partnerUser, decision: partnerDecision, label: "Partner's Decision" },
-            ].map(({ user: u, decision, label }) => (
+              { user: currentUser, decision: myDecision, label: "Your Decision", isNova: false },
+              { user: partnerUser, decision: partnerDecision, label: sprint.isPractice ? "Nova's Decision" : "Partner's Decision", isNova: !!sprint.isPractice },
+            ].map(({ user: u, decision, label, isNova }) => (
               <div key={label} className="flex items-start gap-3">
-                <UserAvatar src={u?.profileImageUrl} name={u?.firstName || "User"} className="h-8 w-8 mt-0.5" />
+                {isNova ? (
+                  <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center mt-0.5">
+                    <Cpu className="h-4 w-4 text-primary" />
+                  </div>
+                ) : (
+                  <UserAvatar src={u?.profileImageUrl} name={u?.firstName || "User"} className="h-8 w-8 mt-0.5" />
+                )}
                 <div>
-                  <p className="text-sm font-medium">{u?.firstName || "User"} — {label}</p>
+                  <p className="text-sm font-medium">{isNova ? "Nova (AI)" : (u?.firstName || "User")} — {label}</p>
                   {decision ? (
                     <>
                       <Badge variant={decision.decision === "proceed" ? "default" : decision.decision === "pivot" ? "secondary" : "destructive"} className="mt-1" data-testid={`badge-decision-${label.toLowerCase().replace(/\s+/g, "-")}`}>
@@ -1535,7 +1646,7 @@ function CompletedPhase({ sprint, report, decisions, ratings, userId, currentUse
         </Card>
       </div>
 
-      {bothProceeded && (
+      {bothProceeded && !sprint.isPractice && (
         <Card className="border-primary/30 bg-primary/5">
           <CardContent className="py-6">
             <div className="flex items-center justify-between flex-wrap gap-4">
@@ -1555,6 +1666,18 @@ function CompletedPhase({ sprint, report, decisions, ratings, userId, currentUse
                 </Button>
               </div>
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {sprint.isPractice && (
+        <Card className="border-primary/30 bg-primary/5">
+          <CardContent className="py-6 text-center">
+            <GraduationCap className="h-8 w-8 text-primary mx-auto mb-3" />
+            <h3 className="font-semibold" data-testid="text-practice-complete">Practice Sprint Complete!</h3>
+            <p className="text-sm text-muted-foreground mt-1 max-w-md mx-auto">
+              Great job completing this practice sprint! You've gone through all the phases of a real co-founder collaboration. When you're ready, try a real sprint with a matched partner.
+            </p>
           </CardContent>
         </Card>
       )}
