@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Zap, MessageSquare, Target, Eye, EyeOff, Loader2 } from "lucide-react";
+import { Zap, MessageSquare, Target, Eye, EyeOff, Loader2, Users, Rocket, Globe, Brain, UserPlus, Search, Handshake, Lightbulb, Wrench, User, ArrowRight } from "lucide-react";
 import logoImage from "@assets/logo_1772583119620.png";
 import { SiGoogle } from "react-icons/si";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -75,14 +75,13 @@ export default function LandingPage() {
             <div className="flex flex-col sm:flex-row gap-4 justify-center" style={{ opacity: 0, animation: 'hero-fade-in 1.2s ease-out 3.2s forwards' }}>
               <Button
                 size="lg"
-                className="h-12 px-8 text-lg"
                 data-testid="button-get-started"
                 onClick={() => { setActiveTab("signup"); setShowAuthModal(true); }}
               >
                 Get Started
               </Button>
-              <Button size="lg" variant="outline" className="h-12 px-8 text-lg border-black/10 bg-white/80 backdrop-blur-md hover:bg-white/90" asChild>
-                <a href="#features">Learn More</a>
+              <Button size="lg" variant="outline" className="bg-white/80 backdrop-blur-md" asChild>
+                <a href="#features" data-testid="link-learn-more">Learn More</a>
               </Button>
             </div>
           </div>
@@ -136,9 +135,174 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <footer className="py-12 border-t border-border bg-card">
-        <div className="max-w-6xl mx-auto px-4 text-center text-tertiary">
-          <p>&copy; {new Date().getFullYear()} SparkTower. Built for the future of collaboration.</p>
+      <section className="py-16 px-4 bg-background border-b border-border" data-testid="section-stats">
+        <div className="max-w-6xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
+          {[
+            { value: "10,000+", label: "Builders & Creators", icon: Users },
+            { value: "2,500+", label: "Projects Launched", icon: Rocket },
+            { value: "50,000+", label: "AI Matches Made", icon: Brain },
+            { value: "120+", label: "Countries Represented", icon: Globe },
+          ].map((stat) => (
+            <div key={stat.label} className="space-y-2" data-testid={`stat-${stat.label.toLowerCase().replace(/\s+/g, '-')}`}>
+              <stat.icon className="h-6 w-6 text-primary mx-auto mb-2" />
+              <div className="text-3xl md:text-4xl font-bold text-foreground tracking-tight">{stat.value}</div>
+              <div className="text-sm text-muted-foreground font-medium">{stat.label}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="py-24 px-4 bg-card/30 border-b border-border" data-testid="section-personas">
+        <div className="max-w-6xl mx-auto">
+          <div className="text-center mb-16 space-y-4">
+            <h2 className="text-3xl md:text-5xl font-bold tracking-tight">Built for Builders Like You</h2>
+            <p className="text-xl text-secondary max-w-2xl mx-auto">
+              Whether you're going solo or looking for your dream team, SparkTower meets you where you are.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+            <div className="p-8 rounded-2xl bg-card border border-card-border space-y-4 hover-elevate" data-testid="card-persona-founder">
+              <div className="h-12 w-12 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
+                <Lightbulb className="h-6 w-6" />
+              </div>
+              <h3 className="text-xl font-bold">Solo Founders</h3>
+              <p className="text-secondary leading-relaxed italic">"I have the vision, but I need the right people to make it real."</p>
+              <p className="text-secondary leading-relaxed">
+                Stop pitching into the void. SparkTower's AI matches you with co-founders who share your drive and complement your skills — so you can move from idea to launch, faster.
+              </p>
+            </div>
+            <div className="p-8 rounded-2xl bg-card border border-card-border space-y-4 hover-elevate" data-testid="card-persona-freelancer">
+              <div className="h-12 w-12 rounded-xl bg-accent/10 flex items-center justify-center text-accent-foreground">
+                <Wrench className="h-6 w-6" />
+              </div>
+              <h3 className="text-xl font-bold">Freelancers & Specialists</h3>
+              <p className="text-secondary leading-relaxed italic">"I'm tired of one-off gigs. I want to build something that matters."</p>
+              <p className="text-secondary leading-relaxed">
+                Your skills deserve more than a marketplace listing. Join projects you believe in, earn reputation through real collaboration, and build a portfolio that proves your impact.
+              </p>
+            </div>
+            <div className="p-8 rounded-2xl bg-card border border-card-border space-y-4 hover-elevate" data-testid="card-persona-sideproject">
+              <div className="h-12 w-12 rounded-xl bg-chart-4/10 flex items-center justify-center text-chart-4">
+                <Zap className="h-6 w-6" />
+              </div>
+              <h3 className="text-xl font-bold">Side-Project Builders</h3>
+              <p className="text-secondary leading-relaxed italic">"I build on nights and weekends, but I feel like I'm doing it alone."</p>
+              <p className="text-secondary leading-relaxed">
+                You're not alone anymore. Connect with others who share your hustle. Practice sprints with our AI, compete in hackathons, and turn your side project into your main thing.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="py-24 px-4 bg-background border-b border-border" data-testid="section-how-it-works">
+        <div className="max-w-5xl mx-auto">
+          <div className="text-center mb-16 space-y-4">
+            <h2 className="text-3xl md:text-5xl font-bold tracking-tight">How It Works</h2>
+            <p className="text-xl text-secondary max-w-2xl mx-auto">
+              Four steps from sign-up to launch. No gatekeeping, no waiting — just building.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+            {[
+              { step: "01", title: "Sign Up", desc: "Create your free account in under a minute. No credit card required.", icon: UserPlus },
+              { step: "02", title: "Build Your Profile", desc: "Tell us your skills, interests, and what you're looking to build. Our AI learns what makes you unique.", icon: User },
+              { step: "03", title: "Get Matched", desc: "Our AI finds builders who complement your strengths. Try a 24-hour sprint to test the fit before committing.", icon: Search },
+              { step: "04", title: "Launch Together", desc: "Collaborate with built-in project tools, AI assistance, and a community cheering you on.", icon: Handshake },
+            ].map((item, i) => (
+              <div key={item.step} className="relative text-center space-y-4 p-6" data-testid={`step-${item.step}`}>
+                {i < 3 && (
+                  <div className="hidden md:block absolute top-12 -right-3 z-10">
+                    <ArrowRight className="h-5 w-5 text-primary/40" />
+                  </div>
+                )}
+                <div className="h-14 w-14 rounded-full bg-primary/10 flex items-center justify-center text-primary mx-auto">
+                  <item.icon className="h-6 w-6" />
+                </div>
+                <div className="text-xs font-bold text-primary tracking-widest uppercase">Step {item.step}</div>
+                <h3 className="text-lg font-bold">{item.title}</h3>
+                <p className="text-secondary text-sm leading-relaxed">{item.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="py-24 px-4 bg-black text-white" data-testid="section-vision">
+        <div className="max-w-4xl mx-auto text-center space-y-8">
+          <div className="h-16 w-16 rounded-full bg-primary/20 flex items-center justify-center mx-auto">
+            <Zap className="h-8 w-8 text-primary" />
+          </div>
+          <blockquote className="text-2xl md:text-4xl font-bold italic leading-tight tracking-tight">
+            "If you want to find the secrets of the universe, think in terms of <span className="text-primary">energy, frequency, and vibration.</span>"
+          </blockquote>
+          <div className="inline-block px-4 py-1.5 bg-white/10 text-white/80 text-sm font-semibold tracking-wide">
+            — Nikola Tesla
+          </div>
+          <p className="text-lg text-white/70 max-w-2xl mx-auto font-light leading-relaxed">
+            Tesla saw connections where others saw chaos. SparkTower is built on that same frequency — matching the right energy between builders, amplifying the vibration of collaboration, and channeling it into projects that reshape industries. This isn't just a platform. It's a movement for the ones who build the future.
+          </p>
+        </div>
+      </section>
+
+      <section className="py-24 px-4 bg-background" data-testid="section-final-cta">
+        <div className="max-w-3xl mx-auto text-center space-y-8">
+          <h2 className="text-3xl md:text-5xl font-bold tracking-tight text-foreground">
+            The future won't build itself.
+          </h2>
+          <p className="text-xl text-muted-foreground font-light max-w-xl mx-auto leading-relaxed">
+            Every great invention started with one person who refused to wait for permission. Your project, your team, your legacy — it starts right here.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-4 justify-center pt-4">
+            <Button
+              size="lg"
+              data-testid="button-join-sparktower"
+              onClick={() => { setActiveTab("signup"); setShowAuthModal(true); }}
+            >
+              Join SparkTower
+              <ArrowRight className="ml-2 h-5 w-5" />
+            </Button>
+          </div>
+          <p className="text-sm text-muted-foreground/60">Free to start. No credit card required.</p>
+        </div>
+      </section>
+
+      <footer className="py-16 border-t border-border bg-card" data-testid="section-footer">
+        <div className="max-w-6xl mx-auto px-4">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-10 mb-12">
+            <div className="space-y-4 md:col-span-2">
+              <div className="flex items-center gap-3">
+                <img src={logoImage} alt="SparkTower" className="h-10 w-auto" />
+                <span className="font-bold text-lg tracking-tight text-foreground">SparkTower</span>
+              </div>
+              <p className="text-muted-foreground leading-relaxed max-w-sm">
+                Where visionary builders connect, collaborate, and create the future. Inspired by Tesla's belief that the greatest achievements come from bold collaboration.
+              </p>
+            </div>
+            <div className="space-y-3">
+              <h4 className="font-bold text-sm tracking-widest uppercase text-muted-foreground/50">Platform</h4>
+              <ul className="space-y-2 text-muted-foreground text-sm">
+                <li>AI Matching</li>
+                <li>Co-Founder Sprints</li>
+                <li>Project Dashboard</li>
+                <li>Games Arena</li>
+                <li>Leaderboard</li>
+              </ul>
+            </div>
+            <div className="space-y-3">
+              <h4 className="font-bold text-sm tracking-widest uppercase text-muted-foreground/50">Community</h4>
+              <ul className="space-y-2 text-muted-foreground text-sm">
+                <li>Nova AI Assistant</li>
+                <li>Builder Reputation</li>
+                <li>Hackathons & Contests</li>
+                <li>Startup Toolkit</li>
+              </ul>
+            </div>
+          </div>
+          <div className="border-t border-border pt-8 flex flex-col md:flex-row justify-between items-center gap-4">
+            <p className="text-muted-foreground/60 text-sm">&copy; {new Date().getFullYear()} SparkTower. Built for the future of collaboration.</p>
+            <p className="text-muted-foreground/40 text-xs italic">"The present is theirs; the future is mine." — Nikola Tesla</p>
+          </div>
         </div>
       </footer>
     </div>
