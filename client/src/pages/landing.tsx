@@ -5,6 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Zap, MessageSquare, Target, Eye, EyeOff, Loader2 } from "lucide-react";
+import logoImage from "@assets/logo_1772583119620.png";
 import { SiGoogle } from "react-icons/si";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useToast } from "@/hooks/use-toast";
@@ -18,22 +19,24 @@ export default function LandingPage() {
   return (
     <div className="flex flex-col min-h-screen bg-white text-foreground">
       <header className="fixed top-0 w-full z-50" style={{ opacity: 0, animation: 'hero-fade-in-slow 1.5s ease-out 3.8s forwards' }}>
-        <div className="flex items-center justify-between p-4 bg-white/80 backdrop-blur-md border-b border-black/5">
-          <div className="flex items-center gap-2">
-            <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center font-bold text-primary-foreground">
-              ST
-            </div>
-            <span className="font-bold text-xl tracking-tight text-black">SparkTower</span>
-          </div>
-          <div className="flex items-center gap-4">
+        <div className="relative flex items-center justify-center p-3 bg-white/80 backdrop-blur-md border-b border-black/5">
+          <div className="absolute left-4 flex items-center gap-4">
             <ThemeToggle />
+          </div>
+          <div className="flex flex-col items-center">
+            <img src={logoImage} alt="SparkTower" className="h-10 w-auto" data-testid="img-logo" />
+            <span className="font-bold text-xs tracking-widest uppercase text-black -mt-0.5">SparkTower</span>
+          </div>
+          <div className="absolute right-4 flex items-center gap-3">
             <Button
+              size="sm"
               data-testid="button-login"
               onClick={() => { setActiveTab("login"); setShowAuthModal(true); }}
             >
               Log In
             </Button>
             <Button
+              size="sm"
               variant="outline"
               data-testid="button-signup-nav"
               onClick={() => { setActiveTab("signup"); setShowAuthModal(true); }}
