@@ -440,11 +440,11 @@ function LeaderboardView() {
             {entries.map((entry, i) => (
               <tr key={i} className="border-b last:border-0" data-testid={`row-leaderboard-${i}`}>
                 <td className="py-3 px-4 font-medium">{i + 1}</td>
-                <td className="py-3 px-4">{entry.user?.firstName || "Player"}</td>
-                <td className="py-3 px-4">{(entry.metadata as any)?.scenario || "-"}</td>
+                <td className="py-3 px-4">{entry.username || "Player"}</td>
+                <td className="py-3 px-4">{entry.scenario || "-"}</td>
                 <td className="py-3 px-4 text-right font-medium">{entry.score}</td>
-                <td className="py-3 px-4 text-right">{(entry.metadata as any)?.accuracy || 0}%</td>
-                <td className="py-3 px-4 text-right">{(entry.metadata as any)?.streak || 0}</td>
+                <td className="py-3 px-4 text-right">{entry.accuracy || 0}%</td>
+                <td className="py-3 px-4 text-right">{entry.streak || 0}</td>
               </tr>
             ))}
           </tbody>

@@ -245,7 +245,7 @@ function RaceView({ raceId }: { raceId: string }) {
       if (!race?.prompt) return;
       const wpm = calculateWpm();
       const accuracy = calculateAccuracy();
-      const progress = Math.round((typedText.length / race.promptText.length) * 100);
+      const progress = Math.round((typedText.length / race.prompt.length) * 100);
       progressMutation.mutate({
         wpm,
         accuracy,
@@ -265,7 +265,7 @@ function RaceView({ raceId }: { raceId: string }) {
       if (!race?.prompt || !startTime || hasFinished || countdown !== null) return;
 
       const newValue = e.target.value;
-      const prompt = race.promptText;
+      const prompt = race.prompt;
 
       if (newValue.length > prompt.length) return;
 
@@ -350,7 +350,7 @@ function RaceView({ raceId }: { raceId: string }) {
                 className="flex items-center gap-3 py-2"
                 data-testid={`player-waiting-${player.userId}`}
               >
-                <Badge variant="secondary">{player.user?.firstName || "Player"}</Badge>
+                <Badge variant="secondary">{player.username || "Player"}</Badge>
               </div>
             ))}
           </CardContent>
@@ -379,7 +379,7 @@ function RaceView({ raceId }: { raceId: string }) {
                     {idx === 0 ? <Crown className="h-6 w-6 text-yellow-500 inline" /> : `#${idx + 1}`}
                   </span>
                   <div>
-                    <p className="font-medium" data-testid={`text-result-name-${player.userId}`}>{player.user?.firstName || "Player"}</p>
+                    <p className="font-medium" data-testid={`text-result-name-${player.userId}`}>{player.username || "Player"}</p>
                     {player.finishTimeMs && (
                       <p className="text-xs text-muted-foreground">
                         {(player.finishTimeMs / 1000).toFixed(1)}s
@@ -414,7 +414,7 @@ function RaceView({ raceId }: { raceId: string }) {
     );
   }
 
-  const prompt = race.promptText || "";
+  const prompt = race.prompt || "";
   const wpm = calculateWpm();
   const accuracy = calculateAccuracy();
   const progressPct = prompt.length > 0 ? Math.round((typedText.length / prompt.length) * 100) : 0;
@@ -463,7 +463,7 @@ function RaceView({ raceId }: { raceId: string }) {
             data-testid="text-prompt-display"
             onClick={() => textareaRef.current?.focus()}
           >
-            {prompt.split("").map((char, i) => {
+            {prompt.split("").map((char: string, i: number) => {
               let className = "text-muted-foreground";
               if (i < typedText.length) {
                 if (typedText[i] === char) {
@@ -508,10 +508,10 @@ function RaceView({ raceId }: { raceId: string }) {
             {race.players.map((player) => (
               <div key={player.id} className="space-y-1" data-testid={`racer-progress-${player.userId}`}>
                 <div className="flex items-center justify-between flex-wrap gap-2">
-                  <span className="text-sm font-medium">{player.user?.firstName || "Player"}</span>
+                  <span className="text-sm font-medium">{player.username || "Player"}</span>
                   <div className="flex items-center gap-2">
                     <span className="text-sm text-muted-foreground">{player.wpm} WPM</span>
-                    {player.status === "finished" && <Badge variant="secondary">Finished</Badge>}
+                    {player.finished && <Badge variant="secondary">Finished</Badge>}
                   </div>
                 </div>
                 <Progress value={player.progress || 0} className="h-1.5" />
@@ -559,15 +559,15 @@ function LeaderboardView() {
               <span className="text-xl font-bold text-muted-foreground w-8 text-center">
                 {idx === 0 ? <Crown className="h-5 w-5 text-yellow-500 inline" /> : `#${idx + 1}`}
               </span>
-              <span className="font-medium" data-testid={`text-lb-name-${entry.userId}`}>{entry.user?.firstName || "Player"}</span>
+               <span className="font-medium" data-testid={`text-lb-name-${entry.userId}`}>{entry.username || "Player"}</span>
             </div>
             <div className="flex items-center gap-4 flex-wrap">
               <div className="text-center">
-                <p className="font-bold" data-testid={`text-lb-wpm-${entry.userId}`}>{(entry.metadata as any)?.wpm || 0}</p>
+                <p className="font-bold" data-testid={`text-lb-wpm-${entry.userId}`}>{entry.wpm || 0}</p>
                 <p className="text-xs text-muted-foreground">WPM</p>
               </div>
               <div className="text-center">
-                <p className="font-bold" data-testid={`text-lb-accuracy-${entry.userId}`}>{(entry.metadata as any)?.accuracy || 0}%</p>
+                <p className="font-bold" data-testid={`text-lb-accuracy-${entry.userId}`}>{entry.accuracy || 0}%</p>
                 <p className="text-xs text-muted-foreground">Accuracy</p>
               </div>
               <div className="text-center">
