@@ -11,21 +11,33 @@ export function getSession() {
   const sessionTtlSeconds = 7 * 24 * 60 * 60;
   const sessionTtlMs = sessionTtlSeconds * 1000;
   const isProduction = process.env.NODE_ENV === "production";
-  const pgStore = connectPg(session);
+  if (isProduction && !process.env.SESSION_SECRET) {
+    throw new Error("SESSION_SECRET must be set in production");
+  }
+  // Debug: log session secret presence and session import
+  try {
+    // eslint-disable-next-line no-console
+    console.log("getSession() SESSION_SECRET=", Boolean(process.env.SESSION_SECRET));
+    // eslint-disable-next-line no-console
+    console.log("express-session type:", typeof session);
+  } catch (e) {}
+  const sessionFn: any = (session as any)?.default || session;
+  const pgStore = connectPg(sessionFn);
   const sessionStore = new pgStore({
     conString: process.env.DATABASE_URL,
     createTableIfMissing: false,
     ttl: sessionTtlSeconds,
     tableName: "sessions",
   });
-  return session({
-    secret: process.env.SESSION_SECRET!,
+  return sessionFn({
+    secret: process.env.SESSION_SECRET || "dev-session-secret",
     store: sessionStore,
     resave: false,
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
       secure: isProduction,
+      sameSite: isProduction ? "lax" : "lax",
       maxAge: sessionTtlMs,
     },
   });
@@ -75,7 +87,8 @@ export async function setupAuth(app: Express) {
   );
 
   if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
-    const domain = process.env.REPLIT_DOMAINS?.split(",")[0] || "localhost:5000";
+    const defaultPort = process.env.PORT || "5001";
+    const domain = process.env.REPLIT_DOMAINS?.split(",")[0] || `localhost:${defaultPort}`;
     const protocol = domain.includes("localhost") ? "http" : "https";
     passport.use(
       new GoogleStrategy(
@@ -113,6 +126,11 @@ export async function setupAuth(app: Express) {
         }
       )
     );
+    // Debug: log the configured Google callback URL (does not include secrets)
+    try {
+      // eslint-disable-next-line no-console
+      console.log("Google OAuth callback URL:", `${protocol}://${domain}/api/auth/google/callback`);
+    } catch (e) {}
   }
 }
 

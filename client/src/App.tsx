@@ -18,12 +18,12 @@ import Matches from "@/pages/matches";
 import Leaderboard from "@/pages/leaderboard";
 import Discover from "@/pages/discover";
 import Onboarding from "@/pages/onboarding";
+import DocumentBuilder from "@/pages/document-builder";
 import Profile from "@/pages/profile";
 import Contests from "@/pages/contests";
 import Pricing from "@/pages/pricing";
 import Messages from "@/pages/messages";
 import ProjectManager from "@/pages/project-manager";
-import TacticsArena from "@/pages/games/tactics-arena";
 import TypingArena from "@/pages/games/typing-arena";
 import SignalNoise from "@/pages/games/signal-noise";
 import Sprints from "@/pages/sprints";
@@ -90,6 +90,8 @@ function Router() {
             <Route path="/projects" component={Projects} />
             <Route path="/projects/new" component={NovaIntro} />
             <Route path="/projects/new/create" component={ProjectCreate} />
+            {/* Before /projects/:id so the builder path isn't swallowed by it. */}
+            <Route path="/projects/:projectId/documents/:docId" component={DocumentBuilder} />
             <Route path="/projects/:id/manage" component={ProjectManager} />
             <Route path="/projects/:id" component={ProjectDashboard} />
             <Route path="/profile" component={Profile} />
@@ -97,9 +99,8 @@ function Router() {
             <Route path="/matches" component={Matches} />
             <Route path="/leaderboard" component={Leaderboard} />
             <Route path="/discover" component={Discover} />
+            {/* Hidden from nav, still reachable by direct link. */}
             <Route path="/contests" component={Contests} />
-            <Route path="/games/tactics/:id" component={TacticsArena} />
-            <Route path="/games/tactics" component={TacticsArena} />
             <Route path="/games/typing/:id" component={TypingArena} />
             <Route path="/games/typing" component={TypingArena} />
             <Route path="/games/signal-noise" component={SignalNoise} />

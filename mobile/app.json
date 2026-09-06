@@ -1,0 +1,57 @@
+{
+  "expo": {
+    "name": "SparkTower",
+    "slug": "sparktower",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "sparktower",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "backgroundColor": "#0B0F19",
+      "resizeMode": "contain",
+      "image": "./assets/splash-icon.png"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.sparktower.app",
+      "buildNumber": "1",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "com.sparktower.app",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "backgroundColor": "#0B0F19",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "edgeToEdgeEnabled": true
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-web-browser",
+      "expo-document-picker",
+      "expo-font"
+    ],
+    "extra": {
+      "//": "Point the app at your API. Override per-build with EXPO_PUBLIC_API_URL.",
+      "apiUrl": "http://localhost:5001",
+      "router": {},
+      "eas": {
+        "projectId": "f6de2c54-48d9-4f99-90f1-4f7ff3fe6f91"
+      }
+    },
+    "owner": "hunterdamsgard"
+  }
+}

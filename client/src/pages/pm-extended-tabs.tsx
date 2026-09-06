@@ -17,9 +17,13 @@ import {
   Loader2, Plus, Trash2, CheckSquare, Square, FileText,
   DollarSign, BarChart3, Shield, Rocket, Headphones, Beaker,
   MessageSquare, Users, Star, Clock, AlertTriangle, CheckCircle2,
-  X, Edit, Eye, Search,
+  X, Edit, Eye, Search, Briefcase,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useEntitlements } from "@/hooks/use-entitlements";
+import { UpgradePrompt } from "@/components/upgrade-prompt";
+import { HealthCheckPanel } from "@/components/health-check-panel";
+import { InvestorTools } from "@/components/investor-tools";
 
 function useCrudQuery<T>(projectId: string, endpoint: string) {
   return useQuery<T[]>({
@@ -229,11 +233,14 @@ function ExperimentsSection({ projectId }: { projectId: string }) {
 }
 
 export function StrategyTab({ projectId }: { projectId: string }) {
-  const [activeSection, setActiveSection] = useState<"pricing" | "legal">("pricing");
+  const [activeSection, setActiveSection] = useState<"pricing" | "legal" | "investor">("investor");
 
   return (
     <div className="space-y-4" data-testid="strategy-tab">
-      <div className="flex items-center gap-2 mb-4">
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
+        <Button variant={activeSection === "investor" ? "default" : "outline"} size="sm" onClick={() => setActiveSection("investor")} data-testid="btn-investor-section">
+          <Briefcase className="h-4 w-4 mr-1" /> Investor Readiness
+        </Button>
         <Button variant={activeSection === "pricing" ? "default" : "outline"} size="sm" onClick={() => setActiveSection("pricing")} data-testid="btn-pricing-section">
           <DollarSign className="h-4 w-4 mr-1" /> Pricing
         </Button>
@@ -241,6 +248,8 @@ export function StrategyTab({ projectId }: { projectId: string }) {
           <Shield className="h-4 w-4 mr-1" /> Legal
         </Button>
       </div>
+
+      {activeSection === "investor" && <InvestorTools projectId={projectId} />}
       {activeSection === "pricing" ? <PricingSection projectId={projectId} /> : <LegalSection projectId={projectId} />}
     </div>
   );
@@ -762,6 +771,8 @@ function LaunchPlanSection({ projectId }: { projectId: string }) {
 }
 
 export function AnalyticsTab({ projectId }: { projectId: string }) {
+  const { entitlements } = useEntitlements();
+  const analyticsLevel = entitlements.projectAnalytics;
   const { data: events, isLoading } = useCrudQuery<any>(projectId, "analytics-events");
   const { createMutation, updateMutation, deleteMutation } = useCrudMutations(projectId, "analytics-events");
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -786,13 +797,41 @@ export function AnalyticsTab({ projectId }: { projectId: string }) {
     referral: "border-l-purple-500",
   };
 
+  // Analytics is a paid entitlement; the server 402s this endpoint on Free.
+  if (analyticsLevel === "none") {
+    return (
+      <div className="max-w-2xl mx-auto py-8" data-testid="analytics-tab">
+        <UpgradePrompt
+          requiredTier="starter"
+          title="See how your project is actually doing"
+          description="Track activation, retention, revenue, and referral events so you know what's working — instead of guessing."
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4" data-testid="analytics-tab">
+      {/* Pro's project health check lives above the event tracker. */}
+      <HealthCheckPanel projectId={projectId} />
+
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold">Analytics Events</h3>
+        <div className="flex items-center gap-2">
+          <h3 className="text-lg font-semibold">Analytics Events</h3>
+          <Badge variant="secondary" className="text-[10px] capitalize">{analyticsLevel}</Badge>
+        </div>
         <Button size="sm" onClick={() => setDialogOpen(true)} data-testid="btn-add-event"><Plus className="h-4 w-4 mr-1" /> Add Event</Button>
       </div>
       <p className="text-sm text-muted-foreground">Track activation, retention, revenue, and referral events for your product.</p>
+
+      {analyticsLevel === "basic" && (
+        <UpgradePrompt
+          variant="inline"
+          requiredTier="builder"
+          title="Advanced analytics on Builder"
+          description="Get roadmap-linked progress tracking and deeper breakdowns."
+        />
+      )}
       {isLoading ? <Loader2 className="h-6 w-6 animate-spin mx-auto" /> : !events?.length ? (
         <Card><CardContent className="py-8 text-center text-muted-foreground"><BarChart3 className="h-10 w-10 mx-auto mb-2 opacity-30" /><p>No analytics events defined yet.</p></CardContent></Card>
       ) : (

@@ -61,6 +61,50 @@ import {
   projectKanbanTasks,
   projectPersonas,
   projectMilestones,
+  projectRoadmaps,
+  roadmapPhases,
+  projectHealthChecks,
+  healthFindingFeedback,
+  projectTaskCompletions,
+  projectDocuments,
+  projectCodeAudits,
+  projectStoryboards,
+  projectComments,
+  projectCommentReactions,
+  type ProjectComment,
+  type InsertProjectComment,
+  feedPosts,
+  feedReactions,
+  feedComments,
+  type FeedPost,
+  type InsertFeedPost,
+  type FeedComment,
+  type InsertFeedComment,
+  investorArtifacts,
+  mockInterviews,
+  mockInterviewTurns,
+  type InvestorArtifact,
+  type InsertInvestorArtifact,
+  type MockInterview,
+  type InsertMockInterview,
+  type MockInterviewTurn,
+  type InsertMockInterviewTurn,
+  type ProjectStoryboard,
+  type InsertProjectStoryboard,
+  type ProjectRoadmap,
+  type InsertProjectRoadmap,
+  type RoadmapPhase,
+  type InsertRoadmapPhase,
+  type ProjectHealthCheck,
+  type InsertProjectHealthCheck,
+  type ProjectTaskCompletion,
+  type ProjectDocument,
+  type InsertProjectDocument,
+  type ProjectCodeAudit,
+  type InsertProjectCodeAudit,
+  type InsertProjectTaskCompletion,
+  type HealthFindingFeedback,
+  type InsertHealthFindingFeedback,
   projectActivityLog,
   projectDecisions,
   projectCheckIns,
@@ -68,12 +112,6 @@ import {
   projectLinks,
   type GameLeaderboardEntry,
   type InsertGameLeaderboardEntry,
-  type TacticsGame,
-  type InsertTacticsGame,
-  type TacticsPlayer,
-  type InsertTacticsPlayer,
-  type TacticsMove,
-  type InsertTacticsMove,
   type TypingRace,
   type InsertTypingRace,
   type TypingRacePlayer,
@@ -124,10 +162,8 @@ import {
   sprintBehavioralMetrics,
   sprintCompatibilityReports,
   sprintMatchmakingQueue,
+  type SprintMatchmakingQueueEntry,
   gameLeaderboard,
-  tacticsGames,
-  tacticsPlayers,
-  tacticsMoves,
   typingRaces,
   typingRacePlayers,
   signalNoiseGames,
@@ -140,14 +176,49 @@ import {
   projectDeployChecklistItems,
   projectSupportTickets,
   projectLaunchTasks,
+  userTaskStats,
+  type UserTaskStats,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, or, ilike, sql, and, gte, lte, asc, ne, inArray, isNull } from "drizzle-orm";
+import { getEntitlements, normalizeTier, FAIR_USE_MONTHLY_CAP } from "@shared/plans";
+
+/**
+ * Was a finished task finished by its due date?
+ *
+ * Prefers `completedAt`. Tasks finished before that column existed fall back
+ * to the old comparison against now, which is wrong the moment the due date
+ * passes but is the best that data supports.
+ */
+export function isTaskOnTime(task: { status: string; dueDate: Date | null; completedAt?: Date | null }): boolean {
+  if (task.status !== "done" || !task.dueDate) return false;
+  const finished = task.completedAt ? new Date(task.completedAt) : new Date();
+  return finished <= new Date(task.dueDate);
+}
+
+/** A project comment with its author, ready to render. */
+export interface ProjectCommentWithAuthor extends ProjectComment {
+  author: User;
+  profile?: UserProfile;
+  viewerReacted: boolean;
+}
+
+/** A feed post with everything a card renders, resolved in one pass. */
+export interface FeedPostWithDetails extends FeedPost {
+  author: User;
+  profile?: UserProfile;
+  /** Null for posts not attached to a project. */
+  project: { id: string; title: string; isPrivate: boolean } | null;
+  /** The viewing user's own reaction, or null. */
+  viewerReaction: string | null;
+  reactionBreakdown: { reaction: string; count: number }[];
+}
 
 export interface IStorage {
   // User Profile
   getUserProfile(userId: string): Promise<UserProfile | undefined>;
   upsertUserProfile(data: InsertUserProfile): Promise<UserProfile>;
+  getProfilesLookingFor(): Promise<(UserProfile & { user: User })[]>;
   completeOnboarding(userId: string): Promise<void>;
   
   // Projects
@@ -232,7 +303,7 @@ export interface IStorage {
   upsertUserMatch(data: InsertUserMatch): Promise<UserMatch>;
   
   // Leaderboard
-  getLeaderboard(sortBy: "views" | "donations", limit: number, filter?: "solo" | "team" | "all"): Promise<(Project & { owner: User })[]>;
+  getLeaderboard(sortBy: "views" | "donations", limit: number, filter?: "solo" | "team" | "all", includePrivateOwnedBy?: string): Promise<(Project & { owner: User })[]>;
   
   // Media
   addProjectMedia(projectId: string, objectPath: string): Promise<Project>;
@@ -247,7 +318,8 @@ export interface IStorage {
   getBadge(id: string): Promise<Badge | undefined>;
   createBadge(data: InsertBadge): Promise<Badge>;
   getUserBadges(userId: string): Promise<(UserBadge & { badge: Badge })[]>;
-  awardBadge(userId: string, badgeId: string): Promise<UserBadge>;
+  /** Null when the badge id is unknown. */
+  awardBadge(userId: string, badgeId: string): Promise<UserBadge | null>;
 
   // Contests
   getContests(filters?: { status?: string }): Promise<(Contest & { badge?: Badge; participantCount: number })[]>;
@@ -301,6 +373,30 @@ export interface IStorage {
   createKanbanTask(data: InsertProjectKanbanTask): Promise<ProjectKanbanTask>;
   updateKanbanTask(id: string, data: Partial<InsertProjectKanbanTask>): Promise<ProjectKanbanTask>;
   deleteKanbanTask(id: string): Promise<void>;
+  clearProjectKanbanTasks(projectId: string, onlyStatus?: string): Promise<number>;
+  getUserTaskStats(userId: string): Promise<UserTaskStats | undefined>;
+  bankUserTaskStats(userId: string, totals: { completed: number; onTime: number; lastCompletedAt?: Date | null }): Promise<UserTaskStats>;
+  countUserCompletedTasks(userId: string): Promise<{ completed: number; onTime: number; lastCompletedAt: Date | null }>;
+  bankExecutionCredit(userId: string): Promise<void>;
+  incrementUserTaskCompletion(userId: string, onTime: boolean): Promise<void>;
+  // Nova codebase audits
+  createCodeAudit(data: InsertProjectCodeAudit): Promise<ProjectCodeAudit>;
+  getCodeAudit(id: string): Promise<ProjectCodeAudit | undefined>;
+  getCodeAudits(projectId: string, limit?: number): Promise<ProjectCodeAudit[]>;
+  updateCodeAudit(id: string, data: Partial<InsertProjectCodeAudit>): Promise<ProjectCodeAudit>;
+  deleteCodeAudit(id: string): Promise<void>;
+
+  // Nova-built documents
+  createDocument(data: InsertProjectDocument): Promise<ProjectDocument>;
+  getDocument(id: string): Promise<ProjectDocument | undefined>;
+  getProjectDocuments(projectId: string): Promise<ProjectDocument[]>;
+  updateDocument(id: string, data: Partial<InsertProjectDocument>): Promise<ProjectDocument>;
+  deleteDocument(id: string): Promise<void>;
+
+  /** Project-level completion history, which outlives the kanban rows. */
+  recordTaskCompletion(data: InsertProjectTaskCompletion): Promise<void>;
+  getProjectTaskCompletions(projectId: string, limit?: number): Promise<ProjectTaskCompletion[]>;
+  getProjectCompletionStats(projectId: string): Promise<{ completed: number; onTime: number; lastCompletedAt: Date | null }>;
 
   // Personas
   getProjectPersonas(projectId: string): Promise<ProjectPersona[]>;
@@ -310,6 +406,7 @@ export interface IStorage {
 
   // Milestones
   getProjectMilestones(projectId: string): Promise<ProjectMilestone[]>;
+  getMilestone(id: string): Promise<ProjectMilestone | undefined>;
   createMilestone(data: InsertProjectMilestone): Promise<ProjectMilestone>;
   updateMilestone(id: string, data: Partial<InsertProjectMilestone>): Promise<ProjectMilestone>;
   deleteMilestone(id: string): Promise<void>;
@@ -331,6 +428,7 @@ export interface IStorage {
   // Files
   getProjectFiles(projectId: string): Promise<(ProjectFile & { uploader: User })[]>;
   createProjectFile(data: InsertProjectFile): Promise<ProjectFile>;
+  updateProjectFile(id: string, data: Partial<InsertProjectFile>): Promise<ProjectFile>;
   deleteProjectFile(id: string): Promise<void>;
 
   // Links
@@ -346,22 +444,66 @@ export interface IStorage {
   checkCredits(userId: string, amount: number): Promise<boolean>;
   deductCredits(userId: string, amount: number): Promise<boolean>;
   resetCreditsIfNeeded(userId: string): Promise<void>;
+  countPrivateProjects(userId: string): Promise<number>;
+
+  // Roadmaps (Builder tier and above)
+  getProjectRoadmap(projectId: string): Promise<(ProjectRoadmap & { phases: RoadmapPhase[] }) | undefined>;
+  createRoadmap(data: InsertProjectRoadmap, phases: Omit<InsertRoadmapPhase, "roadmapId">[]): Promise<ProjectRoadmap & { phases: RoadmapPhase[] }>;
+  replaceRoadmapPhases(roadmapId: string, phases: Omit<InsertRoadmapPhase, "roadmapId">[]): Promise<RoadmapPhase[]>;
+  updateRoadmap(id: string, data: Partial<ProjectRoadmap>): Promise<ProjectRoadmap>;
+  updateRoadmapPhase(id: string, data: Partial<RoadmapPhase>): Promise<RoadmapPhase>;
+  /** A single phase plus the project it belongs to, for authorization. */
+  getRoadmapPhase(id: string): Promise<(RoadmapPhase & { projectId: string }) | undefined>;
+  deleteRoadmap(id: string): Promise<void>;
+
+  // Health checks (Pro tier)
+  createHealthCheck(data: InsertProjectHealthCheck): Promise<ProjectHealthCheck>;
+  getHealthChecks(projectId: string, limit?: number): Promise<ProjectHealthCheck[]>;
+  createHealthFindingFeedback(data: InsertHealthFindingFeedback): Promise<HealthFindingFeedback>;
+  getHealthFindingFeedback(projectId: string): Promise<HealthFindingFeedback[]>;
+  deleteHealthFindingFeedback(id: string, userId: string): Promise<boolean>;
+
+  getProjectFollowers(projectId: string): Promise<{ userId: string; user: User; profile?: UserProfile }[]>;
+
+  // Project discussion (milestone / roadmap / project comments)
+  createProjectComment(data: InsertProjectComment): Promise<ProjectComment>;
+  getProjectComments(projectId: string, target?: { targetType: string; targetId: string }, viewerId?: string): Promise<ProjectCommentWithAuthor[]>;
+  getProjectCommentCounts(projectId: string): Promise<Record<string, number>>;
+  deleteProjectComment(id: string, userId: string): Promise<boolean>;
+  toggleCommentReaction(commentId: string, userId: string): Promise<{ reactionCount: number; reacted: boolean }>;
+
+  // Founder feed
+  createFeedPost(data: InsertFeedPost): Promise<FeedPost>;
+  getFeedPosts(options: { viewerId?: string; limit: number; before?: string; authorId?: string; projectId?: string; postType?: string }): Promise<FeedPostWithDetails[]>;
+  getFeedPost(id: string, viewerId?: string): Promise<FeedPostWithDetails | undefined>;
+  deleteFeedPost(id: string, authorId: string): Promise<boolean>;
+  setFeedReaction(postId: string, userId: string, reaction: string | null): Promise<{ reactionCount: number; viewerReaction: string | null }>;
+  getFeedComments(postId: string): Promise<(FeedComment & { author: User; profile?: UserProfile })[]>;
+  createFeedComment(data: InsertFeedComment): Promise<FeedComment>;
+  deleteFeedComment(id: string, authorId: string): Promise<boolean>;
+
+  // Investor readiness suite
+  createInvestorArtifact(data: InsertInvestorArtifact): Promise<InvestorArtifact>;
+  getInvestorArtifacts(projectId: string, kind?: string): Promise<InvestorArtifact[]>;
+  createMockInterview(data: InsertMockInterview): Promise<MockInterview>;
+  getMockInterview(id: string): Promise<(MockInterview & { turns: MockInterviewTurn[] }) | undefined>;
+  getMockInterviews(projectId: string, userId: string): Promise<MockInterview[]>;
+  updateMockInterview(id: string, data: Partial<MockInterview>): Promise<MockInterview>;
+  createInterviewTurn(data: InsertMockInterviewTurn): Promise<MockInterviewTurn>;
+  updateInterviewTurn(id: string, data: Partial<MockInterviewTurn>): Promise<MockInterviewTurn>;
+
+  // Storyboards — private to the generating user, never in the media gallery
+  createStoryboard(data: InsertProjectStoryboard): Promise<ProjectStoryboard>;
+  getStoryboardsForUser(projectId: string, userId: string): Promise<ProjectStoryboard[]>;
+  /** Returns undefined unless the storyboard belongs to `userId`. */
+  getStoryboardForUser(id: string, userId: string): Promise<ProjectStoryboard | undefined>;
+  deleteStoryboard(id: string, userId: string): Promise<boolean>;
   updateUserStripeInfo(userId: string, data: { stripeCustomerId?: string; stripeSubscriptionId?: string; subscriptionTier?: string }): Promise<User>;
 
   // Game Leaderboard
   createLeaderboardEntry(data: InsertGameLeaderboardEntry): Promise<GameLeaderboardEntry>;
   getGameLeaderboard(gameType: string, limit?: number): Promise<(GameLeaderboardEntry & { user: User; profile?: UserProfile })[]>;
 
-  // Tactics
-  createTacticsGame(data: InsertTacticsGame): Promise<TacticsGame>;
-  getTacticsGame(id: string): Promise<TacticsGame | undefined>;
-  updateTacticsGame(id: string, data: Partial<TacticsGame>): Promise<TacticsGame>;
-  getWaitingTacticsGames(): Promise<TacticsGame[]>;
-  createTacticsPlayer(data: InsertTacticsPlayer): Promise<TacticsPlayer>;
-  getTacticsPlayers(gameId: string): Promise<(TacticsPlayer & { user: User })[]>;
-  updateTacticsPlayer(id: string, data: Partial<TacticsPlayer>): Promise<TacticsPlayer>;
-  createTacticsMove(data: InsertTacticsMove): Promise<TacticsMove>;
-  getTacticsMovesForRound(gameId: string, round: number): Promise<TacticsMove[]>;
 
   // Typing
   createTypingRace(data: InsertTypingRace): Promise<TypingRace>;
@@ -383,7 +525,7 @@ export interface IStorage {
   getSprint(id: string): Promise<CofounderSprint | undefined>;
   updateSprint(id: string, data: Partial<CofounderSprint>): Promise<CofounderSprint>;
   getSprintsByUser(userId: string): Promise<(CofounderSprint & { user1: User; user2: User })[]>;
-  addSprintResponse(data: { sprintId: string; userId: string; questionKey: string; answer: string }): Promise<SprintResponse>;
+  addSprintResponse(data: { sprintId: string; userId: string; questionKey: string; answer: string; isNova?: boolean }): Promise<SprintResponse>;
   getSprintResponses(sprintId: string, userId?: string): Promise<SprintResponse[]>;
   addSprintDeliverable(data: { sprintId: string; type: string; content: any; userId?: string }): Promise<SprintDeliverable>;
   getSprintDeliverables(sprintId: string): Promise<SprintDeliverable[]>;
@@ -391,7 +533,7 @@ export interface IStorage {
   getSprintRatings(sprintId: string): Promise<SprintRating[]>;
   addSprintDecision(data: { sprintId: string; userId: string; decision: string; reason: string }): Promise<SprintDecision>;
   getSprintDecisions(sprintId: string): Promise<SprintDecision[]>;
-  sendSprintMessage(data: { sprintId: string; userId: string; content: string }): Promise<SprintMessage>;
+  sendSprintMessage(data: { sprintId: string; userId: string; content: string; isNova?: boolean }): Promise<SprintMessage>;
   getSprintMessages(sprintId: string): Promise<(SprintMessage & { user: User })[]>;
   getSprintTasks(sprintId: string): Promise<SprintKanbanTask[]>;
   createSprintTask(data: { sprintId: string; title: string; description?: string; order?: number; assigneeId?: string }): Promise<SprintKanbanTask>;
@@ -400,10 +542,14 @@ export interface IStorage {
   getSprintBehavioralMetrics(sprintId: string): Promise<SprintBehavioralMetrics[]>;
   saveCompatibilityReport(data: { sprintId: string; overallScore: number; strengths: any; risks: any; recommendation: string }): Promise<SprintCompatibilityReport>;
   getCompatibilityReport(sprintId: string): Promise<SprintCompatibilityReport | undefined>;
-  joinMatchmakingQueue(data: { userId: string; duration: string; productStyle?: string }): Promise<any>;
-  findMatchmakingPartner(userId: string): Promise<any>;
+  joinMatchmakingQueue(data: { userId: string; duration: "24h" | "72h"; productStyle?: string | null }): Promise<SprintMatchmakingQueueEntry>;
+  /** Atomically pairs the caller with a compatible waiting partner. */
+  tryMatchInQueue(userId: string): Promise<{ sprint: CofounderSprint; partnerId: string } | null>;
+  touchQueueEntry(userId: string): Promise<boolean>;
+  sweepStaleQueueEntries(): Promise<number>;
   removeFromMatchmakingQueue(userId: string): Promise<void>;
-  getQueueEntry(userId: string): Promise<any>;
+  getQueueEntry(userId: string): Promise<SprintMatchmakingQueueEntry | undefined>;
+  getQueueStats(userId: string, duration?: "24h" | "72h"): Promise<{ waiting: number; position: number | null }>;
 
   // Reputation
   getUserReputation(userId: string): Promise<UserReputation | undefined>;
@@ -447,6 +593,19 @@ export class DatabaseStorage implements IStorage {
     return profile;
   }
 
+  /** Profiles with an active "looking for" call, newest first. */
+  async getProfilesLookingFor(): Promise<(UserProfile & { user: User })[]> {
+    const rows = await db
+      .select()
+      .from(userProfiles)
+      .where(sql`${userProfiles.lookingFor} IS NOT NULL AND ${userProfiles.lookingFor}->>'isActive' = 'true'`);
+
+    return Promise.all(rows.map(async (profile) => {
+      const [user] = await db.select().from(users).where(eq(users.id, profile.userId));
+      return { ...profile, user };
+    }));
+  }
+
   async completeOnboarding(userId: string): Promise<void> {
     await db
       .update(userProfiles)
@@ -454,7 +613,7 @@ export class DatabaseStorage implements IStorage {
       .where(eq(userProfiles.userId, userId));
   }
 
-  async getProjects(filters?: { category?: string; status?: string }): Promise<(Project & { owner: User; profile?: UserProfile })[]> {
+  async getProjects(filters?: { category?: string; status?: string; includePrivateOwnedBy?: string }): Promise<(Project & { owner: User; profile?: UserProfile })[]> {
     let query = db.select().from(projects);
     const conditions = [];
 
@@ -464,7 +623,13 @@ export class DatabaseStorage implements IStorage {
     if (filters?.status) {
       conditions.push(eq(projects.status, filters.status as any));
     }
-    
+    // Private projects are excluded from public listings, except for their owner.
+    conditions.push(
+      filters?.includePrivateOwnedBy
+        ? or(eq(projects.isPrivate, false), eq(projects.ownerId, filters.includePrivateOwnedBy))!
+        : eq(projects.isPrivate, false)
+    );
+
     const result = await (conditions.length > 0 
       ? query.where(and(...conditions)) 
       : query).orderBy(desc(projects.createdAt));
@@ -485,6 +650,14 @@ export class DatabaseStorage implements IStorage {
 
   async createProject(data: InsertProject): Promise<Project> {
     const [project] = await db.insert(projects).values(data).returning();
+    // The owner is on the team. Without this row every member count reads one
+    // short — the Team Members card renders empty, and health checks and
+    // readiness scores see "0 of 3 seats filled" on a project that has a founder.
+    await db.insert(projectMembers).values({
+      projectId: project.id,
+      userId: project.ownerId,
+      role: "Owner",
+    }).onConflictDoNothing();
     return project;
   }
 
@@ -741,17 +914,26 @@ export class DatabaseStorage implements IStorage {
     return match;
   }
 
-  async getLeaderboard(sortBy: "views" | "donations", limit: number, filter?: "solo" | "team" | "all"): Promise<(Project & { owner: User })[]> {
+  async getLeaderboard(sortBy: "views" | "donations", limit: number, filter?: "solo" | "team" | "all", includePrivateOwnedBy?: string): Promise<(Project & { owner: User })[]> {
     const orderCol = sortBy === "views" ? projects.views : projects.totalDonations;
     const conditions = [];
     if (filter === "solo") conditions.push(eq(projects.soloMode, true));
     else if (filter === "team") conditions.push(or(eq(projects.soloMode, false), isNull(projects.soloMode))!);
-    
-    const query = conditions.length > 0
-      ? db.select().from(projects).where(and(...conditions)).orderBy(desc(orderCol)).limit(limit)
-      : db.select().from(projects).orderBy(desc(orderCol)).limit(limit);
-    
-    const result = await query;
+
+    // Private projects are ranked only for their own owner — otherwise their
+    // titles, owners, and view counts would be public on the leaderboard.
+    conditions.push(
+      includePrivateOwnedBy
+        ? or(eq(projects.isPrivate, false), eq(projects.ownerId, includePrivateOwnedBy))!
+        : eq(projects.isPrivate, false)
+    );
+
+    const result = await db
+      .select()
+      .from(projects)
+      .where(and(...conditions))
+      .orderBy(desc(orderCol))
+      .limit(limit);
 
     return await Promise.all(
       result.map(async (project) => {
@@ -835,7 +1017,28 @@ export class DatabaseStorage implements IStorage {
     return results.filter((r): r is NonNullable<typeof r> => r !== null);
   }
 
-  async awardBadge(userId: string, badgeId: string): Promise<UserBadge> {
+  /**
+   * Awards a badge, or does nothing if the badge doesn't exist or the user
+   * already has it.
+   *
+   * Badges are a cosmetic side effect of finishing a game or hitting a
+   * milestone, and callers award them by hard-coded id. An unknown id used to
+   * raise a foreign-key error that failed the whole request — losing the
+   * player's score over a decoration. Returns null instead.
+   */
+  async awardBadge(userId: string, badgeId: string): Promise<UserBadge | null> {
+    const badge = await this.getBadge(badgeId);
+    if (!badge) {
+      console.warn(`Skipping unknown badge "${badgeId}".`);
+      return null;
+    }
+
+    const [already] = await db
+      .select()
+      .from(userBadges)
+      .where(and(eq(userBadges.userId, userId), eq(userBadges.badgeId, badgeId)));
+    if (already) return already;
+
     const [ub] = await db.insert(userBadges).values({ userId, badgeId }).returning();
     return ub;
   }
@@ -900,13 +1103,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   private getCreditLimit(tier: string): number {
-    const limits: Record<string, number> = {
-      free: 20,
-      spark_pro: 100,
-      spark_business: 250,
-      spark_unlimited: Infinity,
-    };
-    return limits[tier] || 20;
+    return getEntitlements(tier).credits;
   }
 
   async resetCreditsIfNeeded(userId: string): Promise<void> {
@@ -927,7 +1124,8 @@ export class DatabaseStorage implements IStorage {
     if (!user) {
       return { tier: "free", creditsUsed: 0, creditsLimit: 20, creditsRemaining: 20, stripeCustomerId: null, stripeSubscriptionId: null };
     }
-    const tier = user.subscriptionTier || "free";
+    // Legacy spark_* tiers are mapped forward so existing subscribers keep access.
+    const tier = normalizeTier(user.subscriptionTier);
     const creditsLimit = this.getCreditLimit(tier);
     const creditsUsed = user.creditsUsed || 0;
     const creditsRemaining = creditsLimit === Infinity ? Infinity : Math.max(0, creditsLimit - creditsUsed);
@@ -943,17 +1141,494 @@ export class DatabaseStorage implements IStorage {
 
   async checkCredits(userId: string, amount: number): Promise<boolean> {
     const sub = await this.getUserSubscription(userId);
-    if (sub.tier === "spark_unlimited") return true;
+    // Unlimited tiers are still bounded by the fair-use ceiling.
+    if (sub.creditsLimit === Infinity) {
+      return sub.creditsUsed + amount <= FAIR_USE_MONTHLY_CAP;
+    }
     return sub.creditsRemaining >= amount;
   }
 
   async deductCredits(userId: string, amount: number): Promise<boolean> {
     const canUse = await this.checkCredits(userId, amount);
     if (!canUse) return false;
-    const sub = await this.getUserSubscription(userId);
-    if (sub.tier === "spark_unlimited") return true;
+    // Unlimited tiers increment too — usage has to be tracked for the
+    // fair-use cap to mean anything, it just never blocks below the ceiling.
     await db.update(users).set({ creditsUsed: sql`${users.creditsUsed} + ${amount}` }).where(eq(users.id, userId));
     return true;
+  }
+
+  async countPrivateProjects(userId: string): Promise<number> {
+    const [row] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(projects)
+      .where(and(eq(projects.ownerId, userId), eq(projects.isPrivate, true)));
+    return row?.count || 0;
+  }
+
+  // --- Roadmaps ---
+  async getProjectRoadmap(projectId: string) {
+    const [roadmap] = await db
+      .select()
+      .from(projectRoadmaps)
+      .where(and(eq(projectRoadmaps.projectId, projectId), eq(projectRoadmaps.status, "active")))
+      .orderBy(desc(projectRoadmaps.createdAt))
+      .limit(1);
+    if (!roadmap) return undefined;
+    const phases = await db
+      .select()
+      .from(roadmapPhases)
+      .where(eq(roadmapPhases.roadmapId, roadmap.id))
+      .orderBy(roadmapPhases.order);
+    return { ...roadmap, phases };
+  }
+
+  async createRoadmap(data: InsertProjectRoadmap, phases: Omit<InsertRoadmapPhase, "roadmapId">[]) {
+    // Only one active roadmap per project; supersede any earlier one.
+    await db
+      .update(projectRoadmaps)
+      .set({ status: "archived" })
+      .where(and(eq(projectRoadmaps.projectId, data.projectId), eq(projectRoadmaps.status, "active")));
+
+    const [roadmap] = await db.insert(projectRoadmaps).values(data).returning();
+    const inserted = phases.length
+      ? await db
+          .insert(roadmapPhases)
+          .values(phases.map((p, i) => ({ ...p, roadmapId: roadmap.id, order: p.order ?? i })))
+          .returning()
+      : [];
+    return { ...roadmap, phases: inserted };
+  }
+
+  async replaceRoadmapPhases(roadmapId: string, phases: Omit<InsertRoadmapPhase, "roadmapId">[]) {
+    await db.delete(roadmapPhases).where(eq(roadmapPhases.roadmapId, roadmapId));
+    if (!phases.length) return [];
+    return db
+      .insert(roadmapPhases)
+      .values(phases.map((p, i) => ({ ...p, roadmapId, order: p.order ?? i })))
+      .returning();
+  }
+
+  async updateRoadmap(id: string, data: Partial<ProjectRoadmap>): Promise<ProjectRoadmap> {
+    const [updated] = await db
+      .update(projectRoadmaps)
+      .set({ ...data, lastUpdatedAt: new Date() })
+      .where(eq(projectRoadmaps.id, id))
+      .returning();
+    return updated;
+  }
+
+  async updateRoadmapPhase(id: string, data: Partial<RoadmapPhase>): Promise<RoadmapPhase> {
+    const [updated] = await db.update(roadmapPhases).set(data).where(eq(roadmapPhases.id, id)).returning();
+    return updated;
+  }
+
+  async getRoadmapPhase(id: string): Promise<(RoadmapPhase & { projectId: string }) | undefined> {
+    const [row] = await db
+      .select({ phase: roadmapPhases, projectId: projectRoadmaps.projectId })
+      .from(roadmapPhases)
+      .innerJoin(projectRoadmaps, eq(roadmapPhases.roadmapId, projectRoadmaps.id))
+      .where(eq(roadmapPhases.id, id));
+    return row ? { ...row.phase, projectId: row.projectId } : undefined;
+  }
+
+  async deleteRoadmap(id: string): Promise<void> {
+    await db.delete(roadmapPhases).where(eq(roadmapPhases.roadmapId, id));
+    await db.delete(projectRoadmaps).where(eq(projectRoadmaps.id, id));
+  }
+
+  // --- Health checks ---
+  async createHealthCheck(data: InsertProjectHealthCheck): Promise<ProjectHealthCheck> {
+    const [check] = await db.insert(projectHealthChecks).values(data).returning();
+    return check;
+  }
+
+  async getHealthChecks(projectId: string, limit = 10): Promise<ProjectHealthCheck[]> {
+    return db
+      .select()
+      .from(projectHealthChecks)
+      .where(eq(projectHealthChecks.projectId, projectId))
+      .orderBy(desc(projectHealthChecks.createdAt))
+      .limit(limit);
+  }
+
+  async createHealthFindingFeedback(data: InsertHealthFindingFeedback): Promise<HealthFindingFeedback> {
+    const [row] = await db.insert(healthFindingFeedback).values(data).returning();
+    return row;
+  }
+
+  async getHealthFindingFeedback(projectId: string): Promise<HealthFindingFeedback[]> {
+    return db
+      .select()
+      .from(healthFindingFeedback)
+      .where(eq(healthFindingFeedback.projectId, projectId))
+      .orderBy(desc(healthFindingFeedback.createdAt));
+  }
+
+  /** Only the author can retract their own pushback. */
+  async deleteHealthFindingFeedback(id: string, userId: string): Promise<boolean> {
+    const deleted = await db
+      .delete(healthFindingFeedback)
+      .where(and(eq(healthFindingFeedback.id, id), eq(healthFindingFeedback.userId, userId)))
+      .returning();
+    return deleted.length > 0;
+  }
+
+  async getProjectFollowers(projectId: string) {
+    const follows = await db
+      .select()
+      .from(projectFollows)
+      .where(eq(projectFollows.projectId, projectId))
+      .orderBy(desc(projectFollows.createdAt));
+
+    return Promise.all(follows.map(async (f) => {
+      const [user] = await db.select().from(users).where(eq(users.id, f.userId));
+      const profile = await this.getUserProfile(f.userId);
+      return { userId: f.userId, user, profile };
+    }));
+  }
+
+  // --- Project discussion ---
+  async createProjectComment(data: InsertProjectComment): Promise<ProjectComment> {
+    const [comment] = await db.insert(projectComments).values(data).returning();
+    return comment;
+  }
+
+  async getProjectComments(
+    projectId: string,
+    target?: { targetType: string; targetId: string },
+    viewerId?: string
+  ): Promise<ProjectCommentWithAuthor[]> {
+    const rows = await db
+      .select()
+      .from(projectComments)
+      .where(
+        target
+          ? and(
+              eq(projectComments.projectId, projectId),
+              eq(projectComments.targetType, target.targetType as any),
+              eq(projectComments.targetId, target.targetId)
+            )
+          : eq(projectComments.projectId, projectId)
+      )
+      .orderBy(asc(projectComments.createdAt));
+
+    return Promise.all(rows.map(async (c) => {
+      const [author] = await db.select().from(users).where(eq(users.id, c.authorId));
+      const profile = await this.getUserProfile(c.authorId);
+      let viewerReacted = false;
+      if (viewerId) {
+        const [r] = await db
+          .select()
+          .from(projectCommentReactions)
+          .where(and(eq(projectCommentReactions.commentId, c.id), eq(projectCommentReactions.userId, viewerId)));
+        viewerReacted = !!r;
+      }
+      return { ...c, author, profile, viewerReacted };
+    }));
+  }
+
+  /** Comment counts keyed by "<targetType>:<targetId>", for badge counts. */
+  async getProjectCommentCounts(projectId: string): Promise<Record<string, number>> {
+    const rows = await db
+      .select({
+        targetType: projectComments.targetType,
+        targetId: projectComments.targetId,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(projectComments)
+      .where(eq(projectComments.projectId, projectId))
+      .groupBy(projectComments.targetType, projectComments.targetId);
+
+    return Object.fromEntries(rows.map((r) => [`${r.targetType}:${r.targetId}`, r.count]));
+  }
+
+  /** Author can always delete; a project owner can moderate their own page. */
+  async deleteProjectComment(id: string, userId: string): Promise<boolean> {
+    const [comment] = await db.select().from(projectComments).where(eq(projectComments.id, id));
+    if (!comment) return false;
+
+    const project = await this.getProject(comment.projectId);
+    const allowed = comment.authorId === userId || project?.ownerId === userId;
+    if (!allowed) return false;
+
+    await db.delete(projectComments).where(eq(projectComments.id, id));
+    return true;
+  }
+
+  async toggleCommentReaction(commentId: string, userId: string) {
+    const [existing] = await db
+      .select()
+      .from(projectCommentReactions)
+      .where(and(eq(projectCommentReactions.commentId, commentId), eq(projectCommentReactions.userId, userId)));
+
+    if (existing) {
+      await db.delete(projectCommentReactions).where(eq(projectCommentReactions.id, existing.id));
+    } else {
+      await db.insert(projectCommentReactions).values({ commentId, userId }).onConflictDoNothing();
+    }
+
+    const [{ count }] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(projectCommentReactions)
+      .where(eq(projectCommentReactions.commentId, commentId));
+
+    await db.update(projectComments).set({ reactionCount: count }).where(eq(projectComments.id, commentId));
+    return { reactionCount: count, reacted: !existing };
+  }
+
+  // --- Founder feed ---
+  async createFeedPost(data: InsertFeedPost): Promise<FeedPost> {
+    const [post] = await db.insert(feedPosts).values(data).returning();
+    return post;
+  }
+
+  /**
+   * Feed page, newest first, with everything a card needs in one pass.
+   *
+   * Posts about a private project are hidden from everyone but that project's
+   * members — otherwise a "milestone" post would leak the existence and
+   * progress of work its owner marked private.
+   */
+  async getFeedPosts(options: {
+    viewerId?: string; limit: number; before?: string;
+    authorId?: string; projectId?: string; postType?: string;
+  }): Promise<FeedPostWithDetails[]> {
+    const conditions = [];
+    if (options.authorId) conditions.push(eq(feedPosts.authorId, options.authorId));
+    if (options.projectId) conditions.push(eq(feedPosts.projectId, options.projectId));
+    if (options.postType) conditions.push(eq(feedPosts.postType, options.postType as any));
+    // Keyset pagination on createdAt — stable as new posts arrive.
+    if (options.before) conditions.push(lte(feedPosts.createdAt, new Date(options.before)));
+
+    const rows = await db
+      .select()
+      .from(feedPosts)
+      .where(conditions.length ? and(...conditions) : undefined)
+      .orderBy(desc(feedPosts.createdAt))
+      // Over-fetch so private-project filtering can't leave a short page.
+      .limit(options.limit * 2);
+
+    const visible: typeof rows = [];
+    for (const post of rows) {
+      if (!post.projectId) { visible.push(post); continue; }
+      const [project] = await db.select().from(projects).where(eq(projects.id, post.projectId));
+      if (!project) continue;
+      if (!project.isPrivate) { visible.push(post); continue; }
+      if (!options.viewerId) continue;
+      const isMember =
+        project.ownerId === options.viewerId ||
+        (await db.select().from(projectMembers).where(and(
+          eq(projectMembers.projectId, project.id),
+          eq(projectMembers.userId, options.viewerId)
+        ))).length > 0;
+      if (isMember) visible.push(post);
+      if (visible.length >= options.limit) break;
+    }
+
+    return Promise.all(visible.slice(0, options.limit).map((p) => this.hydrateFeedPost(p, options.viewerId)));
+  }
+
+  async getFeedPost(id: string, viewerId?: string): Promise<FeedPostWithDetails | undefined> {
+    const [post] = await db.select().from(feedPosts).where(eq(feedPosts.id, id));
+    if (!post) return undefined;
+    return this.hydrateFeedPost(post, viewerId);
+  }
+
+  /** Attaches author, project, and the viewer's own reaction. */
+  private async hydrateFeedPost(post: FeedPost, viewerId?: string): Promise<FeedPostWithDetails> {
+    const [author] = await db.select().from(users).where(eq(users.id, post.authorId));
+    const profile = await this.getUserProfile(post.authorId);
+    const project = post.projectId
+      ? (await db.select().from(projects).where(eq(projects.id, post.projectId)))[0]
+      : undefined;
+
+    let viewerReaction: string | null = null;
+    if (viewerId) {
+      const [reaction] = await db
+        .select()
+        .from(feedReactions)
+        .where(and(eq(feedReactions.postId, post.id), eq(feedReactions.userId, viewerId)));
+      viewerReaction = reaction?.reaction ?? null;
+    }
+
+    // Reaction mix drives the little emoji cluster on the card.
+    const breakdownRows = await db
+      .select({ reaction: feedReactions.reaction, count: sql<number>`count(*)::int` })
+      .from(feedReactions)
+      .where(eq(feedReactions.postId, post.id))
+      .groupBy(feedReactions.reaction);
+
+    return {
+      ...post,
+      author,
+      profile,
+      project: project ? { id: project.id, title: project.title, isPrivate: project.isPrivate } : null,
+      viewerReaction,
+      reactionBreakdown: breakdownRows.map((r) => ({ reaction: r.reaction, count: r.count })),
+    };
+  }
+
+  async deleteFeedPost(id: string, authorId: string): Promise<boolean> {
+    const deleted = await db
+      .delete(feedPosts)
+      .where(and(eq(feedPosts.id, id), eq(feedPosts.authorId, authorId)))
+      .returning();
+    return deleted.length > 0;
+  }
+
+  /**
+   * Sets, changes, or clears the viewer's reaction and returns the new total.
+   * Passing the same reaction again clears it, which is what makes the button
+   * behave like a toggle.
+   */
+  async setFeedReaction(postId: string, userId: string, reaction: string | null) {
+    if (reaction === null) {
+      await db.delete(feedReactions).where(and(eq(feedReactions.postId, postId), eq(feedReactions.userId, userId)));
+    } else {
+      await db
+        .insert(feedReactions)
+        .values({ postId, userId, reaction: reaction as any })
+        .onConflictDoUpdate({
+          target: [feedReactions.postId, feedReactions.userId],
+          set: { reaction: reaction as any },
+        });
+    }
+
+    const [{ count }] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(feedReactions)
+      .where(eq(feedReactions.postId, postId));
+
+    await db.update(feedPosts).set({ reactionCount: count }).where(eq(feedPosts.id, postId));
+    return { reactionCount: count, viewerReaction: reaction };
+  }
+
+  async getFeedComments(postId: string) {
+    const rows = await db
+      .select()
+      .from(feedComments)
+      .where(eq(feedComments.postId, postId))
+      .orderBy(asc(feedComments.createdAt));
+
+    return Promise.all(rows.map(async (c) => {
+      const [author] = await db.select().from(users).where(eq(users.id, c.authorId));
+      const profile = await this.getUserProfile(c.authorId);
+      return { ...c, author, profile };
+    }));
+  }
+
+  async createFeedComment(data: InsertFeedComment): Promise<FeedComment> {
+    const [comment] = await db.insert(feedComments).values(data).returning();
+    await db
+      .update(feedPosts)
+      .set({ commentCount: sql`${feedPosts.commentCount} + 1` })
+      .where(eq(feedPosts.id, data.postId));
+    return comment;
+  }
+
+  async deleteFeedComment(id: string, authorId: string): Promise<boolean> {
+    const deleted = await db
+      .delete(feedComments)
+      .where(and(eq(feedComments.id, id), eq(feedComments.authorId, authorId)))
+      .returning();
+    if (deleted.length > 0) {
+      await db
+        .update(feedPosts)
+        // Guard against drifting below zero if a counter ever gets out of sync.
+        .set({ commentCount: sql`greatest(0, ${feedPosts.commentCount} - 1)` })
+        .where(eq(feedPosts.id, deleted[0].postId));
+    }
+    return deleted.length > 0;
+  }
+
+  // --- Investor readiness suite ---
+  async createInvestorArtifact(data: InsertInvestorArtifact): Promise<InvestorArtifact> {
+    const [artifact] = await db.insert(investorArtifacts).values(data).returning();
+    return artifact;
+  }
+
+  async getInvestorArtifacts(projectId: string, kind?: string): Promise<InvestorArtifact[]> {
+    return db
+      .select()
+      .from(investorArtifacts)
+      .where(
+        kind
+          ? and(eq(investorArtifacts.projectId, projectId), eq(investorArtifacts.kind, kind as any))
+          : eq(investorArtifacts.projectId, projectId)
+      )
+      .orderBy(desc(investorArtifacts.createdAt));
+  }
+
+  async createMockInterview(data: InsertMockInterview): Promise<MockInterview> {
+    const [interview] = await db.insert(mockInterviews).values(data).returning();
+    return interview;
+  }
+
+  async getMockInterview(id: string) {
+    const [interview] = await db.select().from(mockInterviews).where(eq(mockInterviews.id, id));
+    if (!interview) return undefined;
+    const turns = await db
+      .select()
+      .from(mockInterviewTurns)
+      .where(eq(mockInterviewTurns.interviewId, id))
+      .orderBy(asc(mockInterviewTurns.order));
+    return { ...interview, turns };
+  }
+
+  async getMockInterviews(projectId: string, userId: string): Promise<MockInterview[]> {
+    return db
+      .select()
+      .from(mockInterviews)
+      .where(and(eq(mockInterviews.projectId, projectId), eq(mockInterviews.userId, userId)))
+      .orderBy(desc(mockInterviews.createdAt));
+  }
+
+  async updateMockInterview(id: string, data: Partial<MockInterview>): Promise<MockInterview> {
+    const [updated] = await db.update(mockInterviews).set(data).where(eq(mockInterviews.id, id)).returning();
+    return updated;
+  }
+
+  async createInterviewTurn(data: InsertMockInterviewTurn): Promise<MockInterviewTurn> {
+    const [turn] = await db.insert(mockInterviewTurns).values(data).returning();
+    return turn;
+  }
+
+  async updateInterviewTurn(id: string, data: Partial<MockInterviewTurn>): Promise<MockInterviewTurn> {
+    const [updated] = await db.update(mockInterviewTurns).set(data).where(eq(mockInterviewTurns.id, id)).returning();
+    return updated;
+  }
+
+  // --- Storyboards ---
+  async createStoryboard(data: InsertProjectStoryboard): Promise<ProjectStoryboard> {
+    const [storyboard] = await db.insert(projectStoryboards).values(data).returning();
+    return storyboard;
+  }
+
+  async getStoryboardsForUser(projectId: string, userId: string): Promise<ProjectStoryboard[]> {
+    return db
+      .select()
+      .from(projectStoryboards)
+      .where(and(eq(projectStoryboards.projectId, projectId), eq(projectStoryboards.userId, userId)))
+      .orderBy(desc(projectStoryboards.createdAt));
+  }
+
+  async getStoryboardForUser(id: string, userId: string): Promise<ProjectStoryboard | undefined> {
+    // Scoping the query by userId is the authorization check — a storyboard
+    // belonging to someone else is indistinguishable from one that
+    // doesn't exist.
+    const [storyboard] = await db
+      .select()
+      .from(projectStoryboards)
+      .where(and(eq(projectStoryboards.id, id), eq(projectStoryboards.userId, userId)));
+    return storyboard;
+  }
+
+  async deleteStoryboard(id: string, userId: string): Promise<boolean> {
+    const deleted = await db
+      .delete(projectStoryboards)
+      .where(and(eq(projectStoryboards.id, id), eq(projectStoryboards.userId, userId)))
+      .returning();
+    return deleted.length > 0;
   }
 
   // --- Connections ---
@@ -1229,6 +1904,238 @@ export class DatabaseStorage implements IStorage {
     await db.delete(projectKanbanTasks).where(eq(projectKanbanTasks.id, id));
   }
 
+  async clearProjectKanbanTasks(projectId: string, onlyStatus?: string): Promise<number> {
+    const where = onlyStatus
+      ? and(eq(projectKanbanTasks.projectId, projectId), eq(projectKanbanTasks.status, onlyStatus as any))
+      : eq(projectKanbanTasks.projectId, projectId);
+    const removed = await db.delete(projectKanbanTasks).where(where).returning({ id: projectKanbanTasks.id });
+    return removed.length;
+  }
+
+  // --- Durable execution counters ---
+
+  async getUserTaskStats(userId: string): Promise<UserTaskStats | undefined> {
+    const [row] = await db.select().from(userTaskStats).where(eq(userTaskStats.userId, userId));
+    return row;
+  }
+
+  /**
+   * Ratchets the banked counters up to at least the given totals.
+   *
+   * Only ever increases, so it's safe to call repeatedly and safe to call
+   * before a delete: the banked figure keeps the execution credit that the
+   * rows themselves were evidencing. Also backfills users whose completions
+   * predate these counters, since it takes the max against live totals.
+   */
+  async bankUserTaskStats(
+    userId: string,
+    totals: { completed: number; onTime: number; lastCompletedAt?: Date | null },
+  ): Promise<UserTaskStats> {
+    const existing = await this.getUserTaskStats(userId);
+    const completed = Math.max(existing?.tasksCompleted ?? 0, totals.completed);
+    const onTime = Math.max(existing?.tasksCompletedOnTime ?? 0, totals.onTime);
+    const lastCompletedAt = totals.lastCompletedAt ?? existing?.lastCompletedAt ?? null;
+
+    if (!existing) {
+      const [row] = await db.insert(userTaskStats)
+        .values({ userId, tasksCompleted: completed, tasksCompletedOnTime: onTime, lastCompletedAt })
+        .returning();
+      return row;
+    }
+    const [row] = await db.update(userTaskStats)
+      .set({ tasksCompleted: completed, tasksCompletedOnTime: onTime, lastCompletedAt, updatedAt: new Date() })
+      .where(eq(userTaskStats.userId, userId))
+      .returning();
+    return row;
+  }
+
+  /**
+   * Live done/on-time totals across every project the user owns or belongs to.
+   * Mirrors the attribution rule in getReputationStats: a task counts if it's
+   * assigned to them, or sits in a project they own.
+   */
+  async countUserCompletedTasks(userId: string): Promise<{ completed: number; onTime: number; lastCompletedAt: Date | null }> {
+    const owned = await db.select().from(projects).where(eq(projects.ownerId, userId));
+    const memberOf = await db.select().from(projectMembers).where(eq(projectMembers.userId, userId));
+    const ownedIds = new Set(owned.map((p) => p.id));
+    const projectIds = [...new Set([...ownedIds, ...memberOf.map((m) => m.projectId)])];
+
+    let completed = 0, onTime = 0;
+    let lastCompletedAt: Date | null = null;
+
+    for (const pid of projectIds) {
+      const rows = await db.select().from(projectKanbanTasks).where(eq(projectKanbanTasks.projectId, pid));
+      for (const t of rows) {
+        if (t.status !== "done") continue;
+        if (t.assigneeId !== userId && !ownedIds.has(pid)) continue;
+        completed++;
+        if (isTaskOnTime(t)) onTime++;
+        const at = t.completedAt ? new Date(t.completedAt) : null;
+        if (at && (!lastCompletedAt || at > lastCompletedAt)) lastCompletedAt = at;
+      }
+    }
+    return { completed, onTime, lastCompletedAt };
+  }
+
+  // --- Nova codebase audits ---
+  async createCodeAudit(data: InsertProjectCodeAudit): Promise<ProjectCodeAudit> {
+    const [row] = await db.insert(projectCodeAudits).values(data).returning();
+    return row;
+  }
+
+  async getCodeAudit(id: string): Promise<ProjectCodeAudit | undefined> {
+    const [row] = await db.select().from(projectCodeAudits).where(eq(projectCodeAudits.id, id));
+    return row;
+  }
+
+  async getCodeAudits(projectId: string, limit = 20): Promise<ProjectCodeAudit[]> {
+    return db
+      .select()
+      .from(projectCodeAudits)
+      .where(eq(projectCodeAudits.projectId, projectId))
+      .orderBy(desc(projectCodeAudits.createdAt))
+      .limit(limit);
+  }
+
+  async updateCodeAudit(id: string, data: Partial<InsertProjectCodeAudit>): Promise<ProjectCodeAudit> {
+    const [row] = await db.update(projectCodeAudits).set(data).where(eq(projectCodeAudits.id, id)).returning();
+    return row;
+  }
+
+  async deleteCodeAudit(id: string): Promise<void> {
+    await db.delete(projectCodeAudits).where(eq(projectCodeAudits.id, id));
+  }
+
+  // --- Nova-built documents ---
+  async createDocument(data: InsertProjectDocument): Promise<ProjectDocument> {
+    const [row] = await db.insert(projectDocuments).values(data).returning();
+    return row;
+  }
+
+  async getDocument(id: string): Promise<ProjectDocument | undefined> {
+    const [row] = await db.select().from(projectDocuments).where(eq(projectDocuments.id, id));
+    return row;
+  }
+
+  async getProjectDocuments(projectId: string): Promise<ProjectDocument[]> {
+    return db
+      .select()
+      .from(projectDocuments)
+      .where(eq(projectDocuments.projectId, projectId))
+      .orderBy(desc(projectDocuments.updatedAt));
+  }
+
+  async updateDocument(id: string, data: Partial<InsertProjectDocument>): Promise<ProjectDocument> {
+    const [row] = await db
+      .update(projectDocuments)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(projectDocuments.id, id))
+      .returning();
+    return row;
+  }
+
+  async deleteDocument(id: string): Promise<void> {
+    await db.delete(projectDocuments).where(eq(projectDocuments.id, id));
+  }
+
+  /**
+   * Archives one completion against the project.
+   *
+   * Idempotent on taskId, so moving a card out of done and back can't inflate
+   * the history — the first completion is the one that counts.
+   */
+  async recordTaskCompletion(data: InsertProjectTaskCompletion): Promise<void> {
+    await db.insert(projectTaskCompletions).values(data).onConflictDoNothing({
+      target: projectTaskCompletions.taskId,
+    });
+  }
+
+  /**
+   * Everything this project has ever finished, newest first.
+   *
+   * Backfills on read: any card currently sitting in done that predates the
+   * archive gets a row now, so history isn't blank for projects that were
+   * already running. Cards cleared before the archive existed are
+   * unrecoverable here — the user-level banked total is what covers those.
+   */
+  async getProjectTaskCompletions(projectId: string, limit = 50): Promise<ProjectTaskCompletion[]> {
+    const liveDone = (await db
+      .select()
+      .from(projectKanbanTasks)
+      .where(and(eq(projectKanbanTasks.projectId, projectId), eq(projectKanbanTasks.status, "done"))));
+
+    for (const t of liveDone) {
+      await this.recordTaskCompletion({
+        projectId,
+        taskId: t.id,
+        completedById: t.completedById ?? null,
+        title: t.title,
+        priority: t.priority,
+        onTime: isTaskOnTime(t),
+        completedAt: t.completedAt ?? new Date(),
+      }).catch(() => { /* a backfill race is harmless — the unique index wins */ });
+    }
+
+    return db
+      .select()
+      .from(projectTaskCompletions)
+      .where(eq(projectTaskCompletions.projectId, projectId))
+      .orderBy(desc(projectTaskCompletions.completedAt))
+      .limit(limit);
+  }
+
+  /** Lifetime completion totals for a project, independent of the live board. */
+  async getProjectCompletionStats(projectId: string): Promise<{
+    completed: number; onTime: number; lastCompletedAt: Date | null;
+  }> {
+    // Read through the archive so the backfill runs before we count.
+    const rows = await this.getProjectTaskCompletions(projectId, 1000);
+    return {
+      completed: rows.length,
+      onTime: rows.filter((r) => r.onTime).length,
+      lastCompletedAt: rows[0]?.completedAt ?? null,
+    };
+  }
+
+  /** Banks a user's current live totals. Call before deleting any task. */
+  async bankExecutionCredit(userId: string): Promise<void> {
+    const live = await this.countUserCompletedTasks(userId);
+    await this.bankUserTaskStats(userId, live);
+  }
+
+  /**
+   * Records one fresh task completion.
+   *
+   * This has to add rather than take a maximum against the live board: after a
+   * builder clears finished tasks, the live count restarts from zero, so a
+   * maximum would silently swallow every completion that followed the clear.
+   * Called only on the first transition into "done" (guarded by the task's
+   * previous `completedAt`), so re-completing the same task can't inflate it.
+   */
+  async incrementUserTaskCompletion(userId: string, onTime: boolean): Promise<void> {
+    const existing = await this.getUserTaskStats(userId);
+    if (!existing) {
+      // Seed from the live board first so completions predating these
+      // counters aren't lost, then count this one on top.
+      const live = await this.countUserCompletedTasks(userId);
+      await db.insert(userTaskStats).values({
+        userId,
+        tasksCompleted: live.completed,
+        tasksCompletedOnTime: live.onTime,
+        lastCompletedAt: new Date(),
+      });
+      return;
+    }
+    await db.update(userTaskStats)
+      .set({
+        tasksCompleted: existing.tasksCompleted + 1,
+        tasksCompletedOnTime: existing.tasksCompletedOnTime + (onTime ? 1 : 0),
+        lastCompletedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(userTaskStats.userId, userId));
+  }
+
   // --- Personas ---
   async getProjectPersonas(projectId: string): Promise<ProjectPersona[]> {
     return await db.select().from(projectPersonas).where(eq(projectPersonas.projectId, projectId)).orderBy(desc(projectPersonas.createdAt));
@@ -1255,6 +2162,11 @@ export class DatabaseStorage implements IStorage {
 
   async createMilestone(data: InsertProjectMilestone): Promise<ProjectMilestone> {
     const [milestone] = await db.insert(projectMilestones).values(data).returning();
+    return milestone;
+  }
+
+  async getMilestone(id: string): Promise<ProjectMilestone | undefined> {
+    const [milestone] = await db.select().from(projectMilestones).where(eq(projectMilestones.id, id));
     return milestone;
   }
 
@@ -1334,6 +2246,11 @@ export class DatabaseStorage implements IStorage {
     return file;
   }
 
+  async updateProjectFile(id: string, data: Partial<InsertProjectFile>): Promise<ProjectFile> {
+    const [row] = await db.update(projectFiles).set(data).where(eq(projectFiles.id, id)).returning();
+    return row;
+  }
+
   async deleteProjectFile(id: string): Promise<void> {
     await db.delete(projectFiles).where(eq(projectFiles.id, id));
   }
@@ -1372,53 +2289,6 @@ export class DatabaseStorage implements IStorage {
       const [profile] = await db.select().from(userProfiles).where(eq(userProfiles.userId, e.userId));
       return { ...e, user, profile };
     }));
-  }
-
-  // --- Tactics ---
-  async createTacticsGame(data: InsertTacticsGame): Promise<TacticsGame> {
-    const [game] = await db.insert(tacticsGames).values(data).returning();
-    return game;
-  }
-
-  async getTacticsGame(id: string): Promise<TacticsGame | undefined> {
-    const [game] = await db.select().from(tacticsGames).where(eq(tacticsGames.id, id));
-    return game;
-  }
-
-  async updateTacticsGame(id: string, data: Partial<TacticsGame>): Promise<TacticsGame> {
-    const [game] = await db.update(tacticsGames).set(data).where(eq(tacticsGames.id, id)).returning();
-    return game;
-  }
-
-  async getWaitingTacticsGames(): Promise<TacticsGame[]> {
-    return db.select().from(tacticsGames).where(eq(tacticsGames.status, "waiting")).orderBy(desc(tacticsGames.createdAt));
-  }
-
-  async createTacticsPlayer(data: InsertTacticsPlayer): Promise<TacticsPlayer> {
-    const [player] = await db.insert(tacticsPlayers).values(data).returning();
-    return player;
-  }
-
-  async getTacticsPlayers(gameId: string): Promise<(TacticsPlayer & { user: User })[]> {
-    const players = await db.select().from(tacticsPlayers).where(eq(tacticsPlayers.gameId, gameId));
-    return await Promise.all(players.map(async (p) => {
-      const [user] = await db.select().from(users).where(eq(users.id, p.userId));
-      return { ...p, user };
-    }));
-  }
-
-  async updateTacticsPlayer(id: string, data: Partial<TacticsPlayer>): Promise<TacticsPlayer> {
-    const [player] = await db.update(tacticsPlayers).set(data).where(eq(tacticsPlayers.id, id)).returning();
-    return player;
-  }
-
-  async createTacticsMove(data: InsertTacticsMove): Promise<TacticsMove> {
-    const [move] = await db.insert(tacticsMoves).values(data).returning();
-    return move;
-  }
-
-  async getTacticsMovesForRound(gameId: string, round: number): Promise<TacticsMove[]> {
-    return db.select().from(tacticsMoves).where(and(eq(tacticsMoves.gameId, gameId), eq(tacticsMoves.round, round)));
   }
 
   // --- Typing ---
@@ -1542,7 +2412,8 @@ export class DatabaseStorage implements IStorage {
       const userTasks = tasks.filter(t => t.assigneeId === userId || ownedProjects.some(p => p.id === pid));
       totalTasks += userTasks.length;
       doneTasks += userTasks.filter(t => t.status === "done").length;
-      onTimeTasks += userTasks.filter(t => t.status === "done" && t.dueDate && new Date() <= new Date(t.dueDate)).length;
+      // Judged against when the task was actually finished, not against now.
+      onTimeTasks += userTasks.filter(t => isTaskOnTime(t)).length;
       
       const checkIns = await db.select().from(projectCheckIns).where(and(eq(projectCheckIns.projectId, pid), eq(projectCheckIns.userId, userId)));
       checkInCount += checkIns.length;
@@ -1579,11 +2450,25 @@ export class DatabaseStorage implements IStorage {
     }
     const bestGameScores = Array.from(bestByType.entries()).map(([gameType, score]) => ({ gameType, score }));
     
+    /*
+     * Execution credit is the greater of what's on the board now and what was
+     * banked before tasks were deleted, so tidying a board never costs score.
+     * `total` is lifted alongside `done` so the done/total ratios used by the
+     * execution and contribution scores can't exceed 1.
+     */
+    const banked = await this.getUserTaskStats(userId);
+    const effectiveDone = Math.max(doneTasks, banked?.tasksCompleted ?? 0);
+    const effectiveOnTime = Math.min(
+      effectiveDone,
+      Math.max(onTimeTasks, banked?.tasksCompletedOnTime ?? 0),
+    );
+    const effectiveTotal = Math.max(totalTasks, effectiveDone);
+
     return {
       ownedProjects,
       memberProjects: memberRecords,
       milestones: { total: totalMilestones, completed: completedMilestones },
-      tasks: { total: totalTasks, done: doneTasks, onTime: onTimeTasks },
+      tasks: { total: effectiveTotal, done: effectiveDone, onTime: effectiveOnTime },
       checkIns: checkInCount,
       followedProjects: follows.length,
       donationsReceived,
@@ -1620,9 +2505,17 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
-  async addSprintResponse(data: { sprintId: string; userId: string; questionKey: string; answer: string }): Promise<SprintResponse> {
+  async addSprintResponse(data: { sprintId: string; userId: string; questionKey: string; answer: string; isNova?: boolean }): Promise<SprintResponse> {
+    // In a practice sprint both the human and Nova share userId, so isNova is
+    // part of the identity of a response — without it Nova's answer would
+    // overwrite the builder's answer to the same question.
     const existing = await db.select().from(sprintResponses)
-      .where(and(eq(sprintResponses.sprintId, data.sprintId), eq(sprintResponses.userId, data.userId), eq(sprintResponses.questionKey, data.questionKey)));
+      .where(and(
+        eq(sprintResponses.sprintId, data.sprintId),
+        eq(sprintResponses.userId, data.userId),
+        eq(sprintResponses.questionKey, data.questionKey),
+        eq(sprintResponses.isNova, data.isNova === true),
+      ));
     if (existing.length > 0) {
       const [updated] = await db.update(sprintResponses).set({ answer: data.answer }).where(eq(sprintResponses.id, existing[0].id)).returning();
       return updated;
@@ -1670,7 +2563,7 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(sprintDecisions).where(eq(sprintDecisions.sprintId, sprintId));
   }
 
-  async sendSprintMessage(data: { sprintId: string; userId: string; content: string }): Promise<SprintMessage> {
+  async sendSprintMessage(data: { sprintId: string; userId: string; content: string; isNova?: boolean }): Promise<SprintMessage> {
     const [msg] = await db.insert(sprintMessages).values(data).returning();
     return msg;
   }
@@ -1728,28 +2621,169 @@ export class DatabaseStorage implements IStorage {
     return report;
   }
 
-  async joinMatchmakingQueue(data: { userId: string; duration: string; productStyle?: string }): Promise<any> {
-    const existing = await db.select().from(sprintMatchmakingQueue).where(eq(sprintMatchmakingQueue.userId, data.userId));
-    if (existing.length > 0) {
-      const [updated] = await db.update(sprintMatchmakingQueue).set(data).where(eq(sprintMatchmakingQueue.id, existing[0].id)).returning();
-      return updated;
-    }
-    const [entry] = await db.insert(sprintMatchmakingQueue).values(data).returning();
+  // ---------------------------------------------------------------------
+  // Sprint matchmaking queue
+  // ---------------------------------------------------------------------
+
+  /** A queue row is abandoned if its heartbeat stops for this long. */
+  private static readonly QUEUE_STALE_SECONDS = 90;
+
+  /** Removes rows whose owner stopped polling, so nobody matches a dead tab. */
+  async sweepStaleQueueEntries(): Promise<number> {
+    const deleted = await db
+      .delete(sprintMatchmakingQueue)
+      .where(
+        and(
+          eq(sprintMatchmakingQueue.status, "waiting"),
+          lte(
+            sprintMatchmakingQueue.lastSeenAt,
+            new Date(Date.now() - DatabaseStorage.QUEUE_STALE_SECONDS * 1000)
+          )
+        )
+      )
+      .returning();
+    return deleted.length;
+  }
+
+  async joinMatchmakingQueue(data: { userId: string; duration: "24h" | "72h"; productStyle?: string | null; projectId?: string | null }): Promise<SprintMatchmakingQueueEntry> {
+    const values = {
+      userId: data.userId,
+      duration: data.duration,
+      productStyle: (data.productStyle || null) as any,
+      projectId: data.projectId || null,
+      status: "waiting" as const,
+      matchedSprintId: null,
+      lastSeenAt: new Date(),
+    };
+    // userId is unique, so re-joining updates the existing row (and clears any
+    // stale "matched" state from a previous run).
+    const [entry] = await db
+      .insert(sprintMatchmakingQueue)
+      .values(values)
+      .onConflictDoUpdate({ target: sprintMatchmakingQueue.userId, set: values })
+      .returning();
     return entry;
   }
 
-  async findMatchmakingPartner(userId: string): Promise<any> {
-    const results = await db.select().from(sprintMatchmakingQueue).where(ne(sprintMatchmakingQueue.userId, userId)).orderBy(asc(sprintMatchmakingQueue.createdAt)).limit(1);
-    return results[0] || null;
+  /** Keeps a waiting row alive. Returns false if the row is gone. */
+  async touchQueueEntry(userId: string): Promise<boolean> {
+    const updated = await db
+      .update(sprintMatchmakingQueue)
+      .set({ lastSeenAt: new Date() })
+      .where(eq(sprintMatchmakingQueue.userId, userId))
+      .returning();
+    return updated.length > 0;
+  }
+
+  /**
+   * Atomically pairs the caller with a compatible waiting partner.
+   *
+   * Everything happens in one transaction using `FOR UPDATE SKIP LOCKED`, so
+   * two users polling at the same moment can't both claim each other and
+   * create duplicate sprints — the loser of the lock race simply finds no
+   * candidate and keeps waiting.
+   *
+   * Partners must want the same duration. A 24h builder paired into a 72h
+   * sprint would silently get a commitment they never agreed to.
+   */
+  async tryMatchInQueue(userId: string): Promise<{ sprint: CofounderSprint; partnerId: string } | null> {
+    return db.transaction(async (tx) => {
+      const [me] = await tx
+        .select()
+        .from(sprintMatchmakingQueue)
+        .where(eq(sprintMatchmakingQueue.userId, userId))
+        .for("update");
+      if (!me || me.status !== "waiting") return null;
+
+      const staleCutoff = new Date(Date.now() - DatabaseStorage.QUEUE_STALE_SECONDS * 1000);
+
+      // Longest-waiting compatible partner first, so the queue is fair.
+      const candidates = await tx
+        .select()
+        .from(sprintMatchmakingQueue)
+        .where(
+          and(
+            ne(sprintMatchmakingQueue.userId, userId),
+            eq(sprintMatchmakingQueue.status, "waiting"),
+            eq(sprintMatchmakingQueue.duration, me.duration),
+            gte(sprintMatchmakingQueue.lastSeenAt, staleCutoff)
+          )
+        )
+        .orderBy(asc(sprintMatchmakingQueue.createdAt))
+        .limit(1)
+        .for("update", { skipLocked: true });
+
+      const partner = candidates[0];
+      if (!partner) return null;
+
+      // If either builder brought a project, the sprint works on it. The
+      // longer-waiting builder's project wins if both did.
+      const sourceProjectId = partner.projectId || me.projectId || null;
+      let productName: string | null = null;
+      let productDescription: string | null = null;
+      if (sourceProjectId) {
+        const [proj] = await tx.select().from(projects).where(eq(projects.id, sourceProjectId));
+        if (proj) {
+          productName = proj.title;
+          productDescription = proj.oneLiner || proj.description;
+        }
+      }
+
+      const [sprint] = await tx
+        .insert(cofounderSprints)
+        .values({
+          user1Id: partner.userId, // the longer-waiting builder is user1
+          user2Id: userId,
+          duration: me.duration,
+          status: "setup",
+          // Prefer a style both asked for; otherwise fall back to either.
+          productStyle: (partner.productStyle === me.productStyle
+            ? me.productStyle
+            : me.productStyle || partner.productStyle) as any,
+          sourceProjectId,
+          productName,
+          productDescription,
+        })
+        .returning();
+
+      // Flip both rows to matched so each side's next poll learns the sprint id.
+      await tx
+        .update(sprintMatchmakingQueue)
+        .set({ status: "matched", matchedSprintId: sprint.id })
+        .where(inArray(sprintMatchmakingQueue.userId, [userId, partner.userId]));
+
+      return { sprint, partnerId: partner.userId };
+    });
   }
 
   async removeFromMatchmakingQueue(userId: string): Promise<void> {
     await db.delete(sprintMatchmakingQueue).where(eq(sprintMatchmakingQueue.userId, userId));
   }
 
-  async getQueueEntry(userId: string): Promise<any> {
-    const results = await db.select().from(sprintMatchmakingQueue).where(eq(sprintMatchmakingQueue.userId, userId));
-    return results[0] || null;
+  async getQueueEntry(userId: string): Promise<SprintMatchmakingQueueEntry | undefined> {
+    const [entry] = await db
+      .select()
+      .from(sprintMatchmakingQueue)
+      .where(eq(sprintMatchmakingQueue.userId, userId));
+    return entry;
+  }
+
+  /** Waiting builders per duration, plus the caller's 1-based place in line. */
+  async getQueueStats(userId: string, duration?: "24h" | "72h"): Promise<{ waiting: number; position: number | null }> {
+    const staleCutoff = new Date(Date.now() - DatabaseStorage.QUEUE_STALE_SECONDS * 1000);
+    const live = and(
+      eq(sprintMatchmakingQueue.status, "waiting"),
+      gte(sprintMatchmakingQueue.lastSeenAt, staleCutoff)
+    );
+
+    const rows = await db
+      .select({ userId: sprintMatchmakingQueue.userId, createdAt: sprintMatchmakingQueue.createdAt })
+      .from(sprintMatchmakingQueue)
+      .where(duration ? and(live, eq(sprintMatchmakingQueue.duration, duration)) : live)
+      .orderBy(asc(sprintMatchmakingQueue.createdAt));
+
+    const index = rows.findIndex((r) => r.userId === userId);
+    return { waiting: rows.length, position: index === -1 ? null : index + 1 };
   }
 }
 

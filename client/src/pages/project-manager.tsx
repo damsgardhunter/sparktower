@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { UserAvatar } from "@/components/user-avatar";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -23,20 +23,40 @@ import {
   GitBranch, Palette, BookOpen, HardDrive, StickyNote, Globe,
   BarChart3, AlertTriangle, CheckSquare, Square, X,
   Beaker, DollarSign, Shield, Rocket, Headphones, Crosshair,
+  Eye, EyeOff, Map, Stethoscope, CalendarDays, CircleDot, Share2, Pencil, ListOrdered, ScanSearch,
 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { RoadmapTab } from "@/components/roadmap-tab";
+import { NovaDashboard } from "@/components/nova-dashboard";
+import { HealthCheckPanel } from "@/components/health-check-panel";
+import { UpgradePrompt } from "@/components/upgrade-prompt";
+import { useEntitlements } from "@/hooks/use-entitlements";
+import {
+  PROJECT_SECTIONS, sectionHasContent, isSectionEnabled,
+  type ProjectSectionKey, type ProjectSectionDef,
+} from "@shared/project-sections";
 import { ResearchTab, StrategyTab, LaunchTab, AnalyticsTab, SupportTab } from "./pm-extended-tabs";
 import { NovaGuide } from "@/components/nova-guide";
+import { ProjectCalendar, TASK_DRAG_TYPE } from "@/components/project-calendar";
+import { NovaTaskPlanner } from "@/components/nova-task-planner";
+import { DocumentStartDialog, looksLikeDocumentTask } from "@/components/document-start-dialog";
+import { CodebaseTab } from "@/components/codebase-tab";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import type {
   Project, ProjectMember, UserProfile, User, ProjectKanbanTask,
-  ProjectPersona, ProjectMilestone, ProjectFile, ProjectLink,
+  ProjectPersona, ProjectMilestone, ProjectFile, ProjectLink, ProjectDocument,
   ProjectDecision, ProjectCheckIn, ProjectActivityLog,
 } from "@shared/schema";
+import { CREDIT_COSTS } from "@shared/plans";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { useUpload } from "@/hooks/use-upload";
 
-type TabId = "setup" | "kanban" | "milestones" | "team" | "files" | "activity" | "personas" | "chat" | "research" | "strategy" | "launch" | "analytics" | "support";
+type TabId = "nova" | "setup" | "public" | "roadmap" | "kanban" | "milestones" | "team" | "files" | "activity" | "personas" | "chat" | "research" | "strategy" | "launch" | "analytics" | "support" | "codebase";
 
 const KANBAN_COLUMNS = [
   { id: "todo" as const, label: "To Do", icon: Circle, color: "text-muted-foreground" },
@@ -83,13 +103,13 @@ export default function ProjectManager() {
   const { toast } = useToast();
   const projectId = params?.id;
 
-  const [activeTab, setActiveTab] = useState<TabId>("setup");
+  const [activeTab, setActiveTab] = useState<TabId>("nova");
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<ProjectKanbanTask | null>(null);
   const [taskForm, setTaskForm] = useState({
     title: "", description: "", status: "todo" as string, priority: "medium" as string,
     assigneeId: "" as string, dueDate: "", tags: [] as string[], estimateHours: "",
-    blockedByTaskId: "" as string, subtasks: [] as Subtask[],
+    blockedByTaskId: "" as string, subtasks: [] as Subtask[], milestoneId: "" as string,
   });
 
   const { uploadFile, isUploading: isUploadingPlan } = useUpload({
@@ -120,6 +140,19 @@ export default function ProjectManager() {
     enabled: !!projectId && activeTab === "kanban",
   });
 
+  /**
+   * Completion history, which outlives the board. Without it a cleared board
+   * reads as "nothing ever finished" — to the user and to Nova.
+   */
+  const { data: taskHistory } = useQuery<{
+    projectCompleted: number; projectOnTime: number; lastCompletedAt: string | null;
+    builderCompletedAllTime: number;
+    recent: { id: string; title: string; completedAt: string; onTime: boolean }[];
+  }>({
+    queryKey: ["/api/projects", projectId, "task-history"],
+    enabled: !!projectId && activeTab === "kanban",
+  });
+
   const { data: applications } = useQuery<any[]>({
     queryKey: ["/api/projects", projectId, "applications"],
     queryFn: async () => {
@@ -137,7 +170,9 @@ export default function ProjectManager() {
 
   const { data: milestones, isLoading: milestonesLoading } = useQuery<ProjectMilestone[]>({
     queryKey: ["/api/projects", projectId, "milestones"],
-    enabled: !!projectId && (activeTab === "milestones" || activeTab === "setup"),
+    // The kanban tab needs these too: task cards show which milestone they
+    // serve, and the task form lets you pick one.
+    enabled: !!projectId && (activeTab === "milestones" || activeTab === "setup" || activeTab === "kanban"),
   });
 
   const { data: activityLog } = useQuery<(ProjectActivityLog & { user?: User })[]>({
@@ -172,22 +207,63 @@ export default function ProjectManager() {
 
   const createTaskMutation = useMutation({
     mutationFn: async (data: any) => { const res = await apiRequest("POST", `/api/projects/${projectId}/kanban`, data); return res.json(); },
-    onSuccess: () => { toast({ title: "Task created" }); queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "kanban"] }); closeTaskDialog(); },
+    onSuccess: () => { toast({ title: "Task created" }); invalidateTaskViews(); closeTaskDialog(); },
   });
 
   const updateTaskMutation = useMutation({
     mutationFn: async ({ taskId, data }: { taskId: string; data: any }) => { const res = await apiRequest("PATCH", `/api/kanban/${taskId}`, data); return res.json(); },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "kanban"] }); },
+    onSuccess: () => { invalidateTaskViews(); },
   });
 
   const deleteTaskMutation = useMutation({
     mutationFn: async (taskId: string) => { await apiRequest("DELETE", `/api/kanban/${taskId}`); },
-    onSuccess: () => { toast({ title: "Task deleted" }); queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "kanban"] }); },
+    onSuccess: () => { toast({ title: "Task deleted" }); invalidateTaskViews(); },
+  });
+
+  /**
+   * The calendar is derived from tasks, so any change to the board has to
+   * refresh both views — and reputation, since completing a task moves it.
+   */
+  function invalidateTaskViews() {
+    queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "kanban"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "calendar"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/reputation"] });
+  }
+
+  const clearTasksMutation = useMutation({
+    mutationFn: async (onlyDone: boolean) => {
+      const res = await apiRequest("DELETE", `/api/projects/${projectId}/kanban${onlyDone ? "?status=done" : ""}`);
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({
+        title: `Cleared ${data.removed} task${data.removed === 1 ? "" : "s"}`,
+        description: "Your execution credit was banked first — your reputation is unchanged.",
+      });
+      invalidateTaskViews();
+    },
+    onError: () => toast({ title: "Couldn't clear the board", variant: "destructive" }),
+  });
+
+  const shareTaskMutation = useMutation({
+    mutationFn: async (taskTitle: string) => {
+      const res = await apiRequest("POST", "/api/feed", {
+        postType: "project_update",
+        projectId,
+        content: `Just finished: ${taskTitle} ✅`,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Shared to your feed", description: "Your win is on your profile." });
+      queryClient.invalidateQueries({ queryKey: ["/api/feed"] });
+    },
+    onError: (err: any) => toast({ title: "Couldn't share that", description: err?.message || undefined, variant: "destructive" }),
   });
 
   const aiGenerateTasksMutation = useMutation({
     mutationFn: async () => { const res = await apiRequest("POST", `/api/projects/${projectId}/kanban/ai-generate`); return res.json(); },
-    onSuccess: (data) => { toast({ title: "Tasks generated", description: `Nova created ${data.length} tasks.` }); queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "kanban"] }); },
+    onSuccess: (data) => { toast({ title: "Tasks generated", description: `Nova created ${data.length} tasks.` }); invalidateTaskViews(); },
     onError: (error: any) => {
       const msg = error.message || "";
       if (msg.includes("403") || msg.includes("Insufficient")) toast({ title: "Insufficient credits", variant: "destructive" });
@@ -314,7 +390,7 @@ export default function ProjectManager() {
 
   function openNewTaskDialog(status: string = "todo") {
     setEditingTask(null);
-    setTaskForm({ title: "", description: "", status, priority: "medium", assigneeId: "", dueDate: "", tags: [], estimateHours: "", blockedByTaskId: "", subtasks: [] });
+    setTaskForm({ title: "", description: "", status, priority: "medium", assigneeId: "", dueDate: "", tags: [], estimateHours: "", blockedByTaskId: "", subtasks: [], milestoneId: "" });
     setTaskDialogOpen(true);
   }
 
@@ -327,6 +403,7 @@ export default function ProjectManager() {
       tags: (task.tags as string[]) || [], estimateHours: task.estimateHours?.toString() || "",
       blockedByTaskId: task.blockedByTaskId || "",
       subtasks: (task.subtasks as Subtask[]) || [],
+      milestoneId: (task as any).milestoneId || "",
     });
     setTaskDialogOpen(true);
   }
@@ -334,7 +411,7 @@ export default function ProjectManager() {
   function closeTaskDialog() {
     setTaskDialogOpen(false);
     setEditingTask(null);
-    setTaskForm({ title: "", description: "", status: "todo", priority: "medium", assigneeId: "", dueDate: "", tags: [], estimateHours: "", blockedByTaskId: "", subtasks: [] });
+    setTaskForm({ title: "", description: "", status: "todo", priority: "medium", assigneeId: "", dueDate: "", tags: [], estimateHours: "", blockedByTaskId: "", subtasks: [], milestoneId: "" });
   }
 
   function handleTaskSubmit() {
@@ -344,6 +421,7 @@ export default function ProjectManager() {
       assigneeId: taskForm.assigneeId || null, dueDate: taskForm.dueDate || null,
       tags: taskForm.tags, estimateHours: taskForm.estimateHours ? parseInt(taskForm.estimateHours) : null,
       blockedByTaskId: taskForm.blockedByTaskId || null, subtasks: taskForm.subtasks,
+      milestoneId: taskForm.milestoneId || null,
     };
     if (editingTask) { updateTaskMutation.mutate({ taskId: editingTask.id, data }); closeTaskDialog(); }
     else createTaskMutation.mutate(data);
@@ -379,11 +457,15 @@ export default function ProjectManager() {
   }
 
   const tabs: { id: TabId; label: string; icon: any }[] = [
+    { id: "nova", label: "Dashboard", icon: Sparkles },
     { id: "setup", label: "Setup", icon: LayoutDashboard },
+    { id: "public", label: "Public Page", icon: Eye },
+    { id: "roadmap", label: "Roadmap", icon: Map },
     { id: "kanban", label: "Tasks", icon: ListChecks },
     { id: "milestones", label: "Milestones", icon: Flag },
     { id: "team", label: "Team", icon: Users },
     { id: "files", label: "Files", icon: FolderOpen },
+    { id: "codebase", label: "Codebase", icon: ScanSearch },
     { id: "activity", label: "Activity", icon: Activity },
     { id: "personas", label: "Personas", icon: Target },
     { id: "research", label: "Research", icon: Beaker },
@@ -407,9 +489,12 @@ export default function ProjectManager() {
               <p className="text-sm text-secondary">Project Manager</p>
             </div>
           </div>
-          <div className="flex gap-1 overflow-x-auto">
+          {/* Tabs wrap into as many rows as the viewport needs rather than
+              scrolling sideways, so every tab is reachable without dragging.
+              A wide screen shows one or two rows; a narrow one stacks more. */}
+          <div className="flex flex-wrap gap-1">
             {tabs.map((tab) => (
-              <Button key={tab.id} variant={activeTab === tab.id ? "default" : "ghost"} size="sm" className="gap-2 shrink-0" onClick={() => setActiveTab(tab.id)} data-testid={`tab-${tab.id}`}>
+              <Button key={tab.id} variant={activeTab === tab.id ? "default" : "ghost"} size="sm" className="gap-2" onClick={() => setActiveTab(tab.id)} data-testid={`tab-${tab.id}`}>
                 <tab.icon className="h-4 w-4" />
                 {tab.label}
               </Button>
@@ -419,6 +504,9 @@ export default function ProjectManager() {
       </div>
 
       <div className="max-w-7xl mx-auto px-6 py-6">
+        {activeTab === "nova" && projectId && (
+          <NovaDashboard projectId={projectId} onNavigate={(tab) => setActiveTab(tab as TabId)} />
+        )}
         {activeTab === "setup" && (
           <SetupTab
             project={project} isOwner={isOwner} links={projectLinks || []}
@@ -430,6 +518,17 @@ export default function ProjectManager() {
             aiSummary={aiSummarizeMutation} aiGaps={aiDetectGapsMutation}
           />
         )}
+        {activeTab === "public" && (
+          <PublicPageTab
+            project={project} isOwner={isOwner}
+            onUpdateProject={(data) => updateProjectMutation.mutate(data)}
+            onViewPublicPage={() => setLocation(`/projects/${projectId}`)}
+            onEditBrief={() => setActiveTab("setup")}
+          />
+        )}
+        {activeTab === "roadmap" && projectId && (
+          <RoadmapTab projectId={projectId} isOwner={isOwner} />
+        )}
         {activeTab === "kanban" && (
           <KanbanTab
             tasks={kanbanTasks || []} members={members || []} isLoading={tasksLoading}
@@ -438,6 +537,12 @@ export default function ProjectManager() {
             onStatusChange={handleStatusChange}
             onAiGenerate={() => aiGenerateTasksMutation.mutate()}
             aiPending={aiGenerateTasksMutation.isPending}
+            projectId={projectId!} projectTitle={project.title} isOwner={isOwner}
+            onClearTasks={(onlyDone) => clearTasksMutation.mutate(onlyDone)}
+            clearPending={clearTasksMutation.isPending}
+            onShareTask={(title) => shareTaskMutation.mutate(title)}
+            history={taskHistory}
+            milestones={milestones || []}
           />
         )}
         {activeTab === "milestones" && (
@@ -458,12 +563,16 @@ export default function ProjectManager() {
             recommendData={recommendPeopleMutation.data}
           />
         )}
+        {activeTab === "codebase" && projectId && (
+          <CodebaseTab projectId={projectId} repoUrl={project.repoUrl} />
+        )}
         {activeTab === "files" && (
           <FilesTab
             files={projectFiles || []} isUploading={isUploadingFile}
             uploadFolder={uploadFolder} setUploadFolder={setUploadFolder}
             onUpload={(file) => uploadProjectFile(file)}
             onDelete={(id) => deleteFileMutation.mutate(id)}
+            projectId={projectId!}
           />
         )}
         {activeTab === "activity" && (
@@ -570,6 +679,16 @@ export default function ProjectManager() {
               </div>
             </div>
             <div className="space-y-2">
+              <label className="text-sm font-medium">Milestone</label>
+              <Select value={taskForm.milestoneId || "none"} onValueChange={(v) => setTaskForm((p) => ({ ...p, milestoneId: v === "none" ? "" : v }))}>
+                <SelectTrigger data-testid="select-task-milestone"><SelectValue placeholder="Not linked" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Not linked to a milestone</SelectItem>
+                  {(milestones || []).map((m) => (<SelectItem key={m.id} value={m.id}>{m.title}</SelectItem>))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
               <label className="text-sm font-medium">Tags</label>
               <TagInput tags={taskForm.tags} onChange={(tags) => setTaskForm(p => ({ ...p, tags }))} />
             </div>
@@ -673,6 +792,186 @@ function SubtaskEditor({ subtasks, onChange }: { subtasks: Subtask[]; onChange: 
   );
 }
 
+/**
+ * Private-project control. The quota is a paid entitlement, so this surfaces
+ * how many are left and pitches the right plan when the cap is hit.
+ */
+function PrivacyCard({ project, isOwner, onUpdateProject }: {
+  project: Project; isOwner: boolean; onUpdateProject: (data: any) => void;
+}) {
+  const { entitlements, privateProjectsUsed, canCreatePrivateProject } = useEntitlements();
+  const isPrivate = (project as any).isPrivate === true;
+  const limit = entitlements.privateProjects;
+  const unlimited = limit === -1;
+  // Turning privacy off is always allowed; turning it on needs quota.
+  const blocked = !isPrivate && !canCreatePrivateProject;
+
+  return (
+    <Card data-testid="card-project-privacy">
+      <CardHeader className="space-y-1">
+        <CardTitle className="text-lg flex items-center gap-2">
+          {isPrivate ? <Lock className="h-4 w-4" /> : <Globe className="h-4 w-4" />} Project visibility
+        </CardTitle>
+        <p className="text-sm text-muted-foreground">
+          {isPrivate
+            ? "Only you and your team can see this project. It's hidden from Discover and search."
+            : "Anyone can find this project in Discover and view its public page."}
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex items-center justify-between gap-4">
+          <div className="space-y-0.5">
+            <p className="text-sm font-medium">Make this project private</p>
+            <p className="text-xs text-muted-foreground">
+              {unlimited
+                ? "Unlimited private projects on your plan"
+                : limit === 0
+                  ? "Private projects need a paid plan"
+                  : `${privateProjectsUsed} of ${limit} private projects used`}
+            </p>
+          </div>
+          <Switch
+            checked={isPrivate}
+            disabled={!isOwner || blocked}
+            onCheckedChange={(v) => onUpdateProject({ isPrivate: v })}
+            aria-label="Make this project private"
+            data-testid="switch-project-private"
+          />
+        </div>
+        {blocked && (
+          <UpgradePrompt
+            variant="inline"
+            requiredTier={limit === 0 ? "starter" : "builder"}
+            title={limit === 0 ? "Keep work private until you're ready" : "You've used all your private projects"}
+            description={limit === 0
+              ? "Starter includes 3 private projects. Builder makes them unlimited."
+              : "Builder includes unlimited private projects."}
+          />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+const SECTION_GROUP_LABELS: Record<ProjectSectionDef["group"], { title: string; blurb: string }> = {
+  hero: { title: "Top of the page", blurb: "The first thing a visitor reads" },
+  brief: { title: "Project brief", blurb: "Cards explaining the what and why" },
+  detail: { title: "Details", blurb: "Roadmap, stack, and roles" },
+  sidebar: { title: "Sidebar", blurb: "Stats, team, and links" },
+};
+
+function PublicPageTab({ project, isOwner, onUpdateProject, onViewPublicPage, onEditBrief }: {
+  project: Project; isOwner: boolean;
+  onUpdateProject: (data: any) => void;
+  onViewPublicPage: () => void;
+  onEditBrief: () => void;
+}) {
+  // Local mirror so the toggles feel instant while the PATCH is in flight.
+  const [overrides, setOverrides] = useState<Partial<Record<ProjectSectionKey, boolean>>>(
+    ((project as any).publicSections as Partial<Record<ProjectSectionKey, boolean>>) || {}
+  );
+
+  const enabled = (key: ProjectSectionKey) =>
+    overrides[key] ?? isSectionEnabled(project, key);
+
+  const toggle = (key: ProjectSectionKey, value: boolean) => {
+    const next = { ...overrides, [key]: value };
+    setOverrides(next);
+    onUpdateProject({ publicSections: next });
+  };
+
+  const visibleCount = PROJECT_SECTIONS.filter(s => enabled(s.key) && sectionHasContent(project, s.key)).length;
+  const emptyCount = PROJECT_SECTIONS.filter(s => !sectionHasContent(project, s.key)).length;
+
+  const groups = (["hero", "brief", "detail", "sidebar"] as const).map(group => ({
+    group,
+    sections: PROJECT_SECTIONS.filter(s => s.group === group),
+  }));
+
+  return (
+    <div className="space-y-6 max-w-3xl">
+      <PrivacyCard project={project} isOwner={isOwner} onUpdateProject={onUpdateProject} />
+
+      <Card>
+        <CardHeader className="flex flex-row items-start justify-between space-y-0 gap-4">
+          <div className="space-y-1">
+            <CardTitle className="text-lg flex items-center gap-2"><Eye className="h-4 w-4" /> What visitors see</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Sections appear automatically once they have content. Turn any of them off to keep them private.
+            </p>
+          </div>
+          <Button variant="outline" size="sm" className="gap-2 shrink-0" onClick={onViewPublicPage} data-testid="button-view-public-page">
+            <ExternalLink className="h-3.5 w-3.5" /> View page
+          </Button>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            <Badge variant="default" className="gap-1" data-testid="badge-visible-count">
+              <Eye className="h-3 w-3" /> {visibleCount} live
+            </Badge>
+            {emptyCount > 0 && (
+              <>
+                <Badge variant="secondary" className="gap-1" data-testid="badge-empty-count">
+                  {emptyCount} awaiting content
+                </Badge>
+                <button className="text-primary text-xs hover:underline" onClick={onEditBrief} data-testid="link-edit-brief">
+                  Fill in your brief →
+                </button>
+              </>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {groups.map(({ group, sections }) => (
+        <Card key={group}>
+          <CardHeader className="space-y-1">
+            <CardTitle className="text-base">{SECTION_GROUP_LABELS[group].title}</CardTitle>
+            <p className="text-xs text-muted-foreground">{SECTION_GROUP_LABELS[group].blurb}</p>
+          </CardHeader>
+          <CardContent className="space-y-1">
+            {sections.map(section => {
+              const hasContent = sectionHasContent(project, section.key);
+              const isOn = enabled(section.key);
+              return (
+                <div
+                  key={section.key}
+                  className="flex items-center justify-between gap-4 py-2.5 border-b border-border/40 last:border-0"
+                  data-testid={`row-section-${section.key}`}
+                >
+                  <div className="min-w-0 space-y-0.5">
+                    <div className="flex items-center gap-2">
+                      <p className={`text-sm font-medium ${!hasContent ? "text-muted-foreground" : ""}`}>{section.label}</p>
+                      {!hasContent && (
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 gap-1 font-normal">
+                          <EyeOff className="h-2.5 w-2.5" /> No content yet
+                        </Badge>
+                      )}
+                      {hasContent && !isOn && (
+                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0 gap-1 font-normal">
+                          <EyeOff className="h-2.5 w-2.5" /> Hidden
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground">{section.hint}</p>
+                  </div>
+                  <Switch
+                    checked={isOn}
+                    disabled={!isOwner}
+                    onCheckedChange={(v) => toggle(section.key, v)}
+                    aria-label={`Show ${section.label} on the public page`}
+                    data-testid={`switch-section-${section.key}`}
+                  />
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
 function SetupTab({ project, isOwner, links, isUploadingPlan, onUploadPlan, onUpdateProject, onCreateLink, onDeleteLink, aiSummary, aiGaps }: {
   project: Project; isOwner: boolean; links: ProjectLink[];
   isUploadingPlan: boolean; onUploadPlan: (file: File) => void;
@@ -686,9 +985,37 @@ function SetupTab({ project, isOwner, links, isUploadingPlan, onUploadPlan, onUp
     targetUser: project.targetUser || "",
     successMetrics: project.successMetrics || "",
     oneLiner: (project as any).oneLiner || "",
+    mission: (project as any).mission || "",
     valueProposition: (project as any).valueProposition || "",
     targetCustomerProfile: (project as any).targetCustomerProfile || "",
   });
+  /*
+   * Keep the edit form in step with the project.
+   *
+   * `briefForm` seeds from `project` once on mount, so anything written after
+   * that — most often Nova filling in Target User / Success Metrics — left the
+   * form holding stale values. Opening Edit then showed those fields blank,
+   * and saving wrote the blanks back over Nova's work. Re-sync whenever the
+   * project changes while the form is closed; skip it mid-edit so we never
+   * clobber what the user is typing.
+   */
+  useEffect(() => {
+    if (editingBrief) return;
+    setBriefForm({
+      problemStatement: project.problemStatement || "",
+      targetUser: project.targetUser || "",
+      successMetrics: project.successMetrics || "",
+      oneLiner: (project as any).oneLiner || "",
+      mission: (project as any).mission || "",
+      valueProposition: (project as any).valueProposition || "",
+      targetCustomerProfile: (project as any).targetCustomerProfile || "",
+    });
+  }, [
+    editingBrief, project.problemStatement, project.targetUser, project.successMetrics,
+    (project as any).oneLiner, (project as any).mission,
+    (project as any).valueProposition, (project as any).targetCustomerProfile,
+  ]);
+
   const [scopeItem, setScopeItem] = useState("");
   const [scopeType, setScopeType] = useState<"mvp" | "niceToHave">("mvp");
   const [newLink, setNewLink] = useState({ label: "", url: "", category: "other" });
@@ -696,6 +1023,19 @@ function SetupTab({ project, isOwner, links, isUploadingPlan, onUploadPlan, onUp
   const [newQuestion, setNewQuestion] = useState("");
   const scope = (project.scope as { mvp?: string[]; niceToHave?: string[] }) || { mvp: [], niceToHave: [] };
   const questions: ApplicationQuestion[] = (project.applicationQuestions as ApplicationQuestion[]) || [];
+
+  /*
+   * The repo and live URLs captured on the project-creation page live on the
+   * project itself, not in the project_links table, so the Links Hub never
+   * showed them. Surface them here as first-class entries. They're edited on
+   * the project's own fields rather than deleted like a normal link, so they
+   * render with an Edit affordance pointing at the brief instead of a trash
+   * can — dropping one means clearing the field.
+   */
+  const integrationLinks = [
+    { key: "repoUrl", label: "Repository", url: project.repoUrl, icon: GitBranch },
+    { key: "liveUrl", label: "Live Demo", url: project.liveUrl, icon: Globe },
+  ].filter((l): l is typeof l & { url: string } => !!l.url?.trim());
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -708,6 +1048,7 @@ function SetupTab({ project, isOwner, links, isUploadingPlan, onUploadPlan, onUp
           {editingBrief ? (
             <div className="space-y-4">
               <div className="space-y-2"><Label>One-Liner Positioning</Label><Input value={briefForm.oneLiner} onChange={e => setBriefForm(p => ({ ...p, oneLiner: e.target.value }))} placeholder="We help [who] do [what] by [how]" data-testid="input-one-liner" /></div>
+              <div className="space-y-2"><Label>Mission</Label><Textarea value={briefForm.mission} onChange={e => setBriefForm(p => ({ ...p, mission: e.target.value }))} placeholder="Why does this project exist? What is it working toward?" data-testid="textarea-mission" /></div>
               <div className="space-y-2"><Label>Value Proposition</Label><Textarea value={briefForm.valueProposition} onChange={e => setBriefForm(p => ({ ...p, valueProposition: e.target.value }))} placeholder="What unique value do you provide?" data-testid="textarea-value-prop" /></div>
               <div className="space-y-2"><Label>Target Customer Profile</Label><Textarea value={briefForm.targetCustomerProfile} onChange={e => setBriefForm(p => ({ ...p, targetCustomerProfile: e.target.value }))} placeholder="Demographics, behaviors, pain points..." data-testid="textarea-customer-profile" /></div>
               <div className="space-y-2"><Label>Problem Statement</Label><Textarea value={briefForm.problemStatement} onChange={e => setBriefForm(p => ({ ...p, problemStatement: e.target.value }))} placeholder="What problem does this project solve?" data-testid="textarea-problem" /></div>
@@ -720,12 +1061,27 @@ function SetupTab({ project, isOwner, links, isUploadingPlan, onUploadPlan, onUp
             </div>
           ) : (
             <div className="space-y-4">
-              {(project as any).oneLiner && (
-                <div className="bg-primary/5 border border-primary/20 rounded-lg p-4">
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">One-Liner</p>
-                  <p className="text-base font-medium" data-testid="text-one-liner">{(project as any).oneLiner}</p>
-                </div>
-              )}
+              {/*
+                * One-Liner and Mission always render, even when empty.
+                *
+                * They used to be hidden until filled, which made an incomplete
+                * brief look finished: Nova's "brief is missing mission" nudge
+                * pointed at a field that wasn't on the page at all. Problem /
+                * Target User / Success Metrics already showed "Not defined
+                * yet" for the same reason.
+                */}
+              <div className="bg-primary/5 border border-primary/20 rounded-lg p-4">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">One-Liner</p>
+                <p className="text-base font-medium" data-testid="text-one-liner">
+                  {(project as any).oneLiner || <span className="text-sm font-normal text-muted-foreground italic">Not defined yet</span>}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">Mission</p>
+                <p className="text-sm whitespace-pre-line" data-testid="text-mission">
+                  {(project as any).mission || <span className="text-muted-foreground italic">Not defined yet</span>}
+                </p>
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div>
                   <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">Problem</p>
@@ -827,6 +1183,42 @@ function SetupTab({ project, isOwner, links, isUploadingPlan, onUploadPlan, onUp
               <Button size="sm" disabled={!newLink.label.trim() || !newLink.url.trim()} onClick={() => { onCreateLink(newLink); setNewLink({ label: "", url: "", category: "other" }); setShowLinkForm(false); }} data-testid="button-save-link">Save Link</Button>
             </div>
           )}
+          {integrationLinks.map(link => {
+            const Icon = link.icon;
+            return (
+              <div key={link.key} className="flex items-center gap-3 p-2 rounded-md bg-muted/30 group" data-testid={`integration-link-${link.key}`}>
+                <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-sm font-medium truncate">{link.label}</p>
+                    <Badge variant="outline" className="text-[10px] px-1 py-0 shrink-0">Integration</Badge>
+                  </div>
+                  <a
+                    href={link.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-muted-foreground truncate hover:text-primary hover:underline block"
+                    data-testid={`integration-link-url-${link.key}`}
+                  >
+                    {link.url}
+                  </a>
+                </div>
+                <a href={link.url} target="_blank" rel="noopener noreferrer" data-testid={`integration-link-open-${link.key}`}>
+                  <ExternalLink className="h-3.5 w-3.5 text-muted-foreground hover:text-primary" />
+                </a>
+                {isOwner && (
+                  <button
+                    onClick={() => onUpdateProject({ [link.key]: "" })}
+                    className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive"
+                    title={`Remove ${link.label} link`}
+                    data-testid={`integration-link-remove-${link.key}`}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+            );
+          })}
           {links.length > 0 ? links.map(link => {
             const cat = LINK_CATEGORIES.find(c => c.id === link.category);
             const Icon = cat?.icon || Globe;
@@ -841,7 +1233,7 @@ function SetupTab({ project, isOwner, links, isUploadingPlan, onUploadPlan, onUp
                 {isOwner && <button onClick={() => onDeleteLink(link.id)} className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive"><Trash2 className="h-3.5 w-3.5" /></button>}
               </div>
             );
-          }) : <p className="text-sm text-muted-foreground">No links added yet.</p>}
+          }) : integrationLinks.length === 0 && <p className="text-sm text-muted-foreground">No links added yet.</p>}
         </CardContent>
       </Card>
 
@@ -938,12 +1330,171 @@ function SetupTab({ project, isOwner, links, isUploadingPlan, onUploadPlan, onUp
   );
 }
 
-function KanbanTab({ tasks, members, isLoading, onNewTask, onEditTask, onDeleteTask, onStatusChange, onAiGenerate, aiPending }: {
+interface SequenceResult {
+  rationale: string;
+  startHere: string | null;
+  sequence: { id: string; title: string; position: number; reason: string; blockedByTaskId: string | null }[];
+  dependenciesFound: { id: string; title: string; blockerTitle: string; why?: string }[];
+  cyclesBroken: { id: string; title: string; blockerTitle: string }[];
+}
+
+interface TaskHistory {
+  projectCompleted: number;
+  projectOnTime: number;
+  lastCompletedAt: string | null;
+  builderCompletedAllTime: number;
+  recent: { id: string; title: string; completedAt: string; onTime: boolean }[];
+}
+
+function KanbanTab({
+  tasks, members, isLoading, onNewTask, onEditTask, onDeleteTask, onStatusChange,
+  onAiGenerate, aiPending, projectId, projectTitle, isOwner, onClearTasks, clearPending, onShareTask,
+  history, milestones,
+}: {
   tasks: ProjectKanbanTask[]; members: (ProjectMember & { user: User; profile?: UserProfile })[];
   isLoading: boolean; onNewTask: (status: string) => void; onEditTask: (task: ProjectKanbanTask) => void;
   onDeleteTask: (id: string) => void; onStatusChange: (taskId: string, newStatus: string) => void;
   onAiGenerate: () => void; aiPending: boolean;
+  projectId: string; projectTitle: string; isOwner: boolean;
+  onClearTasks: (onlyDone: boolean) => void; clearPending: boolean;
+  onShareTask: (title: string) => void;
+  history?: TaskHistory;
+  milestones: ProjectMilestone[];
 }) {
+  const [view, setView] = useState<"board" | "calendar">("board");
+  const [clearOpen, setClearOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  /** Nova's explanation of the last re-order, shown until dismissed. */
+  const [sequenceResult, setSequenceResult] = useState<SequenceResult | null>(null);
+  /** null = closed; a task = opened from that card; "board" = opened from the header. */
+  const [plannerFor, setPlannerFor] = useState<ProjectKanbanTask | "board" | null>(null);
+  /** Seeds the document builder. null = closed. */
+  const [docStart, setDocStart] = useState<{ title: string; description: string; taskId?: string } | null>(null);
+  /** The task open in the read-first detail view. */
+  const [viewingTask, setViewingTask] = useState<ProjectKanbanTask | null>(null);
+  const doneCount = tasks.filter((t) => t.status === "done").length;
+  // The board's done column only shows what hasn't been cleared yet.
+  const completedAllTime = Math.max(doneCount, history?.projectCompleted ?? 0);
+  const clearedCount = Math.max(0, completedAllTime - doneCount);
+  const { toast } = useToast();
+
+  /** The task being dragged, and where it would land if dropped now. */
+  const [dragTaskId, setDragTaskId] = useState<string | null>(null);
+  const [dropAt, setDropAt] = useState<{ status: string; index: number } | null>(null);
+
+  /**
+   * Persists a drag.
+   *
+   * A status change goes through PATCH so the completion stamping, feed post
+   * and execution archive stay in one place; the new positions then go in a
+   * single reorder call rather than one request per card.
+   */
+  const dragMutation = useMutation({
+    mutationFn: async ({ items, movedId, newStatus }: {
+      items: { id: string; order: number }[];
+      movedId: string;
+      newStatus: string | null;
+    }) => {
+      if (newStatus) await apiRequest("PATCH", `/api/kanban/${movedId}`, { status: newStatus });
+      await apiRequest("POST", `/api/projects/${projectId}/kanban/reorder`, { items });
+    },
+    // Settled rather than success: a failed drag has to snap back to the truth,
+    // and the optimistic update has already moved the card.
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "kanban"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "calendar"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "task-history"] });
+    },
+    onError: (err: any) => {
+      const raw = err?.message || "";
+      const jsonStart = raw.indexOf("{");
+      let description = "The board has been put back.";
+      if (jsonStart >= 0) {
+        try { description = JSON.parse(raw.slice(jsonStart)).message || description; } catch { /* keep */ }
+      }
+      toast({ title: "Couldn't move that task", description, variant: "destructive" });
+    },
+  });
+
+  /**
+   * Works out the whole board's new order from one drop.
+   *
+   * Renumbers column by column so every task keeps a unique position — the
+   * calendar orders a day's entries by this same number, and per-column
+   * numbering would leave it full of ties.
+   */
+  function handleDrop(status: string, index: number) {
+    const movedId = dragTaskId;
+    setDragTaskId(null);
+    setDropAt(null);
+    if (!movedId) return;
+
+    const moved = tasks.find((t) => t.id === movedId);
+    if (!moved) return;
+
+    // Plain object, not a Map — `Map` in this file is the lucide icon.
+    const columns: Record<string, ProjectKanbanTask[]> = {};
+    for (const c of KANBAN_COLUMNS) {
+      columns[c.id] = tasks
+        .filter((t) => t.status === c.id && t.id !== movedId)
+        .sort((a, b) => a.order - b.order);
+    }
+    const target = columns[status];
+    if (!target) return;
+    target.splice(Math.max(0, Math.min(index, target.length)), 0, { ...moved, status } as ProjectKanbanTask);
+
+    const items: { id: string; order: number }[] = [];
+    let n = 0;
+    for (const c of KANBAN_COLUMNS) {
+      for (const t of columns[c.id] || []) items.push({ id: t.id, order: n++ });
+    }
+
+    // Nothing actually moved — don't spend a round trip on it.
+    const sameColumn = moved.status === status;
+    const unchanged = sameColumn && items.every((i) => tasks.find((t) => t.id === i.id)?.order === i.order);
+    if (unchanged) return;
+
+    const orderById: Record<string, number> = {};
+    for (const i of items) orderById[i.id] = i.order;
+    queryClient.setQueryData<ProjectKanbanTask[]>(
+      ["/api/projects", projectId, "kanban"],
+      (old) => (old || []).map((t) => ({
+        ...t,
+        order: orderById[t.id] ?? t.order,
+        status: t.id === movedId ? (status as ProjectKanbanTask["status"]) : t.status,
+      })),
+    );
+
+    dragMutation.mutate({ items, movedId, newStatus: sameColumn ? null : status });
+  }
+
+  const sequenceMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/projects/${projectId}/kanban/sequence`);
+      return res.json() as Promise<SequenceResult>;
+    },
+    onSuccess: (result) => {
+      setSequenceResult(result);
+      toast({
+        title: "Board re-ordered",
+        description: result.dependenciesFound.length
+          ? `Nova also found ${result.dependenciesFound.length} dependenc${result.dependenciesFound.length === 1 ? "y" : "ies"}.`
+          : undefined,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "kanban"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/subscription"] });
+    },
+    onError: (err: any) => {
+      const raw = err?.message || "";
+      const jsonStart = raw.indexOf("{");
+      let description = "Couldn't re-order the board.";
+      if (jsonStart >= 0) {
+        try { description = JSON.parse(raw.slice(jsonStart)).message || description; } catch { /* keep */ }
+      }
+      toast({ title: "Nova couldn't do that", description, variant: "destructive" });
+    },
+  });
+
   if (isLoading) return <div className="flex items-center justify-center py-12"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
 
   function getMemberName(userId: string | null) {
@@ -959,41 +1510,327 @@ function KanbanTab({ tasks, members, isLoading, onNewTask, onEditTask, onDeleteT
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div><h2 className="text-lg font-semibold">Task Board</h2><p className="text-sm text-secondary">{tasks.length} tasks total</p></div>
+        <div className="flex items-center gap-3">
+          <div>
+            <h2 className="text-lg font-semibold">{view === "board" ? "Task Board" : "Task Calendar"}</h2>
+            <p className="text-sm text-secondary" data-testid="text-task-counts">
+              {tasks.length} on the board{doneCount > 0 && ` · ${doneCount} done`}
+              {completedAllTime > 0 && (
+                <>
+                  {" · "}
+                  <button
+                    type="button"
+                    className="underline decoration-dotted underline-offset-2 hover:text-foreground"
+                    onClick={() => setHistoryOpen(true)}
+                    data-testid="button-open-task-history"
+                  >
+                    {completedAllTime} completed all time
+                  </button>
+                </>
+              )}
+            </p>
+          </div>
+          {/* Small symbol buttons to swap between the simple board and the calendar. */}
+          <div className="flex items-center rounded-md border border-border overflow-hidden">
+            <button
+              onClick={() => setView("board")}
+              title="Board view"
+              aria-label="Board view"
+              aria-pressed={view === "board"}
+              className={`p-2 transition-colors ${view === "board" ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground"}`}
+              data-testid="button-view-board"
+            >
+              <LayoutDashboard className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => setView("calendar")}
+              title="Calendar view"
+              aria-label="Calendar view"
+              aria-pressed={view === "calendar"}
+              className={`p-2 transition-colors ${view === "calendar" ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground"}`}
+              data-testid="button-view-calendar"
+            >
+              <CalendarDays className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
         <div className="flex items-center gap-2">
+          <Button
+            className="gap-2"
+            onClick={() => setPlannerFor("board")}
+            data-testid="button-nova-task-help"
+          >
+            <Sparkles className="h-4 w-4" /> Nova, help me
+          </Button>
           <Button variant="outline" className="gap-2" onClick={onAiGenerate} disabled={aiPending} data-testid="button-ai-generate-tasks">
             {aiPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} AI Generate Tasks
           </Button>
+          {tasks.filter((t) => t.status !== "done").length > 1 && (
+            <Button
+              variant="outline"
+              className="gap-2"
+              title="Nova puts the board in an order you can work straight down, prerequisites first"
+              disabled={sequenceMutation.isPending}
+              onClick={() => sequenceMutation.mutate()}
+              data-testid="button-sequence-tasks"
+            >
+              {sequenceMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListOrdered className="h-4 w-4" />}
+              {sequenceMutation.isPending ? "Nova is sequencing…" : `Order my tasks (${CREDIT_COSTS.taskSequencing})`}
+            </Button>
+          )}
+          {isOwner && tasks.length > 0 && (
+            <Button variant="outline" className="gap-2" onClick={() => setClearOpen(true)} disabled={clearPending} data-testid="button-clear-tasks">
+              {clearPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />} Clear
+            </Button>
+          )}
           <Button className="gap-2" onClick={() => onNewTask("todo")} data-testid="button-new-task"><Plus className="h-4 w-4" /> New Task</Button>
         </div>
       </div>
+
+      {/* Why the board looks the way it does now, and what to pick up first. */}
+      {sequenceResult && (
+        <Card className="border-primary/40 bg-primary/5" data-testid="card-sequence-result">
+          <CardContent className="p-4 space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-2 min-w-0">
+                <ListOrdered className="h-4 w-4 text-primary mt-0.5 shrink-0" />
+                <div className="min-w-0 space-y-1">
+                  <p className="text-sm font-semibold">Nova re-ordered your board</p>
+                  {sequenceResult.rationale && (
+                    <p className="text-sm text-secondary leading-relaxed">{sequenceResult.rationale}</p>
+                  )}
+                </div>
+              </div>
+              <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => setSequenceResult(null)} data-testid="button-dismiss-sequence">
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+
+            {sequenceResult.sequence[0] && (
+              <button
+                type="button"
+                className="w-full text-left rounded-md border border-primary/40 bg-background/70 p-3 hover:border-primary transition-colors"
+                onClick={() => {
+                  const first = tasks.find((t) => t.id === sequenceResult.sequence[0].id);
+                  if (first) setViewingTask(first);
+                }}
+                data-testid="button-start-here"
+              >
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-primary">Start here</p>
+                <p className="text-sm font-medium">{sequenceResult.sequence[0].title}</p>
+                {sequenceResult.sequence[0].reason && (
+                  <p className="text-xs text-muted-foreground">{sequenceResult.sequence[0].reason}</p>
+                )}
+              </button>
+            )}
+
+            {sequenceResult.cyclesBroken?.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Deadlocks Nova cleared
+                </p>
+                {sequenceResult.cyclesBroken.map((c) => (
+                  <p key={c.id} className="text-xs text-muted-foreground flex items-start gap-1.5">
+                    <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0 text-amber-500" />
+                    <span>
+                      <strong className="text-foreground">{c.title}</strong> and{" "}
+                      <strong className="text-foreground">{c.blockerTitle}</strong> were waiting on each other,
+                      so neither could start. Removed the blocker on {c.title}.
+                    </span>
+                  </p>
+                ))}
+              </div>
+            )}
+
+            {sequenceResult.dependenciesFound.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Dependencies Nova spotted
+                </p>
+                {sequenceResult.dependenciesFound.map((d) => (
+                  <p key={d.id} className="text-xs text-muted-foreground flex items-start gap-1.5">
+                    <Lock className="h-3 w-3 mt-0.5 shrink-0 text-orange-500" />
+                    <span><strong className="text-foreground">{d.title}</strong> now waits on <strong className="text-foreground">{d.blockerTitle}</strong>{d.why ? ` — ${d.why}` : ""}</span>
+                  </p>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      <AlertDialog open={clearOpen} onOpenChange={setClearOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Clear tasks from this board?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                <p>
+                  This permanently deletes the task cards. It <strong>won't</strong> affect your builder
+                  reputation — execution credit for every finished task is banked first, so your
+                  completed count keeps going up.
+                </p>
+                <p className="text-xs">
+                  Tasks removed here also disappear from the calendar, since the calendar is built
+                  from the tasks themselves. This can't be undone.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-col sm:flex-row gap-2">
+            <AlertDialogCancel data-testid="button-clear-cancel">Cancel</AlertDialogCancel>
+            {doneCount > 0 && (
+              <AlertDialogAction
+                onClick={() => { onClearTasks(true); setClearOpen(false); }}
+                data-testid="button-clear-done"
+              >
+                Clear {doneCount} finished
+              </AlertDialogAction>
+            )}
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => { onClearTasks(false); setClearOpen(false); }}
+              data-testid="button-clear-all"
+            >
+              Clear all {tasks.length}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {view === "calendar" ? (
+        <ProjectCalendar
+          projectId={projectId}
+          projectTitle={projectTitle}
+          onShareTask={(e) => onShareTask(e.title)}
+          // Tasks cleared off the board still show on the calendar, so a
+          // missing match just means there's nothing left to open.
+          onOpenTask={(taskId) => {
+            const task = tasks.find((t) => t.id === taskId);
+            if (task) setViewingTask(task);
+            else toast({ title: "That task no longer exists", description: "It was deleted or cleared from the board." });
+          }}
+        />
+      ) : (
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         {KANBAN_COLUMNS.map((col) => {
           const ColIcon = col.icon;
           const columnTasks = tasks.filter(t => t.status === col.id).sort((a, b) => a.order - b.order);
           return (
-            <div key={col.id} className="space-y-3" data-testid={`kanban-column-${col.id}`}>
+            <div
+              key={col.id}
+              className={`space-y-3 rounded-md transition-colors ${
+                dropAt?.status === col.id ? "bg-primary/5 ring-1 ring-primary/40" : ""
+              }`}
+              onDragOver={(ev) => {
+                if (!ev.dataTransfer.types.includes(TASK_DRAG_TYPE)) return;
+                ev.preventDefault();
+                ev.dataTransfer.dropEffect = "move";
+                // Landing on the column body rather than a card means "last".
+                setDropAt({ status: col.id, index: columnTasks.length });
+              }}
+              onDrop={(ev) => {
+                if (!ev.dataTransfer.types.includes(TASK_DRAG_TYPE)) return;
+                ev.preventDefault();
+                handleDrop(col.id, dropAt?.status === col.id ? dropAt.index : columnTasks.length);
+              }}
+              data-testid={`kanban-column-${col.id}`}
+            >
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <ColIcon className={`h-4 w-4 ${col.color}`} />
                   <span className="text-sm font-medium">{col.label}</span>
                   <Badge variant="secondary" className="text-xs">{columnTasks.length}</Badge>
+                  {/* Finished work that's been cleared still counts. Without
+                      this the Done column reads as the whole record. */}
+                  {col.id === "done" && clearedCount > 0 && (
+                    <button
+                      type="button"
+                      className="text-[10px] text-muted-foreground hover:text-foreground underline decoration-dotted underline-offset-2"
+                      title="Tasks finished on this project and since cleared off the board"
+                      onClick={() => setHistoryOpen(true)}
+                      data-testid="text-done-all-time"
+                    >
+                      +{clearedCount} cleared
+                    </button>
+                  )}
                 </div>
                 <Button variant="ghost" size="icon" onClick={() => onNewTask(col.id)} data-testid={`button-add-task-${col.id}`}><Plus className="h-3 w-3" /></Button>
               </div>
-              <div className="space-y-2 min-h-[8rem]">
-                {columnTasks.map((task) => {
+              <div className="space-y-2 min-h-[8rem] px-0.5">
+                {columnTasks.map((task, taskIndex) => {
                   const subtasks = (task.subtasks as Subtask[]) || [];
                   const doneSubtasks = subtasks.filter(s => s.done).length;
-                  const blockerTask = task.blockedByTaskId ? tasks.find(t => t.id === task.blockedByTaskId) : null;
+                  // A finished prerequisite is no longer a blocker. New completions
+                  // clear the link outright; this covers rows saved before that.
+                  const blockerRaw = task.blockedByTaskId ? tasks.find(t => t.id === task.blockedByTaskId) : null;
+                  const blockerTask = blockerRaw && blockerRaw.status !== "done" ? blockerRaw : null;
+                  const taskMilestone = (task as any).milestoneId
+                    ? milestones.find((m) => m.id === (task as any).milestoneId)
+                    : null;
+                  const isDragging = dragTaskId === task.id;
+                  const showIndicator = dropAt?.status === col.id && dropAt.index === taskIndex && !isDragging;
                   return (
-                    <Card key={task.id} className="hover:shadow-md transition-shadow cursor-pointer" onClick={() => onEditTask(task)} data-testid={`task-card-${task.id}`}>
+                    <div key={task.id}>
+                      {/* Where the card would land if dropped right now. */}
+                      {showIndicator && <div className="h-0.5 bg-primary rounded-full mb-2" data-testid={`drop-indicator-${col.id}-${taskIndex}`} />}
+                    <Card
+                      className={`hover:shadow-md transition-shadow cursor-pointer ${isDragging ? "opacity-40" : ""}`}
+                      onClick={() => setViewingTask(task)}
+                      draggable
+                      onDragStart={(ev) => {
+                        ev.dataTransfer.setData(TASK_DRAG_TYPE, task.id);
+                        ev.dataTransfer.effectAllowed = "move";
+                        setDragTaskId(task.id);
+                      }}
+                      onDragEnd={() => { setDragTaskId(null); setDropAt(null); }}
+                      onDragOver={(ev) => {
+                        if (!ev.dataTransfer.types.includes(TASK_DRAG_TYPE)) return;
+                        ev.preventDefault();
+                        ev.stopPropagation();
+                        // Past the halfway line means "after this card".
+                        const box = ev.currentTarget.getBoundingClientRect();
+                        const after = ev.clientY > box.top + box.height / 2;
+                        setDropAt({ status: col.id, index: taskIndex + (after ? 1 : 0) });
+                      }}
+                      onDrop={(ev) => {
+                        if (!ev.dataTransfer.types.includes(TASK_DRAG_TYPE)) return;
+                        ev.preventDefault();
+                        ev.stopPropagation();
+                        const box = ev.currentTarget.getBoundingClientRect();
+                        const after = ev.clientY > box.top + box.height / 2;
+                        handleDrop(col.id, taskIndex + (after ? 1 : 0));
+                      }}
+                      data-testid={`task-card-${task.id}`}
+                    >
                       <CardContent className="p-3 space-y-2">
                         <div className="flex items-start justify-between gap-2">
                           <p className="text-sm font-medium leading-tight flex-1">{task.title}</p>
                           <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={(e) => { e.stopPropagation(); onDeleteTask(task.id); }} data-testid={`button-delete-task-${task.id}`} style={{ visibility: "visible" }}><Trash2 className="h-3 w-3" /></Button>
                         </div>
                         {task.description && <p className="text-xs text-secondary line-clamp-2">{task.description}</p>}
+                        {/* Which milestone this is work toward — the readable
+                            half of a milestone → tasks plan. */}
+                        {looksLikeDocumentTask(task.title, task.description) && task.status !== "done" && (
+                          <button
+                            type="button"
+                            className="flex items-center gap-1 text-xs text-primary hover:underline"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDocStart({ title: task.title, description: task.description || "", taskId: task.id });
+                            }}
+                            data-testid={`task-build-doc-${task.id}`}
+                          >
+                            <FileText className="h-3 w-3 shrink-0" />
+                            <span>Build with Nova</span>
+                          </button>
+                        )}
+                        {taskMilestone && (
+                          <div className="flex items-center gap-1 text-xs text-purple-500">
+                            <Flag className="h-3 w-3 shrink-0" />
+                            <span className="truncate">{taskMilestone.title}</span>
+                          </div>
+                        )}
                         {blockerTask && (
                           <div className="flex items-center gap-1 text-xs text-orange-500"><Lock className="h-3 w-3" /><span className="truncate">Blocked by: {blockerTask.title}</span></div>
                         )}
@@ -1016,20 +1853,308 @@ function KanbanTab({ tasks, members, isLoading, onNewTask, onEditTask, onDeleteT
                             {task.assigneeId && <UserAvatar src={getMemberAvatar(task.assigneeId)} name={getMemberName(task.assigneeId) || ""} className="h-5 w-5" />}
                           </div>
                         </div>
-                        <Select value={task.status} onValueChange={(v) => onStatusChange(task.id, v)}>
-                          <SelectTrigger className="h-7 text-xs" onClick={(e) => e.stopPropagation()} data-testid={`select-status-${task.id}`}><SelectValue /></SelectTrigger>
-                          <SelectContent>{KANBAN_COLUMNS.map(c => <SelectItem key={c.id} value={c.id}>{c.label}</SelectItem>)}</SelectContent>
-                        </Select>
+                        {/* Who actually moved the card, which is not always who it's assigned to. */}
+                        {task.status === "in-progress" && (task as any).startedById && (
+                          <div className="flex items-center gap-1.5 text-xs text-blue-500" data-testid={`attribution-progress-${task.id}`}>
+                            <CircleDot className="h-3 w-3 shrink-0" />
+                            <UserAvatar src={getMemberAvatar((task as any).startedById)} name={getMemberName((task as any).startedById) || ""} className="h-4 w-4" />
+                            <span className="truncate">{getMemberName((task as any).startedById) || "Someone"} is on it</span>
+                          </div>
+                        )}
+                        {task.status === "done" && (task as any).completedById && (
+                          <div className="flex items-center gap-1.5 text-xs text-emerald-500" data-testid={`attribution-done-${task.id}`}>
+                            <CheckCircle2 className="h-3 w-3 shrink-0" />
+                            <UserAvatar src={getMemberAvatar((task as any).completedById)} name={getMemberName((task as any).completedById) || ""} className="h-4 w-4" />
+                            <span className="truncate">
+                              {getMemberName((task as any).completedById) || "Someone"} finished
+                              {(task as any).completedAt && ` ${new Date((task as any).completedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`}
+                            </span>
+                          </div>
+                        )}
+                        <div className="flex items-center gap-1">
+                          <Select value={task.status} onValueChange={(v) => onStatusChange(task.id, v)}>
+                            <SelectTrigger className="h-7 text-xs" onClick={(e) => e.stopPropagation()} data-testid={`select-status-${task.id}`}><SelectValue /></SelectTrigger>
+                            <SelectContent>{KANBAN_COLUMNS.map(c => <SelectItem key={c.id} value={c.id}>{c.label}</SelectItem>)}</SelectContent>
+                          </Select>
+                          {task.status === "done" && (
+                            <Button
+                              variant="ghost" size="icon" className="h-7 w-7 shrink-0"
+                              title="Share this win to your feed"
+                              onClick={(e) => { e.stopPropagation(); onShareTask(task.title); }}
+                              data-testid={`button-share-done-${task.id}`}
+                            >
+                              <Share2 className="h-3 w-3" />
+                            </Button>
+                          )}
+                        </div>
                       </CardContent>
                     </Card>
+                    </div>
                   );
                 })}
-                {columnTasks.length === 0 && <div className="border-2 border-dashed border-border rounded-md p-6 text-center"><p className="text-xs text-muted-foreground">No tasks</p></div>}
+                {dropAt?.status === col.id && dropAt.index >= columnTasks.length && columnTasks.some((t) => t.id !== dragTaskId) && (
+                  <div className="h-0.5 bg-primary rounded-full" data-testid={`drop-indicator-${col.id}-end`} />
+                )}
+                {columnTasks.length === 0 && (
+                  <div className={`border-2 border-dashed rounded-md p-6 text-center transition-colors ${
+                    dropAt?.status === col.id ? "border-primary bg-primary/5" : "border-border"
+                  }`}>
+                    <p className="text-xs text-muted-foreground">
+                      {dropAt?.status === col.id ? `Drop here to move to ${col.label}` : "No tasks"}
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           );
         })}
       </div>
+      )}
+
+      {/* The project's execution record, board or no board. */}
+      <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 text-emerald-500" /> Completed work
+            </DialogTitle>
+            <DialogDescription>
+              Everything finished on this project, including cards you've since cleared off the
+              board. Nova reads this too, so clearing up doesn't cost you credit for shipping.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-1">
+            <div className="grid grid-cols-3 gap-3">
+              <div className="rounded-md border border-border/60 bg-muted/40 p-3">
+                <p className="text-xl font-bold">{completedAllTime}</p>
+                <p className="text-[11px] text-muted-foreground leading-tight">completed on this project</p>
+              </div>
+              <div className="rounded-md border border-border/60 bg-muted/40 p-3">
+                <p className="text-xl font-bold">{history?.projectOnTime ?? 0}</p>
+                <p className="text-[11px] text-muted-foreground leading-tight">hit their due date</p>
+              </div>
+              <div className="rounded-md border border-border/60 bg-muted/40 p-3">
+                <p className="text-xl font-bold">{history?.builderCompletedAllTime ?? 0}</p>
+                <p className="text-[11px] text-muted-foreground leading-tight">your total across all projects</p>
+              </div>
+            </div>
+            {history?.recent?.length ? (
+              <div className="space-y-1.5 max-h-[18rem] overflow-y-auto">
+                {history.recent.map((c) => (
+                  <div key={c.id} className="flex items-start gap-2 text-sm" data-testid={`history-item-${c.id}`}>
+                    <CheckCircle2 className={`h-3.5 w-3.5 mt-0.5 shrink-0 ${c.onTime ? "text-emerald-500" : "text-amber-500"}`} />
+                    <span className="flex-1 min-w-0">{c.title}</span>
+                    <span className="text-xs text-muted-foreground shrink-0">
+                      {new Date(c.completedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Nothing recorded yet. Completions are archived from the moment a task moves to Done.
+              </p>
+            )}
+            {(history?.builderCompletedAllTime ?? 0) > completedAllTime && (
+              <p className="text-xs text-muted-foreground">
+                Your all-time total is higher than this project's list — it includes other projects,
+                and work finished before per-project history was kept.
+              </p>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {plannerFor && (
+        <NovaTaskPlanner
+          projectId={projectId}
+          selectedTask={plannerFor === "board" ? null : plannerFor}
+          onClose={() => setPlannerFor(null)}
+        />
+      )}
+
+      <DocumentStartDialog
+        projectId={projectId}
+        open={!!docStart}
+        onOpenChange={(open) => !open && setDocStart(null)}
+        initialTitle={docStart?.title || ""}
+        initialDescription={docStart?.description || ""}
+        sourceTaskId={docStart?.taskId}
+      />
+
+      {/* Read first, edit second: clicking a card shows the whole task rather
+          than dropping straight into a form. */}
+      <Dialog open={!!viewingTask} onOpenChange={(open) => !open && setViewingTask(null)}>
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+          {viewingTask && (() => {
+            const subtasks = (viewingTask.subtasks as Subtask[]) || [];
+            const doneSubtasks = subtasks.filter((s) => s.done).length;
+            const tags = (viewingTask.tags as string[]) || [];
+            const blockerCandidate = viewingTask.blockedByTaskId
+              ? tasks.find((t) => t.id === viewingTask.blockedByTaskId)
+              : null;
+            // Same rule as the card: a done prerequisite isn't a blocker.
+            const blocker = blockerCandidate && blockerCandidate.status !== "done" ? blockerCandidate : null;
+            const col = KANBAN_COLUMNS.find((c) => c.id === viewingTask.status);
+            const started = (viewingTask as any).startedById as string | null;
+            const finishedBy = (viewingTask as any).completedById as string | null;
+            const finishedAt = (viewingTask as any).completedAt as string | null;
+
+            return (
+              <>
+                <DialogHeader>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Badge variant="secondary" className="text-xs">{col?.label || viewingTask.status}</Badge>
+                    <Badge variant="secondary" className={`text-xs ${PRIORITY_COLORS[viewingTask.priority]}`}>
+                      {viewingTask.priority} priority
+                    </Badge>
+                    {viewingTask.estimateHours && (
+                      <Badge variant="outline" className="text-xs gap-1">
+                        <Clock className="h-3 w-3" />{viewingTask.estimateHours}h estimate
+                      </Badge>
+                    )}
+                  </div>
+                  <DialogTitle className="text-left pt-1" data-testid="text-task-detail-title">
+                    {viewingTask.title}
+                  </DialogTitle>
+                </DialogHeader>
+
+                <div className="space-y-4 py-1 text-sm">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Description</p>
+                    <p className="whitespace-pre-wrap leading-relaxed" data-testid="text-task-detail-description">
+                      {viewingTask.description || <span className="text-muted-foreground">No description.</span>}
+                    </p>
+                  </div>
+
+                  {blocker && (
+                    <div className="flex items-center gap-1.5 text-orange-500">
+                      <Lock className="h-3.5 w-3.5 shrink-0" />
+                      <span>Blocked by <strong>{blocker.title}</strong></span>
+                    </div>
+                  )}
+
+                  {tags.length > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Tags</p>
+                      <div className="flex flex-wrap gap-1">
+                        {tags.map((tag, i) => (
+                          <Badge key={i} variant="outline" className="text-[10px]"><Tag className="h-2.5 w-2.5 mr-0.5" />{tag}</Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {subtasks.length > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">
+                        Subtasks ({doneSubtasks}/{subtasks.length})
+                      </p>
+                      <div className="space-y-1">
+                        {subtasks.map((s, i) => (
+                          <div key={i} className="flex items-start gap-2">
+                            {s.done
+                              ? <CheckSquare className="h-3.5 w-3.5 mt-0.5 shrink-0 text-emerald-500" />
+                              : <Square className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground" />}
+                            <span className={s.done ? "line-through text-muted-foreground" : ""}>{s.title}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-3 pt-1 border-t border-border/50">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Assignee</p>
+                      {viewingTask.assigneeId ? (
+                        <div className="flex items-center gap-1.5">
+                          <UserAvatar src={getMemberAvatar(viewingTask.assigneeId)} name={getMemberName(viewingTask.assigneeId) || ""} className="h-5 w-5" />
+                          <span>{getMemberName(viewingTask.assigneeId) || "Unknown"}</span>
+                        </div>
+                      ) : <span className="text-muted-foreground">Unassigned</span>}
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Due</p>
+                      {viewingTask.dueDate
+                        ? <span>{new Date(viewingTask.dueDate).toLocaleDateString()}</span>
+                        : <span className="text-muted-foreground">No due date</span>}
+                    </div>
+                    <div className="col-span-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Milestone</p>
+                      {(() => {
+                        const m = milestones.find((x) => x.id === (viewingTask as any).milestoneId);
+                        return m
+                          ? <span className="flex items-center gap-1.5"><Flag className="h-3.5 w-3.5 text-purple-500" />{m.title}</span>
+                          : <span className="text-muted-foreground">Not linked to a milestone</span>;
+                      })()}
+                    </div>
+                  </div>
+
+                  {/* Who did what, which the card only hints at. */}
+                  {(started || finishedBy) && (
+                    <div className="space-y-1 pt-1 border-t border-border/50">
+                      {started && (
+                        <p className="text-xs text-muted-foreground">
+                          Started by {getMemberName(started) || "someone"}
+                          {(viewingTask as any).startedAt && ` on ${new Date((viewingTask as any).startedAt).toLocaleDateString()}`}
+                        </p>
+                      )}
+                      {finishedBy && (
+                        <p className="text-xs text-muted-foreground">
+                          Finished by {getMemberName(finishedBy) || "someone"}
+                          {finishedAt && ` on ${new Date(finishedAt).toLocaleDateString()}`}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <DialogFooter className="gap-2 sm:gap-2">
+                  {viewingTask.status === "done" ? (
+                    <Button
+                      variant="ghost" className="gap-2 mr-auto"
+                      onClick={() => onShareTask(viewingTask.title)}
+                      data-testid="button-task-detail-share"
+                    >
+                      <Share2 className="h-4 w-4" /> Share this win
+                    </Button>
+                  ) : looksLikeDocumentTask(viewingTask.title, viewingTask.description) ? (
+                    /* This task's deliverable is a document, so the most useful
+                       thing on offer is building it rather than planning it. */
+                    <Button
+                      variant="ghost" className="gap-2 mr-auto"
+                      onClick={() => {
+                        const t = viewingTask;
+                        setViewingTask(null);
+                        setDocStart({ title: t.title, description: t.description || "", taskId: t.id });
+                      }}
+                      data-testid="button-task-detail-document"
+                    >
+                      <FileText className="h-4 w-4 text-primary" /> Build this document with Nova
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="ghost" className="gap-2 mr-auto"
+                      onClick={() => { const t = viewingTask; setViewingTask(null); setPlannerFor(t); }}
+                      data-testid="button-task-detail-nova"
+                    >
+                      <Sparkles className="h-4 w-4" /> Nova, help with this
+                    </Button>
+                  )}
+                  <Button variant="outline" onClick={() => setViewingTask(null)}>Close</Button>
+                  <Button
+                    className="gap-2"
+                    onClick={() => { const t = viewingTask; setViewingTask(null); onEditTask(t); }}
+                    data-testid="button-task-detail-edit"
+                  >
+                    <Pencil className="h-4 w-4" /> Edit task
+                  </Button>
+                </DialogFooter>
+              </>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -1040,6 +2165,11 @@ function MilestonesTab({ milestones, isLoading, onCreate, onUpdate, onDelete }: 
 }) {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ title: "", description: "", targetDate: "", status: "planned" });
+  /**
+   * The milestone being edited by hand, held as a draft. A milestone whose
+   * wording is frozen the moment it's created is one the plan outgrows.
+   */
+  const [editing, setEditing] = useState<{ id: string; title: string; description: string; targetDate: string } | null>(null);
 
   if (isLoading) return <div className="flex items-center justify-center py-12"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
 
@@ -1072,15 +2202,65 @@ function MilestonesTab({ milestones, isLoading, onCreate, onUpdate, onDelete }: 
                 </div>
                 <Card className="flex-1 group">
                   <CardContent className="p-4">
+                    {editing?.id === m.id ? (
+                      <div className="space-y-3" data-testid={`form-edit-milestone-${m.id}`}>
+                        <Input
+                          value={editing.title}
+                          onChange={e => setEditing(p => p && ({ ...p, title: e.target.value }))}
+                          placeholder="Milestone title"
+                          data-testid="input-edit-milestone-title"
+                        />
+                        <Textarea
+                          value={editing.description}
+                          onChange={e => setEditing(p => p && ({ ...p, description: e.target.value }))}
+                          placeholder="Description (optional)"
+                          data-testid="textarea-edit-milestone-desc"
+                        />
+                        <Input
+                          type="date"
+                          value={editing.targetDate}
+                          onChange={e => setEditing(p => p && ({ ...p, targetDate: e.target.value }))}
+                          data-testid="input-edit-milestone-date"
+                        />
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            disabled={!editing.title.trim()}
+                            onClick={() => {
+                              onUpdate(m.id, {
+                                title: editing.title,
+                                description: editing.description,
+                                targetDate: editing.targetDate || null,
+                              });
+                              setEditing(null);
+                            }}
+                            data-testid="button-save-edit-milestone"
+                          >Save</Button>
+                          <Button size="sm" variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
+                        </div>
+                      </div>
+                    ) : (
                     <div className="flex items-start justify-between gap-2">
-                      <div className="flex-1">
+                      {/* Click the milestone itself to edit it — the pencil is
+                          a hint, not the only way in. */}
+                      <button
+                        type="button"
+                        className="flex-1 text-left"
+                        onClick={() => setEditing({
+                          id: m.id,
+                          title: m.title,
+                          description: m.description || "",
+                          targetDate: m.targetDate ? new Date(m.targetDate).toISOString().slice(0, 10) : "",
+                        })}
+                        data-testid={`button-open-edit-milestone-${m.id}`}
+                      >
                         <div className="flex items-center gap-2 mb-1">
                           <h3 className="font-semibold text-sm">{m.title}</h3>
                           <Badge variant="secondary" className={`text-xs ${statusColors[m.status]}`}>{m.status}</Badge>
                         </div>
                         {m.description && <p className="text-xs text-secondary mb-2">{m.description}</p>}
                         {m.targetDate && <p className="text-xs text-muted-foreground flex items-center gap-1"><Calendar className="h-3 w-3" /> Target: {new Date(m.targetDate).toLocaleDateString()}</p>}
-                      </div>
+                      </button>
                       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                         <Select value={m.status} onValueChange={v => onUpdate(m.id, { status: v })}>
                           <SelectTrigger className="h-7 text-xs w-[110px]"><SelectValue /></SelectTrigger>
@@ -1090,9 +2270,20 @@ function MilestonesTab({ milestones, isLoading, onCreate, onUpdate, onDelete }: 
                             <SelectItem value="completed">Completed</SelectItem>
                           </SelectContent>
                         </Select>
+                        <Button
+                          variant="ghost" size="icon" className="h-7 w-7"
+                          onClick={() => setEditing({
+                            id: m.id,
+                            title: m.title,
+                            description: m.description || "",
+                            targetDate: m.targetDate ? new Date(m.targetDate).toISOString().slice(0, 10) : "",
+                          })}
+                          data-testid={`button-edit-milestone-${m.id}`}
+                        ><Pencil className="h-3 w-3" /></Button>
                         <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => onDelete(m.id)}><Trash2 className="h-3 w-3" /></Button>
                       </div>
                     </div>
+                    )}
                   </CardContent>
                 </Card>
               </div>
@@ -1137,6 +2328,9 @@ function TeamTab({ project, members, applications, isOwner, tasks, onUpdateMembe
   const [editingMember, setEditingMember] = useState<string | null>(null);
   const [memberForm, setMemberForm] = useState({ timezone: "", availability: "", hoursPerWeek: "", skills: "" });
   const pendingApps = applications?.filter(a => a.status === "pending") || [];
+  // Solo Builder Mode is fixed at creation time, so recruiting is off the
+  // table for the life of the project.
+  const soloMode = !!(project as any).soloMode;
 
   function getTaskStats(userId: string) {
     const userTasks = tasks.filter(t => t.assigneeId === userId);
@@ -1146,8 +2340,33 @@ function TeamTab({ project, members, applications, isOwner, tasks, onUpdateMembe
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <div><h2 className="text-lg font-semibold">Team</h2><p className="text-sm text-secondary">{members.length} members</p></div>
+        <div>
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+            Team
+            {soloMode && <Badge variant="outline" className="text-xs border-primary/30 text-primary">Solo Builder</Badge>}
+          </h2>
+          <p className="text-sm text-secondary">{members.length} members</p>
+        </div>
       </div>
+
+      {soloMode && (
+        <Card className="border-primary/20 bg-primary/5" data-testid="card-solo-mode-notice">
+          <CardContent className="p-4 flex items-start gap-3">
+            <Rocket className="h-5 w-5 text-primary shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="text-sm font-medium">You're building this one solo</p>
+              <p className="text-sm text-muted-foreground">
+                This project was created in Solo Builder Mode, so teammates can't be
+                invited and applications are turned off. It's just you and Nova.
+              </p>
+              <p className="text-sm text-muted-foreground">
+                Solo Builder Mode is locked in at creation. To build with a team,
+                create a new project with Solo Builder Mode off and delete this one.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {members.map(member => {
@@ -1220,7 +2439,7 @@ function TeamTab({ project, members, applications, isOwner, tasks, onUpdateMembe
         })}
       </div>
 
-      {isOwner && pendingApps.length > 0 && (
+      {isOwner && !soloMode && pendingApps.length > 0 && (
         <Card>
           <CardHeader><CardTitle className="text-lg flex items-center gap-2">Pending Applications <Badge>{pendingApps.length}</Badge></CardTitle></CardHeader>
           <CardContent>
@@ -1237,6 +2456,7 @@ function TeamTab({ project, members, applications, isOwner, tasks, onUpdateMembe
         </Card>
       )}
 
+      {!soloMode && (
       <Card>
         <CardHeader><CardTitle className="text-lg flex items-center gap-2"><UserPlus className="h-4 w-4" /> AI People Recommendations</CardTitle></CardHeader>
         <CardContent className="space-y-4">
@@ -1258,26 +2478,51 @@ function TeamTab({ project, members, applications, isOwner, tasks, onUpdateMembe
           )}
         </CardContent>
       </Card>
+      )}
     </div>
   );
 }
 
-function FilesTab({ files, isUploading, uploadFolder, setUploadFolder, onUpload, onDelete }: {
+function FilesTab({ files, isUploading, uploadFolder, setUploadFolder, onUpload, onDelete, projectId }: {
   files: (ProjectFile & { uploader: User })[]; isUploading: boolean;
   uploadFolder: string; setUploadFolder: (f: string) => void;
   onUpload: (file: File) => void; onDelete: (id: string) => void;
+  projectId: string;
 }) {
+  const [, navigate] = useLocation();
   const [filterFolder, setFilterFolder] = useState<string>("all");
+  const [docStartOpen, setDocStartOpen] = useState(false);
+
+  /** Nova documents, which live alongside uploads but stay editable. */
+  const { data: documents } = useQuery<(ProjectDocument & { pageCount: number })[]>({
+    queryKey: ["/api/projects", projectId, "documents"],
+    enabled: !!projectId,
+  });
+
+  /*
+   * Folders are free text — a published document can create one — so the
+   * filter is built from what's actually in use rather than a fixed list.
+   */
+  const folders = Array.from(new Set([...FILE_FOLDERS, ...files.map((f) => f.folder || "general")]));
   const filtered = filterFolder === "all" ? files : files.filter(f => f.folder === filterFolder);
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-4">
-        <div><h2 className="text-lg font-semibold">Files & Assets</h2><p className="text-sm text-secondary">{files.length} files</p></div>
+        <div>
+          <h2 className="text-lg font-semibold">Files & Assets</h2>
+          <p className="text-sm text-secondary">
+            {files.length} file{files.length === 1 ? "" : "s"}
+            {(documents?.length || 0) > 0 && ` · ${documents!.length} Nova document${documents!.length === 1 ? "" : "s"}`}
+          </p>
+        </div>
         <div className="flex items-center gap-2">
+          <Button className="gap-2" onClick={() => setDocStartOpen(true)} data-testid="button-new-document">
+            <FileText className="h-4 w-4" /> New document with Nova
+          </Button>
           <Select value={uploadFolder} onValueChange={setUploadFolder}>
             <SelectTrigger className="w-[120px]"><SelectValue /></SelectTrigger>
-            <SelectContent>{FILE_FOLDERS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
+            <SelectContent>{folders.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
           </Select>
           <label className="cursor-pointer">
             <input type="file" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) onUpload(f); }} data-testid="input-upload-file" />
@@ -1288,13 +2533,54 @@ function FilesTab({ files, isUploading, uploadFolder, setUploadFolder, onUpload,
 
       <div className="flex gap-1 flex-wrap">
         <Button variant={filterFolder === "all" ? "default" : "ghost"} size="sm" onClick={() => setFilterFolder("all")} data-testid="filter-all">All</Button>
-        {FILE_FOLDERS.map(f => (
+        {folders.map(f => (
           <Button key={f} variant={filterFolder === f ? "default" : "ghost"} size="sm" onClick={() => setFilterFolder(f)} data-testid={`filter-${f}`}>{f}</Button>
         ))}
       </div>
 
+      {/* Nova documents first: they're still being worked on, and reopening one
+          is a different action from downloading a finished upload. */}
+      {(documents?.length || 0) > 0 && filterFolder === "all" && (
+        <div className="space-y-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Nova documents
+          </p>
+          {documents!.map((d) => (
+            <div key={d.id} className="flex items-center gap-3 p-3 rounded-md bg-primary/5 border border-primary/20 group" data-testid={`document-${d.id}`}>
+              <FileText className="h-5 w-5 text-primary shrink-0" />
+              <button
+                type="button"
+                className="flex-1 min-w-0 text-left"
+                onClick={() => navigate(`/projects/${projectId}/documents/${d.id}`)}
+                data-testid={`open-document-${d.id}`}
+              >
+                <p className="text-sm font-medium truncate">{d.title}</p>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Badge variant="secondary" className="text-[9px] px-1.5 py-0">{d.status}</Badge>
+                  <span>{d.pageCount} page{d.pageCount === 1 ? "" : "s"}</span>
+                  <span>·</span>
+                  <span>edited {new Date(d.updatedAt).toLocaleDateString()}</span>
+                </div>
+              </button>
+              <a
+                href={`/api/documents/${d.id}/pdf`} target="_blank" rel="noopener noreferrer"
+                title="Open the PDF"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <ExternalLink className="h-3.5 w-3.5 text-muted-foreground hover:text-primary" />
+              </a>
+            </div>
+          ))}
+        </div>
+      )}
+
       {filtered.length > 0 ? (
         <div className="space-y-2">
+          {(documents?.length || 0) > 0 && filterFolder === "all" && (
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground pt-2">
+              Uploads
+            </p>
+          )}
           {filtered.map(file => (
             <div key={file.id} className="flex items-center gap-3 p-3 rounded-md bg-muted/30 group" data-testid={`file-${file.id}`}>
               <FileText className="h-5 w-5 text-muted-foreground shrink-0" />
@@ -1318,9 +2604,20 @@ function FilesTab({ files, isUploading, uploadFolder, setUploadFolder, onUpload,
         <div className="border-2 border-dashed border-border rounded-lg p-12 text-center">
           <FolderOpen className="h-12 w-12 mx-auto mb-4 text-muted-foreground opacity-50" />
           <h3 className="text-lg font-medium mb-2">No files yet</h3>
-          <p className="text-sm text-muted-foreground">Upload files to share with your team.</p>
+          <p className="text-sm text-muted-foreground mb-4">
+            Upload files to share with your team, or have Nova build a document from scratch.
+          </p>
+          <Button variant="outline" className="gap-2" onClick={() => setDocStartOpen(true)} data-testid="button-new-document-empty">
+            <FileText className="h-4 w-4" /> New document with Nova
+          </Button>
         </div>
       )}
+
+      <DocumentStartDialog
+        projectId={projectId}
+        open={docStartOpen}
+        onOpenChange={setDocStartOpen}
+      />
     </div>
   );
 }

@@ -2,9 +2,11 @@ import type { Express, Request, Response } from "express";
 import OpenAI from "openai";
 import { chatStorage } from "./storage";
 
+const _rawOpenAiBase = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
+const _openAiBaseURL = _rawOpenAiBase ? (_rawOpenAiBase.endsWith("/v1") ? _rawOpenAiBase : `${_rawOpenAiBase.replace(/\/$/,"")}/v1`) : undefined;
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+  baseURL: _openAiBaseURL,
 });
 
 export function registerChatRoutes(app: Express): void {

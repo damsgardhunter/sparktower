@@ -2,7 +2,34 @@ import Stripe from 'stripe';
 
 let connectionSettings: any;
 
+function getEnvCredentials() {
+  const secretKey = process.env.STRIPE_SECRET_KEY;
+  if (!secretKey) return null;
+
+  return {
+    secretKey,
+    publishableKey:
+      process.env.STRIPE_PUBLISHABLE_KEY || process.env.VITE_STRIPE_PUBLIC_KEY || '',
+  };
+}
+
+/**
+ * True when Stripe keys are reachable either from plain env vars (local dev)
+ * or from the Replit connector service (repl/deployment).
+ */
+export function isStripeConfigured() {
+  return Boolean(
+    getEnvCredentials() || process.env.REPL_IDENTITY || process.env.WEB_REPL_RENEWAL
+  );
+}
+
 async function getCredentials() {
+  // Outside Replit there is no connector service, so fall back to plain env vars.
+  const envCredentials = getEnvCredentials();
+  if (envCredentials) {
+    return envCredentials;
+  }
+
   const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
   const xReplitToken = process.env.REPL_IDENTITY
     ? 'repl ' + process.env.REPL_IDENTITY
@@ -11,7 +38,10 @@ async function getCredentials() {
       : null;
 
   if (!xReplitToken) {
-    throw new Error('X-Replit-Token not found for repl/depl');
+    throw new Error(
+      'Stripe is not configured: set STRIPE_SECRET_KEY (and VITE_STRIPE_PUBLIC_KEY) in .env, ' +
+        'or run inside Replit with the Stripe connector enabled.'
+    );
   }
 
   const connectorName = 'stripe';
@@ -52,6 +82,11 @@ export async function getUncachableStripeClient() {
 
 export async function getStripePublishableKey() {
   const { publishableKey } = await getCredentials();
+  if (!publishableKey) {
+    throw new Error(
+      'Stripe publishable key missing: set VITE_STRIPE_PUBLIC_KEY (or STRIPE_PUBLISHABLE_KEY) in .env'
+    );
+  }
   return publishableKey;
 }
 

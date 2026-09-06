@@ -10,6 +10,7 @@ import type { Project } from "@shared/schema";
 import type { User } from "@shared/models/auth";
 import { Link } from "wouter";
 import { SkillBadge } from "@/components/skill-badge";
+import { PrivateBadge } from "@/components/private-badge";
 import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/user-avatar";
 
@@ -299,6 +300,7 @@ function ProjectRankings({ projects, metric }: { projects: ProjectWithStats[], m
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
+                      {project.isPrivate && <PrivateBadge variant="icon" className="flex-shrink-0" />}
                       <Link href={`/projects/${project.id}`} className="font-semibold hover:underline block truncate">
                         {project.title}
                       </Link>
@@ -309,7 +311,9 @@ function ProjectRankings({ projects, metric }: { projects: ProjectWithStats[], m
                     <p className="text-xs text-secondary">by {project.owner.firstName || project.owner.email}</p>
                   </div>
                   <div className="hidden sm:flex flex-wrap gap-1 max-w-[200px]">
-                    {project.rolesNeeded?.slice(0, 2).map((role: string) => (
+                    {/* Solo projects already carry a "Solo" badge above; don't
+                        also advertise roles they aren't recruiting for. */}
+                    {!project.soloMode && project.rolesNeeded?.slice(0, 2).map((role: string) => (
                       <SkillBadge key={role} skill={role} />
                     ))}
                   </div>
@@ -351,6 +355,7 @@ function PodiumCard({ project, rank, metric, isWinner }: { project: ProjectWithS
       <CardContent className={`pt-8 text-center flex flex-col items-center ${isWinner ? 'pb-10' : 'pb-6'}`}>
         {isWinner && <Trophy className="h-8 w-8 text-yellow-500 mb-4" />}
         <div className="flex items-center gap-2 justify-center mb-1">
+          {project.isPrivate && <PrivateBadge variant="icon" />}
           <Link href={`/projects/${project.id}`} className="block">
             <h3 className="font-bold text-lg line-clamp-1 hover:underline">{project.title}</h3>
           </Link>

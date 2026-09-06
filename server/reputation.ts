@@ -4,9 +4,11 @@ import OpenAI from "openai";
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
   if (!_openai) {
+    const _rawOpenAiBase = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
+    const _openAiBaseURL = _rawOpenAiBase ? (_rawOpenAiBase.endsWith("/v1") ? _rawOpenAiBase : `${_rawOpenAiBase.replace(/\/$/,"")}/v1`) : undefined;
     _openai = new OpenAI({
       apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-      baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+      baseURL: _openAiBaseURL,
     });
   }
   return _openai;
@@ -160,7 +162,7 @@ async function calculateStrategicThinking(
             content: `Evaluate the strategic thinking behind these projects:\n\n${projectSummaries}`
           }
         ],
-        max_tokens: 10,
+        max_completion_tokens: 10,
         temperature: 0.3,
       });
 

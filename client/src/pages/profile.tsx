@@ -26,6 +26,10 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { UserCard } from "@/components/user-card";
 import { ReputationCard } from "@/components/reputation-card";
+import { ProfileCredentials } from "@/components/profile-credentials";
+import { ProfileResumePanel } from "@/components/profile-resume-panel";
+import { LookingForCard } from "@/components/looking-for-card";
+import { ProfileFeed } from "@/components/profile-feed";
 
 type ProjectWithDetails = Project & { owner: User; profile?: UserProfile };
 
@@ -41,7 +45,7 @@ export default function Profile() {
 
   const { uploadFile, isUploading: isUploadingResume, progress: uploadProgress } = useUpload({
     onSuccess: (response) => {
-      form.setValue("resumeUrl", `/objects/${response.objectPath}`);
+      form.setValue("resumeUrl", response.objectPath);
       toast({ title: "Resume uploaded", description: "Your resume has been uploaded successfully." });
     },
     onError: (error) => {
@@ -616,8 +620,24 @@ export default function Profile() {
         </TabsList>
 
         <TabsContent value="about">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            <div className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 items-start">
+            <div className="space-y-4">
+              {/* The public ask sits at the top — it's the most actionable
+                  thing on the page for whoever is reading it. */}
+              <LookingForCard
+                lookingFor={(profile as any)?.lookingFor || null}
+                isOwnProfile={!!isOwnProfile}
+              />
+
+              {isOwnProfile && (
+                <ProfileResumePanel
+                  hasProfileContent={
+                    ((profile as any)?.experience?.length || 0) > 0 ||
+                    ((profile as any)?.education?.length || 0) > 0
+                  }
+                />
+              )}
+
               <Card className="border-border/50">
                 <CardHeader>
                   <CardTitle className="text-sm font-semibold uppercase text-muted-foreground">About</CardTitle>
@@ -649,21 +669,30 @@ export default function Profile() {
                 </CardContent>
               </Card>
 
-              <Card className="border-border/50">
-                <CardHeader>
-                  <CardTitle className="text-sm font-semibold uppercase text-muted-foreground">Interests</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex flex-wrap gap-2">
-                    {profile?.interests?.map(i => (
-                      <Badge key={i} variant="secondary" className="bg-accent/10 text-accent-foreground border-accent/20">{i}</Badge>
-                    ))}
-                    {(!profile?.interests || profile.interests.length === 0) && (
-                      <p className="text-sm text-muted-foreground">No interests listed.</p>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
+              {/* Résumé-derived credentials. Each card hides when empty. */}
+              <ProfileCredentials
+                novaSummary={(profile as any)?.novaSummary}
+                experience={(profile as any)?.experience}
+                education={(profile as any)?.education}
+                portfolioProjects={(profile as any)?.portfolioProjects}
+                skills={profile?.skills}
+                resumeParsedAt={(profile as any)?.resumeParsedAt}
+              />
+
+              {(profile?.interests?.length || 0) > 0 && (
+                <Card className="border-border/50">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-sm font-semibold uppercase text-muted-foreground">Interests</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="flex flex-wrap gap-2">
+                      {profile!.interests!.map(i => (
+                        <Badge key={i} variant="secondary" className="bg-accent/10 text-accent-foreground border-accent/20">{i}</Badge>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
 
               {userBadges && userBadges.length > 0 && (
                 <Card className="border-border/50">
@@ -697,20 +726,55 @@ export default function Profile() {
               )}
             </div>
 
+            {/* Main column: posts first, then the projects they're building,
+                then the Builder Index — the order someone actually judges a
+                builder in. */}
             <div className="md:col-span-2 space-y-6">
-              <Card className="border-border/50">
-                <CardHeader>
-                  <CardTitle className="text-sm font-semibold uppercase text-muted-foreground">Skills & Expertise</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex flex-wrap gap-2">
-                    {profile?.skills?.map(s => <SkillBadge key={s} skill={s} />)}
-                    {(!profile?.skills || profile.skills.length === 0) && (
-                      <p className="text-sm text-muted-foreground">No skills listed.</p>
-                    )}
+              <section className="space-y-3">
+                <h2 className="text-lg font-bold">
+                  {isOwnProfile
+                    ? "Your posts"
+                    : `${(profile?.displayName || "This builder").split(" ")[0]}'s posts`}
+                </h2>
+                <ProfileFeed userId={userId!} isOwnProfile={!!isOwnProfile} />
+              </section>
+
+              <section className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-lg font-bold">
+                    {displayProjects.length > 0 ? "Building" : "Projects"}
+                  </h2>
+                  {isOwnProfile && (
+                    <Button variant="ghost" size="sm" onClick={() => setLocation("/projects/new")} data-testid="button-new-project-about">
+                      New project
+                    </Button>
+                  )}
+                </div>
+                {projectsLoading ? (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    {Array.from({ length: 2 }).map((_, i) => <Skeleton key={i} className="h-44 rounded-xl" />)}
                   </div>
-                </CardContent>
-              </Card>
+                ) : displayProjects.length > 0 ? (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    {displayProjects.slice(0, 4).map((project: any) => (
+                      <ProjectCard key={project.id} project={project} />
+                    ))}
+                  </div>
+                ) : (
+                  <Card className="border-dashed border-border/50 bg-transparent py-8">
+                    <CardContent className="flex flex-col items-center justify-center text-center space-y-2">
+                      <p className="text-sm text-muted-foreground">
+                        {isOwnProfile ? "You're not building anything yet." : "Nothing public yet."}
+                      </p>
+                      {isOwnProfile && (
+                        <Button variant="outline" size="sm" onClick={() => setLocation("/projects/new")}>
+                          Start your first project
+                        </Button>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+              </section>
 
               {userId && (
                 <ReputationCard userId={userId} isOwnProfile={!!isOwnProfile} />

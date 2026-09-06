@@ -1,5 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ProjectCard } from "@/components/project-card";
+import { PrivateBadge } from "@/components/private-badge";
+import { FounderFeed } from "@/components/founder-feed";
 import { UserCard } from "@/components/user-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent } from "@/components/ui/card";
@@ -29,36 +31,61 @@ export default function Home() {
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-12 h-full overflow-y-auto">
-      <section className="space-y-6">
-        <div className="flex items-center justify-between gap-4">
-          <h2 className="text-3xl font-bold tracking-tight">Recent Projects</h2>
-          <Button asChild className="gap-2" data-testid="button-create-project-home">
-            <Link href="/projects/new">
-              <Plus className="h-4 w-4" />
-              Create Project
-            </Link>
-          </Button>
+      {/* The feed is the point of the home page now. A sidebar keeps the
+          project discovery that used to live here, without it competing
+          with the timeline for attention. */}
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
+        <div className="lg:col-span-2 space-y-4">
+          <div className="flex items-center justify-between gap-4">
+            <h2 className="text-2xl font-bold tracking-tight">Founder Feed</h2>
+            <Button asChild className="gap-2" data-testid="button-create-project-home">
+              <Link href="/projects/new">
+                <Plus className="h-4 w-4" />
+                Create Project
+              </Link>
+            </Button>
+          </div>
+          <FounderFeed />
         </div>
-        {projectsLoading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {[...Array(3)].map((_, i) => (
-              <Skeleton key={i} className="h-[280px] w-full rounded-2xl" />
-            ))}
-          </div>
-        ) : projects && projects.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {projects.slice(0, 6).map((project) => (
-              <ProjectCard
-                key={project.id}
-                project={project}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="text-center py-12 bg-card rounded-2xl border border-card-border">
-            <p className="text-secondary">No projects found yet. Be the first to start one!</p>
-          </div>
-        )}
+
+        <aside className="space-y-4 lg:sticky lg:top-6">
+          <Card>
+            <CardContent className="p-4 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="font-semibold text-sm">New projects</h3>
+                <Link href="/projects" className="text-xs text-primary hover:underline">
+                  See all
+                </Link>
+              </div>
+              {projectsLoading ? (
+                <div className="space-y-2">
+                  {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-12 w-full rounded-md" />)}
+                </div>
+              ) : projects && projects.length > 0 ? (
+                <div className="space-y-1">
+                  {projects.slice(0, 5).map((project) => (
+                    <Link
+                      key={project.id}
+                      href={`/projects/${project.id}`}
+                      className="block rounded-md p-2 hover:bg-accent transition-colors"
+                      data-testid={`sidebar-project-${project.id}`}
+                    >
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        {project.isPrivate && <PrivateBadge variant="icon" className="shrink-0" />}
+                        <p className="text-sm font-medium truncate">{project.title}</p>
+                      </div>
+                      <p className="text-xs text-muted-foreground truncate">
+                        {project.category} · by {project.owner?.firstName || "a builder"}
+                      </p>
+                    </Link>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">No projects yet. Start the first one.</p>
+              )}
+            </CardContent>
+          </Card>
+        </aside>
       </section>
 
       <section className="space-y-6">
@@ -147,9 +174,12 @@ function HomePodiumCard({ project, rank, isWinner }: { project: ProjectWithStats
       </div>
       <CardContent className={`pt-8 text-center flex flex-col items-center ${isWinner ? "pb-10" : "pb-6"}`}>
         {isWinner && <Trophy className="h-8 w-8 text-yellow-500 mb-4" />}
-        <Link href={`/projects/${project.id}`}>
-          <h3 className="font-bold text-lg line-clamp-1 hover:underline">{project.title}</h3>
-        </Link>
+        <div className="flex items-center gap-1.5 justify-center">
+          {project.isPrivate && <PrivateBadge variant="icon" />}
+          <Link href={`/projects/${project.id}`}>
+            <h3 className="font-bold text-lg line-clamp-1 hover:underline">{project.title}</h3>
+          </Link>
+        </div>
         <p className="text-sm text-secondary mb-4">by {project.owner.firstName || project.owner.email}</p>
         <div className="flex items-center gap-2 bg-muted px-3 py-1 rounded-full text-sm font-mono mb-6">
           <Eye className="h-4 w-4" />

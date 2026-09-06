@@ -3,8 +3,9 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { runMigrations } from "stripe-replit-sync";
-import { getStripeSync } from "./stripeClient";
+import { getStripeSync, isStripeConfigured } from "./stripeClient";
 import { WebhookHandlers } from "./webhookHandlers";
+import { ensureGameBadges } from "./badge-seed";
 
 const app = express();
 const httpServer = createServer(app);
@@ -59,6 +60,20 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
+/**
+ * Express 5 leaves `req.body` as `undefined` when a request carries no body,
+ * where Express 4 left it `{}`. Handlers all over this codebase read
+ * `req.body.foo` directly, so a bodyless POST — which is exactly what
+ * `apiRequest("POST", url)` sends with no data — threw
+ * "Cannot read properties of undefined" and surfaced as a generic 500.
+ *
+ * Normalizing here fixes every such route at once.
+ */
+app.use((req, _res, next) => {
+  if (req.body === undefined) req.body = {};
+  next();
+});
+
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
     hour: "numeric",
@@ -112,17 +127,29 @@ app.use((req, res, next) => {
 (async () => {
   try {
     const databaseUrl = process.env.DATABASE_URL;
-    if (databaseUrl) {
+    if (!databaseUrl) {
+      console.log("Skipping Stripe init: DATABASE_URL not set");
+    } else if (!isStripeConfigured()) {
+      console.log("Skipping Stripe init: no Stripe credentials (set STRIPE_SECRET_KEY to enable)");
+    } else {
       console.log("Initializing Stripe schema...");
       await runMigrations({ databaseUrl });
       console.log("Stripe schema ready");
 
       const stripeSync = await getStripeSync();
-      const webhookBaseUrl = `https://${process.env.REPLIT_DOMAINS?.split(",")[0]}`;
-      const webhookResult = await stripeSync.findOrCreateManagedWebhook(
-        `${webhookBaseUrl}/api/stripe/webhook`
-      );
-      console.log("Webhook configured:", JSON.stringify(webhookResult?.webhook?.url || webhookResult?.id || "ok"));
+
+      // Stripe can only reach a publicly routable URL, so skip webhook
+      // registration when running locally without one.
+      const publicDomain = process.env.PUBLIC_URL || process.env.REPLIT_DOMAINS?.split(",")[0];
+      if (publicDomain) {
+        const webhookBaseUrl = publicDomain.startsWith("http") ? publicDomain : `https://${publicDomain}`;
+        const webhookResult = await stripeSync.findOrCreateManagedWebhook(
+          `${webhookBaseUrl}/api/stripe/webhook`
+        );
+        console.log("Webhook configured:", JSON.stringify(webhookResult?.webhook?.url || webhookResult?.id || "ok"));
+      } else {
+        console.log("Skipping Stripe webhook registration: no public URL (set PUBLIC_URL to enable)");
+      }
 
       stripeSync.syncBackfill()
         .then(() => console.log("Stripe data synced"))
@@ -131,6 +158,9 @@ app.use((req, res, next) => {
   } catch (stripeErr) {
     console.error("Stripe init failed (non-fatal):", stripeErr);
   }
+
+  // Game badges are referenced by hard-coded id, so their rows have to exist.
+  await ensureGameBadges();
 
   await registerRoutes(httpServer, app);
 
@@ -162,15 +192,16 @@ app.use((req, res, next) => {
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || "5000", 10);
-  httpServer.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true,
-    },
-    () => {
-      appReady = true;
-      log(`serving on port ${port}`);
-    },
-  );
+  const listenOptions: any = {
+    port,
+    host: "0.0.0.0",
+  };
+  // reusePort may not be supported in some macOS environments; enable only when not darwin
+  if (process.platform !== "darwin") {
+    listenOptions.reusePort = true;
+  }
+  httpServer.listen(listenOptions, () => {
+    appReady = true;
+    log(`serving on port ${port}`);
+  });
 })();

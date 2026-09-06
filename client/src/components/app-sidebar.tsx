@@ -18,6 +18,9 @@ import { UserAvatar } from "@/components/user-avatar";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "@tanstack/react-query";
 import { Progress } from "@/components/ui/progress";
+import { useEntitlements } from "@/hooks/use-entitlements";
+import { TierSwitcher } from "@/components/tier-switcher";
+import { PLAN_PRESENTATION } from "@shared/plans";
 
 const menuItems = [
   { title: "Home", url: "/", icon: Home },
@@ -27,32 +30,19 @@ const menuItems = [
   { title: "Sprints", url: "/sprints", icon: Handshake },
   { title: "Messages", url: "/messages", icon: MessageSquare },
   { title: "Leaderboard", url: "/leaderboard", icon: Trophy },
-  { title: "Contests", url: "/contests", icon: Medal },
+  // Contests are hidden from navigation for now. The page and its routes
+  // still work if you visit /contests directly.
   { title: "Pricing", url: "/pricing", icon: CreditCard },
 ];
-
-interface Subscription {
-  tier: string;
-  creditsUsed: number;
-  creditsLimit: number;
-  creditsRemaining: number;
-}
-
-const tierLabels: Record<string, string> = {
-  free: "Free",
-  spark_pro: "Spark Pro",
-  spark_business: "Spark Business",
-  spark_unlimited: "Unlimited",
-};
 
 export function AppSidebar() {
   const [location] = useLocation();
   const { user, logout } = useAuth();
   const displayName = user?.firstName ? `${user.firstName} ${user.lastName || ""}` : user?.email || "User";
 
-  const { data: subscription } = useQuery<Subscription>({
-    queryKey: ["/api/subscription"],
-  });
+  const {
+    tier, plan, subscription, creditsUsed, creditsLimit, creditsRemaining, isUnlimited,
+  } = useEntitlements();
 
   const { data: unreadData } = useQuery<{ count: number }>({
     queryKey: ["/api/messages/unread-count"],
@@ -60,19 +50,15 @@ export function AppSidebar() {
   });
   const unreadCount = unreadData?.count || 0;
 
-  const isUnlimited = subscription?.tier === "spark_unlimited";
-  const creditsUsed = subscription?.creditsUsed || 0;
-  const creditsLimit = subscription?.creditsLimit || 20;
-  const creditsRemaining = subscription?.creditsRemaining ?? 20;
-  const progressPercent = isUnlimited ? 0 : Math.min(100, (creditsUsed / creditsLimit) * 100);
+  const progressPercent = isUnlimited || creditsLimit <= 0
+    ? 0
+    : Math.min(100, (creditsUsed / creditsLimit) * 100);
 
   return (
     <Sidebar className="border-r border-sidebar-border">
       <SidebarHeader className="p-4">
         <div className="flex items-center gap-2">
-          <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center font-bold text-primary-foreground">
-            ST
-          </div>
+          <img src="/favicon.png" alt="SparkTower" className="h-8 w-8 rounded-lg object-contain" />
           <span className="font-bold text-xl tracking-tight">SparkTower</span>
         </div>
       </SidebarHeader>
@@ -117,11 +103,12 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="p-4 mt-auto space-y-3">
+        <TierSwitcher />
         {subscription && (
           <div className="px-2 py-2 rounded-lg bg-sidebar-accent/50" data-testid="sidebar-credit-usage">
             <div className="flex items-center justify-between mb-1">
               <span className="text-xs font-medium text-muted-foreground">
-                {tierLabels[subscription.tier] || "Free"} Plan
+                {plan.name} Plan
               </span>
               {isUnlimited ? (
                 <span className="text-xs text-primary flex items-center gap-1">
@@ -136,11 +123,15 @@ export function AppSidebar() {
             {!isUnlimited && (
               <Progress value={progressPercent} className="h-1.5" />
             )}
-            {subscription.tier === "free" && (
+            {tier === "free" ? (
               <Link href="/pricing" className="text-xs text-primary hover:underline mt-1 block" data-testid="link-upgrade">
-                Upgrade for more credits
+                {PLAN_PRESENTATION.builder.promise}
               </Link>
-            )}
+            ) : tier !== "pro" ? (
+              <Link href="/pricing" className="text-xs text-primary hover:underline mt-1 block" data-testid="link-upgrade">
+                Compare plans
+              </Link>
+            ) : null}
           </div>
         )}
         <SidebarMenu>

@@ -4,6 +4,31 @@ import { isAuthenticated } from "./replitAuth";
 import passport from "passport";
 import bcrypt from "bcryptjs";
 
+// Simple in-memory rate limiter for auth endpoints (IP-based)
+const loginAttempts: Map<string, { count: number; firstAttempt: number }> = new Map();
+const MAX_ATTEMPTS = 8;
+const WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+
+function checkRateLimit(ip: string) {
+  const now = Date.now();
+  const data = loginAttempts.get(ip);
+  if (!data) {
+    loginAttempts.set(ip, { count: 1, firstAttempt: now });
+    return { allowed: true };
+  }
+  if (now - data.firstAttempt > WINDOW_MS) {
+    // reset window
+    loginAttempts.set(ip, { count: 1, firstAttempt: now });
+    return { allowed: true };
+  }
+  data.count += 1;
+  loginAttempts.set(ip, data);
+  if (data.count > MAX_ATTEMPTS) {
+    return { allowed: false, retryAfter: Math.ceil((WINDOW_MS - (now - data.firstAttempt)) / 1000) };
+  }
+  return { allowed: true };
+}
+
 export function registerAuthRoutes(app: Express): void {
   app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
     try {
@@ -50,6 +75,11 @@ export function registerAuthRoutes(app: Express): void {
   });
 
   app.post("/api/auth/login", (req, res, next) => {
+    const ip = req.ip || req.headers["x-forwarded-for"] || req.connection?.remoteAddress || "unknown";
+    const rate = checkRateLimit(String(ip));
+    if (!rate.allowed) {
+      return res.status(429).json({ message: "Too many login attempts", retryAfter: rate.retryAfter });
+    }
     passport.authenticate("local", (err: any, user: any, info: any) => {
       if (err) return next(err);
       if (!user) {

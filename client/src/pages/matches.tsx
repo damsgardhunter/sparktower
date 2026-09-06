@@ -6,6 +6,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { UserMatch, UserProfile, User } from "@shared/schema";
 import { Loader2, Sparkles, UserPlus, Users } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { SprintLauncher } from "@/components/sprint-launcher";
 
 export default function Matches() {
   const [, setLocation] = useLocation();
@@ -46,6 +47,12 @@ export default function Matches() {
   return (
     <div className="p-6 h-full overflow-y-auto">
       <div className="max-w-6xl mx-auto">
+        {/* Start a sprint without leaving the page — queue for a live partner
+            or rehearse against Nova. */}
+        <div className="mb-8">
+          <SprintLauncher />
+        </div>
+
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
           <div>
             <h1 className="text-3xl font-bold tracking-tight">AI Matches</h1>

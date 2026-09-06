@@ -49,7 +49,7 @@ export default function Onboarding() {
 
   const { uploadFile, isUploading: isUploadingResume, progress: uploadProgress } = useUpload({
     onSuccess: (response) => {
-      form.setValue("resumeUrl", `/objects/${response.objectPath}`);
+      form.setValue("resumeUrl", response.objectPath);
       toast({ title: "Resume uploaded", description: "Your resume has been uploaded successfully." });
     },
     onError: (error) => {

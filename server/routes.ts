@@ -1,28 +1,41 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
-import { storage } from "./storage";
+import { storage, isTaskOnTime } from "./storage";
 import { db } from "./db";
 import { users, projectMembers, projects, userProfiles } from "@shared/schema";
 import { setupAuth, isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { registerAuthRoutes } from "./replit_integrations/auth/routes";
-import { registerObjectStorageRoutes, ObjectStorageService } from "./replit_integrations/object_storage";
+import { attachBearerUser, registerMobileAuthRoutes } from "./mobile-auth";
+import { registerObjectStorageRoutes, ObjectStorageService, ObjectNotFoundError } from "./replit_integrations/object_storage";
 import { registerSprintRoutes } from "./sprint-routes";
-import { insertUserProfileSchema, insertProjectSchema, insertDonationSchema, insertContestSchema, insertProjectLiveChatMessageSchema, insertWaitlistEntrySchema, insertInterviewSchema, insertExperimentSchema, insertPricingTierSchema, insertAnalyticsEventSchema, insertLegalDocSchema, insertDeployChecklistItemSchema, insertSupportTicketSchema, insertLaunchTaskSchema } from "@shared/schema";
+import { registerInvestorRoutes } from "./investor-routes";
+import { registerNovaBriefingRoutes } from "./nova-briefing";
+import { registerFeedRoutes, registerProjectDiscussionRoutes, publishSystemPost, SYSTEM_POST_COPY, SYSTEM_POST_TYPES } from "./feed-routes";
+import { registerProfileRoutes } from "./profile-routes";
+import { registerDocumentRoutes } from "./document-routes";
+import { registerCodeAuditRoutes } from "./code-audit-routes";
+import {
+  applyProjectOperations, buildOperableProjectState, OPERATION_SCHEMA_INSTRUCTIONS,
+} from "./project-operations";
+import { insertUserProfileSchema, insertProjectSchema, insertDonationSchema, insertContestSchema, insertProjectLiveChatMessageSchema, insertWaitlistEntrySchema, insertInterviewSchema, insertExperimentSchema, insertPricingTierSchema, insertAnalyticsEventSchema, insertLegalDocSchema, insertDeployChecklistItemSchema, insertSupportTicketSchema, insertLaunchTaskSchema, type StoryboardScene } from "@shared/schema";
 import { z } from "zod";
 import OpenAI from "openai";
 import { eq, ne, and, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { calculateUserReputation } from "./reputation";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
-
-function getFeaturesForTier(tier: string): string[] {
-  const features: Record<string, string[]> = {
-    spark_pro: ["100 AI credits/month", "Create public projects", "Priority support", "Community access"],
-    spark_business: ["250 AI credits/month", "Private projects", "Priority support", "Advanced analytics"],
-    spark_unlimited: ["Unlimited AI credits", "Private projects", "AI roadmap generation", "Premium support", "All features"],
-  };
-  return features[tier] || ["20 AI credits/month", "Create public projects", "Join contests", "Community access"];
-}
+import { formatProjectBriefForPrompt, getProjectBriefContext } from "@shared/project-sections";
+import { TEXT_MODEL, IMAGE_MODEL, IMAGE_SIZE, IMAGE_QUALITY } from "./aiModels";
+import {
+  TIER_IDS, PLAN_PRESENTATION, ENTITLEMENTS, COMPARISON_ROWS, CREDIT_COSTS,
+  FAIR_USE_NOTICE, FAIR_USE_MONTHLY_CAP, normalizeTier, roadmapRebuildCost,
+  type TierId,
+} from "@shared/plans";
+import {
+  getUserEntitlements, requireFeature, requireLevel, requireCredits,
+  checkPrivateProjectQuota, modelFor, memoryLimitFor, taskLimitFor,
+  coachingDirectiveFor,
+} from "./entitlements";
 
 async function isProjectMember(userId: string, projectId: string): Promise<boolean> {
   const project = await storage.getProject(projectId);
@@ -32,10 +45,90 @@ async function isProjectMember(userId: string, projectId: string): Promise<boole
   return members.some(m => m.userId === userId);
 }
 
+const _rawOpenAiBase = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
+const _openAiBaseURL = _rawOpenAiBase ? (_rawOpenAiBase.endsWith("/v1") ? _rawOpenAiBase : `${_rawOpenAiBase.replace(/\/$/,"")}/v1`) : undefined;
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+  baseURL: _openAiBaseURL,
 });
+
+/**
+ * URL for a storyboard frame. Always the authenticated streaming route — the
+ * underlying private object path is never sent to the client.
+ */
+function sceneImageUrl(storyboard: { id: string; scenes: unknown }, index: number): string | null {
+  const scene = ((storyboard.scenes as StoryboardScene[]) || [])[index];
+  if (!scene || (!scene.imagePath && !scene.inlineImage)) return null;
+  return `/api/storyboards/${storyboard.id}/scenes/${index}/image`;
+}
+
+/** Storyboard scenes in the shape the slideshow expects. */
+function toClientScenes(storyboard: { id: string; scenes: unknown }) {
+  return ((storyboard.scenes as StoryboardScene[]) || []).map((scene, i) => ({
+    caption: scene.caption,
+    prompt: scene.prompt,
+    imageUrl: sceneImageUrl(storyboard, i) || "",
+  }));
+}
+
+/**
+ * Maps each paid tier to its active Stripe price ID.
+ *
+ * Reads the tables synced by stripe-replit-sync first (cheap, local), then
+ * falls back to the Stripe API — its backfill doesn't cover products/prices,
+ * so the synced tables are empty until a product webhook fires. Results are
+ * cached briefly so the pricing page doesn't hit Stripe on every load.
+ */
+let _priceCache: { at: number; value: Map<string, string> } | null = null;
+const PRICE_CACHE_MS = 60_000;
+
+async function getPriceIdsByTier(): Promise<Map<string, string>> {
+  if (_priceCache && Date.now() - _priceCache.at < PRICE_CACHE_MS) {
+    return _priceCache.value;
+  }
+
+  const byTier = new Map<string, string>();
+  const parse = (m: any) => (typeof m === "string" ? JSON.parse(m) : m || {});
+
+  try {
+    const result = await db.execute(
+      sql`SELECT p.metadata as product_metadata, pr.id as price_id, pr.unit_amount, pr.metadata as price_metadata
+          FROM stripe.products p
+          JOIN stripe.prices pr ON pr.product = p.id AND pr.active = true
+          WHERE p.active = true
+          ORDER BY pr.unit_amount ASC`
+    );
+    for (const row of result.rows as any[]) {
+      const tier = parse(row.price_metadata).tier || parse(row.product_metadata).tier;
+      // normalizeTier maps legacy spark_* products onto the new tiers.
+      const normalized = normalizeTier(tier);
+      if (normalized !== "free" && !byTier.has(normalized)) byTier.set(normalized, row.price_id);
+    }
+  } catch (error: any) {
+    // stripe.* tables only exist once stripe-replit-sync has migrated.
+    console.warn("Synced Stripe tables unavailable:", error?.message || error);
+  }
+
+  if (byTier.size === 0) {
+    try {
+      const stripe = await getUncachableStripeClient();
+      const prices = await stripe.prices.list({ active: true, expand: ["data.product"], limit: 100 });
+      for (const price of prices.data) {
+        const product = price.product as any;
+        if (!product || product.deleted || product.active === false) continue;
+        if (price.recurring?.interval !== "month") continue;
+        const tier = normalizeTier(price.metadata?.tier || product.metadata?.tier);
+        if (tier !== "free" && !byTier.has(tier)) byTier.set(tier, price.id);
+      }
+    } catch (error: any) {
+      // No Stripe credentials — the catalog still renders, just without checkout.
+      console.warn("Stripe price lookup unavailable, serving catalog without checkout:", error?.message || error);
+    }
+  }
+
+  _priceCache = { at: Date.now(), value: byTier };
+  return byTier;
+}
 
 function generateFallbackScenes(style: string): { prompt: string; caption: string; imageUrl: string }[] {
   const colors: Record<string, { bg1: string; bg2: string; accent: string; text: string }> = {
@@ -63,14 +156,136 @@ function generateFallbackScenes(style: string): { prompt: string; caption: strin
   });
 }
 
+/** Action types Nova is allowed to trigger from a reply. */
+const NOVA_ACTION_TYPES = new Set([
+  "update_project", "update_scope", "create_tasks", "create_milestones", "complete_onboarding",
+  "edit_project",
+]);
+
+/**
+ * Finds the index of the `}` closing the object that opens at `start`.
+ * String-aware, so braces inside values don't throw off the count.
+ * Returns -1 when the object never closes.
+ */
+function matchClosingBrace(text: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escaped) { escaped = false; continue; }
+    if (ch === "\\") { escaped = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/** Parses a candidate blob into an action, or null if it isn't one. */
+function parseNovaAction(blob: string): any | null {
+  try {
+    const parsed = JSON.parse(blob.trim());
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    if (typeof parsed.type !== "string" || !NOVA_ACTION_TYPES.has(parsed.type)) return null;
+    if (parsed.data === undefined || parsed.data === null) parsed.data = {};
+    if (typeof parsed.data !== "object" || Array.isArray(parsed.data)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Pulls Nova's actions out of a reply and strips them from the visible text.
+ *
+ * The prompt asks for `<nova_action>{...}</nova_action>`, but the model
+ * regularly emits the object bare or inside a ```json fence instead. Those
+ * replies used to match nothing, so the action was dropped silently while Nova
+ * still told the user "Done ✅" — the update never reached the database. So
+ * scan for the wrapper first, then fall back to any balanced JSON object that
+ * parses into a known action type.
+ *
+ * Brace matching (rather than a regex) is what makes the fallback safe: it
+ * tolerates nested objects and trailing junk like an extra `}`, and only
+ * accepts a blob whose parsed `type` is a real action, so ordinary JSON that
+ * Nova quotes in conversation is left alone.
+ */
+export function extractNovaActions(reply: string): { actions: any[]; cleaned: string } {
+  const actions: any[] = [];
+  const spans: [number, number][] = [];
+
+  const tagRe = /<nova_action>([\s\S]*?)<\/nova_action>/g;
+  for (const m of reply.matchAll(tagRe)) {
+    const action = parseNovaAction(m[1]);
+    if (action) {
+      actions.push(action);
+      spans.push([m.index!, m.index! + m[0].length]);
+    }
+  }
+
+  const covered = (i: number) => spans.some(([s, e]) => i >= s && i < e);
+
+  let i = 0;
+  while (i < reply.length) {
+    const start = reply.indexOf("{", i);
+    if (start === -1) break;
+    if (covered(start)) { i = start + 1; continue; }
+    const end = matchClosingBrace(reply, start);
+    if (end === -1) break;
+    const action = parseNovaAction(reply.slice(start, end + 1));
+    if (action) {
+      actions.push(action);
+      spans.push([start, end + 1]);
+      i = end + 1;
+    } else {
+      i = start + 1;
+    }
+  }
+
+  // Cut the action spans out back-to-front so earlier offsets stay valid.
+  let cleaned = reply;
+  for (const [s, e] of [...spans].sort((a, b) => b[0] - a[0])) {
+    cleaned = cleaned.slice(0, s) + cleaned.slice(e);
+  }
+
+  // Tidy up what the removal leaves behind: empty code fences, orphaned
+  // punctuation from a malformed action (the model likes to add an extra `}`),
+  // and the runs of blank lines where the action used to sit.
+  cleaned = cleaned
+    .replace(/```[a-zA-Z]*\s*```/g, "")
+    .replace(/^[ \t]*[{}[\],]+[ \t]*$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return { actions, cleaned };
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
   await setupAuth(app);
+  // Bearer auth must run before every guarded route so a mobile caller's token
+  // populates req.user. It sits above registerAuthRoutes too — otherwise
+  // /api/auth/user stays cookie-only and 401s for a perfectly valid token.
+  // No-op when there's no Bearer header, so cookie sessions are unaffected.
+  app.use(attachBearerUser);
   registerAuthRoutes(app);
+  registerMobileAuthRoutes(app);
   registerObjectStorageRoutes(app);
   registerSprintRoutes(app);
+  registerInvestorRoutes(app);
+  registerNovaBriefingRoutes(app);
+  registerFeedRoutes(app);
+  registerProjectDiscussionRoutes(app);
+  registerProfileRoutes(app);
+  registerDocumentRoutes(app);
+  registerCodeAuditRoutes(app);
 
   // User Profile
   app.get("/api/profile", isAuthenticated, async (req: any, res) => {
@@ -79,10 +294,45 @@ export async function registerRoutes(
     res.json(profile);
   });
 
+  /**
+   * Saves a profile.
+   *
+   * This is a MERGE, not a replace. Both callers — the onboarding wizard and
+   * the profile editor — post only the fields their own form owns, and a
+   * replace wiped everything else on the row: Nova's résumé-derived
+   * experience, education and portfolio, the "looking for" call, the avatar,
+   * and the isOnboarded flag. Clearing that flag bounced the user straight
+   * back into onboarding, which looked like the whole account had reset.
+   *
+   * So: validate the incoming fields as a patch, then layer it over what's
+   * already stored. A field the client didn't send is a field it isn't
+   * changing.
+   */
   app.post("/api/profile", isAuthenticated, async (req: any, res) => {
     const userId = (req.user as any).id;
-    const validated = insertUserProfileSchema.parse({ ...req.body, userId });
-    const profile = await storage.upsertUserProfile(validated);
+    const existing = await storage.getUserProfile(userId);
+
+    // Identity and lifecycle columns are the server's to set. `isOnboarded`
+    // in particular only ever moves forward, via complete-onboarding.
+    const { id, userId: _ignoredUserId, createdAt, isOnboarded, ...incoming } = req.body ?? {};
+
+    const patch = insertUserProfileSchema.partial().parse(incoming);
+    // react-hook-form sends `undefined` for untouched optional fields; those
+    // must not overwrite stored values.
+    for (const key of Object.keys(patch)) {
+      if ((patch as any)[key] === undefined) delete (patch as any)[key];
+    }
+
+    if (!existing && !patch.displayName) {
+      return res.status(400).json({ message: "A display name is required to create your profile." });
+    }
+
+    const profile = await storage.upsertUserProfile({
+      ...(existing ?? {}),
+      ...patch,
+      userId,
+      isOnboarded: existing?.isOnboarded ?? false,
+    } as any);
     res.json(profile);
   });
 
@@ -159,7 +409,9 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       ];
 
       const response = await openai.chat.completions.create({
-        model: "gpt-5.2",
+        // Some deployments/users may not have access to custom "gpt-5.2" models.
+        // Use a broadly available fallback model so requests don't 404.
+        model: process.env.AI_DEFAULT_MODEL || "gpt-4o-mini",
         messages,
       });
 
@@ -179,38 +431,117 @@ Only include fields you have enough info to fill. Start empty if needed.`;
 
       await storage.deductCredits(userId, 1);
       res.json({ reply, projectUpdates });
-    } catch (error) {
+    } catch (error: any) {
+      // Improved logging for OpenAI client errors to aid diagnosis without
+      // exposing secrets to clients. In development, include the error message.
       console.error("Chat error:", error);
+      if (error?.status) {
+        console.error("OpenAI status:", error.status);
+      }
+      if (error?.headers) {
+        console.error("OpenAI headers:", error.headers);
+      }
+      // If OpenAI indicates exhausted credits, return 402 with guidance.
+      if (error?.code === "credit_balance_exhausted" || error?.error?.type === "insufficient_quota") {
+        return res.status(402).json({ message: "OpenAI account out of credits. Add credits or update the API key.", details: error?.error?.message || error?.message });
+      }
+
+      if (process.env.NODE_ENV === "development") {
+        // Return a slightly more helpful error in dev for quicker debugging.
+        return res.status(500).json({ message: "AI chat failed", error: error?.message || String(error) });
+      }
+
       res.status(500).json({ message: "AI chat failed" });
     }
   });
 
   // Projects
-  app.get("/api/projects", async (req, res) => {
+  app.get("/api/projects", async (req: any, res) => {
     const { category, status } = req.query;
-    const filters = {
+    const projects = await storage.getProjects({
       category: category as string,
       status: status as string,
-    };
-    const projects = await storage.getProjects(filters);
+      // Owners still see their own private projects in listings.
+      includePrivateOwnedBy: req.user?.id,
+    });
     res.json(projects);
   });
 
+  /**
+   * Solo Builder Mode and recruiting are mutually exclusive, so enforce it at
+   * the write boundary rather than trusting each client.
+   *
+   * The web create page clears roles when the toggle flips, but that left two
+   * holes: the mobile create screen and any project whose roles were set
+   * before the toggle. Both produced solo projects advertising open roles.
+   */
+  function normalizeSoloMode<T extends Record<string, any>>(data: T): T {
+    if (data.soloMode !== true) return data;
+    return { ...data, rolesNeeded: [], teamSize: 1 };
+  }
+
   app.post("/api/projects", isAuthenticated, async (req: any, res) => {
     const ownerId = (req.user as any).id;
-    const validated = insertProjectSchema.parse({ ...req.body, ownerId });
+    const validated = normalizeSoloMode(insertProjectSchema.parse({ ...req.body, ownerId }));
+
+    if (validated.isPrivate) {
+      const quota = await checkPrivateProjectQuota(ownerId);
+      if (!quota.allowed) return res.status(402).json(quota.body);
+    }
+
     const project = await storage.createProject(validated);
+
+    // Announce it on the founder feed. Private projects stay off the feed.
+    if (!project.isPrivate) {
+      void publishSystemPost({
+        authorId: ownerId,
+        projectId: project.id,
+        postType: SYSTEM_POST_TYPES.projectCreated,
+        content: SYSTEM_POST_COPY.projectCreated(project.title, project.oneLiner),
+        entityType: "project",
+        entityId: project.id,
+      });
+    }
+
     res.json(project);
   });
 
-  app.get("/api/projects/:id", async (req, res) => {
+  app.get("/api/projects/:id", async (req: any, res) => {
     const project = await storage.getProject(req.params.id);
     if (!project) return res.status(404).json({ message: "Project not found" });
+
+    /*
+     * A private project is only readable by its owner and members. Everyone
+     * else gets a deliberately minimal "restricted" payload — the title and
+     * nothing else — so the client can show a proper "this is a private
+     * project" screen instead of a dead end. The brief, media, roles, stats,
+     * and links are all withheld.
+     */
+    if (project.isPrivate) {
+      const viewerId = req.user?.id;
+      if (!viewerId || !(await isProjectMember(viewerId, project.id))) {
+        return res.json({
+          id: project.id,
+          title: project.title,
+          isPrivate: true,
+          restricted: true,
+        });
+      }
+    }
+
     await storage.incrementProjectViews(req.params.id);
     res.json(project);
   });
 
-  app.get("/api/projects/:id/members", async (req, res) => {
+  app.get("/api/projects/:id/members", async (req: any, res) => {
+    // Don't reveal who's on a private project to outsiders.
+    const project = await storage.getProject(req.params.id);
+    if (project?.isPrivate) {
+      const viewerId = req.user?.id;
+      if (!viewerId || !(await isProjectMember(viewerId, project.id))) {
+        return res.json([]);
+      }
+    }
     const members = await storage.getProjectMembers(req.params.id);
     res.json(members);
   });
@@ -348,17 +679,533 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     try {
       const userId = (req.user as any).id;
       if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      const { title, description, status, assigneeId, priority, dueDate, order } = req.body;
+      const {
+        title, description, status, assigneeId, priority, dueDate, order,
+        tags, estimateHours, blockedByTaskId, subtasks, milestoneId,
+      } = req.body;
       if (!title) return res.status(400).json({ message: "Title is required" });
+      const now = new Date();
+      /*
+       * New tasks land at the end of the board, not at position 0.
+       * Defaulting to 0 gave every task the same position, so nothing that
+       * reads the order — the columns, and the calendar's per-day sort — could
+       * tell them apart, and a task's own events got split up.
+       */
+      let resolvedOrder = Number(order);
+      if (!Number.isFinite(resolvedOrder)) {
+        const existing = await storage.getProjectKanbanTasks(req.params.id).catch(() => []);
+        resolvedOrder = existing.length
+          ? Math.max(...existing.map((t: any) => t.order ?? 0)) + 1
+          : 0;
+      }
       const task = await storage.createKanbanTask({
         projectId: req.params.id, title, description, status: status || "todo",
         assigneeId: assigneeId || null, priority: priority || "medium",
-        dueDate: dueDate ? new Date(dueDate) : null, order: order || 0,
+        dueDate: dueDate ? new Date(dueDate) : null, order: resolvedOrder,
+        // These were accepted by the task dialog but silently dropped here.
+        tags: Array.isArray(tags) ? tags.slice(0, 12).map(String) : [],
+        estimateHours: Number.isFinite(estimateHours) ? estimateHours : null,
+        blockedByTaskId: blockedByTaskId || null,
+        subtasks: Array.isArray(subtasks) ? subtasks : [],
+        milestoneId: milestoneId || null,
+        // A task created straight into a later column still needs its timeline.
+        startedAt: status === "in-progress" || status === "done" ? now : null,
+        startedById: status === "in-progress" || status === "done" ? userId : null,
+        completedAt: status === "done" ? now : null,
+        completedById: status === "done" ? userId : null,
       });
+      if (status === "done") {
+        const onTime = isTaskOnTime(task);
+        await storage.incrementUserTaskCompletion(userId, onTime).catch(() => {});
+        await storage.recordTaskCompletion({
+          projectId: task.projectId, taskId: task.id, completedById: userId,
+          title: task.title, priority: task.priority, onTime, completedAt: task.completedAt ?? now,
+        }).catch(() => {});
+      }
       res.json(task);
     } catch (error) {
       console.error("Create kanban task error:", error);
       res.status(500).json({ message: "Failed to create task" });
+    }
+  });
+
+  /**
+   * Nova re-sequences the board into an order you can actually work down.
+   *
+   * The default order is whatever tasks happened to be created in, which puts
+   * work you can't start yet at the top and buries its prerequisite somewhere
+   * in the middle. Nova reads the tasks, works out what genuinely depends on
+   * what, records those links as real blockers, and lays out a run that opens
+   * with something finishable.
+   */
+  app.post("/api/projects/:id/kanban/sequence", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+      if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
+
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+
+      const allTasks = await storage.getProjectKanbanTasks(projectId);
+      // Finished work is left where it is; there's nothing to sequence about it.
+      const open = allTasks.filter((t: any) => t.status !== "done");
+      if (open.length < 2) {
+        return res.status(400).json({ message: "There's nothing to re-order yet — add a few more tasks first." });
+      }
+
+      const ent = await requireCredits(res, userId, CREDIT_COSTS.taskSequencing, "task sequencing");
+      if (!ent) return;
+
+      const [roadmap, milestones, completions] = await Promise.all([
+        storage.getProjectRoadmap(projectId).catch(() => undefined),
+        storage.getProjectMilestones(projectId).catch(() => []),
+        storage.getProjectTaskCompletions(projectId, 10).catch(() => []),
+      ]);
+
+      const activePhase = roadmap?.phases.find((p) => p.status === "in-progress")
+        || roadmap?.phases.find((p) => p.status === "upcoming");
+
+      const completion = await openai.chat.completions.create({
+        model: modelFor(ent),
+        messages: [
+          {
+            role: "system",
+            content: `You are Nova, putting a builder's task list into the order they should actually work it. ${coachingDirectiveFor(ent)}
+
+Sequence for momentum, in this priority:
+1. NOTHING BEFORE ITS PREREQUISITE. If task B can't be started until task A is done, A comes first — always. This is the whole point; a list that opens with something unstartable is worse than no order at all.
+2. Open with something finishable. The first task should be completable in one sitting with what they have now, so the list starts with a win rather than a wall.
+3. Group related work so they stay in one context instead of task-switching.
+4. Then weigh urgency (due dates), stated priority, and what unblocks the most other work.
+5. Front-load whatever moves the current roadmap phase forward.
+
+Also identify real dependencies you can see from the task titles and descriptions — "deploy the API" plainly depends on "write the API". Only record a dependency you're confident about; a wrong blocker is worse than a missing one. Never make a task depend on itself, and never create a loop.
+
+Every task given to you must appear exactly once in "order".
+
+Respond ONLY with valid JSON (no markdown, no code fences):
+{
+  "rationale": "2-3 sentences on the shape of this sequence and where to start.",
+  "order": [
+    { "id": "task id", "reason": "one short clause on why it sits here" }
+  ],
+  "dependencies": [
+    { "id": "task that is blocked", "blockedByTaskId": "the task it waits on", "why": "short" }
+  ]
+}`,
+          },
+          {
+            role: "user",
+            content: [
+              `PROJECT\n${project.title} — ${project.description || "no description"}`,
+              activePhase
+                ? `THE PHASE THEY'RE IN NOW\n${activePhase.title}: ${activePhase.description || ""}\nOutcomes: ${((activePhase.outcomes as string[]) || []).join("; ") || "none listed"}`
+                : "THE PHASE THEY'RE IN NOW\nNo roadmap yet.",
+              milestones.length
+                ? `MILESTONES\n${milestones.map((m) => `- ${m.title} [${m.status}]${m.targetDate ? ` due ${new Date(m.targetDate).toISOString().slice(0, 10)}` : ""}`).join("\n")}`
+                : null,
+              completions.length
+                ? `JUST FINISHED (build on this momentum)\n${completions.map((c) => `- ${c.title}`).join("\n")}`
+                : null,
+              `TASKS TO SEQUENCE (${open.length})\n${open.map((t: any) => {
+                const subtasks = (t.subtasks as any[]) || [];
+                return [
+                  `- id=${t.id}`,
+                  `  title: ${t.title}`,
+                  t.description ? `  description: ${String(t.description).slice(0, 400)}` : null,
+                  `  status: ${t.status} | priority: ${t.priority}`,
+                  t.dueDate ? `  due: ${new Date(t.dueDate).toISOString().slice(0, 10)}` : null,
+                  t.estimateHours ? `  estimate: ${t.estimateHours}h` : null,
+                  subtasks.length ? `  subtasks: ${subtasks.length} (${subtasks.filter((s) => s.done).length} done)` : null,
+                  t.blockedByTaskId ? `  already marked blocked by: ${t.blockedByTaskId}` : null,
+                ].filter(Boolean).join("\n");
+              }).join("\n")}`,
+            ].filter(Boolean).join("\n\n"),
+          },
+        ],
+      });
+
+      let parsed: any;
+      try {
+        const raw = completion.choices[0].message.content || "{}";
+        const match = raw.match(/\{[\s\S]*\}/);
+        parsed = JSON.parse(match ? match[0] : raw);
+      } catch (parseErr) {
+        console.error("Task sequence parse failed:", parseErr);
+        return res.status(502).json({ message: "Nova returned an unreadable order. Please try again." });
+      }
+
+      const openIds = new Set(open.map((t: any) => t.id));
+
+      /*
+       * Dependencies first, because they constrain the order. Self-links,
+       * unknown ids and anything that would close a loop are dropped — a
+       * cycle would make every task in it permanently blocked.
+       */
+      const deps = new Map<string, string>();
+      const wouldCycle = (from: string, to: string): boolean => {
+        let cursor: string | undefined = to;
+        const seen = new Set<string>([from]);
+        while (cursor) {
+          if (seen.has(cursor)) return true;
+          seen.add(cursor);
+          cursor = deps.get(cursor);
+        }
+        return false;
+      };
+
+      /*
+       * Blockers the builder set by hand come first — Nova doesn't get to
+       * discard them. Except a circular one: a pair of tasks waiting on each
+       * other can never start, so re-sequencing is exactly the moment to cut
+       * the link rather than order around a deadlock. Older boards can carry
+       * these from before the task editor rejected them.
+       */
+      const cyclesBroken: { id: string; title: string; blockerTitle: string }[] = [];
+      const openById = new Map((open as any[]).map((t) => [t.id, t]));
+      for (const t of [...open].sort((a: any, b: any) => a.order - b.order) as any[]) {
+        if (!t.blockedByTaskId || !openIds.has(t.blockedByTaskId)) continue;
+        if (t.blockedByTaskId === t.id || wouldCycle(t.id, t.blockedByTaskId)) {
+          cyclesBroken.push({
+            id: t.id,
+            title: t.title,
+            blockerTitle: openById.get(t.blockedByTaskId)?.title || "another task",
+          });
+          await storage.updateKanbanTask(t.id, { blockedByTaskId: null } as any);
+          continue;
+        }
+        deps.set(t.id, t.blockedByTaskId);
+      }
+
+      const newDeps: { id: string; blockedByTaskId: string; why?: string }[] = [];
+      for (const d of Array.isArray(parsed.dependencies) ? parsed.dependencies.slice(0, 40) : []) {
+        const id = String(d?.id || ""), blocker = String(d?.blockedByTaskId || "");
+        if (!openIds.has(id) || !openIds.has(blocker) || id === blocker) continue;
+        if (deps.get(id) === blocker) continue;
+        // One blocker per task — that's what the column stores.
+        if (deps.has(id)) continue;
+        if (wouldCycle(id, blocker)) continue;
+        deps.set(id, blocker);
+        newDeps.push({ id, blockedByTaskId: blocker, why: String(d?.why || "").slice(0, 200) });
+      }
+
+      // Nova's proposed order, with anything it forgot appended in its old order.
+      const reasons = new Map<string, string>();
+      const proposed: string[] = [];
+      for (const item of Array.isArray(parsed.order) ? parsed.order : []) {
+        const id = String(item?.id || "");
+        if (!openIds.has(id) || proposed.includes(id)) continue;
+        proposed.push(id);
+        reasons.set(id, String(item?.reason || "").slice(0, 200));
+      }
+      for (const t of [...open].sort((a: any, b: any) => a.order - b.order) as any[]) {
+        if (!proposed.includes(t.id)) proposed.push(t.id);
+      }
+
+      /*
+       * Topological repair. Nova is good at this but not reliable at it, and
+       * "the top task is one I can't start" is the exact complaint this
+       * endpoint exists to fix — so enforce it in code rather than trusting
+       * the model. Stable: a task is emitted as soon as its blocker has been.
+       */
+      const sequenced: string[] = [];
+      const emitted = new Set<string>();
+      const remaining = [...proposed];
+      while (remaining.length) {
+        const readyIndex = remaining.findIndex((id) => {
+          const blocker = deps.get(id);
+          return !blocker || emitted.has(blocker) || !remaining.includes(blocker);
+        });
+        // -1 means every task left is waiting on another one left, which the
+        // cycle guard should prevent. Fall back to Nova's order rather than loop.
+        const pick = readyIndex === -1 ? 0 : readyIndex;
+        const [id] = remaining.splice(pick, 1);
+        sequenced.push(id);
+        emitted.add(id);
+      }
+
+      for (let i = 0; i < sequenced.length; i++) {
+        const id = sequenced[i];
+        const patch: any = { order: i };
+        const blocker = deps.get(id);
+        const current = openById.get(id);
+        if (blocker && current?.blockedByTaskId !== blocker) patch.blockedByTaskId = blocker;
+        await storage.updateKanbanTask(id, patch);
+      }
+
+      /*
+       * Finished tasks sit after the open ones. They aren't part of the
+       * sequence, but leaving their old positions in place would let a done
+       * task share an order value with an open one — and the calendar orders a
+       * day's entries by exactly that number.
+       */
+      const doneTasks = (allTasks as any[])
+        .filter((t) => t.status === "done")
+        .sort((a, b) => a.order - b.order);
+      for (let i = 0; i < doneTasks.length; i++) {
+        await storage.updateKanbanTask(doneTasks[i].id, { order: sequenced.length + i } as any);
+      }
+
+      await storage.deductCredits(userId, CREDIT_COSTS.taskSequencing);
+      await storage.logActivity({
+        projectId, userId, action: "let Nova re-order the task board",
+        entityType: "kanban", entityId: projectId,
+        metadata: { tasks: sequenced.length, dependenciesFound: newDeps.length },
+      }).catch(() => {});
+
+      const byId = openById;
+      res.json({
+        rationale: String(parsed.rationale || "").slice(0, 600),
+        sequence: sequenced.map((id, i) => ({
+          id,
+          title: byId.get(id)?.title || "",
+          position: i + 1,
+          reason: reasons.get(id) || "",
+          blockedByTaskId: deps.get(id) || null,
+        })),
+        dependenciesFound: newDeps.map((d) => ({
+          ...d,
+          title: byId.get(d.id)?.title || "",
+          blockerTitle: byId.get(d.blockedByTaskId)?.title || "",
+        })),
+        cyclesBroken,
+        startHere: sequenced[0] || null,
+        creditsCharged: CREDIT_COSTS.taskSequencing,
+      });
+    } catch (error) {
+      console.error("Task sequence error:", error);
+      res.status(500).json({ message: "Nova couldn't re-order the board" });
+    }
+  });
+
+  /**
+   * Nova plans the work.
+   *
+   * The analytics panel can act on its own findings; this is the same idea
+   * pointed at the board. A builder asks for something like "turn my
+   * milestones into ordered task lists with estimates" and Nova returns a
+   * plan — per milestone: the goal, the definition of done, and 5-10 ordered,
+   * estimated tasks — plus the single milestone to work next.
+   *
+   * Nothing is written yet. The plan comes back with the operations that would
+   * produce it, and the apply route below runs them once the builder says yes.
+   * Dumping forty tasks onto someone's board unasked is not help.
+   */
+  app.post("/api/projects/:id/tasks/nova-assist", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+      if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
+
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+
+      // Gated on the Builder plan. The client always shows the button and
+      // surfaces this 402, so the capability is discoverable rather than
+      // hidden from the people who'd upgrade for it.
+      const ent = await requireFeature(res, userId, "aiMilestones", "Nova task planning");
+      if (!ent) return;
+
+      const { ask, taskId } = req.body as { ask?: string; taskId?: string };
+      if (!ask?.trim()) return res.status(400).json({ message: "Tell Nova what you want help with." });
+      if (ask.length > 2000) return res.status(400).json({ message: "That's a lot to ask at once — trim it down." });
+
+      const focusTask = taskId ? await storage.getKanbanTask(taskId) : undefined;
+      if (focusTask && focusTask.projectId !== projectId) {
+        return res.status(400).json({ message: "That task isn't on this project." });
+      }
+
+      if (!(await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova task planning"))) return;
+
+      const [state, roadmap, milestones] = await Promise.all([
+        buildOperableProjectState(projectId),
+        storage.getProjectRoadmap(projectId).catch(() => undefined),
+        storage.getProjectMilestones(projectId).catch(() => []),
+      ]);
+
+      const completion = await openai.chat.completions.create({
+        model: modelFor(ent),
+        messages: [
+          {
+            role: "system",
+            content: `You are Nova, planning a builder's work on their task board. ${coachingDirectiveFor(ent)}
+
+You are not writing advice. You are producing the working plan they will execute from, and the operations that put it on their board.
+
+How to plan:
+- Between 5 and 10 tasks per milestone. More than that isn't a plan, it's a backlog, and it stalls people.
+- Every task gets a whole-hour estimate (minimum 1) that a real person could hit in one or two sittings. If something is bigger than about 8 hours, split it. Never use fractions.
+- Order matters. Emit create_task operations in the order the work should be done — that's what sets each task's position on the board.
+- You can only set "blockedByTaskId" on a task that already exists, since a task you're creating in this same plan has no id yet. Don't invent one. If the plan needs dependencies between new tasks, say so in "summary" and tell them to run "Order my tasks" once the plan is applied — that pass reads the real ids and links them.
+- Attach every task to the milestone it serves with "milestoneId".
+- Write a real definition of done for each milestone — the observable thing that proves it's finished — and save it with update_milestone so it lives on the milestone rather than only in this reply.
+- Name exactly ONE milestone to work on next, and say why that one.
+- Respect what's already there. Don't recreate a task that exists; update it instead.
+
+Set "suggestedDocument" ONLY when a written document IS the deliverable — when the task cannot be called done without that document existing. A spec, a one-pager, a brief, a business plan, a pitch, a policy: yes. SparkTower has a document builder that lays out and writes documents, so pointing them at it beats leaving them to start from a blank page.
+
+Leave it null in every other case, including when a document would merely be *nice to have alongside* the work. If the output is code, a deployment, a configuration, a conversation, a decision, or an experiment, the answer is null — even if you think they should also write a runbook or notes about it. Suggesting a document for work that isn't document work is noise, and it teaches them to ignore the suggestion.
+
+${OPERATION_SCHEMA_INSTRUCTIONS}
+
+Respond ONLY with valid JSON (no markdown, no code fences):
+{
+  "summary": "2-4 sentences: what this plan does and how to run it.",
+  "nextMilestone": { "id": "milestone id or null", "title": "", "why": "one or two sentences" },
+  "milestones": [
+    {
+      "id": "milestone id, or null if you are proposing a new one",
+      "title": "",
+      "goal": "one sentence",
+      "definitionOfDone": "the observable thing that proves it is finished",
+      "tasks": [ { "title": "", "estimateHours": 3, "why": "short" } ]
+    }
+  ],
+  "totalEstimatedHours": 0,
+  "suggestedDocument": { "title": "", "description": "what the document has to contain, in enough detail to write from", "why": "one sentence" } | null,
+  "operations": [ ... ]
+}
+If the ask has nothing to do with planning tasks, say so in "summary", return an empty "operations" list, and don't invent work.`,
+          },
+          {
+            role: "user",
+            content: [
+              `WHAT THE BUILDER ASKED FOR\n${ask.trim()}`,
+              focusTask
+                ? `THEY HAVE THIS TASK SELECTED — the ask is probably about it\nid=${focusTask.id}\ntitle: ${focusTask.title}\ndescription: ${focusTask.description || "(none)"}\nstatus: ${focusTask.status} | priority: ${focusTask.priority}${focusTask.estimateHours ? ` | estimate: ${focusTask.estimateHours}h` : ""}`
+                : null,
+              roadmap
+                ? `ROADMAP\nGoal: ${roadmap.goal}\n${roadmap.summary || ""}\nPhases:\n${roadmap.phases.map((p) => `- ${p.title} [${p.status}] ${p.description || ""}\n    outcomes: ${((p.outcomes as string[]) || []).join("; ") || "none"}`).join("\n")}`
+                : "ROADMAP\nNone yet.",
+              `MILESTONE COUNT: ${milestones.length}`,
+              `CURRENT PROJECT STATE (use these ids)\n${state}`,
+            ].filter(Boolean).join("\n\n"),
+          },
+        ],
+      });
+
+      let parsed: any;
+      try {
+        const raw = completion.choices[0].message.content || "{}";
+        const match = raw.match(/\{[\s\S]*\}/);
+        parsed = JSON.parse(match ? match[0] : raw);
+      } catch (parseErr) {
+        console.error("Task assist parse failed:", parseErr);
+        return res.status(502).json({ message: "Nova returned an unreadable plan. Please try again." });
+      }
+
+      await storage.deductCredits(userId, CREDIT_COSTS.taskAssist);
+
+      const operations = Array.isArray(parsed.operations) ? parsed.operations.slice(0, 80) : [];
+      res.json({
+        summary: String(parsed.summary || "").slice(0, 1200),
+        nextMilestone: parsed.nextMilestone && typeof parsed.nextMilestone === "object" ? {
+          id: parsed.nextMilestone.id || null,
+          title: String(parsed.nextMilestone.title || "").slice(0, 200),
+          why: String(parsed.nextMilestone.why || "").slice(0, 600),
+        } : null,
+        milestones: (Array.isArray(parsed.milestones) ? parsed.milestones : []).slice(0, 20).map((m: any) => ({
+          id: m?.id || null,
+          title: String(m?.title || "").slice(0, 200),
+          goal: String(m?.goal || "").slice(0, 500),
+          definitionOfDone: String(m?.definitionOfDone || "").slice(0, 600),
+          tasks: (Array.isArray(m?.tasks) ? m.tasks : []).slice(0, 12).map((t: any) => ({
+            title: String(t?.title || "").slice(0, 200),
+            // Rounded here as well as on write, so the preview shows the same
+            // number that ends up on the card — estimates are whole hours.
+            estimateHours: Number.isFinite(Number(t?.estimateHours))
+              ? Math.max(1, Math.round(Number(t.estimateHours)))
+              : null,
+            why: String(t?.why || "").slice(0, 300),
+          })),
+        })),
+        totalEstimatedHours: Number.isFinite(Number(parsed.totalEstimatedHours)) ? Number(parsed.totalEstimatedHours) : null,
+        // Offered, never acted on automatically — starting a document costs
+        // credits, so it stays the builder's call.
+        suggestedDocument: parsed.suggestedDocument && String(parsed.suggestedDocument.title || "").trim()
+          ? {
+              title: String(parsed.suggestedDocument.title).slice(0, 200),
+              description: String(parsed.suggestedDocument.description || "").slice(0, 3000),
+              why: String(parsed.suggestedDocument.why || "").slice(0, 400),
+            }
+          : null,
+        operations,
+        creditsCharged: CREDIT_COSTS.taskAssist,
+      });
+    } catch (error) {
+      console.error("Task assist error:", error);
+      res.status(500).json({ message: "Nova couldn't plan that" });
+    }
+  });
+
+  /**
+   * Applies a plan the builder reviewed. No second AI call, so no second
+   * charge — the operations were already paid for when the plan was made.
+   */
+  app.post("/api/projects/:id/tasks/nova-assist/apply", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+      if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
+
+      const ent = await requireFeature(res, userId, "aiMilestones", "Nova task planning");
+      if (!ent) return;
+
+      const { operations } = req.body as { operations?: unknown };
+      if (!Array.isArray(operations) || !operations.length) {
+        return res.status(400).json({ message: "There's no plan to apply." });
+      }
+
+      const { changes, skipped } = await applyProjectOperations(projectId, userId, operations, {
+        canEditMilestones: ent.aiMilestones,
+        canEditRoadmap: ent.roadmapUpdates,
+        // A milestone-by-milestone plan is legitimately dozens of operations.
+        maxOperations: 120,
+      });
+      if (!changes.length) {
+        return res.status(422).json({ message: "None of that plan could be applied.", skipped });
+      }
+      res.json({ changes, skipped });
+    } catch (error) {
+      console.error("Task assist apply error:", error);
+      res.status(500).json({ message: "Couldn't apply that plan" });
+    }
+  });
+
+  /**
+   * Persists a drag-and-drop reorder in one call.
+   *
+   * Order only. A card dropped into a different column changes status too, and
+   * that goes through PATCH so the completion stamping, feed post and
+   * execution archive all stay in one place rather than being duplicated here.
+   */
+  app.post("/api/projects/:id/kanban/reorder", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+      if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
+
+      const { items } = req.body as { items?: { id: string; order: number }[] };
+      if (!Array.isArray(items) || !items.length) {
+        return res.status(400).json({ message: "Nothing to reorder" });
+      }
+      if (items.length > 400) return res.status(400).json({ message: "Too many tasks in one reorder" });
+
+      // Every id has to be a task on this project, or a reorder becomes a way
+      // to write to someone else's board.
+      const own = await storage.getProjectKanbanTasks(projectId);
+      const ownIds = new Set(own.map((t: any) => t.id));
+      const valid = items.filter((i) => i && ownIds.has(i.id) && Number.isFinite(Number(i.order)));
+      if (!valid.length) return res.status(400).json({ message: "None of those tasks are on this project" });
+
+      await Promise.all(
+        valid.map((i) => storage.updateKanbanTask(i.id, { order: Number(i.order) } as any)),
+      );
+      res.json({ updated: valid.length });
+    } catch (error) {
+      console.error("Kanban reorder error:", error);
+      res.status(500).json({ message: "Failed to save the new order" });
     }
   });
 
@@ -369,7 +1216,10 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       if (!existingTask) return res.status(404).json({ message: "Task not found" });
       if (!(await isProjectMember(userId, existingTask.projectId))) return res.status(403).json({ message: "Not a project member" });
       const updates: any = {};
-      const { title, description, status, assigneeId, priority, dueDate, order } = req.body;
+      const {
+        title, description, status, assigneeId, priority, dueDate, order,
+        tags, estimateHours, blockedByTaskId, subtasks, milestoneId,
+      } = req.body;
       if (title !== undefined) updates.title = title;
       if (description !== undefined) updates.description = description;
       if (status !== undefined) updates.status = status;
@@ -377,11 +1227,153 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       if (priority !== undefined) updates.priority = priority;
       if (dueDate !== undefined) updates.dueDate = dueDate ? new Date(dueDate) : null;
       if (order !== undefined) updates.order = order;
+      // Previously dropped, so tags, estimates, blockers and subtasks edited in
+      // the task dialog never saved.
+      if (tags !== undefined) updates.tags = Array.isArray(tags) ? tags.slice(0, 12).map(String) : [];
+      if (estimateHours !== undefined) updates.estimateHours = Number.isFinite(estimateHours) ? estimateHours : null;
+      if (blockedByTaskId !== undefined) {
+        /*
+         * A task that blocks itself, directly or through a chain, can never be
+         * started — and neither can anything behind it. Refuse the link rather
+         * than storing a deadlock the board can only display, not resolve.
+         */
+        if (!blockedByTaskId) {
+          updates.blockedByTaskId = null;
+        } else if (blockedByTaskId === req.params.taskId) {
+          return res.status(400).json({ message: "A task can't be blocked by itself." });
+        } else {
+          const siblings = await storage.getProjectKanbanTasks(existingTask.projectId);
+          const blocker = siblings.find((t: any) => t.id === blockedByTaskId);
+          if (!blocker) {
+            return res.status(400).json({ message: "That blocker isn't a task on this project." });
+          }
+          const chain = new Map(
+            siblings.map((t: any) => [t.id, t.id === req.params.taskId ? blockedByTaskId : t.blockedByTaskId]),
+          );
+          let cursor: string | null | undefined = blockedByTaskId;
+          const seen = new Set<string>([req.params.taskId]);
+          while (cursor) {
+            if (seen.has(cursor)) {
+              return res.status(400).json({
+                message: "That would make two tasks wait on each other, so neither could ever start.",
+              });
+            }
+            seen.add(cursor);
+            cursor = chain.get(cursor) ?? null;
+          }
+          updates.blockedByTaskId = blockedByTaskId;
+        }
+      }
+      if (subtasks !== undefined) updates.subtasks = Array.isArray(subtasks) ? subtasks : [];
+      if (milestoneId !== undefined) {
+        if (!milestoneId) {
+          updates.milestoneId = null;
+        } else {
+          // A milestone from another project would render as a broken link.
+          const own = await storage.getProjectMilestones(existingTask.projectId).catch(() => []);
+          if (!own.some((m) => m.id === milestoneId)) {
+            return res.status(400).json({ message: "That milestone isn't on this project." });
+          }
+          updates.milestoneId = milestoneId;
+        }
+      }
+
+      /*
+       * Stamp the timeline server-side so the calendar and the reputation
+       * maths can't disagree, and so attribution records who actually moved
+       * the card rather than who it's assigned to.
+       */
+      const now = new Date();
+      const movingToDone = status === "done" && existingTask.status !== "done";
+      const firstCompletion = movingToDone && !existingTask.completedAt;
+
+      if (status !== undefined && status !== existingTask.status) {
+        if ((status === "in-progress" || status === "done") && !existingTask.startedAt) {
+          updates.startedAt = now;
+          updates.startedById = userId;
+        }
+        if (movingToDone) {
+          updates.completedAt = now;
+          updates.completedById = userId;
+        }
+        // Reopening keeps the previous completedAt as a record of the last
+        // completion — that's what stops a done/undone loop double-counting.
+      }
+
       const task = await storage.updateKanbanTask(req.params.taskId, updates);
+
+      if (movingToDone) {
+        /*
+         * Finishing a task unblocks whatever was waiting on it.
+         *
+         * The blocker column was only ever cleared by hand, so a task whose
+         * prerequisite was finished still showed "Blocked by <done task>" —
+         * and the board went on treating it as unstartable. A completed
+         * prerequisite has served its purpose, so the link goes.
+         */
+        const siblings = await storage.getProjectKanbanTasks(existingTask.projectId).catch(() => []);
+        const waiting = (siblings as any[]).filter((t) => t.blockedByTaskId === task.id && t.id !== task.id);
+        for (const t of waiting) {
+          await storage.updateKanbanTask(t.id, { blockedByTaskId: null } as any).catch((e) => {
+            console.error("Failed to clear blocker on task", t.id, e);
+          });
+        }
+      }
+
+      if (firstCompletion) {
+        const onTime = isTaskOnTime(task);
+        await storage.incrementUserTaskCompletion(userId, onTime).catch((e) => {
+          console.error("Failed to bank task completion:", e);
+        });
+        // Archive it against the project too. The user-level counter drives
+        // reputation; this is what lets the project itself still show its
+        // execution record after the board has been cleared.
+        await storage.recordTaskCompletion({
+          projectId: task.projectId,
+          taskId: task.id,
+          completedById: userId,
+          title: task.title,
+          priority: task.priority,
+          onTime,
+          completedAt: task.completedAt ?? now,
+        }).catch((e) => {
+          console.error("Failed to archive task completion:", e);
+        });
+      }
       res.json(task);
     } catch (error) {
       console.error("Update kanban task error:", error);
       res.status(500).json({ message: "Failed to update task" });
+    }
+  });
+
+  /**
+   * What this project has actually shipped, including work cleared off the
+   * board. Two numbers, because they answer different questions: the archive
+   * is this project's record, the banked figure is the builder's across every
+   * project (and covers completions that predate the archive).
+   */
+  app.get("/api/projects/:id/task-history", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+      if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Unauthorized" });
+
+      const [completions, banked] = await Promise.all([
+        storage.getProjectTaskCompletions(projectId, 50),
+        storage.getUserTaskStats(userId),
+      ]);
+
+      res.json({
+        projectCompleted: completions.length,
+        projectOnTime: completions.filter((c) => c.onTime).length,
+        lastCompletedAt: completions[0]?.completedAt ?? null,
+        builderCompletedAllTime: banked?.tasksCompleted ?? 0,
+        recent: completions.slice(0, 25),
+      });
+    } catch (error) {
+      console.error("Task history error:", error);
+      res.status(500).json({ message: "Failed to load task history" });
     }
   });
 
@@ -391,6 +1383,14 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       const existingTask = await storage.getKanbanTask(req.params.taskId);
       if (!existingTask) return res.status(404).json({ message: "Task not found" });
       if (!(await isProjectMember(userId, existingTask.projectId))) return res.status(403).json({ message: "Not a project member" });
+      // Bank execution credit before the evidence disappears. Reading the
+      // project's stats backfills the archive, which covers cards that were
+      // finished before completions started being archived at source.
+      await storage.getProjectCompletionStats(existingTask.projectId).catch(() => {});
+      await storage.bankExecutionCredit(userId).catch(() => {});
+      if (existingTask.completedById && existingTask.completedById !== userId) {
+        await storage.bankExecutionCredit(existingTask.completedById).catch(() => {});
+      }
       await storage.deleteKanbanTask(req.params.taskId);
       res.json({ success: true });
     } catch (error) {
@@ -399,46 +1399,285 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     }
   });
 
+  /**
+   * Clear the board in one go.
+   *
+   * `?status=done` clears only finished work, which is the common case — tidy
+   * up without losing what's still outstanding. Every member who completed
+   * anything has their execution credit banked first, so nobody's reputation
+   * drops because someone else tidied the board.
+   */
+  app.delete("/api/projects/:id/kanban", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      // Clearing the whole board is destructive, so restrict it to the owner.
+      if (project.ownerId !== userId) {
+        return res.status(403).json({ message: "Only the project owner can clear the board" });
+      }
+
+      const onlyStatus = typeof req.query.status === "string" ? req.query.status : undefined;
+      if (onlyStatus && !["todo", "in-progress", "review", "done"].includes(onlyStatus)) {
+        return res.status(400).json({ message: "Unknown status filter" });
+      }
+
+      // Archive first: once the rows go, the project's execution record is
+      // whatever we saved here.
+      await storage.getProjectCompletionStats(projectId).catch(() => {});
+
+      const tasks = await storage.getProjectKanbanTasks(projectId);
+      const affected = new Set<string>([userId, project.ownerId]);
+      for (const t of tasks as any[]) {
+        if (t.completedById) affected.add(t.completedById);
+        if (t.assigneeId) affected.add(t.assigneeId);
+      }
+      for (const id of affected) {
+        await storage.bankExecutionCredit(id).catch(() => {});
+      }
+
+      const removed = await storage.clearProjectKanbanTasks(projectId, onlyStatus);
+      await storage.logActivity({
+        projectId, userId,
+        action: onlyStatus ? `cleared ${removed} ${onlyStatus} tasks` : `cleared all ${removed} tasks`,
+        entityType: "kanban", entityId: projectId, metadata: { removed, onlyStatus: onlyStatus || null },
+      }).catch(() => {});
+
+      res.json({ removed });
+    } catch (error) {
+      console.error("Clear kanban error:", error);
+      res.status(500).json({ message: "Failed to clear tasks" });
+    }
+  });
+
+  /**
+   * Day-by-day activity for the project calendar.
+   *
+   * Returns one entry per event (project created, task created, task started,
+   * task completed) with the member who did it already resolved, so the client
+   * doesn't have to join members to tasks itself.
+   */
+  app.get("/api/projects/:id/calendar", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+      if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
+
+      const [project, tasks, members, milestones] = await Promise.all([
+        storage.getProject(projectId),
+        storage.getProjectKanbanTasks(projectId),
+        storage.getProjectMembers(projectId).catch(() => []),
+        storage.getProjectMilestones(projectId).catch(() => []),
+      ]);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+
+      const who = (id: string | null | undefined) => {
+        if (!id) return null;
+        const m = members.find((x) => x.userId === id);
+        return {
+          userId: id,
+          name: m?.profile?.displayName || m?.user?.firstName || m?.user?.email || "Someone",
+          avatarUrl: m?.profile?.avatarUrl || null,
+        };
+      };
+      const dayKey = (d: Date | string) => new Date(d).toISOString().slice(0, 10);
+
+      const events: any[] = [];
+
+      events.push({
+        id: `project-${project.id}`,
+        date: dayKey(project.createdAt),
+        type: "project_created",
+        title: `${project.title} was created`,
+        priority: null, taskId: null, actor: who(project.ownerId),
+      });
+
+      for (const m of milestones) {
+        if (m.targetDate) {
+          events.push({
+            id: `milestone-due-${m.id}`, date: dayKey(m.targetDate),
+            type: m.status === "completed" ? "milestone_completed" : "milestone_due",
+            title: m.title, priority: null, taskId: null, actor: null,
+          });
+        }
+      }
+
+      for (const t of tasks as any[]) {
+        // `taskOrder` is the board's own sequence — the one Nova sets when it
+        // re-orders the tasks. Carrying it here is what lets a day's entries
+        // read in the same order as the board instead of an arbitrary one.
+        const common = { priority: t.priority, taskId: t.id, taskOrder: t.order, taskStatus: t.status };
+        events.push({
+          id: `created-${t.id}`, date: dayKey(t.createdAt), type: "task_created",
+          title: t.title, ...common, actor: who(t.assigneeId),
+        });
+        if (t.startedAt) {
+          events.push({
+            id: `started-${t.id}`, date: dayKey(t.startedAt), type: "task_started",
+            title: t.title, ...common, actor: who(t.startedById || t.assigneeId),
+          });
+        }
+        if (t.status === "done" && t.completedAt) {
+          events.push({
+            id: `completed-${t.id}`, date: dayKey(t.completedAt), type: "task_completed",
+            title: t.title, ...common, actor: who(t.completedById || t.assigneeId),
+          });
+        }
+        if (t.dueDate && t.status !== "done") {
+          events.push({
+            id: `due-${t.id}`, date: dayKey(t.dueDate), type: "task_due",
+            title: t.title, ...common, actor: who(t.assigneeId),
+          });
+        }
+      }
+
+      /*
+       * Within a day: project/milestone context first, then tasks in board
+       * order, then each task's own events in the order they happened. Sorting
+       * by anything else made a day's list disagree with the board the user
+       * had just had Nova sequence.
+       */
+      const TYPE_RANK: Record<string, number> = {
+        project_created: 0, milestone_completed: 1, milestone_due: 2,
+        task_created: 3, task_started: 4, task_completed: 5, task_due: 6,
+      };
+      events.sort((a, b) =>
+        a.date.localeCompare(b.date)
+        || (a.taskId ? 1 : 0) - (b.taskId ? 1 : 0)
+        || (a.taskOrder ?? -1) - (b.taskOrder ?? -1)
+        || (TYPE_RANK[a.type] ?? 9) - (TYPE_RANK[b.type] ?? 9)
+        || String(a.title).localeCompare(String(b.title)));
+      res.json({ projectCreatedAt: project.createdAt, events });
+    } catch (error) {
+      console.error("Project calendar error:", error);
+      res.status(500).json({ message: "Failed to load the calendar" });
+    }
+  });
+
   app.post("/api/projects/:id/kanban/ai-generate", isAuthenticated, async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       await storage.resetCreditsIfNeeded(userId);
-      const hasCredits = await storage.checkCredits(userId, 1);
-      if (!hasCredits) return res.status(403).json({ message: "Insufficient credits" });
-      const project = await storage.getProject(req.params.id);
+
+      // Free has no AI task generation; Starter gets a capped batch.
+      const ent = await requireLevel(
+        res, userId, "aiTaskGeneration", ["limited", "full"],
+        "AI task generation", "starter"
+      );
+      if (!ent) return;
+      if (!(await requireCredits(res, userId, CREDIT_COSTS.taskGeneration, "task generation"))) return;
+
+      const maxTasks = taskLimitFor(ent);
+      const projectId = req.params.id;
+      const project = await storage.getProject(projectId);
       if (!project) return res.status(404).json({ message: "Project not found" });
-      const members = await storage.getProjectMembers(req.params.id);
 
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [{
-          role: "system",
-          content: `You are Nova, a project management AI. Generate a Kanban board breakdown for the project. You MUST respond with ONLY a valid JSON object (no markdown, no code fences) with a "tasks" array. Each task should have: title, description, status ("todo"), priority ("low"/"medium"/"high"), and suggested_role (which team role should handle it). Break the project into 8-12 actionable tasks covering planning, development, testing, and launch phases.`
-        }, {
-          role: "user",
-          content: `Project: "${project.title}"\nDescription: ${project.description}\nCategory: ${project.category}\nTech Stack: ${(project.techStack || []).join(", ")}\nRoles: ${(project.rolesNeeded || []).join(", ")}\nTeam Size: ${project.teamSize}\nTimeline: ${project.estimatedWeeks} weeks\nTeam Members: ${members.map(m => `${m.profile?.displayName || m.user.firstName || "Member"} (${m.role})`).join(", ")}`
-        }],
-        temperature: 0.7,
-      });
+      /*
+       * Task generation used to see only the title, description, category,
+       * tech stack and team — no roadmap, no milestones, and no existing
+       * tasks. So it always produced a generic "planning → development →
+       * testing → launch" lifecycle from scratch, duplicated work already on
+       * the board, and ignored the plan Nova itself had just written. Give it
+       * the same picture the roadmap gets.
+       */
+      const [members, roadmap, milestones, existingTasks] = await Promise.all([
+        storage.getProjectMembers(projectId),
+        storage.getProjectRoadmap(projectId).catch(() => undefined),
+        storage.getProjectMilestones(projectId).catch(() => []),
+        storage.getProjectKanbanTasks(projectId).catch(() => []),
+      ]);
 
-      await storage.deductCredits(userId, 1);
+      const doneTasks = existingTasks.filter((t: any) => t.status === "done");
+      const openTasks = existingTasks.filter((t: any) => t.status !== "done");
 
-      const rawContent = completion.choices[0].message.content || "{}";
-      const cleaned = rawContent.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+      // The phase to aim at: first unfinished one, else the last.
+      const activePhase = roadmap?.phases.find((p) => p.status === "in-progress")
+        || roadmap?.phases.find((p) => p.status === "upcoming")
+        || roadmap?.phases[roadmap.phases.length - 1];
+
+      // `outcomes` is a jsonb column, so it arrives untyped.
+      const phaseOutcomes = (p: { outcomes?: unknown }): string[] =>
+        Array.isArray(p.outcomes) ? p.outcomes.map(String) : [];
+
+      const userContent = [
+        `PROJECT BRIEF\n${formatProjectBriefForPrompt(project)}`,
+        `TEAM\nTeam size: ${project.teamSize}${project.soloMode ? " (solo builder — no teammates to delegate to)" : ""}\nTimeline: ${project.estimatedWeeks} weeks\nMembers: ${members.map((m) => `${m.profile?.displayName || m.user.firstName || "Member"} (${m.role})`).join(", ") || "just the owner"}`,
+        describeCurrentState({
+          project,
+          startingPoint: roadmap?.startingPoint,
+          members: members.length,
+          tasks: existingTasks,
+          milestones,
+          phases: roadmap?.phases,
+        }),
+        roadmap
+          ? `THE ROADMAP NOVA ALREADY BUILT (v${roadmap.version})\nGoal: ${roadmap.goal}\n${roadmap.summary || ""}\n\nPhases:\n${roadmap.phases.map((p) => `- ${p.title} [${p.status}]${p.estimatedDuration ? ` (${p.estimatedDuration})` : ""}\n    ${p.description || ""}\n    Outcomes: ${phaseOutcomes(p).join("; ") || "none listed"}`).join("\n")}`
+          : "THE ROADMAP\nNo roadmap has been built yet. Break the work down toward the goal in the brief.",
+        activePhase
+          ? `THE PHASE TO WORK ON NOW\n"${activePhase.title}" — ${activePhase.description || ""}\nOutcomes that phase needs: ${phaseOutcomes(activePhase).join("; ") || "none listed"}`
+          : "",
+        `MILESTONES\n${milestones.length ? milestones.map((m) => `- ${m.title} [${m.status}]${m.targetDate ? ` due ${new Date(m.targetDate).toISOString().slice(0, 10)}` : ""}`).join("\n") : "none set"}`,
+        `TASKS ALREADY FINISHED (${doneTasks.length}) — this work is DONE, never suggest it again\n${doneTasks.map((t: any) => `- ${t.title}`).join("\n") || "none yet"}`,
+        `TASKS ALREADY ON THE BOARD, NOT FINISHED (${openTasks.length}) — do NOT duplicate these\n${openTasks.map((t: any) => `- ${t.title} [${t.status}/${t.priority}]`).join("\n") || "none"}`,
+      ].filter(Boolean).join("\n\n");
+
+      const systemContent = `You are Nova, breaking a builder's next stretch of work into board-ready tasks. ${coachingDirectiveFor(ent)}
+
+Your job is NOT to plan the whole project from scratch. A roadmap already exists and some work is already done. Generate the tasks that move the builder through THE PHASE TO WORK ON NOW, and nothing else.
+
+Rules:
+- Read WHERE THEY ARE NOW and the finished tasks first. Never generate work that is already done or already on the board, and never re-plan groundwork that clearly exists.
+- Every task must serve an outcome of the current phase. If a task doesn't move that phase forward, leave it out.
+- Tasks must be small enough to finish in a sitting or two, and specific enough to start without asking a follow-up question. "Add a weekly reminder email for people who posted last week" — not "improve retention".
+- Order them the way they should actually be done, dependencies first.
+- If the team is a solo builder, don't invent tasks that need a team.
+
+Respond with ONLY a valid JSON object (no markdown, no code fences):
+{
+  "tasks": [
+    {
+      "title": "Short imperative task name",
+      "description": "What to do and what 'done' means for this task.",
+      "priority": "low" | "medium" | "high",
+      "suggested_role": "who should pick this up",
+      "phase": "the roadmap phase title this belongs to, or null"
+    }
+  ]
+}
+At most ${maxTasks} tasks, most important first.
+
+${PLAIN_LANGUAGE_RULES}`;
+
+      const raw = await askInPlainLanguage(modelFor(ent), systemContent, userContent);
+
+      await storage.deductCredits(userId, CREDIT_COSTS.taskGeneration);
+
+      const cleaned = raw.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
       const content = JSON.parse(cleaned);
-      const tasks = content.tasks || content;
+      // Enforce the tier cap here too — the model can overshoot its instruction.
+      const proposed = (content.tasks || content || []).slice(0, maxTasks);
+
+      // Belt and braces: drop anything matching a title already on the board,
+      // in case the model ignored the instruction.
+      const seen = new Set(existingTasks.map((t: any) => t.title.trim().toLowerCase()));
+      const startOrder = existingTasks.length;
       const created = [];
-      for (let i = 0; i < tasks.length; i++) {
-        const t = tasks[i];
+      for (const t of proposed) {
+        const title = String(t?.title || "").trim();
+        if (!title || seen.has(title.toLowerCase())) continue;
+        seen.add(title.toLowerCase());
         const task = await storage.createKanbanTask({
-          projectId: req.params.id,
-          title: t.title,
+          projectId,
+          title: title.slice(0, 200),
           description: t.description || "",
           status: "todo",
-          priority: t.priority || "medium",
+          priority: ["low", "medium", "high"].includes(t.priority) ? t.priority : "medium",
           assigneeId: null,
           dueDate: null,
-          order: i,
+          // Keep the roadmap link visible on the card; there's no phase FK.
+          tags: t.phase ? [String(t.phase).slice(0, 100)] : [],
+          order: startOrder + created.length,
         });
         created.push(task);
       }
@@ -624,7 +1863,14 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     if (!project) return res.status(404).json({ message: "Project not found" });
     if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Unauthorized" });
     
-    const validated = insertProjectSchema.partial().parse(req.body);
+    const validated = normalizeSoloMode(insertProjectSchema.partial().parse(req.body));
+
+    // Flipping a public project to private consumes private-project quota.
+    if (validated.isPrivate === true && !project.isPrivate) {
+      const quota = await checkPrivateProjectQuota((req.user as any).id);
+      if (!quota.allowed) return res.status(402).json(quota.body);
+    }
+
     const updated = await storage.updateProject(req.params.id, validated);
     res.json(updated);
   });
@@ -646,11 +1892,8 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       const projectId = req.params.id;
       if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
 
-      const hasCredits = await storage.checkCredits(userId, 1);
-      if (!hasCredits) {
-        const sub = await storage.getUserSubscription(userId);
-        return res.status(403).json({ message: "Insufficient credits", creditsRemaining: sub.creditsRemaining, tier: sub.tier });
-      }
+      const ent = await requireCredits(res, userId, CREDIT_COSTS.novaGuide, "Nova coaching");
+      if (!ent) return;
 
       const { message, currentTab } = req.body;
       if (!message || typeof message !== "string") return res.status(400).json({ message: "Message is required" });
@@ -661,7 +1904,10 @@ Only include fields you have enough info to fill. Start empty if needed.`;
 
       const members = await storage.getProjectMembers(projectId);
       const sub = await storage.getUserSubscription(userId);
-      const isPremium = sub.tier !== "free";
+      // Roadmap/milestone actions are Builder+; coaching depth and how much
+      // history Nova sees both scale with the tier.
+      const canCreateMilestones = ent.aiMilestones;
+      const isPremium = ent.tier !== "free";
 
       await storage.addNovaGuideMessage({ projectId, role: "user", content: message, actionsTaken: [] });
 
@@ -674,6 +1920,7 @@ PROJECT CONTEXT:
 - Category: ${project.category}
 - Status: ${project.status}
 - One-Liner: ${(project as any).oneLiner || "Not set"}
+- Mission: ${(project as any).mission || "Not set"}
 - Value Proposition: ${(project as any).valueProposition || "Not set"}
 - Target Customer: ${(project as any).targetCustomerProfile || "Not set"}
 - Problem Statement: ${project.problemStatement || "Not set"}
@@ -683,15 +1930,24 @@ PROJECT CONTEXT:
 - Timeline: ${project.estimatedWeeks} weeks
 - Tech Stack: ${(project.techStack || []).join(", ") || "Not set"}
 - Roles Needed: ${(project.rolesNeeded || []).join(", ") || "Not set"}
-- Scope: ${JSON.stringify(project.scope) || "Not set"}
+- Scope MVP: ${((project.scope as any)?.mvp || []).join(", ") || "Not set"}
+- Scope Nice-to-Have: ${((project.scope as any)?.niceToHave || []).join(", ") || "Not set"}
+- Solo Builder Mode: ${(project as any).soloMode ? "Yes — this is a solo project. Never suggest recruiting, roles, or teammates." : "No"}
 - Team Members: ${members.length}
 - Onboarding Complete: ${(project as any).novaOnboardingComplete ? "Yes" : "No"}
-- User Tier: ${sub.tier} (${isPremium ? "Premium" : "Free"})
-- Current Tab: ${currentTab || "setup"}`;
+- User Tier: ${ent.tier} (${isPremium ? "Premium" : "Free"})
+- Current Tab: ${currentTab || "setup"}
+
+WHAT'S IN THE PROJECT RIGHT NOW — these are the real ids; you must use them
+verbatim when editing an existing task, milestone or roadmap phase, and you
+must never invent one:
+${await buildOperableProjectState(projectId)}`;
 
       const systemPrompt = `You are Nova, SparkTower's AI project partner. You have a warm, encouraging, knowledgeable personality. You always refer to yourself as "Nova" and use emojis naturally.
 
 YOUR ROLE: You are the user's dedicated project advisor. You guide them through building their project from the ground up — from defining their vision to launching their product.
+
+COACHING DEPTH: ${coachingDirectiveFor(ent)}
 
 ${projectContext}
 
@@ -706,17 +1962,24 @@ CONVERSATION GUIDELINES:
 GUIDED ONBOARDING FLOW (for new projects):
 1. Welcome them warmly, acknowledge their project "${project.title}"
 2. Help define their ONE-LINER positioning (who they help, what they do, how)
-3. Help articulate their VALUE PROPOSITION and TARGET CUSTOMER
-4. Work through their PROBLEM STATEMENT and SUCCESS METRICS
-5. Help define their SCOPE (MVP features vs nice-to-have)
-6. Create initial TASKS to get started
-7. ${isPremium ? "Create MILESTONES/ROADMAP for their journey" : "Suggest upgrading to premium for AI-powered roadmap creation"}
-8. Ask what they want to FOCUS ON FIRST
+3. Help articulate their MISSION (why this exists, what it's working toward)
+4. Help articulate their VALUE PROPOSITION and TARGET CUSTOMER
+5. Work through their PROBLEM STATEMENT and SUCCESS METRICS
+6. Help define their SCOPE (MVP features vs nice-to-have)
+7. Create initial TASKS to get started
+8. ${isPremium ? "Create MILESTONES/ROADMAP for their journey" : "Suggest upgrading to premium for AI-powered roadmap creation"}
+9. Ask what they want to FOCUS ON FIRST
 
 CONTEXT-AWARE ASSISTANCE (based on current tab):
-- Setup tab: Help with brief, positioning, scope, links
-- Kanban tab: Help create/prioritize tasks, suggest what to work on next
-- Milestones tab: ${isPremium ? "Help create milestones and roadmap" : "Explain milestones, suggest upgrading for AI roadmap creation"}
+- Setup tab: Help with brief, positioning, scope, links. The editable fields
+  here are One-Liner, Mission, Value Proposition, Target Customer Profile,
+  Problem Statement, Target User, and Success Metrics (all via update_project),
+  plus the Scope box's MVP / Nice-to-Have lists (via update_scope). When the
+  user asks you to "fill in" or "write" any of these, use the action to persist
+  it — don't just print the text in chat and leave the field empty.
+- Kanban tab: Help create/prioritize tasks, suggest what to work on next, and
+  reword or re-prioritise existing ones via edit_project
+- Milestones tab: ${isPremium ? "Help create milestones and roadmap, and edit existing milestones and roadmap phases in place via edit_project when the user wants one reworded, re-dated or re-scoped" : "Explain milestones, suggest upgrading for AI roadmap creation"}
 - Team tab: Advise on roles needed, team structure
 - Research tab: Help plan user interviews, design experiments
 - Strategy tab: Help with pricing strategy, legal document templates
@@ -730,22 +1993,43 @@ You can take actions to update the project. When you want to take an action, inc
 
 Available actions:
 1. update_project: Update project fields
-   <nova_action>{"type": "update_project", "data": {"oneLiner": "...", "valueProposition": "...", "targetCustomerProfile": "...", "problemStatement": "...", "targetUser": "...", "successMetrics": "..."}}</nova_action>
-   Only include fields you're updating. Valid fields: oneLiner, valueProposition, targetCustomerProfile, problemStatement, targetUser, successMetrics
+   <nova_action>{"type": "update_project", "data": {"oneLiner": "...", "mission": "...", "valueProposition": "...", "targetCustomerProfile": "...", "problemStatement": "...", "targetUser": "...", "successMetrics": "..."}}</nova_action>
+   Only include fields you're updating. Valid fields: oneLiner, mission, valueProposition, targetCustomerProfile, problemStatement, targetUser, successMetrics
+   - mission: why the project exists and what it's working toward, in 1-2 sentences.
+   - targetUser: a short phrase naming who this is for (e.g. "Solo indie founders shipping their first SaaS"), NOT a paragraph.
+   - successMetrics: concrete, measurable outcomes. Prefer a few short lines over prose.
+   These write straight into the Project Brief on the Setup tab, so once the user
+   agrees on a value, SAVE IT with this action instead of only saying it in chat.
 
-2. update_scope: Update project scope
+2. update_scope: Fill in the Scope box on the Setup tab (MVP vs nice-to-have)
    <nova_action>{"type": "update_scope", "data": {"mvp": ["feature1", "feature2"], "niceToHave": ["feature3"]}}</nova_action>
+   Each entry is a SHORT feature name (2-6 words), not a sentence — they render as badges.
+   Send the COMPLETE list for any bucket you include: a bucket you send replaces
+   that bucket entirely. Omit a bucket to leave it untouched. To add one MVP item
+   to an existing list, resend the existing items plus the new one.
 
 3. create_tasks: Create kanban tasks
    <nova_action>{"type": "create_tasks", "data": {"tasks": [{"title": "...", "description": "...", "priority": "high|medium|low"}]}}</nova_action>
 
-4. create_milestones: Create project milestones (${isPremium ? "AVAILABLE - user is premium" : "NOT AVAILABLE - user is free tier. Mention they can upgrade for this feature."})
+4. create_milestones: Create project milestones (${canCreateMilestones ? "AVAILABLE" : "NOT AVAILABLE on this plan. Mention that the Builder plan unlocks AI roadmaps and milestones."})
    <nova_action>{"type": "create_milestones", "data": {"milestones": [{"title": "...", "description": "...", "targetDate": "YYYY-MM-DD"}]}}</nova_action>
 
 5. complete_onboarding: Mark onboarding as complete
    <nova_action>{"type": "complete_onboarding", "data": {}}</nova_action>
 
+6. edit_project: Change things that already exist — reword a milestone, retitle
+   a task, rewrite a roadmap phase and its outcomes, move something's status.
+   Use this whenever the user asks you to fix, reword, rename, re-scope,
+   re-date, or re-sequence something they can already see.
+   <nova_action>{"type": "edit_project", "data": {"operations": [ ... ]}}</nova_action>
+${OPERATION_SCHEMA_INSTRUCTIONS}
+   Milestone and roadmap operations require the Builder plan${canCreateMilestones ? " — this user has it" : " — this user does NOT have it, so say so instead of trying"}.
+
 RULES:
+- ALWAYS wrap an action in <nova_action>...</nova_action>. Never put the action
+  JSON in a code fence, and never print it as plain text — wrap it.
+- Never tell the user something was saved unless you emitted the action for it
+  in the SAME message.
 - Always explain what you're about to do before taking an action
 - After taking an action, confirm what was done
 - Don't take too many actions at once — guide the user step by step
@@ -753,32 +2037,37 @@ RULES:
 - Present information you've extracted for the user to confirm before saving
 - Use markdown formatting: **bold** for key terms, bullet points for lists`;
 
+      // "Nova project memory" — how far back Nova can see. This is the tier
+      // difference between Basic / Expanded / Full memory.
+      const priorMessages = history.slice(0, -1).slice(-memoryLimitFor(ent));
       const messages = [
         { role: "system" as const, content: systemPrompt },
-        ...history.slice(0, -1).map((m: any) => ({ role: m.role as "user" | "assistant", content: m.content })),
+        ...priorMessages.map((m: any) => ({ role: m.role as "user" | "assistant", content: m.content })),
         { role: "user" as const, content: message }
       ];
 
       const response = await openai.chat.completions.create({
-        model: "gpt-4o",
+        model: modelFor(ent),
         messages,
         temperature: 0.7,
       });
 
       const rawReply = response.choices[0].message.content || "I'm here to help! Tell me more about your project.";
 
-      const actionMatches = [...rawReply.matchAll(/<nova_action>([\s\S]*?)<\/nova_action>/g)];
+      const { actions: parsedActions, cleaned } = extractNovaActions(rawReply);
       const actionsTaken: any[] = [];
-      let cleanReply = rawReply;
+      let cleanReply = cleaned;
 
-      for (const match of actionMatches) {
+      for (const action of parsedActions) {
         try {
-          const action = JSON.parse(match[1]);
-          cleanReply = cleanReply.replace(match[0], "");
-
           switch (action.type) {
             case "update_project": {
-              const allowedFields = ["oneLiner", "valueProposition", "targetCustomerProfile", "problemStatement", "targetUser", "successMetrics"];
+              // Keep in step with the brief fields the Setup tab edits and the
+              // ones nova-briefing.ts scores. `mission` was missing here while
+              // being required by the completion check, so Nova filled in every
+              // other field and the panel then complained about the one field
+              // Nova had no way to write.
+              const allowedFields = ["oneLiner", "mission", "valueProposition", "targetCustomerProfile", "problemStatement", "targetUser", "successMetrics"];
               const updateData: any = {};
               for (const field of allowedFields) {
                 if (action.data[field] !== undefined && typeof action.data[field] === "string" && action.data[field].length <= 2000) {
@@ -796,8 +2085,19 @@ RULES:
               if (Array.isArray(action.data.mvp)) scopeData.mvp = action.data.mvp.filter((s: any) => typeof s === "string").slice(0, 20);
               if (Array.isArray(action.data.niceToHave)) scopeData.niceToHave = action.data.niceToHave.filter((s: any) => typeof s === "string").slice(0, 20);
               if (Object.keys(scopeData).length > 0) {
-                await storage.updateProject(projectId, { scope: scopeData });
-                actionsTaken.push({ type: "update_scope", data: scopeData });
+                // Merge over the existing scope rather than replacing it.
+                // Nova usually sends only one bucket, and a bare overwrite
+                // silently deleted the other one. Re-read the project so we
+                // merge against current state, not the pre-action snapshot.
+                const current = (await storage.getProject(projectId))?.scope as
+                  { mvp?: string[]; niceToHave?: string[] } | null;
+                const merged = {
+                  mvp: current?.mvp || [],
+                  niceToHave: current?.niceToHave || [],
+                  ...scopeData,
+                };
+                await storage.updateProject(projectId, { scope: merged });
+                actionsTaken.push({ type: "update_scope", data: merged });
               }
               break;
             }
@@ -825,8 +2125,11 @@ RULES:
               break;
             }
             case "create_milestones": {
-              if (!isPremium) {
-                actionsTaken.push({ type: "create_milestones", data: { error: "Premium required" } });
+              if (!canCreateMilestones) {
+                actionsTaken.push({
+                  type: "create_milestones",
+                  data: { error: "AI milestone creation requires the Builder plan", requiredTier: "builder" },
+                });
                 break;
               }
               if (Array.isArray(action.data.milestones)) {
@@ -837,7 +2140,7 @@ RULES:
                   if (!m.title || typeof m.title !== "string") continue;
                   const parsedDate = m.targetDate ? new Date(m.targetDate) : null;
                   const validDate = parsedDate && !isNaN(parsedDate.getTime()) ? parsedDate : null;
-                  const milestone = await storage.createProjectMilestone({
+                  const milestone = await storage.createMilestone({
                     projectId,
                     title: m.title.slice(0, 200),
                     description: (m.description || "").slice(0, 1000),
@@ -856,6 +2159,18 @@ RULES:
               actionsTaken.push({ type: "complete_onboarding", data: {} });
               break;
             }
+            case "edit_project": {
+              const { changes, skipped } = await applyProjectOperations(projectId, userId, action.data?.operations, {
+                canEditMilestones: ent.aiMilestones,
+                canEditRoadmap: ent.roadmapUpdates,
+              });
+              if (changes.length) {
+                actionsTaken.push({ type: "edit_project", data: { changes, skipped } });
+              } else {
+                console.warn("Nova edit_project applied nothing for project %s: %s", projectId, JSON.stringify(skipped));
+              }
+              break;
+            }
           }
         } catch (e) {
           console.error("Nova action parse error:", e);
@@ -863,6 +2178,24 @@ RULES:
       }
 
       cleanReply = cleanReply.trim();
+
+      // Nova sometimes replies with nothing but the action block. Stripping it
+      // would leave an empty bubble, so say what actually happened.
+      if (!cleanReply) {
+        cleanReply = actionsTaken.length > 0
+          ? "Saved that to your project. ✅"
+          : "I'm here to help! Tell me more about your project.";
+      }
+
+      // A parsed action that changed nothing means the model sent field names
+      // or shapes we don't accept. Log it — this is otherwise invisible, and
+      // the user just sees Nova claim success.
+      if (parsedActions.length > 0 && actionsTaken.length === 0) {
+        console.warn(
+          "Nova parsed %d action(s) but applied none for project %s: %s",
+          parsedActions.length, projectId, JSON.stringify(parsedActions).slice(0, 500),
+        );
+      }
 
       await storage.addNovaGuideMessage({ projectId, role: "assistant", content: cleanReply, actionsTaken });
       await storage.deductCredits(userId, 1);
@@ -1062,7 +2395,18 @@ RULES:
   // Analytics Events
   app.get("/api/projects/:id/analytics-events", isAuthenticated, async (req: any, res) => {
     try {
-      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const userId = (req.user as any).id;
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+
+      // Free has no analytics; Starter gets basic, Builder+ advanced.
+      const ent = await requireLevel(
+        res, userId, "projectAnalytics", ["basic", "advanced"],
+        "Project analytics", "starter"
+      );
+      if (!ent) return;
+
+      // Kept as a plain array for the shared CRUD helper on the client; the
+      // client reads the analytics level from useEntitlements().
       res.json(await storage.getProjectAnalyticsEvents(req.params.id));
     } catch (e) { res.status(500).json({ message: "Failed to get analytics events" }); }
   });
@@ -1226,6 +2570,12 @@ RULES:
       const userProfile = await storage.getUserProfile(userId);
       if (!userProfile) return res.status(400).json({ message: "Complete your profile first" });
 
+      // Matching quality scales with tier: how many candidates come back, and
+      // whether Nova explains each match in plain language.
+      const matchEnt = await getUserEntitlements(userId);
+      const matchLimit = { basic: 5, enhanced: 12, priority: 20 }[matchEnt.teamMatching];
+      const wantsAiReasons = matchEnt.teamMatching !== "basic";
+
       const allProfiles = await storage.searchUsers("");
       const otherProfiles = allProfiles.filter(p => p.id !== userId && p.profile?.isOnboarded);
 
@@ -1370,13 +2720,13 @@ RULES:
       }
 
       scoredMatches.sort((a, b) => b.score - a.score);
-      const topMatches = scoredMatches.slice(0, 20);
+      const topMatches = scoredMatches.slice(0, matchLimit);
 
       if (topMatches.length === 0) {
         return res.json([]);
       }
 
-      const hasCredits = await storage.checkCredits(userId, 1);
+      const hasCredits = wantsAiReasons && (await storage.checkCredits(userId, CREDIT_COSTS.peopleRecommendation));
       let matchReasons: Record<string, string[]> = {};
 
       if (hasCredits && topMatches.length > 0) {
@@ -1432,11 +2782,12 @@ RULES:
   });
 
   // Leaderboard
-  app.get("/api/leaderboard", async (req, res) => {
+  app.get("/api/leaderboard", async (req: any, res) => {
     const sortBy = (req.query.sortBy as "views" | "donations") || "views";
     const limit = parseInt(req.query.limit as string) || 10;
     const filter = (req.query.filter as "solo" | "team" | "all") || "all";
-    const leaderboard = await storage.getLeaderboard(sortBy, limit, filter);
+    // Owners see their own private projects ranked (and badged); nobody else does.
+    const leaderboard = await storage.getLeaderboard(sortBy, limit, filter, req.user?.id);
     res.json(leaderboard);
   });
 
@@ -1542,8 +2893,14 @@ RULES:
       if (!project) return res.status(404).json({ message: "Project not found" });
       if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Unauthorized" });
 
-      const { prompt, style = "professional" } = req.body;
-      const videoPrompt = prompt || `Create a short showcase video for the project "${project.title}": ${project.description}`;
+      const { prompt, style = "professional", useAiImages = true } = req.body;
+
+      // The brief (one-liner, mission, problem, target user, scope, ...) is the
+      // richest description of the project, so it grounds every generation step.
+      const briefContext = formatProjectBriefForPrompt(project);
+      const videoPrompt = prompt?.trim()
+        ? prompt.trim()
+        : `Create a short showcase video for the project "${project.title}".`;
 
       const styleModifiers: Record<string, string> = {
         professional: "clean, corporate, modern design, professional photography style, polished, minimalist",
@@ -1563,20 +2920,25 @@ RULES:
       const svgGuide = svgStyleGuides[style] || svgStyleGuides.professional;
 
       const storyboardResponse = await openai.chat.completions.create({
-        model: "gpt-5.2",
+        model: TEXT_MODEL,
         messages: [
           {
             role: "system",
-            content: `You are a creative director specializing in ${style} visual style. Generate a detailed video storyboard description for a 30-second project showcase video. The visual style should be: ${styleDesc}. Include exactly 5 scenes with clear scene descriptions, text overlays, and visual effects suggestions. Format as a structured storyboard with ## Scene 1, ## Scene 2, etc.`
+            content: `You are a creative director specializing in ${style} visual style. Generate a detailed video storyboard description for a 30-second project showcase video. The visual style should be: ${styleDesc}. Include exactly 5 scenes with clear scene descriptions, text overlays, and visual effects suggestions. Format as a structured storyboard with ## Scene 1, ## Scene 2, etc.
+
+Ground every scene in the project brief below — use its actual one-liner, mission, problem, target user, and scope. Do not invent product details that contradict the brief. Structure the 5 scenes as a narrative arc: (1) hook built on the one-liner, (2) the problem being solved, (3) the solution and what's being built, (4) who it's for and the value they get, (5) a closing call to action that reflects the mission and the roles being recruited.`
           },
-          { role: "user", content: videoPrompt }
+          {
+            role: "user",
+            content: `PROJECT BRIEF\n${briefContext}\n\nCREATIVE DIRECTION\n${videoPrompt}`
+          }
         ],
       });
 
       const storyboard = storyboardResponse.choices[0].message.content || "Video storyboard generation failed.";
 
       const scenesResponse = await openai.chat.completions.create({
-        model: "gpt-5.2",
+        model: TEXT_MODEL,
         messages: [
           {
             role: "system",
@@ -1584,7 +2946,8 @@ RULES:
 
 For each scene, provide:
 1. "caption": A short 1-sentence summary for display
-2. "svg": A complete, valid SVG image (viewBox="0 0 1280 720") that visually represents the scene.
+2. "imagePrompt": A vivid, self-contained image-generation prompt (2-4 sentences) describing exactly what the frame shows. Describe concrete subject matter drawn from the project brief — the actual product, users, and setting — plus composition, lighting and color. Include this visual style: ${styleDesc}. Never ask for text, words, letters, logos, or UI copy in the image.
+3. "svg": A complete, valid SVG image (viewBox="0 0 1280 720") that visually represents the scene. This is a fallback used if image generation is unavailable.
 
 SVG Style Guide: ${svgGuide}
 
@@ -1599,16 +2962,15 @@ SVG Rules:
 - Keep SVG self-contained and valid XML
 - Ensure all colors use hex values
 
-Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
+Respond ONLY with valid JSON in this exact format (no markdown, no code fences), with exactly 5 entries:
 [
-  {"caption": "Short caption", "svg": "<svg xmlns=\\"http://www.w3.org/2000/svg\\" viewBox=\\"0 0 1280 720\\">...</svg>"},
-  {"caption": "Short caption", "svg": "<svg xmlns=\\"http://www.w3.org/2000/svg\\" viewBox=\\"0 0 1280 720\\">...</svg>"},
-  {"caption": "Short caption", "svg": "<svg xmlns=\\"http://www.w3.org/2000/svg\\" viewBox=\\"0 0 1280 720\\">...</svg>"},
-  {"caption": "Short caption", "svg": "<svg xmlns=\\"http://www.w3.org/2000/svg\\" viewBox=\\"0 0 1280 720\\">...</svg>"},
-  {"caption": "Short caption", "svg": "<svg xmlns=\\"http://www.w3.org/2000/svg\\" viewBox=\\"0 0 1280 720\\">...</svg>"}
+  {"caption": "Short caption", "imagePrompt": "Vivid description of the frame...", "svg": "<svg xmlns=\\"http://www.w3.org/2000/svg\\" viewBox=\\"0 0 1280 720\\">...</svg>"}
 ]`
           },
-          { role: "user", content: storyboard }
+          {
+            role: "user",
+            content: `PROJECT BRIEF\n${briefContext}\n\nSTORYBOARD\n${storyboard}`
+          }
         ],
       });
 
@@ -1626,7 +2988,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
             ? `data:image/svg+xml;base64,${Buffer.from(svgContent).toString("base64")}`
             : "";
           return {
-            prompt: s.prompt || s.caption || "",
+            prompt: s.imagePrompt || s.prompt || s.caption || "",
             caption: s.caption || "",
             imageUrl: dataUri,
           };
@@ -1635,6 +2997,38 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
       } catch (parseErr) {
         console.error("Error parsing scenes:", parseErr);
         scenes = generateFallbackScenes(style);
+      }
+
+      // Upgrade the SVG placeholders to real AI-generated imagery. Each scene
+      // falls back to its SVG independently, so a partial failure (quota,
+      // content filter) still yields a complete storyboard.
+      let imageModelUsed: string | null = null;
+      const imageErrors: string[] = [];
+      if (useAiImages) {
+        const rendered = await Promise.all(
+          scenes.map(async (scene) => {
+            if (!scene.prompt) return scene;
+            try {
+              const image = await openai.images.generate({
+                model: IMAGE_MODEL,
+                prompt: `${scene.prompt}\n\nStyle: ${styleDesc}. Cinematic 3:2 widescreen showcase frame. Do not render any text, words, letters or logos in the image.`,
+                size: IMAGE_SIZE,
+                quality: IMAGE_QUALITY,
+              });
+              const b64 = image.data?.[0]?.b64_json;
+              if (!b64) throw new Error("Image response contained no data");
+              imageModelUsed = IMAGE_MODEL;
+              return { ...scene, imageUrl: `data:image/png;base64,${b64}` };
+            } catch (imgErr: any) {
+              imageErrors.push(imgErr?.message || String(imgErr));
+              return scene; // keep the SVG fallback
+            }
+          })
+        );
+        scenes = rendered;
+        if (imageErrors.length > 0) {
+          console.error(`AI image generation failed for ${imageErrors.length}/${scenes.length} scenes:`, imageErrors[0]);
+        }
       }
 
       try {
@@ -1651,49 +3045,1249 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
         console.error("Badge awarding failed (non-fatal):", badgeErr);
       }
 
-      const savedObjectPaths: string[] = [];
-      try {
-        const objStorage = new ObjectStorageService();
-        for (let i = 0; i < scenes.length; i++) {
-          const scene = scenes[i];
-          if (!scene.imageUrl.startsWith("data:image/svg+xml;base64,")) continue;
-          try {
-            const base64Data = scene.imageUrl.replace("data:image/svg+xml;base64,", "");
-            const svgBuffer = Buffer.from(base64Data, "base64");
+      /*
+       * Persist scenes privately.
+       *
+       * Raster frames go to private object storage (too large for the DB) with
+       * an owner-scoped ACL; SVG fallbacks are small enough to inline. Nothing
+       * here touches projects.mediaUrls — the media gallery is exclusively for
+       * media the user uploaded themselves. Storyboards are private working
+       * output, readable only through /api/storyboards/* by their owner.
+       */
+      const storedScenes: StoryboardScene[] = [];
+      const objStorage = new ObjectStorageService();
 
-            const uploadUrl = await objStorage.getObjectEntityUploadURL();
-            const uploadRes = await fetch(uploadUrl, {
-              method: "PUT",
-              headers: { "Content-Type": "image/svg+xml" },
-              body: svgBuffer,
-            });
+      for (const scene of scenes) {
+        const base: StoryboardScene = { caption: scene.caption, prompt: scene.prompt };
+        const match = scene.imageUrl.match(/^data:(image\/(?:svg\+xml|png|jpeg|webp));base64,(.*)$/);
 
-            if (uploadRes.ok) {
-              const objectPath = objStorage.normalizeObjectEntityPath(uploadUrl);
-              savedObjectPaths.push(objectPath);
-              await storage.addProjectMedia(project.id, objectPath);
-            }
-          } catch (uploadErr) {
-            console.error(`Failed to upload scene ${i}:`, uploadErr);
-          }
+        if (!match) {
+          storedScenes.push(base);
+          continue;
         }
-      } catch (storageErr) {
-        console.error("Object storage upload failed (non-fatal):", storageErr);
+
+        const [, contentType, base64Data] = match;
+
+        // Vector fallbacks are a few KB — keep them inline so a storyboard
+        // still renders even if object storage is unavailable.
+        if (contentType === "image/svg+xml") {
+          storedScenes.push({ ...base, inlineImage: scene.imageUrl });
+          continue;
+        }
+
+        try {
+          const uploadUrl = await objStorage.getObjectEntityUploadURL();
+          const uploadRes = await fetch(uploadUrl, {
+            method: "PUT",
+            headers: { "Content-Type": contentType },
+            body: Buffer.from(base64Data, "base64"),
+          });
+          if (!uploadRes.ok) throw new Error(`upload returned ${uploadRes.status}`);
+
+          const objectPath = await objStorage
+            .trySetObjectEntityAclPolicy(uploadUrl, { owner: userId, visibility: "private" })
+            .catch(() => objStorage.normalizeObjectEntityPath(uploadUrl));
+
+          storedScenes.push({ ...base, imagePath: objectPath, contentType });
+        } catch (uploadErr) {
+          console.error("Failed to store storyboard scene:", uploadErr);
+          storedScenes.push(base); // scene renders as a placeholder
+        }
       }
 
-      await storage.deductCredits(userId, 5);
+      const saved = await storage.createStoryboard({
+        projectId: project.id,
+        userId,
+        style,
+        prompt: prompt?.trim() || null,
+        storyboard,
+        scenes: storedScenes,
+        imageModel: imageModelUsed,
+      });
+
+      await storage.deductCredits(userId, CREDIT_COSTS.videoGeneration);
 
       res.json({
+        storyboardId: saved.id,
         storyboard,
-        scenes,
+        // Scene images are served from an owner-checked route, never inlined
+        // as data URIs and never added to the project's media gallery.
+        scenes: toClientScenes(saved),
         style,
-        savedMediaPaths: savedObjectPaths,
-        message: "AI storyboard and scenes generated successfully!",
+        imageModel: imageModelUsed,
+        // Non-fatal: some or all scenes fell back to SVG illustrations.
+        imageFallbackCount: imageErrors.length,
+        imageFallbackReason: imageErrors[0] || null,
+        usedBriefFields: getProjectBriefContext(project).map((p) => p.label),
+        createdAt: saved.createdAt,
+        message: "AI storyboard generated. Only you can see it.",
         projectId: project.id,
       });
     } catch (error) {
       console.error("Error generating video:", error);
       res.status(500).json({ message: "Failed to generate video" });
+    }
+  });
+
+  // ============================================
+  // STORYBOARDS — private to the generating account
+  // ============================================
+
+  /** List the caller's own storyboards for a project. Never anyone else's. */
+  app.get("/api/projects/:id/storyboards", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const storyboards = await storage.getStoryboardsForUser(req.params.id, userId);
+      res.json(
+        storyboards.map((s) => ({
+          id: s.id,
+          style: s.style,
+          prompt: s.prompt,
+          sceneCount: ((s.scenes as StoryboardScene[]) || []).length,
+          imageModel: s.imageModel,
+          createdAt: s.createdAt,
+          // Thumbnail for the picker list.
+          thumbnail: sceneImageUrl(s, 0),
+        }))
+      );
+    } catch (error) {
+      console.error("Error listing storyboards:", error);
+      res.status(500).json({ message: "Failed to list storyboards" });
+    }
+  });
+
+  /** Full storyboard, owner only. */
+  app.get("/api/storyboards/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const storyboard = await storage.getStoryboardForUser(req.params.id, userId);
+      if (!storyboard) return res.status(404).json({ message: "Storyboard not found" });
+      res.json({
+        id: storyboard.id,
+        projectId: storyboard.projectId,
+        style: storyboard.style,
+        prompt: storyboard.prompt,
+        storyboard: storyboard.storyboard,
+        scenes: toClientScenes(storyboard),
+        imageModel: storyboard.imageModel,
+        createdAt: storyboard.createdAt,
+      });
+    } catch (error) {
+      console.error("Error fetching storyboard:", error);
+      res.status(500).json({ message: "Failed to get storyboard" });
+    }
+  });
+
+  /**
+   * Streams one storyboard frame. The ownership check happens here rather than
+   * relying on the object path being unguessable, so scene images are never
+   * reachable by anyone but the account that generated them.
+   */
+  app.get("/api/storyboards/:id/scenes/:index/image", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const storyboard = await storage.getStoryboardForUser(req.params.id, userId);
+      if (!storyboard) return res.status(404).json({ message: "Storyboard not found" });
+
+      const index = Number(req.params.index);
+      const scene = ((storyboard.scenes as StoryboardScene[]) || [])[index];
+      if (!scene) return res.status(404).json({ message: "Scene not found" });
+
+      if (scene.inlineImage) {
+        const match = scene.inlineImage.match(/^data:(image\/[\w+.-]+);base64,(.*)$/);
+        if (!match) return res.status(404).json({ message: "Scene has no image" });
+        res.setHeader("Content-Type", match[1]);
+        res.setHeader("Cache-Control", "private, max-age=86400");
+        return res.send(Buffer.from(match[2], "base64"));
+      }
+
+      if (!scene.imagePath) return res.status(404).json({ message: "Scene has no image" });
+
+      // downloadObject sets Cache-Control to private for private-ACL objects.
+      const objStorage = new ObjectStorageService();
+      const file = await objStorage.getObjectEntityFile(scene.imagePath);
+      await objStorage.downloadObject(file, res, 86400, scene.contentType);
+    } catch (error) {
+      if (error instanceof ObjectNotFoundError) {
+        return res.status(404).json({ message: "Scene image not found" });
+      }
+      console.error("Error streaming storyboard scene:", error);
+      if (!res.headersSent) res.status(500).json({ message: "Failed to load scene image" });
+    }
+  });
+
+  app.delete("/api/storyboards/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const deleted = await storage.deleteStoryboard(req.params.id, userId);
+      if (!deleted) return res.status(404).json({ message: "Storyboard not found" });
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting storyboard:", error);
+      res.status(500).json({ message: "Failed to delete storyboard" });
+    }
+  });
+
+  // ============================================
+  // NOVA AI ROADMAP BUILDER  (Builder tier and above)
+  // ============================================
+
+  /** Anyone on the team can read the roadmap; only paid tiers can generate one. */
+  app.get("/api/projects/:id/roadmap", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+      const roadmap = await storage.getProjectRoadmap(req.params.id);
+      const ent = await getUserEntitlements((req.user as any).id);
+      res.json({
+        roadmap: roadmap || null,
+        canGenerate: ent.aiRoadmap,
+        canUpdate: ent.roadmapUpdates,
+        canCreateMilestones: ent.aiMilestones,
+      });
+    } catch (error) {
+      console.error("Error fetching roadmap:", error);
+      res.status(500).json({ message: "Failed to get roadmap" });
+    }
+  });
+
+  /*
+   * How Nova is required to write for builders.
+   *
+   * Roadmaps were coming back in analytics-team dialect — "instrument the exact
+   * funnel", "baselines by cohort", "D7/D30", "WAU", "match→message rate",
+   * "event schema", "A/B framework" — which reads as intimidating rather than
+   * helpful to someone on their first project. The schema instructions asked
+   * for output that was "concrete and specific" and said nothing at all about
+   * vocabulary, so the model optimised for sounding expert. Shared by the
+   * roadmap endpoints and next-actions so the whole tab reads in one voice.
+   */
+  const PLAIN_LANGUAGE_RULES = `HOW TO WRITE — plain words, serious thinking:
+
+The rule is about VOCABULARY, never about ambition. Simplify the words; never
+simplify the strategy. A builder reading this should think "that's exactly the
+hard thing I need to do next, and I understand every word of it" — not "this is
+beginner advice". If you find yourself writing an easier plan to make it
+readable, you have misunderstood: write the demanding plan in clear words.
+
+- Explain things clearly, the way a sharp colleague explains something outside your specialty. Assume intelligence and drive; assume no shared insider vocabulary.
+- Never use an acronym or metric shorthand on its own. Say "how many people come back a week after signing up" instead of "D7 retention". Applies to D7/D30, DAU/WAU/MAU, MRR, ARR, CAC, LTV, KPI, ICP, CTR, SEO, CRM, SDK, API, A/B.
+- Use the IDEAS behind these words freely, but never the words themselves — describe the thing instead: instrument, funnel, cohort, attribution, activation, event schema, feature flag, baseline, segment. For example, instead of "feature flag" write "a switch in the app that turns a feature off without redeploying"; instead of "funnel" write "the steps people go through before they sign up".
+- "MVP" is fine; the app uses that label itself.
+- Naming real tools is good and concrete. Prefer "(for example Postgres, or Mixpanel)" over vague hand-waving. Just don't assume the builder must buy something.
+- Titles: 3-8 plain words naming what the builder will DO. No "+" chaining, no colons, no cryptic asides.
+- Descriptions: say what to do, why it matters now, and how they'll know it's done. Use as many sentences as that honestly needs — 2 if it's simple, 5 if it's genuinely hard. Do not truncate substance to hit a length.
+- Outcomes: concrete, verifiable finished things. Be specific — include real numbers, thresholds and names where they sharpen it. Clarity matters more than brevity.
+- skillsNeeded: name the real capability, plainly and specifically. "A backend developer who has run a database under heavy load" — not "someone comfortable with spreadsheets".
+- Encouraging and matter-of-fact. Never condescending, never make the builder feel behind.
+
+MATCH THE BUILDER, NOT A BEGINNER:
+- Read WHERE THEY ARE NOW carefully and start from there. If something already exists, do NOT plan to build it — plan the next real problem past it.
+- Scale the plan to the stated GOAL. A goal in the tens of thousands of users is mostly a distribution, retention, reliability and cost problem, not a "build the app" problem. Say the uncomfortable things: what has to be true, what will break first, what the realistic constraint is.
+- If the goal looks unrealistic from where they are, say so plainly in the summary and lay out the most aggressive credible path anyway. Don't quietly replace their goal with an easier one.
+
+REWRITE PASS: reread every title, description and outcome. Replace any word a smart person outside tech would have to look up — and check you have not made the plan weaker or vaguer than the goal demands.
+
+Do NOT write like this (jargon, and no real thinking):
+  title: "Metric wiring + activation baseline (stop guessing)"
+  description: "Instrument the exact funnel tied to your success metrics and establish baselines by cohort before changing features."
+Also do NOT write like this (clear, but uselessly shallow for a serious goal):
+  title: "Set up the code foundation"
+  description: "Set up the repo and your first database tables. Done when you can sign in and deploy."
+  skillsNeeded: ["someone comfortable with spreadsheets"]
+Write like this instead:
+  title: "Find one channel that repeats"
+  description: "You need one way of reaching builders that still works when you do it the tenth time. Pick two channels and run them properly for two weeks each — enough volume to tell a real result from luck. Track how many people who arrive from each one are still posting a week later, because a channel that brings people who leave will make growth look fine while the product quietly stalls. You're done when one channel brings in new builders at a cost and effort you could sustain for months, and the people it brings behave like the ones who already stay."
+  outcomes: ["Two channels each tested with at least 500 visitors", "A per-channel figure for how many people are still active after a week", "One channel you would commit the next month of effort to"]
+  skillsNeeded: ["Someone who has run paid or community acquisition before", "A developer who can add tracking to signup links"]`;
+
+  const ROADMAP_SCHEMA_INSTRUCTIONS = `Respond ONLY with valid JSON (no markdown, no code fences):
+{
+  "summary": "The overall path from where they actually are to the goal. Name the real constraint and, if the goal is a stretch from here, say so plainly.",
+  "phases": [
+    {
+      "title": "Short plain-English phase name (3-8 words, what they'll DO)",
+      "description": "What happens, why it matters now, and how they'll know it's done. As long as the work honestly needs.",
+      "estimatedDuration": "e.g. 2 weeks",
+      "outcomes": ["A specific verifiable finished thing, with real numbers where they sharpen it"],
+      "skillsNeeded": ["The real capability needed, named plainly and specifically"]
+    }
+  ]
+}
+Produce 4-7 phases ordered from first to last. Each phase must be concrete and specific to THIS project — no generic startup advice. Ground everything in the project brief AND in where they already are. Phases should build on each other toward the stated goal, and the hard part of the goal must actually be addressed by some phase rather than left to the end.
+
+${PLAIN_LANGUAGE_RULES}`;
+
+  function parseRoadmapJson(raw: string): { summary: string; phases: any[] } {
+    const match = raw.match(/\{[\s\S]*\}/);
+    const parsed = JSON.parse(match ? match[0] : raw);
+    const phases = Array.isArray(parsed.phases) ? parsed.phases : [];
+    return {
+      summary: typeof parsed.summary === "string" ? parsed.summary : "",
+      phases: phases.slice(0, 8).map((p: any, i: number) => ({
+        title: String(p.title || `Phase ${i + 1}`).slice(0, 200),
+        description: String(p.description || ""),
+        estimatedDuration: p.estimatedDuration ? String(p.estimatedDuration) : null,
+        outcomes: Array.isArray(p.outcomes) ? p.outcomes.map(String).slice(0, 8) : [],
+        skillsNeeded: Array.isArray(p.skillsNeeded) ? p.skillsNeeded.map(String).slice(0, 6) : [],
+        order: i,
+        status: "upcoming" as const,
+      })),
+    };
+  }
+
+  /**
+   * Shorthand a first-time builder would have to look up.
+   *
+   * PLAIN_LANGUAGE_RULES gets titles right consistently, but the model still
+   * slips analytics shorthand into descriptions, outcomes and skill lists often
+   * enough that builders hit it — measured across repeat generations, not
+   * assumed. So the wording is checked rather than trusted.
+   */
+  const PLAIN_LANGUAGE_JARGON = [
+    "D1", "D7", "D30", "DAU", "WAU", "MAU", "MRR", "ARR", "CAC", "LTV", "KPI", "KPIs",
+    "ICP", "CTR", "A/B", "cohort", "cohorts", "funnel", "funnels", "instrument",
+    "instrumented", "instrumentation", "attribution", "activation", "schema",
+    "feature flag", "feature flags", "baseline", "baselines", "segmented",
+    "segmentation", "north star", "time-to-value", "north-star",
+  ];
+
+  function findJargon(text: string): string[] {
+    return PLAIN_LANGUAGE_JARGON.filter((t) =>
+      new RegExp(`\\b${t.replace(/\//g, "\\/").replace(/-/g, "-")}\\b`, "i").test(text)
+    );
+  }
+
+  /**
+   * Runs a roadmap prompt and returns the raw JSON text, asking for one
+   * rewrite if the model used jargon. A single corrective pass is far more
+   * reliable than phrasing the rules harder, and only costs a second call
+   * when it's actually needed.
+   */
+  async function askInPlainLanguage(model: string, system: string, user: string): Promise<string> {
+    const messages: any[] = [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ];
+    const ask = async (msgs: any[]) =>
+      (await openai.chat.completions.create({ model, messages: msgs })).choices[0].message.content || "{}";
+
+    const raw = await ask(messages);
+    const jargon = findJargon(raw);
+    if (jargon.length === 0) return raw;
+
+    const rewritten = await ask([
+      ...messages,
+      { role: "assistant", content: raw },
+      {
+        role: "user",
+        content: `That used terms a first-time builder would not know: ${jargon.join(", ")}.
+
+Rewrite the JSON. Keep the same items, the same order and the same meaning — change only the wording, and do not make the plan any weaker, shorter or vaguer. Replace every one of those terms with plain English saying what it actually means. For example "D7 retention" becomes "how many people come back a week after joining", and "an analytics event schema" becomes "a simple list of the actions you want to track".
+
+Respond ONLY with the JSON, in the same shape as before.`,
+      },
+    ]);
+
+    const remaining = findJargon(rewritten);
+    if (remaining.length > 0) {
+      // Don't fail the builder's request over wording — surface it instead.
+      console.warn("Roadmap still contained jargon after one rewrite: %j", remaining);
+    }
+    return rewritten;
+  }
+
+  /** As above, parsed into phases. */
+  async function generateRoadmapJson(model: string, system: string, user: string) {
+    return parseRoadmapJson(await askInPlainLanguage(model, system, user));
+  }
+
+  /**
+   * What already exists, so a re-plan doesn't restart from zero.
+   *
+   * `startingPoint` is captured when a roadmap is first generated and stored on
+   * the roadmap row, but update and rebuild never read it back — so re-planning
+   * a mature product produced phases like "set up the repo and your first
+   * database tables". Phase status alone isn't enough of a signal either: a
+   * freshly generated roadmap has every phase "upcoming", which reads as
+   * "nothing is built" even when the app is live.
+   *
+   * So state the situation explicitly, from the roadmap's starting point plus
+   * whatever the project record can evidence.
+   */
+  function describeCurrentState(input: {
+    project: any;
+    startingPoint?: string | null;
+    members?: number;
+    tasks?: any[];
+    milestones?: any[];
+    phases?: { title: string; status: string }[];
+  }): string {
+    const { project } = input;
+    const lines: string[] = [];
+
+    if (input.startingPoint?.trim()) {
+      lines.push(`Where the builder said they were starting from:\n${input.startingPoint.trim()}`);
+    }
+
+    const evidence: string[] = [];
+    if ((project.techStack || []).length) evidence.push(`Already building with: ${project.techStack.join(", ")}`);
+    if (project.repoUrl) evidence.push("A code repository already exists");
+    if (project.liveUrl) evidence.push("Something is already deployed and reachable");
+    if ((project.mediaUrls || []).length) evidence.push(`${project.mediaUrls.length} screenshot(s) of working product`);
+    if (project.businessPlanUrl) evidence.push("A business plan is already written");
+    if (input.members && input.members > 1) evidence.push(`${input.members} people on the team`);
+
+    const doneTasks = (input.tasks || []).filter((t) => t.status === "done").length;
+    const totalTasks = (input.tasks || []).length;
+    if (totalTasks) evidence.push(`${doneTasks} of ${totalTasks} tasks finished`);
+
+    const doneMs = (input.milestones || []).filter((m) => m.status === "completed").length;
+    if (input.milestones?.length) evidence.push(`${doneMs} of ${input.milestones.length} milestones hit`);
+
+    const donePhases = (input.phases || []).filter((p) => p.status === "completed");
+    if (donePhases.length) evidence.push(`Roadmap phases already completed: ${donePhases.map((p) => p.title).join("; ")}`);
+
+    if (evidence.length) lines.push(`Evidence from the project record:\n${evidence.map((e) => `- ${e}`).join("\n")}`);
+
+    if (!lines.length) return "";
+    return `WHERE THEY ARE NOW (do NOT plan work that is already done)\n${lines.join("\n\n")}`;
+  }
+
+  /** Generate a fresh roadmap from a stated goal. */
+  app.post("/api/projects/:id/roadmap/generate", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.ownerId !== userId) return res.status(403).json({ message: "Only the project owner can build a roadmap" });
+
+      const ent = await requireFeature(res, userId, "aiRoadmap", "The Nova AI Roadmap Builder");
+      if (!ent) return;
+      if (!(await requireCredits(res, userId, CREDIT_COSTS.roadmapGeneration, "roadmap generation"))) return;
+
+      const { goal, startingPoint, targetDate } = req.body as {
+        goal?: string; startingPoint?: string; targetDate?: string;
+      };
+      if (!goal?.trim()) return res.status(400).json({ message: "A goal is required" });
+
+      let parsed: { summary: string; phases: any[] };
+      try {
+        parsed = await generateRoadmapJson(
+          modelFor(ent),
+          `You are Nova, a project strategist who turns a builder's goal into a concrete, sequenced roadmap. ${coachingDirectiveFor(ent)}\n\n${ROADMAP_SCHEMA_INSTRUCTIONS}`,
+          [
+            `PROJECT BRIEF\n${formatProjectBriefForPrompt(project)}`,
+            describeCurrentState({
+              project,
+              startingPoint,
+              members: (await storage.getProjectMembers(projectId).catch(() => [])).length,
+              tasks: await storage.getProjectKanbanTasks(projectId).catch(() => []),
+              milestones: await storage.getProjectMilestones(projectId).catch(() => []),
+            }),
+            `GOAL\n${goal.trim()}`,
+            targetDate ? `TARGET DATE\n${targetDate}` : "",
+          ].filter(Boolean).join("\n\n"),
+        );
+      } catch (parseErr) {
+        console.error("Roadmap parse failed:", parseErr);
+        return res.status(502).json({ message: "Nova returned an unreadable roadmap. Please try again." });
+      }
+      if (parsed.phases.length === 0) {
+        return res.status(502).json({ message: "Nova couldn't build a roadmap from that goal. Try describing it differently." });
+      }
+
+      const created = await storage.createRoadmap(
+        {
+          projectId,
+          goal: goal.trim(),
+          summary: parsed.summary,
+          startingPoint: startingPoint?.trim() || null,
+          targetDate: targetDate ? new Date(targetDate) : null,
+          status: "active",
+          generatedOnTier: ent.tier,
+        },
+        parsed.phases
+      );
+
+      await storage.deductCredits(userId, CREDIT_COSTS.roadmapGeneration);
+      await storage.logActivity({
+        projectId, userId, action: "generated an AI roadmap",
+        entityType: "roadmap", entityId: created.id, metadata: { goal: goal.trim(), phases: created.phases.length },
+      });
+
+      if (!project.isPrivate) {
+        void publishSystemPost({
+          authorId: userId,
+          projectId,
+          postType: SYSTEM_POST_TYPES.roadmapBuilt,
+          content: SYSTEM_POST_COPY.roadmapBuilt(project.title, goal.trim(), created.phases.length),
+          entityType: "roadmap",
+          entityId: created.id,
+        });
+      }
+
+      res.json({ roadmap: created, creditsCharged: CREDIT_COSTS.roadmapGeneration });
+    } catch (error) {
+      console.error("Roadmap generation error:", error);
+      res.status(500).json({ message: "Failed to generate roadmap" });
+    }
+  });
+
+  /**
+   * Revise an existing roadmap against current progress. Nova sees which
+   * phases are done and what tasks/milestones exist, then re-plans the rest.
+   */
+  app.post("/api/projects/:id/roadmap/update", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.ownerId !== userId) return res.status(403).json({ message: "Only the project owner can update the roadmap" });
+
+      const ent = await requireFeature(res, userId, "roadmapUpdates", "Nova roadmap updates");
+      if (!ent) return;
+
+      const existing = await storage.getProjectRoadmap(projectId);
+      if (!existing) return res.status(404).json({ message: "No roadmap to update. Generate one first." });
+
+      if (!(await requireCredits(res, userId, CREDIT_COSTS.roadmapUpdate, "a roadmap update"))) return;
+
+      const { note } = req.body as { note?: string };
+      const tasks = await storage.getProjectKanbanTasks(projectId).catch(() => []);
+      const milestones = await storage.getProjectMilestones(projectId).catch(() => []);
+
+      const progressSummary = [
+        `Phases: ${existing.phases.map((p) => `${p.title} [${p.status}]`).join("; ")}`,
+        milestones.length ? `Milestones: ${milestones.map((m) => `${m.title} [${m.status}]`).join("; ")}` : "",
+        tasks.length ? `Tasks: ${tasks.length} total, ${tasks.filter((t: any) => t.status === "done").length} done` : "",
+        note?.trim() ? `Builder's note: ${note.trim()}` : "",
+      ].filter(Boolean).join("\n");
+
+      let parsed: { summary: string; phases: any[] };
+      try {
+        parsed = await generateRoadmapJson(
+          modelFor(ent),
+          `You are Nova, revising an existing project roadmap based on real progress. ${coachingDirectiveFor(ent)}
+
+Keep phases that are still correct (preserve their titles so progress isn't lost), drop or merge ones that no longer make sense, and add new phases the project now needs. Mark phases already finished as completed.\n\n${ROADMAP_SCHEMA_INSTRUCTIONS}
+Additionally, each phase may include "status": one of "upcoming", "in-progress", "completed".`,
+          [
+            `PROJECT BRIEF\n${formatProjectBriefForPrompt(project)}`,
+            `GOAL\n${existing.goal}`,
+            describeCurrentState({
+              project,
+              startingPoint: existing.startingPoint,
+              tasks, milestones, phases: existing.phases,
+            }),
+            `CURRENT ROADMAP (v${existing.version})\n${existing.summary || ""}`,
+            `CURRENT PROGRESS\n${progressSummary}`,
+          ].filter(Boolean).join("\n\n"),
+        );
+      } catch (parseErr) {
+        console.error("Roadmap update parse failed:", parseErr);
+        return res.status(502).json({ message: "Nova returned an unreadable roadmap. Please try again." });
+      }
+      if (parsed.phases.length === 0) {
+        return res.status(502).json({ message: "Nova couldn't revise the roadmap. Please try again." });
+      }
+
+      // Carry forward status for phases Nova kept by title, so completed work
+      // isn't silently reset to "upcoming".
+      const priorStatusByTitle = new Map(
+        existing.phases.map((p) => [p.title.trim().toLowerCase(), p.status])
+      );
+      const phases = parsed.phases.map((p: any) => ({
+        ...p,
+        status: p.status && ["upcoming", "in-progress", "completed"].includes(p.status)
+          ? p.status
+          : priorStatusByTitle.get(String(p.title).trim().toLowerCase()) || "upcoming",
+      }));
+
+      await storage.replaceRoadmapPhases(existing.id, phases);
+      const updated = await storage.updateRoadmap(existing.id, {
+        summary: parsed.summary || existing.summary,
+        version: existing.version + 1,
+      });
+
+      await storage.deductCredits(userId, CREDIT_COSTS.roadmapUpdate);
+      await storage.logActivity({
+        projectId, userId, action: "updated the AI roadmap",
+        entityType: "roadmap", entityId: existing.id, metadata: { version: updated.version },
+      });
+
+      const fresh = await storage.getProjectRoadmap(projectId);
+      res.json({ roadmap: fresh, creditsCharged: CREDIT_COSTS.roadmapUpdate });
+    } catch (error) {
+      console.error("Roadmap update error:", error);
+      res.status(500).json({ message: "Failed to update roadmap" });
+    }
+  });
+
+  /**
+   * "What should I do next?" — Nova reads the roadmap, milestones and tasks
+   * and ranks the three highest-impact actions to take right now.
+   */
+  app.post("/api/projects/:id/roadmap/next-actions", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Unauthorized" });
+
+      const ent = await requireFeature(res, userId, "aiRoadmap", "Next-action recommendations");
+      if (!ent) return;
+
+      const roadmap = await storage.getProjectRoadmap(projectId);
+      if (!roadmap) return res.status(404).json({ message: "Build a roadmap first, then Nova can tell you what's next." });
+
+      if (!(await requireCredits(res, userId, CREDIT_COSTS.nextActions, "next-action recommendations"))) return;
+
+      const [tasks, milestones] = await Promise.all([
+        storage.getProjectKanbanTasks(projectId).catch(() => []),
+        storage.getProjectMilestones(projectId).catch(() => []),
+      ]);
+      const openTasks = tasks.filter((t: any) => t.status !== "done");
+
+      const nextActionsRaw = await askInPlainLanguage(
+        modelFor(ent),
+        `You are Nova, telling a builder exactly what to do next. ${coachingDirectiveFor(ent)}
+
+Pick the THREE highest-impact actions available right now. Judge impact by what unblocks the most downstream work or most reduces the biggest risk — not by what's easiest. If the obvious next step is wrong, say so and give the right one.
+
+Each action must be something they could start today, not a vague theme.
+
+Respond ONLY with valid JSON (no markdown, no code fences):
+{
+  "reasoning": "1-2 sentences on where the project actually stands right now.",
+  "actions": [
+    {
+      "title": "Short imperative, e.g. 'Interview 5 students about study habits'",
+      "why": "1-2 sentences on the impact of doing this now.",
+      "effort": "quick" | "medium" | "heavy",
+      "impact": "high" | "medium",
+      "relatedPhase": "the roadmap phase title this belongs to, or null"
+    }
+  ]
+}
+Exactly 3 actions, ordered most important first.
+
+${PLAIN_LANGUAGE_RULES}`,
+        [
+          `PROJECT BRIEF\n${formatProjectBriefForPrompt(project)}`,
+          `GOAL\n${roadmap.goal}`,
+          `ROADMAP (v${roadmap.version})\n${roadmap.phases.map((p) => `- ${p.title} [${p.status}] ${p.description || ""}`).join("\n")}`,
+          `MILESTONES\n${milestones.length ? milestones.map((m) => `- ${m.title} [${m.status}]`).join("\n") : "none"}`,
+          `OPEN TASKS (${openTasks.length} of ${tasks.length})\n${openTasks.slice(0, 25).map((t: any) => `- ${t.title} [${t.priority}]`).join("\n") || "none"}`,
+        ].join("\n\n"),
+      );
+
+      let parsed: any;
+      try {
+        const match = nextActionsRaw.match(/\{[\s\S]*\}/);
+        parsed = JSON.parse(match ? match[0] : nextActionsRaw);
+      } catch (parseErr) {
+        console.error("Next actions parse failed:", parseErr);
+        return res.status(502).json({ message: "Nova's answer came back unreadable. Try again." });
+      }
+
+      const actions = (Array.isArray(parsed.actions) ? parsed.actions : []).slice(0, 3).map((a: any) => ({
+        title: String(a?.title || "").slice(0, 200),
+        why: String(a?.why || "").slice(0, 500),
+        effort: ["quick", "medium", "heavy"].includes(a?.effort) ? a.effort : "medium",
+        impact: ["high", "medium"].includes(a?.impact) ? a.impact : "high",
+        relatedPhase: a?.relatedPhase ? String(a.relatedPhase).slice(0, 200) : null,
+      })).filter((a: any) => a.title);
+
+      if (actions.length === 0) {
+        return res.status(502).json({ message: "Nova couldn't work out what's next. Try again." });
+      }
+
+      await storage.deductCredits(userId, CREDIT_COSTS.nextActions);
+      res.json({
+        reasoning: String(parsed.reasoning || ""),
+        actions,
+        creditsCharged: CREDIT_COSTS.nextActions,
+      });
+    } catch (error) {
+      console.error("Next actions error:", error);
+      res.status(500).json({ message: "Failed to work out next actions" });
+    }
+  });
+
+  /**
+   * Quotes the cost of a full rebuild before the user commits, so an 8-15
+   * credit charge is never a surprise.
+   */
+  app.get("/api/projects/:id/roadmap/rebuild-quote", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
+
+      const [roadmap, milestones, tasks] = await Promise.all([
+        storage.getProjectRoadmap(req.params.id),
+        storage.getProjectMilestones(req.params.id).catch(() => []),
+        storage.getProjectKanbanTasks(req.params.id).catch(() => []),
+      ]);
+
+      const counts = {
+        phases: roadmap?.phases.length || 0,
+        milestones: milestones.length,
+        tasks: tasks.length,
+      };
+      res.json({
+        cost: roadmapRebuildCost(counts),
+        min: CREDIT_COSTS.roadmapRebuildMin,
+        max: CREDIT_COSTS.roadmapRebuildMax,
+        counts,
+        hasRoadmap: !!roadmap,
+      });
+    } catch (error) {
+      console.error("Rebuild quote error:", error);
+      res.status(500).json({ message: "Failed to quote a rebuild" });
+    }
+  });
+
+  /**
+   * Full roadmap rebuild. Where /roadmap/update revises the remaining phases,
+   * this re-plans from scratch against what the project has become —
+   * restructuring phases, resequencing milestones, and re-prioritising tasks.
+   * For when the project changed direction, not just progressed.
+   */
+  app.post("/api/projects/:id/roadmap/rebuild", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.ownerId !== userId) return res.status(403).json({ message: "Only the project owner can rebuild the roadmap" });
+
+      const ent = await requireFeature(res, userId, "roadmapUpdates", "Roadmap rebuilds");
+      if (!ent) return;
+
+      const existing = await storage.getProjectRoadmap(projectId);
+      if (!existing) return res.status(404).json({ message: "No roadmap to rebuild. Generate one first." });
+
+      const [milestones, tasks] = await Promise.all([
+        storage.getProjectMilestones(projectId).catch(() => []),
+        storage.getProjectKanbanTasks(projectId).catch(() => []),
+      ]);
+
+      const cost = roadmapRebuildCost({
+        phases: existing.phases.length,
+        milestones: milestones.length,
+        tasks: tasks.length,
+      });
+      if (!(await requireCredits(res, userId, cost, "a roadmap rebuild"))) return;
+
+      const { whatChanged, newGoal, startingPoint: newStartingPoint } = req.body as {
+        whatChanged?: string; newGoal?: string; startingPoint?: string;
+      };
+      const goal = newGoal?.trim() || existing.goal;
+      const memberCount = (await storage.getProjectMembers(projectId).catch(() => [])).length;
+
+      const rebuildRaw = await askInPlainLanguage(
+        modelFor(ent),
+        `You are Nova, rebuilding a project roadmap from scratch because the project has changed. ${coachingDirectiveFor(ent)}
+
+This is NOT an incremental revision. Re-plan the whole path to the goal against what the project actually is now. Drop phases that no longer make sense even if work was done on them, and say so in the summary. Genuinely completed work should be preserved as completed phases.
+
+Also resequence the milestones and re-prioritise the open tasks to match the new plan.
+
+${ROADMAP_SCHEMA_INSTRUCTIONS}
+Each phase may also include "status": "upcoming" | "in-progress" | "completed".
+
+Additionally include:
+  "milestoneOrder": [ { "title": "<existing milestone title>", "order": <number>, "status": "planned" | "in-progress" | "completed" } ],
+  "taskPriorities": [ { "title": "<existing task title>", "priority": "low" | "medium" | "high" } ],
+  "changeSummary": "2-3 sentences on what you restructured and why."`,
+        [
+          `PROJECT BRIEF (current)\n${formatProjectBriefForPrompt(project)}`,
+          `GOAL\n${goal}`,
+          describeCurrentState({
+            project,
+            startingPoint: newStartingPoint?.trim() || existing.startingPoint,
+            members: memberCount,
+            tasks, milestones, phases: existing.phases,
+          }),
+          whatChanged?.trim() ? `WHAT CHANGED\n${whatChanged.trim()}` : "",
+          `PREVIOUS ROADMAP (v${existing.version})\n${existing.summary || ""}\n${existing.phases.map((p) => `- ${p.title} [${p.status}]`).join("\n")}`,
+          `EXISTING MILESTONES\n${milestones.map((m) => `- ${m.title} [${m.status}]`).join("\n") || "none"}`,
+          `EXISTING TASKS\n${tasks.map((t: any) => `- ${t.title} [${t.status}/${t.priority}]`).join("\n") || "none"}`,
+        ].filter(Boolean).join("\n\n"),
+      );
+
+      let parsed: any;
+      try {
+        const match = rebuildRaw.match(/\{[\s\S]*\}/);
+        parsed = JSON.parse(match ? match[0] : rebuildRaw);
+      } catch (parseErr) {
+        console.error("Roadmap rebuild parse failed:", parseErr);
+        return res.status(502).json({ message: "Nova's rebuild came back unreadable. Try again." });
+      }
+
+      const phases = parseRoadmapJson(JSON.stringify(parsed)).phases.map((p: any) => ({
+        ...p,
+        status: ["upcoming", "in-progress", "completed"].includes(parsed.phases?.find((x: any) => x.title === p.title)?.status)
+          ? parsed.phases.find((x: any) => x.title === p.title).status
+          : "upcoming",
+      }));
+      if (phases.length === 0) {
+        return res.status(502).json({ message: "Nova couldn't rebuild the roadmap. Try again." });
+      }
+
+      await storage.replaceRoadmapPhases(existing.id, phases);
+      const updated = await storage.updateRoadmap(existing.id, {
+        goal,
+        summary: parsed.summary || existing.summary,
+        version: existing.version + 1,
+        // Carry the starting point forward (or take the builder's revised one),
+        // so the next rebuild still knows what's already built.
+        startingPoint: newStartingPoint?.trim() || existing.startingPoint,
+      });
+
+      // Resequence milestones by title match.
+      let milestonesUpdated = 0;
+      for (const m of Array.isArray(parsed.milestoneOrder) ? parsed.milestoneOrder : []) {
+        const target = milestones.find((x) => x.title.trim().toLowerCase() === String(m?.title || "").trim().toLowerCase());
+        if (!target) continue;
+        const patch: any = {};
+        if (Number.isFinite(m.order)) patch.order = Number(m.order);
+        if (["planned", "in-progress", "completed"].includes(m.status)) patch.status = m.status;
+        if (Object.keys(patch).length === 0) continue;
+        await storage.updateMilestone(target.id, patch).catch(() => {});
+        milestonesUpdated++;
+      }
+
+      // Re-prioritise open tasks by title match.
+      let tasksUpdated = 0;
+      for (const t of Array.isArray(parsed.taskPriorities) ? parsed.taskPriorities : []) {
+        const target = tasks.find((x: any) => x.title.trim().toLowerCase() === String(t?.title || "").trim().toLowerCase());
+        if (!target || !["low", "medium", "high"].includes(t.priority)) continue;
+        await storage.updateKanbanTask(target.id, { priority: t.priority }).catch(() => {});
+        tasksUpdated++;
+      }
+
+      await storage.deductCredits(userId, cost);
+      await storage.logActivity({
+        projectId, userId, action: "rebuilt the AI roadmap",
+        entityType: "roadmap", entityId: existing.id,
+        metadata: { version: updated.version, phases: phases.length, milestonesUpdated, tasksUpdated },
+      });
+
+      const fresh = await storage.getProjectRoadmap(projectId);
+      res.json({
+        roadmap: fresh,
+        changeSummary: String(parsed.changeSummary || ""),
+        milestonesUpdated,
+        tasksUpdated,
+        creditsCharged: cost,
+      });
+    } catch (error) {
+      console.error("Roadmap rebuild error:", error);
+      res.status(500).json({ message: "Failed to rebuild the roadmap" });
+    }
+  });
+
+  /**
+   * Owner edits a phase by hand.
+   *
+   * Nova's plan is a starting point, not scripture — the builder knows things
+   * Nova doesn't, and a phase they can't reword is a phase they stop trusting.
+   * So the whole phase is editable here, not just its status.
+   */
+  app.patch("/api/roadmap-phases/:phaseId", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const phase = await storage.getRoadmapPhase(req.params.phaseId);
+      if (!phase) return res.status(404).json({ message: "Phase not found" });
+
+      const project = await storage.getProject(phase.projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.ownerId !== userId) {
+        return res.status(403).json({ message: "Only the project owner can edit the roadmap" });
+      }
+
+      const body = req.body as Record<string, unknown>;
+      const patch: Record<string, unknown> = {};
+
+      if (body.status !== undefined) {
+        if (!["upcoming", "in-progress", "completed"].includes(String(body.status))) {
+          return res.status(400).json({ message: "status must be upcoming, in-progress, or completed" });
+        }
+        patch.status = body.status;
+      }
+      if (body.title !== undefined) {
+        const title = String(body.title).trim().slice(0, 200);
+        if (!title) return res.status(400).json({ message: "A phase needs a title" });
+        patch.title = title;
+      }
+      if (body.description !== undefined) {
+        patch.description = String(body.description ?? "").trim().slice(0, 2000) || null;
+      }
+      if (body.estimatedDuration !== undefined) {
+        patch.estimatedDuration = String(body.estimatedDuration ?? "").trim().slice(0, 80) || null;
+      }
+      if (Array.isArray(body.outcomes)) {
+        patch.outcomes = body.outcomes
+          .map((o) => String(o ?? "").trim().slice(0, 300))
+          .filter(Boolean)
+          .slice(0, 12);
+      }
+      if (Array.isArray(body.skillsNeeded)) {
+        patch.skillsNeeded = body.skillsNeeded
+          .map((s) => String(s ?? "").trim().slice(0, 60))
+          .filter(Boolean)
+          .slice(0, 12);
+      }
+
+      if (Object.keys(patch).length === 0) {
+        return res.status(400).json({ message: "Nothing to update" });
+      }
+
+      const updated = await storage.updateRoadmapPhase(req.params.phaseId, patch as any);
+      await storage.logActivity({
+        projectId: phase.projectId, userId,
+        action: patch.status && Object.keys(patch).length === 1 ? "updated a roadmap phase's status" : "edited a roadmap phase",
+        entityType: "roadmap", entityId: updated.id, metadata: { title: updated.title },
+      });
+      res.json(updated);
+    } catch (error) {
+      console.error("Phase update error:", error);
+      res.status(500).json({ message: "Failed to update phase" });
+    }
+  });
+
+  /** Turn a roadmap phase into a real project milestone (Builder and above). */
+  app.post("/api/roadmap-phases/:phaseId/create-milestone", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const ent = await requireFeature(res, userId, "aiMilestones", "AI milestone creation");
+      if (!ent) return;
+
+      const { projectId } = req.body as { projectId?: string };
+      if (!projectId) return res.status(400).json({ message: "projectId is required" });
+
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.ownerId !== userId) return res.status(403).json({ message: "Only the project owner can do that" });
+
+      const roadmap = await storage.getProjectRoadmap(projectId);
+      const phase = roadmap?.phases.find((p) => p.id === req.params.phaseId);
+      if (!phase) return res.status(404).json({ message: "Phase not found on this project's roadmap" });
+      if (phase.milestoneId) return res.status(409).json({ message: "This phase already has a milestone" });
+
+      const existingMilestones = await storage.getProjectMilestones(projectId);
+      const milestone = await storage.createMilestone({
+        projectId,
+        title: phase.title,
+        description: phase.description || null,
+        status: "planned",
+        order: existingMilestones.length,
+      } as any);
+
+      await storage.updateRoadmapPhase(phase.id, { milestoneId: milestone.id });
+      await storage.logActivity({
+        projectId, userId, action: "created a milestone from the roadmap",
+        entityType: "milestone", entityId: milestone.id, metadata: { title: milestone.title },
+      });
+
+      res.json(milestone);
+    } catch (error) {
+      console.error("Create milestone from phase error:", error);
+      res.status(500).json({ message: "Failed to create milestone" });
+    }
+  });
+
+  // ============================================
+  // AI PROJECT HEALTH CHECKS  (Pro tier)
+  // ============================================
+
+  app.get("/api/projects/:id/health-checks", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
+      const ent = await getUserEntitlements(userId);
+      const [checks, feedback] = await Promise.all([
+        storage.getHealthChecks(req.params.id),
+        storage.getHealthFindingFeedback(req.params.id),
+      ]);
+      res.json({ checks, feedback, canRun: ent.projectHealthChecks });
+    } catch (error) {
+      console.error("Error fetching health checks:", error);
+      res.status(500).json({ message: "Failed to get health checks" });
+    }
+  });
+
+  /**
+   * The builder pushes back on a finding.
+   *
+   * An assessment the user can't argue with is one they stop reading. The
+   * reason is stored against the finding's area and replayed into every later
+   * check, so Nova either drops the point or engages with the objection
+   * instead of repeating itself.
+   */
+  app.post("/api/projects/:id/health-findings/feedback", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+      if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Unauthorized" });
+
+      const { checkId, area, finding, stance, reason } = req.body as Record<string, string>;
+      const STANCES = ["disagree", "already-handled", "not-a-priority"];
+      if (!area?.trim()) return res.status(400).json({ message: "Which finding is this about?" });
+      if (!STANCES.includes(stance)) {
+        return res.status(400).json({ message: `stance must be one of ${STANCES.join(", ")}` });
+      }
+      if (!reason?.trim()) {
+        return res.status(400).json({ message: "Tell Nova why — that's the part it remembers." });
+      }
+
+      const saved = await storage.createHealthFindingFeedback({
+        projectId,
+        checkId: checkId || null,
+        userId,
+        area: area.trim().toLowerCase().slice(0, 120),
+        finding: (finding || "").slice(0, 1000) || null,
+        stance: stance as any,
+        reason: reason.trim().slice(0, 1000),
+      } as any);
+
+      res.json(saved);
+    } catch (error) {
+      console.error("Health finding feedback error:", error);
+      res.status(500).json({ message: "Failed to save your response" });
+    }
+  });
+
+  app.delete("/api/health-findings/feedback/:feedbackId", isAuthenticated, async (req: any, res) => {
+    try {
+      const removed = await storage.deleteHealthFindingFeedback(req.params.feedbackId, (req.user as any).id);
+      if (!removed) return res.status(404).json({ message: "Not found" });
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to remove your response" });
+    }
+  });
+
+  app.post("/api/projects/:id/health-check", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Unauthorized" });
+
+      const ent = await requireFeature(res, userId, "projectHealthChecks", "AI project health checks");
+      if (!ent) return;
+      if (!(await requireCredits(res, userId, CREDIT_COSTS.healthCheck, "a health check"))) return;
+
+      const [tasks, milestones, members, roadmap, feedback, history, banked] = await Promise.all([
+        storage.getProjectKanbanTasks(projectId).catch(() => []),
+        storage.getProjectMilestones(projectId).catch(() => []),
+        storage.getProjectMembers(projectId).catch(() => []),
+        storage.getProjectRoadmap(projectId).catch(() => undefined),
+        storage.getHealthFindingFeedback(projectId).catch(() => []),
+        storage.getProjectTaskCompletions(projectId, 40).catch(() => []),
+        storage.getUserTaskStats(userId).catch(() => undefined),
+      ]);
+
+      const doneTasks = tasks.filter((t: any) => t.status === "done").length;
+      const context = [
+        `PROJECT BRIEF\n${formatProjectBriefForPrompt(project)}`,
+        `TEAM\n${members.length} of ${project.teamSize ?? "?"} seats filled`,
+        /*
+         * The board is working state, not the execution record. Builders clear
+         * finished cards, and reading only the live board made Nova score a
+         * project with real throughput as having shipped nothing. Give it the
+         * completion history so "no evidence of execution" is a conclusion it
+         * can only reach when that's actually true.
+         */
+        [
+          `TASKS COMPLETED ON THIS PROJECT: ${history.length}. This is the real figure — it includes finished cards the builder has since cleared off the board.`,
+          history.length
+            ? `Completion dates, newest first: ${history.slice(0, 12).map((c) => `${c.title} (${new Date(c.completedAt).toISOString().slice(0, 10)})`).join("; ")}`
+            : "Nothing has ever been completed on this project.",
+          `CURRENT BOARD: ${tasks.length} cards, ${doneTasks} of them still sitting in the done column. The done column shows what hasn't been tidied away yet; it is NOT the completion count.`,
+          `This builder has completed ${banked?.tasksCompleted ?? 0} tasks across all their projects.`,
+          history.length
+            ? "Because work has demonstrably been completed, do not claim or imply that nothing is done, that no tasks have been finished, or that there is no evidence of execution. Judge momentum on the completion dates above — how many, how recently, and whether the pace is holding."
+            : null,
+        ].filter(Boolean).join("\n"),
+        `MILESTONES\n${milestones.length ? milestones.map((m) => `${m.title} [${m.status}]`).join("; ") : "none"}`,
+        roadmap ? `ROADMAP\nGoal: ${roadmap.goal}\nPhases: ${roadmap.phases.map((p) => `${p.title} [${p.status}]`).join("; ")}` : "ROADMAP\nnone",
+        `AGE\nCreated ${Math.max(0, Math.round((Date.now() - new Date(project.createdAt).getTime()) / 86400000))} days ago`,
+        feedback.length
+          ? `WHAT THE BUILDER TOLD YOU LAST TIME\n${feedback
+              .slice(0, 12)
+              .map((f) => `- On "${f.area}" they said [${f.stance}]: ${f.reason}`)
+              .join("\n")}`
+          : null,
+      ].filter(Boolean).join("\n\n");
+
+      const completion = await openai.chat.completions.create({
+        model: modelFor(ent),
+        messages: [
+          {
+            role: "system",
+            content: `You are Nova, assessing the health of a project honestly. Be direct about risks — a falsely reassuring assessment is useless.
+
+If the context includes WHAT THE BUILDER TOLD YOU LAST TIME, treat it as information you did not previously have. Where they said a concern was already handled or not a priority, do not raise it again in the same form: either drop it, or — if the project data still contradicts them — say plainly that you're raising it anyway and why. Never repeat a finding verbatim after it has been answered; that's how a builder learns to ignore you.
+
+Every recommendation must be something that can be acted on inside this project: a task to create, a milestone to add or reword, a roadmap phase to change, a scope list to cut, or a brief field to rewrite. Avoid advice that lives entirely outside the tool.
+
+Respond ONLY with valid JSON (no markdown, no code fences):
+{
+  "score": 0-100,
+  "status": "on-track" | "at-risk" | "stalled",
+  "summary": "2-3 sentences on where this project actually stands.",
+  "findings": [
+    { "area": "e.g. Scope, Team, Momentum, Clarity", "severity": "low" | "medium" | "high", "finding": "What you observed.", "recommendation": "The specific next action.", "fixable": true }
+  ]
+}
+Set "fixable" to true when you could carry out the recommendation yourself by editing tasks, milestones, roadmap phases, scope, or the project brief — false when it needs the builder to go and do something in the real world (talk to users, pick a channel, ship).
+Produce 3-6 findings.`,
+          },
+          { role: "user", content: context },
+        ],
+      });
+
+      let parsed: any;
+      try {
+        const raw = completion.choices[0].message.content || "{}";
+        const match = raw.match(/\{[\s\S]*\}/);
+        parsed = JSON.parse(match ? match[0] : raw);
+      } catch (parseErr) {
+        console.error("Health check parse failed:", parseErr);
+        return res.status(502).json({ message: "Nova returned an unreadable assessment. Please try again." });
+      }
+
+      const score = Math.max(0, Math.min(100, Number(parsed.score) || 0));
+      const status = ["on-track", "at-risk", "stalled"].includes(parsed.status) ? parsed.status : "at-risk";
+      const check = await storage.createHealthCheck({
+        projectId,
+        score,
+        status,
+        summary: String(parsed.summary || "No summary provided."),
+        findings: Array.isArray(parsed.findings) ? parsed.findings.slice(0, 8) : [],
+      });
+
+      await storage.deductCredits(userId, CREDIT_COSTS.healthCheck);
+      res.json({ check, creditsCharged: CREDIT_COSTS.healthCheck });
+    } catch (error) {
+      console.error("Health check error:", error);
+      res.status(500).json({ message: "Failed to run health check" });
+    }
+  });
+
+  /**
+   * "Nova, do it."
+   *
+   * A recommendation the builder has to re-type by hand is a recommendation
+   * they mostly don't act on. This takes one finding and has Nova carry it out
+   * against the real project — rewording a roadmap phase, cutting the MVP
+   * list, adding the milestone it says is missing — then reports back exactly
+   * what changed.
+   */
+  app.post("/api/projects/:id/health-check/apply", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.ownerId !== userId) {
+        return res.status(403).json({ message: "Only the project owner can let Nova make changes" });
+      }
+
+      const ent = await requireFeature(res, userId, "projectHealthChecks", "AI project health checks");
+      if (!ent) return;
+
+      const { checkId, findingIndex, note } = req.body as { checkId?: string; findingIndex?: number; note?: string };
+      const checks = await storage.getHealthChecks(projectId);
+      const check = checkId ? checks.find((c) => c.id === checkId) : checks[0];
+      if (!check) return res.status(404).json({ message: "Run a health check first." });
+
+      const findings = (check.findings as any[]) || [];
+      const finding = findings[Number(findingIndex)];
+      if (!finding) return res.status(400).json({ message: "That finding isn't on this check." });
+
+      if (!(await requireCredits(res, userId, CREDIT_COSTS.healthFix, "Nova applying a fix"))) return;
+
+      const state = await buildOperableProjectState(projectId);
+
+      const completion = await openai.chat.completions.create({
+        model: modelFor(ent),
+        messages: [
+          {
+            role: "system",
+            content: `You are Nova, carrying out one of your own recommendations on a builder's project. ${coachingDirectiveFor(ent)}
+
+You are not advising any more — you are editing. Make the smallest set of concrete changes that genuinely addresses the finding. Prefer editing what already exists over piling on new items: if the finding is that the MVP is too big, cut the MVP list; if a roadmap phase is vague, reword that phase and give it real outcomes; if momentum is the problem, add a handful of specific tasks that could be finished this week.
+
+Never invent an id. Never touch anything the finding didn't call for. If part of the recommendation can only be done by the builder in the real world (running interviews, choosing a channel), leave it out of the operations and say so in "note".
+
+${OPERATION_SCHEMA_INSTRUCTIONS}
+
+Respond ONLY with valid JSON (no markdown, no code fences):
+{
+  "operations": [ ... ],
+  "note": "1-2 sentences: what you changed and what's still left to the builder."
+}`,
+          },
+          {
+            role: "user",
+            content: [
+              `THE FINDING TO ACT ON\nArea: ${finding.area || "general"}\nSeverity: ${finding.severity || "unknown"}\nObservation: ${finding.finding || ""}\nRecommendation: ${finding.recommendation || ""}`,
+              note?.trim() ? `THE BUILDER ADDED\n${note.trim().slice(0, 600)}` : null,
+              `CURRENT PROJECT STATE (use these ids)\n${state}`,
+            ].filter(Boolean).join("\n\n"),
+          },
+        ],
+      });
+
+      let parsed: any;
+      try {
+        const raw = completion.choices[0].message.content || "{}";
+        const match = raw.match(/\{[\s\S]*\}/);
+        parsed = JSON.parse(match ? match[0] : raw);
+      } catch (parseErr) {
+        console.error("Health fix parse failed:", parseErr);
+        return res.status(502).json({ message: "Nova returned an unreadable plan. Please try again." });
+      }
+
+      const { changes, skipped } = await applyProjectOperations(projectId, userId, parsed.operations, {
+        canEditMilestones: ent.aiMilestones,
+        canEditRoadmap: ent.roadmapUpdates,
+      });
+
+      // Nothing landed means nothing to charge for.
+      if (!changes.length) {
+        return res.status(422).json({
+          message: "Nova couldn't turn that finding into a change it's able to make. This one's on you — or try re-running the check.",
+          skipped,
+        });
+      }
+
+      await storage.deductCredits(userId, CREDIT_COSTS.healthFix);
+      res.json({
+        changes,
+        skipped,
+        note: String(parsed.note || "").slice(0, 800),
+        creditsCharged: CREDIT_COSTS.healthFix,
+      });
+    } catch (error) {
+      console.error("Health fix error:", error);
+      res.status(500).json({ message: "Nova couldn't apply that fix" });
     }
   });
 
@@ -1717,9 +4311,68 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
 
   app.patch("/api/milestones/:id", isAuthenticated, async (req: any, res) => {
     try {
-      const milestone = await storage.updateMilestone(req.params.id, req.body);
-      if (req.body.status === "completed") {
-        await storage.logActivity({ projectId: milestone.projectId, userId: (req.user as any).id, action: "completed milestone", entityType: "milestone", entityId: milestone.id, metadata: { title: milestone.title } });
+      const userId = (req.user as any).id;
+      // Read the prior state first so re-saving an already-completed milestone
+      // doesn't post to the feed a second time.
+      const before = await storage.getMilestone(req.params.id);
+      if (!before) return res.status(404).json({ message: "Milestone not found" });
+      if (!(await isProjectMember(userId, before.projectId))) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+
+      // Whitelisted so a client can't move a milestone to another project or
+      // rewrite its id, and so the title/description/date are all editable
+      // rather than status alone.
+      const body = req.body as Record<string, unknown>;
+      const patch: Record<string, unknown> = {};
+
+      if (body.title !== undefined) {
+        const title = String(body.title).trim().slice(0, 200);
+        if (!title) return res.status(400).json({ message: "A milestone needs a title" });
+        patch.title = title;
+      }
+      if (body.description !== undefined) {
+        patch.description = String(body.description ?? "").trim().slice(0, 2000) || null;
+      }
+      if (body.status !== undefined) {
+        if (!["planned", "in-progress", "completed"].includes(String(body.status))) {
+          return res.status(400).json({ message: "status must be planned, in-progress, or completed" });
+        }
+        patch.status = body.status;
+      }
+      if (body.targetDate !== undefined) {
+        if (!body.targetDate) {
+          patch.targetDate = null;
+        } else {
+          const parsed = new Date(String(body.targetDate));
+          if (isNaN(parsed.getTime())) return res.status(400).json({ message: "That target date isn't a valid date" });
+          patch.targetDate = parsed;
+        }
+      }
+      if (body.order !== undefined && Number.isFinite(Number(body.order))) {
+        patch.order = Number(body.order);
+      }
+
+      if (Object.keys(patch).length === 0) {
+        return res.status(400).json({ message: "Nothing to update" });
+      }
+
+      const milestone = await storage.updateMilestone(req.params.id, patch as any);
+
+      if (patch.status === "completed" && before?.status !== "completed") {
+        await storage.logActivity({ projectId: milestone.projectId, userId, action: "completed milestone", entityType: "milestone", entityId: milestone.id, metadata: { title: milestone.title } });
+
+        const project = await storage.getProject(milestone.projectId);
+        if (project && !project.isPrivate) {
+          void publishSystemPost({
+            authorId: userId,
+            projectId: milestone.projectId,
+            postType: SYSTEM_POST_TYPES.milestoneCompleted,
+            content: SYSTEM_POST_COPY.milestoneCompleted(project.title, milestone.title),
+            entityType: "milestone",
+            entityId: milestone.id,
+          });
+        }
       }
       res.json(milestone);
     } catch (error) { res.status(500).json({ message: "Failed to update milestone" }); }
@@ -1727,6 +4380,11 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
 
   app.delete("/api/milestones/:id", isAuthenticated, async (req: any, res) => {
     try {
+      const milestone = await storage.getMilestone(req.params.id);
+      if (!milestone) return res.status(404).json({ message: "Milestone not found" });
+      if (!(await isProjectMember((req.user as any).id, milestone.projectId))) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
       await storage.deleteMilestone(req.params.id);
       res.json({ success: true });
     } catch (error) { res.status(500).json({ message: "Failed to delete milestone" }); }
@@ -2336,62 +4994,69 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
     try {
       const userId = (req.user as any).id;
       const sub = await storage.getUserSubscription(userId);
-      res.json(sub);
+      const ent = await getUserEntitlements(userId);
+      const privateProjectsUsed = await storage.countPrivateProjects(userId);
+      res.json({
+        ...sub,
+        // JSON has no Infinity; the client treats -1 as unlimited.
+        creditsLimit: sub.creditsLimit === Infinity ? -1 : sub.creditsLimit,
+        creditsRemaining: sub.creditsRemaining === Infinity ? -1 : sub.creditsRemaining,
+        unlimited: sub.creditsLimit === Infinity,
+        fairUseCap: sub.creditsLimit === Infinity ? FAIR_USE_MONTHLY_CAP : null,
+        entitlements: {
+          ...ent,
+          credits: ent.credits === Infinity ? -1 : ent.credits,
+          privateProjects: ent.privateProjects === Infinity ? -1 : ent.privateProjects,
+        },
+        privateProjectsUsed,
+        creditCosts: CREDIT_COSTS,
+      });
     } catch (error) {
       console.error("Error fetching subscription:", error);
       res.status(500).json({ message: "Failed to fetch subscription" });
     }
   });
 
+  /**
+   * Plan catalog. All presentation (names, copy, bullets, prices) comes from
+   * shared/plans.ts so the pricing page renders correctly even when Stripe
+   * isn't configured — only `priceId` needs Stripe, and without it the page
+   * shows the plan but can't start checkout.
+   */
   app.get("/api/plans", async (_req, res) => {
-    try {
-      const result = await db.execute(
-        sql`SELECT p.id as product_id, p.name, p.description, p.metadata,
-                   pr.id as price_id, pr.unit_amount, pr.currency, pr.recurring
-            FROM stripe.products p
-            JOIN stripe.prices pr ON pr.product = p.id AND pr.active = true
-            WHERE p.active = true
-            ORDER BY pr.unit_amount ASC`
-      );
+    const priceIdByTier = await getPriceIdsByTier();
 
-      const plans = [
-        {
-          id: "free",
-          name: "Free",
-          description: "Get started with 20 AI credits per month",
-          price: 0,
-          priceId: null,
-          features: ["20 AI credits/month", "Create public projects", "Join contests", "Community access"],
-          tier: "free",
-          credits: 20,
-        },
-      ];
+    const plans = TIER_IDS.map((tier) => {
+      const p = PLAN_PRESENTATION[tier];
+      const ent = ENTITLEMENTS[tier];
+      return {
+        id: tier,
+        tier,
+        stage: p.stage,
+        name: p.name,
+        promise: p.promise,
+        headline: p.headline,
+        pitch: p.pitch,
+        price: p.priceMonthly,
+        priceId: priceIdByTier.get(tier) || null,
+        cta: p.cta,
+        featured: p.featured || false,
+        footnote: p.footnote || null,
+        highlights: p.highlights,
+        credits: ent.credits === Infinity ? -1 : ent.credits,
+        privateProjects: ent.privateProjects === Infinity ? -1 : ent.privateProjects,
+        checkoutAvailable: tier === "free" || priceIdByTier.has(tier),
+      };
+    });
 
-      for (const row of result.rows as any[]) {
-        const metadata = typeof row.metadata === "string" ? JSON.parse(row.metadata) : row.metadata || {};
-        plans.push({
-          id: row.product_id,
-          name: row.name,
-          description: row.description || "",
-          price: row.unit_amount / 100,
-          priceId: row.price_id,
-          features: getFeaturesForTier(metadata.tier),
-          tier: metadata.tier || "free",
-          credits: metadata.credits === "unlimited" ? -1 : parseInt(metadata.credits || "0"),
-        });
-      }
-
-      res.json(plans);
-    } catch (error) {
-      console.error("Error fetching plans:", error);
-      const fallbackPlans = [
-        { id: "free", name: "Free", description: "Get started with 20 AI credits per month", price: 0, priceId: null, features: ["20 AI credits/month", "Create public projects", "Join contests", "Community access"], tier: "free", credits: 20 },
-        { id: "spark_pro", name: "Spark Pro", description: "100 AI credits/month for power users", price: 4.99, priceId: null, features: ["100 AI credits/month", "Create public projects", "Priority support", "Community access"], tier: "spark_pro", credits: 100 },
-        { id: "spark_business", name: "Spark Business", description: "250 AI credits/month + private projects", price: 9.99, priceId: null, features: ["250 AI credits/month", "Private projects", "Priority support", "Advanced analytics"], tier: "spark_business", credits: 250 },
-        { id: "spark_unlimited", name: "Spark Unlimited", description: "Unlimited AI credits + all features", price: 29.99, priceId: null, features: ["Unlimited AI credits", "Private projects", "AI roadmap generation", "Premium support", "All features"], tier: "spark_unlimited", credits: -1 },
-      ];
-      res.json(fallbackPlans);
-    }
+    res.json({
+      plans,
+      comparison: COMPARISON_ROWS,
+      fairUseNotice: FAIR_USE_NOTICE,
+      creditCosts: CREDIT_COSTS,
+      // Signals to the pricing page that paid plans can't be purchased yet.
+      stripeConfigured: priceIdByTier.size > 0,
+    });
   });
 
   app.post("/api/checkout", isAuthenticated, async (req: any, res) => {
@@ -2400,12 +5065,10 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
       const { priceId } = req.body;
       if (!priceId) return res.status(400).json({ message: "priceId is required" });
 
-      const priceCheck = await db.execute(
-        sql`SELECT pr.id FROM stripe.prices pr
-            JOIN stripe.products p ON pr.product = p.id
-            WHERE pr.id = ${priceId} AND pr.active = true AND p.active = true`
-      );
-      if ((priceCheck.rows as any[]).length === 0) {
+      // Only allow prices belonging to one of our own tiers, so an arbitrary
+      // price ID can't be substituted by the client.
+      const allowedPriceIds = new Set((await getPriceIdsByTier()).values());
+      if (!allowedPriceIds.has(priceId)) {
         return res.status(400).json({ message: "Invalid price" });
       }
 
@@ -2468,6 +5131,56 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
     } catch (error) {
       console.error("Error getting publishable key:", error);
       res.status(500).json({ message: "Failed to get publishable key" });
+    }
+  });
+
+  /**
+   * Dev-only tier override, so every entitlement layer can be exercised
+   * without four Stripe subscriptions. Hard-disabled outside development and
+   * whenever a real Stripe subscription exists, so it can never be used to
+   * self-upgrade in production.
+   */
+  app.post("/api/dev/set-tier", isAuthenticated, async (req: any, res) => {
+    if (process.env.NODE_ENV === "production" && process.env.ALLOW_DEV_TIER_OVERRIDE !== "true") {
+      return res.status(404).json({ message: "Not found" });
+    }
+    try {
+      const userId = (req.user as any).id;
+      const { tier } = req.body as { tier?: string };
+      if (!tier || !TIER_IDS.includes(tier as TierId)) {
+        return res.status(400).json({ message: `tier must be one of: ${TIER_IDS.join(", ")}` });
+      }
+
+      const user = await storage.getUser(userId);
+      if (user?.stripeSubscriptionId) {
+        return res.status(409).json({
+          message: "You have a real Stripe subscription. Cancel it in the billing portal before overriding the tier.",
+        });
+      }
+
+      await storage.updateUserStripeInfo(userId, { subscriptionTier: tier });
+      const ent = await getUserEntitlements(userId);
+      console.log(`[dev] tier override: user ${userId} -> ${tier}`);
+      res.json({ tier: ent.tier, entitlements: { ...ent, credits: ent.credits === Infinity ? -1 : ent.credits, privateProjects: ent.privateProjects === Infinity ? -1 : ent.privateProjects } });
+    } catch (error) {
+      console.error("Dev set-tier error:", error);
+      res.status(500).json({ message: "Failed to set tier" });
+    }
+  });
+
+  /** Dev-only: reset this month's credit usage so limits can be re-tested. */
+  app.post("/api/dev/reset-credits", isAuthenticated, async (req: any, res) => {
+    if (process.env.NODE_ENV === "production" && process.env.ALLOW_DEV_TIER_OVERRIDE !== "true") {
+      return res.status(404).json({ message: "Not found" });
+    }
+    try {
+      const userId = (req.user as any).id;
+      await db.update(users).set({ creditsUsed: 0, creditsResetAt: new Date() }).where(eq(users.id, userId));
+      const sub = await storage.getUserSubscription(userId);
+      res.json({ creditsUsed: sub.creditsUsed, creditsLimit: sub.creditsLimit === Infinity ? -1 : sub.creditsLimit });
+    } catch (error) {
+      console.error("Dev reset-credits error:", error);
+      res.status(500).json({ message: "Failed to reset credits" });
     }
   });
 
@@ -2746,24 +5459,6 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
     engineer: { health: 90, attack: 8, defense: 20, range: 1, visibility: 3 },
   };
 
-  function generateTacticsMap(size: number) {
-    const grid: string[][] = [];
-    for (let y = 0; y < size; y++) {
-      const row: string[] = [];
-      for (let x = 0; x < size; x++) {
-        const rand = Math.random();
-        if (rand < 0.1) row.push("mountain");
-        else if (rand < 0.2) row.push("forest");
-        else if (rand < 0.25) row.push("water");
-        else row.push("plain");
-      }
-      grid.push(row);
-    }
-    grid[0][0] = "plain"; grid[0][1] = "plain";
-    grid[size - 1][size - 1] = "plain"; grid[size - 1][size - 2] = "plain";
-    return grid;
-  }
-
   function getStartPositions(teamId: number, size: number, playerIndex: number) {
     if (teamId === 1) return { x: playerIndex % 3, y: Math.floor(playerIndex / 3) };
     return { x: size - 1 - (playerIndex % 3), y: size - 1 - Math.floor(playerIndex / 3) };
@@ -2777,176 +5472,11 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences):
     } catch (error) { res.status(500).json({ message: "Failed to get leaderboard" }); }
   });
 
-  // --- Tactics Arena ---
-  app.post("/api/games/tactics/create", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = (req.user as any).id;
-      const mapSize = 8;
-      const mapData = generateTacticsMap(mapSize);
-      const game = await storage.createTacticsGame({ status: "waiting", mapSize, mapData, currentRound: 0, maxRounds: 10 });
-      const role = req.body.role || "warrior";
-      const teamId = 1;
-      const pos = getStartPositions(teamId, mapSize, 0);
-      const stats = ROLE_STATS[role] || ROLE_STATS.warrior;
-      await storage.createTacticsPlayer({ gameId: game.id, userId, teamId, role, health: stats.health, position: pos, resources: 50 });
-      const players = await storage.getTacticsPlayers(game.id);
-      res.json({ ...game, players });
-    } catch (error) { console.error("Create tactics game error:", error); res.status(500).json({ message: "Failed to create game" }); }
-  });
 
-  app.get("/api/games/tactics/lobby", async (_req, res) => {
-    try {
-      const games = await storage.getWaitingTacticsGames();
-      const enriched = await Promise.all(games.map(async (g) => {
-        const players = await storage.getTacticsPlayers(g.id);
-        return { ...g, players, playerCount: players.length };
-      }));
-      res.json(enriched);
-    } catch (error) { res.status(500).json({ message: "Failed to get lobby" }); }
-  });
 
-  app.post("/api/games/tactics/:id/join", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = (req.user as any).id;
-      const game = await storage.getTacticsGame(req.params.id);
-      if (!game || game.status !== "waiting") return res.status(400).json({ message: "Game not available" });
-      const players = await storage.getTacticsPlayers(game.id);
-      if (players.find(p => p.userId === userId)) return res.status(400).json({ message: "Already in game" });
-      if (players.length >= 10) return res.status(400).json({ message: "Game is full" });
-      const team1Count = players.filter(p => p.teamId === 1).length;
-      const team2Count = players.filter(p => p.teamId === 2).length;
-      const teamId = req.body.teamId || (team1Count <= team2Count ? 1 : 2);
-      const teamPlayers = players.filter(p => p.teamId === teamId);
-      const role = req.body.role || "warrior";
-      const pos = getStartPositions(teamId, game.mapSize, teamPlayers.length);
-      const stats = ROLE_STATS[role] || ROLE_STATS.warrior;
-      await storage.createTacticsPlayer({ gameId: game.id, userId, teamId, role, health: stats.health, position: pos, resources: 50 });
-      const updatedPlayers = await storage.getTacticsPlayers(game.id);
-      res.json({ ...game, players: updatedPlayers });
-    } catch (error) { console.error("Join tactics game error:", error); res.status(500).json({ message: "Failed to join game" }); }
-  });
 
-  app.post("/api/games/tactics/:id/start", isAuthenticated, async (req: any, res) => {
-    try {
-      const game = await storage.getTacticsGame(req.params.id);
-      if (!game || game.status !== "waiting") return res.status(400).json({ message: "Cannot start" });
-      const players = await storage.getTacticsPlayers(game.id);
-      if (players.length < 2) return res.status(400).json({ message: "Need at least 2 players" });
-      const updated = await storage.updateTacticsGame(game.id, { status: "discussion", currentRound: 1 });
-      res.json({ ...updated, players });
-    } catch (error) { res.status(500).json({ message: "Failed to start game" }); }
-  });
 
-  app.get("/api/games/tactics/:id", async (req: any, res) => {
-    try {
-      const game = await storage.getTacticsGame(req.params.id);
-      if (!game) return res.status(404).json({ message: "Game not found" });
-      const players = await storage.getTacticsPlayers(game.id);
-      const moves = game.currentRound > 0 ? await storage.getTacticsMovesForRound(game.id, game.currentRound) : [];
-      res.json({ ...game, players, moves });
-    } catch (error) { res.status(500).json({ message: "Failed to get game" }); }
-  });
 
-  app.post("/api/games/tactics/:id/move", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = (req.user as any).id;
-      const game = await storage.getTacticsGame(req.params.id);
-      if (!game || game.status !== "discussion") return res.status(400).json({ message: "Not in move phase" });
-      const players = await storage.getTacticsPlayers(game.id);
-      const player = players.find(p => p.userId === userId);
-      if (!player || !player.isAlive) return res.status(400).json({ message: "Cannot move" });
-      const existingMoves = await storage.getTacticsMovesForRound(game.id, game.currentRound);
-      if (existingMoves.find(m => m.playerId === player.id)) return res.status(400).json({ message: "Already submitted move" });
-      const move = await storage.createTacticsMove({ gameId: game.id, round: game.currentRound, playerId: player.id, actionType: req.body.actionType, targetPosition: req.body.targetPosition || null, targetPlayerId: req.body.targetPlayerId || null });
-      res.json(move);
-    } catch (error) { res.status(500).json({ message: "Failed to submit move" }); }
-  });
-
-  app.post("/api/games/tactics/:id/resolve", isAuthenticated, async (req: any, res) => {
-    try {
-      const game = await storage.getTacticsGame(req.params.id);
-      if (!game || game.status !== "discussion") return res.status(400).json({ message: "Cannot resolve" });
-      const players = await storage.getTacticsPlayers(game.id);
-      const alivePlayers = players.filter(p => p.isAlive);
-      const moves = await storage.getTacticsMovesForRound(game.id, game.currentRound);
-      const results: any[] = [];
-
-      for (const move of moves) {
-        const player = players.find(p => p.id === move.playerId);
-        if (!player || !player.isAlive) continue;
-        const stats = ROLE_STATS[player.role] || ROLE_STATS.warrior;
-
-        if (move.actionType === "move" && move.targetPosition) {
-          const pos = move.targetPosition as { x: number; y: number };
-          if (pos.x >= 0 && pos.x < game.mapSize && pos.y >= 0 && pos.y < game.mapSize) {
-            await storage.updateTacticsPlayer(player.id, { position: pos });
-            results.push({ playerId: player.id, action: "moved", to: pos });
-          }
-        } else if (move.actionType === "attack" && move.targetPlayerId) {
-          const target = players.find(p => p.id === move.targetPlayerId);
-          if (target && target.isAlive && target.teamId !== player.teamId) {
-            const damage = stats.attack + Math.floor(Math.random() * 10);
-            const newHealth = Math.max(0, target.health - damage);
-            await storage.updateTacticsPlayer(target.id, { health: newHealth, isAlive: newHealth > 0 });
-            results.push({ playerId: player.id, action: "attacked", targetId: target.id, damage, targetHealth: newHealth });
-          }
-        } else if (move.actionType === "ability") {
-          if (player.role === "commander") {
-            const teammates = alivePlayers.filter(p => p.teamId === player.teamId && p.id !== player.id);
-            for (const t of teammates) {
-              const newHealth = Math.min(ROLE_STATS[t.role]?.health || 100, t.health + 15);
-              await storage.updateTacticsPlayer(t.id, { health: newHealth });
-            }
-            results.push({ playerId: player.id, action: "commander_buff", healed: 15 });
-          } else if (player.role === "strategist") {
-            results.push({ playerId: player.id, action: "trap_placed", position: move.targetPosition });
-          } else if (player.role === "scout") {
-            results.push({ playerId: player.id, action: "revealed_area", position: move.targetPosition });
-          } else if (player.role === "engineer") {
-            const newResources = player.resources + 20;
-            await storage.updateTacticsPlayer(player.id, { resources: newResources });
-            results.push({ playerId: player.id, action: "gathered_resources", resources: newResources });
-          }
-        } else if (move.actionType === "defend") {
-          results.push({ playerId: player.id, action: "defending" });
-        }
-      }
-
-      const updatedPlayers = await storage.getTacticsPlayers(game.id);
-      const team1Alive = updatedPlayers.filter(p => p.teamId === 1 && p.isAlive);
-      const team2Alive = updatedPlayers.filter(p => p.teamId === 2 && p.isAlive);
-      const team1Commander = updatedPlayers.find(p => p.teamId === 1 && p.role === "commander");
-      const team2Commander = updatedPlayers.find(p => p.teamId === 2 && p.role === "commander");
-
-      let winnerId = null;
-      let status = game.status;
-      if (team1Alive.length === 0 || (team1Commander && !team1Commander.isAlive)) { winnerId = "team2"; status = "completed"; }
-      else if (team2Alive.length === 0 || (team2Commander && !team2Commander.isAlive)) { winnerId = "team1"; status = "completed"; }
-      else if (game.currentRound >= game.maxRounds) {
-        const team1HP = team1Alive.reduce((s, p) => s + p.health, 0);
-        const team2HP = team2Alive.reduce((s, p) => s + p.health, 0);
-        winnerId = team1HP >= team2HP ? "team1" : "team2";
-        status = "completed";
-      }
-
-      const nextRound = status === "completed" ? game.currentRound : game.currentRound + 1;
-      const updated = await storage.updateTacticsGame(game.id, { currentRound: nextRound, winnerId, status });
-
-      if (status === "completed") {
-        const winningTeamId = winnerId === "team1" ? 1 : 2;
-        const winners = updatedPlayers.filter(p => p.teamId === winningTeamId);
-        for (const w of winners) {
-          await storage.createLeaderboardEntry({ gameType: "tactics", userId: w.userId, score: 100 + (w.health || 0), metadata: { role: w.role, rounds: game.currentRound } });
-          const existing = await storage.getUserBadges(w.userId);
-          if (!existing.find((b: any) => b.badgeId === "badge-tactics-first")) {
-            await storage.awardBadge(w.userId, "badge-tactics-first");
-          }
-        }
-      }
-
-      res.json({ ...updated, players: updatedPlayers, results });
-    } catch (error) { console.error("Resolve tactics error:", error); res.status(500).json({ message: "Failed to resolve round" }); }
-  });
 
   // --- Typing Arena ---
   app.post("/api/games/typing/create", isAuthenticated, async (req: any, res) => {

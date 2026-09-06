@@ -1,10 +1,13 @@
 import fs from "node:fs";
 import OpenAI, { toFile } from "openai";
 import { Buffer } from "node:buffer";
+import { IMAGE_MODEL } from "../../aiModels";
 
+const _rawOpenAiBase = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
+const _openAiBaseURL = _rawOpenAiBase ? (_rawOpenAiBase.endsWith("/v1") ? _rawOpenAiBase : `${_rawOpenAiBase.replace(/\/$/,"")}/v1`) : undefined;
 export const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+  baseURL: _openAiBaseURL,
 });
 
 /**
@@ -16,7 +19,7 @@ export async function generateImageBuffer(
   size: "1024x1024" | "512x512" | "256x256" = "1024x1024"
 ): Promise<Buffer> {
   const response = await openai.images.generate({
-    model: "gpt-image-1",
+    model: IMAGE_MODEL,
     prompt,
     size,
   });
@@ -42,7 +45,7 @@ export async function editImages(
   );
 
   const response = await openai.images.edit({
-    model: "gpt-image-1",
+    model: IMAGE_MODEL,
     image: images,
     prompt,
   });

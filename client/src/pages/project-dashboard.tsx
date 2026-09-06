@@ -10,6 +10,11 @@ import { SkillBadge } from "@/components/skill-badge";
 import { DonationButton } from "@/components/donation-button";
 import { MediaGallery } from "@/components/media-gallery";
 import { StoryboardSlideshow } from "@/components/storyboard-slideshow";
+import { StoryboardLibrary } from "@/components/storyboard-library";
+import { ProjectSocialTabs } from "@/components/project-social-tabs";
+import { PrivateProjectScreen } from "@/components/private-project-screen";
+import { PrivateBadge } from "@/components/private-badge";
+import { isSectionVisible, getProjectBriefContext } from "@shared/project-sections";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -25,7 +30,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Loader2, Users, Eye, Calendar, ExternalLink, Github, Share2, Heart, HeartOff,
   MessageSquare, Video, Sparkles, Briefcase, Zap, Laugh, Palette, Send,
-  CheckCircle, XCircle, Clock, FileText, Settings, Upload, ChevronRight,
+  CheckCircle, XCircle, Clock, FileText, Settings, Upload, ChevronRight, Lock,
 } from "lucide-react";
 import type { Project, ProjectMember, UserProfile, User, ProjectApplication } from "@shared/schema";
 import { useAuth } from "@/hooks/use-auth";
@@ -68,6 +73,8 @@ export default function ProjectDashboard() {
   const [videoPrompt, setVideoPrompt] = useState("");
   const [selectedStyle, setSelectedStyle] = useState<StyleOption>("professional");
   const [generationStatus, setGenerationStatus] = useState("");
+  const [useAiImages, setUseAiImages] = useState(true);
+  const [storyboardLibraryOpen, setStoryboardLibraryOpen] = useState(false);
   const [slideshowData, setSlideshowData] = useState<{ scenes: SceneData[]; storyboard: string; style: string } | null>(null);
   const [slideshowOpen, setSlideshowOpen] = useState(false);
   const [applyModalOpen, setApplyModalOpen] = useState(false);
@@ -81,7 +88,7 @@ export default function ProjectDashboard() {
 
   const { uploadFile, isUploading: isUploadingResume } = useUpload({
     onSuccess: (response) => {
-      setApplyResumeUrl(`/objects/${response.objectPath}`);
+      setApplyResumeUrl(response.objectPath);
       toast({ title: "Resume uploaded" });
     },
     onError: (error) => toast({ title: "Upload failed", description: error.message, variant: "destructive" }),
@@ -120,6 +127,12 @@ export default function ProjectDashboard() {
   const { data: myApplications } = useQuery<(ProjectApplication & { project: Project })[]>({
     queryKey: ["/api/user/applications"],
     enabled: !!user,
+  });
+
+  // Only ever returns the caller's own storyboards.
+  const { data: myStoryboards } = useQuery<{ id: string }[]>({
+    queryKey: ["/api/projects", projectId, "storyboards"],
+    enabled: !!projectId && !!user && project?.ownerId === user?.id,
   });
 
   const followMutation = useMutation({
@@ -190,10 +203,10 @@ export default function ProjectDashboard() {
   });
 
   const videoMutation = useMutation({
-    mutationFn: async ({ prompt, style }: { prompt: string; style: string }) => {
-      setGenerationStatus("Generating storyboard...");
-      const res = await apiRequest("POST", `/api/projects/${projectId}/generate-video`, { prompt, style });
-      setGenerationStatus("Processing scenes...");
+    mutationFn: async ({ prompt, style, useAiImages }: { prompt: string; style: string; useAiImages: boolean }) => {
+      setGenerationStatus("Reading your project brief...");
+      const res = await apiRequest("POST", `/api/projects/${projectId}/generate-video`, { prompt, style, useAiImages });
+      setGenerationStatus(useAiImages ? "Rendering AI scenes..." : "Processing scenes...");
       return res.json();
     },
     onSuccess: (data) => {
@@ -201,9 +214,19 @@ export default function ProjectDashboard() {
       setVideoModalOpen(false);
       setSlideshowOpen(true);
       setGenerationStatus("");
-      const savedCount = data.savedMediaPaths?.length || 0;
-      toast({ title: "Storyboard Generated", description: `${data.scenes?.length || 0} scenes created.${savedCount > 0 ? ` ${savedCount} images saved.` : ""}` });
-      if (savedCount > 0) queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
+      const parts = [`${data.scenes?.length || 0} scenes created.`];
+      if (data.imageFallbackCount > 0) {
+        parts.push(`${data.imageFallbackCount} scene(s) fell back to illustrations.`);
+      }
+      parts.push("Only you can see it.");
+      toast({
+        title: data.imageModel ? `Storyboard Generated (${data.imageModel})` : "Storyboard Generated",
+        description: parts.join(" "),
+      });
+      // Storyboards live in the private library, not the project's media
+      // gallery, so only the storyboard list needs refreshing.
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "storyboards"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/subscription"] });
     },
     onError: (error: any) => {
       setGenerationStatus("");
@@ -232,11 +255,19 @@ export default function ProjectDashboard() {
   }
   if (!project) return <div className="flex items-center justify-center h-full text-muted-foreground">Project not found</div>;
 
+  // Private project the viewer can't access — the server sent only the title.
+  if ((project as any).restricted) {
+    return <PrivateProjectScreen title={project.title} />;
+  }
+
   const isMember = members?.some((m) => m.userId === user?.id);
   const isOwner = project.ownerId === user?.id;
   const hasApplied = myApplications?.some(a => a.projectId === projectId && a.status === "pending");
   const appQuestions = (project.applicationQuestions as any[]) || [];
   const pendingApps = applications?.filter(a => a.status === "pending") || [];
+  // Shown in the video dialog so owners can see what the generator is reading.
+  const briefFieldsUsed = getProjectBriefContext(project).map((p) => p.label);
+  const storyboardCount = myStoryboards?.length || 0;
 
   return (
     <div className="h-full overflow-y-auto pb-20">
@@ -244,9 +275,10 @@ export default function ProjectDashboard() {
         <div className="absolute inset-0 bg-gradient-to-t from-background to-transparent opacity-60" />
         <div className="relative p-6 w-full max-w-5xl mx-auto flex flex-col sm:flex-row items-start sm:items-end justify-between gap-4">
           <div className="space-y-2 min-w-0 flex-1">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <Badge variant={project.status === "active" ? "default" : "secondary"}>{project.status}</Badge>
               <span className="text-sm text-secondary font-medium">{project.category}</span>
+              {project.isPrivate && <PrivateBadge />}
             </div>
             <h1 className="text-3xl sm:text-4xl font-bold tracking-tight break-words" data-testid="text-project-title">{project.title}</h1>
           </div>
@@ -284,52 +316,65 @@ export default function ProjectDashboard() {
 
       <div className="max-w-5xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-8">
-          <section className="space-y-4">
-            <h2 className="text-xl font-semibold">About this project</h2>
-            <p className="text-secondary leading-relaxed">{project.description}</p>
-          </section>
+          {/* The social page: Overview, Updates, Roadmap, Milestones, Team,
+              Open Roles, Media, Discussion, Followers. Milestones and roadmap
+              phases carry their own comment threads. */}
+          <ProjectSocialTabs
+            project={project}
+            members={members || []}
+            isOwner={isOwner}
+            isMember={!!isMember || isOwner}
+            followerCount={followStatus?.count || 0}
+            onApply={() => setApplyModalOpen(true)}
+            onManage={() => setLocation(`/projects/${projectId}/manage`)}
+          />
 
-          <section className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-semibold">Media Gallery</h2>
-              <div className="flex items-center gap-2">
-                {slideshowData && (
-                  <Button variant="outline" size="sm" className="gap-2" onClick={() => setSlideshowOpen(true)} data-testid="button-view-storyboard">
-                    <Sparkles className="h-4 w-4" /> View Storyboard
+          {/* Owner-only tools stay outside the public tabs. */}
+          {isOwner && (
+            <section className="space-y-4 pt-2 border-t border-border/50">
+              <div className="flex items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <h2 className="text-xl font-semibold flex items-center gap-2">
+                    AI Storyboards
+                    <Badge variant="secondary" className="gap-1 text-[10px] font-normal">
+                      <Lock className="h-2.5 w-2.5" /> Private
+                    </Badge>
+                  </h2>
+                  <p className="text-sm text-muted-foreground">
+                    Showcase reels Nova builds from your brief. Only you can see these.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Button variant="outline" size="sm" className="gap-2" onClick={() => setStoryboardLibraryOpen(true)} data-testid="button-view-storyboard">
+                    <Sparkles className="h-4 w-4" />
+                    View Storyboards
+                    {storyboardCount > 0 && <Badge variant="secondary" className="ml-0.5 h-4 px-1.5 text-[10px]">{storyboardCount}</Badge>}
                   </Button>
-                )}
-                {isOwner && (
-                  <Button variant="outline" size="sm" className="gap-2" onClick={() => { setVideoPrompt(`Create a showcase video for "${project.title}": ${project.description}`); setVideoModalOpen(true); }} data-testid="button-generate-video">
+                  <Button variant="outline" size="sm" className="gap-2" onClick={() => setVideoModalOpen(true)} data-testid="button-generate-video">
                     <Video className="h-4 w-4" /> Generate AI Video
                   </Button>
-                )}
+                </div>
               </div>
-            </div>
-            <MediaGallery projectId={project.id} mediaUrls={project.mediaUrls || []} isOwner={isOwner} />
-          </section>
-
-          {project.rolesNeeded && project.rolesNeeded.length > 0 && (
-            <section className="space-y-4">
-              <h2 className="text-xl font-semibold">Roles Needed</h2>
-              <div className="flex flex-wrap gap-2">{project.rolesNeeded.map((role) => <SkillBadge key={role} skill={role} variant="outline" />)}</div>
             </section>
           )}
 
-          {project.techStack && project.techStack.length > 0 && (
+          {isSectionVisible(project, "techStack") && (
             <section className="space-y-4">
               <h2 className="text-xl font-semibold">Tech Stack</h2>
               <div className="flex flex-wrap gap-2">
-                {project.techStack.map((tech) => (
+                {project.techStack!.map((tech) => (
                   <Badge key={tech} variant="outline" className="border-purple-500/30 text-purple-600 dark:text-purple-400" data-testid={`badge-dashboard-tech-${tech}`}>{tech}</Badge>
                 ))}
               </div>
             </section>
           )}
 
-          <div className="flex flex-wrap gap-4">
-            {project.repoUrl && <Button variant="outline" asChild className="gap-2" data-testid="link-repo"><a href={project.repoUrl} target="_blank" rel="noopener noreferrer"><Github className="h-4 w-4" /> Repository</a></Button>}
-            {project.liveUrl && <Button variant="outline" asChild className="gap-2" data-testid="link-live"><a href={project.liveUrl} target="_blank" rel="noopener noreferrer"><ExternalLink className="h-4 w-4" /> Live Demo</a></Button>}
-          </div>
+          {isSectionVisible(project, "links") && (
+            <div className="flex flex-wrap gap-4">
+              {project.repoUrl && <Button variant="outline" asChild className="gap-2" data-testid="link-repo"><a href={project.repoUrl} target="_blank" rel="noopener noreferrer"><Github className="h-4 w-4" /> Repository</a></Button>}
+              {project.liveUrl && <Button variant="outline" asChild className="gap-2" data-testid="link-live"><a href={project.liveUrl} target="_blank" rel="noopener noreferrer"><ExternalLink className="h-4 w-4" /> Live Demo</a></Button>}
+            </div>
+          )}
 
           {isOwner && pendingApps.length > 0 && (
             <section className="space-y-4">
@@ -389,6 +434,7 @@ export default function ProjectDashboard() {
         </div>
 
         <div className="space-y-6">
+          {isSectionVisible(project, "stats") && (
           <Card>
             <CardHeader><CardTitle className="text-lg">Project Stats</CardTitle></CardHeader>
             <CardContent className="space-y-4">
@@ -410,7 +456,9 @@ export default function ProjectDashboard() {
               </div>
             </CardContent>
           </Card>
+          )}
 
+          {isSectionVisible(project, "team") && (
           <Card>
             <CardHeader className="flex flex-row items-center justify-between gap-1 space-y-0">
               <CardTitle className="text-lg">Team Members</CardTitle>
@@ -429,6 +477,7 @@ export default function ProjectDashboard() {
               </div>
             </CardContent>
           </Card>
+          )}
 
           {isOwner && (
             <Card>
@@ -563,11 +612,13 @@ export default function ProjectDashboard() {
 
       {/* Video Generation Dialog */}
       <Dialog open={videoModalOpen} onOpenChange={setVideoModalOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
+        {/* flex + capped height keeps the header and footer pinned so the
+            Generate button stays reachable while the options scroll. */}
+        <DialogContent className="max-w-lg max-h-[90vh] flex flex-col">
+          <DialogHeader className="shrink-0">
             <DialogTitle className="flex items-center gap-2"><Sparkles className="h-5 w-5 text-primary" /> Generate AI Showcase Video</DialogTitle>
           </DialogHeader>
-          <div className="space-y-5 py-2">
+          <div className="space-y-5 py-2 flex-1 min-h-0 overflow-y-auto -mx-6 px-6">
             <div className="space-y-3">
               <label className="text-sm font-medium">Choose a visual style</label>
               <div className="grid grid-cols-2 gap-3">
@@ -584,14 +635,49 @@ export default function ProjectDashboard() {
                 })}
               </div>
             </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Describe your video</label>
-              <Textarea value={videoPrompt} onChange={(e) => setVideoPrompt(e.target.value)} placeholder="Describe the showcase video you'd like to create..." className="min-h-[100px]" data-testid="textarea-video-prompt" />
+            <div className="space-y-3">
+              <label className="text-sm font-medium">Render scenes with</label>
+              <div className="grid grid-cols-2 gap-3">
+                <button onClick={() => setUseAiImages(true)} className={`flex flex-col gap-1 p-3 rounded-md border-2 text-left transition-all ${useAiImages ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"}`} data-testid="button-render-ai">
+                  <span className="text-sm font-medium flex items-center gap-1.5"><Sparkles className="h-3.5 w-3.5 text-primary" /> AI images</span>
+                  <span className="text-xs text-muted-foreground">Photoreal frames. Slower, uses more quota.</span>
+                </button>
+                <button onClick={() => setUseAiImages(false)} className={`flex flex-col gap-1 p-3 rounded-md border-2 text-left transition-all ${!useAiImages ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"}`} data-testid="button-render-illustrated">
+                  <span className="text-sm font-medium flex items-center gap-1.5"><Palette className="h-3.5 w-3.5 text-primary" /> Illustrated</span>
+                  <span className="text-xs text-muted-foreground">Vector scenes. Fast, no image quota.</span>
+                </button>
+              </div>
             </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Extra creative direction (optional)</label>
+              <Textarea value={videoPrompt} onChange={(e) => setVideoPrompt(e.target.value)} placeholder="e.g. Open on a busy campus library, keep the tone upbeat..." className="min-h-[80px]" data-testid="textarea-video-prompt" />
+            </div>
+
+            {briefFieldsUsed.length > 0 ? (
+              <div className="rounded-md bg-muted/40 border border-border/60 p-3 space-y-2">
+                <p className="text-xs font-medium flex items-center gap-1.5">
+                  <FileText className="h-3.5 w-3.5 text-primary" /> Generating from your project brief
+                </p>
+                <div className="flex flex-wrap gap-1">
+                  {briefFieldsUsed.map((f) => (
+                    <Badge key={f} variant="secondary" className="text-[10px] font-normal px-1.5 py-0">{f}</Badge>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-md bg-muted/40 border border-border/60 p-3">
+                <p className="text-xs text-muted-foreground">
+                  Your brief is empty, so scenes will be generic. Fill in a one-liner and mission under{" "}
+                  <button className="text-primary hover:underline" onClick={() => { setVideoModalOpen(false); setLocation(`/projects/${projectId}/manage`); }} data-testid="link-video-fill-brief">Manage → Setup</button>{" "}
+                  for a sharper video.
+                </p>
+              </div>
+            )}
           </div>
-          <DialogFooter>
+          <DialogFooter className="shrink-0">
             <Button variant="outline" onClick={() => setVideoModalOpen(false)}>Cancel</Button>
-            <Button onClick={() => videoMutation.mutate({ prompt: videoPrompt, style: selectedStyle })} disabled={videoMutation.isPending || !videoPrompt.trim()} data-testid="button-submit-video">
+            <Button onClick={() => videoMutation.mutate({ prompt: videoPrompt, style: selectedStyle, useAiImages })} disabled={videoMutation.isPending} data-testid="button-submit-video">
               {videoMutation.isPending ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />{generationStatus || "Generating..."}</> : <><Video className="h-4 w-4 mr-2" />Generate Storyboard</>}
             </Button>
           </DialogFooter>
@@ -600,6 +686,16 @@ export default function ProjectDashboard() {
 
       {slideshowOpen && slideshowData && (
         <StoryboardSlideshow scenes={slideshowData.scenes} title={project.title} style={slideshowData.style} storyboard={slideshowData.storyboard} onClose={() => setSlideshowOpen(false)} />
+      )}
+
+      {isOwner && (
+        <StoryboardLibrary
+          projectId={project.id}
+          projectTitle={project.title}
+          open={storyboardLibraryOpen}
+          onOpenChange={setStoryboardLibraryOpen}
+          onGenerateNew={() => setVideoModalOpen(true)}
+        />
       )}
     </div>
   );

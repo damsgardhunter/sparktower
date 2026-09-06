@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Cpu, Send, X, Loader2, CheckCircle2, ListTodo, Milestone, FileEdit, Sparkles, ChevronDown, MessageSquare } from "lucide-react";
+import { Cpu, Send, X, Loader2, CheckCircle2, ListTodo, Milestone, FileEdit, Sparkles, ChevronDown, MessageSquare, Pencil } from "lucide-react";
 
 interface NovaMessage {
   id: string;
@@ -70,6 +70,7 @@ function ActionCard({ action }: { action: NovaAction }) {
     update_scope: FileEdit,
     create_tasks: ListTodo,
     create_milestones: Milestone,
+    edit_project: Pencil,
     complete_onboarding: CheckCircle2,
   };
   const labels: Record<string, string> = {
@@ -77,6 +78,7 @@ function ActionCard({ action }: { action: NovaAction }) {
     update_scope: "Updated Scope",
     create_tasks: "Created Tasks",
     create_milestones: "Created Milestones",
+    edit_project: "Edited Your Project",
     complete_onboarding: "Setup Complete",
   };
   const Icon = icons[action.type] || Sparkles;
@@ -93,6 +95,10 @@ function ActionCard({ action }: { action: NovaAction }) {
     } else {
       details = `${action.data.count} milestones: ${(action.data.milestones || []).join(", ")}`;
     }
+  } else if (action.type === "edit_project") {
+    // Nova returns a sentence per change; showing them is the only way the
+    // user can tell what it actually touched.
+    details = (action.data.changes || []).map((c: any) => c.description).join(" · ");
   } else if (action.type === "update_scope") {
     const mvp = action.data.mvp?.length || 0;
     const nth = action.data.niceToHave?.length || 0;
@@ -243,6 +249,13 @@ export function NovaGuide({ projectId, currentTab, project, onProjectUpdate }: N
           }
           if (action.type === "create_milestones") {
             queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "milestones"] });
+          }
+          if (action.type === "edit_project") {
+            // An edit can span tasks, milestones and the roadmap in one go, so
+            // refresh all three rather than inferring from the change list.
+            for (const key of ["kanban", "milestones", "roadmap", "activity"]) {
+              queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, key] });
+            }
           }
           if (action.type === "complete_onboarding") {
             setIsOnboarding(false);

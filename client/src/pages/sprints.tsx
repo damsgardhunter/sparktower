@@ -11,10 +11,18 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { CofounderSprint, User } from "@shared/schema";
 import {
   Loader2, Plus, Users, Timer, Sparkles,
-  CheckCircle2, Clock, ArrowRight, XCircle, Cpu, GraduationCap,
+  CheckCircle2, Clock, ArrowRight, XCircle, Cpu, GraduationCap, Bot,
 } from "lucide-react";
 
 type SprintWithUsers = CofounderSprint & { user1?: User; user2?: User };
+
+/** "2m 05s" / "1h 04m" — compact enough for the waiting-room stat row. */
+function formatWait(totalSeconds: number): string {
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  if (minutes < 60) return `${minutes}m ${String(totalSeconds % 60).padStart(2, "0")}s`;
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
+}
 
 const STATUS_STYLES: Record<string, { label: string; variant: "default" | "secondary" | "outline" | "destructive" }> = {
   setup: { label: "Setup", variant: "outline" },
@@ -35,11 +43,16 @@ export default function Sprints() {
     queryKey: ["/api/sprints"],
   });
 
+  // Polling doubles as the heartbeat that keeps our queue row alive; the
+  // server sweeps rows that stop checking in.
   const { data: queueStatus } = useQuery<{
     inQueue: boolean;
     matched?: boolean;
     sprint?: SprintWithUsers;
     entry?: { duration: string; productStyle: string; createdAt: string };
+    position?: number | null;
+    waiting?: number;
+    waitingSeconds?: number;
   }>({
     queryKey: ["/api/sprints/queue/status"],
     refetchInterval: 5000,
@@ -99,25 +112,25 @@ export default function Sprints() {
 
         {queueStatus?.inQueue && queueStatus.entry && (
           <section className="mb-8">
-            <Card className="border-primary/30 bg-primary/5">
-              <CardContent className="p-5">
-                <div className="flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-4">
-                    <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
+            <Card className="border-primary/30 bg-primary/5" data-testid="card-queue-waiting-room">
+              <CardContent className="p-5 space-y-4">
+                <div className="flex items-start justify-between gap-4 flex-wrap">
+                  <div className="flex items-center gap-4 min-w-0">
+                    <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
                       <Loader2 className="h-5 w-5 animate-spin text-primary" />
                     </div>
-                    <div>
-                      <h3 className="font-semibold" data-testid="text-queue-status">Waiting for a partner...</h3>
+                    <div className="min-w-0">
+                      <h3 className="font-semibold" data-testid="text-queue-status">Looking for a partner…</h3>
                       <p className="text-sm text-muted-foreground">
-                        You're in the matchmaking queue for a {queueStatus.entry.duration} sprint.
-                        We'll match you as soon as another builder joins.
+                        You'll be paired with the next builder who picks a {queueStatus.entry.duration} sprint.
+                        Keep this tab open — we check every few seconds.
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3 shrink-0">
+                  <div className="flex items-center gap-2 shrink-0">
                     <Badge variant="outline">{queueStatus.entry.duration}</Badge>
                     {queueStatus.entry.productStyle && (
-                      <Badge variant="outline">{queueStatus.entry.productStyle}</Badge>
+                      <Badge variant="outline" className="capitalize">{queueStatus.entry.productStyle}</Badge>
                     )}
                     <Button
                       variant="ghost"
@@ -127,10 +140,44 @@ export default function Sprints() {
                       data-testid="button-leave-queue"
                     >
                       <XCircle className="h-4 w-4 mr-1" />
-                      Cancel
+                      Leave queue
                     </Button>
                   </div>
                 </div>
+
+                <div className="grid grid-cols-3 gap-3 pt-1 border-t border-primary/20">
+                  <div className="pt-3">
+                    <p className="text-xs text-muted-foreground">Your place in line</p>
+                    <p className="text-lg font-semibold" data-testid="text-queue-position">
+                      {queueStatus.position ? `#${queueStatus.position}` : "—"}
+                    </p>
+                  </div>
+                  <div className="pt-3">
+                    <p className="text-xs text-muted-foreground">Builders waiting</p>
+                    <p className="text-lg font-semibold" data-testid="text-queue-waiting">
+                      {queueStatus.waiting ?? 0}
+                    </p>
+                  </div>
+                  <div className="pt-3">
+                    <p className="text-xs text-muted-foreground">Waiting for</p>
+                    <p className="text-lg font-semibold" data-testid="text-queue-elapsed">
+                      {formatWait(queueStatus.waitingSeconds ?? 0)}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Nobody else in line: offer the practice sprint rather than
+                    leaving them staring at a spinner. */}
+                {(queueStatus.waiting ?? 0) <= 1 && (queueStatus.waitingSeconds ?? 0) > 30 && (
+                  <div className="flex items-center justify-between gap-3 rounded-md bg-background/60 border border-border/60 p-3">
+                    <p className="text-sm text-muted-foreground">
+                      Quiet in here right now. You can practise with Nova instead — your place in line is kept.
+                    </p>
+                    <Button size="sm" variant="outline" className="gap-1.5 shrink-0" onClick={() => setLocation("/sprints/practice")} data-testid="button-queue-practice-instead">
+                      <Bot className="h-3.5 w-3.5" /> Practice with Nova
+                    </Button>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </section>

@@ -149,22 +149,8 @@ export default function Contests() {
             <Zap className="h-4 w-4 text-primary" />
             <h2 className="text-lg font-semibold">Games Arena</h2>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Card className="cursor-pointer hover:border-primary/50 transition-colors group" onClick={() => setLocation("/games/tactics")} data-testid="card-game-tactics">
-              <CardHeader className="pb-2">
-                <div className="h-10 w-10 rounded-lg bg-blue-500/10 flex items-center justify-center mb-2">
-                  <Target className="h-5 w-5 text-blue-500" />
-                </div>
-                <CardTitle className="text-base group-hover:text-primary transition-colors">Team Tactics Arena</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm text-muted-foreground mb-3">Turn-based tactical strategy. Pick a role, coordinate with your team, and outmaneuver opponents on an 8x8 grid.</p>
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline" className="text-xs">Multiplayer</Badge>
-                  <Badge variant="outline" className="text-xs">Strategy</Badge>
-                </div>
-              </CardContent>
-            </Card>
+          {/* Two games now — Team Tactics Arena was removed. */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Card className="cursor-pointer hover:border-primary/50 transition-colors group" onClick={() => setLocation("/games/typing")} data-testid="card-game-typing">
               <CardHeader className="pb-2">
                 <div className="h-10 w-10 rounded-lg bg-green-500/10 flex items-center justify-center mb-2">

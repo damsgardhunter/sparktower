@@ -19,6 +19,7 @@ import {
   GraduationCap,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { SprintIdeaPicker, type SprintIdea } from "@/components/sprint-idea-picker";
 
 type Duration = "24h" | "72h";
 type ProductStyle = "past" | "modern" | "futuristic";
@@ -68,15 +69,18 @@ export default function SprintPractice() {
   const [productStyle, setProductStyle] = useState<ProductStyle | null>(null);
 
   const createPracticeMutation = useMutation({
-    mutationFn: async () => {
+    // `idea` is the option the builder picked; without it the server falls
+    // back to generating one, which is the old behaviour.
+    mutationFn: async (idea?: SprintIdea) => {
       const res = await apiRequest("POST", "/api/sprints/practice", {
         duration,
         productStyle,
+        idea,
       });
       return res.json();
     },
     onSuccess: (sprint) => {
-      toast({ title: "Practice sprint created!", description: "Nova has chosen a product for you to work on." });
+      toast({ title: "Practice sprint created!", description: `You're building "${sprint.productName}" with Nova.` });
       queryClient.invalidateQueries({ queryKey: ["/api/sprints"] });
       setLocation(`/sprints/${sprint.id}`);
     },
@@ -118,14 +122,15 @@ export default function SprintPractice() {
             <div>
               <p className="text-sm font-medium">Nova AI Partner</p>
               <p className="text-xs text-muted-foreground">
-                Nova will generate a product idea, answer ideation questions, and provide feedback — just like a real partner would. Uses 1 AI credit.
+                Nova pitches you ideas, talks through the product with you, answers the ideation
+                questions as your partner, and gives feedback at the end.
               </p>
             </div>
           </CardContent>
         </Card>
 
         <div className="flex items-center justify-center gap-2 mb-10">
-          {[1, 2].map((s) => (
+          {[1, 2, 3].map((s) => (
             <div key={s} className="flex items-center gap-2">
               <div
                 className={`h-8 w-8 rounded-full flex items-center justify-center text-sm font-medium transition-colors ${
@@ -139,7 +144,7 @@ export default function SprintPractice() {
               >
                 {s < step ? <Check className="h-4 w-4" /> : s}
               </div>
-              {s < 2 && <div className={`w-12 h-0.5 ${s < step ? "bg-primary" : "bg-muted"}`} />}
+              {s < 3 && <div className={`w-12 h-0.5 ${s < step ? "bg-primary" : "bg-muted"}`} />}
             </div>
           ))}
         </div>
@@ -216,33 +221,50 @@ export default function SprintPractice() {
           </div>
         )}
 
+        {step === 3 && productStyle && (
+          <div className="space-y-4">
+            <div className="text-center mb-6">
+              <h2 className="text-lg font-semibold">Pick your product</h2>
+              <p className="text-sm text-muted-foreground mt-1">
+                Nova will pitch three {STYLE_OPTIONS.find(o => o.value === productStyle)?.label.toLowerCase()} ideas.
+                Choose whichever sounds most fun to build.
+              </p>
+            </div>
+            <SprintIdeaPicker
+              productStyle={productStyle}
+              onChoose={(idea) => createPracticeMutation.mutate(idea)}
+              isSubmitting={createPracticeMutation.isPending}
+            />
+          </div>
+        )}
+
         <div className="flex items-center justify-between gap-4 mt-8">
           <Button variant="outline" onClick={() => step > 1 ? setStep(step - 1) : setLocation("/sprints")} data-testid="button-step-back">
             <ArrowLeft className="h-4 w-4 mr-2" />
             Back
           </Button>
 
-          {step < 2 ? (
-            <Button
-              onClick={() => setStep(2)}
-              disabled={!duration}
-              data-testid="button-step-next"
-            >
+          {step === 1 ? (
+            <Button onClick={() => setStep(2)} disabled={!duration} data-testid="button-step-next">
               Next
+              <ArrowRight className="h-4 w-4 ml-2" />
+            </Button>
+          ) : step === 2 ? (
+            <Button onClick={() => setStep(3)} disabled={!productStyle} data-testid="button-step-next">
+              Pick an idea
               <ArrowRight className="h-4 w-4 ml-2" />
             </Button>
           ) : (
             <Button
-              onClick={() => createPracticeMutation.mutate()}
-              disabled={createPracticeMutation.isPending || !productStyle}
+              variant="outline"
+              onClick={() => createPracticeMutation.mutate(undefined)}
+              disabled={createPracticeMutation.isPending}
               data-testid="button-create-practice"
             >
-              {createPracticeMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin mr-2" />
-              ) : (
-                <GraduationCap className="h-4 w-4 mr-2" />
-              )}
-              Start Practice Sprint
+              {createPracticeMutation.isPending
+                ? <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                : <GraduationCap className="h-4 w-4 mr-2" />}
+              Surprise me instead
             </Button>
           )}
         </div>

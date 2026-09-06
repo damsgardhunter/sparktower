@@ -1,5 +1,9 @@
 import type { Express } from "express";
 import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
+import { getObjectAclPolicy, ObjectPermission } from "./objectAcl";
+import fs from "fs";
+import fsPromises from "fs/promises";
+import path from "path";
 
 /**
  * Register object storage routes for file uploads.
@@ -65,17 +69,62 @@ export function registerObjectStorageRoutes(app: Express): void {
     }
   });
 
+  // Internal development-only upload endpoint used when PRIVATE_OBJECT_DIR is not configured.
+  // Accepts PUT /internal-local-upload/:id and writes the body to local disk under local_objects/uploads/:id
+  app.put("/internal-local-upload/:id", async (req: any, res) => {
+    try {
+      if (process.env.PRIVATE_OBJECT_DIR) {
+        return res.status(404).json({ error: "Not found" });
+      }
+      const id = req.params.id;
+      const localRoot = process.env.LOCAL_OBJECT_ROOT || path.join(process.cwd(), "local_objects");
+      const uploadsDir = path.join(localRoot, "uploads");
+      await fsPromises.mkdir(uploadsDir, { recursive: true });
+      const filePath = path.join(uploadsDir, id);
+
+      const writeStream = fs.createWriteStream(filePath);
+      req.pipe(writeStream);
+      writeStream.on("finish", () => {
+        res.json({ success: true, objectPath: `/objects/uploads/${id}` });
+      });
+      writeStream.on("error", (err: any) => {
+        console.error("Local upload error:", err);
+        res.status(500).json({ error: "Failed to write file" });
+      });
+    } catch (error) {
+      console.error("Local upload handler error:", error);
+      res.status(500).json({ error: "Failed to handle local upload" });
+    }
+  });
+
   /**
    * Serve uploaded objects.
    *
    * GET /objects/:objectPath(*)
    *
-   * This serves files from object storage. For public files, no auth needed.
-   * For protected files, add authentication middleware and ACL checks.
+   * Objects carrying an explicit `private` ACL policy are only served to their
+   * owner (or a user matching an ACL rule). Objects with no policy — every
+   * upload predating ACLs, including project media that is meant to be
+   * publicly viewable — are served as before, so this stays backwards
+   * compatible while making `visibility: "private"` actually mean something.
    */
-  app.get("/objects/:objectPath{/*rest}", async (req, res) => {
+  app.get("/objects/:objectPath{/*rest}", async (req: any, res) => {
     try {
       const objectFile = await objectStorageService.getObjectEntityFile(req.path);
+
+      const aclPolicy = await getObjectAclPolicy(objectFile).catch(() => null);
+      if (aclPolicy && aclPolicy.visibility === "private") {
+        const allowed = await objectStorageService.canAccessObjectEntity({
+          userId: req.user?.id,
+          objectFile,
+          requestedPermission: ObjectPermission.READ,
+        });
+        if (!allowed) {
+          // 404 rather than 403 so object paths aren't confirmable.
+          return res.status(404).json({ error: "Object not found" });
+        }
+      }
+
       await objectStorageService.downloadObject(objectFile, res);
     } catch (error) {
       console.error("Error serving object:", error);

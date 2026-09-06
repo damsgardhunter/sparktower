@@ -35,14 +35,20 @@ export async function setupVite(server: Server, app: Express) {
     const url = req.originalUrl;
 
     try {
-      const clientTemplate = path.resolve(
-        import.meta.dirname,
-        "..",
-        "client",
-        "index.html",
-      );
+      // try the directory relative to the built file first, but fall back to the
+      // repository root (process.cwd()) which is more stable in worktree setups
+      const candidatePaths = [
+        path.resolve(import.meta.dirname, "..", "client", "index.html"),
+        path.resolve(process.cwd(), "client", "index.html"),
+      ];
 
-      // always reload the index.html file from disk incase it changes
+      const clientTemplate = candidatePaths.find((p) => fs.existsSync(p));
+      if (!clientTemplate) {
+        // keep the original path in the error if nothing exists
+        throw new Error(`Could not find client/index.html in any of: ${candidatePaths.join(", ")}`);
+      }
+
+      // always reload the index.html file from disk in case it changes
       let template = await fs.promises.readFile(clientTemplate, "utf-8");
       template = template.replace(
         `src="/src/main.tsx"`,

@@ -30,5 +30,35 @@ export const users = pgTable("users", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+/**
+ * Refresh tokens for the native mobile apps.
+ *
+ * The web app uses cookie sessions, but a native client can't rely on cookies
+ * (no shared cookie jar with the API origin, and `sameSite` rules break it),
+ * so mobile authenticates with a short-lived access token plus a rotating
+ * refresh token stored here.
+ *
+ * Only a SHA-256 hash of the refresh token is persisted — a database leak
+ * must not hand out working sessions.
+ */
+export const mobileRefreshTokens = pgTable(
+  "mobile_refresh_tokens",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    userId: varchar("user_id").notNull().references(() => users.id),
+    tokenHash: varchar("token_hash").notNull().unique(),
+    /** Free-form client label, e.g. "iPhone 15 · iOS 18". */
+    device: varchar("device"),
+    expiresAt: timestamp("expires_at").notNull(),
+    /** Set when rotated or explicitly signed out. */
+    revokedAt: timestamp("revoked_at"),
+    lastUsedAt: timestamp("last_used_at").defaultNow(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [index("IDX_mobile_refresh_user").on(table.userId)]
+);
+
 export type UpsertUser = typeof users.$inferInsert;
+export type UserRow = typeof users.$inferSelect;
+export type MobileRefreshToken = typeof mobileRefreshTokens.$inferSelect;
 export type User = typeof users.$inferSelect;

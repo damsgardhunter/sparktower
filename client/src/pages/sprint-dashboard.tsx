@@ -22,8 +22,10 @@ import {
   FileText, LayoutList, User as UserIcon,
   Star, ThumbsUp, ThumbsDown, AlertTriangle,
   Shield, TrendingUp, Rocket, Mail, Share2,
-  HelpCircle, Camera, Handshake, PenLine, Cpu, Dice5, GraduationCap,
+  HelpCircle, Camera, Handshake, PenLine, Cpu, Dice5, GraduationCap, Bot,
 } from "lucide-react";
+import { CREDIT_COSTS } from "@shared/plans";
+import { SprintIdeaPicker, type SprintIdea } from "@/components/sprint-idea-picker";
 
 const SPRINT_PHASES = ["setup", "ideation", "alignment", "building", "validation", "review", "completed"] as const;
 
@@ -168,6 +170,27 @@ export default function SprintDashboard() {
     onError: () => { toast({ title: "Failed to submit response", variant: "destructive" }); },
   });
 
+  /** Nova answering as the practice partner. Costs a credit per reply. */
+  const novaReplyMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/sprints/${sprintId}/nova-reply`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/sprints", sprintId, "messages"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/subscription"] });
+    },
+    onError: (err: any) => {
+      const raw = err?.message || "";
+      const start = raw.indexOf("{");
+      let description = "Nova couldn't reply right now.";
+      if (start >= 0) {
+        try { description = JSON.parse(raw.slice(start)).message || description; } catch { /* keep */ }
+      }
+      toast({ title: "Nova didn't reply", description, variant: "destructive" });
+    },
+  });
+
   const sendMessageMutation = useMutation({
     mutationFn: async (content: string) => {
       const res = await apiRequest("POST", `/api/sprints/${sprintId}/messages`, { content });
@@ -176,6 +199,9 @@ export default function SprintDashboard() {
     onSuccess: () => {
       setChatMessage("");
       queryClient.invalidateQueries({ queryKey: ["/api/sprints", sprintId, "messages"] });
+      // On a practice sprint Nova answers back, so the chat feels like a
+      // conversation rather than a monologue.
+      if (sprint?.isPractice) novaReplyMutation.mutate();
     },
   });
 
@@ -532,29 +558,60 @@ export default function SprintDashboard() {
                 <p className="text-sm text-muted-foreground text-center py-4">No messages yet. Start the conversation!</p>
               )}
               {messages?.map((msg) => {
-                const isMe = msg.userId === user?.id;
+                // In a practice sprint Nova shares the human's userId, so
+                // isNova — not userId — decides which side a message sits on.
+                const isNova = (msg as any).isNova === true;
+                const isMe = !isNova && msg.userId === user?.id;
                 return (
                   <div key={msg.id} className={`flex ${isMe ? "justify-end" : "justify-start"}`} data-testid={`chat-message-${msg.id}`}>
-                    <div className={`max-w-[70%] px-3 py-2 rounded-md text-sm ${isMe ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
-                      {!isMe && <p className="text-xs font-medium mb-0.5 opacity-70">{(msg as any).user?.firstName || "Partner"}</p>}
-                      <p>{msg.content}</p>
+                    <div className={`max-w-[70%] px-3 py-2 rounded-md text-sm ${
+                      isMe ? "bg-primary text-primary-foreground"
+                        : isNova ? "bg-muted border border-primary/30"
+                        : "bg-muted"
+                    }`}>
+                      {isNova && (
+                        <p className="text-xs font-medium mb-0.5 flex items-center gap-1 text-primary">
+                          <Bot className="h-3 w-3" /> Nova
+                        </p>
+                      )}
+                      {!isMe && !isNova && (
+                        <p className="text-xs font-medium mb-0.5 opacity-70">{(msg as any).user?.firstName || "Partner"}</p>
+                      )}
+                      <p className="whitespace-pre-line">{msg.content}</p>
                     </div>
                   </div>
                 );
               })}
+              {novaReplyMutation.isPending && (
+                <div className="flex justify-start" data-testid="nova-typing">
+                  <div className="max-w-[70%] px-3 py-2 rounded-md text-sm bg-muted border border-primary/30 flex items-center gap-2 text-muted-foreground">
+                    <Bot className="h-3 w-3 text-primary" />
+                    <span className="text-xs">Nova is thinking…</span>
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  </div>
+                </div>
+              )}
               <div ref={chatEndRef} />
             </div>
-            <div className="flex items-center gap-2 px-6 py-2 border-t border-border">
-              <Input
-                value={chatMessage}
-                onChange={(e) => setChatMessage(e.target.value)}
-                placeholder="Type a message..."
-                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSendChat(); } }}
-                data-testid="input-chat-message"
-              />
-              <Button size="icon" onClick={handleSendChat} disabled={!chatMessage.trim() || sendMessageMutation.isPending} data-testid="button-send-chat">
-                <Send className="h-4 w-4" />
-              </Button>
+            <div className="px-6 py-2 border-t border-border space-y-2">
+              <div className="flex items-center gap-2">
+                <Input
+                  value={chatMessage}
+                  onChange={(e) => setChatMessage(e.target.value)}
+                  placeholder={sprint.isPractice ? "Talk to Nova about the product..." : "Type a message..."}
+                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSendChat(); } }}
+                  data-testid="input-chat-message"
+                />
+                <Button size="icon" onClick={handleSendChat} disabled={!chatMessage.trim() || sendMessageMutation.isPending} data-testid="button-send-chat">
+                  <Send className="h-4 w-4" />
+                </Button>
+              </div>
+              {sprint.isPractice && (
+                <p className="text-[11px] text-muted-foreground flex items-center gap-1">
+                  <Bot className="h-3 w-3" />
+                  Nova replies as your partner · {CREDIT_COSTS.novaPartnerReply} credit per reply
+                </p>
+              )}
             </div>
           </div>
         )}
@@ -592,20 +649,28 @@ function SetupPhase({ sprint, user, onAdvance, isPending }: {
     },
   });
 
-  const novaSuggestMutation = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/sprints/nova-suggest", {
-        productStyle: sprint.productStyle,
-        partnerId: partner?.id,
-      });
+  /**
+   * Locks a picked idea onto the sprint for both partners. This replaces the
+   * old flow where each side proposed a bare name and one was picked at
+   * random — an agreed idea beats a coin flip.
+   */
+  const chooseIdeaMutation = useMutation({
+    mutationFn: async (idea: SprintIdea) => {
+      const res = await apiRequest("POST", `/api/sprints/${sprint.id}/choose-idea`, { idea });
       return res.json();
     },
-    onSuccess: (data: { name: string; description: string }) => {
-      setProposedName(data.name);
-      toast({ title: "Nova suggested a name!", description: data.name });
+    onSuccess: (updated: any) => {
+      toast({ title: "Product locked in", description: `You're building "${updated.productName}".` });
+      queryClient.invalidateQueries({ queryKey: ["/api/sprints", sprint.id] });
     },
-    onError: () => {
-      toast({ title: "Failed to get Nova suggestion", variant: "destructive" });
+    onError: (err: any) => {
+      const raw = err?.message || "";
+      const start = raw.indexOf("{");
+      let description = "Couldn't set that idea.";
+      if (start >= 0) {
+        try { description = JSON.parse(raw.slice(start)).message || description; } catch { /* keep */ }
+      }
+      toast({ title: "Couldn't lock in the idea", description, variant: "destructive" });
     },
   });
 
@@ -615,6 +680,10 @@ function SetupPhase({ sprint, user, onAdvance, isPending }: {
   };
 
   const productNameChosen = !!sprint.productName;
+  const agreedOnIdea =
+    !!sprint.productName &&
+    !!sprint.user1ProposedName &&
+    sprint.user1ProposedName === sprint.user2ProposedName;
 
   if (sprint.isPractice) {
     return (
@@ -718,7 +787,7 @@ function SetupPhase({ sprint, user, onAdvance, isPending }: {
                 )}
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-4">
                 <div className="flex gap-2">
                   <Button
                     variant={!useNova ? "default" : "outline"}
@@ -727,46 +796,53 @@ function SetupPhase({ sprint, user, onAdvance, isPending }: {
                     data-testid="button-name-custom"
                   >
                     <PenLine className="h-3.5 w-3.5 mr-1" />
-                    My Own Name
+                    Propose a name
                   </Button>
                   <Button
                     variant={useNova ? "default" : "outline"}
                     size="sm"
-                    onClick={() => {
-                      setUseNova(true);
-                      if (!proposedName) novaSuggestMutation.mutate();
-                    }}
-                    disabled={novaSuggestMutation.isPending}
+                    onClick={() => setUseNova(true)}
                     data-testid="button-name-nova"
                   >
-                    {novaSuggestMutation.isPending ? (
-                      <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-                    ) : (
-                      <Cpu className="h-3.5 w-3.5 mr-1" />
-                    )}
-                    Ask Nova (1 credit)
+                    <Sparkles className="h-3.5 w-3.5 mr-1" />
+                    Let Nova pitch ideas
                   </Button>
                 </div>
 
-                <div className="flex gap-2">
-                  <Input
-                    value={proposedName}
-                    onChange={(e) => setProposedName(e.target.value)}
-                    placeholder="Enter a product name"
-                    data-testid="input-propose-name"
-                  />
-                  <Button
-                    onClick={handlePropose}
-                    disabled={!proposedName.trim() || proposeNameMutation.isPending}
-                    data-testid="button-submit-proposal"
-                  >
-                    {proposeNameMutation.isPending ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      "Propose"
-                    )}
-                  </Button>
-                </div>
+                {useNova ? (
+                  <div className="space-y-3">
+                    <p className="text-xs text-muted-foreground">
+                      Picking an idea here settles the product for both of you — no name coin-flip needed.
+                    </p>
+                    <SprintIdeaPicker
+                      productStyle={sprint.productStyle || "modern"}
+                      partnerId={partner?.id}
+                      onChoose={(idea) => chooseIdeaMutation.mutate(idea)}
+                      isSubmitting={chooseIdeaMutation.isPending}
+                      chosenName={sprint.productName}
+                    />
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <Input
+                      value={proposedName}
+                      onChange={(e) => setProposedName(e.target.value)}
+                      placeholder="Enter a product name"
+                      data-testid="input-propose-name"
+                    />
+                    <Button
+                      onClick={handlePropose}
+                      disabled={!proposedName.trim() || proposeNameMutation.isPending}
+                      data-testid="button-submit-proposal"
+                    >
+                      {proposeNameMutation.isPending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        "Propose"
+                      )}
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -780,14 +856,27 @@ function SetupPhase({ sprint, user, onAdvance, isPending }: {
       ) : (
         <Card className="border-primary/30 bg-primary/5" data-testid="card-name-selected">
           <CardContent className="p-6 text-center">
-            <Dice5 className="h-8 w-8 text-primary mx-auto mb-3" />
+            {/* Identical proposals mean the idea was agreed via the picker
+                rather than coin-flipped between two different names. */}
+            {agreedOnIdea ? (
+              <Sparkles className="h-8 w-8 text-primary mx-auto mb-3" />
+            ) : (
+              <Dice5 className="h-8 w-8 text-primary mx-auto mb-3" />
+            )}
             <h3 className="text-lg font-semibold mb-1" data-testid="text-chosen-name">
               {sprint.productName}
             </h3>
-            <p className="text-sm text-muted-foreground">
-              Randomly selected from both proposals. This is your sprint project!
+            {sprint.productDescription && (
+              <p className="text-sm text-secondary mt-2 max-w-md mx-auto leading-relaxed">
+                {sprint.productDescription}
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground mt-3">
+              {agreedOnIdea
+                ? "Chosen from Nova's pitches. This is your sprint project!"
+                : "Randomly selected from both proposals. This is your sprint project!"}
             </p>
-            {sprint.user1ProposedName && sprint.user2ProposedName && (
+            {!agreedOnIdea && sprint.user1ProposedName && sprint.user2ProposedName && (
               <div className="flex items-center justify-center gap-4 mt-3 text-xs text-muted-foreground">
                 <span>{isUser1 ? "You" : partner?.firstName}: {sprint.user1ProposedName}</span>
                 <span>vs</span>

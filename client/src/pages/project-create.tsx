@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { useLocation } from "wouter";
+import { useLocation, Link } from "wouter";
+import { useEntitlements } from "@/hooks/use-entitlements";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -30,6 +31,7 @@ import {
   UserPlus,
   Target,
   Rocket,
+  Lock,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { SiGithub } from "react-icons/si";
@@ -162,6 +164,7 @@ function ReadinessItem({ label, done }: { label: string; done: boolean }) {
 export default function ProjectCreate() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const { canCreatePrivateProject, privateProjectLimit } = useEntitlements();
   const [showIntro, setShowIntro] = useState(true);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -178,14 +181,17 @@ export default function ProjectCreate() {
     status: "planning",
     repoUrl: "",
     liveUrl: "",
+    soloMode: false,
   });
+
+  const soloMode = !!projectData.soloMode;
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { uploadFile, isUploading } = useUpload({
     onSuccess: (response) => {
-      const publicUrl = `/api/objects/${response.objectPath}`;
+      const publicUrl = response.objectPath;
       setUploadedImages((prev) => [...prev, { path: response.objectPath, preview: publicUrl }]);
       toast({ title: "Image uploaded" });
     },
@@ -225,7 +231,16 @@ export default function ProjectCreate() {
     onSuccess: (data) => {
       setMessages((prev) => [...prev, { role: "assistant", content: data.reply }]);
       if (data.projectUpdates) {
-        setProjectData((prev) => ({ ...prev, ...data.projectUpdates }));
+        setProjectData((prev) => {
+          const updates = { ...data.projectUpdates };
+          // Nova doesn't know about Solo Builder Mode, so don't let it
+          // reintroduce roles or a bigger team behind the user's back.
+          if (prev.soloMode) {
+            delete updates.rolesNeeded;
+            delete updates.teamSize;
+          }
+          return { ...prev, ...updates };
+        });
       }
       queryClient.invalidateQueries({ queryKey: ["/api/subscription"] });
     },
@@ -274,6 +289,22 @@ export default function ProjectCreate() {
     chatMutation.mutate(userMsg);
   };
 
+  /**
+   * Solo Builder Mode is mutually exclusive with recruiting: turning it on
+   * clears any roles already picked and forces the team back down to just the
+   * owner. Uses a functional update so it can't be clobbered by a Nova reply
+   * landing at the same time (see chatMutation.onSuccess).
+   */
+  const handleSoloModeChange = (checked: boolean) => {
+    setProjectData((prev) => ({
+      ...prev,
+      soloMode: checked,
+      ...(checked ? { teamSize: 1, rolesNeeded: [] } : {}),
+    }));
+    // The role Select is keyed; bump it so a stale selection doesn't linger.
+    if (checked) setRoleSelectKey((k) => k + 1);
+  };
+
   const handleAddRole = (role: string) => {
     if (projectData.rolesNeeded?.includes(role)) return;
     setProjectData((prev) => ({
@@ -311,7 +342,8 @@ export default function ProjectCreate() {
     projectData.title,
     projectData.description,
     projectData.category,
-    projectData.rolesNeeded && projectData.rolesNeeded.length > 0,
+    // Solo builders never fill roles, so the counter would be stuck at 4/5.
+    soloMode || (projectData.rolesNeeded && projectData.rolesNeeded.length > 0),
     projectData.techStack && projectData.techStack.length > 0,
   ].filter(Boolean).length;
 
@@ -493,19 +525,42 @@ export default function ProjectCreate() {
                   </label>
                   <div className="flex items-center gap-2">
                     <Switch
-                      checked={!!(projectData as any).soloMode}
-                      onCheckedChange={(checked) =>
-                        setProjectData({ ...projectData, soloMode: checked, teamSize: checked ? 1 : projectData.teamSize } as any)
-                      }
+                      checked={soloMode}
+                      onCheckedChange={handleSoloModeChange}
                       data-testid="switch-solo-mode"
                     />
                     <span className="text-xs text-muted-foreground">
-                      {(projectData as any).soloMode ? "Building solo" : "Team project"}
+                      {soloMode ? "Building solo" : "Team project"}
                     </span>
-                    {(projectData as any).soloMode && (
+                    {soloMode && (
                       <Badge variant="outline" className="text-xs border-primary/30 text-primary">Solo Builder</Badge>
                     )}
                   </div>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1 mb-2">
+                    <Lock className="h-3 w-3" /> Private Project
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      checked={!!(projectData as any).isPrivate}
+                      disabled={!canCreatePrivateProject && !(projectData as any).isPrivate}
+                      onCheckedChange={(checked) => setProjectData({ ...projectData, isPrivate: checked } as any)}
+                      data-testid="switch-private-project"
+                    />
+                    <span className="text-xs text-muted-foreground">
+                      {(projectData as any).isPrivate ? "Hidden from Discover" : "Visible to everyone"}
+                    </span>
+                  </div>
+                  {!canCreatePrivateProject && !(projectData as any).isPrivate && (
+                    <p className="text-xs text-muted-foreground mt-1.5">
+                      {privateProjectLimit === 0 ? (
+                        <>Private projects are on <Link href="/pricing" className="text-primary hover:underline">Starter and above</Link>.</>
+                      ) : (
+                        <>You've used all {privateProjectLimit} private projects. <Link href="/pricing" className="text-primary hover:underline">Builder</Link> makes them unlimited.</>
+                      )}
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1">
@@ -518,7 +573,7 @@ export default function ProjectCreate() {
                       setProjectData({ ...projectData, teamSize: e.target.value ? parseInt(e.target.value) : 1 })
                     }
                     className="mt-1"
-                    disabled={!!(projectData as any).soloMode}
+                    disabled={soloMode}
                     data-testid="input-project-teamsize"
                   />
                 </div>
@@ -541,35 +596,43 @@ export default function ProjectCreate() {
                 <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1">
                   <UserPlus className="h-3 w-3" /> Roles Needed
                 </label>
-                <div className="flex flex-wrap gap-1 mt-1 min-h-[28px]">
-                  {projectData.rolesNeeded?.map((role) => (
-                    <Badge key={role} variant="outline" className="text-xs flex items-center gap-1 border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
-                      {role}
-                      <button
-                        onClick={() => handleRemoveRole(role)}
-                        className="ml-0.5"
-                        data-testid={`button-remove-role-${role.replace(/\s/g, "-")}`}
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </Badge>
-                  ))}
-                </div>
-                <Select
-                  key={roleSelectKey}
-                  onValueChange={(val) => handleAddRole(val)}
-                >
-                  <SelectTrigger className="mt-2 text-xs h-8" data-testid="select-roles-needed">
-                    <SelectValue placeholder="Select a role to add..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {AVAILABLE_ROLES.filter((r) => !projectData.rolesNeeded?.includes(r)).map((role) => (
-                      <SelectItem key={role} value={role} data-testid={`select-role-${role.replace(/\s/g, "-").toLowerCase()}`}>
-                        {role}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                {soloMode ? (
+                  <p className="text-xs text-muted-foreground mt-1.5" data-testid="text-solo-roles-note">
+                    You're in Solo Builder Mode — no roles needed. Turn it off to recruit teammates.
+                  </p>
+                ) : (
+                  <>
+                    <div className="flex flex-wrap gap-1 mt-1 min-h-[28px]">
+                      {projectData.rolesNeeded?.map((role) => (
+                        <Badge key={role} variant="outline" className="text-xs flex items-center gap-1 border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
+                          {role}
+                          <button
+                            onClick={() => handleRemoveRole(role)}
+                            className="ml-0.5"
+                            data-testid={`button-remove-role-${role.replace(/\s/g, "-")}`}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </Badge>
+                      ))}
+                    </div>
+                    <Select
+                      key={roleSelectKey}
+                      onValueChange={(val) => handleAddRole(val)}
+                    >
+                      <SelectTrigger className="mt-2 text-xs h-8" data-testid="select-roles-needed">
+                        <SelectValue placeholder="Select a role to add..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {AVAILABLE_ROLES.filter((r) => !projectData.rolesNeeded?.includes(r)).map((role) => (
+                          <SelectItem key={role} value={role} data-testid={`select-role-${role.replace(/\s/g, "-").toLowerCase()}`}>
+                            {role}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </>
+                )}
               </div>
               <div>
                 <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1">
@@ -697,7 +760,12 @@ export default function ProjectCreate() {
                 <div className="space-y-2">
                   <ReadinessItem label="Title & Description" done={!!(projectData.title && projectData.description)} />
                   <ReadinessItem label="Category Selected" done={!!projectData.category} />
-                  <ReadinessItem label="Roles Identified" done={!!(projectData.rolesNeeded && projectData.rolesNeeded.length > 0)} />
+                  {/* Solo Builder Mode is itself an answer to "what roles do
+                      you need?" — nobody. Counts as done. */}
+                  <ReadinessItem
+                    label={soloMode ? "Roles Identified (solo)" : "Roles Identified"}
+                    done={soloMode || !!(projectData.rolesNeeded && projectData.rolesNeeded.length > 0)}
+                  />
                   <ReadinessItem label="Timeline Estimated" done={!!(projectData.estimatedWeeks && projectData.estimatedWeeks > 0)} />
                   <ReadinessItem label="Tech Stack" done={!!(projectData.techStack && projectData.techStack.length > 0)} />
                   <ReadinessItem label="Links Added" done={!!(projectData.repoUrl || projectData.liveUrl)} />

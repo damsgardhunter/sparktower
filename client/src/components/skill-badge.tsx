@@ -7,7 +7,16 @@ interface SkillBadgeProps {
 
 export function SkillBadge({ skill, variant = "secondary" }: SkillBadgeProps) {
   return (
-    <Badge variant={variant} className="no-default-active-elevate" data-testid={`badge-skill-${skill}`}>
+    <Badge
+      variant={variant}
+      /*
+       * Badges are nowrap by default, but skills come from résumés and can be
+       * long — "Ensemble modeling (stacked XGBoost + Quantile RF)" was running
+       * past the edge of its card. Let the text wrap inside the badge instead.
+       */
+      className="no-default-active-elevate whitespace-normal break-words text-left max-w-full leading-snug py-1"
+      data-testid={`badge-skill-${skill}`}
+    >
       {skill}
     </Badge>
   );

@@ -3,20 +3,70 @@ import { storage } from "./storage";
 import { db } from "./db";
 import { projectMembers } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
+import { requireFeature, requireCredits, getUserEntitlements, modelFor, coachingDirectiveFor, memoryLimitFor } from "./entitlements";
+import { CREDIT_COSTS } from "@shared/plans";
+import type { CofounderSprint } from "@shared/schema";
 import OpenAI from "openai";
 
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
   if (!_openai) {
+    const _rawOpenAiBase = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
+    const _openAiBaseURL = _rawOpenAiBase ? (_rawOpenAiBase.endsWith("/v1") ? _rawOpenAiBase : `${_rawOpenAiBase.replace(/\/$/,"")}/v1`) : undefined;
     _openai = new OpenAI({
       apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-      baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+      baseURL: _openAiBaseURL,
     });
   }
   return _openai;
 }
 
 const SPRINT_PHASES = ["setup", "ideation", "alignment", "building", "validation", "review", "completed"] as const;
+
+type SprintDuration = "24h" | "72h";
+
+function isDuration(value: unknown): value is SprintDuration {
+  return value === "24h" || value === "72h";
+}
+
+/** Attaches both participants, since the client renders their names/avatars. */
+async function withParticipants(sprint: CofounderSprint) {
+  const [user1, user2] = await Promise.all([
+    storage.getUser(sprint.user1Id),
+    storage.getUser(sprint.user2Id),
+  ]);
+  return { ...sprint, user1, user2 };
+}
+
+/**
+ * Nova's persona when standing in as a practice sprint partner.
+ *
+ * Deliberately opinionated: a partner who agrees with everything teaches
+ * nothing, and the point of a practice sprint is rehearsing real co-founder
+ * friction before doing it with a stranger.
+ */
+function novaPartnerSystemPrompt(sprint: CofounderSprint, directive: string): string {
+  return `You are Nova, standing in as a co-founder partner in a practice sprint. You are NOT an assistant here — you are a peer building alongside this person.
+
+SPRINT
+- Product: ${sprint.productName || "not named yet"}
+- Concept: ${sprint.productDescription || "not defined yet"}
+- Style: ${sprint.productStyle || "modern"}
+- Duration: ${sprint.duration}
+- Current phase: ${sprint.status}
+- Agreed problem: ${sprint.agreedProblem || "not agreed yet"}
+- Agreed ICP: ${sprint.agreedIcp || "not agreed yet"}
+- Agreed value prop: ${sprint.agreedValueProp || "not agreed yet"}
+
+HOW TO BEHAVE
+- Talk like a real co-founder: first person, direct, invested in the outcome.
+- Have opinions. Push back when something is vague, too broad, or unvalidated.
+- Bring your own ideas rather than only reacting to theirs.
+- Keep it to 2-4 sentences unless asked for depth. This is a working chat.
+- Never mention being an AI, a model, or a simulation.
+
+COACHING DEPTH: ${directive}`;
+}
 
 function getNextPhase(current: string, duration: string): string | null {
   const idx = SPRINT_PHASES.indexOf(current as any);
@@ -46,7 +96,103 @@ const SPRINT_72H_EXTRA_TASKS = [
 
 const NOVA_DECISION_PREFIX = "[Nova AI Practice Partner]";
 
-async function generatePracticeNovaContent(sprintId: string, phase: string, sprint: any) {
+const STYLE_BRIEFS: Record<string, string> = {
+  past: "Take something that existed before roughly 2010 — a gadget, a ritual, a service, a fad — and reimagine it for today. Think jukeboxes, video rental stores, pen pals, TV dinners, arcade cabinets, mixtapes, Blockbuster, drive-ins, encyclopedia salesmen.",
+  modern: "Take something people put up with today and make it dramatically better or stranger. Think group chats, potlucks, gym memberships, dog parks, wedding planning, moving apartments, fantasy leagues, neighbourhood gossip.",
+  futuristic: "Invent something that doesn't exist yet but plausibly could within 15 years. Think memory rental, mood-based city routing, sleep economies, pet translators, weather subscriptions, personal reputation escrow.",
+};
+
+/**
+ * Prompt for the three-option idea picker.
+ *
+ * Written to fight two specific failure modes we hit in practice:
+ *  1. The model reaching for tech-stack soup ("Next.js + Tailwind, GraphQL,
+ *     Docker/Kubernetes templates"), which is unreadable and no fun to build.
+ *  2. Bland, interchangeable SaaS dashboards.
+ * Hence the hard bans and the demand for a concrete, surprising hook.
+ */
+function ideaOptionsPrompt(style: string, skills: string, interests: string): string {
+  const brief = STYLE_BRIEFS[style] || STYLE_BRIEFS.modern;
+  return `You are Nova, pitching sprint ideas to builders who have 24-72 hours and want to enjoy themselves.
+
+THE BRIEF
+${brief}
+
+GENERATE EXACTLY 3 IDEAS. Each must be genuinely different from the other two — not three flavours of the same thing.
+
+WHAT MAKES A GOOD IDEA HERE
+- Fun first. If it sounds like homework, throw it out.
+- Specific and concrete. "An app for pet owners" is nothing. "A translator that tells you what your cat's 3am screaming actually means" is something.
+- Has a hook — one surprising twist a person would repeat to a friend.
+- Buildable as a rough prototype in a weekend by two people.
+- Slightly playful or absurd is good. Boring is the only real failure.
+
+HARD RULES — breaking these makes the idea useless
+- NEVER mention frameworks, languages, databases, cloud providers, or infrastructure. No React, Next.js, Tailwind, Node, Go, GraphQL, Postgres, Docker, Kubernetes, AWS. Not once.
+- NEVER use these words: platform, solution, leverage, seamless, robust, scalable, ecosystem, synergy, empower, revolutionize, holistic, cutting-edge, state-of-the-art.
+- No buzzword stacking. No em-dash-joined feature lists.
+- Write like you're telling a friend at a bar, not writing a pitch deck.
+
+FIELD RULES
+- "name": 1-3 words. Memorable, sayable out loud. No CamelCase mashups like "HoloSprintCoach".
+- "tagline": ONE short sentence, max 12 words. The hook.
+- "pitch": 2 sentences MAX, plain English, under 40 words total. What it does and why someone would use it.
+- "twist": ONE sentence on the part that makes people grin.
+- "whoItsFor": 5-10 words describing a specific kind of person.
+- "vibe": 1-3 words for the tone, e.g. "cozy chaos", "petty revenge", "wholesome".
+
+Builder's skills: ${skills}
+Builder's interests: ${interests}
+(Nudge toward their interests where it fits naturally, but never at the cost of the idea being fun.)
+
+Respond ONLY with valid JSON, no markdown or code fences:
+{"ideas":[{"name":"","tagline":"","pitch":"","twist":"","whoItsFor":"","vibe":""}]}`;
+}
+
+interface SprintIdea {
+  name: string;
+  tagline: string;
+  pitch: string;
+  twist: string;
+  whoItsFor: string;
+  vibe: string;
+}
+
+/** Trims the model's output to the documented field limits. */
+function normalizeIdeas(raw: any): SprintIdea[] {
+  const list = Array.isArray(raw?.ideas) ? raw.ideas : Array.isArray(raw) ? raw : [];
+  return list
+    .slice(0, 3)
+    .map((i: any) => ({
+      name: String(i?.name || "").trim().slice(0, 60),
+      tagline: String(i?.tagline || "").trim().slice(0, 140),
+      pitch: String(i?.pitch || "").trim().slice(0, 400),
+      twist: String(i?.twist || "").trim().slice(0, 240),
+      whoItsFor: String(i?.whoItsFor || "").trim().slice(0, 120),
+      vibe: String(i?.vibe || "").trim().slice(0, 40),
+    }))
+    .filter((i: SprintIdea) => i.name && i.pitch);
+}
+
+/** Flattens a chosen idea into the sprint's stored description. */
+function ideaToDescription(idea: SprintIdea): string {
+  return [idea.tagline, idea.pitch, idea.twist && `The twist: ${idea.twist}`]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/**
+ * Nova's ideation answers use `nova_`-prefixed question keys so the dashboard
+ * can pair each one with the matching human answer, and carry isNova: true so
+ * queries don't have to pattern-match on the key.
+ */
+const NOVA_KEY_PREFIX = "nova_";
+
+export function novaQuestionKey(key: string): string {
+  return key.startsWith(NOVA_KEY_PREFIX) ? key : `${NOVA_KEY_PREFIX}${key}`;
+}
+
+async function generatePracticeNovaContent(sprintId: string, phase: string, sprint: any, model: string) {
   const novaUserId = sprint.user1Id;
 
   if (phase === "ideation") {
@@ -58,7 +204,7 @@ async function generatePracticeNovaContent(sprintId: string, phase: string, spri
     ];
     try {
       const response = await getOpenAI().chat.completions.create({
-        model: "gpt-4o-mini",
+        model,
         messages: [{
           role: "system",
           content: `You are Nova, an AI co-founder partner in a practice sprint for the product "${sprint.productName}": ${sprint.productDescription || ""}. Answer these ideation questions as a thoughtful, experienced co-founder would. Be specific, practical, and insightful. Respond with ONLY valid JSON: {"real_problem": "answer", "target_user": "answer", "riskiest_assumption": "answer", "success_criteria": "answer"}`
@@ -67,7 +213,7 @@ async function generatePracticeNovaContent(sprintId: string, phase: string, spri
           content: questions.map(q => `${q.key}: ${q.prompt}`).join("\n")
         }],
         temperature: 0.7,
-        max_tokens: 600,
+        max_completion_tokens: 2000,
       });
       const content = response.choices[0]?.message?.content || "";
       const cleaned = content.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
@@ -75,15 +221,17 @@ async function generatePracticeNovaContent(sprintId: string, phase: string, spri
       for (const q of questions) {
         if (answers[q.key]) {
           await storage.addSprintResponse({
-            sprintId, userId: novaUserId, questionKey: `nova_${q.key}`, answer: answers[q.key]
+            sprintId, userId: novaUserId, questionKey: novaQuestionKey(q.key),
+            answer: answers[q.key], isNova: true,
           });
         }
       }
     } catch (err) {
+      console.error("Nova ideation generation failed, seeding placeholders:", err);
       for (const q of questions) {
         await storage.addSprintResponse({
-          sprintId, userId: novaUserId, questionKey: `nova_${q.key}`,
-          answer: `[Nova's practice response for: ${q.prompt}] This is a simulated answer for your practice sprint.`
+          sprintId, userId: novaUserId, questionKey: novaQuestionKey(q.key), isNova: true,
+          answer: `[Nova couldn't answer "${q.prompt}" right now — try asking in chat.]`
         });
       }
     }
@@ -93,7 +241,7 @@ async function generatePracticeNovaContent(sprintId: string, phase: string, spri
     try {
       await storage.addSprintDecision({
         sprintId, userId: novaUserId,
-        decision: "proceed", reason: "[Nova AI Practice Partner] This concept has solid foundations worth pursuing further. The ideation and building phases showed clear thinking and good execution."
+        decision: "proceed", reason: `${NOVA_DECISION_PREFIX} This concept has solid foundations worth pursuing further. The ideation and building phases showed clear thinking and good execution.`
       });
     } catch {}
   }
@@ -106,6 +254,8 @@ export function registerSprintRoutes(app: Express) {
       if (!partnerId || !duration) {
         return res.status(400).json({ message: "Partner and duration are required" });
       }
+      // Anyone can join a Sprint; starting your own is a Starter+ entitlement.
+      if (!(await requireFeature(res, req.user.id, "createSprints", "Creating your own Sprints"))) return;
       const sprint = await storage.createSprint({
         user1Id: req.user.id,
         user2Id: partnerId,
@@ -119,46 +269,155 @@ export function registerSprintRoutes(app: Express) {
     }
   });
 
+  /**
+   * Three idea options for a style, so builders pick something they actually
+   * want to build instead of accepting whatever the model produced first.
+   *
+   * Used by both the practice flow and the setup phase of a matched sprint;
+   * one credit covers all three.
+   */
+  app.post("/api/sprints/idea-options", isAuthenticated, async (req: any, res) => {
+    try {
+      const { productStyle, partnerId } = req.body as { productStyle?: string; partnerId?: string };
+      const style = productStyle && STYLE_BRIEFS[productStyle] ? productStyle : "modern";
+
+      if (!(await requireFeature(res, req.user.id, "createSprints", "Nova sprint ideas"))) return;
+      const ent = await requireCredits(res, req.user.id, CREDIT_COSTS.sprintIdeaSuggestion, "Nova sprint ideas");
+      if (!ent) return;
+
+      const [mine, theirs] = await Promise.all([
+        storage.getUserProfile(req.user.id),
+        partnerId ? storage.getUserProfile(partnerId) : null,
+      ]);
+      const skills = [...(mine?.skills || []), ...(theirs?.skills || [])].join(", ") || "general";
+      const interests = [...(mine?.interests || []), ...(theirs?.interests || [])].join(", ") || "building things";
+
+      const completion = await getOpenAI().chat.completions.create({
+        model: modelFor(ent),
+        messages: [
+          { role: "system", content: ideaOptionsPrompt(style, skills, interests) },
+          { role: "user", content: `Give me 3 ${style} sprint ideas. Make them fun.` },
+        ],
+        // High temperature on purpose: repeat visits should feel like a fresh
+        // shuffle, not the same three ideas every time.
+        temperature: 1,
+        max_completion_tokens: 2000,
+      });
+
+      let ideas: SprintIdea[] = [];
+      try {
+        const raw = completion.choices[0]?.message?.content || "{}";
+        const match = raw.match(/\{[\s\S]*\}/);
+        ideas = normalizeIdeas(JSON.parse(match ? match[0] : raw));
+      } catch (parseErr) {
+        console.error("Idea options parse failed:", parseErr);
+      }
+
+      if (ideas.length === 0) {
+        return res.status(502).json({ message: "Nova couldn't come up with anything good. Try again." });
+      }
+
+      await storage.deductCredits(req.user.id, CREDIT_COSTS.sprintIdeaSuggestion);
+      res.json({ style, ideas, creditsCharged: CREDIT_COSTS.sprintIdeaSuggestion });
+    } catch (error) {
+      console.error("Idea options error:", error);
+      res.status(500).json({ message: "Failed to generate ideas" });
+    }
+  });
+
+  /** Locks a chosen idea onto a matched sprint during setup. */
+  app.post("/api/sprints/:id/choose-idea", isAuthenticated, async (req: any, res) => {
+    try {
+      const sprint = await storage.getSprint(req.params.id);
+      if (!sprint) return res.status(404).json({ message: "Sprint not found" });
+      if (sprint.user1Id !== req.user.id && sprint.user2Id !== req.user.id) {
+        return res.status(403).json({ message: "Not a participant" });
+      }
+      if (sprint.status !== "setup") {
+        return res.status(400).json({ message: "The idea can only be set during setup" });
+      }
+      if (sprint.productName) {
+        return res.status(409).json({ message: "This sprint already has a product" });
+      }
+
+      const { idea } = req.body as { idea?: SprintIdea };
+      if (!idea?.name?.trim()) return res.status(400).json({ message: "An idea is required" });
+
+      const updated = await storage.updateSprint(sprint.id, {
+        productName: idea.name.trim().slice(0, 120),
+        productDescription: ideaToDescription(idea).slice(0, 1000),
+        // Both sides agreed by picking, so record it as the settled proposal.
+        user1ProposedName: idea.name.trim().slice(0, 120),
+        user2ProposedName: idea.name.trim().slice(0, 120),
+      });
+      res.json(updated);
+    } catch (error) {
+      console.error("Choose idea error:", error);
+      res.status(500).json({ message: "Failed to set the sprint idea" });
+    }
+  });
+
   app.post("/api/sprints/practice", isAuthenticated, async (req: any, res) => {
     try {
-      const { duration, productStyle } = req.body;
-      if (!duration) return res.status(400).json({ message: "Duration required" });
+      const { duration, productStyle, idea } = req.body as {
+        duration?: string; productStyle?: string; idea?: SprintIdea;
+      };
+      if (!isDuration(duration)) {
+        return res.status(400).json({ message: "duration must be 24h or 72h" });
+      }
 
-      const hasCredits = await storage.checkCredits(req.user.id, 1);
-      if (!hasCredits) return res.status(403).json({ message: "Insufficient credits. Practice sprints use 1 AI credit for Nova partner simulation." });
-      await storage.deductCredits(req.user.id, 1);
+      if (!(await requireFeature(res, req.user.id, "createSprints", "Creating your own Sprints"))) return;
+      const ent = await requireCredits(res, req.user.id, CREDIT_COSTS.practiceSprint, "a practice sprint");
+      if (!ent) return;
+      await storage.deductCredits(req.user.id, CREDIT_COSTS.practiceSprint);
 
-      const profile = await storage.getUserProfile(req.user.id);
-      const styleDesc = {
-        past: "a reimagined classic product",
-        modern: "a modern innovation",
-        futuristic: "a futuristic product concept",
-      }[productStyle || "modern"];
+      let productName: string;
+      let productDescription: string;
 
-      let productName = "Practice Product";
-      let productDescription = "A practice sprint product idea.";
-      try {
-        const response = await getOpenAI().chat.completions.create({
-          model: "gpt-4o-mini",
-          messages: [{
-            role: "system",
-            content: `You are Nova, a creative product ideation assistant. Suggest ${styleDesc} for a solo practice sprint. Consider the builder's skills. Respond with ONLY valid JSON: {"name": "Product Name", "description": "2-3 sentence description"}`
-          }, {
-            role: "user",
-            content: `Builder skills: ${profile?.skills?.join(", ") || "general"}. Interests: ${profile?.interests?.join(", ") || "technology"}. Product style: ${productStyle || "modern"}`
-          }],
-          temperature: 0.9,
-          max_tokens: 200,
-        });
-        const content = response.choices[0]?.message?.content || "";
-        const cleaned = content.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
-        const parsed = JSON.parse(cleaned);
-        productName = parsed.name || productName;
-        productDescription = parsed.description || productDescription;
-      } catch {}
+      if (idea?.name?.trim()) {
+        // The builder already picked from the three options, so don't spend
+        // another call (or another credit) re-inventing one.
+        productName = idea.name.trim().slice(0, 120);
+        productDescription = ideaToDescription(idea).slice(0, 1000);
+      } else {
+        // No pick — fall back to generating options and taking the first.
+        productName = "Practice Product";
+        productDescription = "A practice sprint product idea.";
+        try {
+          const profile = await storage.getUserProfile(req.user.id);
+          const style = productStyle && STYLE_BRIEFS[productStyle] ? productStyle : "modern";
+          const response = await getOpenAI().chat.completions.create({
+            model: modelFor(ent),
+            messages: [
+              {
+                role: "system",
+                content: ideaOptionsPrompt(
+                  style,
+                  profile?.skills?.join(", ") || "general",
+                  profile?.interests?.join(", ") || "building things"
+                ),
+              },
+              { role: "user", content: `Give me 3 ${style} sprint ideas. Make them fun.` },
+            ],
+            temperature: 1,
+            max_completion_tokens: 2000,
+          });
+          const raw = response.choices[0]?.message?.content || "{}";
+          const match = raw.match(/\{[\s\S]*\}/);
+          const [first] = normalizeIdeas(JSON.parse(match ? match[0] : raw));
+          if (first) {
+            productName = first.name;
+            productDescription = ideaToDescription(first);
+          }
+        } catch (ideaErr) {
+          console.error("Practice idea generation failed, using placeholder:", ideaErr);
+        }
+      }
 
       const sprint = await storage.createSprint({
         user1Id: req.user.id,
+        // Practice sprints have no second human; Nova stands in as the partner
+        // and its contributions are flagged with isNova.
         user2Id: req.user.id,
         duration,
         status: "setup",
@@ -168,10 +427,170 @@ export function registerSprintRoutes(app: Express) {
         isPractice: true,
       });
 
-      res.json(sprint);
+      // Nova opens the conversation so the sprint doesn't start on an empty
+      // chat — this is what makes it feel like a partner rather than a form.
+      try {
+        await storage.sendSprintMessage({
+          sprintId: sprint.id,
+          userId: req.user.id,
+          isNova: true,
+          content:
+            `Hey — I'm in. I've been thinking about **${productName}**: ${productDescription}\n\n` +
+            `Before we build anything, I want us to agree on the one problem this solves. ` +
+            `What's your read on who feels this pain most acutely?`,
+        } as any);
+      } catch (msgErr) {
+        console.error("Failed to seed Nova opening message (non-fatal):", msgErr);
+      }
+
+      res.json({ ...sprint, creditsCharged: CREDIT_COSTS.practiceSprint });
     } catch (error: any) {
       console.error("Practice sprint error:", error);
       res.status(500).json({ message: "Failed to create practice sprint" });
+    }
+  });
+
+  /**
+   * Nova replies as the practice partner.
+   *
+   * Only valid on practice sprints — on a real sprint the partner is a human
+   * and Nova must not speak for them.
+   */
+  app.post("/api/sprints/:id/nova-reply", isAuthenticated, async (req: any, res) => {
+    try {
+      const sprint = await storage.getSprint(req.params.id);
+      if (!sprint) return res.status(404).json({ message: "Sprint not found" });
+      if (sprint.user1Id !== req.user.id && sprint.user2Id !== req.user.id) {
+        return res.status(403).json({ message: "Not a participant" });
+      }
+      if (!sprint.isPractice) {
+        return res.status(400).json({ message: "Nova only stands in as a partner on practice sprints." });
+      }
+
+      const ent = await requireCredits(res, req.user.id, CREDIT_COSTS.novaPartnerReply, "a Nova partner reply");
+      if (!ent) return;
+
+      const history = await storage.getSprintMessages(req.params.id);
+      // Nova's memory of the sprint conversation scales with the plan.
+      const recent = history.slice(-memoryLimitFor(ent));
+
+      const completion = await getOpenAI().chat.completions.create({
+        model: modelFor(ent),
+        messages: [
+          { role: "system", content: novaPartnerSystemPrompt(sprint, coachingDirectiveFor(ent)) },
+          ...recent.map((m: any) => ({
+            role: (m.isNova ? "assistant" : "user") as "assistant" | "user",
+            content: m.content,
+          })),
+        ],
+        temperature: 0.8,
+        max_completion_tokens: 1500,
+      });
+
+      const content = completion.choices[0]?.message?.content?.trim();
+      if (!content) return res.status(502).json({ message: "Nova didn't respond. Try again." });
+
+      const message = await storage.sendSprintMessage({
+        sprintId: req.params.id,
+        userId: req.user.id,
+        isNova: true,
+        content,
+      } as any);
+
+      await storage.deductCredits(req.user.id, CREDIT_COSTS.novaPartnerReply);
+      res.json({ message, creditsCharged: CREDIT_COSTS.novaPartnerReply });
+    } catch (error) {
+      console.error("Nova reply error:", error);
+      res.status(500).json({ message: "Failed to get a reply from Nova" });
+    }
+  });
+
+  /**
+   * Nova answers the current phase's ideation questions as the partner, so a
+   * solo builder still has two sets of answers to align against.
+   */
+  app.post("/api/sprints/:id/nova-answers", isAuthenticated, async (req: any, res) => {
+    try {
+      const sprint = await storage.getSprint(req.params.id);
+      if (!sprint) return res.status(404).json({ message: "Sprint not found" });
+      if (sprint.user1Id !== req.user.id && sprint.user2Id !== req.user.id) {
+        return res.status(403).json({ message: "Not a participant" });
+      }
+      if (!sprint.isPractice) {
+        return res.status(400).json({ message: "Nova only answers on practice sprints." });
+      }
+
+      const { questionKeys } = req.body as { questionKeys?: string[] };
+      if (!Array.isArray(questionKeys) || questionKeys.length === 0) {
+        return res.status(400).json({ message: "questionKeys is required" });
+      }
+
+      const ent = await requireCredits(res, req.user.id, CREDIT_COSTS.novaPartnerAnswers, "Nova's sprint answers");
+      if (!ent) return;
+
+      const existing = await storage.getSprintResponses(req.params.id);
+      const mine = existing.filter((r: any) => !r.isNova);
+
+      const completion = await getOpenAI().chat.completions.create({
+        model: modelFor(ent),
+        messages: [
+          {
+            role: "system",
+            content: `${novaPartnerSystemPrompt(sprint, coachingDirectiveFor(ent))}
+
+Answer each question as the partner would — concretely and with a point of view. Where you'd genuinely disagree with your partner's answer, say so; alignment is measured by comparing both sets of answers, and fake agreement makes that measurement worthless.
+
+Respond ONLY with valid JSON (no markdown, no code fences):
+{ "answers": [ { "questionKey": "<the exact key given>", "answer": "2-4 sentences" } ] }`,
+          },
+          {
+            role: "user",
+            content: [
+              `QUESTION KEYS TO ANSWER\n${questionKeys.join("\n")}`,
+              mine.length
+                ? `YOUR PARTNER'S ANSWERS SO FAR\n${mine.map((r: any) => `${r.questionKey}: ${r.answer}`).join("\n")}`
+                : "Your partner hasn't answered yet.",
+            ].join("\n\n"),
+          },
+        ],
+        temperature: 0.8,
+      });
+
+      let parsed: { answers?: { questionKey?: string; answer?: string }[] };
+      try {
+        const raw = completion.choices[0]?.message?.content || "{}";
+        const match = raw.match(/\{[\s\S]*\}/);
+        parsed = JSON.parse(match ? match[0] : raw);
+      } catch (parseErr) {
+        console.error("Nova answers parse failed:", parseErr);
+        return res.status(502).json({ message: "Nova's answers came back unreadable. Try again." });
+      }
+
+      const allowed = new Set(questionKeys);
+      const saved = [];
+      for (const a of parsed.answers || []) {
+        if (!a.questionKey || !a.answer || !allowed.has(a.questionKey)) continue;
+        saved.push(
+          await storage.addSprintResponse({
+            sprintId: req.params.id,
+            userId: req.user.id,
+            // Prefixed so the dashboard pairs it with the human's answer.
+            questionKey: novaQuestionKey(a.questionKey),
+            answer: String(a.answer).slice(0, 4000),
+            isNova: true,
+          })
+        );
+      }
+
+      if (saved.length === 0) {
+        return res.status(502).json({ message: "Nova didn't return usable answers. Try again." });
+      }
+
+      await storage.deductCredits(req.user.id, CREDIT_COSTS.novaPartnerAnswers);
+      res.json({ answers: saved, creditsCharged: CREDIT_COSTS.novaPartnerAnswers });
+    } catch (error) {
+      console.error("Nova answers error:", error);
+      res.status(500).json({ message: "Failed to get Nova's answers" });
     }
   });
 
@@ -232,14 +651,29 @@ export function registerSprintRoutes(app: Express) {
         }
       }
 
+      /*
+       * On a practice sprint, Nova produces the partner's side of the new
+       * phase. This runs in the background so advancing stays snappy, and the
+       * credit is charged up front — if the builder can't afford it the phase
+       * still advances, they just don't get Nova's contribution.
+       */
+      let novaCharged = 0;
       if (sprint.isPractice) {
-        generatePracticeNovaContent(sprint.id, nextPhase, sprint).catch(err =>
-          console.error("Practice Nova content error:", err)
-        );
+        const ent = await getUserEntitlements(req.user.id);
+        if (await storage.checkCredits(req.user.id, CREDIT_COSTS.novaPartnerAnswers)) {
+          await storage.deductCredits(req.user.id, CREDIT_COSTS.novaPartnerAnswers);
+          novaCharged = CREDIT_COSTS.novaPartnerAnswers;
+          generatePracticeNovaContent(sprint.id, nextPhase, sprint, modelFor(ent)).catch(err =>
+            console.error("Practice Nova content error:", err)
+          );
+        } else {
+          console.log(`Skipping Nova phase content for sprint ${sprint.id}: insufficient credits`);
+        }
       }
 
-      res.json(updated);
+      res.json({ ...updated, novaCreditsCharged: novaCharged });
     } catch (error) {
+      console.error("Advance sprint error:", error);
       res.status(500).json({ message: "Failed to advance sprint" });
     }
   });
@@ -443,9 +877,9 @@ export function registerSprintRoutes(app: Express) {
   app.post("/api/sprints/nova-suggest", isAuthenticated, async (req: any, res) => {
     try {
       const { productStyle, partnerId } = req.body;
-      const hasCredits = await storage.checkCredits(req.user.id, 1);
-      if (!hasCredits) return res.status(403).json({ message: "Insufficient credits" });
-      await storage.deductCredits(req.user.id, 1);
+      const ent = await requireCredits(res, req.user.id, CREDIT_COSTS.sprintIdeaSuggestion, "a Nova product idea");
+      if (!ent) return;
+      await storage.deductCredits(req.user.id, CREDIT_COSTS.sprintIdeaSuggestion);
 
       const [profile1, profile2] = await Promise.all([
         storage.getUserProfile(req.user.id),
@@ -459,7 +893,7 @@ export function registerSprintRoutes(app: Express) {
       }[productStyle || "modern"];
 
       const response = await getOpenAI().chat.completions.create({
-        model: "gpt-4o-mini",
+        model: modelFor(ent),
         messages: [{
           role: "system",
           content: `You are Nova, a creative product ideation assistant. Suggest ${styleDesc}. Consider the builders' skills and interests. Respond with ONLY valid JSON: {"name": "Product Name", "description": "2-3 sentence description of the product idea"}`
@@ -468,7 +902,7 @@ export function registerSprintRoutes(app: Express) {
           content: `Builder 1 skills: ${profile1?.skills?.join(", ") || "general"}. Interests: ${profile1?.interests?.join(", ") || "technology"}.\n${profile2 ? `Builder 2 skills: ${profile2.skills?.join(", ") || "general"}. Interests: ${profile2.interests?.join(", ") || "technology"}.` : ""}\nProduct style: ${productStyle || "modern"}`
         }],
         temperature: 0.9,
-        max_tokens: 200,
+        max_completion_tokens: 1200,
       });
 
       const content = response.choices[0]?.message?.content || "";
@@ -493,9 +927,9 @@ export function registerSprintRoutes(app: Express) {
         return res.status(403).json({ message: "Not a participant" });
       }
 
-      const hasCredits = await storage.checkCredits(req.user.id, 1);
-      if (!hasCredits) return res.status(403).json({ message: "Insufficient credits" });
-      await storage.deductCredits(req.user.id, 1);
+      const ent = await requireCredits(res, req.user.id, CREDIT_COSTS.sprintReport, "a sprint compatibility report");
+      if (!ent) return;
+      await storage.deductCredits(req.user.id, CREDIT_COSTS.sprintReport);
 
       const [responses, deliverables, ratings, decisions, metrics, user1, user2] = await Promise.all([
         storage.getSprintResponses(sprint.id),
@@ -540,7 +974,7 @@ ${metrics.map(m => {
 }).join("\n")}`;
 
       const aiResponse = await getOpenAI().chat.completions.create({
-        model: "gpt-4o-mini",
+        model: modelFor(ent),
         messages: [{
           role: "system",
           content: `You are Nova, a co-founder compatibility analyst. Analyze the sprint collaboration data and generate a compatibility report. Respond with ONLY valid JSON:
@@ -555,7 +989,7 @@ ${metrics.map(m => {
           content: promptData
         }],
         temperature: 0.7,
-        max_tokens: 500,
+        max_completion_tokens: 2000,
       });
 
       const reportContent = aiResponse.choices[0]?.message?.content || "";
@@ -634,58 +1068,90 @@ ${metrics.map(m => {
     }
   });
 
+  /** Join the matchmaking queue, attempting an immediate pairing. */
   app.post("/api/sprints/queue", isAuthenticated, async (req: any, res) => {
     try {
-      const { duration, productStyle } = req.body;
-      if (!duration) return res.status(400).json({ message: "Duration required" });
+      const { duration, productStyle, projectId } = req.body;
+      if (!isDuration(duration)) {
+        return res.status(400).json({ message: "duration must be 24h or 72h" });
+      }
+      if (!(await requireFeature(res, req.user.id, "createSprints", "Starting a Sprint"))) return;
 
-      const partner = await storage.findMatchmakingPartner(req.user.id);
-      if (partner) {
-        await storage.removeFromMatchmakingQueue(partner.userId);
-        await storage.removeFromMatchmakingQueue(req.user.id);
-        const sprint = await storage.createSprint({
-          user1Id: req.user.id,
-          user2Id: partner.userId,
-          duration: duration,
-          status: "setup",
-          productStyle: productStyle || partner.productStyle || null,
-        });
-        const sprintWithUsers = await storage.getSprint(sprint.id);
-        const user1 = await storage.getUser(sprint.user1Id);
-        const user2 = await storage.getUser(sprint.user2Id);
-        return res.json({ matched: true, sprint: { ...sprintWithUsers, user1, user2 } });
+      // Only let someone bring a project they actually belong to.
+      let sourceProjectId: string | null = null;
+      if (projectId) {
+        const project = await storage.getProject(projectId);
+        const members = project ? await storage.getProjectMembers(projectId).catch(() => []) : [];
+        const isMember = project && (project.ownerId === req.user.id || members.some((m) => m.userId === req.user.id));
+        if (!isMember) return res.status(403).json({ message: "You're not a member of that project" });
+        sourceProjectId = projectId;
       }
 
-      await storage.joinMatchmakingQueue({ userId: req.user.id, duration, productStyle });
-      res.json({ matched: false, message: "Added to queue. Waiting for a partner..." });
+      // Drop abandoned rows first so we never pair with a closed tab.
+      await storage.sweepStaleQueueEntries();
+      await storage.joinMatchmakingQueue({ userId: req.user.id, duration, productStyle, projectId: sourceProjectId });
+
+      const match = await storage.tryMatchInQueue(req.user.id);
+      if (match) {
+        const enriched = await withParticipants(match.sprint);
+        // Both queue rows are already marked matched; clear ours now that we
+        // know. The partner's row clears on their next poll.
+        await storage.removeFromMatchmakingQueue(req.user.id);
+        return res.json({ matched: true, sprint: enriched });
+      }
+
+      const stats = await storage.getQueueStats(req.user.id, duration);
+      res.json({
+        matched: false,
+        message: "You're in the queue. We'll pair you as soon as a partner picks the same duration.",
+        ...stats,
+      });
     } catch (error) {
+      console.error("Join queue error:", error);
       res.status(500).json({ message: "Failed to join queue" });
     }
   });
 
+  /**
+   * Polled by the waiting room. Doubles as the heartbeat that keeps the
+   * caller's queue row alive, and reports position so waiting feels bounded.
+   */
   app.get("/api/sprints/queue/status", isAuthenticated, async (req: any, res) => {
     try {
       const entry = await storage.getQueueEntry(req.user.id);
-      if (!entry) return res.json({ inQueue: false });
+      if (!entry) return res.json({ inQueue: false, matched: false });
 
-      const partner = await storage.findMatchmakingPartner(req.user.id);
-      if (partner) {
-        await storage.removeFromMatchmakingQueue(partner.userId);
+      // Someone else's tryMatchInQueue already paired us — hand over the sprint.
+      if (entry.status === "matched" && entry.matchedSprintId) {
+        const sprint = await storage.getSprint(entry.matchedSprintId);
         await storage.removeFromMatchmakingQueue(req.user.id);
-        const sprint = await storage.createSprint({
-          user1Id: req.user.id,
-          user2Id: partner.userId,
-          duration: entry.duration,
-          status: "setup",
-          productStyle: entry.productStyle || partner.productStyle || null,
-        });
-        const user1 = await storage.getUser(sprint.user1Id);
-        const user2 = await storage.getUser(sprint.user2Id);
-        return res.json({ inQueue: false, matched: true, sprint: { ...sprint, user1, user2 } });
+        if (sprint) {
+          return res.json({ inQueue: false, matched: true, sprint: await withParticipants(sprint) });
+        }
+        return res.json({ inQueue: false, matched: false });
       }
 
-      res.json({ inQueue: true, entry });
+      await storage.touchQueueEntry(req.user.id);
+      await storage.sweepStaleQueueEntries();
+
+      // Try to pair on every poll, so two people waiting simultaneously get
+      // matched even if neither joined after the other.
+      const match = await storage.tryMatchInQueue(req.user.id);
+      if (match) {
+        await storage.removeFromMatchmakingQueue(req.user.id);
+        return res.json({ inQueue: false, matched: true, sprint: await withParticipants(match.sprint) });
+      }
+
+      const stats = await storage.getQueueStats(req.user.id, entry.duration);
+      res.json({
+        inQueue: true,
+        matched: false,
+        entry,
+        ...stats,
+        waitingSeconds: Math.max(0, Math.floor((Date.now() - new Date(entry.createdAt).getTime()) / 1000)),
+      });
     } catch (error) {
+      console.error("Queue status error:", error);
       res.status(500).json({ message: "Failed to check queue" });
     }
   });

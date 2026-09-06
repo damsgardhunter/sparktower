@@ -4,8 +4,8 @@ import { z } from "zod";
 import { sql } from "drizzle-orm";
 
 // Re-exporting from auth models as requested
-export { sessions, users, type User, type UpsertUser } from "./models/auth";
-import { users } from "./models/auth";
+export { sessions, users, mobileRefreshTokens, type User, type UpsertUser, type MobileRefreshToken } from "./models/auth";
+import { users, mobileRefreshTokens } from "./models/auth";
 
 export const userProfiles = pgTable("user_profiles", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -30,7 +30,85 @@ export const userProfiles = pgTable("user_profiles", {
   scheduleStyle: text("schedule_style", { enum: ["structured", "flexible", "hybrid"] }),
   conflictStyle: text("conflict_style", { enum: ["direct", "diplomatic", "avoidant", "collaborative"] }),
   builderType: text("builder_type", { enum: ["long-term", "experimental", "both"] }),
+
+  // --- Résumé-derived profile (see POST /api/profile/evaluate-resume) ---
+  /** ProfileExperience[] — roles held, newest first. */
+  experience: jsonb("experience").default([]),
+  /** ProfileEducation[] */
+  education: jsonb("education").default([]),
+  /**
+   * ProfilePortfolioProject[] — work from a résumé or elsewhere. Distinct from
+   * platform projects, which live in the `projects` table.
+   */
+  portfolioProjects: jsonb("portfolio_projects").default([]),
+  /** Nova's 2-3 sentence read on what this person is good at. */
+  novaSummary: text("nova_summary"),
+  /** When the résumé was last parsed, so the UI can offer a re-run. */
+  resumeParsedAt: timestamp("resume_parsed_at"),
+  /**
+   * Public "open to" call. ProfileLookingFor — role sought, industries,
+   * commitment, stage, equity. Null when they're not looking.
+   */
+  lookingFor: jsonb("looking_for"),
 });
+
+/** One role on someone's profile. */
+export interface ProfileExperience {
+  title: string;
+  company: string;
+  location?: string | null;
+  /** Free-form so "2021" and "Mar 2021" both work. */
+  startDate?: string | null;
+  endDate?: string | null;
+  current?: boolean;
+  description?: string | null;
+  /** Skills Nova inferred from this role. */
+  skills?: string[];
+}
+
+export interface ProfileEducation {
+  school: string;
+  degree?: string | null;
+  field?: string | null;
+  startYear?: string | null;
+  endYear?: string | null;
+  description?: string | null;
+}
+
+export interface ProfilePortfolioProject {
+  name: string;
+  role?: string | null;
+  description?: string | null;
+  url?: string | null;
+  technologies?: string[];
+}
+
+/** Options for the public "looking for" call. */
+export const LOOKING_FOR_ROLES = [
+  "Technical Cofounder", "Business Cofounder", "Design Cofounder", "First Engineer",
+  "Designer", "Marketer", "Advisor / Mentor", "Investor", "Project to Join", "Freelance Work",
+] as const;
+
+export const LOOKING_FOR_STAGES = [
+  "Just an idea", "Validating", "Building MVP", "MVP", "Early users", "Revenue", "Scaling",
+] as const;
+
+export const LOOKING_FOR_COMMITMENTS = [
+  "< 5 hrs/week", "5–10 hrs/week", "10–15 hrs/week", "15–25 hrs/week", "25–40 hrs/week", "Full-time",
+] as const;
+
+export interface ProfileLookingFor {
+  /** Whether to show the banner publicly. */
+  isActive: boolean;
+  role: string;
+  industries: string[];
+  commitment?: string | null;
+  stage?: string | null;
+  /** null when they'd rather not say. */
+  equityAvailable?: boolean | null;
+  /** Free text — what they're actually after. */
+  details?: string | null;
+}
 
 export const projects = pgTable("projects", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -55,11 +133,18 @@ export const projects = pgTable("projects", {
   successMetrics: text("success_metrics"),
   scope: jsonb("scope"),
   oneLiner: text("one_liner"),
+  mission: text("mission"),
   valueProposition: text("value_proposition"),
   targetCustomerProfile: text("target_customer_profile"),
+  // Owner-controlled visibility for the public project page. Shape:
+  // { [sectionKey: string]: boolean } — absent keys fall back to each
+  // section's default, so a section appears as soon as it has content.
+  publicSections: jsonb("public_sections").default({}),
   landingPageConfig: jsonb("landing_page_config"),
   novaOnboardingComplete: boolean("nova_onboarding_complete").default(false),
   soloMode: boolean("solo_mode").default(false),
+  // Private projects are a paid entitlement; see checkPrivateProjectQuota.
+  isPrivate: boolean("is_private").default(false).notNull(),
   externalTractionUrl: text("external_traction_url"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -197,7 +282,45 @@ export const projectKanbanTasks = pgTable("project_kanban_tasks", {
   estimateHours: integer("estimate_hours"),
   blockedByTaskId: varchar("blocked_by_task_id"),
   subtasks: jsonb("subtasks").default([]),
+  /**
+   * The milestone this task is work toward.
+   *
+   * Without it a "milestone → tasks" plan is only a shape in a chat reply:
+   * the tasks land on the board with no way to tell which milestone each one
+   * serves, so the plan can't be read back or reported on.
+   */
+  milestoneId: varchar("milestone_id").references(() => projectMilestones.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  /**
+   * Who moved this into progress and when, and who finished it and when.
+   *
+   * Set by the task PATCH route on status transitions rather than by clients,
+   * so the calendar and the reputation maths both read the same timeline.
+   * `completedAt` is also what makes "finished on time" answerable — before it
+   * existed, on-time was judged by comparing *now* against the due date, so a
+   * task finished early silently became "late" once the date passed.
+   */
+  startedAt: timestamp("started_at"),
+  startedById: varchar("started_by_id").references(() => users.id),
+  completedAt: timestamp("completed_at"),
+  completedById: varchar("completed_by_id").references(() => users.id),
+});
+
+/**
+ * Lifetime execution counters that survive task deletion.
+ *
+ * Reputation reads task counts off the live board, so clearing finished tasks
+ * used to erase the execution credit earned for them. These counters only ever
+ * ratchet upward: every delete path banks the current live totals here first,
+ * and reputation uses max(banked, live). A builder can tidy their board without
+ * losing the score they earned.
+ */
+export const userTaskStats = pgTable("user_task_stats", {
+  userId: varchar("user_id").primaryKey().references(() => users.id),
+  tasksCompleted: integer("tasks_completed").default(0).notNull(),
+  tasksCompletedOnTime: integer("tasks_completed_on_time").default(0).notNull(),
+  lastCompletedAt: timestamp("last_completed_at"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
 export const projectPersonas = pgTable("project_personas", {
@@ -225,6 +348,347 @@ export const projectMilestones = pgTable("project_milestones", {
   order: integer("order").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+/**
+ * Nova AI Roadmap Builder (Builder tier and above). A roadmap is the plan from
+ * "where I am" to "where I want to go", regenerated as the project progresses.
+ */
+export const projectRoadmaps = pgTable("project_roadmaps", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  /** The user's stated destination, e.g. "500 paying users by June". */
+  goal: text("goal").notNull(),
+  summary: text("summary"),
+  startingPoint: text("starting_point"),
+  targetDate: timestamp("target_date"),
+  status: text("status", { enum: ["active", "archived"] }).default("active").notNull(),
+  /** Incremented each time Nova revises the roadmap. */
+  version: integer("version").default(1).notNull(),
+  generatedOnTier: text("generated_on_tier"),
+  lastUpdatedAt: timestamp("last_updated_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const roadmapPhases = pgTable("roadmap_phases", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  roadmapId: varchar("roadmap_id").notNull().references(() => projectRoadmaps.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  description: text("description"),
+  estimatedDuration: text("estimated_duration"),
+  /** Concrete deliverables for the phase. */
+  outcomes: jsonb("outcomes").default([]),
+  /** Skills/roles the user is missing for this phase. */
+  skillsNeeded: varchar("skills_needed").array().default([]),
+  status: text("status", { enum: ["upcoming", "in-progress", "completed"] }).default("upcoming").notNull(),
+  order: integer("order").default(0).notNull(),
+  /** Set when a milestone was created from this phase. */
+  milestoneId: varchar("milestone_id").references(() => projectMilestones.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+/** Nova's periodic project health assessments (Pro tier). */
+export const projectHealthChecks = pgTable("project_health_checks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  score: integer("score").notNull(),
+  status: text("status").notNull(),
+  summary: text("summary").notNull(),
+  /** [{ area, severity, finding, recommendation }] */
+  findings: jsonb("findings").default([]),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+/**
+ * Nova's audit of the actual codebase against the stated plan.
+ *
+ * The point isn't a code review — it's reconciliation. A project's tasks,
+ * milestones and MVP scope describe what the builder *intends*; the repository
+ * is what exists. Everything else in SparkTower reasons about the plan alone,
+ * so a board full of "todo" on work that shipped weeks ago looks identical to
+ * a project that has done nothing. This is the only surface that can tell them
+ * apart.
+ */
+export const projectCodeAudits = pgTable("project_code_audits", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  createdById: varchar("created_by_id").notNull().references(() => users.id),
+  /** "github:owner/repo@main" or "upload:my-project.zip". */
+  source: text("source").notNull(),
+  sourceKind: text("source_kind", { enum: ["github", "upload"] }).notNull(),
+  /** How far along the code says the project is. */
+  stage: text("stage"),
+  completionPercent: integer("completion_percent"),
+  summary: text("summary"),
+  /** Deterministic facts from the scan: stack, routes, models, test counts. */
+  signals: jsonb("signals").default({}),
+  /** The model's assessment: built / missing / partial / risks / reconciliation. */
+  findings: jsonb("findings").default({}),
+  /** Operations that would bring the board in line with the code. */
+  operations: jsonb("operations").default([]),
+  /** Set once the builder applies them, so the same audit can't be applied twice. */
+  appliedAt: timestamp("applied_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+/**
+ * A document built with Nova: a spec, a plan, a report, a whole pitch deck's
+ * worth of prose.
+ *
+ * The structure (pages, grid, blocks) is the source of truth and stays
+ * editable forever, which is why it lives here rather than being flattened to
+ * a file on first save. Publishing writes a `project_files` row pointing back
+ * at the document, and an optional PDF render alongside it — so the Files tab
+ * shows one thing whether the builder wants to keep editing or hand it over.
+ */
+export const projectDocuments = pgTable("project_documents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  createdById: varchar("created_by_id").notNull().references(() => users.id),
+  title: text("title").notNull(),
+  /** What the builder asked for, kept so a re-plan has the original intent. */
+  prompt: text("prompt"),
+  /** The task this document is the deliverable for, when it came from one. */
+  sourceTaskId: varchar("source_task_id"),
+  kind: text("kind").default("document").notNull(),
+  status: text("status", { enum: ["planning", "draft", "published"] }).default("planning").notNull(),
+  /** DocumentOutlineEntry[] — one line per planned page. */
+  outline: jsonb("outline").default([]),
+  /** DocumentPage[] — the real structure and content. */
+  pages: jsonb("pages").default([]),
+  /** DocumentSettings — header, footer, title page, accent colour. */
+  settings: jsonb("settings").default({}),
+  /** The Files row created on publish, so the two stay linked. */
+  fileId: varchar("file_id"),
+  /** Object-storage path of the most recent PDF render, if any. */
+  pdfUrl: text("pdf_url"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+/**
+ * A permanent record of every task this project has ever finished.
+ *
+ * The kanban rows are working state — builders clear finished cards to keep
+ * the board readable, and the moment they do, the project's whole execution
+ * record reads "0 done". Nova then calls a project with real momentum stalled,
+ * and the builder can't prove otherwise. So a completion is archived here on
+ * the way in, and nothing on the board can take it away.
+ *
+ * `taskId` is deliberately not a foreign key: the row it points at is expected
+ * to be deleted, and outliving it is the entire point.
+ */
+export const projectTaskCompletions = pgTable("project_task_completions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  /** The kanban row that was finished. Unique, so a done/undone loop can't double-count. */
+  taskId: varchar("task_id").notNull().unique(),
+  /** Who moved it to done. Null if that user was later removed. */
+  completedById: varchar("completed_by_id").references(() => users.id, { onDelete: "set null" }),
+  title: text("title").notNull(),
+  priority: text("priority"),
+  /** Whether it landed by its due date, frozen at completion time. */
+  onTime: boolean("on_time").default(true).notNull(),
+  completedAt: timestamp("completed_at").defaultNow().notNull(),
+});
+
+/**
+ * The builder's response to a single health-check finding.
+ *
+ * Keyed by `area` rather than by the finding's index, because a finding
+ * survives re-runs while its position in the list does not — pushback on
+ * "Scope" should still apply the next time Nova assesses scope.
+ */
+export const healthFindingFeedback = pgTable("health_finding_feedback", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  /** The check the pushback was written against, for provenance. */
+  checkId: varchar("check_id").references(() => projectHealthChecks.id, { onDelete: "set null" }),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  /** The finding's `area`, lowercased — how later checks match it. */
+  area: text("area").notNull(),
+  /** The finding text as it stood when the builder responded. */
+  finding: text("finding"),
+  stance: text("stance", { enum: ["disagree", "already-handled", "not-a-priority"] }).notNull(),
+  /** Why. This is the part Nova has to respect on the next run. */
+  reason: text("reason").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+/**
+ * AI-generated showcase storyboards.
+ *
+ * Deliberately NOT part of projects.mediaUrls — the media gallery is for media
+ * the user uploaded themselves. A storyboard is private working output visible
+ * only to the account that generated it.
+ */
+export const projectStoryboards = pgTable("project_storyboards", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  /** The account that generated it — the only account that can view it. */
+  userId: varchar("user_id").notNull().references(() => users.id),
+  style: text("style").notNull(),
+  prompt: text("prompt"),
+  storyboard: text("storyboard").notNull(),
+  /** [{ caption, prompt, imagePath, contentType, inlineImage }] */
+  scenes: jsonb("scenes").default([]).notNull(),
+  imageModel: text("image_model"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+/** One frame of a storyboard, as stored in projectStoryboards.scenes. */
+export interface StoryboardScene {
+  caption: string;
+  prompt?: string;
+  /** Private object-storage path. Served only via the authenticated route. */
+  imagePath?: string;
+  /** MIME type of `imagePath`, since local-dev storage drops object metadata. */
+  contentType?: string;
+  /** SVG data URI, used when image generation fell back to vector art. */
+  inlineImage?: string;
+}
+
+/**
+ * Investor-readiness artifacts: deck outlines, readiness scores, pitch
+ * critiques, and pricing analyses. One table because they share a shape.
+ */
+export const investorArtifacts = pgTable("investor_artifacts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  kind: text("kind", { enum: ["deck_outline", "readiness_score", "pitch_critique", "pricing_analysis"] }).notNull(),
+  /** 0-100 for scores and critiques. Null for deck outlines. */
+  score: integer("score"),
+  summary: text("summary"),
+  content: jsonb("content").default({}).notNull(),
+  creditsCharged: integer("credits_charged").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+/**
+ * Mock investor interview. Nova asks progressively harder questions and grades
+ * each answer, so a session is a sequence of graded exchanges.
+ */
+export const mockInterviews = pgTable("mock_interviews", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  /** The investor archetype Nova is playing. */
+  persona: text("persona").notNull(),
+  difficulty: text("difficulty", { enum: ["friendly", "skeptical", "brutal"] }).default("skeptical").notNull(),
+  status: text("status", { enum: ["active", "completed"] }).default("active").notNull(),
+  /** Rolling average of answer grades, 0-100. */
+  averageScore: integer("average_score"),
+  verdict: text("verdict"),
+  creditsCharged: integer("credits_charged").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  completedAt: timestamp("completed_at"),
+});
+
+export const mockInterviewTurns = pgTable("mock_interview_turns", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  interviewId: varchar("interview_id").notNull().references(() => mockInterviews.id, { onDelete: "cascade" }),
+  order: integer("order").default(0).notNull(),
+  question: text("question").notNull(),
+  answer: text("answer"),
+  score: integer("score"),
+  /** What was strong, what was weak, and what a real investor would push on. */
+  feedback: jsonb("feedback"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  answeredAt: timestamp("answered_at"),
+});
+
+/**
+ * Comments on a project's milestones and updates — the "building in public"
+ * layer. Anyone who can see the project can weigh in.
+ */
+export const projectComments = pgTable("project_comments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  authorId: varchar("author_id").notNull().references(() => users.id),
+  targetType: text("target_type", { enum: ["milestone", "project", "roadmap_phase"] }).notNull(),
+  targetId: varchar("target_id").notNull(),
+  content: text("content").notNull(),
+  mentions: jsonb("mentions").default([]),
+  parentCommentId: varchar("parent_comment_id"),
+  reactionCount: integer("reaction_count").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const projectCommentReactions = pgTable("project_comment_reactions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  commentId: varchar("comment_id").notNull().references(() => projectComments.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  reaction: text("reaction").default("like").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  oneReactionPerUser: unique().on(table.commentId, table.userId),
+}));
+
+// ---------------------------------------------------------------------------
+// Founder feed
+// ---------------------------------------------------------------------------
+
+/**
+ * Post types. Each gives the composer a prompt and the card a label, so a
+ * founder never faces an empty box wondering what to write.
+ */
+export const FEED_POST_TYPES = [
+  "project_update", "looking_for_help", "looking_for_cofounder", "seeking_feedback",
+  "milestone", "idea_validation", "launch", "investor_update",
+] as const;
+export type FeedPostType = (typeof FEED_POST_TYPES)[number];
+
+/** LinkedIn-style reactions rather than a single like. */
+export const FEED_REACTIONS = ["like", "celebrate", "support", "insightful", "funny"] as const;
+export type FeedReaction = (typeof FEED_REACTIONS)[number];
+
+export const feedPosts = pgTable("feed_posts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  authorId: varchar("author_id").notNull().references(() => users.id),
+  /** The project this post is about. Null for general founder chatter. */
+  projectId: varchar("project_id").references(() => projects.id),
+  postType: text("post_type", { enum: FEED_POST_TYPES }).notNull(),
+  content: text("content").notNull(),
+  mediaUrls: varchar("media_urls").array().default([]),
+  /** Tagged users resolved at post time: [{ userId, name }]. */
+  mentions: jsonb("mentions").default([]),
+  /** True for posts the system created from an event. */
+  isSystemGenerated: boolean("is_system_generated").default(false).notNull(),
+  entityType: text("entity_type"),
+  entityId: varchar("entity_id"),
+  /** Denormalized so the feed doesn't need a count per post per render. */
+  reactionCount: integer("reaction_count").default(0).notNull(),
+  commentCount: integer("comment_count").default(0).notNull(),
+  editedAt: timestamp("edited_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const feedReactions = pgTable("feed_reactions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  postId: varchar("post_id").notNull().references(() => feedPosts.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  reaction: text("reaction", { enum: FEED_REACTIONS }).default("like").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  // One reaction per person per post; changing it updates in place.
+  oneReactionPerUser: unique().on(table.postId, table.userId),
+}));
+
+export const feedComments = pgTable("feed_comments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  postId: varchar("post_id").notNull().references(() => feedPosts.id, { onDelete: "cascade" }),
+  authorId: varchar("author_id").notNull().references(() => users.id),
+  content: text("content").notNull(),
+  mentions: jsonb("mentions").default([]),
+  parentCommentId: varchar("parent_comment_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+/** A user tagged in a post or comment, captured at write time. */
+export interface FeedMention {
+  userId: string;
+  name: string;
+}
 
 export const projectActivityLog = pgTable("project_activity_log", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -410,7 +874,7 @@ export const projectLaunchTasks = pgTable("project_launch_tasks", {
 
 export const gameLeaderboard = pgTable("game_leaderboard", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  gameType: text("game_type", { enum: ["tactics", "typing", "signal"] }).notNull(),
+  gameType: text("game_type", { enum: ["typing", "signal"] }).notNull(),
   userId: varchar("user_id").notNull().references(() => users.id),
   score: integer("score").notNull().default(0),
   metadata: jsonb("metadata").default({}),
@@ -577,6 +1041,27 @@ export const insertProjectMilestoneSchema = createInsertSchema(projectMilestones
   createdAt: true,
 });
 
+export const insertProjectRoadmapSchema = createInsertSchema(projectRoadmaps).omit({
+  id: true, createdAt: true, lastUpdatedAt: true, version: true,
+});
+export const insertRoadmapPhaseSchema = createInsertSchema(roadmapPhases).omit({ id: true, createdAt: true });
+export const insertProjectHealthCheckSchema = createInsertSchema(projectHealthChecks).omit({ id: true, createdAt: true });
+export const insertHealthFindingFeedbackSchema = createInsertSchema(healthFindingFeedback).omit({ id: true, createdAt: true });
+export const insertProjectTaskCompletionSchema = createInsertSchema(projectTaskCompletions).omit({ id: true });
+export const insertProjectDocumentSchema = createInsertSchema(projectDocuments).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertProjectCodeAuditSchema = createInsertSchema(projectCodeAudits).omit({ id: true, createdAt: true });
+export const insertProjectStoryboardSchema = createInsertSchema(projectStoryboards).omit({ id: true, createdAt: true });
+export const insertInvestorArtifactSchema = createInsertSchema(investorArtifacts).omit({ id: true, createdAt: true });
+export const insertMockInterviewSchema = createInsertSchema(mockInterviews).omit({ id: true, createdAt: true });
+export const insertMockInterviewTurnSchema = createInsertSchema(mockInterviewTurns).omit({ id: true, createdAt: true });
+export const insertProjectCommentSchema = createInsertSchema(projectComments).omit({
+  id: true, createdAt: true, reactionCount: true,
+});
+export const insertFeedPostSchema = createInsertSchema(feedPosts).omit({
+  id: true, createdAt: true, reactionCount: true, commentCount: true, editedAt: true,
+});
+export const insertFeedCommentSchema = createInsertSchema(feedComments).omit({ id: true, createdAt: true });
+
 export const insertProjectActivityLogSchema = createInsertSchema(projectActivityLog).omit({
   id: true,
   createdAt: true,
@@ -647,6 +1132,8 @@ export const cofounderSprints = pgTable("cofounder_sprints", {
   user1ProposedName: text("user1_proposed_name"),
   user2ProposedName: text("user2_proposed_name"),
   isPractice: boolean("is_practice").default(false).notNull(),
+  /** Set when the sprint is working on an existing project rather than a new idea. */
+  sourceProjectId: varchar("source_project_id").references(() => projects.id),
   agreedProblem: text("agreed_problem"),
   agreedIcp: text("agreed_icp"),
   agreedValueProp: text("agreed_value_prop"),
@@ -662,6 +1149,8 @@ export const sprintResponses = pgTable("sprint_responses", {
   userId: varchar("user_id").notNull().references(() => users.id),
   questionKey: text("question_key").notNull(),
   answer: text("answer").notNull(),
+  /** True when Nova answered as the practice partner. See sprintMessages.isNova. */
+  isNova: boolean("is_nova").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -700,6 +1189,12 @@ export const sprintMessages = pgTable("sprint_messages", {
   sprintId: varchar("sprint_id").notNull().references(() => cofounderSprints.id),
   userId: varchar("user_id").notNull().references(() => users.id),
   content: text("content").notNull(),
+  /**
+   * True when Nova wrote this as the practice partner. userId still points at
+   * the human (the column is NOT NULL and practice sprints have no second
+   * user), so this flag is what distinguishes the two speakers.
+   */
+  isNova: boolean("is_nova").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -744,6 +1239,20 @@ export const sprintMatchmakingQueue = pgTable("sprint_matchmaking_queue", {
   userId: varchar("user_id").notNull().references(() => users.id).unique(),
   duration: text("duration", { enum: ["24h", "72h"] }).notNull(),
   productStyle: text("product_style", { enum: ["past", "modern", "futuristic"] }),
+  /**
+   * "waiting" until paired. On a match BOTH rows flip to "matched" with the
+   * new sprint id, rather than being deleted — otherwise the partner who
+   * didn't initiate has no way to learn which sprint they were put into.
+   */
+  status: text("status", { enum: ["waiting", "matched"] }).default("waiting").notNull(),
+  matchedSprintId: varchar("matched_sprint_id").references(() => cofounderSprints.id),
+  /**
+   * Optional project the builder wants to sprint on, so the sprint works on
+   * something real instead of a throwaway idea.
+   */
+  projectId: varchar("project_id").references(() => projects.id),
+  /** Bumped by the client heartbeat; stale rows are swept. */
+  lastSeenAt: timestamp("last_seen_at").defaultNow().notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -819,9 +1328,39 @@ export type InsertProjectApplication = z.infer<typeof insertProjectApplicationSc
 export type ProjectFollow = typeof projectFollows.$inferSelect;
 export type InsertProjectFollow = z.infer<typeof insertProjectFollowSchema>;
 export type ProjectKanbanTask = typeof projectKanbanTasks.$inferSelect;
+export type UserTaskStats = typeof userTaskStats.$inferSelect;
 export type InsertProjectKanbanTask = z.infer<typeof insertProjectKanbanTaskSchema>;
 export type ProjectPersona = typeof projectPersonas.$inferSelect;
 export type InsertProjectPersona = z.infer<typeof insertProjectPersonaSchema>;
+export type ProjectRoadmap = typeof projectRoadmaps.$inferSelect;
+export type InsertProjectRoadmap = z.infer<typeof insertProjectRoadmapSchema>;
+export type RoadmapPhase = typeof roadmapPhases.$inferSelect;
+export type InsertRoadmapPhase = z.infer<typeof insertRoadmapPhaseSchema>;
+export type ProjectHealthCheck = typeof projectHealthChecks.$inferSelect;
+export type InsertProjectHealthCheck = z.infer<typeof insertProjectHealthCheckSchema>;
+export type ProjectCodeAudit = typeof projectCodeAudits.$inferSelect;
+export type InsertProjectCodeAudit = z.infer<typeof insertProjectCodeAuditSchema>;
+export type ProjectDocument = typeof projectDocuments.$inferSelect;
+export type InsertProjectDocument = z.infer<typeof insertProjectDocumentSchema>;
+export type ProjectTaskCompletion = typeof projectTaskCompletions.$inferSelect;
+export type InsertProjectTaskCompletion = z.infer<typeof insertProjectTaskCompletionSchema>;
+export type HealthFindingFeedback = typeof healthFindingFeedback.$inferSelect;
+export type InsertHealthFindingFeedback = z.infer<typeof insertHealthFindingFeedbackSchema>;
+export type ProjectStoryboard = typeof projectStoryboards.$inferSelect;
+export type InsertProjectStoryboard = z.infer<typeof insertProjectStoryboardSchema>;
+export type InvestorArtifact = typeof investorArtifacts.$inferSelect;
+export type InsertInvestorArtifact = z.infer<typeof insertInvestorArtifactSchema>;
+export type MockInterview = typeof mockInterviews.$inferSelect;
+export type InsertMockInterview = z.infer<typeof insertMockInterviewSchema>;
+export type MockInterviewTurn = typeof mockInterviewTurns.$inferSelect;
+export type InsertMockInterviewTurn = z.infer<typeof insertMockInterviewTurnSchema>;
+export type ProjectComment = typeof projectComments.$inferSelect;
+export type InsertProjectComment = z.infer<typeof insertProjectCommentSchema>;
+export type FeedPost = typeof feedPosts.$inferSelect;
+export type InsertFeedPost = z.infer<typeof insertFeedPostSchema>;
+export type FeedComment = typeof feedComments.$inferSelect;
+export type InsertFeedComment = z.infer<typeof insertFeedCommentSchema>;
+export type FeedReactionRow = typeof feedReactions.$inferSelect;
 export type ProjectMilestone = typeof projectMilestones.$inferSelect;
 export type InsertProjectMilestone = z.infer<typeof insertProjectMilestoneSchema>;
 export type ProjectActivityLog = typeof projectActivityLog.$inferSelect;

@@ -1,6 +1,9 @@
 import { Storage, File } from "@google-cloud/storage";
 import { Response } from "express";
 import { randomUUID } from "crypto";
+import fs from "fs";
+import fsPromises from "fs/promises";
+import path from "path";
 import {
   ObjectAclPolicy,
   ObjectPermission,
@@ -29,6 +32,39 @@ export const objectStorageClient = new Storage({
   },
   projectId: "",
 });
+
+const LOCAL_OBJECT_ROOT = process.env.LOCAL_OBJECT_ROOT || path.join(process.cwd(), "local_objects");
+
+function isLocalFallback(): boolean {
+  return !process.env.PRIVATE_OBJECT_DIR && process.env.NODE_ENV === "development";
+}
+
+class LocalFile {
+  filePath: string;
+  constructor(filePath: string) {
+    this.filePath = filePath;
+  }
+  async exists(): Promise<[boolean]> {
+    try {
+      await fsPromises.access(this.filePath, fs.constants.R_OK);
+      return [true];
+    } catch {
+      return [false];
+    }
+  }
+  async getMetadata(): Promise<any[]> {
+    const stat = await fsPromises.stat(this.filePath);
+    return [
+      {
+        contentType: "application/octet-stream",
+        size: stat.size,
+      },
+    ];
+  }
+  createReadStream() {
+    return fs.createReadStream(this.filePath);
+  }
+}
 
 export class ObjectNotFoundError extends Error {
   constructor() {
@@ -66,6 +102,10 @@ export class ObjectStorageService {
   getPrivateObjectDir(): string {
     const dir = process.env.PRIVATE_OBJECT_DIR || "";
     if (!dir) {
+      if (isLocalFallback()) {
+        // For local development, use a local folder as the object dir root.
+        return `/local/${path.relative(process.cwd(), LOCAL_OBJECT_ROOT)}`;
+      }
       throw new Error(
         "PRIVATE_OBJECT_DIR not set. Create a bucket in 'Object Storage' " +
           "tool and set PRIVATE_OBJECT_DIR env var."
@@ -95,7 +135,57 @@ export class ObjectStorageService {
   }
 
   // Downloads an object to the response.
-  async downloadObject(file: File, res: Response, cacheTtlSec: number = 3600) {
+  /**
+   * Reads an object fully into memory.
+   *
+   * Uses createReadStream rather than the GCS-only `download()` so it works
+   * against both real object storage and the local-dev disk fallback. Guarded
+   * by maxBytes because callers pass user-uploaded files.
+   */
+  async readObjectBuffer(
+    objectPath: string,
+    maxBytes = 15 * 1024 * 1024
+  ): Promise<{ buffer: Buffer; contentType: string; size: number }> {
+    const file = await this.getObjectEntityFile(objectPath);
+    const [metadata] = await file.getMetadata();
+
+    const chunks: Buffer[] = [];
+    let total = 0;
+    await new Promise<void>((resolve, reject) => {
+      const stream = file.createReadStream();
+      stream.on("data", (chunk: Buffer) => {
+        total += chunk.length;
+        if (total > maxBytes) {
+          stream.destroy();
+          reject(new Error(`File is larger than ${Math.round(maxBytes / 1024 / 1024)}MB`));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      stream.on("end", () => resolve());
+      stream.on("error", reject);
+    });
+
+    return {
+      buffer: Buffer.concat(chunks),
+      contentType: metadata?.contentType || "application/octet-stream",
+      size: total,
+    };
+  }
+
+  /**
+   * Streams an object to the response.
+   *
+   * `contentTypeOverride` exists because the local-dev disk fallback doesn't
+   * persist object metadata, so callers that already know the MIME type can
+   * supply it rather than serving application/octet-stream.
+   */
+  async downloadObject(
+    file: File,
+    res: Response,
+    cacheTtlSec: number = 3600,
+    contentTypeOverride?: string
+  ) {
     try {
       // Get file metadata
       const [metadata] = await file.getMetadata();
@@ -104,7 +194,7 @@ export class ObjectStorageService {
       const isPublic = aclPolicy?.visibility === "public";
       // Set appropriate headers
       res.set({
-        "Content-Type": metadata.contentType || "application/octet-stream",
+        "Content-Type": contentTypeOverride || metadata.contentType || "application/octet-stream",
         "Content-Length": metadata.size,
         "Cache-Control": `${
           isPublic ? "public" : "private"
@@ -132,6 +222,16 @@ export class ObjectStorageService {
 
   // Gets the upload URL for an object entity.
   async getObjectEntityUploadURL(): Promise<string> {
+    // Local-dev fallback: return an internal upload endpoint the server will accept.
+    if (isLocalFallback()) {
+      const objectId = randomUUID();
+      // Ensure local directories exist
+      const uploadsDir = path.join(LOCAL_OBJECT_ROOT, "uploads");
+      await fsPromises.mkdir(uploadsDir, { recursive: true });
+      const serverBase = process.env.SERVER_BASE_URL || `http://localhost:${process.env.PORT || 5001}`;
+      return `${serverBase}/internal-local-upload/${objectId}`;
+    }
+
     const privateObjectDir = this.getPrivateObjectDir();
     if (!privateObjectDir) {
       throw new Error(
@@ -154,8 +254,51 @@ export class ObjectStorageService {
     });
   }
 
+  /**
+   * Writes a Buffer straight into object storage and returns its object path.
+   *
+   * The signed-URL flow exists for browser uploads; server-generated artefacts
+   * (a rendered PDF, for one) have the bytes in hand already and shouldn't
+   * have to round-trip through an HTTP PUT to store them.
+   */
+  async writeObjectBuffer(
+    buffer: Buffer,
+    contentType = "application/octet-stream",
+  ): Promise<string> {
+    const objectId = randomUUID();
+
+    if (isLocalFallback()) {
+      const uploadsDir = path.join(LOCAL_OBJECT_ROOT, "uploads");
+      await fsPromises.mkdir(uploadsDir, { recursive: true });
+      await fsPromises.writeFile(path.join(uploadsDir, objectId), buffer);
+      return `/objects/uploads/${objectId}`;
+    }
+
+    const fullPath = `${this.getPrivateObjectDir()}/uploads/${objectId}`;
+    const { bucketName, objectName } = parseObjectPath(fullPath);
+    await objectStorageClient
+      .bucket(bucketName)
+      .file(objectName)
+      .save(buffer, { contentType, resumable: false });
+
+    return `/objects/uploads/${objectId}`;
+  }
+
   // Gets the object entity file from the object path.
   async getObjectEntityFile(objectPath: string): Promise<File> {
+    /*
+     * Heal legacy malformed paths.
+     *
+     * /api/uploads/request-url already returns "/objects/uploads/<id>", but
+     * several clients used to prefix it again. Depending on the call site that
+     * produced "/objects/objects/uploads/<id>" or "/objects//objects/uploads/<id>".
+     * Collapse repeated slashes and repeated "/objects" segments so those
+     * records still resolve rather than orphaning the files.
+     */
+    objectPath = objectPath
+      .replace(/\/{2,}/g, "/")
+      .replace(/^(\/objects)(?:\/objects)+\//, "$1/");
+
     if (!objectPath.startsWith("/objects/")) {
       throw new ObjectNotFoundError();
     }
@@ -166,6 +309,18 @@ export class ObjectStorageService {
     }
 
     const entityId = parts.slice(1).join("/");
+
+    // Local fallback: map to filesystem path under LOCAL_OBJECT_ROOT
+    if (isLocalFallback()) {
+      const localPath = path.join(LOCAL_OBJECT_ROOT, entityId);
+      try {
+        await fsPromises.access(localPath, fs.constants.R_OK);
+        return new (LocalFile as any)(localPath) as any;
+      } catch {
+        throw new ObjectNotFoundError();
+      }
+    }
+
     let entityDir = this.getPrivateObjectDir();
     if (!entityDir.endsWith("/")) {
       entityDir = `${entityDir}/`;
@@ -184,8 +339,28 @@ export class ObjectStorageService {
   normalizeObjectEntityPath(
     rawPath: string,
   ): string {
-    if (!rawPath.startsWith("https://storage.googleapis.com/")) {
-      return rawPath;
+    // If this is a standard Google Storage URL, extract the path
+    if (rawPath.startsWith("https://storage.googleapis.com/")) {
+      const url = new URL(rawPath);
+      return url.pathname;
+    }
+
+    // Local fallback: if the rawPath points to our internal-local-upload endpoint,
+    // convert it to an object entity path used by the app: /objects/uploads/<id>
+    const serverBase = process.env.SERVER_BASE_URL || `http://localhost:${process.env.PORT || 5001}`;
+    if (rawPath.startsWith(serverBase + "/internal-local-upload/")) {
+      const id = rawPath.split("/internal-local-upload/")[1];
+      return `/objects/uploads/${id}`;
+    }
+
+    // Unknown URL; return as-is
+    if (!rawPath.startsWith("/")) {
+      try {
+        const url = new URL(rawPath);
+        return url.pathname;
+      } catch {
+        return rawPath;
+      }
     }
   
     // Extract the path from the URL by removing query parameters and domain
