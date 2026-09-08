@@ -5,7 +5,7 @@ import { getStripeSync, isStripeConfigured } from "./stripeClient";
 import { ensureGameBadges } from "./badge-seed";
 import { syncPlatformRoles } from "./platform-roles";
 import { backfillMissingProfiles } from "./user-provisioning";
-import { loadSurfaceFlags } from "./surfaces";
+import { loadSurfaceFlags, startSurfaceFlagRefresh } from "./surfaces";
 import { startBackingJobs } from "./backing-jobs";
 import { startAnalyticsJobs } from "./analytics";
 import { checkMerchFonts } from "./merch-render";
@@ -65,8 +65,11 @@ let appReady = false;
   // Game badges are referenced by hard-coded id, so their rows have to exist.
   await ensureGameBadges();
 
-  // Feature kill switches, read before any route can be hit.
+  // Feature kill switches, read before any route can be hit, then re-read on a
+  // timer so a toggle reaches every instance rather than only the one that
+  // served it — this deploys to autoscale.
   await loadSurfaceFlags();
+  startSurfaceFlagRefresh();
 
   // Accounts created before profiles were provisioned at sign-up have no
   // profile row; give them one rather than waiting for each to log in again.

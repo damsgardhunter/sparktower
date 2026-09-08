@@ -46,6 +46,31 @@ export async function loadSurfaceFlags(): Promise<Record<string, boolean>> {
   return cache;
 }
 
+/**
+ * How stale a flag may get on an instance that didn't serve the toggle.
+ *
+ * The cache is per-process and was refreshed only at boot and by whichever
+ * instance handled the change. `.replit` deploys to `autoscale`, which runs
+ * several — so turning a surface off updated one of them and left the rest
+ * serving it until they happened to restart. A kill switch that works on one
+ * instance out of N is not a kill switch, and the moment you need one is the
+ * moment you cannot wait for a deploy.
+ *
+ * Polling rather than a notification channel: ten seconds of staleness is
+ * nothing against "until restart", and this needs no new moving parts to be
+ * correct however many instances are running.
+ */
+const REFRESH_MS = 10_000;
+
+/** Starts the periodic re-read. Safe to call more than once. */
+let refresher: ReturnType<typeof setInterval> | null = null;
+export function startSurfaceFlagRefresh(): void {
+  if (refresher) return;
+  refresher = setInterval(() => { void loadSurfaceFlags(); }, REFRESH_MS);
+  // Must not hold the process open — this is a cache, not work.
+  refresher.unref();
+}
+
 export const surfaceEnabled = (id: string): boolean => cache[id] !== false;
 
 export const surfaceMap = (): Record<string, boolean> => ({ ...cache });
