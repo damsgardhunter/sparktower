@@ -13,8 +13,25 @@ export function getSession() {
   const sessionTtlSeconds = 7 * 24 * 60 * 60;
   const sessionTtlMs = sessionTtlSeconds * 1000;
   const isProduction = process.env.NODE_ENV === "production";
+  /*
+   * Refused in production: unset, or set to the development fallback below.
+   *
+   * Checking only for presence isn't enough. The fallback string is committed
+   * to a public repository, so anyone can read it — and a deployment that
+   * copied it out of a local .env would be signing session cookies with a
+   * value the whole internet knows, which is forgeable session cookies for
+   * every account. That is exactly what had happened here, and a guard that
+   * only asked "is it set?" said yes to it.
+   */
+  const DEV_FALLBACK = "dev-session-secret";
   if (isProduction && !process.env.SESSION_SECRET) {
     throw new Error("SESSION_SECRET must be set in production");
+  }
+  if (isProduction && process.env.SESSION_SECRET === DEV_FALLBACK) {
+    throw new Error(
+      "SESSION_SECRET is set to the public development fallback. Generate a real one: " +
+      "node -e \"console.log(require('crypto').randomBytes(48).toString('base64url'))\"",
+    );
   }
   // Debug: log session secret presence and session import
   try {
@@ -32,7 +49,7 @@ export function getSession() {
     tableName: "sessions",
   });
   return sessionFn({
-    secret: process.env.SESSION_SECRET || "dev-session-secret",
+    secret: process.env.SESSION_SECRET || DEV_FALLBACK,
     store: sessionStore,
     resave: false,
     saveUninitialized: false,
