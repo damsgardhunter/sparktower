@@ -1,6 +1,8 @@
 import passport from "passport";
 import { Strategy as LocalStrategy } from "passport-local";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
+import { ensureUserProfile } from "../../user-provisioning";
+import { stampSignupAttribution } from "../../attribution";
 import session from "express-session";
 import type { Express, RequestHandler } from "express";
 import connectPg from "connect-pg-simple";
@@ -96,18 +98,24 @@ export async function setupAuth(app: Express) {
           clientID: process.env.GOOGLE_CLIENT_ID,
           clientSecret: process.env.GOOGLE_CLIENT_SECRET,
           callbackURL: `${protocol}://${domain}/api/auth/google/callback`,
+          /* So a new account can be stamped with the link that brought them. */
+          passReqToCallback: true,
         },
-        async (_accessToken, _refreshToken, profile, done) => {
+        async (req: any, _accessToken: string, _refreshToken: string, profile: any, done: any) => {
           try {
             const email = profile.emails?.[0]?.value;
             const existingUser = await authStorage.getUserByGoogleId(profile.id);
             if (existingUser) {
+              // Also runs for returning users: accounts created before
+              // provisioning existed get their profile on next sign-in.
+              await ensureUserProfile(existingUser);
               return done(null, existingUser);
             }
             if (email) {
               const emailUser = await authStorage.getUserByEmail(email);
               if (emailUser) {
                 const updated = await authStorage.linkGoogleAccount(emailUser.id, profile.id);
+                await ensureUserProfile(updated);
                 return done(null, updated);
               }
             }
@@ -119,6 +127,10 @@ export async function setupAuth(app: Express) {
               authProvider: "google",
               googleId: profile.id,
             });
+            await ensureUserProfile(newUser);
+            // Only here, on the branch that actually creates an account —
+            // the two branches above are returning users.
+            await stampSignupAttribution(newUser.id, req);
             return done(null, newUser);
           } catch (err) {
             return done(err);

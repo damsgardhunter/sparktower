@@ -1,12 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
-import { ProjectCard } from "@/components/project-card";
 import { PrivateBadge } from "@/components/private-badge";
 import { FounderFeed } from "@/components/founder-feed";
-import { UserCard } from "@/components/user-card";
+import { ProfileRailCard } from "@/components/profile-rail-card";
+import { MyProjectsCard } from "@/components/my-projects-card";
+import { RailCard, RailHeader, RailDivider } from "@/components/rail-card";
+import { UserAvatar } from "@/components/user-avatar";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Trophy, Eye, ArrowRight, Plus } from "lucide-react";
+import { Eye, Plus, Trophy, UserPlus } from "lucide-react";
 import { Link } from "wouter";
 import type { Project, UserProfile, User, UserMatch } from "@shared/schema";
 
@@ -14,6 +15,16 @@ type ProjectWithDetails = Project & { owner: User; profile?: UserProfile };
 type ProjectWithStats = Project & { owner: User };
 type MatchWithDetails = UserMatch & { matchedUser: User; matchedProfile: UserProfile };
 
+/**
+ * The home page, laid out like a social feed.
+ *
+ * One scrolling column of posts with a sticky rail beside it, which is the
+ * shape every feed product has converged on: the timeline gets the attention
+ * and everything else is a compact module you glance at. What used to be three
+ * full-width sections stacked under the feed — leaderboard podium, match cards
+ * — now live in the rail, so discovery is visible while you read rather than
+ * two screens down.
+ */
 export default function Home() {
   const { data: projects, isLoading: projectsLoading } = useQuery<ProjectWithDetails[]>({
     queryKey: ["/api/projects"],
@@ -27,170 +38,184 @@ export default function Home() {
     queryKey: ["/api/matches"],
   });
 
-  const topThree = leaderboard?.slice(0, 3) || [];
-
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-12 h-full overflow-y-auto">
-      {/* The feed is the point of the home page now. A sidebar keeps the
-          project discovery that used to live here, without it competing
-          with the timeline for attention. */}
-      <section className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
-        <div className="lg:col-span-2 space-y-4">
-          <div className="flex items-center justify-between gap-4">
-            <h2 className="text-2xl font-bold tracking-tight">Founder Feed</h2>
-            <Button asChild className="gap-2" data-testid="button-create-project-home">
+    <div className="h-full overflow-y-auto bg-muted dark:bg-background">
+      <div className="mx-auto max-w-[1128px] px-4 py-5">
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_300px] gap-5 items-start">
+          {/* --- The feed --- */}
+          <div className="min-w-0 space-y-2">
+            {/*
+              * Starting a project is what sits at the top of the feed.
+              *
+              * A check-in button lived here for a while, on the reasoning that
+              * the weekly loop is what the page should ask for. It isn't the
+              * right trade: this bar is the entry point for the whole product,
+              * and someone with nothing to check in on has no use for it. The
+              * check-in shortcuts belong on the project cards in the rail,
+              * where they sit next to the project they act on.
+              *
+              * Full-width rather than a heading plus a button, so it doesn't
+              * cost a row of vertical space above the composer.
+              */}
+            <Button
+              asChild
+              className="btn-glossy w-full h-11 gap-2 text-[15px] font-semibold text-primary-foreground border-0"
+              data-testid="button-create-project-home"
+            >
               <Link href="/projects/new">
                 <Plus className="h-4 w-4" />
                 Create Project
               </Link>
             </Button>
+            <FounderFeed />
           </div>
-          <FounderFeed />
-        </div>
 
-        <aside className="space-y-4 lg:sticky lg:top-6">
-          <Card>
-            <CardContent className="p-4 space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <h3 className="font-semibold text-sm">New projects</h3>
-                <Link href="/projects" className="text-xs text-primary hover:underline">
-                  See all
-                </Link>
-              </div>
+          {/* --- The rail. Sticky, so it stays with you down a long feed. --- */}
+          <aside className="space-y-2 lg:sticky lg:top-5" data-testid="home-rail">
+            <ProfileRailCard />
+            <MyProjectsCard />
+
+            <RailCard>
+              <RailHeader title="New projects" href="/projects" />
               {projectsLoading ? (
-                <div className="space-y-2">
-                  {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-12 w-full rounded-md" />)}
+                <div className="space-y-2 pt-1">
+                  {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-10 w-full rounded-md" />)}
                 </div>
               ) : projects && projects.length > 0 ? (
-                <div className="space-y-1">
+                <div className="pt-0.5">
                   {projects.slice(0, 5).map((project) => (
                     <Link
                       key={project.id}
                       href={`/projects/${project.id}`}
-                      className="block rounded-md p-2 hover:bg-accent transition-colors"
-                      data-testid={`sidebar-project-${project.id}`}
+                      className="flex items-center gap-2 -mx-3 px-3 py-1.5 hover:bg-accent transition-colors"
+                      data-testid={`rail-project-${project.id}`}
                     >
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        {project.isPrivate && <PrivateBadge variant="icon" className="shrink-0" />}
-                        <p className="text-sm font-medium truncate">{project.title}</p>
-                      </div>
-                      <p className="text-xs text-muted-foreground truncate">
-                        {project.category} · by {project.owner?.firstName || "a builder"}
-                      </p>
+                      <UserAvatar
+                        src={project.profile?.avatarUrl}
+                        name={project.owner?.firstName || project.title}
+                        className="h-8 w-8 shrink-0"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-1 min-w-0">
+                          {project.isPrivate && <PrivateBadge variant="icon" className="shrink-0" />}
+                          <span className="text-sm font-medium truncate">{project.title}</span>
+                        </span>
+                        <span className="block text-xs text-muted-foreground truncate">
+                          {project.category} · by {project.owner?.firstName || "a builder"}
+                        </span>
+                      </span>
                     </Link>
                   ))}
                 </div>
               ) : (
-                <p className="text-sm text-muted-foreground">No projects yet. Start the first one.</p>
+                <p className="text-sm text-muted-foreground pt-1">No projects yet. Start the first one.</p>
               )}
-            </CardContent>
-          </Card>
-        </aside>
-      </section>
+            </RailCard>
 
-      <section className="space-y-6">
-        <div className="flex items-center justify-between gap-4">
-          <h2 className="text-3xl font-bold tracking-tight">Top Projects</h2>
-          <Link href="/leaderboard">
-            <Button variant="outline" size="sm" data-testid="link-view-leaderboard">
-              View Leaderboard <ArrowRight className="ml-2 h-4 w-4" />
-            </Button>
-          </Link>
+            {/* The podium, compacted. Ranked rows read faster in a rail than
+                three stacked cards did full-width. */}
+            <RailCard>
+              <RailHeader title="Top projects" href="/leaderboard" />
+              {leaderboardLoading ? (
+                <div className="space-y-2 pt-1">
+                  {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-8 w-full rounded-md" />)}
+                </div>
+              ) : leaderboard && leaderboard.length > 0 ? (
+                <div className="pt-0.5">
+                  {leaderboard.slice(0, 5).map((project, i) => (
+                    <Link
+                      key={project.id}
+                      href={`/projects/${project.id}`}
+                      className="flex items-center gap-2 -mx-3 px-3 py-1.5 hover:bg-accent transition-colors"
+                      data-testid={`rail-top-${project.id}`}
+                    >
+                      <span
+                        className={`h-5 w-5 shrink-0 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                          i === 0
+                            ? "bg-yellow-500/15 text-yellow-600 dark:text-yellow-400"
+                            : i === 1
+                              ? "bg-slate-400/20 text-slate-600 dark:text-slate-300"
+                              : i === 2
+                                ? "bg-amber-600/15 text-amber-700 dark:text-amber-500"
+                                : "bg-muted text-muted-foreground"
+                        }`}
+                      >
+                        {i === 0 ? <Trophy className="h-3 w-3" /> : i + 1}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-medium truncate">{project.title}</span>
+                        <span className="block text-xs text-muted-foreground truncate">
+                          by {project.owner?.firstName || project.owner?.email || "a builder"}
+                        </span>
+                      </span>
+                      <span className="text-xs text-muted-foreground shrink-0 flex items-center gap-1 tabular-nums">
+                        <Eye className="h-3 w-3" />{project.views.toLocaleString()}
+                      </span>
+                    </Link>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground pt-1">Nothing on the leaderboard yet.</p>
+              )}
+            </RailCard>
+
+            <RailCard>
+              <RailHeader title="People to build with" href="/matches" />
+              {matchesLoading ? (
+                <div className="space-y-2 pt-1">
+                  {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-10 w-full rounded-md" />)}
+                </div>
+              ) : matches && matches.length > 0 ? (
+                <div className="pt-0.5">
+                  {matches.slice(0, 4).map((match) => (
+                    <Link
+                      key={match.id}
+                      href={`/profile/${match.matchedUser.id}`}
+                      className="flex items-center gap-2 -mx-3 px-3 py-1.5 hover:bg-accent transition-colors"
+                      data-testid={`rail-match-${match.id}`}
+                    >
+                      <UserAvatar
+                        src={match.matchedProfile?.avatarUrl}
+                        name={match.matchedProfile?.displayName || match.matchedUser.firstName || "Builder"}
+                        className="h-8 w-8 shrink-0"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-medium truncate">
+                          {match.matchedProfile?.displayName || match.matchedUser.firstName || "A builder"}
+                        </span>
+                        <span className="block text-xs text-muted-foreground truncate">
+                          {match.matchedProfile?.headline || "Builder on SparkTower"}
+                        </span>
+                      </span>
+                      {match.score !== null && match.score !== undefined && (
+                        <span className="text-xs font-semibold text-primary shrink-0 tabular-nums">
+                          {match.score}%
+                        </span>
+                      )}
+                    </Link>
+                  ))}
+                  <RailDivider />
+                  <Link
+                    href="/matches"
+                    className="flex items-center justify-center gap-1.5 text-xs text-primary hover:underline py-0.5"
+                    data-testid="rail-see-matches"
+                  >
+                    <UserPlus className="h-3.5 w-3.5" /> Find more collaborators
+                  </Link>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground pt-1">
+                  No matches yet — completing your profile is what makes these good.
+                </p>
+              )}
+            </RailCard>
+
+            <p className="text-[11px] text-muted-foreground text-center pt-1 pb-4">
+              SparkTower · built for people who ship
+            </p>
+          </aside>
         </div>
-        {leaderboardLoading ? (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {[...Array(3)].map((_, i) => (
-              <Skeleton key={i} className="h-[220px] w-full rounded-2xl" />
-            ))}
-          </div>
-        ) : topThree.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-end">
-            {topThree[1] && (
-              <div className="order-2 md:order-1" data-testid={`podium-card-2`}>
-                <HomePodiumCard project={topThree[1]} rank={2} />
-              </div>
-            )}
-            {topThree[0] && (
-              <div className="order-1 md:order-2" data-testid={`podium-card-1`}>
-                <HomePodiumCard project={topThree[0]} rank={1} isWinner />
-              </div>
-            )}
-            {topThree[2] && (
-              <div className="order-3" data-testid={`podium-card-3`}>
-                <HomePodiumCard project={topThree[2]} rank={3} />
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="text-center py-12 bg-card rounded-2xl border border-card-border">
-            <p className="text-secondary">No projects on the leaderboard yet.</p>
-          </div>
-        )}
-      </section>
-
-      <section className="space-y-6">
-        <div className="flex items-center justify-between gap-4">
-          <h2 className="text-3xl font-bold tracking-tight">Recommended Matches</h2>
-        </div>
-        {matchesLoading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {[...Array(3)].map((_, i) => (
-              <Skeleton key={i} className="h-[280px] w-full rounded-2xl" />
-            ))}
-          </div>
-        ) : matches && matches.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {matches.slice(0, 3).map((match) => (
-              <UserCard
-                key={match.id}
-                profile={match.matchedProfile}
-                userName={(match.matchedUser.firstName || match.matchedUser.email || "Anonymous") as string}
-                matchScore={match.score ?? undefined}
-                matchReasons={match.reasons ?? undefined}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="text-center py-12 bg-card rounded-2xl border border-card-border">
-            <p className="text-secondary">No matches found. Make sure your profile is complete!</p>
-          </div>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function HomePodiumCard({ project, rank, isWinner }: { project: ProjectWithStats; rank: number; isWinner?: boolean }) {
-  const rankColors = {
-    1: "bg-yellow-500/10 text-yellow-500 border-yellow-500/20",
-    2: "bg-slate-400/10 text-slate-400 border-slate-400/20",
-    3: "bg-amber-600/10 text-amber-600 border-amber-600/20",
-  }[rank as 1 | 2 | 3];
-
-  return (
-    <Card className={`relative overflow-visible transition-all hover-elevate ${isWinner ? "border-primary ring-2 ring-primary/20" : ""}`}>
-      <div className={`absolute -top-4 left-1/2 -translate-x-1/2 w-8 h-8 rounded-full flex items-center justify-center font-bold border ${rankColors} z-10`}>
-        {rank}
       </div>
-      <CardContent className={`pt-8 text-center flex flex-col items-center ${isWinner ? "pb-10" : "pb-6"}`}>
-        {isWinner && <Trophy className="h-8 w-8 text-yellow-500 mb-4" />}
-        <div className="flex items-center gap-1.5 justify-center">
-          {project.isPrivate && <PrivateBadge variant="icon" />}
-          <Link href={`/projects/${project.id}`}>
-            <h3 className="font-bold text-lg line-clamp-1 hover:underline">{project.title}</h3>
-          </Link>
-        </div>
-        <p className="text-sm text-secondary mb-4">by {project.owner.firstName || project.owner.email}</p>
-        <div className="flex items-center gap-2 bg-muted px-3 py-1 rounded-full text-sm font-mono mb-6">
-          <Eye className="h-4 w-4" />
-          {project.views.toLocaleString()} views
-        </div>
-        <Link href={`/projects/${project.id}`} className="w-full">
-          <Button variant={isWinner ? "default" : "outline"} className="w-full" data-testid={`button-view-project-rank-${rank}`}>
-            View Project <ArrowRight className="ml-2 h-4 w-4" />
-          </Button>
-        </Link>
-      </CardContent>
-    </Card>
+    </div>
   );
 }

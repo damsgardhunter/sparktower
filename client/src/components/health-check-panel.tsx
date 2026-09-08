@@ -16,6 +16,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useEntitlements } from "@/hooks/use-entitlements";
 import { UpgradePrompt } from "@/components/upgrade-prompt";
+import { useNovaHandoff } from "@/components/nova-handoff";
 import {
   Loader2, Stethoscope, AlertTriangle, TrendingUp, Info, Wand2, ThumbsDown,
   Check, X, MessageSquareX,
@@ -110,6 +111,9 @@ export function HealthCheckPanel({ projectId }: { projectId: string }) {
       toast({ title: "Couldn't run the check", description: describeError(err, "Health check failed."), variant: "destructive" });
     },
   });
+
+  // Handed over from the Nova dashboard's "Run a health check".
+  useNovaHandoff("analytics.healthCheck", () => runMutation.mutate(), can("projectHealthChecks"));
 
   /**
    * Hands a finding back to Nova to carry out. Everything Nova can touch may

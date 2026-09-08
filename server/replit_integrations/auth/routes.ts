@@ -3,6 +3,8 @@ import { authStorage } from "./storage";
 import { isAuthenticated } from "./replitAuth";
 import passport from "passport";
 import bcrypt from "bcryptjs";
+import { ensureUserProfile } from "../../user-provisioning";
+import { stampSignupAttribution } from "../../attribution";
 
 // Simple in-memory rate limiter for auth endpoints (IP-based)
 const loginAttempts: Map<string, { count: number; firstAttempt: number }> = new Map();
@@ -63,6 +65,13 @@ export function registerAuthRoutes(app: Express): void {
         lastName: lastName || "",
         authProvider: "local",
       });
+      // The profile is part of having an account, not something the user
+      // stumbles into later — see server/user-provisioning.ts.
+      await ensureUserProfile(user);
+      // Where they came from, from the cookie stamped on their first page.
+      // Here and not in ensureUserProfile, which also runs on every sign-in.
+      await stampSignupAttribution(user.id, req);
+
       req.login(user, (err: any) => {
         if (err) return next(err);
         const { passwordHash: _, ...safeUser } = user;
@@ -85,8 +94,10 @@ export function registerAuthRoutes(app: Express): void {
       if (!user) {
         return res.status(401).json({ message: info?.message || "Invalid credentials" });
       }
-      req.login(user, (err: any) => {
+      req.login(user, async (err: any) => {
         if (err) return next(err);
+        // Heals accounts created before profiles were provisioned at sign-up.
+        await ensureUserProfile(user);
         const { passwordHash, ...safeUser } = user;
         res.json(safeUser);
       });

@@ -383,6 +383,8 @@ export interface IStorage {
   createCodeAudit(data: InsertProjectCodeAudit): Promise<ProjectCodeAudit>;
   getCodeAudit(id: string): Promise<ProjectCodeAudit | undefined>;
   getCodeAudits(projectId: string, limit?: number): Promise<ProjectCodeAudit[]>;
+  /** The most recent audit, which is what every Nova surface reasons from. */
+  getLatestCodeAudit(projectId: string): Promise<ProjectCodeAudit | undefined>;
   updateCodeAudit(id: string, data: Partial<InsertProjectCodeAudit>): Promise<ProjectCodeAudit>;
   deleteCodeAudit(id: string): Promise<void>;
 
@@ -1995,6 +1997,16 @@ export class DatabaseStorage implements IStorage {
       .where(eq(projectCodeAudits.projectId, projectId))
       .orderBy(desc(projectCodeAudits.createdAt))
       .limit(limit);
+  }
+
+  async getLatestCodeAudit(projectId: string): Promise<ProjectCodeAudit | undefined> {
+    const [row] = await db
+      .select()
+      .from(projectCodeAudits)
+      .where(eq(projectCodeAudits.projectId, projectId))
+      .orderBy(desc(projectCodeAudits.createdAt))
+      .limit(1);
+    return row;
   }
 
   async updateCodeAudit(id: string, data: Partial<InsertProjectCodeAudit>): Promise<ProjectCodeAudit> {

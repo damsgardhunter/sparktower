@@ -1,6 +1,6 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
-import { rm, readFile } from "fs/promises";
+import { rm, readFile, cp } from "fs/promises";
 
 // server deps to bundle to reduce openat(2) syscalls
 // which helps cold start times
@@ -59,6 +59,14 @@ async function buildAll() {
     external: externals,
     logLevel: "info",
   });
+
+  /*
+   * The merch renderer converts text to outlines from these font files, so
+   * they are program data rather than assets — the bundle is useless without
+   * them and a deploy that ships only dist/ would print nothing.
+   */
+  console.log("copying merch fonts...");
+  await cp("server/assets/fonts", "dist/assets/fonts", { recursive: true });
 }
 
 buildAll().catch((err) => {

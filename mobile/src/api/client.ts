@@ -9,6 +9,7 @@
 import Constants from "expo-constants";
 import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
+import { pendingAttribution, clearAttribution } from "./attribution";
 
 const ACCESS_KEY = "sparktower.accessToken";
 const REFRESH_KEY = "sparktower.refreshToken";
@@ -262,20 +263,29 @@ export async function login(email: string, password: string): Promise<Session> {
 export async function register(input: {
   email: string; password: string; firstName?: string; lastName?: string;
 }): Promise<Session> {
+  // Where this install came from, carried in with the signup — the server has
+  // no cookie to read here. See src/api/attribution.ts.
+  const attribution = await pendingAttribution();
   const session = await api<Session>("/api/auth/mobile/register", {
     method: "POST",
-    body: { ...input, device: deviceLabel() },
+    body: { ...input, device: deviceLabel(), attribution },
   });
   await saveSession(session);
+  await clearAttribution();
   return session;
 }
 
 export async function loginWithGoogle(idToken: string): Promise<Session> {
+  // Sent on every Google call, not just new accounts: the app can't tell a
+  // first sign-in from a returning one, and the server ignores it for anyone
+  // who already has a row.
+  const attribution = await pendingAttribution();
   const session = await api<Session>("/api/auth/mobile/google", {
     method: "POST",
-    body: { idToken, device: deviceLabel() },
+    body: { idToken, device: deviceLabel(), attribution },
   });
   await saveSession(session);
+  await clearAttribution();
   return session;
 }
 

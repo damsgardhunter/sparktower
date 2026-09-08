@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { UserAvatar } from "@/components/user-avatar";
 import { SkillBadge } from "@/components/skill-badge";
-import { DonationButton } from "@/components/donation-button";
+import { BackingPanel } from "@/components/backing-panel";
 import { MediaGallery } from "@/components/media-gallery";
 import { StoryboardSlideshow } from "@/components/storyboard-slideshow";
 import { StoryboardLibrary } from "@/components/storyboard-library";
@@ -271,16 +271,33 @@ export default function ProjectDashboard() {
 
   return (
     <div className="h-full overflow-y-auto pb-20">
-      <div className="relative min-h-[12rem] bg-muted border-b border-border flex items-end">
-        <div className="absolute inset-0 bg-gradient-to-t from-background to-transparent opacity-60" />
+      <div
+        className="relative min-h-[12rem] bg-muted border-b border-border flex items-end bg-cover bg-center"
+        style={project.coverUrl ? { backgroundImage: `url(${project.coverUrl})` } : undefined}
+        data-testid="project-cover"
+      >
+        {/* Darkened so the title stays readable over any uploaded image. */}
+        <div className={`absolute inset-0 ${project.coverUrl
+          ? "bg-gradient-to-t from-background via-background/70 to-background/20"
+          : "bg-gradient-to-t from-background to-transparent opacity-60"}`} />
         <div className="relative p-6 w-full max-w-5xl mx-auto flex flex-col sm:flex-row items-start sm:items-end justify-between gap-4">
-          <div className="space-y-2 min-w-0 flex-1">
-            <div className="flex items-center gap-2 flex-wrap">
-              <Badge variant={project.status === "active" ? "default" : "secondary"}>{project.status}</Badge>
-              <span className="text-sm text-secondary font-medium">{project.category}</span>
-              {project.isPrivate && <PrivateBadge />}
+          <div className="flex items-end gap-4 min-w-0 flex-1">
+            {project.logoUrl && (
+              <img
+                src={project.logoUrl}
+                alt=""
+                className="h-20 w-20 rounded-xl object-contain bg-background/80 border border-border/60 p-1.5 shrink-0"
+                data-testid="project-logo"
+              />
+            )}
+            <div className="space-y-2 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Badge variant={project.status === "active" ? "default" : "secondary"}>{project.status}</Badge>
+                <span className="text-sm text-secondary font-medium">{project.category}</span>
+                {project.isPrivate && <PrivateBadge />}
+              </div>
+              <h1 className="text-3xl sm:text-4xl font-bold tracking-tight break-words" data-testid="text-project-title">{project.title}</h1>
             </div>
-            <h1 className="text-3xl sm:text-4xl font-bold tracking-tight break-words" data-testid="text-project-title">{project.title}</h1>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <Button
@@ -295,7 +312,6 @@ export default function ProjectDashboard() {
               {followStatus?.following ? "Following" : "Follow"}
               {followStatus && followStatus.count > 0 && <span className="text-xs">({followStatus.count})</span>}
             </Button>
-            <DonationButton projectId={project.id} projectTitle={project.title} />
             {!isMember && !isOwner && !hasApplied && (
               <Button onClick={() => setApplyModalOpen(true)} data-testid="button-apply-project">
                 <Send className="h-4 w-4 mr-2" /> Apply
@@ -434,6 +450,11 @@ export default function ProjectDashboard() {
         </div>
 
         <div className="space-y-6">
+          {/* Renders nothing unless the project is running a campaign, so it
+              can sit here unconditionally. Above the stats card because it's
+              the one thing on this page a visitor can act on. */}
+          <BackingPanel projectId={project.id} projectTitle={project.title} isOwner={isOwner} />
+
           {isSectionVisible(project, "stats") && (
           <Card>
             <CardHeader><CardTitle className="text-lg">Project Stats</CardTitle></CardHeader>

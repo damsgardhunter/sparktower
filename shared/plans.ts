@@ -215,6 +215,12 @@ export const CREDIT_COSTS = {
    */
   taskAssist: 4,
   /**
+   * Nova's help on one surface — milestones, research, pricing, strategy.
+   * Priced between a chat turn and a full task plan: it reasons over the
+   * project and proposes concrete changes, but scoped to one area.
+   */
+  novaAssist: 3,
+  /**
    * Nova audits the real codebase against the plan. Priced above a health
    * check because it ingests and reasons over an entire repository.
    */
@@ -240,6 +246,14 @@ export const CREDIT_COSTS = {
   videoGeneration: 5,
   /** "What should I do next?" — ranks the 3 highest-impact actions. */
   nextActions: 3,
+  /**
+   * Nova drafting a weekly check-in.
+   *
+   * Priced low on purpose: this is the assist on the habit the whole product
+   * depends on, and a cost someone weighs up each week is a cost that stops
+   * them checking in.
+   */
+  checkInDraft: 1,
   /**
    * Full roadmap rebuild. Priced as a range because cost scales with how much
    * project context has to be re-planned; see roadmapRebuildCost().

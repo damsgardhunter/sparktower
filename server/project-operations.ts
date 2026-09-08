@@ -12,17 +12,20 @@ import { storage } from "./storage";
 
 /** One edit Nova wants to make. Shapes mirror the JSON Nova is told to emit. */
 export type ProjectOperation =
-  | { op: "update_project"; fields: Record<string, string> }
+  | { op: "update_project"; fields: Record<string, string | string[]> }
   | { op: "update_scope"; mvp?: string[]; niceToHave?: string[] }
   | { op: "create_task"; title: string; description?: string; priority?: string; status?: string; estimateHours?: number; tags?: string[]; milestoneId?: string | null; dueDate?: string | null; subtasks?: { title: string; done?: boolean }[] }
   | { op: "update_task"; id: string; title?: string; description?: string; priority?: string; status?: string; order?: number; blockedByTaskId?: string | null; estimateHours?: number; tags?: string[]; milestoneId?: string | null; dueDate?: string | null; subtasks?: { title: string; done?: boolean }[] }
   | { op: "create_milestone"; title: string; description?: string; targetDate?: string | null }
   | { op: "update_milestone"; id: string; title?: string; description?: string; status?: string; targetDate?: string | null }
-  | { op: "update_phase"; id: string; title?: string; description?: string; estimatedDuration?: string; outcomes?: string[]; status?: string };
+  | { op: "update_phase"; id: string; title?: string; description?: string; estimatedDuration?: string; outcomes?: string[]; status?: string }
+  | { op: "create_interview"; intervieweeName: string; intervieweeRole?: string; notes?: string; keyInsights?: string }
+  | { op: "create_experiment"; hypothesis: string; method?: string; metrics?: string }
+  | { op: "create_pricing_tier"; name: string; price?: number; billingPeriod?: string; features?: string[]; isFeatured?: boolean };
 
 export interface AppliedChange {
   /** Machine-readable, for the client to route an invalidation. */
-  entity: "project" | "scope" | "task" | "milestone" | "phase";
+  entity: "project" | "scope" | "task" | "milestone" | "phase" | "interview" | "experiment" | "pricing";
   action: "created" | "updated";
   /** A sentence the user can read: "Renamed milestone to …". */
   description: string;
@@ -32,7 +35,8 @@ export interface AppliedChange {
 /** The op vocabulary, verbatim, for embedding in a prompt. */
 export const OPERATION_SCHEMA_INSTRUCTIONS = `Each operation is one object. Valid operations:
 
-{ "op": "update_project", "fields": { "oneLiner"|"mission"|"valueProposition"|"targetCustomerProfile"|"problemStatement"|"targetUser"|"successMetrics": "new text" } }
+{ "op": "update_project", "fields": { "oneLiner"|"mission"|"valueProposition"|"targetCustomerProfile"|"problemStatement"|"targetUser"|"successMetrics": "new text", "techStack": ["React","Express"], "repoUrl": "https://…", "liveUrl": "https://…", "status": "planning"|"active"|"completed" } }
+   // "techStack" REPLACES the list. Use it to correct a stale stack against what an audit found in the code.
 { "op": "update_scope", "mvp": ["short feature name"], "niceToHave": ["short feature name"] }   // a list you send REPLACES that bucket; omit a bucket to leave it alone
 { "op": "create_task", "title": "", "description": "", "priority": "low"|"medium"|"high", "estimateHours": 3, "tags": ["short label"], "milestoneId": "the milestone this is work toward, or null", "dueDate": "YYYY-MM-DD", "subtasks": [{ "title": "" }] }
 { "op": "update_task", "id": "existing task id", "title": "", "description": "", "priority": "", "status": "todo"|"in-progress"|"review"|"done", "order": 0, "blockedByTaskId": "id of a task this one waits on, or null", "estimateHours": 3, "tags": [], "milestoneId": "", "subtasks": [{ "title": "", "done": false }] }
@@ -40,6 +44,10 @@ export const OPERATION_SCHEMA_INSTRUCTIONS = `Each operation is one object. Vali
 { "op": "create_milestone", "title": "", "description": "", "targetDate": "YYYY-MM-DD" }
 { "op": "update_milestone", "id": "existing milestone id", "title": "", "description": "", "status": "planned"|"in-progress"|"completed", "targetDate": "YYYY-MM-DD" }
 { "op": "update_phase", "id": "existing roadmap phase id", "title": "", "description": "", "estimatedDuration": "e.g. 2 weeks", "outcomes": ["deliverable"], "status": "upcoming"|"in-progress"|"completed" }
+
+{ "op": "create_interview", "intervieweeName": "who to talk to — a role or a named person", "intervieweeRole": "", "notes": "the questions to ask, one per line", "keyInsights": "" }
+{ "op": "create_experiment", "hypothesis": "a falsifiable statement", "method": "how it will be run", "metrics": "the number that decides it, with a threshold" }
+{ "op": "create_pricing_tier", "name": "", "price": 0, "billingPeriod": "monthly"|"yearly"|"one-time", "features": ["short benefit"], "isFeatured": false }
 
 Only include the fields you are changing. Only ever use ids that appear in the project state you were given.`;
 
@@ -79,6 +87,158 @@ function parseDate(v: unknown): Date | null {
 }
 
 /**
+ * Renders the most recent codebase audit as prompt text.
+ *
+ * The audit is the only evidence in the system of what has actually been
+ * built, so every Nova surface should be able to see it: the chat, the health
+ * check, the task planner, the document builder. Without this the audit was a
+ * dead end — Nova could produce one and then, five minutes later, have no idea
+ * it existed and go back to trusting the board.
+ *
+ * Deliberately compact. The full findings run to several thousand words; what
+ * every caller needs is the verdict, the gaps and the reconciliation.
+ */
+export function renderAudit(audit: any): string {
+  if (!audit) {
+    return [
+      "LATEST CODEBASE AUDIT",
+      "None has been run. Nothing here has verified what is actually built — the tasks and",
+      "milestones below are the builder's claims, not evidence. If they ask what state the",
+      "project is really in, tell them to run an audit from the Codebase tab.",
+    ].join("\n");
+  }
+
+  const f = (audit.findings || {}) as any;
+  const list = (items: any[] | undefined, render: (x: any) => string, max = 6) =>
+    (items || []).slice(0, max).map(render).filter(Boolean).join("; ");
+
+  const when = audit.createdAt ? new Date(audit.createdAt).toISOString().slice(0, 10) : "unknown date";
+
+  return [
+    `LATEST CODEBASE AUDIT (${when}, source: ${audit.source})`,
+    `Verdict: ${audit.stage} — roughly ${audit.completionPercent}% of the plan is built.`,
+    audit.appliedAt
+      ? "Its suggested changes have already been applied to the board."
+      : "Its suggested changes have NOT been applied to the board yet.",
+    f.stackSummary ? `Stack actually in the code: ${f.stackSummary}` : null,
+    audit.summary ? `Nova's read: ${audit.summary}` : null,
+    f.built?.length ? `Verified as built: ${list(f.built, (b) => b.item, 10)}` : null,
+    f.partial?.length ? `Partly built: ${list(f.partial, (b) => `${b.item} (missing: ${b.missing})`, 6)}` : null,
+    f.missing?.length ? `Missing from the code entirely: ${list(f.missing, (b) => b.item, 10)}` : null,
+    f.undocumented?.length ? `In the code but not in the plan: ${list(f.undocumented, (b) => b.item, 6)}` : null,
+    f.risks?.length
+      ? `Risks found: ${list(f.risks, (r) => `[${r.severity}] ${r.area}: ${r.finding}`, 6)}`
+      : null,
+    f.taskReconciliation?.looksDone?.length
+      ? `Open tasks the code says are already finished: ${list(f.taskReconciliation.looksDone, (t) => t.title, 10)}`
+      : null,
+    f.taskReconciliation?.notStarted?.length
+      ? `Tasks with no supporting code: ${list(f.taskReconciliation.notStarted, (t) => t.title, 10)}`
+      : null,
+    f.milestones?.length
+      ? `Milestone verdicts from the code: ${list(f.milestones, (m) => `${m.title}=${m.verdict}`, 12)}`
+      : null,
+    f.scan
+      ? `Measured: ${f.scan.linesOfCode?.toLocaleString?.() ?? f.scan.linesOfCode} lines, ${f.scan.routeCount} routes, ${f.scan.dataModels?.length ?? 0} data models, ${f.scan.testFiles} test files, CI ${f.scan.hasCi ? "configured" : "absent"}${f.scan.suspectedSecrets?.length ? `, ${f.scan.suspectedSecrets.length} possible committed credential(s)` : ""}.`
+      : null,
+    "Where the audit and the board disagree, the audit is the evidence. Say so, and offer to correct the board.",
+  ].filter(Boolean).join("\n");
+}
+
+/**
+ * Removes internal id fragments the model leaked into prose.
+ *
+ * The prompt forbids it and the context no longer contains ids, but a model
+ * that has seen an id earlier in a conversation will still occasionally emit
+ * one. Only fragments that actually prefix a real id on this project are
+ * removed, so a legitimate hex string in the builder's own content survives.
+ */
+export function stripIdFragments(content: string, knownIds: string[]): string {
+  if (!content || !knownIds.length) return content;
+
+  // Index by 4-, 6- and 8-character prefixes: the lengths a model truncates to.
+  const prefixes = new Set<string>();
+  for (const id of knownIds) {
+    // Stored dash-free, because lookups normalise the same way — keying the
+    // full id with its dashes meant a whole uuid never matched.
+    const bare = id.replace(/-/g, "").toLowerCase();
+    for (const len of [4, 6, 8]) if (bare.length >= len) prefixes.add(bare.slice(0, len));
+    prefixes.add(bare);
+  }
+  const isKnown = (token: string) => prefixes.has(token.replace(/-/g, "").toLowerCase());
+
+  /*
+   * A full uuid is matched before any short fragment. With the short
+   * alternative first, "id=0e7f1a2b-3c4d-..." matched only the leading eight
+   * characters and left "-3c4d-..." behind in the prose.
+   */
+  const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+  /** Longest alternative first, for the same reason. */
+  const TOKEN = "([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{4})";
+
+  return content
+    /*
+     * The shape chat actually produced:
+     *   "• 4103bb02-1319-4fbf-… (in-progress): *Walk the check-in loop*"
+     * Removing just the id would leave "•  (in-progress): *…*" behind, so the
+     * whole id-plus-separator prefix goes and the title carries the line.
+     */
+    .replace(
+      new RegExp(`(^|\\n)([ \\t]*(?:[-*\\u2022]|\\d{1,2}\\.)[ \\t]*)${TOKEN}[ \\t]*(?:\\([^)\\n]{0,30}\\))?[ \\t]*:[ \\t]*`, "gi"),
+      (m, lead, bullet, token) => (isKnown(token) ? `${lead}${bullet}` : m),
+    )
+    // The same construct without a list marker: "<id> (done): title"
+    .replace(
+      new RegExp(`(^|\\n)[ \\t]*${TOKEN}[ \\t]*(?:\\([^)\\n]{0,30}\\))?[ \\t]*:[ \\t]*`, "gi"),
+      (m, lead, token) => (isKnown(token) ? lead : m),
+    )
+    .replace(new RegExp(`\\bid\\s*[:=]\\s*${TOKEN}\\b`, "gi"), (m, token) => (isKnown(token) ? "" : m))
+    .replace(UUID, (m) => (isKnown(m) ? "" : m))
+    // "(0e7f, 2-3h)" -> "(2-3h)"
+    .replace(new RegExp(`\\(\\s*${TOKEN}\\s*,\\s*`, "gi"), (m, token) => (isKnown(token) ? "(" : m))
+    // ", 0e7f)" -> ")"
+    .replace(new RegExp(`,\\s*${TOKEN}\\s*\\)`, "gi"), (m, token) => (isKnown(token) ? ")" : m))
+    // a parenthesised or bracketed id on its own
+    .replace(new RegExp(`\\s*[([]\\s*${TOKEN}\\s*[)\\]]`, "gi"), (m, token) => (isKnown(token) ? "" : m))
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\(\s*\)/g, "")
+    // A list item left starting with a stray separator after an id was cut.
+    .replace(/(^|\n)([ \t]*(?:[-*\u2022]|\d{1,2}\.)[ \t]*)[:\-\u2013\u2014][ \t]*/g, "$1$2")
+    .replace(/\s+([,.;:])/g, "$1")
+    .trim();
+}
+
+/** Every id on the project that a model might have echoed into prose. */
+export async function collectProjectIds(projectId: string): Promise<string[]> {
+  const [tasks, milestones, roadmap, docs] = await Promise.all([
+    storage.getProjectKanbanTasks(projectId).catch(() => []),
+    storage.getProjectMilestones(projectId).catch(() => []),
+    storage.getProjectRoadmap(projectId).catch(() => undefined),
+    storage.getProjectDocuments(projectId).catch(() => []),
+  ]);
+  return [
+    projectId,
+    ...(tasks as any[]).map((t) => t.id),
+    ...milestones.map((m) => m.id),
+    ...(roadmap?.phases || []).map((p) => p.id),
+    ...docs.map((d) => d.id),
+  ].filter(Boolean);
+}
+
+/**
+ * The latest audit as prompt text, for routes that build their own context.
+ *
+ * Several surfaces (the health check, the roadmap planners) assemble a bespoke
+ * prompt rather than using buildOperableProjectState, so telling the model
+ * "use the audit if present" was a no-op there — the audit was never in the
+ * context to begin with.
+ */
+export async function renderLatestAudit(projectId: string): Promise<string> {
+  const audit = await storage.getLatestCodeAudit(projectId).catch(() => undefined);
+  return renderAudit(audit);
+}
+
+/**
  * Renders the project's current state, optionally with entity ids attached.
  *
  * Nova can only edit what it can name, so ids have to be in the prompt for any
@@ -94,15 +254,18 @@ function parseDate(v: unknown): Date | null {
  */
 export async function buildOperableProjectState(
   projectId: string,
-  opts: { includeIds?: boolean } = {},
+  opts: { includeIds?: boolean; includeAudit?: boolean } = {},
 ): Promise<string> {
   const withIds = opts.includeIds !== false;
-  const [project, tasks, milestones, roadmap, completions] = await Promise.all([
+  const [project, tasks, milestones, roadmap, completions, audit] = await Promise.all([
     storage.getProject(projectId),
     storage.getProjectKanbanTasks(projectId).catch(() => []),
     storage.getProjectMilestones(projectId).catch(() => []),
     storage.getProjectRoadmap(projectId).catch(() => undefined),
     storage.getProjectTaskCompletions(projectId, 30).catch(() => []),
+    opts.includeAudit === false
+      ? Promise.resolve(undefined)
+      : storage.getLatestCodeAudit(projectId).catch(() => undefined),
   ]);
   if (!project) return "PROJECT NOT FOUND";
 
@@ -110,6 +273,9 @@ export async function buildOperableProjectState(
 
   return [
     `PROJECT: ${project.title}`,
+    `STATED TECH STACK: ${(project.techStack || []).join(", ") || "(none set)"}`,
+    project.repoUrl ? `REPO: ${project.repoUrl}` : "REPO: (none linked)",
+    opts.includeAudit === false ? null : renderAudit(audit),
     `BRIEF FIELDS\n${BRIEF_FIELDS.map((f) => `- ${f}: ${(project as any)[f] || "(empty)"}`).join("\n")}`,
     `SCOPE\nMVP (${scope.mvp?.length || 0}): ${scope.mvp?.join(", ") || "(empty)"}\nNice to have (${scope.niceToHave?.length || 0}): ${scope.niceToHave?.join(", ") || "(empty)"}`,
     `TASKS ON THE BOARD (${tasks.length})\n${tasks.length
@@ -132,7 +298,7 @@ export async function buildOperableProjectState(
     roadmap
       ? `ROADMAP PHASES (${roadmap.phases.length})\nGoal: ${roadmap.goal}\n${roadmap.phases.map((p) => `${withIds ? `- id=${p.id} ` : "- "}[${p.status}] ${p.title}${p.estimatedDuration ? ` (${p.estimatedDuration})` : ""}\n    ${p.description || ""}\n    outcomes: ${((p.outcomes as string[]) || []).join("; ") || "none"}`).join("\n")}`
       : "ROADMAP PHASES\n(no roadmap yet — you cannot create phases, only suggest the builder generates one)",
-  ].join("\n\n");
+  ].filter(Boolean).join("\n\n");
 }
 
 /**
@@ -195,16 +361,42 @@ export async function applyProjectOperations(
     try {
       switch (operation?.op) {
         case "update_project": {
-          const fields: Record<string, string> = {};
+          const fields: Record<string, unknown> = {};
           for (const field of BRIEF_FIELDS) {
             const value = operation.fields?.[field];
             if (typeof value === "string" && value.trim()) fields[field] = value.trim().slice(0, 2000);
           }
+
+          /*
+           * Beyond the brief: the facts an audit can establish from the code.
+           * A stated tech stack that no longer matches the repository is the
+           * most common one — it's written once at project creation and never
+           * revisited.
+           */
+          if (Array.isArray(operation.fields?.techStack)) {
+            const stack = operation.fields.techStack
+              .map((t: unknown) => text(t, 60)).filter(Boolean).slice(0, 30);
+            if (stack.length) fields.techStack = stack;
+          }
+          for (const urlField of ["repoUrl", "liveUrl"] as const) {
+            const value = operation.fields?.[urlField];
+            if (typeof value !== "string") continue;
+            const url = value.trim().slice(0, 500);
+            // Only real http(s) URLs, or an explicit clear.
+            if (!url) fields[urlField] = null;
+            else if (/^https?:\/\/[^\s]+$/i.test(url)) fields[urlField] = url;
+            else skipped.push(`A ${urlField} that isn't a URL.`);
+          }
+          if (typeof operation.fields?.status === "string"
+              && ["planning", "active", "completed"].includes(operation.fields.status)) {
+            fields.status = operation.fields.status;
+          }
+
           if (!Object.keys(fields).length) { skipped.push("An update_project with no recognised fields."); break; }
           await storage.updateProject(projectId, fields as any);
           changes.push({
             entity: "project", action: "updated",
-            description: `Rewrote ${Object.keys(fields).length === 1 ? "the" : ""} ${Object.keys(fields).join(", ")} in the project brief`,
+            description: `Updated ${Object.keys(fields).join(", ")} on the project`,
           });
           break;
         }
@@ -327,6 +519,69 @@ export async function applyProjectOperations(
           if (!Object.keys(patch).length) { skipped.push("An update_phase with nothing to change."); break; }
           const updated = await storage.updateRoadmapPhase(operation.id, patch as any);
           changes.push({ entity: "phase", action: "updated", description: `Reworked roadmap phase "${updated.title}"`, entityId: updated.id });
+          break;
+        }
+
+        case "create_interview": {
+          const name = text(operation.intervieweeName, 160);
+          if (!name) { skipped.push("An interview with nobody to interview."); break; }
+          const created = await storage.createProjectInterview({
+            projectId, userId,
+            intervieweeName: name,
+            intervieweeRole: text(operation.intervieweeRole, 120) || null,
+            notes: text(operation.notes, 4000) || null,
+            keyInsights: text(operation.keyInsights, 2000) || null,
+            status: "planned",
+            sentiment: "neutral",
+          } as any);
+          changes.push({
+            entity: "interview", action: "created",
+            description: `Planned an interview with ${name}`, entityId: created.id,
+          });
+          break;
+        }
+
+        case "create_experiment": {
+          const hypothesis = text(operation.hypothesis, 1000);
+          if (!hypothesis) { skipped.push("An experiment with no hypothesis."); break; }
+          const created = await storage.createProjectExperiment({
+            projectId, userId,
+            hypothesis,
+            method: text(operation.method, 2000) || null,
+            metrics: text(operation.metrics, 1000) || null,
+            status: "planned",
+          } as any);
+          changes.push({
+            entity: "experiment", action: "created",
+            description: `Designed the experiment "${hypothesis.slice(0, 60)}"`, entityId: created.id,
+          });
+          break;
+        }
+
+        case "create_pricing_tier": {
+          const name = text(operation.name, 80);
+          if (!name) { skipped.push("A pricing tier with no name."); break; }
+          const periods = ["monthly", "yearly", "one-time"];
+          // Price is stored as a whole currency unit, so reject nonsense
+          // rather than writing a negative or absurd number.
+          const price = Math.round(Number(operation.price));
+          const existing = await storage.getProjectPricingTiers(projectId).catch(() => []);
+          const created = await storage.createPricingTier({
+            projectId,
+            name,
+            price: Number.isFinite(price) && price >= 0 && price <= 1_000_000 ? price : 0,
+            billingPeriod: periods.includes(operation.billingPeriod) ? operation.billingPeriod : "monthly",
+            features: Array.isArray(operation.features)
+              ? operation.features.map((f: unknown) => text(f, 120)).filter(Boolean).slice(0, 15)
+              : [],
+            isFeatured: operation.isFeatured === true,
+            sortOrder: existing.length,
+          } as any);
+          changes.push({
+            entity: "pricing", action: "created",
+            description: `Added the "${name}" tier at ${created.price}/${created.billingPeriod}`,
+            entityId: created.id,
+          });
           break;
         }
 

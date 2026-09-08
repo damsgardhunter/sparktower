@@ -1,4 +1,7 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { BackerCredits } from "@/components/backer-credits";
+import { BackerBadgeShowcase } from "@/components/backer-badge-showcase";
+import { ImageUploadField } from "@/components/image-upload-field";
 import { useParams, useLocation } from "wouter";
 import { type UserProfile, type Project, type User, type UserBadge, type Badge as BadgeType, type Connection } from "@shared/schema";
 import { UserAvatar } from "@/components/user-avatar";
@@ -10,7 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { MapPin, Globe, Github, Linkedin, Mail, MessageSquare, UserPlus, UserMinus, Edit, Loader2, FileText, Award, Rocket, Star, Users as UsersIcon, Sparkles, Trophy, Upload, CheckCircle, X, Clock, DollarSign, ExternalLink, Search, Heart } from "lucide-react";
+import { MapPin, Globe, Github, Linkedin, Mail, MessageSquare, UserPlus, UserMinus, Edit, Loader2, FileText, Award, Rocket, Star, Users as UsersIcon, Sparkles, Trophy, Upload, CheckCircle, X, Clock, DollarSign, ExternalLink, Search, Heart, Activity } from "lucide-react";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useAuth } from "@/hooks/use-auth";
 import { useState, useRef } from "react";
@@ -122,6 +125,34 @@ export default function Profile() {
     enabled: !!isOwnProfile,
   });
 
+  /*
+   * Whether this account owns the site. Only the owner sees the Behaviour tab,
+   * and the server refuses the data to everyone else regardless — this only
+   * decides whether the tab is drawn.
+   */
+  const { data: analyticsAccess } = useQuery<{ owner: boolean }>({
+    queryKey: ["/api/admin/analytics/access"],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/analytics/access", { credentials: "include" });
+      if (!res.ok) return { owner: false };
+      return res.json();
+    },
+    enabled: !!isOwnProfile,
+    retry: false,
+  });
+  const isSiteOwner = !!analyticsAccess?.owner;
+
+  const { data: analyticsPeek } = useQuery<any>({
+    queryKey: ["/api/admin/analytics/summary", 7],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/analytics/summary?days=7", { credentials: "include" });
+      if (!res.ok) throw new Error("failed");
+      return res.json();
+    },
+    enabled: isSiteOwner,
+    refetchInterval: 30_000,
+  });
+
   const connectMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/connections/request", { userId });
@@ -209,6 +240,27 @@ export default function Profile() {
       builderType: profile.builderType ?? undefined,
       isOnboarded: profile.isOnboarded,
     } : undefined,
+  });
+
+  /**
+   * Avatar and cover save the moment they're picked, separately from the form.
+   *
+   * Routing them through react-hook-form would mean an upload only landed if
+   * the person also pressed Save — and a picture that appears in the dialog
+   * but vanishes on close is worse than no upload at all.
+   */
+  const imageMutation = useMutation({
+    mutationFn: async (patch: { avatarUrl?: string | null; coverUrl?: string | null }) => {
+      const res = await apiRequest("POST", "/api/profile", patch);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/profile"] });
+      queryClient.invalidateQueries({ queryKey: [`/api/users/${userId}`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profile/summary"] });
+      toast({ title: "Photo updated" });
+    },
+    onError: () => toast({ title: "Couldn't save that photo", variant: "destructive" }),
   });
 
   const onUpdateProfile = async (data: InsertUserProfile) => {
@@ -325,7 +377,17 @@ export default function Profile() {
   return (
     <div className="container max-w-5xl mx-auto py-10 px-4 space-y-8">
       <Card className="overflow-hidden border-border/50">
-        <div className="h-32 bg-gradient-to-r from-primary/20 via-accent/20 to-primary/20" />
+        {/*
+          * The cover photo. This used to be a hardcoded gradient, so a cover
+          * set anywhere else in the app was stored and then never shown here —
+          * which read as the upload having failed. The gradient is now the
+          * fallback rather than the only option.
+          */}
+        <div
+          className="h-32 bg-gradient-to-r from-primary/20 via-accent/20 to-primary/20 bg-cover bg-center"
+          style={profile?.coverUrl ? { backgroundImage: `url(${profile.coverUrl})` } : undefined}
+          data-testid="profile-cover"
+        />
         <div className="px-6 pb-6 relative">
           <div className="absolute -top-12 left-6">
             <UserAvatar
@@ -371,6 +433,30 @@ export default function Profile() {
                     </DialogHeader>
                     <Form {...form}>
                       <form onSubmit={form.handleSubmit(onUpdateProfile)} className="space-y-4 py-4">
+                        {/*
+                          * Pictures first — it's what people came into this
+                          * dialog to change, and neither was editable here at
+                          * all before. Both save on pick rather than waiting
+                          * for the form's Save, so the header updates while
+                          * the dialog is still open.
+                          */}
+                        <div className="grid grid-cols-2 gap-4">
+                          <ImageUploadField
+                            label="Profile photo"
+                            value={profile?.avatarUrl}
+                            onChange={(p) => imageMutation.mutate({ avatarUrl: p })}
+                            hint="Square works best."
+                            testId="upload-avatar"
+                          />
+                          <ImageUploadField
+                            label="Cover photo"
+                            value={profile?.coverUrl}
+                            onChange={(p) => imageMutation.mutate({ coverUrl: p })}
+                            aspect="wide"
+                            hint="Wide banner behind your avatar."
+                            testId="upload-cover"
+                          />
+                        </div>
                         <div className="grid grid-cols-2 gap-4">
                           <FormField control={form.control} name="displayName" render={({ field }) => (
                             <FormItem>
@@ -617,6 +703,9 @@ export default function Profile() {
           {isOwnProfile && (
             <TabsTrigger value="earnings" data-testid="tab-earnings">Earnings</TabsTrigger>
           )}
+          {isOwnProfile && isSiteOwner && (
+            <TabsTrigger value="behaviour" data-testid="tab-behaviour">Behaviour</TabsTrigger>
+          )}
         </TabsList>
 
         <TabsContent value="about">
@@ -724,6 +813,12 @@ export default function Profile() {
                   </CardContent>
                 </Card>
               )}
+
+              {/* Believer numbers and founding credit only work because
+                  other people can see them. Renders nothing if they've
+                  backed nobody. */}
+              {userId && <BackerBadgeShowcase userId={userId} isOwnProfile={!!isOwnProfile} />}
+              {userId && <BackerCredits userId={userId} isOwnProfile={!!isOwnProfile} />}
             </div>
 
             {/* Main column: posts first, then the projects they're building,
@@ -932,6 +1027,54 @@ export default function Profile() {
                 </Card>
               )}
             </div>
+          </TabsContent>
+        )}
+
+        {/*
+          * Sits beside Earnings because that's where the owner already comes to
+          * see how the site is doing. The numbers here are a glance; the live
+          * feed and the visit trails are a page of their own.
+          */}
+        {isOwnProfile && isSiteOwner && (
+          <TabsContent value="behaviour">
+            <Card className="border-border/50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Activity className="h-5 w-5" /> Behaviour
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-5">
+                <div className="flex flex-wrap items-baseline gap-8">
+                  <div>
+                    <p className="text-3xl font-bold tabular-nums" data-testid="text-online-now">
+                      {analyticsPeek?.onlineNow ?? "—"}
+                    </p>
+                    <p className="text-sm text-muted-foreground">On the site right now</p>
+                  </div>
+                  <div>
+                    <p className="text-lg font-semibold tabular-nums">
+                      {analyticsPeek?.totals?.visitors ?? "—"}
+                    </p>
+                    <p className="text-sm text-muted-foreground">People this week</p>
+                  </div>
+                  <div>
+                    <p className="text-lg font-semibold tabular-nums">
+                      {analyticsPeek?.totals?.actions ?? "—"}
+                    </p>
+                    <p className="text-sm text-muted-foreground">Actions taken</p>
+                  </div>
+                </div>
+
+                <Button onClick={() => setLocation("/admin/analytics")} data-testid="button-open-analytics">
+                  Open the live console <ExternalLink className="h-4 w-4 ml-2" />
+                </Button>
+
+                <p className="text-xs text-muted-foreground">
+                  Only this account can see any of this. Page views and actions are recorded —
+                  never the contents of what anyone writes.
+                </p>
+              </CardContent>
+            </Card>
           </TabsContent>
         )}
 

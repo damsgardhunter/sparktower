@@ -6,6 +6,12 @@ import { runMigrations } from "stripe-replit-sync";
 import { getStripeSync, isStripeConfigured } from "./stripeClient";
 import { WebhookHandlers } from "./webhookHandlers";
 import { ensureGameBadges } from "./badge-seed";
+import { syncPlatformRoles } from "./platform-roles";
+import { backfillMissingProfiles } from "./user-provisioning";
+import { loadSurfaceFlags } from "./surfaces";
+import { startBackingJobs } from "./backing-jobs";
+import { startAnalyticsJobs } from "./analytics";
+import { checkMerchFonts } from "./merch-render";
 
 const app = express();
 const httpServer = createServer(app);
@@ -161,6 +167,26 @@ app.use((req, res, next) => {
 
   // Game badges are referenced by hard-coded id, so their rows have to exist.
   await ensureGameBadges();
+
+  // Feature kill switches, read before any route can be hit.
+  await loadSurfaceFlags();
+
+  // Accounts created before profiles were provisioned at sign-up have no
+  // profile row; give them one rather than waiting for each to log in again.
+  await backfillMissingProfiles();
+
+  // Reviewer rights are granted from the environment, never through the API,
+  // and are re-derived here so a removed reviewer loses them on restart.
+  await syncPlatformRoles();
+
+  // Merch artwork is generated from committed font files; fail loudly at
+  // boot rather than when someone's order needs a print file.
+  checkMerchFonts();
+
+  // Merch fulfillment and the refund window. Both take an advisory lock, so
+  // running several server processes is safe.
+  startBackingJobs();
+  startAnalyticsJobs();
 
   await registerRoutes(httpServer, app);
 

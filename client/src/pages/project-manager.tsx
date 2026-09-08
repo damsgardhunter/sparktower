@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -24,6 +24,7 @@ import {
   BarChart3, AlertTriangle, CheckSquare, Square, X,
   Beaker, DollarSign, Shield, Rocket, Headphones, Crosshair,
   Eye, EyeOff, Map, Stethoscope, CalendarDays, CircleDot, Share2, Pencil, ListOrdered, ScanSearch,
+  Image as ImageIcon,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { RoadmapTab } from "@/components/roadmap-tab";
@@ -41,6 +42,12 @@ import { ProjectCalendar, TASK_DRAG_TYPE } from "@/components/project-calendar";
 import { NovaTaskPlanner } from "@/components/nova-task-planner";
 import { DocumentStartDialog, looksLikeDocumentTask } from "@/components/document-start-dialog";
 import { CodebaseTab } from "@/components/codebase-tab";
+import { NovaActionButton } from "@/components/nova-action-button";
+import { NovaHandoffProvider, useNovaHandoffPending } from "@/components/nova-handoff";
+import { BackingSetup } from "@/components/backing-setup";
+import { CheckInList } from "@/components/check-in-list";
+import { ImageUploadField } from "@/components/image-upload-field";
+import { type NovaHandoff } from "@shared/nova-handoff";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -104,6 +111,17 @@ export default function ProjectManager() {
   const projectId = params?.id;
 
   const [activeTab, setActiveTab] = useState<TabId>("nova");
+  /**
+   * The job a Nova recommendation handed to a tab, held here because
+   * navigating and handing over are one decision. The destination tab claims
+   * it on arrival and clears it.
+   */
+  const [novaHandoff, setNovaHandoff] = useState<NovaHandoff | null>(null);
+  const clearNovaHandoff = useCallback(() => setNovaHandoff(null), []);
+  const novaHandoffValue = useMemo(
+    () => ({ pending: novaHandoff, request: setNovaHandoff, clear: clearNovaHandoff }),
+    [novaHandoff, clearNovaHandoff],
+  );
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<ProjectKanbanTask | null>(null);
   const [taskForm, setTaskForm] = useState({
@@ -303,6 +321,27 @@ export default function ProjectManager() {
       else toast({ title: "Recommendation failed", variant: "destructive" });
     },
   });
+
+  /*
+   * The hand-offs whose mutations live in this file rather than in a tab
+   * component. Each tab already renders its own pending state — the kanban
+   * board's generate button, the personas spinner, the team panel — so the
+   * builder lands on the work in progress rather than on a finished toast.
+   */
+  useEffect(() => {
+    if (!novaHandoff) return;
+    const run: Partial<Record<NovaHandoff, () => void>> = {
+      "kanban.generate": () => aiGenerateTasksMutation.mutate(),
+      "personas.generate": () => aiGeneratePersonaMutation.mutate(),
+      "team.recommendPeople": () => recommendPeopleMutation.mutate(),
+    };
+    const job = run[novaHandoff];
+    if (!job) return;
+    setNovaHandoff(null);
+    job();
+    // Only the pending job should re-trigger this; the mutations are stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [novaHandoff]);
 
   const updateProjectMutation = useMutation({
     mutationFn: async (data: any) => { const res = await apiRequest("PATCH", `/api/projects/${projectId}`, data); return res.json(); },
@@ -504,6 +543,7 @@ export default function ProjectManager() {
       </div>
 
       <div className="max-w-7xl mx-auto px-6 py-6">
+        <NovaHandoffProvider value={novaHandoffValue}>
         {activeTab === "nova" && projectId && (
           <NovaDashboard projectId={projectId} onNavigate={(tab) => setActiveTab(tab as TabId)} />
         )}
@@ -551,6 +591,7 @@ export default function ProjectManager() {
             onCreate={(data) => createMilestoneMutation.mutate(data)}
             onUpdate={(id, data) => updateMilestoneMutation.mutate({ id, data })}
             onDelete={(id) => deleteMilestoneMutation.mutate(id)}
+            projectId={projectId!}
           />
         )}
         {activeTab === "team" && (
@@ -578,11 +619,10 @@ export default function ProjectManager() {
         {activeTab === "activity" && (
           <ActivityTab
             activity={activityLog || []} decisions={decisions || []}
-            checkIns={checkIns || []} projectId={projectId!}
+            projectId={projectId!} projectTitle={project.title}
             onCreateDecision={(data) => createDecisionMutation.mutate(data)}
             onUpdateDecision={(id, data) => updateDecisionMutation.mutate({ id, data })}
             onDeleteDecision={(id) => deleteDecisionMutation.mutate(id)}
-            onCreateCheckIn={(data) => createCheckInMutation.mutate(data)}
           />
         )}
         {activeTab === "personas" && (
@@ -612,6 +652,7 @@ export default function ProjectManager() {
         {activeTab === "chat" && projectId && (
           <LiveChatTab projectId={projectId} />
         )}
+        </NovaHandoffProvider>
       </div>
 
       <Dialog open={taskDialogOpen} onOpenChange={setTaskDialogOpen}>
@@ -1039,6 +1080,41 @@ function SetupTab({ project, isOwner, links, isUploadingPlan, onUploadPlan, onUp
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/*
+        * Identity sits above the brief because it's the first thing a visitor
+        * sees on the public page, and because the logo feeds the backer merch
+        * and the AI badge — getting it set early makes everything downstream
+        * work.
+        */}
+      <Card className="lg:col-span-2">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg flex items-center gap-2">
+            <ImageIcon className="h-4 w-4" /> Logo &amp; cover
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Your logo also goes on backer merch and the badges backers display, so a square
+            transparent PNG travels furthest.
+          </p>
+        </CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-2">
+          <ImageUploadField
+            label="Project logo"
+            value={project.logoUrl}
+            onChange={(p) => onUpdateProject({ logoUrl: p })}
+            hint="Square. Transparent PNG prints best."
+            testId="upload-project-logo"
+          />
+          <ImageUploadField
+            label="Cover image"
+            value={project.coverUrl}
+            onChange={(p) => onUpdateProject({ coverUrl: p })}
+            aspect="wide"
+            hint="Wide banner across the top of your public page."
+            testId="upload-project-cover"
+          />
+        </CardContent>
+      </Card>
+
       <Card className="lg:col-span-2">
         <CardHeader className="flex flex-row items-center justify-between space-y-0">
           <CardTitle className="text-lg flex items-center gap-2"><Target className="h-4 w-4" /> Project Brief</CardTitle>
@@ -1326,6 +1402,16 @@ function SetupTab({ project, isOwner, links, isUploadingPlan, onUploadPlan, onUp
           )}
         </CardContent>
       </Card>
+
+      {/* Backing lives at the bottom of Setup: it only makes sense once the
+          brief above it says what the project actually is, and it's the one
+          block here that takes other people's money. Owner-only — a member
+          must not be able to open a campaign on someone else's project. */}
+      {isOwner && (
+        <div className="lg:col-span-2">
+          <BackingSetup projectId={project.id} projectTitle={project.title} />
+        </div>
+      )}
     </div>
   );
 }
@@ -2159,9 +2245,10 @@ function KanbanTab({
   );
 }
 
-function MilestonesTab({ milestones, isLoading, onCreate, onUpdate, onDelete }: {
+function MilestonesTab({ milestones, isLoading, onCreate, onUpdate, onDelete, projectId }: {
   milestones: ProjectMilestone[]; isLoading: boolean;
   onCreate: (data: any) => void; onUpdate: (id: string, data: any) => void; onDelete: (id: string) => void;
+  projectId: string;
 }) {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ title: "", description: "", targetDate: "", status: "planned" });
@@ -2188,7 +2275,10 @@ function MilestonesTab({ milestones, isLoading, onCreate, onUpdate, onDelete }: 
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div><h2 className="text-lg font-semibold">Milestones & Roadmap</h2><p className="text-sm text-secondary">{milestones.length} milestones</p></div>
-        <Button className="gap-2" onClick={() => setShowForm(true)} data-testid="button-new-milestone"><Plus className="h-4 w-4" /> New Milestone</Button>
+        <div className="flex items-center gap-2">
+          <NovaActionButton projectId={projectId} surface="milestones" />
+          <Button className="gap-2" onClick={() => setShowForm(true)} data-testid="button-new-milestone"><Plus className="h-4 w-4" /> New Milestone</Button>
+        </div>
       </div>
 
       {sorted.length > 0 && (
@@ -2270,6 +2360,15 @@ function MilestonesTab({ milestones, isLoading, onCreate, onUpdate, onDelete }: 
                             <SelectItem value="completed">Completed</SelectItem>
                           </SelectContent>
                         </Select>
+                        <NovaActionButton
+                          projectId={projectId}
+                          surface="milestones"
+                          entityId={m.id}
+                          entityLabel={m.title}
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                        />
                         <Button
                           variant="ghost" size="icon" className="h-7 w-7"
                           onClick={() => setEditing({
@@ -2622,17 +2721,25 @@ function FilesTab({ files, isUploading, uploadFolder, setUploadFolder, onUpload,
   );
 }
 
-function ActivityTab({ activity, decisions, checkIns, projectId, onCreateDecision, onUpdateDecision, onDeleteDecision, onCreateCheckIn }: {
+function ActivityTab({ activity, decisions, projectId, projectTitle, onCreateDecision, onUpdateDecision, onDeleteDecision }: {
   activity: (ProjectActivityLog & { user?: User })[]; decisions: (ProjectDecision & { user: User })[];
-  checkIns: (ProjectCheckIn & { user: User; profile?: UserProfile })[]; projectId: string;
+  projectId: string; projectTitle: string;
   onCreateDecision: (data: any) => void; onUpdateDecision: (id: string, data: any) => void;
-  onDeleteDecision: (id: string) => void; onCreateCheckIn: (data: any) => void;
+  onDeleteDecision: (id: string) => void;
 }) {
   const [activeSection, setActiveSection] = useState<"feed" | "decisions" | "checkins">("feed");
+
+  /*
+   * Land on Check-ins when the dashboard sent us here to write one — otherwise
+   * the handoff opens a composer behind the Feed tab, which reads as the page
+   * having ignored the click.
+   */
+  const pendingHandoff = useNovaHandoffPending();
+  useEffect(() => {
+    if (pendingHandoff === "activity.checkIn") setActiveSection("checkins");
+  }, [pendingHandoff]);
   const [showDecisionForm, setShowDecisionForm] = useState(false);
   const [decisionForm, setDecisionForm] = useState({ title: "", decision: "", context: "" });
-  const [showCheckInForm, setShowCheckInForm] = useState(false);
-  const [checkInForm, setCheckInForm] = useState({ did: "", doing: "", blockers: "" });
 
   const statusColors: Record<string, string> = {
     proposed: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
@@ -2718,39 +2825,7 @@ function ActivityTab({ activity, decisions, checkIns, projectId, onCreateDecisio
       )}
 
       {activeSection === "checkins" && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Weekly Check-ins</h2>
-            <Button size="sm" className="gap-2" onClick={() => setShowCheckInForm(true)} data-testid="button-new-checkin"><Plus className="h-4 w-4" /> Submit Check-in</Button>
-          </div>
-          {showCheckInForm && (
-            <Card><CardContent className="p-4 space-y-3">
-              <div className="space-y-2"><Label>What I did</Label><Textarea value={checkInForm.did} onChange={e => setCheckInForm(p => ({ ...p, did: e.target.value }))} placeholder="Completed tasks, progress made..." data-testid="textarea-checkin-did" /></div>
-              <div className="space-y-2"><Label>What I'm doing next</Label><Textarea value={checkInForm.doing} onChange={e => setCheckInForm(p => ({ ...p, doing: e.target.value }))} placeholder="Focus areas, upcoming work..." data-testid="textarea-checkin-doing" /></div>
-              <div className="space-y-2"><Label>Blockers</Label><Textarea value={checkInForm.blockers} onChange={e => setCheckInForm(p => ({ ...p, blockers: e.target.value }))} placeholder="Any blockers or help needed? (optional)" data-testid="textarea-checkin-blockers" /></div>
-              <div className="flex gap-2">
-                <Button size="sm" disabled={!checkInForm.did.trim() || !checkInForm.doing.trim()} onClick={() => { onCreateCheckIn(checkInForm); setCheckInForm({ did: "", doing: "", blockers: "" }); setShowCheckInForm(false); }} data-testid="button-save-checkin">Submit</Button>
-                <Button size="sm" variant="outline" onClick={() => setShowCheckInForm(false)}>Cancel</Button>
-              </div>
-            </CardContent></Card>
-          )}
-          {checkIns.length > 0 ? checkIns.map(ci => (
-            <Card key={ci.id} data-testid={`checkin-${ci.id}`}>
-              <CardContent className="p-4">
-                <div className="flex items-center gap-2 mb-3">
-                  <UserAvatar src={ci.profile?.avatarUrl} name={ci.user?.firstName || ci.user?.email || ""} className="h-6 w-6" />
-                  <span className="text-sm font-medium">{ci.user?.firstName || ci.user?.email}</span>
-                  <span className="text-xs text-muted-foreground">{new Date(ci.createdAt).toLocaleDateString()}</span>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <div><p className="text-xs font-medium text-green-600 dark:text-green-400 uppercase tracking-wide mb-1">Done</p><p className="text-sm">{ci.did}</p></div>
-                  <div><p className="text-xs font-medium text-blue-600 dark:text-blue-400 uppercase tracking-wide mb-1">Doing</p><p className="text-sm">{ci.doing}</p></div>
-                  <div><p className="text-xs font-medium text-red-600 dark:text-red-400 uppercase tracking-wide mb-1">Blockers</p><p className="text-sm">{ci.blockers || "None"}</p></div>
-                </div>
-              </CardContent>
-            </Card>
-          )) : !showCheckInForm && <p className="text-sm text-muted-foreground">No check-ins yet. Team members can share what they did, what's next, and any blockers.</p>}
-        </div>
+        <CheckInList projectId={projectId} projectTitle={projectTitle} />
       )}
     </div>
   );

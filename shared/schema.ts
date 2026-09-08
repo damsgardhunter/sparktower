@@ -1,4 +1,4 @@
-import { pgTable, text, varchar, timestamp, integer, boolean, index, jsonb, unique } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, integer, boolean, index, jsonb, unique, foreignKey, bigserial } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
@@ -24,6 +24,8 @@ export const userProfiles = pgTable("user_profiles", {
   websiteUrl: text("website_url"),
   location: text("location"),
   avatarUrl: text("avatar_url"),
+  /** Banner behind the avatar on the profile card. Falls back to a gradient. */
+  coverUrl: text("cover_url"),
   hoursPerWeek: integer("hours_per_week"),
   riskTolerance: text("risk_tolerance", { enum: ["low", "moderate", "high"] }),
   speedVsPolish: text("speed_vs_polish", { enum: ["speed", "balanced", "polish"] }),
@@ -124,6 +126,14 @@ export const projects = pgTable("projects", {
   mediaUrls: varchar("media_urls").array().default([]),
   rolesNeeded: varchar("roles_needed").array().default([]),
   techStack: varchar("tech_stack").array().default([]),
+  /**
+   * The project's own identity, distinct from `mediaUrls` (a gallery).
+   *
+   * `logoUrl` is also the source image for backer merch and for the AI-built
+   * backer badge, so it wants to be square and transparent where possible.
+   */
+  logoUrl: text("logo_url"),
+  coverUrl: text("cover_url"),
   liveUrl: text("live_url"),
   repoUrl: text("repo_url"),
   businessPlanUrl: text("business_plan_url"),
@@ -177,6 +187,201 @@ export const donations = pgTable("donations", {
   message: text("message"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+/**
+ * A project's backing campaign. One per project.
+ *
+ * Separate from `projects` because a campaign is a distinct thing with its own
+ * lifecycle — it opens, it gets reviewed, it pays out — and `projects` is
+ * already carrying more columns than it should.
+ */
+export const projectBackingCampaigns = pgTable("project_backing_campaigns", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id).unique(),
+  /** Off until the creator opens it. Nothing is collectable before that. */
+  enabled: boolean("enabled").default(false).notNull(),
+  headline: text("headline"),
+  story: text("story"),
+  goalCents: integer("goal_cents"),
+  /** MerchConfig — see shared/backing.ts. */
+  merchConfig: jsonb("merch_config").default({}),
+  /**
+   * Creator-facing badge previews, `{ [levelKey]: objectPath }`.
+   *
+   * Cached because each one costs a model call, and a creator deciding on
+   * their logo will open this screen repeatedly.
+   */
+  badgePreviews: jsonb("badge_previews").default({}),
+  /**
+   * Fixed when the campaign first opens rather than read from `now`, so a
+   * backer's datestamped shirt says when the campaign started and not when
+   * their particular order happened to print.
+   */
+  startedAt: timestamp("started_at"),
+  /**
+   * Payout review. Every release is approved by hand: the code audit score,
+   * completed-task count and profile state are shown to the reviewer as
+   * signals but gate nothing on their own, because a legitimate early-stage
+   * project can score badly on all three and a convincing fake can score well.
+   */
+  reviewStatus: text("review_status", {
+    enum: ["not_submitted", "pending", "approved", "rejected"],
+  }).default("not_submitted").notNull(),
+  submittedForReviewAt: timestamp("submitted_for_review_at"),
+  reviewedAt: timestamp("reviewed_at"),
+  reviewedById: varchar("reviewed_by_id").references(() => users.id),
+  reviewNotes: text("review_notes"),
+  /**
+   * Ratchets on every successful pledge so two simultaneous checkouts can't
+   * both be handed believer #0047.
+   */
+  believerCount: integer("believer_count").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+/** One rung of the ladder. Five works; three leaves money, eight is a menu. */
+export const projectBackerTiers = pgTable("project_backer_tiers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  amountCents: integer("amount_cents").notNull(),
+  /** The creator's own words — "Believer", "Ride or die", "Absolute unit". */
+  name: text("name").notNull(),
+  description: text("description"),
+  /** Keys from DIGITAL_REWARDS. */
+  digitalRewards: varchar("digital_rewards").array().default([]),
+  /** Keys from MERCH_PRODUCTS. Non-empty makes checkout collect an address. */
+  merchProducts: varchar("merch_products").array().default([]),
+  /** Optional scarcity — "only 50 of these". Null is unlimited. */
+  maxBackers: integer("max_backers"),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+/**
+ * One pledge, and the escrow record for it.
+ *
+ * Money lands in the platform's Stripe balance and stays there. This is a
+ * separate charge, not a destination charge — nothing reaches the creator
+ * until a human approves the release, which is the whole point of the gate.
+ */
+export const projectBackings = pgTable("project_backings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  backerId: varchar("backer_id").notNull().references(() => users.id),
+  /** The rung earned, resolved from the amount rather than what was clicked. */
+  tierId: varchar("tier_id").references(() => projectBackerTiers.id, { onDelete: "set null" }),
+  /** Snapshot: renaming or deleting a tier later must not rewrite history. */
+  tierNameAtBacking: text("tier_name_at_backing"),
+  amountCents: integer("amount_cents").notNull(),
+  /** Optional platform tip. Never part of the creator's payout. */
+  tipCents: integer("tip_cents").default(0).notNull(),
+  believerNumber: integer("believer_number"),
+  message: text("message"),
+  isAnonymous: boolean("is_anonymous").default(false).notNull(),
+  status: text("status", {
+    enum: ["pending", "held", "released", "refunded", "converted", "failed"],
+  }).default("pending").notNull(),
+  stripeCheckoutSessionId: varchar("stripe_checkout_session_id"),
+  stripePaymentIntentId: varchar("stripe_payment_intent_id"),
+  stripeChargeId: varchar("stripe_charge_id"),
+  stripeTransferId: varchar("stripe_transfer_id"),
+  stripeRefundId: varchar("stripe_refund_id"),
+  /** ShippingAddress, collected only when the tier ships something. */
+  shippingAddress: jsonb("shipping_address"),
+  /** What to do if the creator never earns it out. Backer's call, at checkout. */
+  unclaimedPreference: text("unclaimed_preference", {
+    enum: ["refund", "donate_platform"],
+  }).default("refund").notNull(),
+  /** createdAt + REFUND_WINDOW_DAYS, denormalised so the sweep is one query. */
+  refundDueAt: timestamp("refund_due_at"),
+  releasedAt: timestamp("released_at"),
+  resolvedAt: timestamp("resolved_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  believerNumberUnique: unique().on(table.projectId, table.believerNumber),
+}));
+
+/**
+ * A physical reward on its way to a backer.
+ *
+ * Orders queue until the project clears review once. After that first
+ * approval every later order goes straight out — the risk being defended
+ * against is a creator collecting for a project that doesn't exist, and that
+ * question is answered the first time a human looks, not once per shirt.
+ */
+export const projectMerchOrders = pgTable("project_merch_orders", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  backingId: varchar("backing_id").notNull().references(() => projectBackings.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  status: text("status", {
+    enum: ["queued", "submitted", "shipped", "failed", "canceled"],
+  }).default("queued").notNull(),
+  /** MerchOrderItem[] — product key plus the artwork it was built from. */
+  items: jsonb("items").default([]),
+  shippingAddress: jsonb("shipping_address"),
+  printfulOrderId: varchar("printful_order_id"),
+  trackingUrl: text("tracking_url"),
+  lastError: text("last_error"),
+  submittedAt: timestamp("submitted_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+/**
+ * A backer's badge for one project — the reward they actually carry around.
+ *
+ * One row per (backer, project): backing the same project again upgrades the
+ * level in place rather than accumulating duplicates, since the badge means
+ * "how far I went for this project", not "how many times I paid".
+ *
+ * The artwork is generated once and stored, not rendered on demand. It costs a
+ * model call to make and it has to look identical every time someone loads the
+ * profile it's pinned to.
+ */
+export const backerBadges = pgTable("backer_badges", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  /** Highest level earned, from BADGE_LEVELS. */
+  level: text("level").notNull(),
+  /** Total across every pledge to this project, which is what sets the level. */
+  totalCents: integer("total_cents").default(0).notNull(),
+  believerNumber: integer("believer_number"),
+  foundingBeliever: boolean("founding_believer").default(false).notNull(),
+  /** Object path of the generated art. Null until it's been made. */
+  imageUrl: text("image_url"),
+  status: text("status", { enum: ["pending", "ready", "failed"] }).default("pending").notNull(),
+  lastError: text("last_error"),
+  /**
+   * Position on the owner's profile, 0-based. Null means not pinned — a
+   * profile shows at most MAX_SHOWCASE_BADGES of these.
+   */
+  showcaseOrder: integer("showcase_order"),
+  generatedAt: timestamp("generated_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  oneBadgePerProject: unique().on(table.userId, table.projectId),
+}));
+
+/** Where a physical reward is going. Only collected when one is owed. */
+export interface ShippingAddress {
+  name: string;
+  line1: string;
+  line2?: string;
+  city: string;
+  state?: string;
+  postalCode: string;
+  country: string;
+}
+
+/** One line on a merch order, with the artwork settled at order time. */
+export interface MerchOrderItem {
+  productKey: string;
+  quantity: number;
+  /** Snapshot of MerchConfig, so a later logo change can't alter a sent order. */
+  artwork: Record<string, unknown>;
+}
 
 export const userMatches = pgTable("user_matches", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -265,7 +470,16 @@ export const projectFollows = pgTable("project_follows", {
   userId: varchar("user_id").notNull().references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
-  userProjectUnique: unique().on(table.userId, table.projectId),
+  /*
+   * Listed project-then-user to match the order the columns are declared in
+   * above. drizzle-kit reads a constraint's columns back in table order, so a
+   * composite unique written in any other order never matches what it finds and
+   * it offers to re-add the constraint on every push — the prompt that used to
+   * block this schema entirely.
+   */
+  projectUserUnique: unique().on(table.projectId, table.userId),
+  /* The unique covers project-first lookups; this covers "what am I following". */
+  userIdx: index("project_follows_user_idx").on(table.userId),
 }));
 
 export const projectKanbanTasks = pgTable("project_kanban_tasks", {
@@ -605,7 +819,7 @@ export const projectComments = pgTable("project_comments", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   projectId: varchar("project_id").notNull().references(() => projects.id),
   authorId: varchar("author_id").notNull().references(() => users.id),
-  targetType: text("target_type", { enum: ["milestone", "project", "roadmap_phase"] }).notNull(),
+  targetType: text("target_type", { enum: ["milestone", "project", "roadmap_phase", "check_in"] }).notNull(),
   targetId: varchar("target_id").notNull(),
   content: text("content").notNull(),
   mentions: jsonb("mentions").default([]),
@@ -712,14 +926,179 @@ export const projectDecisions = pgTable("project_decisions", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+/**
+ * One weekly check-in — the artifact the whole loop is built around.
+ *
+ * The fields are the spec's, not a general-purpose status update: a goal you
+ * set, proof it happened, what's in the way, and the single next step. The old
+ * shape (did / doing / blockers) had nowhere to put proof and nowhere to put a
+ * next step, which is what broke steps 3 through 6 of the loop.
+ */
 export const projectCheckIns = pgTable("project_check_ins", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   projectId: varchar("project_id").notNull().references(() => projects.id),
   userId: varchar("user_id").notNull().references(() => users.id),
-  did: text("did").notNull(),
-  doing: text("doing").notNull(),
-  blockers: text("blockers"),
+  /**
+   * Monday of the week this covers, at UTC midnight.
+   *
+   * Part of the check-in's identity — it's in the public page's heading — so
+   * it's stored rather than derived from `createdAt`, which would move the
+   * week for anyone reading from a different timezone.
+   */
+  weekStart: timestamp("week_start").notNull(),
+  /** 5-120 chars, one sentence. */
+  goal: text("goal").notNull(),
+  /** 10-400 chars, must carry a link or name something shipped. */
+  proof: text("proof").notNull(),
+  /** Optional — plenty of good weeks have nothing in the way. */
+  blocker: text("blocker"),
+  /** 5-140 chars, starts with a verb. Carried into next week's composer. */
+  nextStep: text("next_step").notNull(),
+  /**
+   * Unlisted by default: reachable by anyone holding the link, listed nowhere.
+   * "Too public → posting anxiety" is the loop's first named risk, so going
+   * public is a decision the builder makes, not a default they discover.
+   */
+  visibility: text("visibility", { enum: ["unlisted", "public"] })
+    .default("unlisted").notNull(),
+  /** Set when a builder asks for feedback, which routes it to the queue. */
+  needsFeedback: boolean("needs_feedback").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /** One check-in per person per project per week. */
+  onePerWeek: unique().on(table.projectId, table.userId, table.weekStart),
+}));
+
+/**
+ * The loop's event stream.
+ *
+ * Separate from `project_analytics_events`, which is a creator-managed list of
+ * metric definitions rather than telemetry — conflating the two is how the
+ * spec's numbers ended up unmeasurable while a table called "analytics" sat
+ * there looking like it held them.
+ *
+ * Append-only and deliberately narrow. `sessionId` is what links a composer
+ * opening to the check-in it produced, which is the only way time-to-post can
+ * be computed at all.
+ */
+export const loopEvents = pgTable("loop_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  /** One of LOOP_EVENTS — see shared/loop-events.ts. */
+  name: text("name").notNull(),
+  /** Null for events from someone who isn't signed in. */
+  userId: varchar("user_id").references(() => users.id),
+  projectId: varchar("project_id").references(() => projects.id),
+  checkInId: varchar("check_in_id"),
+  /** Correlates `started` with `submitted` for one composing session. */
+  sessionId: varchar("session_id"),
+  /** Anything a specific metric needs and nothing more. */
+  props: jsonb("props").default({}),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+/**
+ * The behaviour stream — every write the API takes and every page anyone opens.
+ *
+ * Kept apart from `loop_events` deliberately: that table is five names feeding
+ * the numbers the product is judged on, and it stays small so they stay
+ * trustworthy. This one is high volume and read by a person watching the site,
+ * not by a metric. See shared/analytics.ts.
+ *
+ * No request body is ever written here. A row says someone sent a message; it
+ * never says what the message was.
+ */
+export const activityEvents = pgTable("activity_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  /**
+   * Strictly increasing, and the cursor the live feed pages on. `created_at`
+   * can't do this job: two events in the same millisecond tie, and a tie means
+   * the tail either repeats a row or skips one.
+   */
+  seq: bigserial("seq", { mode: "number" }).notNull(),
+  /** One of ACTIVITY_EVENTS. */
+  name: text("name").notNull(),
+  /** Null when nobody is signed in — see `visitorId`, which is never null. */
+  userId: varchar("user_id").references(() => users.id),
+  /**
+   * Follows the browser, not the account. It's what makes a signed-out visitor
+   * a "who" rather than a series of unrelated rows, and what connects the
+   * pages someone read before signing up to the account they then created.
+   */
+  visitorId: varchar("visitor_id").notNull(),
+  /** One visit. A new one starts after SESSION_IDLE_MINUTES of quiet. */
+  sessionId: varchar("session_id").notNull(),
+  /** Raw path, ids and all. */
+  path: text("path").notNull(),
+  /** `path` with ids replaced by `:id`, so totals can be grouped. */
+  pattern: text("pattern").notNull(),
+  /** Absent on page views, which aren't requests. */
+  method: varchar("method"),
+  status: integer("status"),
+  durationMs: integer("duration_ms"),
+  projectId: varchar("project_id"),
+  referrer: text("referrer"),
+  userAgent: text("user_agent"),
+  /** Small, non-sensitive extras. Never request bodies. */
+  props: jsonb("props").default({}),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /* The live tail's only query: everything after a cursor. */
+  seqIdx: index("activity_events_seq_idx").on(table.seq),
+  /* Windowed aggregates — "the last hour", "today", "who's here now". */
+  createdIdx: index("activity_events_created_idx").on(table.createdAt),
+  /* One person's trail, newest first. */
+  visitorIdx: index("activity_events_visitor_idx").on(table.visitorId, table.createdAt),
+}));
+
+/**
+ * Which feature areas are switched on.
+ *
+ * One row per surface that has been changed from its shipped default; absent
+ * rows mean "as shipped". See shared/surfaces.ts for the registry and
+ * server/surfaces.ts for the middleware that enforces it.
+ */
+/**
+ * Something a person flagged for a human to look at.
+ *
+ * One table for every reportable thing rather than a table per type: the queue
+ * is worked as one list, and a moderator triaging by severity doesn't care
+ * whether the offending object was a comment or a project.
+ */
+export const contentReports = pgTable("content_reports", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  reporterId: varchar("reporter_id").notNull().references(() => users.id),
+  /** One of REPORT_TARGETS — see shared/moderation.ts. */
+  targetType: text("target_type").notNull(),
+  targetId: varchar("target_id").notNull(),
+  /** Denormalised so the queue can show context without five joins. */
+  targetOwnerId: varchar("target_owner_id").references(() => users.id),
+  projectId: varchar("project_id").references(() => projects.id),
+  reason: text("reason").notNull(),
+  note: text("note"),
+  /**
+   * A copy of what was reported, taken at report time.
+   *
+   * Without it, deleting the offending content also destroys the evidence for
+   * the report about it — and the obvious move for someone caught is to delete
+   * and carry on.
+   */
+  snapshot: text("snapshot"),
+  status: text("status", { enum: ["open", "actioned", "dismissed"] })
+    .default("open").notNull(),
+  reviewedById: varchar("reviewed_by_id").references(() => users.id),
+  reviewedAt: timestamp("reviewed_at"),
+  reviewNote: text("review_note"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /** One report per person per thing — re-reporting shouldn't inflate a queue. */
+  oneReportPerPerson: unique().on(table.reporterId, table.targetType, table.targetId),
+}));
+
+export const surfaceFlags = pgTable("surface_flags", {
+  surfaceId: varchar("surface_id").primaryKey(),
+  enabled: boolean("enabled").notNull(),
+  updatedById: varchar("updated_by_id").references(() => users.id),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
 export const projectFiles = pgTable("project_files", {
@@ -980,6 +1359,31 @@ export const insertProjectChatMessageSchema = createInsertSchema(projectChatMess
 export const insertDonationSchema = createInsertSchema(donations).omit({
   id: true,
   createdAt: true,
+});
+
+export const insertBackingCampaignSchema = createInsertSchema(projectBackingCampaigns).omit({
+  id: true,
+  createdAt: true,
+  believerCount: true,
+  reviewedAt: true,
+  reviewedById: true,
+});
+
+export const insertBackerTierSchema = createInsertSchema(projectBackerTiers).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertBackingSchema = createInsertSchema(projectBackings).omit({
+  id: true,
+  createdAt: true,
+  believerNumber: true,
+});
+
+export const insertMerchOrderSchema = createInsertSchema(projectMerchOrders).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
 });
 
 export const insertUserMatchSchema = createInsertSchema(userMatches).omit({
@@ -1245,7 +1649,7 @@ export const sprintMatchmakingQueue = pgTable("sprint_matchmaking_queue", {
    * didn't initiate has no way to learn which sprint they were put into.
    */
   status: text("status", { enum: ["waiting", "matched"] }).default("waiting").notNull(),
-  matchedSprintId: varchar("matched_sprint_id").references(() => cofounderSprints.id),
+  matchedSprintId: varchar("matched_sprint_id"),
   /**
    * Optional project the builder wants to sprint on, so the sprint works on
    * something real instead of a throwaway idea.
@@ -1254,7 +1658,20 @@ export const sprintMatchmakingQueue = pgTable("sprint_matchmaking_queue", {
   /** Bumped by the client heartbeat; stale rows are swept. */
   lastSeenAt: timestamp("last_seen_at").defaultNow().notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  /*
+   * Named by hand rather than left to `.references()`. The name drizzle would
+   * generate — sprint_matchmaking_queue_matched_sprint_id_cofounder_sprints_id_fk
+   * — is 66 characters, and Postgres silently truncates identifiers at 63,
+   * cutting off the "_fk". Drizzle then can't find the constraint it just
+   * created and drops and re-adds it on every single push.
+   */
+  matchedSprintFk: foreignKey({
+    columns: [table.matchedSprintId],
+    foreignColumns: [cofounderSprints.id],
+    name: "sprint_matchmaking_queue_matched_sprint_fk",
+  }),
+}));
 
 // Sprint insert schemas
 export const insertCofounderSprintSchema = createInsertSchema(cofounderSprints).omit({ id: true, createdAt: true });
@@ -1309,6 +1726,16 @@ export type ProjectMember = typeof projectMembers.$inferSelect;
 export type InsertProjectMember = z.infer<typeof insertProjectMemberSchema>;
 export type Donation = typeof donations.$inferSelect;
 export type InsertDonation = z.infer<typeof insertDonationSchema>;
+
+export type BackingCampaign = typeof projectBackingCampaigns.$inferSelect;
+export type InsertBackingCampaign = z.infer<typeof insertBackingCampaignSchema>;
+export type BackerTier = typeof projectBackerTiers.$inferSelect;
+export type InsertBackerTier = z.infer<typeof insertBackerTierSchema>;
+export type Backing = typeof projectBackings.$inferSelect;
+export type InsertBacking = z.infer<typeof insertBackingSchema>;
+export type MerchOrder = typeof projectMerchOrders.$inferSelect;
+export type InsertMerchOrder = z.infer<typeof insertMerchOrderSchema>;
+export type BackerBadge = typeof backerBadges.$inferSelect;
 export type UserMatch = typeof userMatches.$inferSelect;
 export type InsertUserMatch = z.infer<typeof insertUserMatchSchema>;
 export type Badge = typeof badges.$inferSelect;

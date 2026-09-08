@@ -6,6 +6,7 @@ import { useEntitlements } from "@/hooks/use-entitlements";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { ChatComposer } from "@/components/chat-composer";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
@@ -446,15 +447,16 @@ export default function ProjectCreate() {
         </ScrollArea>
 
         <div className="p-4 bg-background border-t border-border">
-          <div className="flex gap-2">
-            <Input
+          {/* items-end so the send button stays level with the last line as
+              the composer grows, rather than floating in the middle. */}
+          <div className="flex gap-2 items-end">
+            <ChatComposer
               placeholder="Tell Nova about your project idea..."
               value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSend()}
+              onChange={setInput}
+              onSubmit={handleSend}
               disabled={showIntro}
-              className="rounded-full"
-              data-testid="input-chat-project"
+              testId="input-chat-project"
             />
             <Button
               size="icon"
@@ -466,6 +468,9 @@ export default function ProjectCreate() {
               <Send className="h-4 w-4" />
             </Button>
           </div>
+          <p className="text-[11px] text-muted-foreground mt-1.5 px-1">
+            Enter to send · Shift+Enter for a new line
+          </p>
         </div>
       </div>
 

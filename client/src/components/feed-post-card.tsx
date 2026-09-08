@@ -118,7 +118,7 @@ export function FeedPostCard({ post }: { post: FeedPostWithDetails }) {
   const viewerDef = post.viewerReaction ? REACTIONS_BY_KEY[post.viewerReaction] : null;
 
   return (
-    <Card data-testid={`feed-post-${post.id}`}>
+    <Card className="rounded-lg shadow-none bg-background dark:bg-card" data-testid={`feed-post-${post.id}`}>
       <CardContent className="p-4 space-y-3">
         {/* Author, and which project they're posting for */}
         <div className="flex items-start gap-3">

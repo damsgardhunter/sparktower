@@ -13,6 +13,8 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useEntitlements } from "@/hooks/use-entitlements";
 import { UpgradePrompt } from "@/components/upgrade-prompt";
+import { NovaActionButton } from "@/components/nova-action-button";
+import { useNovaHandoff } from "@/components/nova-handoff";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
@@ -173,6 +175,20 @@ export function RoadmapTab({ projectId, isOwner }: { projectId: string; isOwner:
     },
     onError: (err) => onMutationError(err, "Roadmap rebuild failed."),
   });
+
+  /*
+   * Work handed over from the Nova dashboard, picked up once the roadmap has
+   * loaded — arriving mid-fetch would otherwise drop the job on the floor.
+   *
+   * The cheap, self-explanatory runs start on arrival. A rebuild opens its
+   * dialog instead: it re-plans every phase, milestone and task and costs up
+   * to 15 credits, so it gets the quote and the confirm step rather than a
+   * charge the instant the page renders.
+   */
+  const canReplan = !!data?.roadmap && isOwner && can("roadmapUpdates");
+  useNovaHandoff("roadmap.nextActions", () => nextActionsMutation.mutate(), !!data?.roadmap);
+  useNovaHandoff("roadmap.update", () => updateMutation.mutate(), canReplan);
+  useNovaHandoff("roadmap.rebuild", () => setRebuildOpen(true), canReplan);
 
   const phaseStatusMutation = useMutation({
     mutationFn: async ({ phaseId, status }: { phaseId: string; status: string }) => {
@@ -340,6 +356,7 @@ export function RoadmapTab({ projectId, isOwner }: { projectId: string; isOwner:
                   className="flex-1"
                   data-testid="input-roadmap-note"
                 />
+                <NovaActionButton projectId={projectId} surface="roadmap" variant="outline" className="shrink-0" />
                 <Button
                   variant="outline"
                   className="gap-2 shrink-0"
@@ -632,6 +649,15 @@ export function RoadmapTab({ projectId, isOwner }: { projectId: string; isOwner:
                         <SelectItem value="completed">Done</SelectItem>
                       </SelectContent>
                     </Select>
+                    <NovaActionButton
+                      projectId={projectId}
+                      surface="roadmap"
+                      entityId={phase.id}
+                      entityLabel={phase.title}
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                    />
                     <Button
                       variant="ghost"
                       size="sm"

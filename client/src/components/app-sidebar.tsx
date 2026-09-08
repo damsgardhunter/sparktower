@@ -10,7 +10,7 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
 } from "@/components/ui/sidebar";
-import { Home, Compass, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles, MessageSquare, Handshake } from "lucide-react";
+import { Inbox, Home, Compass, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles, MessageSquare, Handshake } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -21,22 +21,31 @@ import { Progress } from "@/components/ui/progress";
 import { useEntitlements } from "@/hooks/use-entitlements";
 import { TierSwitcher } from "@/components/tier-switcher";
 import { PLAN_PRESENTATION } from "@shared/plans";
+import { useSurfaces } from "@/hooks/use-surfaces";
 
-const menuItems = [
+/*
+ * `surface` ties a nav item to its kill switch — an item whose surface is off
+ * disappears from the sidebar. Items with no surface are always shown, which
+ * is right for Home, Projects and Pricing: they aren't feature areas that can
+ * be switched off.
+ */
+const menuItems: { title: string; url: string; icon: typeof Home; surface?: string }[] = [
   { title: "Home", url: "/", icon: Home },
-  { title: "Discover", url: "/discover", icon: Compass },
+  { title: "Discover", url: "/discover", icon: Compass, surface: "discover" },
   { title: "Projects", url: "/projects", icon: FolderKanban },
-  { title: "Matches", url: "/matches", icon: Users },
-  { title: "Sprints", url: "/sprints", icon: Handshake },
-  { title: "Messages", url: "/messages", icon: MessageSquare },
-  { title: "Leaderboard", url: "/leaderboard", icon: Trophy },
-  // Contests are hidden from navigation for now. The page and its routes
-  // still work if you visit /contests directly.
+  { title: "Matches", url: "/matches", icon: Users, surface: "matches" },
+  { title: "Sprints", url: "/sprints", icon: Handshake, surface: "sprints" },
+  { title: "Messages", url: "/messages", icon: MessageSquare, surface: "messages" },
+  { title: "Leaderboard", url: "/leaderboard", icon: Trophy, surface: "leaderboard" },
+  { title: "Contests", url: "/contests", icon: Trophy, surface: "contests" },
+  { title: "Needs feedback", url: "/feedback", icon: Inbox, surface: "checkIns" },
   { title: "Pricing", url: "/pricing", icon: CreditCard },
 ];
 
 export function AppSidebar() {
   const [location] = useLocation();
+  const { on } = useSurfaces();
+  const visibleItems = menuItems.filter((item) => !item.surface || on(item.surface));
   const { user, logout } = useAuth();
   const displayName = user?.firstName ? `${user.firstName} ${user.lastName || ""}` : user?.email || "User";
 
@@ -67,7 +76,7 @@ export function AppSidebar() {
           <SidebarGroupLabel>Navigation</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {menuItems.map((item) => (
+              {visibleItems.map((item) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton
                     asChild

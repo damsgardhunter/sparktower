@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -23,7 +23,10 @@ import { useToast } from "@/hooks/use-toast";
 import { useEntitlements } from "@/hooks/use-entitlements";
 import { UpgradePrompt } from "@/components/upgrade-prompt";
 import { HealthCheckPanel } from "@/components/health-check-panel";
+import { NovaActionButton } from "@/components/nova-action-button";
+import { useNovaHandoff, useNovaHandoffPending } from "@/components/nova-handoff";
 import { InvestorTools } from "@/components/investor-tools";
+import { CREDIT_COSTS } from "@shared/plans";
 
 function useCrudQuery<T>(projectId: string, endpoint: string) {
   return useQuery<T[]>({
@@ -92,6 +95,7 @@ export function ResearchTab({ projectId }: { projectId: string }) {
         <Button variant={activeSection === "experiments" ? "default" : "outline"} size="sm" onClick={() => setActiveSection("experiments")} data-testid="btn-experiments-section">
           <Beaker className="h-4 w-4 mr-1" /> Experiments
         </Button>
+        <NovaActionButton projectId={projectId} surface="research" className="ml-auto" />
       </div>
       {activeSection === "interviews" ? (
         <InterviewsSection projectId={projectId} />
@@ -235,6 +239,17 @@ function ExperimentsSection({ projectId }: { projectId: string }) {
 export function StrategyTab({ projectId }: { projectId: string }) {
   const [activeSection, setActiveSection] = useState<"pricing" | "legal" | "investor">("investor");
 
+  /*
+   * A hand-off from the Nova dashboard lands on this tab, but the section that
+   * actually claims it may not be mounted. Peek at the pending job and open
+   * the right section; the section itself takes and clears it.
+   */
+  const pendingHandoff = useNovaHandoffPending();
+  useEffect(() => {
+    if (pendingHandoff === "strategy.pricing") setActiveSection("pricing");
+    else if (pendingHandoff === "strategy.readiness") setActiveSection("investor");
+  }, [pendingHandoff]);
+
   return (
     <div className="space-y-4" data-testid="strategy-tab">
       <div className="flex items-center gap-2 mb-4 flex-wrap">
@@ -247,20 +262,81 @@ export function StrategyTab({ projectId }: { projectId: string }) {
         <Button variant={activeSection === "legal" ? "default" : "outline"} size="sm" onClick={() => setActiveSection("legal")} data-testid="btn-legal-section">
           <Shield className="h-4 w-4 mr-1" /> Legal
         </Button>
+        {/* Pricing gets its own Nova surface — it reasons about tiers and
+            what to charge, which is a different job from investor strategy. */}
+        <NovaActionButton
+          projectId={projectId}
+          surface={activeSection === "pricing" ? "pricing" : "strategy"}
+          className="ml-auto"
+        />
       </div>
 
+      {/*
+        * One section at a time. The chained ternary rendered LegalSection
+        * whenever pricing wasn't selected, so choosing Investor Readiness
+        * showed investor tools with the legal section stacked underneath.
+        */}
       {activeSection === "investor" && <InvestorTools projectId={projectId} />}
-      {activeSection === "pricing" ? <PricingSection projectId={projectId} /> : <LegalSection projectId={projectId} />}
+      {activeSection === "pricing" && <PricingSection projectId={projectId} />}
+      {activeSection === "legal" && <LegalSection projectId={projectId} />}
     </div>
   );
 }
 
+interface PricingAnalysis {
+  willingnessToPay: string;
+  recommended: { name: string; price: string; forWho: string; rationale: string }[];
+  risks: string[];
+  howToValidate: string[];
+}
+
 function PricingSection({ projectId }: { projectId: string }) {
+  const { toast } = useToast();
+  const { creditsRemaining, isUnlimited } = useEntitlements();
   const { data: tiers, isLoading } = useCrudQuery<any>(projectId, "pricing");
   const { createMutation, updateMutation, deleteMutation } = useCrudMutations(projectId, "pricing");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState({ name: "", price: 0, billingPeriod: "monthly", features: [] as string[], isFeatured: false });
   const [featureInput, setFeatureInput] = useState("");
+
+  /*
+   * The pricing analysis is stored as an investor artifact, so it survives a
+   * reload and reads back the same way whether it was run from here or handed
+   * over by the Nova dashboard. It had nowhere to be displayed before, which
+   * meant the dashboard's "Run pricing analysis" charged credits for a verdict
+   * the builder never saw.
+   */
+  const { data: artifactData } = useQuery<{ artifacts: any[] }>({
+    queryKey: ["/api/projects", projectId, "investor-artifacts"],
+    enabled: !!projectId,
+  });
+  const analysisArtifact = artifactData?.artifacts?.find((a) => a.kind === "pricing_analysis");
+  const analysis = analysisArtifact?.content as PricingAnalysis | undefined;
+
+  const analysisMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/projects/${projectId}/pricing-analysis`);
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Nova priced it out", description: "Her verdict is below." });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "investor-artifacts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/subscription"] });
+    },
+    onError: (err: any) => {
+      const raw = err?.message || "";
+      const start = raw.indexOf("{");
+      let description = "Please try again.";
+      if (start >= 0) {
+        try { description = JSON.parse(raw.slice(start)).message || description; } catch { /* keep */ }
+      }
+      toast({ title: "Couldn't run that", description, variant: "destructive" });
+    },
+  });
+
+  useNovaHandoff("strategy.pricing", () => analysisMutation.mutate());
+
+  const cantAffordAnalysis = !isUnlimited && creditsRemaining < CREDIT_COSTS.pricingAnalysis;
 
   const handleCreate = () => {
     createMutation.mutate({ ...form, features: form.features }, {
@@ -277,10 +353,86 @@ function PricingSection({ projectId }: { projectId: string }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <h3 className="text-lg font-semibold">Pricing Tiers</h3>
-        <Button size="sm" onClick={() => setDialogOpen(true)} data-testid="btn-add-pricing"><Plus className="h-4 w-4 mr-1" /> Add Tier</Button>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5"
+            disabled={analysisMutation.isPending || cantAffordAnalysis}
+            onClick={() => analysisMutation.mutate()}
+            data-testid="btn-pricing-analysis"
+          >
+            {analysisMutation.isPending
+              ? <><Loader2 className="h-4 w-4 animate-spin" /> Nova is pricing…</>
+              : <><Search className="h-4 w-4" /> {analysis ? "Re-run analysis" : "Pressure-test my pricing"} ({CREDIT_COSTS.pricingAnalysis})</>}
+          </Button>
+          <Button size="sm" onClick={() => setDialogOpen(true)} data-testid="btn-add-pricing"><Plus className="h-4 w-4 mr-1" /> Add Tier</Button>
+        </div>
       </div>
+
+      {analysis && (
+        <Card className="border-primary/40 bg-primary/5" data-testid="card-pricing-analysis">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <DollarSign className="h-4 w-4 text-primary" /> Nova's verdict
+            </CardTitle>
+            {analysisArtifact?.summary && (
+              <p className="text-sm text-secondary leading-relaxed">{analysisArtifact.summary}</p>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {analysis.willingnessToPay && (
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">What they'll actually pay</p>
+                <p className="text-sm leading-relaxed">{analysis.willingnessToPay}</p>
+              </div>
+            )}
+            {analysis.recommended?.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Suggested tiers</p>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                  {analysis.recommended.map((tier, i) => (
+                    <div key={i} className="rounded-md border border-border/60 bg-background p-3 space-y-1">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="font-medium text-sm">{tier.name}</span>
+                        <span className="text-sm font-semibold">{tier.price}</span>
+                      </div>
+                      {tier.forWho && <p className="text-xs text-muted-foreground">{tier.forWho}</p>}
+                      {tier.rationale && <p className="text-xs leading-relaxed">{tier.rationale}</p>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {analysis.risks?.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Where this could go wrong</p>
+                <ul className="space-y-1">
+                  {analysis.risks.map((risk, i) => (
+                    <li key={i} className="text-sm flex items-start gap-2">
+                      <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0 mt-0.5" />{risk}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {analysis.howToValidate?.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Test it before you commit</p>
+                <ul className="space-y-1">
+                  {analysis.howToValidate.map((step, i) => (
+                    <li key={i} className="text-sm flex items-start gap-2">
+                      <CheckCircle2 className="h-3.5 w-3.5 text-primary shrink-0 mt-0.5" />{step}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
       {isLoading ? <Loader2 className="h-6 w-6 animate-spin mx-auto" /> : !tiers?.length ? (
         <Card><CardContent className="py-8 text-center text-muted-foreground"><DollarSign className="h-10 w-10 mx-auto mb-2 opacity-30" /><p>No pricing tiers yet. Define your plans!</p></CardContent></Card>
       ) : (
@@ -820,7 +972,10 @@ export function AnalyticsTab({ projectId }: { projectId: string }) {
           <h3 className="text-lg font-semibold">Analytics Events</h3>
           <Badge variant="secondary" className="text-[10px] capitalize">{analyticsLevel}</Badge>
         </div>
-        <Button size="sm" onClick={() => setDialogOpen(true)} data-testid="btn-add-event"><Plus className="h-4 w-4 mr-1" /> Add Event</Button>
+        <div className="flex items-center gap-2">
+          <NovaActionButton projectId={projectId} surface="analytics" variant="outline" />
+          <Button size="sm" onClick={() => setDialogOpen(true)} data-testid="btn-add-event"><Plus className="h-4 w-4 mr-1" /> Add Event</Button>
+        </div>
       </div>
       <p className="text-sm text-muted-foreground">Track activation, retention, revenue, and referral events for your product.</p>
 

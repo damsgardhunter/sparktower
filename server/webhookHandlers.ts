@@ -2,6 +2,7 @@ import { getStripeSync, getUncachableStripeClient } from './stripeClient';
 import { db } from './db';
 import { users, donations, projects } from '@shared/schema';
 import { eq, sql } from 'drizzle-orm';
+import { recordBacking } from './backing-routes';
 
 export class WebhookHandlers {
   static async processWebhook(payload: Buffer, signature: string): Promise<void> {
@@ -91,6 +92,18 @@ export class WebhookHandlers {
     if (event.type !== 'checkout.session.completed') return;
 
     const session = event.data?.object;
+
+    // Backing pledges are held in escrow and have their own ledger, believer
+    // numbers and merch queue — see server/backing-routes.ts.
+    if (session?.metadata?.type === 'backing') {
+      try {
+        await recordBacking(session);
+      } catch (err) {
+        console.error('Failed to record backing from webhook:', err);
+      }
+      return;
+    }
+
     if (!session?.metadata?.type || session.metadata.type !== 'donation') return;
 
     const { projectId, donorId, amount } = session.metadata;

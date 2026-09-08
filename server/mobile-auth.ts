@@ -18,6 +18,8 @@ import { db } from "./db";
 import { users, mobileRefreshTokens } from "@shared/schema";
 import { eq, and, isNull, gt } from "drizzle-orm";
 import { storage } from "./storage";
+import { ensureUserProfile } from "./user-provisioning";
+import { stampSignupAttribution } from "./attribution";
 
 const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;          // 15 minutes
 const REFRESH_TOKEN_TTL_DAYS = 60;
@@ -97,6 +99,14 @@ async function buildSession(userId: string, device?: string) {
   const refreshToken = await issueRefreshToken(userId, device);
   const user = await storage.getUser(userId);
   const safeUser = user ? { ...user, passwordHash: undefined } : null;
+
+  /*
+   * Provisioned here rather than at each of the four mobile entry points
+   * (register, login, Google, refresh) — every session is built through this
+   * function, so no sign-in route can forget it.
+   */
+  if (user) await ensureUserProfile(user);
+
   const profile = await storage.getUserProfile(userId).catch(() => undefined);
   return {
     accessToken: token,
@@ -187,6 +197,9 @@ export function registerMobileAuthRoutes(app: Express) {
         lastName: lastName || "",
         authProvider: "local",
       }).returning();
+      // The app carries its own attribution — there is no landing page here to
+      // have stamped a cookie on. See server/attribution.ts.
+      await stampSignupAttribution(user.id, req);
 
       res.json(await buildSession(user.id, device));
     } catch (error) {
@@ -254,6 +267,9 @@ export function registerMobileAuthRoutes(app: Express) {
             profileImageUrl: payload.picture || null,
             authProvider: "google",
           }).returning();
+          // Only this branch creates an account; the two above return one that
+          // already existed.
+          await stampSignupAttribution(user.id, req);
         }
       }
 

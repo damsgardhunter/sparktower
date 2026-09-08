@@ -9,9 +9,12 @@
 import type { Express } from "express";
 import { storage } from "./storage";
 import { db } from "./db";
-import { users, userProfiles, projects, projectMembers } from "@shared/schema";
+import { users, userProfiles, projects, projectMembers, projectCheckIns } from "@shared/schema";
 import { eq, and, or, ilike, ne } from "drizzle-orm";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
+import { recordLoopEvent } from "./loop-metrics";
+import { rateLimit } from "./moderation";
+import { LOOP_EVENTS } from "@shared/loop-events";
 import {
   POST_TYPES, POST_TYPES_BY_KEY, REACTIONS, MAX_POST_LENGTH,
   MAX_COMMENT_LENGTH, MAX_POST_MEDIA,
@@ -127,7 +130,7 @@ export function registerFeedRoutes(app: Express) {
     }
   });
 
-  app.post("/api/feed", isAuthenticated, async (req: any, res) => {
+  app.post("/api/feed", isAuthenticated, rateLimit("feedPost"), async (req: any, res) => {
     try {
       const userId = req.user.id;
       const { postType, content, projectId, mediaUrls, mentions } = req.body as {
@@ -216,7 +219,7 @@ export function registerFeedRoutes(app: Express) {
     }
   });
 
-  app.post("/api/feed/:id/comments", isAuthenticated, async (req: any, res) => {
+  app.post("/api/feed/:id/comments", isAuthenticated, rateLimit("comment"), async (req: any, res) => {
     try {
       const userId = req.user.id;
       const { content, mentions, parentCommentId } = req.body as {
@@ -336,7 +339,13 @@ export function registerFeedRoutes(app: Express) {
  * project can weigh in, not just the team.
  */
 export function registerProjectDiscussionRoutes(app: Express) {
-  const TARGETS = ["milestone", "project", "roadmap_phase"] as const;
+  /*
+   * What a comment can hang off. `check_in` is what closes step 5 of the
+   * weekly loop — "received feedback when >=1 comment" — and it's the only
+   * target an outsider is expected to use, since a check-in permalink is
+   * shared with people who aren't on the project.
+   */
+  const TARGETS = ["milestone", "project", "roadmap_phase", "check_in"] as const;
 
   /** Can this viewer see the project at all? Private ones are members-only. */
   async function canView(projectId: string, viewerId?: string): Promise<boolean> {
@@ -379,7 +388,7 @@ export function registerProjectDiscussionRoutes(app: Express) {
     }
   });
 
-  app.post("/api/projects/:id/comments", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/comments", isAuthenticated, rateLimit("comment"), async (req: any, res) => {
     try {
       const userId = req.user.id;
       if (!(await canView(req.params.id, userId))) {
@@ -408,6 +417,16 @@ export function registerProjectDiscussionRoutes(app: Express) {
         }
       }
 
+      // Same for a check-in — otherwise a comment could be filed against one
+      // project while pointing at another project's check-in.
+      if (targetType === "check_in") {
+        const [checkIn] = await db.select({ projectId: projectCheckIns.projectId })
+          .from(projectCheckIns).where(eq(projectCheckIns.id, targetId));
+        if (!checkIn || checkIn.projectId !== req.params.id) {
+          return res.status(404).json({ message: "Check-in not found on this project" });
+        }
+      }
+
       await storage.createProjectComment({
         projectId: req.params.id,
         authorId: userId,
@@ -417,6 +436,15 @@ export function registerProjectDiscussionRoutes(app: Express) {
         mentions: await resolveMentions(mentions),
         parentCommentId: parentCommentId || null,
       });
+
+      if (targetType === "check_in") {
+        // Step 5 of the weekly loop. Recorded here rather than inferred from
+        // the comments table so the 24-hour SLA has a real timestamp.
+        void recordLoopEvent({
+          name: LOOP_EVENTS.commentCreated,
+          userId, projectId: req.params.id, checkInId: targetId,
+        });
+      }
 
       res.json(await storage.getProjectComments(req.params.id, { targetType: targetType!, targetId }, userId));
     } catch (error) {

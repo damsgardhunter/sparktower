@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, jsonb, pgTable, timestamp, varchar } from "drizzle-orm/pg-core";
+import { index, integer, jsonb, pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
 
 export const sessions = pgTable(
   "sessions",
@@ -26,6 +26,37 @@ export const users = pgTable("users", {
   creditsUsed: integer("credits_used").default(0).notNull(),
   creditsResetAt: timestamp("credits_reset_at"),
   stripeConnectAccountId: varchar("stripe_connect_account_id"),
+  /**
+   * Platform-side authority, distinct from a user's role on any one project.
+   *
+   * Only "reviewer" and above may approve a backing payout, so this is the
+   * column standing between held backer money and whoever asks for it. It is
+   * never settable through the API — see PLATFORM_REVIEWER_EMAILS in
+   * server/platform-roles.ts, which promotes a fixed allowlist at boot.
+   */
+  platformRole: varchar("platform_role").default("user").notNull(),
+  /**
+   * Set when an account is suspended. Checked on every authenticated request,
+   * so a suspension takes effect on the suspended person's next action rather
+   * than whenever their session happens to expire.
+   */
+  suspendedAt: timestamp("suspended_at"),
+  suspendedReason: text("suspended_reason"),
+  /*
+   * Where this account came from, captured on the visitor's first page and
+   * written here once, when the account is created. First touch: the link that
+   * brought someone here is the one that did the work, even if they signed up
+   * three visits later. Never updated afterwards — see server/attribution.ts.
+   */
+  signupSource: varchar("signup_source"),
+  signupMedium: varchar("signup_medium"),
+  signupCampaign: varchar("signup_campaign"),
+  /** The external page that linked here. Null for direct arrivals. */
+  signupReferrer: text("signup_referrer"),
+  /** The first page they landed on, query string included. */
+  signupLandingPath: text("signup_landing_path"),
+  /** Every tracked parameter that was on that link. Allowlisted, never the raw query. */
+  signupParams: jsonb("signup_params"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

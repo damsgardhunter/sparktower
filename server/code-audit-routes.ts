@@ -191,7 +191,13 @@ export function registerCodeAuditRoutes(app: Express) {
 
       // --- the plan, for reconciliation ------------------------------------
       const [state, completions, milestones] = await Promise.all([
-        buildOperableProjectState(projectId),
+        /*
+         * Without the previous audit. A fresh audit has to judge the code on
+         * its own merits — handed its predecessor's verdict it anchors on it
+         * and reproduces the old conclusion instead of reading what's there.
+         * The history list is where comparisons belong.
+         */
+        buildOperableProjectState(projectId, { includeAudit: false }),
         storage.getProjectTaskCompletions(projectId, 40).catch(() => []),
         storage.getProjectMilestones(projectId).catch(() => []),
       ]);

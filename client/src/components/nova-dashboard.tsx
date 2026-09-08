@@ -1,13 +1,13 @@
 import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import { useEntitlements } from "@/hooks/use-entitlements";
+import { useRequestNovaHandoff } from "@/components/nova-handoff";
+import { novaHandoffTab, type NovaHandoff } from "@shared/nova-handoff";
 import {
   Loader2, Sparkles, ArrowRight, CheckCircle2, Circle, AlertTriangle,
   Users, ListChecks, Flag, Map, ChevronDown, ChevronUp,
@@ -20,7 +20,8 @@ interface Recommendation {
   actionLabel: string;
   credits: number;
   tab?: string;
-  endpoint?: string;
+  /** The job the destination tab picks up on arrival, if there is one. */
+  action?: NovaHandoff;
   severity: "critical" | "important" | "suggested";
 }
 
@@ -63,6 +64,9 @@ const SEVERITY_ACCENT: Record<string, string> = {
  * The briefing itself is free — completion and recommendations are computed
  * from real project state, not an AI call. Only the action on each
  * recommendation costs credits, and every one shows its price on the button.
+ *
+ * Acting on a recommendation always takes you to the tab that owns the work,
+ * and hands the job to that tab to run. See shared/nova-handoff.ts.
  */
 export function NovaDashboard({
   projectId, onNavigate,
@@ -71,41 +75,13 @@ export function NovaDashboard({
   onNavigate: (tab: string) => void;
 }) {
   const { user } = useAuth();
-  const { toast } = useToast();
   const { creditsRemaining, isUnlimited } = useEntitlements();
+  const requestHandoff = useRequestNovaHandoff();
   const [showBreakdown, setShowBreakdown] = useState(false);
-  const [running, setRunning] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery<Briefing>({
     queryKey: ["/api/projects", projectId, "nova-briefing"],
     enabled: !!projectId,
-  });
-
-  /** Runs a recommendation's endpoint in place, then refreshes the briefing. */
-  const runAction = useMutation({
-    mutationFn: async (rec: Recommendation) => {
-      const res = await apiRequest("POST", rec.endpoint!);
-      return { rec, result: await res.json() };
-    },
-    onSuccess: ({ rec }) => {
-      toast({
-        title: "Nova's done",
-        description: `${rec.actionLabel} finished. Open ${rec.tab ?? "the tab"} to see it.`,
-      });
-      setRunning(null);
-      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
-      queryClient.invalidateQueries({ queryKey: ["/api/subscription"] });
-    },
-    onError: (err: any) => {
-      setRunning(null);
-      const raw = err?.message || "";
-      const start = raw.indexOf("{");
-      let description = "Please try again.";
-      if (start >= 0) {
-        try { description = JSON.parse(raw.slice(start)).message || description; } catch { /* keep */ }
-      }
-      toast({ title: "Couldn't run that", description, variant: "destructive" });
-    },
   });
 
   if (isLoading) {
@@ -203,7 +179,7 @@ export function NovaDashboard({
           <div className="space-y-2.5">
             {data.recommendations.map((rec, i) => {
               const cantAfford = !isUnlimited && rec.credits > 0 && creditsRemaining < rec.credits;
-              const isRunning = running === rec.id;
+              const destination = rec.action ? novaHandoffTab(rec.action) : rec.tab;
               return (
                 <Card
                   key={rec.id}
@@ -236,22 +212,18 @@ export function NovaDashboard({
                         size="sm"
                         variant={rec.severity === "critical" ? "default" : "outline"}
                         className="gap-1.5 shrink-0 w-full sm:w-auto"
-                        disabled={cantAfford || isRunning}
+                        disabled={cantAfford || !destination}
                         onClick={() => {
-                          // Endpoint-backed actions run right here; the rest
-                          // just navigate to where the work happens.
-                          if (rec.endpoint) {
-                            setRunning(rec.id);
-                            runAction.mutate(rec);
-                          } else if (rec.tab) {
-                            onNavigate(rec.tab);
-                          }
+                          // Always land on the tab the work happens in, and let
+                          // that tab run it. Running it here left the builder on
+                          // the dashboard while their credits were spent on a
+                          // result they had to go hunting for.
+                          if (rec.action) requestHandoff(rec.action);
+                          if (destination) onNavigate(destination);
                         }}
                         data-testid={`rec-action-${rec.id}`}
                       >
-                        {isRunning
-                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          : <ArrowRight className="h-3.5 w-3.5" />}
+                        <ArrowRight className="h-3.5 w-3.5" />
                         {rec.actionLabel}
                         {rec.credits > 0 && (
                           <Badge variant="secondary" className="ml-0.5 text-[10px] px-1.5">

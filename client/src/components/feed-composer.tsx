@@ -98,7 +98,7 @@ export function FeedComposer({ defaultProjectId }: { defaultProjectId?: string }
 
   if (!open) {
     return (
-      <Card data-testid="card-composer-collapsed">
+      <Card className="rounded-lg shadow-none bg-background dark:bg-card" data-testid="card-composer-collapsed">
         <CardContent className="p-3">
           <div className="flex items-center gap-3">
             <UserAvatar src={user.profileImageUrl} name={displayName} className="h-10 w-10 shrink-0" />
@@ -131,7 +131,7 @@ export function FeedComposer({ defaultProjectId }: { defaultProjectId?: string }
   }
 
   return (
-    <Card className="border-primary/30" data-testid="card-composer">
+    <Card className="border-primary/30 rounded-lg shadow-none bg-background dark:bg-card" data-testid="card-composer">
       <CardContent className="p-4 space-y-4">
         <div className="flex items-start gap-3">
           <UserAvatar src={user.profileImageUrl} name={displayName} className="h-10 w-10 shrink-0" />

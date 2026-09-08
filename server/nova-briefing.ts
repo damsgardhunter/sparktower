@@ -12,6 +12,11 @@ import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { getUserEntitlements } from "./entitlements";
 import { CREDIT_COSTS, roadmapRebuildCost } from "@shared/plans";
 import { PROJECT_SECTIONS, sectionHasContent } from "@shared/project-sections";
+import { weekStartOf } from "@shared/check-in";
+import { db } from "./db";
+import { projectCheckIns } from "@shared/schema";
+import { and, desc, eq } from "drizzle-orm";
+import type { NovaHandoff } from "@shared/nova-handoff";
 
 /** Where the action button sends the user, and what it costs. */
 export interface NovaRecommendation {
@@ -23,10 +28,14 @@ export interface NovaRecommendation {
   actionLabel: string;
   /** 0 means the action itself is free (navigation, editing). */
   credits: number;
-  /** Manage tab to open, if the action is navigational. */
+  /** Manage tab to open. Every recommendation goes somewhere. */
   tab?: string;
-  /** API endpoint the client should POST to, if the action runs AI. */
-  endpoint?: string;
+  /**
+   * The job to hand to that tab on arrival, for the recommendations that run
+   * something. The dashboard never calls an endpoint itself — see
+   * shared/nova-handoff.ts for why.
+   */
+  action?: NovaHandoff;
   /** Higher surfaces first. */
   weight: number;
   severity: "critical" | "important" | "suggested";
@@ -115,10 +124,24 @@ export function registerNovaBriefingRoutes(app: Express) {
        */
       const completedAllTime = Math.max(doneTasks.length, completions.length);
       const openTasks = tasks.filter((t: any) => t.status !== "done");
-      const blockedTasks = tasks.filter((t: any) => t.blockedByTaskId && t.status !== "done");
-      // "Stale" = sitting in progress untouched for over a week.
+      /*
+       * Blocked means the task it's waiting on is still unfinished. Nothing
+       * clears `blockedByTaskId` when the blocker lands, so a stale pointer at
+       * an already-finished task has to be filtered out here or it's counted
+       * as a block that no longer exists.
+       */
+      const doneTaskIds = new Set(doneTasks.map((t: any) => t.id));
+      const blockedTasks = openTasks.filter(
+        (t: any) => t.blockedByTaskId && !doneTaskIds.has(t.blockedByTaskId)
+      );
+      /*
+       * Stalled = started, then left alone. Measured from `startedAt`, which
+       * the task PATCH route stamps on the move into progress. Measuring from
+       * `createdAt` counted the time a task spent sitting in the backlog, so a
+       * task picked up this morning read as a week stale.
+       */
       const stalledTasks = openTasks.filter(
-        (t: any) => t.status === "in-progress" && daysSince(t.createdAt) > 7
+        (t: any) => t.status === "in-progress" && daysSince(t.startedAt ?? t.createdAt) > 7
       );
       const readinessScore = artifacts.find((a) => a.kind === "readiness_score");
 
@@ -136,6 +159,48 @@ export function registerNovaBriefingRoutes(app: Express) {
       });
 
       const recs: NovaRecommendation[] = [];
+
+      /*
+       * --- This week's check-in ---
+       *
+       * The highest-weight recommendation there is, because the weekly loop is
+       * the product and every other suggestion here is downstream of it. It
+       * only appears when this week's is actually missing, so it disappears
+       * the moment it's done rather than nagging.
+       */
+      const weekStart = weekStartOf();
+      const [thisWeek] = await db.select({ id: projectCheckIns.id })
+        .from(projectCheckIns)
+        .where(and(
+          eq(projectCheckIns.projectId, projectId),
+          eq(projectCheckIns.userId, userId),
+          eq(projectCheckIns.weekStart, weekStart),
+        ));
+
+      if (!thisWeek) {
+        const [last] = await db.select({ nextStep: projectCheckIns.nextStep })
+          .from(projectCheckIns)
+          .where(and(
+            eq(projectCheckIns.projectId, projectId),
+            eq(projectCheckIns.userId, userId),
+          ))
+          .orderBy(desc(projectCheckIns.weekStart))
+          .limit(1);
+
+        recs.push({
+          id: "weekly-check-in",
+          title: "You haven't checked in this week",
+          detail: last?.nextStep
+            ? `Last week you said you'd ${last.nextStep.charAt(0).toLowerCase()}${last.nextStep.slice(1)}`
+            : "Goal, proof, blocker, next step. Under two minutes, and it gets a link you can share.",
+          actionLabel: "Write this week's check-in",
+          credits: 0,
+          tab: "activity",
+          action: "activity.checkIn",
+          weight: 100,
+          severity: "important",
+        });
+      }
 
       // --- Brief gaps: cheapest, highest-leverage fix, and it's free ---
       const missingBrief = PROJECT_SECTIONS
@@ -176,15 +241,24 @@ export function registerNovaBriefingRoutes(app: Express) {
             actionLabel: "Update roadmap",
             credits: CREDIT_COSTS.roadmapUpdate,
             tab: "roadmap",
+            action: "roadmap.update",
             weight: 70 + Math.min(15, stale),
             severity: stale >= 21 ? "important" : "suggested",
           });
         }
-        // A roadmap with nothing in flight usually means it drifted from reality.
-        if (roadmap.phases.length > 0 && roadmap.phases.every((p) => p.status === "upcoming") && tasks.length > 5) {
+        /*
+         * A roadmap with nothing in flight while work is actually moving means
+         * it drifted from reality. "Moving" has to mean started or finished —
+         * keying this off `tasks.length` alone told builders their tasks were
+         * moving when the whole board was still sitting in the todo column.
+         */
+        const movingTasks = tasks.filter(
+          (t: any) => t.status === "in-progress" || t.status === "done"
+        ).length;
+        if (roadmap.phases.length > 0 && roadmap.phases.every((p) => p.status === "upcoming") && movingTasks > 0) {
           recs.push({
             id: "roadmap-drift",
-            title: "Your roadmap says nothing has started, but you have tasks moving",
+            title: `Your roadmap says nothing has started, but ${movingTasks} task${movingTasks === 1 ? " is" : "s are"} underway`,
             detail: "A rebuild resequences phases, milestones, and priorities around where the project actually is.",
             actionLabel: "Rebuild roadmap",
             credits: roadmapRebuildCost({
@@ -193,11 +267,17 @@ export function registerNovaBriefingRoutes(app: Express) {
               tasks: tasks.length,
             }),
             tab: "roadmap",
+            action: "roadmap.rebuild",
             weight: 68,
             severity: "important",
           });
         }
-        if (roadmap.phases.length > 0) {
+        /*
+         * Skipped when the blocked-work recommendation is already offering the
+         * same job — two buttons that spend the same credits on the same
+         * answer, one of which had the better reason for existing.
+         */
+        if (roadmap.phases.length > 0 && blockedTasks.length === 0) {
           recs.push({
             id: "next-actions",
             title: "Not sure what to work on next?",
@@ -205,26 +285,53 @@ export function registerNovaBriefingRoutes(app: Express) {
             actionLabel: "Ask Nova what's next",
             credits: CREDIT_COSTS.nextActions,
             tab: "roadmap",
-            endpoint: `/api/projects/${projectId}/roadmap/next-actions`,
+            action: "roadmap.nextActions",
             weight: 60,
             severity: "suggested",
           });
         }
       }
 
-      // --- Blocked / stalled work ---
-      if (blockedTasks.length > 0 || stalledTasks.length > 0) {
-        const count = blockedTasks.length || stalledTasks.length;
-        const kind = blockedTasks.length > 0 ? "blocked" : "sitting in progress";
+      /*
+       * --- Blocked / stalled work ---
+       *
+       * Two different problems, so two separate sentences. They used to share
+       * one: the count came from whichever set was non-empty while the wording
+       * came from the blocked set, so N blocked tasks were announced as
+       * "blocked for over a week" — a duration nothing here measures. There is
+       * no record of *when* a task became blocked, so that claim can't be made
+       * at all. Say the part that's true: the work is waiting on something
+       * unfinished.
+       */
+      if (blockedTasks.length > 0) {
+        const n = blockedTasks.length;
         recs.push({
           id: "blocked-tasks",
-          title: `${count} task${count === 1 ? " has" : "s have"} been ${kind} for over a week`,
-          detail: blockedTasks.slice(0, 3).map((t: any) => t.title).join(" · ") || stalledTasks.slice(0, 3).map((t: any) => t.title).join(" · "),
-          actionLabel: "Ask Nova for solutions",
+          title: `${n} task${n === 1 ? " is" : "s are"} waiting on unfinished work`,
+          detail: blockedTasks.slice(0, 3).map((t: any) => t.title).join(" · "),
+          actionLabel: "Ask Nova for a way through",
           credits: CREDIT_COSTS.nextActions,
           tab: "roadmap",
-          endpoint: `/api/projects/${projectId}/roadmap/next-actions`,
+          action: "roadmap.nextActions",
           weight: 82,
+          severity: "important",
+        });
+      }
+      // Only claimed when it's measurable, and the oldest one is named so the
+      // number can be checked rather than taken on trust.
+      if (stalledTasks.length > 0) {
+        const n = stalledTasks.length;
+        const oldest = Math.max(
+          ...stalledTasks.map((t: any) => daysSince(t.startedAt ?? t.createdAt))
+        );
+        recs.push({
+          id: "stalled-tasks",
+          title: `${n} task${n === 1 ? " has" : "s have"} been in progress for over a week`,
+          detail: `Oldest started ${oldest} days ago · ${stalledTasks.slice(0, 3).map((t: any) => t.title).join(" · ")}`,
+          actionLabel: "Review the board",
+          credits: 0,
+          tab: "kanban",
+          weight: 80,
           severity: "important",
         });
       }
@@ -242,7 +349,7 @@ export function registerNovaBriefingRoutes(app: Express) {
           actionLabel: "Find candidates",
           credits: CREDIT_COSTS.peopleRecommendation,
           tab: "team",
-          endpoint: `/api/projects/${projectId}/recommend-people`,
+          action: "team.recommendPeople",
           weight: 75,
           severity: "important",
         });
@@ -257,7 +364,7 @@ export function registerNovaBriefingRoutes(app: Express) {
           actionLabel: "Run pricing analysis",
           credits: CREDIT_COSTS.pricingAnalysis,
           tab: "strategy",
-          endpoint: `/api/projects/${projectId}/pricing-analysis`,
+          action: "strategy.pricing",
           weight: 72,
           severity: "important",
         });
@@ -272,7 +379,7 @@ export function registerNovaBriefingRoutes(app: Express) {
           actionLabel: "Generate a persona",
           credits: CREDIT_COSTS.personaGeneration,
           tab: "personas",
-          endpoint: `/api/projects/${projectId}/personas/generate`,
+          action: "personas.generate",
           weight: 65,
           severity: "suggested",
         });
@@ -287,7 +394,7 @@ export function registerNovaBriefingRoutes(app: Express) {
           actionLabel: "Generate tasks",
           credits: CREDIT_COSTS.taskGeneration,
           tab: "kanban",
-          endpoint: `/api/projects/${projectId}/kanban/ai-generate`,
+          action: "kanban.generate",
           weight: 78,
           severity: "important",
         });
@@ -302,7 +409,7 @@ export function registerNovaBriefingRoutes(app: Express) {
           actionLabel: "Score my readiness",
           credits: CREDIT_COSTS.investorReadinessScore,
           tab: "strategy",
-          endpoint: `/api/projects/${projectId}/readiness-score`,
+          action: "strategy.readiness",
           weight: 50,
           severity: "suggested",
         });
@@ -316,7 +423,7 @@ export function registerNovaBriefingRoutes(app: Express) {
           actionLabel: "Run a health check",
           credits: CREDIT_COSTS.healthCheck,
           tab: "analytics",
-          endpoint: `/api/projects/${projectId}/health-check`,
+          action: "analytics.healthCheck",
           weight: 45,
           severity: "suggested",
         });

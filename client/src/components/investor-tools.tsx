@@ -13,6 +13,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useEntitlements } from "@/hooks/use-entitlements";
 import { UpgradePrompt } from "@/components/upgrade-prompt";
+import { useNovaHandoff } from "@/components/nova-handoff";
 import {
   Loader2, Presentation, Gauge, MessageSquareWarning, Mic, Send,
   CheckCircle2, AlertTriangle, Quote, ArrowRight, Trophy, X,
@@ -96,6 +97,17 @@ export function InvestorTools({ projectId }: { projectId: string }) {
     },
     onError: (err) => toast({ title: "Couldn't run that", description: errorMessage(err, "Please try again."), variant: "destructive" }),
   });
+
+  /*
+   * Handed over from the Nova dashboard's "Score my readiness". The tool
+   * switch comes first so the builder watches the score being written into the
+   * panel that will hold it, rather than arriving on whichever tool was last
+   * selected while the work happens out of sight.
+   */
+  useNovaHandoff("strategy.readiness", () => {
+    setTool("score");
+    runTool.mutate("score");
+  }, can("aiRoadmap"));
 
   const startInterview = useMutation({
     mutationFn: async () => {

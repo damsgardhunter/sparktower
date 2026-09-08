@@ -14,8 +14,17 @@ import { registerFeedRoutes, registerProjectDiscussionRoutes, publishSystemPost,
 import { registerProfileRoutes } from "./profile-routes";
 import { registerDocumentRoutes } from "./document-routes";
 import { registerCodeAuditRoutes } from "./code-audit-routes";
+import { registerBackingRoutes } from "./backing-routes";
+import { registerCheckInRoutes } from "./check-in-routes";
+import { registerSurfaceRoutes, requireSurface } from "./surfaces";
+import { registerModerationRoutes, blockSuspended, rateLimit } from "./moderation";
+import { attachVisitor, captureWrites, registerAnalyticsIngest } from "./analytics";
+import { registerAnalyticsRoutes } from "./analytics-routes";
+import { captureAttribution } from "./attribution";
+import { registerNovaAssistRoutes } from "./nova-assist-routes";
 import {
-  applyProjectOperations, buildOperableProjectState, OPERATION_SCHEMA_INSTRUCTIONS,
+  applyProjectOperations, buildOperableProjectState, renderLatestAudit,
+  stripIdFragments, collectProjectIds, OPERATION_SCHEMA_INSTRUCTIONS,
 } from "./project-operations";
 import { insertUserProfileSchema, insertProjectSchema, insertDonationSchema, insertContestSchema, insertProjectLiveChatMessageSchema, insertWaitlistEntrySchema, insertInterviewSchema, insertExperimentSchema, insertPricingTierSchema, insertAnalyticsEventSchema, insertLegalDocSchema, insertDeployChecklistItemSchema, insertSupportTicketSchema, insertLaunchTaskSchema, type StoryboardScene } from "@shared/schema";
 import { z } from "zod";
@@ -275,6 +284,30 @@ export async function registerRoutes(
   // /api/auth/user stays cookie-only and 401s for a perfectly valid token.
   // No-op when there's no Bearer header, so cookie sessions are unaffected.
   app.use(attachBearerUser);
+  /*
+   * A suspended account can read but not write, anywhere. Mounted globally
+   * because a suspension that only covers the routes someone remembered to
+   * decorate is not a suspension.
+   */
+  app.use(blockSuspended);
+  /*
+   * Behaviour capture, mounted here for two reasons.
+   *
+   * `attachVisitor` runs before the routes so a visitor and session id exist on
+   * the very first request of a visit, including the one that serves the
+   * landing page to someone who has never been here.
+   *
+   * `captureWrites` sits above every registration below it, so a route added
+   * later is recorded without anyone remembering to record it. It reads
+   * `req.user` at response time, which is why it can sit above the auth routes
+   * and still attribute a sign-in to the account it created.
+   */
+  app.use(attachVisitor);
+  /* First-touch signup attribution, stamped on the same first page. */
+  app.use(captureAttribution);
+  app.use(captureWrites);
+  registerAnalyticsIngest(app);
+  registerAnalyticsRoutes(app);
   registerAuthRoutes(app);
   registerMobileAuthRoutes(app);
   registerObjectStorageRoutes(app);
@@ -286,6 +319,35 @@ export async function registerRoutes(
   registerProfileRoutes(app);
   registerDocumentRoutes(app);
   registerCodeAuditRoutes(app);
+  registerNovaAssistRoutes(app);
+  /*
+   * Kill switches, mounted as path prefixes rather than per-route.
+   *
+   * A guard added to 66 individual registrations is one a future route forgets
+   * to include; a prefix covers everything under it, including sub-routes that
+   * don't exist yet. This is the point at which a surface is genuinely off —
+   * the nav filtering on the client is only cosmetics on top of it.
+   */
+  for (const [prefix, id] of [
+    ["/api/games", "games"],
+    ["/api/contests", "contests"],
+    ["/api/sprints", "sprints"],
+    ["/api/sprint", "sprints"],
+    ["/api/matches", "matches"],
+    ["/api/connections", "connections"],
+    ["/api/messages", "messages"],
+    ["/api/leaderboard", "leaderboard"],
+    ["/api/feed", "feed"],
+    ["/api/check-ins", "checkIns"],
+    ["/api/loop-events", "checkIns"],
+  ] as const) {
+    app.use(prefix, requireSurface(id));
+  }
+
+  registerSurfaceRoutes(app);
+  registerModerationRoutes(app);
+  registerBackingRoutes(app);
+  registerCheckInRoutes(app);
 
   // User Profile
   app.get("/api/profile", isAuthenticated, async (req: any, res) => {
@@ -334,6 +396,48 @@ export async function registerRoutes(
       isOnboarded: existing?.isOnboarded ?? false,
     } as any);
     res.json(profile);
+  });
+
+  /**
+   * Everything the profile card on the home rail needs, in one request.
+   *
+   * The card shows the profile plus half a dozen counts. Fetching those as
+   * separate queries meant six round trips to render one box above the fold,
+   * and the numbers could disagree with each other mid-render.
+   */
+  app.get("/api/profile/summary", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const [profile, projects, followed, connections, reputation, badges, taskStats] = await Promise.all([
+        storage.getUserProfile(userId),
+        storage.getUserProjects(userId).catch(() => []),
+        storage.getUserFollowedProjects(userId).catch(() => []),
+        storage.getConnections(userId).catch(() => []),
+        storage.getUserReputation(userId).catch(() => undefined),
+        storage.getUserBadges(userId).catch(() => []),
+        storage.getUserTaskStats(userId).catch(() => undefined),
+      ]);
+
+      const owned = projects.filter((p: any) => p.ownerId === userId);
+      res.json({
+        profile: profile ?? null,
+        stats: {
+          projects: owned.length,
+          // Views across everything they own: the closest thing SparkTower
+          // has to LinkedIn's "profile viewers".
+          projectViews: owned.reduce((sum: number, p: any) => sum + (p.views ?? 0), 0),
+          following: followed.length,
+          connections: connections.length,
+          tasksCompleted: taskStats?.tasksCompleted ?? 0,
+          // The composite builder index is the headline reputation number.
+          reputationScore: reputation?.builderIndex ?? null,
+          badges: badges.length,
+        },
+      });
+    } catch (error) {
+      console.error("Profile summary error:", error);
+      res.status(500).json({ message: "Failed to load your profile summary" });
+    }
   });
 
   app.post("/api/profile/complete-onboarding", isAuthenticated, async (req: any, res) => {
@@ -480,7 +584,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     return { ...data, rolesNeeded: [], teamSize: 1 };
   }
 
-  app.post("/api/projects", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects", isAuthenticated, rateLimit("project"), async (req: any, res) => {
     const ownerId = (req.user as any).id;
     const validated = normalizeSoloMode(insertProjectSchema.parse({ ...req.body, ownerId }));
 
@@ -1042,6 +1146,7 @@ How to plan:
 - Write a real definition of done for each milestone — the observable thing that proves it's finished — and save it with update_milestone so it lives on the milestone rather than only in this reply.
 - Name exactly ONE milestone to work on next, and say why that one.
 - Respect what's already there. Don't recreate a task that exists; update it instead.
+- If a CODEBASE AUDIT appears in the context, plan from it. Don't create work for something the audit says is already built, do create work for what it found missing, and move tasks the audit says are finished to done. Its risks — committed credentials, no tests, no CI — are real work and belong on the board.
 
 Set "suggestedDocument" ONLY when a written document IS the deliverable — when the task cannot be called done without that document existing. A spec, a one-pager, a brief, a business plan, a pitch, a policy: yes. SparkTower has a document builder that lays out and writes documents, so pointing them at it beats leaving them to start from a blank page.
 
@@ -1940,7 +2045,8 @@ PROJECT CONTEXT:
 
 WHAT'S IN THE PROJECT RIGHT NOW — these are the real ids; you must use them
 verbatim when editing an existing task, milestone or roadmap phase, and you
-must never invent one:
+must never invent one. This also includes the latest codebase audit, if one has
+been run:
 ${await buildOperableProjectState(projectId)}`;
 
       const systemPrompt = `You are Nova, SparkTower's AI project partner. You have a warm, encouraging, knowledgeable personality. You always refer to yourself as "Nova" and use emojis naturally.
@@ -1950,6 +2056,14 @@ YOUR ROLE: You are the user's dedicated project advisor. You guide them through 
 COACHING DEPTH: ${coachingDirectiveFor(ent)}
 
 ${projectContext}
+
+USING THE CODEBASE AUDIT:
+- An audit is the only evidence in this project of what has actually been built. The tasks and milestones are what the builder *intends*; the audit is what the code *shows*.
+- When they ask "where am I", "what's left", or "what should I do next", answer from the audit if there is one — and name it as the source.
+- Where the audit and the board disagree, the audit wins. Point out the specific disagreement and offer to correct the board with edit_project rather than silently doing it.
+- If the audit lists possible committed credentials, raise that first, every time, however the conversation started. It outranks everything else on the list.
+- If no audit has been run and they ask about real progress, say plainly that nothing has verified the board and point them at the Codebase tab.
+- Never claim something is built because a task says done. Say "your board says done; the audit hasn't verified it" instead.
 
 CONVERSATION GUIDELINES:
 - Be warm, supportive, and encouraging. Starting a project is scary!
@@ -2026,6 +2140,11 @@ ${OPERATION_SCHEMA_INSTRUCTIONS}
    Milestone and roadmap operations require the Builder plan${canCreateMilestones ? " — this user has it" : " — this user does NOT have it, so say so instead of trying"}.
 
 RULES:
+- NEVER write an id in your visible reply. Ids exist so you can put them inside
+  a <nova_action> block; in prose they are meaningless noise to the user. Refer
+  to a task, milestone or phase by its TITLE. Write "your board already has
+  *Walk the weekly check-in loop*" — never "4103bb02-1319-4fbf-a110-bc57d7a0eaee
+  (in-progress): Walk the weekly check-in loop".
 - ALWAYS wrap an action in <nova_action>...</nova_action>. Never put the action
   JSON in a code fence, and never print it as plain text — wrap it.
 - Never tell the user something was saved unless you emitted the action for it
@@ -2177,6 +2296,17 @@ RULES:
         }
       }
 
+      /*
+       * Strip any id that survived into the visible reply.
+       *
+       * Unlike the document builder, the chat genuinely needs ids in its
+       * context — that's how it addresses an existing task in an action block.
+       * So the temptation can't be removed, only the result: replies were
+       * coming back as "4103bb02-1319-4fbf-…: Walk the weekly check-in loop".
+       * Runs after action extraction so the action JSON, which legitimately
+       * contains ids, is already out of the string.
+       */
+      cleanReply = stripIdFragments(cleanReply, await collectProjectIds(projectId).catch(() => []));
       cleanReply = cleanReply.trim();
 
       // Nova sometimes replies with nothing but the action block. Stripping it
@@ -3317,6 +3447,8 @@ Write like this instead:
 }
 Produce 4-7 phases ordered from first to last. Each phase must be concrete and specific to THIS project — no generic startup advice. Ground everything in the project brief AND in where they already are. Phases should build on each other toward the stated goal, and the hard part of the goal must actually be addressed by some phase rather than left to the end.
 
+If a CODEBASE AUDIT appears in the context, it is the evidence for what already exists and it overrides the board. Never plan a phase around building something the audit says is already built — start the roadmap from what's actually shipped. Do turn the audit's gaps and risks into phases: work it found missing is real remaining work, and a finding like no tests, no CI or a committed credential belongs in an early phase, not left implicit. Where the audit says a capability is only partly built, plan the finishing of it rather than the building of it, and say which part is already done.
+
 ${PLAIN_LANGUAGE_RULES}`;
 
   function parseRoadmapJson(raw: string): { summary: string; phases: any[] } {
@@ -3490,6 +3622,13 @@ Respond ONLY with the JSON, in the same shape as before.`,
             }),
             `GOAL\n${goal.trim()}`,
             targetDate ? `TARGET DATE\n${targetDate}` : "",
+            /*
+             * The first roadmap is exactly where this matters most. A builder
+             * who has been shipping for months and only now generates a
+             * roadmap would otherwise get a plan that starts from nothing —
+             * "set up auth", "build the database" — for work already done.
+             */
+            await renderLatestAudit(projectId),
           ].filter(Boolean).join("\n\n"),
         );
       } catch (parseErr) {
@@ -3587,6 +3726,9 @@ Additionally, each phase may include "status": one of "upcoming", "in-progress",
             }),
             `CURRENT ROADMAP (v${existing.version})\n${existing.summary || ""}`,
             `CURRENT PROGRESS\n${progressSummary}`,
+            // Re-planning without knowing what's actually shipped produces a
+            // roadmap that re-plans finished work.
+            await renderLatestAudit(projectId),
           ].filter(Boolean).join("\n\n"),
         );
       } catch (parseErr) {
@@ -3679,6 +3821,8 @@ Respond ONLY with valid JSON (no markdown, no code fences):
 }
 Exactly 3 actions, ordered most important first.
 
+If a CODEBASE AUDIT appears below, it is the evidence for what exists. Never propose building something it says is already built, and prefer the gaps and risks it found over anything the board merely claims.
+
 ${PLAIN_LANGUAGE_RULES}`,
         [
           `PROJECT BRIEF\n${formatProjectBriefForPrompt(project)}`,
@@ -3686,6 +3830,9 @@ ${PLAIN_LANGUAGE_RULES}`,
           `ROADMAP (v${roadmap.version})\n${roadmap.phases.map((p) => `- ${p.title} [${p.status}] ${p.description || ""}`).join("\n")}`,
           `MILESTONES\n${milestones.length ? milestones.map((m) => `- ${m.title} [${m.status}]`).join("\n") : "none"}`,
           `OPEN TASKS (${openTasks.length} of ${tasks.length})\n${openTasks.slice(0, 25).map((t: any) => `- ${t.title} [${t.priority}]`).join("\n") || "none"}`,
+          // "What should I do next?" is unanswerable without knowing what's
+          // already built, and only the audit knows that.
+          await renderLatestAudit(projectId),
         ].join("\n\n"),
       );
 
@@ -3822,6 +3969,8 @@ Additionally include:
           `PREVIOUS ROADMAP (v${existing.version})\n${existing.summary || ""}\n${existing.phases.map((p) => `- ${p.title} [${p.status}]`).join("\n")}`,
           `EXISTING MILESTONES\n${milestones.map((m) => `- ${m.title} [${m.status}]`).join("\n") || "none"}`,
           `EXISTING TASKS\n${tasks.map((t: any) => `- ${t.title} [${t.status}/${t.priority}]`).join("\n") || "none"}`,
+          // A rebuild that ignores what's shipped re-plans work already done.
+          await renderLatestAudit(projectId),
         ].filter(Boolean).join("\n\n"),
       );
 
@@ -4091,7 +4240,7 @@ Additionally include:
       if (!ent) return;
       if (!(await requireCredits(res, userId, CREDIT_COSTS.healthCheck, "a health check"))) return;
 
-      const [tasks, milestones, members, roadmap, feedback, history, banked] = await Promise.all([
+      const [tasks, milestones, members, roadmap, feedback, history, banked, auditText] = await Promise.all([
         storage.getProjectKanbanTasks(projectId).catch(() => []),
         storage.getProjectMilestones(projectId).catch(() => []),
         storage.getProjectMembers(projectId).catch(() => []),
@@ -4099,6 +4248,7 @@ Additionally include:
         storage.getHealthFindingFeedback(projectId).catch(() => []),
         storage.getProjectTaskCompletions(projectId, 40).catch(() => []),
         storage.getUserTaskStats(userId).catch(() => undefined),
+        renderLatestAudit(projectId),
       ]);
 
       const doneTasks = tasks.filter((t: any) => t.status === "done").length;
@@ -4126,6 +4276,7 @@ Additionally include:
         `MILESTONES\n${milestones.length ? milestones.map((m) => `${m.title} [${m.status}]`).join("; ") : "none"}`,
         roadmap ? `ROADMAP\nGoal: ${roadmap.goal}\nPhases: ${roadmap.phases.map((p) => `${p.title} [${p.status}]`).join("; ")}` : "ROADMAP\nnone",
         `AGE\nCreated ${Math.max(0, Math.round((Date.now() - new Date(project.createdAt).getTime()) / 86400000))} days ago`,
+        auditText,
         feedback.length
           ? `WHAT THE BUILDER TOLD YOU LAST TIME\n${feedback
               .slice(0, 12)
@@ -4144,6 +4295,8 @@ Additionally include:
 If the context includes WHAT THE BUILDER TOLD YOU LAST TIME, treat it as information you did not previously have. Where they said a concern was already handled or not a priority, do not raise it again in the same form: either drop it, or — if the project data still contradicts them — say plainly that you're raising it anyway and why. Never repeat a finding verbatim after it has been answered; that's how a builder learns to ignore you.
 
 Every recommendation must be something that can be acted on inside this project: a task to create, a milestone to add or reword, a roadmap phase to change, a scope list to cut, or a brief field to rewrite. Avoid advice that lives entirely outside the tool.
+
+If a CODEBASE AUDIT appears in the context, treat it as the evidence for what is actually built and score accordingly. A project whose audit shows a working product is not "stalled" because its board is untidy — say the board is out of date instead. Equally, do not credit a milestone the audit says is not started. Cite the audit when it's what changed your assessment.
 
 Respond ONLY with valid JSON (no markdown, no code fences):
 {
@@ -4433,22 +4586,8 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   });
 
   // --- Check-ins ---
-  app.get("/api/projects/:id/check-ins", isAuthenticated, async (req: any, res) => {
-    try {
-      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
-      const checkIns = await storage.getProjectCheckIns(req.params.id);
-      res.json(checkIns);
-    } catch (error) { res.status(500).json({ message: "Failed to get check-ins" }); }
-  });
-
-  app.post("/api/projects/:id/check-ins", isAuthenticated, async (req: any, res) => {
-    try {
-      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
-      const checkIn = await storage.createCheckIn({ ...req.body, projectId: req.params.id, userId: (req.user as any).id });
-      await storage.logActivity({ projectId: req.params.id, userId: (req.user as any).id, action: "submitted check-in", entityType: "check-in", entityId: checkIn.id });
-      res.json(checkIn);
-    } catch (error) { res.status(500).json({ message: "Failed to create check-in" }); }
-  });
+  // Check-ins now live in server/check-in-routes.ts — the loop needs a public
+  // permalink, validation and week identity, which outgrew two inline handlers.
 
   // --- Project Files ---
   app.get("/api/projects/:id/files", isAuthenticated, async (req: any, res) => {
@@ -4539,7 +4678,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
           content: `You are Nova, SparkTower's AI project assistant. Generate a concise weekly progress summary for a project. Be specific and actionable. Format with markdown headers and bullet points.`
         }, {
           role: "user",
-          content: `Project: "${project?.title}"\nDescription: ${project?.description}\n\nTask Status: ${JSON.stringify(taskSummary)}\nRecent Tasks: ${JSON.stringify(tasks.slice(0, 10).map(t => ({ title: t.title, status: t.status, priority: t.priority })))}\nMilestones: ${JSON.stringify(milestones.map(m => ({ title: m.title, status: m.status, targetDate: m.targetDate })))}\nRecent Check-ins: ${JSON.stringify(checkIns.slice(0, 5).map(ci => ({ did: ci.did, doing: ci.doing, blockers: ci.blockers })))}\nRecent Activity: ${JSON.stringify(activity.slice(0, 10).map(a => a.action))}\n\nGenerate a progress summary covering: accomplishments, current focus, blockers, and next steps.`
+          content: `Project: "${project?.title}"\nDescription: ${project?.description}\n\nTask Status: ${JSON.stringify(taskSummary)}\nRecent Tasks: ${JSON.stringify(tasks.slice(0, 10).map(t => ({ title: t.title, status: t.status, priority: t.priority })))}\nMilestones: ${JSON.stringify(milestones.map(m => ({ title: m.title, status: m.status, targetDate: m.targetDate })))}\nRecent Check-ins: ${JSON.stringify(checkIns.slice(0, 5).map(ci => ({ goal: ci.goal, proof: ci.proof, blocker: ci.blocker, nextStep: ci.nextStep })))}\nRecent Activity: ${JSON.stringify(activity.slice(0, 10).map(a => a.action))}\n\nGenerate a progress summary covering: accomplishments, current focus, blockers, and next steps.`
         }],
         temperature: 0.7,
       });
@@ -4803,7 +4942,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     }
   });
 
-  app.post("/api/messages/:userId", isAuthenticated, async (req: any, res) => {
+  app.post("/api/messages/:userId", isAuthenticated, rateLimit("message"), async (req: any, res) => {
     try {
       const senderId = (req.user as any).id;
       const receiverId = req.params.userId;
@@ -4919,63 +5058,23 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     }
   });
 
-  // Stripe donation checkout
+  /**
+   * Retired: the donation route that paid creators the moment a card cleared.
+   *
+   * It used a Stripe destination charge, so money reached the creator's
+   * connected account instantly — a hole straight around the escrow the
+   * backing flow exists to provide. Kept as an explicit 410 rather than
+   * deleted so an old client, a cached page or a bookmarked call gets told
+   * what happened instead of a bare 404.
+   *
+   * Historic `donations` rows are untouched; they still count toward the
+   * public totals and reputation.
+   */
   app.post("/api/projects/:id/donate-checkout", isAuthenticated, async (req: any, res) => {
-    try {
-      const donorId = (req.user as any).id;
-      const projectId = req.params.id;
-      const { amount } = req.body;
-
-      if (!amount || amount < 100) return res.status(400).json({ message: "Minimum donation is $1.00" });
-
-      const project = await storage.getProject(projectId);
-      if (!project) return res.status(404).json({ message: "Project not found" });
-
-      const stripe = await getUncachableStripeClient();
-      const donor = await storage.getUser(donorId);
-
-      let customerId = donor?.stripeCustomerId;
-      if (!customerId) {
-        const customer = await stripe.customers.create({
-          email: donor?.email || undefined,
-          metadata: { userId: donorId },
-        });
-        await storage.updateUserStripeInfo(donorId, { stripeCustomerId: customer.id });
-        customerId = customer.id;
-      }
-
-      const owner = await storage.getUser(project.ownerId);
-      const sessionParams: any = {
-        customer: customerId,
-        payment_method_types: ["card"],
-        line_items: [{
-          price_data: {
-            currency: "usd",
-            product_data: { name: `Donation to ${project.title}` },
-            unit_amount: amount,
-          },
-          quantity: 1,
-        }],
-        mode: "payment",
-        success_url: `${req.protocol}://${req.get("host")}/projects/${projectId}?donated=true`,
-        cancel_url: `${req.protocol}://${req.get("host")}/projects/${projectId}`,
-        metadata: { type: "donation", projectId, donorId, amount: String(amount) },
-      };
-
-      if (owner?.stripeConnectAccountId) {
-        const platformFee = Math.round(amount * 0.1);
-        sessionParams.payment_intent_data = {
-          application_fee_amount: platformFee,
-          transfer_data: { destination: owner.stripeConnectAccountId },
-        };
-      }
-
-      const session = await stripe.checkout.sessions.create(sessionParams);
-      res.json({ url: session.url });
-    } catch (error) {
-      console.error("Donation checkout error:", error);
-      res.status(500).json({ message: "Failed to create donation checkout" });
-    }
+    res.status(410).json({
+      message: "Direct donations have moved to backing, where funds are held until the project is reviewed.",
+      replacement: `/api/projects/${req.params.id}/backing/checkout`,
+    });
   });
 
   // User projects (own + member of)

@@ -1,4 +1,5 @@
-import { Switch, Route, Redirect } from "wouter";
+import { Switch, Route, Redirect, useLocation } from "wouter";
+import { useEffect } from "react";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -22,6 +23,16 @@ import DocumentBuilder from "@/pages/document-builder";
 import Profile from "@/pages/profile";
 import Contests from "@/pages/contests";
 import Pricing from "@/pages/pricing";
+import BackingReview from "@/pages/backing-review";
+import CheckInDetail from "@/pages/check-in-detail";
+import { useSurfaces } from "@/hooks/use-surfaces";
+import { isPathDisabled } from "@shared/surfaces";
+import FeedbackQueue from "@/pages/feedback-queue";
+import LoopMetrics from "@/pages/loop-metrics";
+import AdminSurfaces from "@/pages/admin-surfaces";
+import AdminReports from "@/pages/admin-reports";
+import AdminAnalytics from "@/pages/admin-analytics";
+import { installAnalytics, trackPageView } from "@/lib/analytics";
 import Messages from "@/pages/messages";
 import ProjectManager from "@/pages/project-manager";
 import TypingArena from "@/pages/games/typing-arena";
@@ -35,8 +46,23 @@ import { useQuery } from "@tanstack/react-query";
 import type { UserProfile } from "@shared/schema";
 import { Loader2 } from "lucide-react";
 
+/**
+ * Reports every page change to the behaviour stream.
+ *
+ * Sits above the auth gate deliberately: a visitor who reads the landing page
+ * and leaves without signing up is exactly the behaviour worth seeing, and
+ * putting this inside the signed-in tree would make them invisible.
+ */
+function usePageTracking() {
+  const [location] = useLocation();
+  useEffect(() => { installAnalytics(); }, []);
+  useEffect(() => { trackPageView(location); }, [location]);
+}
+
 function Router() {
   const { user, isLoading: authLoading, isAuthenticated } = useAuth();
+  const { enabled: surfaces } = useSurfaces();
+  usePageTracking();
   const { data: profile, isLoading: profileLoading } = useQuery<UserProfile | null>({
     queryKey: ["/api/profile"],
     queryFn: async () => {
@@ -57,6 +83,23 @@ function Router() {
     );
   }
 
+  /*
+   * Routes that work with no account at all.
+   *
+   * A check-in permalink is the artifact the weekly loop produces — it gets
+   * sent to people who have never heard of SparkTower, and bouncing them to a
+   * landing page would make the whole share step pointless. Checked before
+   * both the auth gate and the onboarding redirect so neither can swallow it.
+   */
+  const isPublicRoute = /^\/c\/[^/]+$/.test(window.location.pathname);
+  if (isPublicRoute) {
+    return (
+      <Switch>
+        <Route path="/c/:id" component={CheckInDetail} />
+      </Switch>
+    );
+  }
+
   if (!isAuthenticated) {
     return (
       <Switch>
@@ -68,9 +111,35 @@ function Router() {
     );
   }
 
-  // Redirect to onboarding if not onboarded
-  if (profile && !profile.isOnboarded && window.location.pathname !== "/onboarding") {
+  /*
+   * Anyone who hasn't finished onboarding goes to onboarding — including
+   * anyone with no profile row at all.
+   *
+   * This used to read `profile && !profile.isOnboarded`, which a *missing*
+   * profile fails: the accounts most in need of onboarding were the ones waved
+   * through it, landing in the app with no name and no way back. Profiles are
+   * now created at sign-up (server/user-provisioning.ts), so a null here means
+   * something went wrong — and onboarding is the right place to end up either
+   * way. Safe because the loading branch above has already settled the query.
+   */
+  if (!profile?.isOnboarded && window.location.pathname !== "/onboarding") {
     return <Redirect to="/onboarding" />;
+  }
+
+  /*
+   * A route whose surface is off resolves to NotFound rather than rendering.
+   * The server already refuses the data, so without this the page would load
+   * and then sit empty — which reads as broken rather than absent.
+   */
+  if (isPathDisabled(window.location.pathname, surfaces)) {
+    return (
+      <div className="flex h-screen w-full">
+        <AppSidebar />
+        <div className="flex flex-col flex-1 overflow-hidden">
+          <main className="flex-1 overflow-hidden"><NotFound /></main>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -110,6 +179,15 @@ function Router() {
             <Route path="/sprints/:id" component={SprintDashboard} />
             <Route path="/messages" component={Messages} />
             <Route path="/pricing" component={Pricing} />
+            {/* Reviewer-only. The page itself renders NotFound for anyone
+                else, matching what the API tells them. */}
+            <Route path="/admin/backing" component={BackingReview} />
+            <Route path="/c/:id" component={CheckInDetail} />
+            <Route path="/feedback" component={FeedbackQueue} />
+            <Route path="/admin/loop-metrics" component={LoopMetrics} />
+            <Route path="/admin/surfaces" component={AdminSurfaces} />
+            <Route path="/admin/reports" component={AdminReports} />
+            <Route path="/admin/analytics" component={AdminAnalytics} />
             <Route component={NotFound} />
           </Switch>
         </main>

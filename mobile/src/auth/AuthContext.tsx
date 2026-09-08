@@ -6,6 +6,7 @@ import {
   clearSession, fetchMe, getAccessToken, login as apiLogin, loginWithGoogle,
   logout as apiLogout, register as apiRegister, setSessionExpiredHandler,
 } from "../api/client";
+import { captureAttribution } from "../api/attribution";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -95,6 +96,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Held in a ref rather than state: the bridge hands this over on mount, and
   // storing it in state would re-render the whole tree for no reason.
   const promptRef = useRef<(() => Promise<unknown>) | null>(null);
+
+  /*
+   * Catch the link that opened the app, before anything else navigates away
+   * from it. Fire-and-forget and first-touch — see src/api/attribution.ts.
+   */
+  useEffect(() => { void captureAttribution(); }, []);
 
   // Restore a stored session on launch.
   useEffect(() => {

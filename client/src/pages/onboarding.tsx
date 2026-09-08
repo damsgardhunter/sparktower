@@ -1,4 +1,5 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -55,6 +56,22 @@ export default function Onboarding() {
     onError: (error) => {
       toast({ title: "Upload failed", description: error.message, variant: "destructive" });
     },
+  });
+
+  /*
+   * The profile row now exists before onboarding opens, seeded with whatever
+   * the sign-in provider gave us — a Google display name and photo, or a name
+   * derived from the email. Reading it here means someone who signed in with
+   * Google sees their own name already filled in rather than retyping it.
+   */
+  const { data: seeded } = useQuery<{ displayName?: string | null; avatarUrl?: string | null } | null>({
+    queryKey: ["/api/profile"],
+    queryFn: async () => {
+      const res = await fetch("/api/profile", { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    retry: false,
   });
 
   const form = useForm<InsertUserProfile>({
@@ -128,6 +145,13 @@ export default function Onboarding() {
   };
 
   const prev = () => setStep((s) => Math.max(s - 1, 0));
+
+  // Applied once, and only into a field the user hasn't touched.
+  useEffect(() => {
+    if (seeded?.displayName && !form.getValues("displayName")) {
+      form.setValue("displayName", seeded.displayName);
+    }
+  }, [seeded, form]);
 
   const onSubmit = async (data: InsertUserProfile) => {
     setIsSubmitting(true);

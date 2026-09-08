@@ -20,7 +20,9 @@ import { storage } from "./storage";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { requireCredits, requireFeature, modelFor, coachingDirectiveFor } from "./entitlements";
 import { CREDIT_COSTS, documentFillCost } from "@shared/plans";
-import { buildOperableProjectState } from "./project-operations";
+import {
+  buildOperableProjectState, stripIdFragments, collectProjectIds,
+} from "./project-operations";
 import { renderDocumentPdf } from "./document-pdf";
 import {
   BLOCK_KINDS, BLOCK_KIND_CONTENT_RULES, DEFAULT_SETTINGS, MAX_GRID_COLUMNS,
@@ -43,69 +45,6 @@ const str = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
 function parseJson(raw: string): any {
   const match = raw.match(/\{[\s\S]*\}/);
   return JSON.parse(match ? match[0] : raw);
-}
-
-/**
- * Removes internal id fragments the model leaked into prose.
- *
- * The prompt forbids it and the context no longer contains ids, but a model
- * that has seen an id earlier in a conversation will still occasionally emit
- * one. Only fragments that actually prefix a real id on this project are
- * removed, so a legitimate hex string in the builder's own content survives.
- */
-function stripIdFragments(content: string, knownIds: string[]): string {
-  if (!content || !knownIds.length) return content;
-
-  // Index by 4-, 6- and 8-character prefixes: the lengths a model truncates to.
-  const prefixes = new Set<string>();
-  for (const id of knownIds) {
-    // Stored dash-free, because lookups normalise the same way — keying the
-    // full id with its dashes meant a whole uuid never matched.
-    const bare = id.replace(/-/g, "").toLowerCase();
-    for (const len of [4, 6, 8]) if (bare.length >= len) prefixes.add(bare.slice(0, len));
-    prefixes.add(bare);
-  }
-  const isKnown = (token: string) => prefixes.has(token.replace(/-/g, "").toLowerCase());
-
-  /*
-   * A full uuid is matched before any short fragment. With the short
-   * alternative first, "id=0e7f1a2b-3c4d-..." matched only the leading eight
-   * characters and left "-3c4d-..." behind in the prose.
-   */
-  const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
-  /** Longest alternative first, for the same reason. */
-  const TOKEN = "([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{4})";
-
-  return content
-    .replace(new RegExp(`\\bid\\s*[:=]\\s*${TOKEN}\\b`, "gi"), (m, token) => (isKnown(token) ? "" : m))
-    .replace(UUID, (m) => (isKnown(m) ? "" : m))
-    // "(0e7f, 2-3h)" -> "(2-3h)"
-    .replace(new RegExp(`\\(\\s*${TOKEN}\\s*,\\s*`, "gi"), (m, token) => (isKnown(token) ? "(" : m))
-    // ", 0e7f)" -> ")"
-    .replace(new RegExp(`,\\s*${TOKEN}\\s*\\)`, "gi"), (m, token) => (isKnown(token) ? ")" : m))
-    // a parenthesised or bracketed id on its own
-    .replace(new RegExp(`\\s*[([]\\s*${TOKEN}\\s*[)\\]]`, "gi"), (m, token) => (isKnown(token) ? "" : m))
-    .replace(/[ \t]{2,}/g, " ")
-    .replace(/\(\s*\)/g, "")
-    .replace(/\s+([,.;:])/g, "$1")
-    .trim();
-}
-
-/** Every id on the project that a model might have echoed into prose. */
-async function collectProjectIds(projectId: string): Promise<string[]> {
-  const [tasks, milestones, roadmap, docs] = await Promise.all([
-    storage.getProjectKanbanTasks(projectId).catch(() => []),
-    storage.getProjectMilestones(projectId).catch(() => []),
-    storage.getProjectRoadmap(projectId).catch(() => undefined),
-    storage.getProjectDocuments(projectId).catch(() => []),
-  ]);
-  return [
-    projectId,
-    ...(tasks as any[]).map((t) => t.id),
-    ...milestones.map((m) => m.id),
-    ...(roadmap?.phases || []).map((p) => p.id),
-    ...docs.map((d) => d.id),
-  ].filter(Boolean);
 }
 
 /** Coerces whatever the model returned into legal, renderable pages. */
@@ -590,6 +529,8 @@ Respond ONLY with valid JSON (no markdown, no code fences):
 Write what the block's headline and intent say to write, at the length the block's shape implies. This is the real deliverable, not a placeholder: be concrete, use the project's actual details, and never write "TBD", "lorem ipsum", "[insert here]" or a description of what the section would contain.
 
 Every claim has to come from the project context you were given or be clearly framed as a decision the builder still has to make. Don't invent metrics, dates, customer names or funding numbers.
+
+If the context includes a CODEBASE AUDIT, prefer it over the plan when describing what exists. A status report or investor update that claims a feature the audit says is missing is worse than useless — it's wrong in front of someone who matters.
 
 Content format per block kind:
 ${BLOCK_KINDS.map((k) => `- ${k}: ${BLOCK_KIND_CONTENT_RULES[k]}`).join("\n")}

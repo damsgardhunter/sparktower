@@ -46,41 +46,48 @@ export function FounderFeed({ projectId }: { projectId?: string }) {
   });
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-2">
       <FeedComposer defaultProjectId={projectId} />
 
-      {/* Type filter */}
-      <div className="flex flex-wrap gap-1.5">
-        <Button
-          variant={filter === "all" ? "default" : "outline"}
-          size="sm"
-          className="h-7 text-xs gap-1.5"
-          onClick={() => { setFilter("all"); setPages([]); }}
-          data-testid="filter-all"
-        >
-          <Newspaper className="h-3.5 w-3.5" /> Everything
-        </Button>
-        {POST_TYPES.map((t) => (
+      {/*
+        * Filters get their own container, tinted to the page rather than the
+        * card surface. Sitting loose between the composer and the posts they
+        * read as a third feed item; recessed a shade, they read as a control
+        * strip — and every chip is the same height, so the rows line up.
+        */}
+      <div className="rounded-lg border border-border bg-muted/60 dark:bg-muted/40 px-2.5 py-2">
+        <div className="flex flex-wrap gap-1.5">
           <Button
-            key={t.type}
-            variant={filter === t.type ? "default" : "outline"}
+            variant={filter === "all" ? "default" : "outline"}
             size="sm"
-            className="h-7 text-xs gap-1.5"
-            onClick={() => { setFilter(t.type); setPages([]); }}
-            data-testid={`filter-${t.type}`}
+            className={`h-7 text-xs gap-1.5 rounded-full px-3 ${filter === "all" ? "btn-glossy border-0 text-primary-foreground" : "bg-background"}`}
+            onClick={() => { setFilter("all"); setPages([]); }}
+            data-testid="filter-all"
           >
-            <TypeIcon name={t.icon} className="h-3.5 w-3.5" />
-            {t.label}
+            <Newspaper className="h-3.5 w-3.5" /> Everything
           </Button>
-        ))}
+          {POST_TYPES.map((t) => (
+            <Button
+              key={t.type}
+              variant={filter === t.type ? "default" : "outline"}
+              size="sm"
+              className={`h-7 text-xs gap-1.5 rounded-full px-3 ${filter === t.type ? "btn-glossy border-0 text-primary-foreground" : "bg-background"}`}
+              onClick={() => { setFilter(t.type); setPages([]); }}
+              data-testid={`filter-${t.type}`}
+            >
+              <TypeIcon name={t.icon} className="h-3.5 w-3.5" />
+              {t.label}
+            </Button>
+          ))}
+        </div>
       </div>
 
       {isLoading ? (
-        <div className="space-y-4">
-          {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-48 w-full rounded-xl" />)}
+        <div className="space-y-2">
+          {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-48 w-full rounded-lg" />)}
         </div>
       ) : !data?.posts?.length ? (
-        <Card>
+        <Card className="rounded-lg shadow-none bg-background dark:bg-card">
           <CardContent className="py-12 text-center space-y-2">
             <Newspaper className="h-10 w-10 mx-auto text-muted-foreground/30" />
             <p className="font-medium">
@@ -94,7 +101,7 @@ export function FounderFeed({ projectId }: { projectId?: string }) {
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-2">
           {data.posts.map((post) => (
             <FeedPostCard key={post.id} post={post} />
           ))}

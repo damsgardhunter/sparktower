@@ -75,6 +75,31 @@ export class ObjectNotFoundError extends Error {
 }
 
 // The object storage service is used to interact with the object storage service.
+/**
+ * Reads a MIME type off a file's leading bytes.
+ *
+ * Only the formats this app actually serves. Deliberately signature-based
+ * rather than extension-based: uploads are stored under a UUID with no
+ * extension at all, so there is nothing else to go on.
+ */
+export function sniffContentType(buf: Buffer): string | null {
+  if (buf.length < 4) return null;
+  const hex = buf.subarray(0, 12).toString("hex").toLowerCase();
+  const ascii = buf.subarray(0, 64).toString("utf8");
+
+  if (hex.startsWith("89504e47")) return "image/png";
+  if (hex.startsWith("ffd8ff")) return "image/jpeg";
+  if (hex.startsWith("47494638")) return "image/gif";
+  if (hex.startsWith("52494646") && hex.slice(16, 24) === "77656270") return "image/webp";
+  if (hex.startsWith("00000100")) return "image/x-icon";
+  if (hex.startsWith("25504446")) return "application/pdf";
+  if (hex.slice(8, 16) === "66747970") return "video/mp4";
+  if (hex.startsWith("1a45dfa3")) return "video/webm";
+  // SVG and other text formats have no magic number; sniff the opening tag.
+  if (/^\s*(<\?xml|<svg)/i.test(ascii)) return "image/svg+xml";
+  return null;
+}
+
 export class ObjectStorageService {
   constructor() {}
 
@@ -192,17 +217,28 @@ export class ObjectStorageService {
       // Get the ACL policy for the object.
       const aclPolicy = await getObjectAclPolicy(file);
       const isPublic = aclPolicy?.visibility === "public";
-      // Set appropriate headers
-      res.set({
-        "Content-Type": contentTypeOverride || metadata.contentType || "application/octet-stream",
-        "Content-Length": metadata.size,
-        "Cache-Control": `${
-          isPublic ? "public" : "private"
-        }, max-age=${cacheTtlSec}`,
-      });
 
-      // Stream the file to the response
+      const declared = contentTypeOverride || metadata.contentType;
+      /*
+       * The local-dev disk fallback persists no metadata, so every upload came
+       * back as application/octet-stream. Browsers sniff `<img>` and CSS
+       * backgrounds and render it anyway, which is why this survived — but
+       * anything stricter does not: a Printful fetch of a print file, a
+       * download that saves with no extension, a future nosniff header.
+       *
+       * So when the type is missing or generic, it's read off the file's own
+       * signature bytes instead of guessed from a name we don't have.
+       */
+      const needsSniff = !declared || declared === "application/octet-stream";
+
+      res.set({
+        "Content-Length": metadata.size,
+        "Cache-Control": `${isPublic ? "public" : "private"}, max-age=${cacheTtlSec}`,
+      });
+      if (!needsSniff) res.set("Content-Type", declared);
+
       const stream = file.createReadStream();
+      let typeResolved = !needsSniff;
 
       stream.on("error", (err) => {
         console.error("Stream error:", err);
@@ -210,6 +246,17 @@ export class ObjectStorageService {
           res.status(500).json({ error: "Error streaming file" });
         }
       });
+
+      if (needsSniff) {
+        // Set from the first chunk, which must happen before anything is
+        // written — headers are already gone once the body starts.
+        stream.once("data", (chunk: Buffer) => {
+          if (!typeResolved) {
+            res.set("Content-Type", sniffContentType(chunk) || "application/octet-stream");
+            typeResolved = true;
+          }
+        });
+      }
 
       stream.pipe(res);
     } catch (error) {

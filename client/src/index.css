@@ -316,3 +316,91 @@
   opacity: 0;
   animation: hero-fade-in-slow 1.5s ease-out 3.8s forwards;
 }
+
+/**
+ * A glossy fill for the primary call-to-action.
+ *
+ * Two stacked gradients rather than a hand-picked palette: the base layer is
+ * the theme's own primary colour, and a white-to-black sheen sits over it. That
+ * way the gloss follows whatever `--primary` is set to and works unchanged in
+ * both light and dark mode, where a set of hardcoded purples would not.
+ */
+.btn-glossy {
+  background-image:
+    linear-gradient(
+      180deg,
+      hsl(0 0% 100% / 0.3) 0%,
+      hsl(0 0% 100% / 0.08) 45%,
+      hsl(0 0% 0% / 0.06) 55%,
+      hsl(0 0% 0% / 0.14) 100%
+    ),
+    linear-gradient(hsl(var(--primary)), hsl(var(--primary)));
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.4),
+    inset 0 -1px 0 hsl(0 0% 0% / 0.12),
+    0 1px 2px hsl(0 0% 0% / 0.18);
+  transition: filter 150ms ease, box-shadow 150ms ease;
+}
+
+.btn-glossy:hover {
+  /* Brightness rather than a second gradient, so the sheen stays put. */
+  filter: brightness(1.07) saturate(1.05);
+}
+
+/*
+ * The check-in button.
+ *
+ * Green on hover, and it stays green — the point is to make the weekly habit
+ * the most inviting thing on the page, so the colour arrives as a deliberate
+ * settle rather than an instant flip. `--checkin` is defined here rather than
+ * taken from the theme's accent because "posted" wants to read as done, and
+ * that meaning is the same in both themes.
+ */
+.btn-checkin {
+  --checkin: 152 58% 38%;
+  --checkin-fg: 0 0% 100%;
+  transition:
+    background-color 320ms cubic-bezier(.22,.61,.36,1),
+    border-color 320ms cubic-bezier(.22,.61,.36,1),
+    color 220ms ease,
+    box-shadow 320ms ease;
+}
+
+.btn-checkin:hover,
+.btn-checkin:focus-visible {
+  background-color: hsl(var(--checkin));
+  border-color: hsl(var(--checkin));
+  color: hsl(var(--checkin-fg));
+  box-shadow: 0 1px 10px hsl(var(--checkin) / 0.35);
+}
+
+/*
+ * A slow breath while a check-in is actually due, and only then. An animation
+ * that ran all the time would become wallpaper within a day and stop meaning
+ * anything.
+ */
+.btn-checkin[data-due="true"] {
+  animation: checkin-breathe 3.2s ease-in-out infinite;
+}
+
+@keyframes checkin-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 hsl(152 58% 38% / 0.35); }
+  50%      { box-shadow: 0 0 0 5px hsl(152 58% 38% / 0); }
+}
+
+/* Once it's hovered the breathing stops — the invitation has been accepted. */
+.btn-checkin[data-due="true"]:hover {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-checkin { transition: background-color 120ms linear, color 120ms linear; }
+  .btn-checkin[data-due="true"] { animation: none; }
+}
+
+.btn-glossy:active {
+  filter: brightness(0.97);
+  box-shadow:
+    inset 0 1px 3px hsl(0 0% 0% / 0.2),
+    0 1px 1px hsl(0 0% 0% / 0.12);
+}
