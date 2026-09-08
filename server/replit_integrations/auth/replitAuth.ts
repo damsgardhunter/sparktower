@@ -107,8 +107,23 @@ export async function setupAuth(app: Express) {
 
   if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
     const defaultPort = process.env.PORT || "5001";
-    const domain = process.env.REPLIT_DOMAINS?.split(",")[0] || `localhost:${defaultPort}`;
-    const protocol = domain.includes("localhost") ? "http" : "https";
+    /*
+     * AUTH_HOST first, so the callback can be pointed at a LAN address while
+     * testing with other people on the same wifi.
+     *
+     * Without it this is hard-wired to localhost, and localhost on a tester's
+     * phone is the tester's phone — Google sends them back to a callback that
+     * doesn't exist and sign-in dies with no useful error. Set it to the
+     * address the boot log prints, e.g. AUTH_HOST=10.0.0.56:5001, and add the
+     * matching redirect URI in the Google Cloud console.
+     */
+    const domain =
+      process.env.AUTH_HOST ||
+      process.env.REPLIT_DOMAINS?.split(",")[0] ||
+      `localhost:${defaultPort}`;
+    // Anything on the local network is plain http; only a real domain is https.
+    const isLocal = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(domain);
+    const protocol = isLocal ? "http" : "https";
     passport.use(
       new GoogleStrategy(
         {

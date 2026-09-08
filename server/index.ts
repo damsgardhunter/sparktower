@@ -1,4 +1,5 @@
 import { createServer } from "http";
+import { networkInterfaces } from "os";
 import { runMigrations } from "stripe-replit-sync";
 import { getStripeSync, isStripeConfigured } from "./stripeClient";
 import { ensureGameBadges } from "./badge-seed";
@@ -117,5 +118,22 @@ let appReady = false;
   httpServer.listen(listenOptions, () => {
     appReady = true;
     log(`serving on port ${port}`);
+
+    /*
+     * The addresses other machines on the network can use.
+     *
+     * The server already binds 0.0.0.0, so this was always reachable from a
+     * phone or a laptop on the same wifi — but only if you knew the address,
+     * and the log said "port 5001" as though localhost were the only way in.
+     * Printing it is the whole difference between "it's accessible" and
+     * "someone else can actually open it".
+     */
+    for (const [name, addrs] of Object.entries(networkInterfaces())) {
+      for (const addr of addrs ?? []) {
+        if (addr.family === "IPv4" && !addr.internal) {
+          log(`  on this network: http://${addr.address}:${port}  (${name})`);
+        }
+      }
+    }
   });
 })();
