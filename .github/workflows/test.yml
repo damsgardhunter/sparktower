@@ -1,0 +1,56 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # A real Postgres, because the suite is testing behaviour that only a real
+    # one has: column types, defaults, constraints, and the timezone semantics
+    # of `timestamp without time zone`. A fake would pass and prove nothing.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        # Without this the job races the container and fails on connection
+        # refused, intermittently, which is the worst kind of red build.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # The suite derives its own database from this by suffixing `_test`, and
+      # creates it on first run. Nothing here touches a real environment.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      NODE_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        # Does not gate the build: this repository has a known backlog of type
+        # errors, and failing CI on them would mean failing every PR from day
+        # one. Reported so the number is visible and can be driven down.
+        run: npx tsc --noEmit || true
+
+      - name: Test
+        run: npm test

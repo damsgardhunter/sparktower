@@ -35,3 +35,6 @@ mobile/.expo
 mobile/dist
 mobile/ios
 mobile/android
+
+# Vitest
+coverage/
