@@ -516,3 +516,36 @@ describe("keep building", () => {
     expect((await agent.get(`/api/projects/${id}/path`)).body.current.id).toBe("branch-build");
   });
 });
+
+describe("the plan re-sizes for the loops you're going for", () => {
+  it("creates the loops Nova found, marks built ones done, never duplicates, and stretches the plan", async () => {
+    const app = await getTestApp();
+    const agent = await owner(app);
+    const id = (await create(agent, "ship_mvp", "saas", "Resize Test")).body.id;
+    const { reconcileLoops } = await import("../../server/phase-trees");
+
+    const one = (await agent.get(`/api/projects/${id}/path`)).body;
+    expect(one.plan).toMatchObject({ loops: 1, authoredDays: 28 });
+    const baseTotal = one.plan.totalMinutes;
+
+    await agent.post(`/api/projects/${id}/path/loops`).send({ backboneId: "SHIP.M1.2", title: "Build" });
+    const r = await reconcileLoops(id, [
+      { title: "build", steps: "create → check in → feedback", state: "built", evidence: "tasks done" },
+      { title: "The feed", steps: "open → read → react → follow", state: "partly", evidence: "feed routes exist" },
+      { title: "Backing", steps: "browse → back → get updates", state: "planned", evidence: "in scope" },
+    ]);
+    expect(r.created).toHaveLength(2);       // build matched the existing loop
+    expect(r.updated).toHaveLength(2);       // build: steps written in, and marked done
+    const core = (await agent.get(`/api/projects/${id}/path/milestones/SHIP.M1.2`)).body;
+    expect(core.loops.map((l: any) => [l.title, l.status])).toEqual([["Build", "done"], ["The feed", "todo"], ["Backing", "todo"]]);
+    expect(core.loops[0].answer).toBe("create → check in → feedback");
+
+    const three = (await agent.get(`/api/projects/${id}/path`)).body;
+    expect(three.plan).toMatchObject({ loops: 3, authoredDays: 42 });
+    // Loop steps is now three loops' worth: 2 × 3h more than the single-loop plan.
+    expect(three.plan.totalMinutes - baseTotal).toBe(2 * 180);
+    // A second read of the same loops changes nothing.
+    const again = await reconcileLoops(id, [{ title: "The Feed", steps: "x", state: "planned", evidence: "" }]);
+    expect(again).toEqual({ created: [], updated: [] });
+  });
+});

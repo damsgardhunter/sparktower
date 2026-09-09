@@ -23,6 +23,8 @@ export interface PaceInput {
   remainingMinutes: number;
   /** Authored estimate minutes on the whole main line. */
   totalMinutes: number;
+  /** The month, stretched for the loops the builder is going for. Defaults to 28. */
+  authoredDays?: number;
   tier: VerificationTier;
   /** True once a raise is in market: outcomes depend on other people now. */
   pipeline?: boolean;
@@ -57,6 +59,7 @@ export function paceState(daysSinceActivity: number): PaceState {
 
 export function computePace(input: PaceInput): PaceResult {
   const { now, createdAt, completions, remainingMinutes, totalMinutes, tier, previous } = input;
+  const authoredDays = input.authoredDays ?? AUTHORED_DAYS;
   const activity = [...completions.map((c) => c.at), ...input.activityDates, createdAt];
   const last = new Date(Math.max(...activity.map((d) => d.getTime())));
   const daysSinceActivity = Math.max(0, (now.getTime() - last.getTime()) / DAY);
@@ -90,14 +93,14 @@ export function computePace(input: PaceInput): PaceResult {
   ).size;
   // Optimistic: assume they keep the days they have shown, never fewer than two a week.
   const daysPerWeek = Math.min(7, Math.max(2, activeDaysLastWeek));
-  const authoredPerDay = totalMinutes / AUTHORED_DAYS;
+  const authoredPerDay = totalMinutes / authoredDays;
 
   let daysNeeded: number;
   let multiplier: number | null;
   let note: string;
   if (best === 0) {
     // Thin sample: believe the authored month until there is a pace to read.
-    daysNeeded = Math.max(0, AUTHORED_DAYS - (now.getTime() - createdAt.getTime()) / DAY) || remainingMinutes / authoredPerDay;
+    daysNeeded = Math.max(0, authoredDays - (now.getTime() - createdAt.getTime()) / DAY) || remainingMinutes / authoredPerDay;
     multiplier = null;
     note = "No verified completions yet, so this is the authored month. The first one gives Nova a pace to read.";
   } else {

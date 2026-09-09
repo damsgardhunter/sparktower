@@ -57,14 +57,16 @@ Respond ONLY with JSON: {"tasks":[{"title":"","description":"","artifact":"<exac
  * the backbone and says which milestones are already done, each with the
  * evidence. Only ids from the backbone are accepted; the caller checks.
  */
-export async function readExistingProgress(ent: UserEntitlements, backbone: { id: string; title: string; description: string }[], state: string) {
+export async function readExistingProgress(ent: UserEntitlements, backbone: { id: string; title: string; description: string }[], state: string, opts: { findLoops?: boolean; knownLoops?: string[] } = {}) {
   const completion = await openai.chat.completions.create({
     model: modelFor(ent),
     messages: [
       { role: "system", content: `You are Nova, placing a project that already exists onto its path. ${coachingDirectiveFor(ent)}
 You are given the path's milestones and the project's real state: its brief fields, scope, tech stack, tasks (with status), milestones, roadmap, latest codebase audit and check-ins. Decide which path milestones are ALREADY DONE on that evidence. Be generous where the evidence is concrete (a deployed URL, a finished task that clearly is the milestone, an audit that says the thing exists, a brief field that is the milestone's content) and strict where it is absent — never mark something done because it "probably" is.
 For each done milestone, also write out its ANSWER: the milestone's actual content as the project already states it — the product statement from the brief's one-liner or value proposition, the stack from the stated tech stack or the audit, the scope cut from the scope lists, the data model from the audit's schema, the deploy from the live URL. Quote and assemble from the sources; do not invent. If the sources hold nothing for it, leave "answer" empty and say so in the evidence.
-Respond ONLY with JSON: {"done":[{"id":"<milestone id>","evidence":"<one line>","answer":"<the content, or empty>"}],"read":"<two sentences: where this project actually is and what the next real step is>"}` },
+${opts.findLoops ? `
+Also identify the product's LOOPS: the distinct repeatable sequences that deliver value, each 3–5 steps (e.g. "build: create project → check in → get feedback", "explore: open the feed → read → react → follow"). A product usually has one to four; a social or community part is often a loop of its own. For each: a short name, the steps as one line, and its state on the evidence — "built" (exists and works), "partly", or "planned". ${opts.knownLoops?.length ? `Loops already recorded (do not repeat them; you may report their state): ${opts.knownLoops.join("; ")}.` : ""}` : ""}
+Respond ONLY with JSON: {"done":[{"id":"<milestone id>","evidence":"<one line>","answer":"<the content, or empty>"}]${opts.findLoops ? `,"loops":[{"title":"","steps":"","state":"built|partly|planned","evidence":"one line"}]` : ""},"read":"<two sentences: where this project actually is and what the next real step is>"}` },
       { role: "user", content: `PATH MILESTONES\n${backbone.map((m) => `${m.id} — ${m.title}: ${m.description}`).join("\n")}\n\nPROJECT STATE\n${state.slice(0, 24000)}` },
     ],
     temperature: 0.2,
@@ -74,7 +76,11 @@ Respond ONLY with JSON: {"done":[{"id":"<milestone id>","evidence":"<one line>",
   const done = (Array.isArray(parsed.done) ? parsed.done : [])
     .filter((d: any) => d && ids.has(String(d.id)))
     .map((d: any) => ({ id: String(d.id), evidence: String(d.evidence ?? "").slice(0, 300), answer: d.answer ? String(d.answer).slice(0, 4000) : undefined }));
-  return { done, read: String(parsed.read ?? "").slice(0, 600) };
+  const loops = (Array.isArray(parsed.loops) ? parsed.loops : [])
+    .map((l: any) => ({ title: String(l.title ?? "").trim().slice(0, 80), steps: String(l.steps ?? "").trim().slice(0, 1000), state: (["built", "partly", "planned"].includes(l.state) ? l.state : "planned") as "built" | "partly" | "planned", evidence: String(l.evidence ?? "").slice(0, 300) }))
+    .filter((l: any) => l.title)
+    .slice(0, 6);
+  return { done, loops, read: String(parsed.read ?? "").slice(0, 600) };
 }
 
 /** Drafts the missing artifact (the core loop, say) from what the project already shows. */

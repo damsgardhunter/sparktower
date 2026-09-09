@@ -40,6 +40,7 @@ interface PathStatus {
   offer: { phaseId: string; title: string; milestones: string[] } | null;
   next: NextAction | null;
   mainLine: { done: number; total: number };
+  plan: { loops: number; authoredDays: number; totalMinutes: number; doneMinutes: number } | null;
   pace: { state: PaceState; multiplier: number | null; mode: ProjectionMode; projectedAt: string | null; projectedLow: string | null; projectedHigh: string | null; note: string; daysSinceActivity: number } | null;
   events: { id: string; title: string; estimateMinutes: number | null; actualMinutes: number | null; projectedBefore: string | null; projectedAfter: string | null; createdAt: string }[];
   proposal: { goal: ProjectGoal; why: string }[] | null;
@@ -113,6 +114,8 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
       const bits = [
         r.recognised?.length ? `${r.recognised.length} milestone${r.recognised.length === 1 ? "" : "s"} marked done` : null,
         r.filled?.length ? `${r.filled.length} written in from your brief and audit` : null,
+        r.loops?.created?.length ? `${r.loops.created.length} loop${r.loops.created.length === 1 ? "" : "s"} found (${r.loops.found.map((l: any) => l.title).join(", ")})` : null,
+        r.plan && r.plan.loops > 1 ? `plan re-sized for ${r.plan.loops} loops: ${Math.round(r.plan.authoredDays / 7)} weeks` : null,
       ].filter(Boolean);
       toast({ title: bits.length ? `Nova re-read your project: ${bits.join(", ")}` : (r.built ? "Your project is on its path" : "Nothing new — the path already matches what Nova can see"), description: r.read || undefined });
     },
@@ -178,6 +181,7 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
           </p>
           <p className="text-muted-foreground">
             Step {current.step} of {current.of} · {mainLine.done}/{mainLine.total} on the main line
+            {data.plan && data.plan.loops > 1 && <> · <span data-testid="plan-loops">{data.plan.loops} loops · {Math.round(data.plan.authoredDays / 7)}-week plan</span></>}
             {pace && <> · <span data-testid="pace-projection">{projection(pace)}</span></>}
             {pace?.multiplier != null && <> · <span data-testid="pace-multiplier">{pace.multiplier}×</span></>}
           </p>

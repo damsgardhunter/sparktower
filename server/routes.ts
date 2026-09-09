@@ -50,7 +50,7 @@ import { isValidSubcategory, PROJECT_GOALS } from "@shared/goals";
 import { recordActivity } from "./analytics";
 import {
   instantiatePathTree, pathStatus, onPathTaskDone, createExpansion, createInjections,
-  collectArtifacts, switchPath, backboneIdOf, reconcileMilestones, pathTaskContext, saveWork, chooseWork, milestoneDetail, createLoop, setBranch, extendBranch,
+  collectArtifacts, switchPath, backboneIdOf, reconcileMilestones, pathTaskContext, saveWork, chooseWork, milestoneDetail, createLoop, setBranch, extendBranch, reconcileLoops,
 } from "./phase-trees";
 import { draftExpansionSteps, proposeInjections, readExistingProgress, draftArtifact, produceWork } from "./phase-trees-nova";
 import { workKindFor } from "@shared/phase-trees";
@@ -2599,18 +2599,26 @@ RULES:
       const backbone = resolveTree(project.goal as any, project.subcategory).filter((p) => !p.optional).flatMap((p) => p.milestones)
         .map((m) => ({ id: m.id, title: m.title, description: m.description }));
 
-      let recognised: { id: string; evidence: string }[] = [];
+      let recognised: { id: string; evidence: string; answer?: string }[] = [];
       let read = "";
+      let loops: { created: string[]; updated: string[]; found: { title: string; state: string }[] } = { created: [], updated: [], found: [] };
       if (req.body?.read !== false) {
         const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova reading your progress");
         if (!ent) return;
         const state = await buildOperableProjectState(projectId, { includeIds: false, includeAudit: true });
-        const result = await readExistingProgress(ent, backbone, state);
+        const ship = project.goal === "ship_mvp";
+        const known = ship ? (await storage.getProjectKanbanTasks(projectId)).filter((t) => t.tags?.includes("kind:loop") && t.tags?.includes("parent:SHIP.M1.2")).map((t) => t.title) : [];
+        const result = await readExistingProgress(ent, backbone, state, { findLoops: ship, knownLoops: known });
         recognised = result.done; read = result.read;
+        if (ship && result.loops.length) {
+          const r = await reconcileLoops(projectId, result.loops);
+          loops = { ...r, found: result.loops.map((l: { title: string; state: string }) => ({ title: l.title, state: l.state })) };
+        }
         await storage.deductCredits(userId, CREDIT_COSTS.taskAssist);
       }
       const { marked, filled } = await reconcileMilestones(projectId, recognised, "nova");
-      res.json({ built: built.created, recognised: recognised.filter((r) => marked.includes(r.id)), filled, read });
+      const status = await pathStatus(projectId);
+      res.json({ built: built.created, recognised: recognised.filter((r) => marked.includes(r.id)), filled, loops, plan: status?.adopted ? status.plan : null, read });
     } catch (error: any) {
       if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
       console.error("Path adopt error:", error);

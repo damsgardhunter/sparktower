@@ -119,6 +119,7 @@ export async function refreshPace(projectId: string, effort?: {
   const main = mainLineMilestones(resolveTree(goal, project.subcategory));
   const mainIds = new Set(main.map((m) => m.id));
   const tasks = await pathTasks(projectId);
+  const plan = planShape(main, tasks);
 
   // Work carried across from another path counts toward progress, not pace:
   // it was done there, at that pace, and this path starts fresh.
@@ -129,10 +130,8 @@ export async function refreshPace(projectId: string, effort?: {
     .map((t) => ({ at: new Date(t.completedAt!), estimateMinutes: minutesOf(t) }));
   const checkIns = await db.select({ at: projectCheckIns.createdAt }).from(projectCheckIns).where(eq(projectCheckIns.projectId, projectId));
 
-  const totalMinutes = main.reduce((n, m) => n + (m.estimateMinutes ?? 60), 0);
-  const doneMinutes = tasks
-    .filter((t) => t.status === "done" && mainIds.has(backboneIdOf(t.tags) ?? ""))
-    .reduce((n, t) => n + (main.find((m) => m.id === backboneIdOf(t.tags))?.estimateMinutes ?? 60), 0);
+  const totalMinutes = plan.totalMinutes;
+  const doneMinutes = plan.doneMinutes;
   const [prev] = await db.select().from(pathPace).where(eq(pathPace.projectId, projectId));
 
   // A raise in market is a pipeline: week 4 reached on the funding path.
@@ -143,6 +142,7 @@ export async function refreshPace(projectId: string, effort?: {
     now: new Date(), createdAt: new Date(project.createdAt), completions,
     activityDates: checkIns.map((c) => new Date(c.at)),
     remainingMinutes: Math.max(0, totalMinutes - doneMinutes), totalMinutes,
+    authoredDays: plan.authoredDays,
     tier: tree.defaultTier, pipeline: inMarket,
     previous: prev ? { projectedAt: prev.projectedAt, state: prev.state as PaceState } : null,
   });
@@ -160,7 +160,45 @@ export async function refreshPace(projectId: string, effort?: {
       projectedBefore: prev?.projectedAt ?? null, projectedAfter: result.projectedAt,
     });
   }
-  return { ...result, mode: result.mode };
+  return { ...result, mode: result.mode, plan: { loops: plan.loops, authoredDays: plan.authoredDays, totalMinutes, doneMinutes } };
+}
+
+/**
+ * The plan's size, given the loops the builder is going for. A fan-out
+ * milestone ("loop steps") is one authored estimate per loop until its
+ * steps exist, then the sum of them; the month stretches a week per extra
+ * loop, because that is where the time actually goes.
+ */
+export function planShape(main: ResolvedMilestone[], tasks: { status: string; tags: string[] | null; estimateHours: number | null }[]) {
+  const loopsBy = new Map<string, number>();
+  const stepsBy = new Map<string, { total: number; done: number }>();
+  for (const t of tasks) {
+    const p = parentOf(t.tags);
+    if (!p) continue;
+    if (isLoop(t.tags)) loopsBy.set(p, (loopsBy.get(p) ?? 0) + 1);
+    else {
+      const cur = stepsBy.get(p) ?? { total: 0, done: 0 };
+      cur.total += minutesOf(t); if (t.status === "done") cur.done += minutesOf(t);
+      stepsBy.set(p, cur);
+    }
+  }
+  const doneIds = new Set(tasks.filter((t) => t.status === "done").map((t) => backboneIdOf(t.tags)).filter(Boolean) as string[]);
+  let totalMinutes = 0, doneMinutes = 0, loops = 1;
+  for (const m of main) {
+    const authored = m.estimateMinutes ?? 60;
+    if (m.expandsFrom) {
+      const n = Math.max(1, loopsBy.get(m.expandsFrom) ?? 1);
+      loops = Math.max(loops, n);
+      const steps = stepsBy.get(m.id);
+      const size = steps?.total ? Math.max(steps.total, authored) : authored * n;
+      totalMinutes += size;
+      doneMinutes += doneIds.has(m.id) ? size : steps?.done ?? 0;
+    } else {
+      totalMinutes += authored;
+      if (doneIds.has(m.id)) doneMinutes += authored;
+    }
+  }
+  return { loops, totalMinutes, doneMinutes, authoredDays: 28 + 7 * (loops - 1) };
 }
 
 /** Called from the task board when a task on the path is finished. */
@@ -232,6 +270,35 @@ export async function createLoop(projectId: string, sourceBackboneId: string, lo
     tags: [`parent:${sourceBackboneId}`, "kind:loop", ...(source.tags ?? []).filter((t) => t.startsWith("actor:") || t.startsWith("tier:"))],
     estimateHours: 1,
   } as any);
+}
+
+/**
+ * The loops Nova found on re-evaluation. New ones are created under the
+ * core loop with their steps written; a built one is done. Existing loops
+ * are matched by name, never duplicated, never overwritten.
+ */
+export async function reconcileLoops(projectId: string, found: { title: string; steps: string; state: "built" | "partly" | "planned"; evidence: string }[], sourceBackboneId = "SHIP.M1.2") {
+  const tasks = await pathTasks(projectId);
+  const source = tasks.find((t) => backboneIdOf(t.tags) === sourceBackboneId);
+  if (!source) return { created: [], updated: [] };
+  const norm = (x: string) => x.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  const existing = tasks.filter((t) => parentOf(t.tags) === sourceBackboneId && isLoop(t.tags));
+  const created: string[] = [];
+  const updated: string[] = [];
+  for (const f of found) {
+    const match = existing.find((e) => norm(e.title) === norm(f.title) || norm(e.title).includes(norm(f.title)) || norm(f.title).includes(norm(e.title)));
+    if (match) {
+      if (!match.description?.trim() && f.steps) { await storage.updateKanbanTask(match.id, { description: f.steps } as any); updated.push(match.id); }
+      if (match.status !== "done" && f.state === "built") { await storage.updateKanbanTask(match.id, { status: "done", completedAt: new Date(), tags: [...(match.tags ?? []), "carried:reconciled"] } as any); updated.push(match.id); }
+      continue;
+    }
+    if (existing.length + created.length >= 6) break;
+    const loop = await createLoop(projectId, sourceBackboneId, { title: f.title, description: f.steps });
+    if (f.state === "built") await storage.updateKanbanTask(loop.id, { status: "done", completedAt: new Date(), tags: [...(loop.tags ?? []), "carried:reconciled"] } as any);
+    created.push(loop.id);
+  }
+  if (created.length || updated.length) await refreshPace(projectId);
+  return { created, updated };
 }
 
 /**
@@ -619,6 +686,7 @@ export async function pathStatus(projectId: string) {
     } : null,
     mainLine: { done: doneCount, total: main.length },
     pace, events,
+    plan: pace?.plan ?? null,
     proposal: complete ? NEXT_PATHS[goal] : null,
   };
 }
