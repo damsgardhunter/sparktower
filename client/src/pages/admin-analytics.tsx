@@ -52,6 +52,7 @@ interface Summary {
   topPages: { pattern: string; label: string; n: number; people: number }[];
   topActions: { pattern: string; label: string; method: string | null; n: number; people: number }[];
   failing: { pattern: string; label: string; method: string | null; status: number | null; n: number }[];
+  signupSources: { source: string; medium: string | null; campaign: string | null; signups: number }[];
   byHour: { hour: string; events: number; people: number }[];
 }
 
@@ -400,6 +401,34 @@ export default function AdminAnalytics() {
           </CardContent>
         </Card>
       </div>
+
+      {/* --- Where signups came from ------------------------------------ */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-semibold">Where signups came from</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {!summary?.signupSources?.length ? (
+            <p className="text-sm text-muted-foreground py-6 text-center">No signups in this window.</p>
+          ) : (
+            <ul className="space-y-1.5">
+              {summary.signupSources.map((r, i) => (
+                <li key={i} className="flex items-baseline gap-2 text-sm">
+                  <span className="truncate">
+                    {r.source}
+                    {r.campaign && <span className="text-muted-foreground"> · {r.campaign}</span>}
+                    {r.medium && r.medium !== "direct" && (
+                      <span className="text-[11px] text-muted-foreground"> ({r.medium})</span>
+                    )}
+                  </span>
+                  <span className="flex-1 border-b border-dashed border-border/60" />
+                  <span className="tabular-nums shrink-0">{r.signups}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="grid lg:grid-cols-2 gap-6">
         {/* --- What they do --------------------------------------------- */}

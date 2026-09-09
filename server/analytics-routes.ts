@@ -267,9 +267,31 @@ export function registerAnalyticsRoutes(app: Express) {
         GROUP BY 1 ORDER BY 1
       `);
 
+      /*
+       * Where the accounts came from. Read off the user rows, not the event
+       * stream: attribution is stamped once at registration and is meant to
+       * still be true a year later, while the stream is swept at 90 days.
+       */
+      const signupSources = await db.select({
+        source: users.signupSource,
+        medium: users.signupMedium,
+        campaign: users.signupCampaign,
+        n: sql<number>`count(*)::int`,
+      }).from(users)
+        .where(gte(users.createdAt, since))
+        .groupBy(users.signupSource, users.signupMedium, users.signupCampaign)
+        .orderBy(desc(sql`count(*)`))
+        .limit(20);
+
       res.json({
         windowDays,
         onlineNow: now?.online ?? 0,
+        signupSources: signupSources.map((r) => ({
+          source: r.source ?? "unknown",
+          medium: r.medium ?? null,
+          campaign: r.campaign ?? null,
+          signups: r.n,
+        })),
         onlineWindowMinutes: ONLINE_WINDOW_MINUTES,
         totals: totals ?? null,
         topPages: topPages.map((p) => ({ ...p, label: pageLabel(p.pattern) })),
