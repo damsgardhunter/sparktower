@@ -9,7 +9,7 @@
 import type { ProjectGoal } from "../goals";
 
 /** Who acts. The most important rule in the system. */
-export type Actor = "novva-builds" | "novva-drafts" | "user-decides" | "user-does";
+export type Actor = "nova-builds" | "nova-drafts" | "user-decides" | "user-does";
 
 /**
  * What counts as done, and therefore how confidently a date can be projected.
@@ -72,8 +72,8 @@ export interface PathTree {
 }
 
 export const ACTOR_LABEL: Record<Actor, string> = {
-  "novva-builds": "Nova builds it — you run or review",
-  "novva-drafts": "Nova drafts it — you edit or approve",
+  "nova-builds": "Nova builds it — you run or review",
+  "nova-drafts": "Nova drafts it — you edit or approve",
   "user-decides": "Nova lays out options — you choose",
   "user-does": "Only you can do this",
 };

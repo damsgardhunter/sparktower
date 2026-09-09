@@ -46,8 +46,14 @@ import {
   checkPrivateProjectQuota, modelFor, memoryLimitFor, taskLimitFor,
   coachingDirectiveFor,
 } from "./entitlements";
-import { isValidSubcategory } from "@shared/goals";
-import { instantiatePathTree, pathStatus } from "./phase-trees";
+import { isValidSubcategory, PROJECT_GOALS } from "@shared/goals";
+import { recordActivity } from "./analytics";
+import {
+  instantiatePathTree, pathStatus, onPathTaskDone, createExpansion, createInjections,
+  collectArtifacts, switchPath, backboneIdOf,
+} from "./phase-trees";
+import { draftExpansionSteps, proposeInjections } from "./phase-trees-nova";
+import { resolveTree, treeFor } from "@shared/phase-trees";
 
 async function isProjectMember(userId: string, projectId: string): Promise<boolean> {
   const project = await storage.getProject(projectId);
@@ -1420,6 +1426,8 @@ If the ask has nothing to do with planning tasks, say so in "summary", return an
       const task = await storage.updateKanbanTask(req.params.taskId, updates);
 
       if (movingToDone) {
+        // A task on the path is a pace signal; the projection moves on it.
+        await onPathTaskDone(task).catch((e) => console.error("[phase-trees] pace refresh failed:", e));
         /*
          * Finishing a task unblocks whatever was waiting on it.
          *
@@ -2001,7 +2009,19 @@ ${PLAIN_LANGUAGE_RULES}`;
       if (!quota.allowed) return res.status(402).json(quota.body);
     }
 
-    const updated = await storage.updateProject(req.params.id, validated);
+    const { goal: _g, subcategory: _s, ...rest } = validated;
+    let updated = Object.keys(rest).length ? await storage.updateProject(req.params.id, rest) : project;
+    if (nextGoal !== project.goal || nextSub !== project.subcategory) {
+      // The path is the product of goal + type; changing either is a switch,
+      // which archives the old tree, builds the new one and carries shared
+      // work across. A silent column edit would leave the old path in place.
+      await switchPath(req.params.id, nextGoal, nextSub);
+      updated = (await storage.getProject(req.params.id)) ?? updated;
+      void recordActivity({
+        name: "path.switched", userId: (req.user as any).id, visitorId: req.visitorId ?? "unknown", sessionId: req.sessionId ?? "unknown",
+        path: req.originalUrl, projectId: req.params.id, props: { from: project.goal, to: nextGoal, fromSubcategory: project.subcategory, toSubcategory: nextSub },
+      });
+    }
     res.json(updated);
   });
 
@@ -2557,6 +2577,104 @@ RULES:
     } catch (error) {
       console.error("Path status error:", error);
       res.status(500).json({ message: "Couldn't read the path" });
+    }
+  });
+
+  /**
+   * Layer 3a. A fan-out milestone ("one per step of the core loop") becomes
+   * real steps. The artifact is the parent task's own written answer; with
+   * no answer there is nothing to expand from, and Nova says so.
+   */
+  app.post("/api/projects/:id/path/expand", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+      if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
+      const backboneId = String(req.body?.backboneId ?? "");
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      const milestone = resolveTree(project.goal as any, project.subcategory).flatMap((p) => p.milestones).find((m) => m.id === backboneId);
+      if (!milestone?.expandsFrom) return res.status(400).json({ message: "That milestone doesn't break into steps.", code: "not_expandable" });
+
+      const tasks = await storage.getProjectKanbanTasks(projectId);
+      const source = tasks.find((t) => backboneIdOf(t.tags) === milestone.expandsFrom);
+      const authored = resolveTree(project.goal as any, project.subcategory).flatMap((p) => p.milestones).find((m) => m.id === milestone.expandsFrom);
+      const written = typeof req.body?.artifact === "string" && req.body.artifact.trim()
+        ? req.body.artifact.trim()
+        : source?.description && source.description.trim() !== (authored?.description ?? "").trim() ? source.description.trim() : "";
+      if (!written) {
+        return res.status(400).json({
+          message: `Write your ${authored?.title?.toLowerCase() ?? "answer"} into that task first — Nova builds the steps from what you wrote, not from a guess.`,
+          code: "artifact_missing", sourceTaskId: source?.id ?? null,
+        });
+      }
+      const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova path steps");
+      if (!ent) return;
+      const steps = await draftExpansionSteps(ent, milestone.title, written);
+      if (steps.length < 1) return res.status(502).json({ message: "Nova couldn't read steps out of that. Try adding a line or two." });
+      const result = await createExpansion(projectId, backboneId, steps);
+      await storage.deductCredits(userId, CREDIT_COSTS.taskAssist);
+      res.json(result);
+    } catch (error: any) {
+      if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
+      console.error("Path expand error:", error);
+      res.status(500).json({ message: "Couldn't expand that milestone" });
+    }
+  });
+
+  /**
+   * Layer 3b. Nova reads the project's artifacts and proposes what this
+   * phase is missing. Admission — the cap, the named artifact — is code.
+   */
+  app.post("/api/projects/:id/path/inject", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+      if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
+      const phaseId = String(req.body?.phaseId ?? "");
+      const status = await pathStatus(projectId);
+      if (!status) return res.status(404).json({ message: "Project not found" });
+      const phase = status.phases.find((p) => p.id === phaseId);
+      if (!phase) return res.status(400).json({ message: "That phase isn't on this path.", code: "not_on_path" });
+      if (phase.injectRoom <= 0) return res.status(409).json({ message: "This phase already has three of Nova's additions. Finish those first.", code: "phase_at_cap" });
+      const artifacts = await collectArtifacts(projectId);
+      if (artifacts.length === 0) {
+        return res.status(400).json({ message: "Nothing to ground a task in yet. Finish a milestone with a written answer, or post a check-in, and Nova will have something to work from.", code: "no_artifacts" });
+      }
+      const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova path additions");
+      if (!ent) return;
+      const proposals = await proposeInjections(ent, phase.title, phase.milestones.map((m) => m.title), artifacts, phase.injectRoom);
+      const result = await createInjections(projectId, phaseId, proposals, artifacts);
+      await storage.deductCredits(userId, CREDIT_COSTS.taskAssist);
+      res.json(result);
+    } catch (error: any) {
+      if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
+      console.error("Path inject error:", error);
+      res.status(500).json({ message: "Couldn't add to that phase" });
+    }
+  });
+
+  /** Moving to another path, visibly. Shared milestones already done carry across. */
+  app.post("/api/projects/:id/path/switch", isAuthenticated, async (req: any, res) => {
+    try {
+      const project = await storage.getProject(req.params.id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Only the owner can move the project to another path" });
+      const goal = String(req.body?.goal ?? "");
+      const subcategory = String(req.body?.subcategory ?? "other");
+      if (!PROJECT_GOALS.some((g) => g.id === goal)) return res.status(400).json({ message: "Pick one of the three paths.", code: "invalid_input", field: "goal" });
+      if (!isValidSubcategory(goal as any, subcategory)) return res.status(400).json({ message: `"${subcategory}" is not a kind of "${goal}" project.`, code: "subcategory_mismatch" });
+      if (goal === project.goal && subcategory === project.subcategory) return res.status(400).json({ message: "The project is already on that path.", code: "same_path" });
+      const result = await switchPath(req.params.id, goal as any, subcategory);
+      void recordActivity({
+        name: "path.switched", userId: (req.user as any).id, visitorId: req.visitorId ?? "unknown", sessionId: req.sessionId ?? "unknown",
+        path: req.originalUrl, projectId: req.params.id, props: { from: project.goal, to: goal, fromSubcategory: project.subcategory, toSubcategory: subcategory },
+      });
+      res.json(result);
+    } catch (error: any) {
+      if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
+      console.error("Path switch error:", error);
+      res.status(500).json({ message: "Couldn't switch paths" });
     }
   });
 

@@ -1,4 +1,4 @@
-import { pgTable, text, varchar, timestamp, integer, boolean, index, jsonb, unique, foreignKey, bigserial } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, integer, boolean, index, jsonb, unique, foreignKey, bigserial, real } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
@@ -1073,6 +1073,43 @@ export const rateLimitHits = pgTable("rate_limit_hits", {
  * No request body is ever written here. A row says someone sent a message; it
  * never says what the message was.
  */
+
+/**
+ * Pace, per project on a path. One row, rewritten on every recalculation;
+ * the rules that write it live in shared/phase-trees/pace.ts. Kept apart
+ * from the project row because it is derived state with its own clock.
+ */
+export const pathPace = pgTable("path_pace", {
+  projectId: varchar("project_id").primaryKey().references(() => projects.id, { onDelete: "cascade" }),
+  state: text("state", { enum: ["active", "nudge", "decaying", "dormant"] }).default("active").notNull(),
+  multiplier: real("multiplier"),
+  projectedAt: timestamp("projected_at"),
+  projectedLow: timestamp("projected_low"),
+  projectedHigh: timestamp("projected_high"),
+  lastActivityAt: timestamp("last_activity_at"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+/**
+ * The recalculation log: every "estimated 3h, took 40m" as an event the
+ * builder can scroll back through. The history of getting faster is the
+ * hook; the current number is only its latest line.
+ */
+export const pathPaceEvents = pgTable("path_pace_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  taskId: varchar("task_id"),
+  backboneId: text("backbone_id"),
+  title: text("title").notNull(),
+  estimateMinutes: integer("estimate_minutes"),
+  actualMinutes: integer("actual_minutes"),
+  projectedBefore: timestamp("projected_before"),
+  projectedAfter: timestamp("projected_after"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export type PathPace = typeof pathPace.$inferSelect;
+export type PathPaceEvent = typeof pathPaceEvents.$inferSelect;
+
 export const activityEvents = pgTable("activity_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   /**

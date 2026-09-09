@@ -22,6 +22,7 @@ import {
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { requireSurface } from "./surfaces";
 import { rateLimit } from "./moderation";
+import { refreshPace } from "./phase-trees";
 import OpenAI from "openai";
 import { requireCredits, modelFor } from "./entitlements";
 import { CREDIT_COSTS } from "@shared/plans";
@@ -271,6 +272,9 @@ export function registerCheckInRoutes(app: Express) {
         sessionId: typeof req.body.sessionId === "string" ? req.body.sessionId : null,
         props: { visibility, needsFeedback: Boolean(req.body.needsFeedback) },
       });
+
+      // A check-in is a sign of life: it holds the projected date and stops decay.
+      void refreshPace(projectId).catch(() => {});
 
       res.json(checkIn);
     } catch (error) {
