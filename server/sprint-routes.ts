@@ -1046,6 +1046,7 @@ ${metrics.map(m => {
         category: "Web App",
         // A sprint exists to get a first version built, which is one path.
         goal: "ship_mvp",
+        subcategory: "app",
         status: "planning",
         teamSize: 2,
         estimatedWeeks: 8,

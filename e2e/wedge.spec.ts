@@ -62,6 +62,7 @@ test("a new builder signs up, creates a project, and posts the first check-in", 
   );
   // Which path this project is on — required, and a real choice.
   await page.getByTestId("goal-ship_mvp").click();
+  await page.getByTestId("subcategory-saas").click();
   await page.getByTestId("button-create-project").click();
   // Creating a project lands on its manage page, which is where check-ins live.
   await page.waitForURL(/\/projects\/[0-9a-f-]{36}\/manage/, { timeout: 15_000 });
@@ -103,7 +104,7 @@ test("someone with no account opens a shared check-in and reads it", async ({ pa
     data: {
       title: "Quiet Project",
       description: "Something worth a second pair of eyes.",
-      category: "saas", goal: "ship_mvp",
+      category: "saas", goal: "ship_mvp", subcategory: "saas",
     },
   })).json();
   const checkIn = await (await page.request.post(`/api/projects/${project.id}/check-ins`, {

@@ -41,7 +41,7 @@ import ReactMarkdown from "react-markdown";
 import type { Project } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 import { useUpload } from "@/hooks/use-upload";
-import { PROJECT_GOALS } from "@shared/goals";
+import { PROJECT_GOALS, projectGoal, subcategoriesFor, isValidSubcategory, type ProjectGoal } from "@shared/goals";
 
 interface Message {
   role: "user" | "assistant";
@@ -520,7 +520,7 @@ export default function ProjectCreate() {
                     return (
                       <button
                         key={g.id} type="button"
-                        onClick={() => setProjectData({ ...projectData, goal: g.id })}
+                        onClick={() => setProjectData({ ...projectData, goal: g.id, subcategory: isValidSubcategory(g.id, projectData.subcategory) ? projectData.subcategory : undefined })}
                         className={`text-left rounded-md border px-3 py-2 transition-colors ${
                           active ? "border-primary bg-primary/10" : "border-border hover:bg-accent"
                         }`}
@@ -534,6 +534,32 @@ export default function ProjectCreate() {
                   })}
                 </div>
               </div>
+              {/* Asked only once there is a goal to ask it about; the options are the goal's. */}
+              {projectData.goal && (
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                    What kind of {projectGoal(projectData.goal).short.toLowerCase() === "ship" ? "thing are you shipping" : projectGoal(projectData.goal).short.toLowerCase() === "raise" ? "raise is it" : "business is it"}? *
+                  </label>
+                  <div className="mt-1 flex flex-wrap gap-1.5" data-testid="project-subcategory">
+                    {subcategoriesFor(projectData.goal as ProjectGoal).map((sc) => {
+                      const active = projectData.subcategory === sc.id;
+                      return (
+                        <button
+                          key={sc.id} type="button"
+                          onClick={() => setProjectData({ ...projectData, subcategory: sc.id })}
+                          className={`rounded-full border px-3 py-1 text-sm transition-colors ${
+                            active ? "border-primary bg-primary/10 font-medium" : "border-border hover:bg-accent"
+                          }`}
+                          data-testid={`subcategory-${sc.id}`}
+                          aria-pressed={active}
+                        >
+                          {sc.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1">
@@ -816,7 +842,7 @@ export default function ProjectCreate() {
           <Button
             className="w-full"
             onClick={() => createMutation.mutate(projectData)}
-            disabled={!projectData.title || !projectData.description || !projectData.goal || createMutation.isPending}
+            disabled={!projectData.title || !projectData.description || !isValidSubcategory(projectData.goal, projectData.subcategory) || createMutation.isPending}
             data-testid="button-create-project"
           >
             {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Sparkles className="h-4 w-4 mr-2" />}

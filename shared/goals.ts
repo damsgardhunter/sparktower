@@ -30,6 +30,53 @@ export const PROJECT_GOALS = [
 ] as const;
 
 export type ProjectGoal = (typeof PROJECT_GOALS)[number]["id"];
+
+/**
+ * What kind of thing it is, within its path.
+ *
+ * Asked after the goal, and the options depend on it: "restaurant" is a
+ * meaningful answer to "what are you systemizing" and a meaningless one to
+ * "what are you shipping". Every path ends in "other" so the question never
+ * blocks someone whose thing doesn't fit the list — but "other" is a real
+ * answer they chose, not a default they fell into.
+ *
+ * Ids are flat and unique except "other", which is shared; validity is always
+ * checked as a (goal, subcategory) pair, never by id alone.
+ */
+export const PROJECT_SUBCATEGORIES: Record<ProjectGoal, readonly { id: string; label: string }[]> = {
+  ship_mvp: [
+    { id: "app", label: "App" },
+    { id: "saas", label: "SaaS" },
+    { id: "game", label: "Game" },
+    { id: "content", label: "Content" },
+    { id: "other", label: "Other" },
+  ],
+  systemize_business: [
+    { id: "restaurant", label: "Restaurant" },
+    { id: "service", label: "Service business" },
+    { id: "retail", label: "Retail" },
+    { id: "other", label: "Other" },
+  ],
+  raise_funding: [
+    { id: "startup_equity", label: "Startup equity" },
+    { id: "local_community", label: "Local community" },
+    { id: "loan_grant", label: "Loan or grant" },
+    { id: "other", label: "Other" },
+  ],
+};
+
+export const subcategoriesFor = (goal: ProjectGoal) => PROJECT_SUBCATEGORIES[goal];
+
+export const isValidSubcategory = (goal: string | null | undefined, sub: string | null | undefined): boolean =>
+  !!goal && !!sub && (PROJECT_SUBCATEGORIES as Record<string, readonly { id: string }[]>)[goal]?.some((s) => s.id === sub) === true;
+
+/** Every subcategory id across all paths, for the column's allowed values. */
+export const PROJECT_SUBCATEGORY_IDS = [
+  ...new Set(Object.values(PROJECT_SUBCATEGORIES).flatMap((list) => list.map((s) => s.id))),
+] as [string, ...string[]];
+
+/** What every pre-existing project is assumed to be: chosen, in effect, by nobody. */
+export const DEFAULT_PROJECT_SUBCATEGORY = "other";
 export const PROJECT_GOAL_IDS = PROJECT_GOALS.map((g) => g.id) as [ProjectGoal, ...ProjectGoal[]];
 
 /**

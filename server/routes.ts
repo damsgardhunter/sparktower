@@ -27,7 +27,7 @@ import {
   applyProjectOperations, buildOperableProjectState, renderLatestAudit,
   stripIdFragments, collectProjectIds, OPERATION_SCHEMA_INSTRUCTIONS,
 } from "./project-operations";
-import { insertUserProfileSchema, insertProjectSchema, insertDonationSchema, insertContestSchema, insertProjectLiveChatMessageSchema, insertWaitlistEntrySchema, insertInterviewSchema, insertExperimentSchema, insertPricingTierSchema, insertAnalyticsEventSchema, insertLegalDocSchema, insertDeployChecklistItemSchema, insertSupportTicketSchema, insertLaunchTaskSchema, type StoryboardScene } from "@shared/schema";
+import { insertUserProfileSchema, insertProjectSchema, insertProjectBase, insertDonationSchema, insertContestSchema, insertProjectLiveChatMessageSchema, insertWaitlistEntrySchema, insertInterviewSchema, insertExperimentSchema, insertPricingTierSchema, insertAnalyticsEventSchema, insertLegalDocSchema, insertDeployChecklistItemSchema, insertSupportTicketSchema, insertLaunchTaskSchema, type StoryboardScene } from "@shared/schema";
 import { z } from "zod";
 import OpenAI from "openai";
 import { eq, ne, and, sql } from "drizzle-orm";
@@ -46,6 +46,7 @@ import {
   checkPrivateProjectQuota, modelFor, memoryLimitFor, taskLimitFor,
   coachingDirectiveFor,
 } from "./entitlements";
+import { isValidSubcategory } from "@shared/goals";
 
 async function isProjectMember(userId: string, projectId: string): Promise<boolean> {
   const project = await storage.getProject(projectId);
@@ -504,7 +505,7 @@ When presenting the final summary, end with an encouraging note like "✨ This i
 After each user message, respond conversationally AND include a JSON block in your response with any updates you can extract.
 
 Format: Respond with your conversational message, then on a new line include:
-<project_update>{"title": "...", "description": "...", "goal": "ship_mvp" | "systemize_business" | "raise_funding", "rolesNeeded": [...], "techStack": [...], "teamSize": 2, "estimatedWeeks": 8, "category": "...", "repoUrl": "...", "liveUrl": "..."}</project_update>
+<project_update>{"title": "...", "description": "...", "goal": "ship_mvp" | "systemize_business" | "raise_funding", "subcategory": "<one of the goal's kinds: ship→app|saas|game|content|other, systemize→restaurant|service|retail|other, raise→startup_equity|local_community|loan_grant|other>", "rolesNeeded": [...], "techStack": [...], "teamSize": 2, "estimatedWeeks": 8, "category": "...", "repoUrl": "...", "liveUrl": "..."}</project_update>
 
 Only include fields you have enough info to fill. Start empty if needed.`;
 
@@ -1970,7 +1971,20 @@ ${PLAIN_LANGUAGE_RULES}`;
     if (!project) return res.status(404).json({ message: "Project not found" });
     if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Unauthorized" });
     
-    const validated = normalizeSoloMode(insertProjectSchema.partial().parse(req.body));
+    const validated = normalizeSoloMode(insertProjectBase.partial().parse(req.body));
+    /*
+     * The pair is checked against what the row will be, not against the
+     * patch alone: a patch that changes only the goal would otherwise leave
+     * "restaurant" attached to a project that is now shipping an MVP.
+     */
+    const nextGoal = validated.goal ?? project.goal;
+    const nextSub = validated.subcategory ?? project.subcategory;
+    if (!isValidSubcategory(nextGoal, nextSub)) {
+      return res.status(400).json({
+        message: `"${nextSub}" is not a kind of "${nextGoal}" project — pick a subcategory for the new goal.`,
+        code: "subcategory_mismatch",
+      });
+    }
 
     // Flipping a public project to private consumes private-project quota.
     if (validated.isPrivate === true && !project.isPrivate) {
@@ -5779,6 +5793,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
           description: "An AI-powered platform for collaboration.",
           category: "Software",
           goal: "ship_mvp" as const,
+          subcategory: "app",
           status: "active" as const,
           rolesNeeded: ["Frontend Developer", "Backend Developer", "ML Engineer"],
           teamSize: 3,
@@ -5791,6 +5806,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
           description: "Track your energy consumption and reduce your carbon footprint.",
           category: "Sustainability",
           goal: "ship_mvp" as const,
+          subcategory: "app",
           status: "planning" as const,
           rolesNeeded: ["Data Analyst", "Backend Developer"],
           teamSize: 2,
@@ -5802,6 +5818,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
           description: "A secure and easy-to-use crypto wallet.",
           category: "Fintech",
           goal: "ship_mvp" as const,
+          subcategory: "app",
           status: "completed" as const,
           rolesNeeded: ["Mobile Developer", "Full Stack Developer", "Security Engineer"],
           teamSize: 4,
@@ -5813,6 +5830,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
           description: "Control your home with your voice.",
           category: "IoT",
           goal: "ship_mvp" as const,
+          subcategory: "app",
           status: "active" as const,
           rolesNeeded: ["DevOps Engineer", "Full Stack Developer"],
           teamSize: 1,

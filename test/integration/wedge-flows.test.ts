@@ -41,7 +41,7 @@ async function signedIn(app: any, label: string) {
 const aProject = (overrides: Record<string, unknown> = {}) => ({
   title: "Weeknight Recipes",
   description: "Plans a week of dinners from what is already in the fridge.",
-  category: "saas", goal: "ship_mvp",
+  category: "saas", goal: "ship_mvp", subcategory: "saas",
   ...overrides,
 });
 
@@ -81,6 +81,32 @@ describe("create a project", () => {
     const { goal: _omit, ...withoutGoal } = aProject();
     expect((await agent.post("/api/projects").send(withoutGoal)).status).toBeGreaterThanOrEqual(400);
     expect((await agent.post("/api/projects").send(aProject({ goal: "get_rich" }))).status).toBeGreaterThanOrEqual(400);
+  });
+
+  it("requires a subcategory that belongs to the chosen goal", async () => {
+    const app = await getTestApp();
+    const { agent } = await signedIn(app, "Owner");
+
+    // Distinct titles throughout: the duplicate-content guard refuses the
+    // same title and description twice from one account, which is right, and
+    // is not what this test is about.
+    // A restaurant is a kind of business to systemize, not a kind of MVP.
+    const crossed = await agent.post("/api/projects").send(aProject({ title: "Crossed", goal: "ship_mvp", subcategory: "restaurant" }));
+    expect(crossed.status).toBeGreaterThanOrEqual(400);
+    // The same id is fine under the goal it belongs to.
+    const right = await agent.post("/api/projects").send(aProject({ title: "The Corner Bistro", goal: "systemize_business", subcategory: "restaurant" }));
+    expect(right.status).toBe(200);
+    expect(right.body.subcategory).toBe("restaurant");
+    // "other" is valid on every path — a real answer, not a fallback.
+    expect((await agent.post("/api/projects").send(aProject({ title: "Community Fund", goal: "raise_funding", subcategory: "other" }))).status).toBe(200);
+
+    // And an update can't orphan it: changing only the goal is refused until
+    // the subcategory is changed with it.
+    const orphan = await agent.patch(`/api/projects/${right.body.id}`).send({ goal: "ship_mvp" });
+    expect(orphan.status).toBe(400);
+    expect(orphan.body.code).toBe("subcategory_mismatch");
+    const together = await agent.patch(`/api/projects/${right.body.id}`).send({ goal: "ship_mvp", subcategory: "app" });
+    expect(together.status).toBe(200);
   });
 
   it("refuses an anonymous caller", async () => {

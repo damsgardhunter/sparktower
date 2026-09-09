@@ -45,7 +45,7 @@ describe("moderation drill", () => {
     const mod = await reviewer(app);
 
     const project = await author.agent.post("/api/projects").send({
-      title: "Spammy Thing", description: "Buy now buy now buy now.", category: "saas", goal: "ship_mvp",
+      title: "Spammy Thing", description: "Buy now buy now buy now.", category: "saas", goal: "ship_mvp", subcategory: "saas",
     });
     expect(project.status).toBe(200);
 
@@ -72,7 +72,7 @@ describe("moderation drill", () => {
 
     expect((await author.agent.get("/api/user/projects")).status).toBe(200);   // can still read
     const blocked = await author.agent.post("/api/projects").send({
-      title: "Another", description: "More of the same thing again.", category: "saas", goal: "ship_mvp",
+      title: "Another", description: "More of the same thing again.", category: "saas", goal: "ship_mvp", subcategory: "saas",
     });
     expect(blocked.status).toBe(403);                                           // cannot write
     expect(blocked.body.code).toBe("account_suspended");
@@ -82,7 +82,7 @@ describe("moderation drill", () => {
     const reinstate = await mod.agent.post(`/api/admin/users/${author.userId}/suspend`).send({ suspended: false });
     expect(reinstate.body.suspended).toBe(false);
     const unblocked = await author.agent.post("/api/projects").send({
-      title: "Reformed", description: "Something genuinely useful this time.", category: "saas", goal: "ship_mvp",
+      title: "Reformed", description: "Something genuinely useful this time.", category: "saas", goal: "ship_mvp", subcategory: "saas",
     });
     expect(unblocked.status).toBe(200);
 

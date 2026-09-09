@@ -2,7 +2,7 @@ import { pgTable, text, varchar, timestamp, integer, boolean, index, jsonb, uniq
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
-import { PROJECT_GOAL_IDS } from "./goals";
+import { PROJECT_GOAL_IDS, isValidSubcategory } from "./goals";
 
 // Re-exporting from auth models as requested
 export { sessions, users, mobileRefreshTokens, type User, type UpsertUser, type MobileRefreshToken } from "./models/auth";
@@ -126,6 +126,12 @@ export const projects = pgTable("projects", {
    */
   goal: text("goal", { enum: ["ship_mvp", "systemize_business", "raise_funding"] })
     .default("ship_mvp").notNull(),
+  /*
+   * Required, and only valid as a pair with `goal` — checked in the insert
+   * schema, since a column can't express "restaurant is fine for systemizing
+   * and nonsense for shipping". Plain text with a backfill default of "other".
+   */
+  subcategory: text("subcategory").default("other").notNull(),
   status: text("status", { enum: ["planning", "active", "completed"] }).default("planning").notNull(),
   teamSize: integer("team_size"),
   estimatedWeeks: integer("estimated_weeks"),
@@ -1400,7 +1406,13 @@ export const insertUserProfileSchema = createInsertSchema(userProfiles).omit({
   id: true,
 });
 
-export const insertProjectSchema = createInsertSchema(projects).omit({
+/**
+ * The plain object schema, for partial updates. `.partial()` only exists on a
+ * ZodObject, and the pair check below turns the full schema into a ZodEffects
+ * — so an update validates its fields here and checks the (goal, subcategory)
+ * pair against the merged row itself, where both halves are known.
+ */
+export const insertProjectBase = createInsertSchema(projects).omit({
   id: true,
   views: true,
   totalDonations: true,
@@ -1409,6 +1421,19 @@ export const insertProjectSchema = createInsertSchema(projects).omit({
   // Re-required here: the column's DB default is for backfill, not for
   // letting a new project skip the question.
   goal: z.enum(PROJECT_GOAL_IDS),
+  subcategory: z.string().min(1),
+});
+
+export const insertProjectSchema = insertProjectBase.superRefine((v, ctx) => {
+  // The pair, not the id: "other" is valid everywhere, "restaurant" only when
+  // systemizing. Validating the id alone would let a mismatched pair through.
+  if (!isValidSubcategory(v.goal, v.subcategory)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["subcategory"],
+      message: `"${v.subcategory}" is not a kind of "${v.goal}" project`,
+    });
+  }
 });
 
 export const insertProjectMemberSchema = createInsertSchema(projectMembers).omit({
