@@ -2,6 +2,7 @@ import { pgTable, text, varchar, timestamp, integer, boolean, index, jsonb, uniq
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
+import { PROJECT_GOAL_IDS } from "./goals";
 
 // Re-exporting from auth models as requested
 export { sessions, users, mobileRefreshTokens, type User, type UpsertUser, type MobileRefreshToken } from "./models/auth";
@@ -118,6 +119,13 @@ export const projects = pgTable("projects", {
   title: text("title").notNull(),
   description: text("description").notNull(),
   category: text("category").notNull(),
+  /*
+   * Required. The database default exists only so the column could be added
+   * to rows that predate it — the insert schema below re-requires it, so a new
+   * project must say which path it is on. See shared/goals.ts.
+   */
+  goal: text("goal", { enum: ["ship_mvp", "systemize_business", "raise_funding"] })
+    .default("ship_mvp").notNull(),
   status: text("status", { enum: ["planning", "active", "completed"] }).default("planning").notNull(),
   teamSize: integer("team_size"),
   estimatedWeeks: integer("estimated_weeks"),
@@ -1397,6 +1405,10 @@ export const insertProjectSchema = createInsertSchema(projects).omit({
   views: true,
   totalDonations: true,
   createdAt: true,
+}).extend({
+  // Re-required here: the column's DB default is for backfill, not for
+  // letting a new project skip the question.
+  goal: z.enum(PROJECT_GOAL_IDS),
 });
 
 export const insertProjectMemberSchema = createInsertSchema(projectMembers).omit({

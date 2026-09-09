@@ -41,7 +41,7 @@ async function signedIn(app: any, label: string) {
 const aProject = (overrides: Record<string, unknown> = {}) => ({
   title: "Weeknight Recipes",
   description: "Plans a week of dinners from what is already in the fridge.",
-  category: "saas",
+  category: "saas", goal: "ship_mvp",
   ...overrides,
 });
 

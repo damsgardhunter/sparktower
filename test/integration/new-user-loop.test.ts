@@ -71,7 +71,7 @@ describe("a new user can get all the way through the loop", () => {
     const project = await agent.post("/api/projects").send({
       title: "Weeknight Recipes",
       description: "A small app that plans a week of dinners from what's already in the fridge.",
-      category: "saas",
+      category: "saas", goal: "ship_mvp",
     });
     expect(project.status).toBe(200);
     const projectId = project.body.id;
@@ -116,7 +116,7 @@ describe("a new user can get all the way through the loop", () => {
     const project = await agent.post("/api/projects").send({
       title: "Quiet Project",
       description: "Something being worked on without an audience yet.",
-      category: "saas",
+      category: "saas", goal: "ship_mvp",
     });
 
     const checkIn = await agent.post(`/api/projects/${project.body.id}/check-ins`).send({

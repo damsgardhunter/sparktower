@@ -469,6 +469,7 @@ IMPORTANT FORMATTING RULES:
 Your guided flow:
 1. First, understand what kind of project the user wants to build. Ask about their vision. 🚀
 2. Ask clarifying questions about scope, **target audience**, and key features.
+   Early on, find out which of the three paths this project is on and set "goal" accordingly — 🚀 **shipping an MVP** (get a first version in front of people), 🔧 **systemizing a business** (make something that already works run without them in every step), or 💰 **raising funding** (get the story and numbers investor-ready). Ask if it isn't obvious; never assume shipping for a business that already has customers.
 3. Ask what **tools and platforms** they're using or planning to use (GitHub, Replit, Google Colab, Figma, etc.). If they have existing repos or live demos, ask for links.
 4. Ask about their **target audience** — who will use this? What problem does it solve?
 5. Work through the tricky parts *with* their answer: "🤔 The part that'll take real care is X — here's how we'd handle it." Never suggest dropping a feature or idea they've told you about; if something belongs later, say it's a later phase.
@@ -503,7 +504,7 @@ When presenting the final summary, end with an encouraging note like "✨ This i
 After each user message, respond conversationally AND include a JSON block in your response with any updates you can extract.
 
 Format: Respond with your conversational message, then on a new line include:
-<project_update>{"title": "...", "description": "...", "rolesNeeded": [...], "techStack": [...], "teamSize": 2, "estimatedWeeks": 8, "category": "...", "repoUrl": "...", "liveUrl": "..."}</project_update>
+<project_update>{"title": "...", "description": "...", "goal": "ship_mvp" | "systemize_business" | "raise_funding", "rolesNeeded": [...], "techStack": [...], "teamSize": 2, "estimatedWeeks": 8, "category": "...", "repoUrl": "...", "liveUrl": "..."}</project_update>
 
 Only include fields you have enough info to fill. Start empty if needed.`;
 
@@ -5777,6 +5778,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
           title: "SparkTower AI",
           description: "An AI-powered platform for collaboration.",
           category: "Software",
+          goal: "ship_mvp" as const,
           status: "active" as const,
           rolesNeeded: ["Frontend Developer", "Backend Developer", "ML Engineer"],
           teamSize: 3,
@@ -5788,6 +5790,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
           title: "Green Energy Tracker",
           description: "Track your energy consumption and reduce your carbon footprint.",
           category: "Sustainability",
+          goal: "ship_mvp" as const,
           status: "planning" as const,
           rolesNeeded: ["Data Analyst", "Backend Developer"],
           teamSize: 2,
@@ -5798,6 +5801,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
           title: "Crypto Wallet",
           description: "A secure and easy-to-use crypto wallet.",
           category: "Fintech",
+          goal: "ship_mvp" as const,
           status: "completed" as const,
           rolesNeeded: ["Mobile Developer", "Full Stack Developer", "Security Engineer"],
           teamSize: 4,
@@ -5808,6 +5812,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
           title: "Smart Home Assistant",
           description: "Control your home with your voice.",
           category: "IoT",
+          goal: "ship_mvp" as const,
           status: "active" as const,
           rolesNeeded: ["DevOps Engineer", "Full Stack Developer"],
           teamSize: 1,

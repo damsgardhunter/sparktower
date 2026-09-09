@@ -41,6 +41,7 @@ import ReactMarkdown from "react-markdown";
 import type { Project } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 import { useUpload } from "@/hooks/use-upload";
+import { PROJECT_GOALS } from "@shared/goals";
 
 interface Message {
   role: "user" | "assistant";
@@ -503,6 +504,36 @@ export default function ProjectCreate() {
                   data-testid="textarea-project-description"
                 />
               </div>
+              {/*
+                * Required, and asked as a choice rather than defaulted: the
+                * three paths get different roadmaps, different briefings and
+                * different advice, and a default would quietly put every
+                * agency and every fundraise on the MVP path.
+                */}
+              <div>
+                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                  <Target className="h-3 w-3" /> What does winning look like? *
+                </label>
+                <div className="mt-1 grid grid-cols-1 gap-1.5" data-testid="project-goal">
+                  {PROJECT_GOALS.map((g) => {
+                    const active = projectData.goal === g.id;
+                    return (
+                      <button
+                        key={g.id} type="button"
+                        onClick={() => setProjectData({ ...projectData, goal: g.id })}
+                        className={`text-left rounded-md border px-3 py-2 transition-colors ${
+                          active ? "border-primary bg-primary/10" : "border-border hover:bg-accent"
+                        }`}
+                        data-testid={`goal-${g.id}`}
+                        aria-pressed={active}
+                      >
+                        <span className="text-sm font-medium">{g.label}</span>
+                        <span className="block text-xs text-muted-foreground">{g.description}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1">
@@ -785,7 +816,7 @@ export default function ProjectCreate() {
           <Button
             className="w-full"
             onClick={() => createMutation.mutate(projectData)}
-            disabled={!projectData.title || !projectData.description || createMutation.isPending}
+            disabled={!projectData.title || !projectData.description || !projectData.goal || createMutation.isPending}
             data-testid="button-create-project"
           >
             {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Sparkles className="h-4 w-4 mr-2" />}

@@ -1044,6 +1044,8 @@ ${metrics.map(m => {
         title: sprint.productName,
         description: sprint.productDescription || "",
         category: "Web App",
+        // A sprint exists to get a first version built, which is one path.
+        goal: "ship_mvp",
         status: "planning",
         teamSize: 2,
         estimatedWeeks: 8,
