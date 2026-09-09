@@ -1,3 +1,4 @@
+import { ROADMAP_DEPTHS, DEFAULT_ROADMAP_DEPTH, MAX_ROADMAP_PHASES, roadmapDepth, depthForPhaseCount, type RoadmapDepth } from "@shared/roadmap";
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage, isTaskOnTime } from "./storage";
@@ -470,7 +471,7 @@ Your guided flow:
 2. Ask clarifying questions about scope, **target audience**, and key features.
 3. Ask what **tools and platforms** they're using or planning to use (GitHub, Replit, Google Colab, Figma, etc.). If they have existing repos or live demos, ask for links.
 4. Ask about their **target audience** — who will use this? What problem does it solve?
-5. Work through potential challenges: "🤔 Let me think about what could be tricky here..."
+5. Work through the tricky parts *with* their answer: "🤔 The part that'll take real care is X — here's how we'd handle it." Never suggest dropping a feature or idea they've told you about; if something belongs later, say it's a later phase.
 6. Provide estimates: team size, timeline, roles needed, and a polished description.
 7. Present a structured summary using this format:
    🚀 **Project Title**: ...
@@ -2375,7 +2376,7 @@ RULES:
     const response = await openai.chat.completions.create({
       model: "gpt-5.2",
       messages: [
-        { role: "system", content: `You are an expert project consultant for SparkTower. Help the user plan their project: "${project.title}". Provide tips on timeline, team size, roadmap, and tech stack.` },
+        { role: "system", content: `You are Nova, SparkTower's project partner, helping plan "${project.title}". ${coachingDirectiveFor(await getUserEntitlements(userId))} Give concrete, sequenced advice on timeline, team, roadmap and tech stack.` },
         ...history.map(m => ({ role: m.role, content: m.content }))
       ],
       stream: false, // Session plan says streaming SSE but storage might not support it easily. Let's start with simple.
@@ -3432,9 +3433,9 @@ Write like this instead:
   outcomes: ["Two channels each tested with at least 500 visitors", "A per-channel figure for how many people are still active after a week", "One channel you would commit the next month of effort to"]
   skillsNeeded: ["Someone who has run paid or community acquisition before", "A developer who can add tracking to signup links"]`;
 
-  const ROADMAP_SCHEMA_INSTRUCTIONS = `Respond ONLY with valid JSON (no markdown, no code fences):
+  const roadmapSchemaInstructions = (depth: RoadmapDepth = DEFAULT_ROADMAP_DEPTH) => `Respond ONLY with valid JSON (no markdown, no code fences):
 {
-  "summary": "The overall path from where they actually are to the goal. Name the real constraint and, if the goal is a stretch from here, say so plainly.",
+  "summary": "The overall path from where they actually are to the goal. Name what makes it ambitious and what would make it reachable — this is a plan for getting there, not a verdict on whether to try.",
   "phases": [
     {
       "title": "Short plain-English phase name (3-8 words, what they'll DO)",
@@ -3445,7 +3446,9 @@ Write like this instead:
     }
   ]
 }
-Produce 4-7 phases ordered from first to last. Each phase must be concrete and specific to THIS project — no generic startup advice. Ground everything in the project brief AND in where they already are. Phases should build on each other toward the stated goal, and the hard part of the goal must actually be addressed by some phase rather than left to the end.
+Produce ${ROADMAP_DEPTHS[depth].min}-${ROADMAP_DEPTHS[depth].max} phases ordered from first to last — the builder asked for a ${ROADMAP_DEPTHS[depth].label.toLowerCase()} roadmap, so use the full range rather than folding steps together. Each phase must be concrete and specific to THIS project — no generic startup advice. Ground everything in the project brief AND in where they already are. Phases should build on each other toward the stated goal, and the hard part of the goal must actually be addressed by some phase rather than left to the end.
+
+Every step the builder named in their goal or starting point appears as a phase. If something genuinely has to come later, it becomes a later phase — never dropped, and never quietly replaced with a smaller version of what they asked for. If the goal contains more than one direction, plan them as parallel tracks or as a sequence with the tradeoff stated; do not pick one for them.
 
 If a CODEBASE AUDIT appears in the context, it is the evidence for what already exists and it overrides the board. Never plan a phase around building something the audit says is already built — start the roadmap from what's actually shipped. Do turn the audit's gaps and risks into phases: work it found missing is real remaining work, and a finding like no tests, no CI or a committed credential belongs in an early phase, not left implicit. Where the audit says a capability is only partly built, plan the finishing of it rather than the building of it, and say which part is already done.
 
@@ -3457,7 +3460,7 @@ ${PLAIN_LANGUAGE_RULES}`;
     const phases = Array.isArray(parsed.phases) ? parsed.phases : [];
     return {
       summary: typeof parsed.summary === "string" ? parsed.summary : "",
-      phases: phases.slice(0, 8).map((p: any, i: number) => ({
+      phases: phases.slice(0, MAX_ROADMAP_PHASES).map((p: any, i: number) => ({
         title: String(p.title || `Phase ${i + 1}`).slice(0, 200),
         description: String(p.description || ""),
         estimatedDuration: p.estimatedDuration ? String(p.estimatedDuration) : null,
@@ -3604,13 +3607,14 @@ Respond ONLY with the JSON, in the same shape as before.`,
       const { goal, startingPoint, targetDate } = req.body as {
         goal?: string; startingPoint?: string; targetDate?: string;
       };
+      const depth = roadmapDepth(req.body?.depth);
       if (!goal?.trim()) return res.status(400).json({ message: "A goal is required" });
 
       let parsed: { summary: string; phases: any[] };
       try {
         parsed = await generateRoadmapJson(
           modelFor(ent),
-          `You are Nova, a project strategist who turns a builder's goal into a concrete, sequenced roadmap. ${coachingDirectiveFor(ent)}\n\n${ROADMAP_SCHEMA_INSTRUCTIONS}`,
+          `You are Nova, a project strategist who turns a builder's goal into a concrete, sequenced roadmap. ${coachingDirectiveFor(ent)}\n\n${roadmapSchemaInstructions(depth)}`,
           [
             `PROJECT BRIEF\n${formatProjectBriefForPrompt(project)}`,
             describeCurrentState({
@@ -3714,7 +3718,7 @@ Respond ONLY with the JSON, in the same shape as before.`,
           modelFor(ent),
           `You are Nova, revising an existing project roadmap based on real progress. ${coachingDirectiveFor(ent)}
 
-Keep phases that are still correct (preserve their titles so progress isn't lost), drop or merge ones that no longer make sense, and add new phases the project now needs. Mark phases already finished as completed.\n\n${ROADMAP_SCHEMA_INSTRUCTIONS}
+Keep phases that are still correct (preserve their titles so progress isn't lost), and add new phases the project now needs. Merge two phases only when they have become the same work; a phase the builder still wants stays even if it has to move later. Mark phases already finished as completed.\n\n${roadmapSchemaInstructions(depthForPhaseCount(existing.phases.length))}
 Additionally, each phase may include "status": one of "upcoming", "in-progress", "completed".`,
           [
             `PROJECT BRIEF\n${formatProjectBriefForPrompt(project)}`,
@@ -3945,11 +3949,11 @@ ${PLAIN_LANGUAGE_RULES}`,
         modelFor(ent),
         `You are Nova, rebuilding a project roadmap from scratch because the project has changed. ${coachingDirectiveFor(ent)}
 
-This is NOT an incremental revision. Re-plan the whole path to the goal against what the project actually is now. Drop phases that no longer make sense even if work was done on them, and say so in the summary. Genuinely completed work should be preserved as completed phases.
+This is NOT an incremental revision. Re-plan the whole path to the goal against what the project actually is now. Where a phase no longer fits the goal, say so in the summary and explain where that work now belongs — reordered, merged into a later phase, or set aside for the builder to decide — rather than silently removing it. Genuinely completed work should be preserved as completed phases.
 
 Also resequence the milestones and re-prioritise the open tasks to match the new plan.
 
-${ROADMAP_SCHEMA_INSTRUCTIONS}
+${roadmapSchemaInstructions(req.body?.depth ? roadmapDepth(req.body.depth) : depthForPhaseCount(existing.phases.length))}
 Each phase may also include "status": "upcoming" | "in-progress" | "completed".
 
 Additionally include:

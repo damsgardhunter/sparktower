@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ROADMAP_DEPTHS, ROADMAP_DEPTH_IDS, DEFAULT_ROADMAP_DEPTH, type RoadmapDepth } from "@shared/roadmap";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -64,6 +65,7 @@ export function RoadmapTab({ projectId, isOwner }: { projectId: string; isOwner:
   const [goal, setGoal] = useState("");
   const [startingPoint, setStartingPoint] = useState("");
   const [targetDate, setTargetDate] = useState("");
+  const [depth, setDepth] = useState<RoadmapDepth>(DEFAULT_ROADMAP_DEPTH);
   const [updateNote, setUpdateNote] = useState("");
   const [nextActions, setNextActions] = useState<NextActionsResult | null>(null);
   const [rebuildOpen, setRebuildOpen] = useState(false);
@@ -101,7 +103,7 @@ export function RoadmapTab({ projectId, isOwner }: { projectId: string; isOwner:
   const generateMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", `/api/projects/${projectId}/roadmap/generate`, {
-        goal, startingPoint: startingPoint || undefined, targetDate: targetDate || undefined,
+        goal, startingPoint: startingPoint || undefined, targetDate: targetDate || undefined, depth,
       });
       return res.json();
     },
@@ -283,6 +285,26 @@ export function RoadmapTab({ projectId, isOwner }: { projectId: string; isOwner:
             <div className="space-y-2">
               <Label>Target date (optional)</Label>
               <Input type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} data-testid="input-roadmap-date" />
+            </div>
+
+            {/*
+              * How long a roadmap. This used to be fixed at about six phases
+              * with no way to ask for more — fine for a weekend, useless for a
+              * year. The builder is the only one who knows which they have.
+              */}
+            <div className="space-y-2">
+              <Label>How detailed?</Label>
+              <Select value={depth} onValueChange={(v) => setDepth(v as RoadmapDepth)}>
+                <SelectTrigger data-testid="select-roadmap-depth"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {ROADMAP_DEPTH_IDS.map((id) => (
+                    <SelectItem key={id} value={id} data-testid={`depth-${id}`}>
+                      {ROADMAP_DEPTHS[id].label} · {ROADMAP_DEPTHS[id].min}–{ROADMAP_DEPTHS[id].max} phases
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">{ROADMAP_DEPTHS[depth].hint}</p>
             </div>
 
             {notEnoughCredits && (

@@ -161,23 +161,48 @@ export function taskLimitFor(ent: Pick<Entitlements, "aiTaskGeneration">): numbe
  * Depth of Nova's coaching, injected into system prompts so the paid tiers
  * genuinely behave differently rather than just unlocking buttons.
  */
+/**
+ * How Nova talks to a builder about their idea.
+ *
+ * The earlier version told the top tier to "pressure-test assumptions and name
+ * risks", which a model reads as "find the weakness and push back" — and every
+ * builder got the same push: narrow it, pick one thing, drop the rest. Advice
+ * that is identical for everyone is advice for no one, and someone who came in
+ * with three ideas and left with a lecture about focus doesn't come back.
+ *
+ * So the stance is fixed across tiers and only the depth changes: the idea is
+ * the plan, the job is the sequence that makes it work, and a risk is only
+ * worth naming alongside the move that handles it. Nova can be exacting about
+ * order, effort and evidence without ever being the board that votes an idea
+ * down.
+ */
+const NOVA_STANCE =
+  "The builder's idea is the plan. Your job is to work out the sequence, effort and " +
+  "evidence that make it succeed — not to replace it with a smaller one. Be positive " +
+  "and calculating: specific about order, honest about effort, concrete about what " +
+  "would prove each step worked. When you see a risk, say it in the same breath as the " +
+  "move that handles it. When several directions are viable, lay them out with their " +
+  "tradeoffs and let the builder choose — never give everyone the same 'focus on one " +
+  "thing'. Deferring a step to later is fine and should be said as sequencing, not " +
+  "cutting; removing an idea is the builder's call alone. Never tell them what to give up.";
+
 export function coachingDirectiveFor(ent: Pick<Entitlements, "novaCoaching">): string {
   switch (ent.novaCoaching) {
     case "advanced":
       return (
-        "Coach at an advanced level. Pressure-test assumptions, name concrete risks and " +
-        "tradeoffs, propose sequencing, and reference the project's roadmap and milestones " +
-        "when relevant. Offer specific next actions with rough effort estimates."
+        `${NOVA_STANCE} Coach at an advanced level: propose sequencing across the whole ` +
+        "plan, reference the roadmap and milestones, give effort estimates, and for each " +
+        "hard part name the earliest cheap test that would tell them if it's working."
       );
     case "enhanced":
       return (
-        "Coach at an enhanced level. Break work into concrete steps, suggest what to tackle " +
-        "next and why, and point out gaps in the plan. Keep it practical and specific."
+        `${NOVA_STANCE} Coach at an enhanced level: break the work into concrete steps, ` +
+        "say what to do next and why, and where the plan has a gap, fill it with a step."
       );
     default:
       return (
-        "Coach at a basic level. Be encouraging and help the user clarify their idea. " +
-        "Keep guidance high-level and short."
+        `${NOVA_STANCE} Coach at a basic level: help them make the idea clear and ` +
+        "concrete. Keep it short and specific; every reply should leave them with a next move."
       );
   }
 }
