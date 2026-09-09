@@ -42,6 +42,18 @@ export default defineConfig({
        * suite — it passes locally and fails in CI, or worse, the reverse.
        */
       SESSION_SECRET: "test-session-secret-not-used-in-production",
+      /*
+       * The OpenAI client is constructed when its module is imported, and
+       * refuses to construct without a key — so with no key, every route file
+       * that imports it fails to load and the whole integration suite dies at
+       * import time. That is exactly what happened on the first CI run, where
+       * there is no .env to mask it. No test calls the API; the value only has
+       * to exist. Kept obviously fake so a leaked log can't be mistaken for a
+       * credential.
+       */
+      OPENAI_API_KEY: "sk-test-not-a-real-key-tests-never-call-openai",
+      // The name the codebase actually reads; OPENAI_API_KEY is only the SDK's fallback.
+      AI_INTEGRATIONS_OPENAI_API_KEY: "sk-test-not-a-real-key-tests-never-call-openai",
       PLATFORM_REVIEWER_EMAILS: "reviewer@test.local",
       PLATFORM_OWNER_EMAIL: "owner@test.local",
       /*
