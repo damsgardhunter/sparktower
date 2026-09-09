@@ -11,13 +11,6 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-env:
-  # The password for the throwaway Postgres each job starts. It is not a
-  # secret — the database lives inside one job on the runner's loopback and is
-  # destroyed with it — but a literal here reads as one to every scanner, and a
-  # value derived per run means there is nothing in the repository to leak.
-  CI_DB_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
-
 jobs:
   # The web client and the API share one package, one lockfile and one
   # typecheck, so they are one job. The job names below are what branch
@@ -29,12 +22,18 @@ jobs:
     # A real Postgres, because the suite tests behaviour only a real one has:
     # column types, defaults, constraints, and `timestamp without time zone`
     # semantics. A fake would pass and prove nothing.
+    #
+    # Its password is derived per run rather than written down. It is not a
+    # secret — the database lives inside this job on the runner's loopback and
+    # is destroyed with it — but a literal reads as one to every scanner, and a
+    # derived value means there is nothing in the repository to leak. Spelled
+    # out at each use because a service container's env can't read `env`.
     services:
       postgres:
         image: postgres:16
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: ${{ env.CI_DB_PASSWORD }}
+          POSTGRES_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
           POSTGRES_DB: postgres
         ports:
           - 5432:5432
@@ -49,7 +48,7 @@ jobs:
     env:
       # The suite derives its own database from this by suffixing `_test`, and
       # creates it on first run. Nothing here touches a real environment.
-      DATABASE_URL: postgresql://postgres:${{ env.CI_DB_PASSWORD }}@localhost:5432/postgres
+      DATABASE_URL: postgresql://postgres:ci-${{ github.run_id }}-${{ github.run_attempt }}@localhost:5432/postgres
       NODE_ENV: test
 
     steps:
@@ -87,7 +86,7 @@ jobs:
         image: postgres:16
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: ${{ env.CI_DB_PASSWORD }}
+          POSTGRES_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
           POSTGRES_DB: postgres
         ports:
           - 5432:5432
@@ -98,7 +97,7 @@ jobs:
           --health-retries 10
 
     env:
-      DATABASE_URL: postgresql://postgres:${{ env.CI_DB_PASSWORD }}@localhost:5432/postgres
+      DATABASE_URL: postgresql://postgres:ci-${{ github.run_id }}-${{ github.run_attempt }}@localhost:5432/postgres
       CI: "true"
 
     steps:
