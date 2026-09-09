@@ -35,6 +35,9 @@ export const backboneIdOf = (tags: string[] | null | undefined) => tagValue(tags
 /** An expansion step's parent milestone, if this task is one. */
 export const parentOf = (tags: string[] | null | undefined) => tagValue(tags, "parent:");
 export const injectedPhaseOf = (tags: string[] | null | undefined) => tagValue(tags, "injected:");
+/** A loop is a named child of a source milestone (the core loop); steps belong to one via loop:<taskId>. */
+export const isLoop = (tags: string[] | null | undefined) => !!tags?.includes("kind:loop");
+export const loopOf = (tags: string[] | null | undefined) => tagValue(tags, "loop:");
 /** Tasks from a path the project has since left stay on the board, marked, and out of the maths. */
 export const isArchivedPath = (tags: string[] | null | undefined) => !!tags?.some((t) => t.startsWith("archived:"));
 const minutesOf = (t: { estimateHours: number | null }) => (t.estimateHours ?? 1) * 60;
@@ -120,8 +123,9 @@ export async function refreshPace(projectId: string, effort?: {
   // Work carried across from another path counts toward progress, not pace:
   // it was done there, at that pace, and this path starts fresh.
   const carried = (t: { tags: string[] | null }) => !!t.tags?.some((x) => x.startsWith("carried:"));
+  // Extending is activity: any path task counts, main line or branch.
   const completions = tasks
-    .filter((t) => t.status === "done" && t.completedAt && !carried(t) && (mainIds.has(backboneIdOf(t.tags) ?? "") || mainIds.has(parentOf(t.tags) ?? "")))
+    .filter((t) => t.status === "done" && t.completedAt && !carried(t) && (backboneIdOf(t.tags) || parentOf(t.tags) || injectedPhaseOf(t.tags)))
     .map((t) => ({ at: new Date(t.completedAt!), estimateMinutes: minutesOf(t) }));
   const checkIns = await db.select({ at: projectCheckIns.createdAt }).from(projectCheckIns).where(eq(projectCheckIns.projectId, projectId));
 
@@ -179,25 +183,90 @@ export async function onPathTaskDone(task: { id: string; projectId: string; titl
  * as done when every step is. The artifact the steps come from is the
  * parent milestone's own written answer.
  */
-export async function createExpansion(projectId: string, backboneId: string, steps: { title: string; description: string; estimateHours?: number }[]) {
+export async function createExpansion(
+  projectId: string, backboneId: string, steps: { title: string; description: string; estimateHours?: number }[],
+  opts: { loopTaskId?: string | null; append?: boolean } = {},
+) {
   const tasks = await pathTasks(projectId);
   const parent = tasks.find((t) => backboneIdOf(t.tags) === backboneId);
   if (!parent) throw Object.assign(new Error("That milestone isn't on this project's path."), { code: "not_on_path", status: 400 });
-  const existing = tasks.filter((t) => parentOf(t.tags) === backboneId);
-  if (existing.length) return { created: [], existing };
+  const loopTaskId = opts.loopTaskId ?? null;
+  if (loopTaskId && !tasks.some((t) => t.id === loopTaskId && isLoop(t.tags))) {
+    throw Object.assign(new Error("That loop isn't on this project."), { code: "not_on_path", status: 400 });
+  }
+  // Steps exist per loop: expanding a second loop adds its own set.
+  const existing = tasks.filter((t) => parentOf(t.tags) === backboneId && loopOf(t.tags) === loopTaskId);
+  if (existing.length && !opts.append) return { created: [], existing };
   const created = [];
-  let order = parent.order ?? 0;
+  let order = Math.max(parent.order ?? 0, ...existing.map((t) => t.order ?? 0));
   for (const step of steps.slice(0, 8)) {
     const title = String(step.title ?? "").trim();
     if (!title) continue;
     created.push(await storage.createKanbanTask({
       projectId, milestoneId: parent.milestoneId, title, description: String(step.description ?? "").trim(),
       status: "todo", priority: "medium", order: ++order,
-      tags: [`parent:${backboneId}`, ...(parent.tags ?? []).filter((t) => t.startsWith("actor:") || t.startsWith("tier:"))],
+      tags: [`parent:${backboneId}`, ...(loopTaskId ? [`loop:${loopTaskId}`] : []), ...(parent.tags ?? []).filter((t) => t.startsWith("actor:") || t.startsWith("tier:"))],
       estimateHours: Math.min(3, Math.max(1, Math.ceil(Number(step.estimateHours) || 1))),
     } as any));
   }
-  return { created, existing: [] };
+  return { created, existing };
+}
+
+/**
+ * Another loop. A product can have several — the feed people come back to,
+ * the thing they build, the thing they buy — and each is written down on
+ * its own, then broken into its own steps. Loops hang off the source
+ * milestone (the core loop), so that milestone is done when every loop is.
+ */
+export async function createLoop(projectId: string, sourceBackboneId: string, loop: { title: string; description?: string }) {
+  const tasks = await pathTasks(projectId);
+  const source = tasks.find((t) => backboneIdOf(t.tags) === sourceBackboneId);
+  if (!source) throw Object.assign(new Error("That milestone isn't on this project's path."), { code: "not_on_path", status: 400 });
+  const title = String(loop.title ?? "").trim();
+  if (!title) throw Object.assign(new Error("Give the loop a name."), { code: "invalid_input", field: "title", status: 400 });
+  const siblings = tasks.filter((t) => parentOf(t.tags) === sourceBackboneId && isLoop(t.tags));
+  if (siblings.length >= 6) throw Object.assign(new Error("Six loops is already a lot for one month. Finish some first."), { code: "loop_cap", status: 409 });
+  return storage.createKanbanTask({
+    projectId, milestoneId: source.milestoneId, title, description: String(loop.description ?? "").trim(),
+    status: "todo", priority: "medium", order: (source.order ?? 0) + siblings.length + 1,
+    tags: [`parent:${sourceBackboneId}`, "kind:loop", ...(source.tags ?? []).filter((t) => t.startsWith("actor:") || t.startsWith("tier:"))],
+    estimateHours: 1,
+  } as any);
+}
+
+/**
+ * Entering or leaving an optional phase. Nine builders in ten want to keep
+ * building after week 2; choosing it is what makes Nova work the extension
+ * instead of asking week-3 questions. Leaving is the same explicit act.
+ */
+export async function setBranch(projectId: string, phaseId: string | null) {
+  const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory }).from(projects).where(eq(projects.id, projectId));
+  if (!project) throw Object.assign(new Error("Project not found"), { status: 404 });
+  if (phaseId) {
+    const phase = resolveTree(project.goal as ProjectGoal, project.subcategory).find((p) => p.id === phaseId);
+    if (!phase?.optional) throw Object.assign(new Error("That isn't an optional phase on this path."), { code: "not_on_path", status: 400 });
+  }
+  await db.update(projects).set({ activeBranch: phaseId }).where(eq(projects.id, projectId));
+  return { activeBranch: phaseId };
+}
+
+/** Extending again: the branch's own tasks reopen for another round, with the round recorded. */
+export async function extendBranch(projectId: string, phaseId: string) {
+  const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory }).from(projects).where(eq(projects.id, projectId));
+  if (!project) throw Object.assign(new Error("Project not found"), { status: 404 });
+  const phase = resolveTree(project.goal as ProjectGoal, project.subcategory).find((p) => p.id === phaseId);
+  if (!phase?.optional) throw Object.assign(new Error("That isn't an optional phase on this path."), { code: "not_on_path", status: 400 });
+  const tasks = await pathTasks(projectId);
+  const ids = new Set(phase.milestones.map((m) => m.id));
+  let round = 1;
+  for (const t of tasks.filter((t) => ids.has(backboneIdOf(t.tags) ?? ""))) {
+    round = Math.max(round, Number(tagValue(t.tags, "round:") ?? 1) + (t.status === "done" ? 1 : 0));
+  }
+  for (const t of tasks.filter((t) => ids.has(backboneIdOf(t.tags) ?? "") && t.status === "done")) {
+    await storage.updateKanbanTask(t.id, { status: "todo", tags: [...(t.tags ?? []).filter((x) => !x.startsWith("round:")), `round:${round}`] } as any);
+  }
+  await db.update(projects).set({ activeBranch: phaseId }).where(eq(projects.id, projectId));
+  return { activeBranch: phaseId, round };
 }
 
 /**
@@ -329,12 +398,23 @@ export async function milestoneDetail(projectId: string, backboneId: string) {
       work: w ? { id: w.id, kind: w.kind, payload: w.payload, chosenIndex: w.chosenIndex, createdAt: w.createdAt } : null,
     };
   };
-  const steps = [];
-  for (const k of tasks.filter((t) => parentOf(t.tags) === backboneId).sort((a, b) => (a.order ?? 0) - (b.order ?? 0))) steps.push(await describe(k, ""));
+  const kids = tasks.filter((t) => parentOf(t.tags) === backboneId).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const loops = [];
+  for (const k of kids.filter((t) => isLoop(t.tags))) loops.push(await describe(k, ""));
+  const steps: (Awaited<ReturnType<typeof describe>> & { loopTaskId: string | null })[] = [];
+  for (const k of kids.filter((t) => !isLoop(t.tags))) steps.push({ ...(await describe(k, "")), loopTaskId: loopOf(k.tags) });
+  // A fan-out milestone shows the loops it expands from, so steps can be added per loop.
+  const sourceLoops = milestone.expandsFrom
+    ? tasks.filter((t) => parentOf(t.tags) === milestone.expandsFrom && isLoop(t.tags)).map((t) => ({ taskId: t.id, title: t.title, status: t.status, expanded: steps.some((s) => s.loopTaskId === t.id) }))
+    : [];
   return {
     phase: { id: phase.id, title: phase.title, optional: !!phase.optional },
     milestone,
+    /** Something expands from this milestone, so it can hold several loops. */
+    isSource: phases.some((p) => p.milestones.some((m) => m.expandsFrom === backboneId)),
     task: task ? await describe(task, milestone.description) : null,
+    loops,
+    sourceLoops,
     steps,
   };
 }
@@ -435,7 +515,7 @@ export async function switchPath(projectId: string, goal: ProjectGoal, subcatego
  * pace, the recalculation log, and — at the end — Nova's case for what's next.
  */
 export async function pathStatus(projectId: string) {
-  const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory })
+  const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory, activeBranch: projects.activeBranch })
     .from(projects).where(eq(projects.id, projectId));
   if (!project) return null;
 
@@ -461,8 +541,13 @@ export async function pathStatus(projectId: string) {
   const isDone = (id: string) => {
     const own = taskByBackbone.get(id)?.status === "done";
     const kids = children.get(id);
+    // Loops and steps: a source milestone is done when every loop is written;
+    // a fan-out milestone when every step of every loop is done.
     return own || (!!kids?.length && kids.every((k) => k.status === "done"));
   };
+  const loopsOf = (id: string) => (children.get(id) ?? []).filter((k) => isLoop(k.tags)).map((k) => ({
+    taskId: k.id, title: k.title, description: k.description ?? "", status: k.status,
+  }));
   const withTask = (m: ResolvedMilestone) => {
     const kids = children.get(m.id) ?? [];
     return {
@@ -474,13 +559,36 @@ export async function pathStatus(projectId: string) {
 
   const main = mainLineMilestones(phases);
   const doneCount = main.filter((m) => isDone(m.id)).length;
-  const current = phases.find((p) => !p.optional && p.milestones.some((m) => !isDone(m.id))) ?? phases[phases.length - 1];
+  const branch = project.activeBranch ? phases.find((p) => p.id === project.activeBranch && p.optional) ?? null : null;
+  const branchOpen = !!branch && branch.milestones.some((m) => !isDone(m.id));
+  const mainCurrent = phases.find((p) => !p.optional && p.milestones.some((m) => !isDone(m.id))) ?? phases[phases.length - 1];
+  const current = branchOpen ? branch! : mainCurrent;
   const inPhaseDone = current.milestones.filter((m) => isDone(m.id)).length;
   const next = current.milestones.find((m) => !isDone(m.id)) ?? null;
+  // Offer an optional phase at the checkpoint before it, when the builder
+  // isn't already in it: the phase just before the branch is complete and
+  // the main line would otherwise move past it.
+  const offer = (() => {
+    if (branchOpen) return null;
+    const i = phases.findIndex((p) => p.id === mainCurrent.id);
+    const before = phases[i - 1];
+    if (!before?.optional) return null;
+    const preceding = phases[i - 2];
+    // Once they've been in the branch and left, leaving sticks: the map offers a way back, the dashboard doesn't nag.
+    const visited = before.milestones.some((m) => taskByBackbone.get(m.id)?.status === "done" || tagValue(taskByBackbone.get(m.id)?.tags, "round:"));
+    if (!visited && preceding && preceding.milestones.every((m) => isDone(m.id)) && mainCurrent.milestones.every((m) => !isDone(m.id))) {
+      return { phaseId: before.id, title: before.title, milestones: before.milestones.map((m) => m.title) };
+    }
+    return null;
+  })();
 
   // When the next milestone has been broken into steps, the next action is
   // the first unfinished step — Nova works step by step, not on the whole.
+  // A loop that hasn't been written yet is a step too: write it first.
   const nextStepTask = next ? (children.get(next.id) ?? []).find((k) => k.status !== "done") ?? null : null;
+  const nextLoops = next ? loopsOf(next.expandsFrom ?? next.id) : [];
+  const stepLoopId = nextStepTask ? loopOf(nextStepTask.tags) : null;
+  const stepLoop = stepLoopId ? nextLoops.find((l) => l.taskId === stepLoopId) ?? null : null;
   const workTaskId = nextStepTask?.id ?? taskByBackbone.get(next?.id ?? "")?.id ?? null;
   const work = workTaskId ? await latestWork(workTaskId) : null;
   const pace = await refreshPace(projectId);
@@ -498,10 +606,14 @@ export async function pathStatus(projectId: string) {
       injected: (injected.get(p.id) ?? []).map((t) => ({ id: t.id, title: t.title, status: t.status, artifact: tagValue(t.tags, "artifact:") })),
       injectRoom: Math.max(0, 3 - (injected.get(p.id)?.length ?? 0)),
     })),
-    current: { id: current.id, title: current.title, step: Math.min(inPhaseDone + 1, current.milestones.length), of: current.milestones.length },
+    current: { id: current.id, title: current.title, optional: !!current.optional, step: Math.min(inPhaseDone + 1, current.milestones.length), of: current.milestones.length },
+    branch: branch ? { phaseId: branch.id, title: branch.title, open: branchOpen, round: Math.max(1, ...tasks.filter((t) => branch.milestones.some((m) => m.id === backboneIdOf(t.tags))).map((t) => Number(tagValue(t.tags, "round:") ?? 1))) } : null,
+    offer,
     next: next ? {
       ...withTask(next),
-      step: nextStepTask ? { taskId: nextStepTask.id, title: nextStepTask.title, description: nextStepTask.description ?? "", actor: (tagValue(nextStepTask.tags, "actor:") ?? next.actor) as Actor } : null,
+      step: nextStepTask ? { taskId: nextStepTask.id, title: nextStepTask.title, description: nextStepTask.description ?? "", actor: (tagValue(nextStepTask.tags, "actor:") ?? next.actor) as Actor, isLoop: isLoop(nextStepTask.tags), loop: stepLoop ? { taskId: stepLoop.taskId, title: stepLoop.title } : null } : null,
+      // The loops behind this milestone (its own, or its source's), each with whether it has steps yet.
+      loops: nextLoops.map((l) => ({ ...l, expanded: next.expandsFrom ? (children.get(next.id) ?? []).some((k) => loopOf(k.tags) === l.taskId) : false })),
       workTaskId,
       work: work ? { id: work.id, kind: work.kind, payload: work.payload, chosenIndex: work.chosenIndex, createdAt: work.createdAt } : null,
     } : null,

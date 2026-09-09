@@ -1,17 +1,22 @@
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { ACTOR_LABEL, type Actor, type VerificationTier } from "@shared/phase-trees";
 import { WorkView, refreshPath, useFail, type WorkRow } from "@/components/path-work";
-import { CheckCircle2, Circle, Loader2, RotateCcw, Sparkles, User } from "lucide-react";
+import { CheckCircle2, Circle, Loader2, RotateCcw, Sparkles, User, Plus } from "lucide-react";
 
 type How = "not-done" | "nova-recognised" | "you-marked" | "carried" | "done";
 interface TaskView { taskId: string; title: string; status: string; completedAt: string | null; how: How; actor: Actor; answer: string | null; work: WorkRow | null }
 interface Detail {
   phase: { id: string; title: string; optional: boolean };
   milestone: { id: string; title: string; description: string; actor: Actor; estimateMinutes: number | null; tier: VerificationTier; expandsFrom?: string; sharedId?: string };
+  isSource: boolean;
   task: TaskView | null;
-  steps: TaskView[];
+  loops: TaskView[];
+  sourceLoops: { taskId: string; title: string; status: string; expanded: boolean }[];
+  steps: (TaskView & { loopTaskId: string | null })[];
 }
 
 const HOW: Record<How, string> = {
@@ -36,9 +41,27 @@ export function MilestoneDetail({ projectId, backboneId }: { projectId: string; 
     onSuccess: () => refreshPath(projectId), onError: fail,
   });
 
+  const [form, setForm] = useState<{ kind: "loop" | "step"; loopTaskId: string | null; title: string; description: string } | null>(null);
+  const add = useMutation({
+    mutationFn: (f: NonNullable<typeof form>) => f.kind === "loop"
+      ? apiRequest("POST", `/api/projects/${projectId}/path/loops`, { backboneId, title: f.title, description: f.description }).then((r) => r.json())
+      : apiRequest("POST", `/api/projects/${projectId}/path/steps`, { backboneId, loopTaskId: f.loopTaskId, title: f.title, description: f.description }).then((r) => r.json()),
+    onSuccess: () => { setForm(null); refreshPath(projectId); }, onError: fail,
+  });
+
   if (isLoading) return <div className="py-3 flex justify-center"><Loader2 className="h-4 w-4 animate-spin text-primary" /></div>;
   if (!data) return null;
-  const { milestone, task, steps } = data;
+  const { milestone, task, steps, loops, sourceLoops, isSource } = data;
+  const AddForm = () => form && (
+    <div className="space-y-2 rounded-md border border-border p-3" data-testid={`add-${form.kind}-form`}>
+      <input className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-sm" placeholder={form.kind === "loop" ? "Name the loop" : "Name the step"} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} data-testid="input-add-title" />
+      <Textarea rows={3} className="text-sm" placeholder={form.kind === "loop" ? "Its 3–5 steps, if you know them" : "What exists when it's done"} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} data-testid="input-add-description" />
+      <div className="flex gap-2">
+        <Button size="sm" disabled={add.isPending || !form.title.trim()} onClick={() => add.mutate(form)} data-testid="button-add-save">Add</Button>
+        <Button size="sm" variant="ghost" onClick={() => setForm(null)}>Cancel</Button>
+      </div>
+    </div>
+  );
 
   const TaskBlock = ({ t, authored, label }: { t: TaskView; authored?: string; label?: string }) => (
     <div className="space-y-2" data-testid={`milestone-task-${t.taskId}`}>
@@ -69,10 +92,37 @@ export function MilestoneDetail({ projectId, backboneId }: { projectId: string; 
   return (
     <div className="rounded-lg border border-border p-4 space-y-4 bg-background" data-testid="milestone-detail">
       {task ? <TaskBlock t={task} authored={milestone.description} /> : <p className="text-sm text-muted-foreground">{milestone.description}</p>}
-      {steps.length > 0 && (
+      {(loops.length > 0 || isSource) && (
+        <div className="space-y-3 border-t border-border pt-3" data-testid="milestone-loops">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">Loops · {loops.filter((l) => l.status === "done").length}/{loops.length}</p>
+          {loops.map((l) => <div key={l.taskId} className="pl-3 border-l-2 border-border"><TaskBlock t={l} label={l.title} /></div>)}
+          {form?.kind === "loop" ? <AddForm /> : (
+            <Button size="sm" variant="ghost" className="text-xs" onClick={() => setForm({ kind: "loop", loopTaskId: null, title: "", description: "" })} data-testid="button-detail-add-loop"><Plus className="h-3 w-3 mr-1" />Add another loop</Button>
+          )}
+        </div>
+      )}
+      {(steps.length > 0 || milestone.expandsFrom) && (
         <div className="space-y-3 border-t border-border pt-3">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">Steps · {steps.filter((s) => s.status === "done").length}/{steps.length}</p>
-          {steps.map((s) => <div key={s.taskId} className="pl-3 border-l-2 border-border"><TaskBlock t={s} label={s.title} /></div>)}
+          {sourceLoops.length > 0 ? sourceLoops.map((l) => {
+            const own = steps.filter((s) => s.loopTaskId === l.taskId);
+            return (
+              <div key={l.taskId} className="space-y-2" data-testid={`steps-loop-${l.taskId}`}>
+                <p className="text-sm font-medium">{l.title} <span className="text-xs text-muted-foreground font-normal">· {own.filter((s) => s.status === "done").length}/{own.length}</span></p>
+                {own.map((s) => <div key={s.taskId} className="pl-3 border-l-2 border-border"><TaskBlock t={s} label={s.title} /></div>)}
+                {form?.kind === "step" && form.loopTaskId === l.taskId ? <AddForm /> : (
+                  <Button size="sm" variant="ghost" className="text-xs" onClick={() => setForm({ kind: "step", loopTaskId: l.taskId, title: "", description: "" })} data-testid={`button-add-step-${l.taskId}`}><Plus className="h-3 w-3 mr-1" />Add a step</Button>
+                )}
+              </div>
+            );
+          }) : (
+            <>
+              {steps.map((s) => <div key={s.taskId} className="pl-3 border-l-2 border-border"><TaskBlock t={s} label={s.title} /></div>)}
+              {form?.kind === "step" ? <AddForm /> : (
+                <Button size="sm" variant="ghost" className="text-xs" onClick={() => setForm({ kind: "step", loopTaskId: null, title: "", description: "" })} data-testid="button-add-step"><Plus className="h-3 w-3 mr-1" />Add a step</Button>
+              )}
+            </>
+          )}
         </div>
       )}
     </div>

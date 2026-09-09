@@ -10,15 +10,17 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ACTOR_LABEL, type Actor, type VerificationTier, type PaceState, type ProjectionMode } from "@shared/phase-trees";
 import { PROJECT_GOALS, subcategoriesFor, type ProjectGoal } from "@shared/goals";
-import { CheckCircle2, Circle, ChevronDown, ChevronUp, Loader2, Sparkles, User, GitBranch, ListTree, Plus, ArrowRightLeft } from "lucide-react";
+import { CheckCircle2, Circle, ChevronDown, ChevronUp, Loader2, Sparkles, User, GitBranch, ListTree, Plus, ArrowRightLeft, Repeat, LogOut } from "lucide-react";
 
 interface PathMilestone {
   id: string; title: string; description: string; actor: Actor; estimateMinutes: number | null;
   tier: VerificationTier; done: boolean; taskId: string | null; taskStatus: string | null;
   expandsFrom?: string; steps: { done: number; total: number } | null;
 }
+interface Loop { taskId: string; title: string; description: string; status: string; expanded: boolean }
 interface NextAction extends PathMilestone {
-  step: { taskId: string; title: string; description: string; actor: Actor } | null;
+  step: { taskId: string; title: string; description: string; actor: Actor; isLoop: boolean; loop: { taskId: string; title: string } | null } | null;
+  loops: Loop[];
   workTaskId: string | null;
   work: WorkRow | null;
 }
@@ -33,7 +35,9 @@ interface PathStatus {
   adopted: true;
   goal: ProjectGoal; subcategory: string; promise: string; target: string;
   phases: PathPhase[];
-  current: { id: string; title: string; step: number; of: number };
+  current: { id: string; title: string; optional: boolean; step: number; of: number };
+  branch: { phaseId: string; title: string; open: boolean; round: number } | null;
+  offer: { phaseId: string; title: string; milestones: string[] } | null;
   next: NextAction | null;
   mainLine: { done: number; total: number };
   pace: { state: PaceState; multiplier: number | null; mode: ProjectionMode; projectedAt: string | null; projectedLow: string | null; projectedHigh: string | null; note: string; daysSinceActivity: number } | null;
@@ -78,16 +82,16 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
   const fail = useFail();
 
   const markDone = useMutation({ mutationFn: (taskId: string) => apiRequest("PATCH", `/api/kanban/${taskId}`, { status: "done" }), onSuccess: refresh, onError: fail });
-  const [draft, setDraft] = useState<{ backboneId: string; sourceTitle: string; text: string } | null>(null);
+  const [draft, setDraft] = useState<{ backboneId: string; loopTaskId: string | null; sourceTitle: string; text: string } | null>(null);
   const expand = useMutation({
-    mutationFn: (body: { backboneId: string; artifact?: string }) => apiRequest("POST", `/api/projects/${projectId}/path/expand`, body).then((r) => r.json()),
+    mutationFn: (body: { backboneId: string; artifact?: string; loopTaskId?: string | null }) => apiRequest("POST", `/api/projects/${projectId}/path/expand`, body).then((r) => r.json()),
     onSuccess: (r: any) => { setDraft(null); refresh(); toast({ title: r.created?.length ? `Nova broke it into ${r.created.length} steps` : "Steps already exist" }); },
     onError: async (e: any, body) => {
       // Nothing written yet: ask Nova to draft it, and let them edit before it becomes the source.
       if (String(e?.message ?? "").includes("artifact_missing")) {
         try {
-          const r = await apiRequest("POST", `/api/projects/${projectId}/path/expand`, { backboneId: body.backboneId, draft: true }).then((x) => x.json());
-          setDraft({ backboneId: body.backboneId, sourceTitle: r.sourceTitle, text: r.draft });
+          const r = await apiRequest("POST", `/api/projects/${projectId}/path/expand`, { backboneId: body.backboneId, loopTaskId: body.loopTaskId ?? null, draft: true }).then((x) => x.json());
+          setDraft({ backboneId: body.backboneId, loopTaskId: body.loopTaskId ?? null, sourceTitle: r.sourceTitle, text: r.draft });
           return;
         } catch (err) { return fail(err); }
       }
@@ -117,6 +121,17 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
   const mark = useMutation({
     mutationFn: (ids: string[]) => apiRequest("POST", `/api/projects/${projectId}/path/mark`, { ids }).then((r) => r.json()),
     onSuccess: refresh, onError: fail,
+  });
+  const branch = useMutation({
+    mutationFn: (b: { phaseId: string | null; extend?: boolean }) => apiRequest("POST", `/api/projects/${projectId}/path/branch`, b).then((r) => r.json()),
+    onSuccess: (r: any, b) => { refresh(); toast({ title: b.phaseId ? (b.extend ? `Extending again — round ${r.round}` : "Keep building it is. Nova works the extension now.") : "Back on the main line" }); },
+    onError: fail,
+  });
+  const [loopForm, setLoopForm] = useState<{ title: string; description: string } | null>(null);
+  const addLoop = useMutation({
+    mutationFn: (b: { backboneId: string; title: string; description: string }) => apiRequest("POST", `/api/projects/${projectId}/path/loops`, b).then((r) => r.json()),
+    onSuccess: () => { setLoopForm(null); refresh(); toast({ title: "Loop added — write it down, then break it into steps" }); },
+    onError: fail,
   });
   const switchPath = useMutation({
     mutationFn: (body: { goal: ProjectGoal; subcategory: string }) => apiRequest("POST", `/api/projects/${projectId}/path/switch`, body).then((r) => r.json()),
@@ -149,13 +164,18 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
   const pct = mainLine.total ? Math.round((mainLine.done / mainLine.total) * 100) : 0;
   const novaActs = next && next.actor !== "user-does";
   const goalLabel = (g: ProjectGoal) => PROJECT_GOALS.find((x) => x.id === g)?.label ?? g;
+  const sources = new Set(data.phases.flatMap((p) => p.milestones).map((m) => m.expandsFrom).filter(Boolean));
+  const isSource = (id: string) => sources.has(id);
 
   return (
     <div className="space-y-3" data-testid="path-panel">
       {/* Pace strip */}
       <div className="flex items-center justify-between gap-3 flex-wrap text-sm">
         <div className="min-w-0">
-          <p className="font-medium truncate" data-testid="path-phase">{current.title}</p>
+          <p className="font-medium truncate flex items-center gap-2" data-testid="path-phase">
+            {current.optional && <GitBranch className="h-3.5 w-3.5 text-primary shrink-0" />}{current.title}
+            {data.branch?.open && data.branch.round > 1 && <Badge variant="secondary" className="text-[10px]">round {data.branch.round}</Badge>}
+          </p>
           <p className="text-muted-foreground">
             Step {current.step} of {current.of} · {mainLine.done}/{mainLine.total} on the main line
             {pace && <> · <span data-testid="pace-projection">{projection(pace)}</span></>}
@@ -188,6 +208,28 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
         </div>
       )}
 
+      {/* The fork after week 2: keep building, or go to users. Chosen, never drifted into. */}
+      {data.offer && (
+        <Card className="border-primary/40" data-testid="branch-offer">
+          <CardContent className="p-4 space-y-2">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground"><GitBranch className="h-3.5 w-3.5 text-primary" /><span>Your product does its main thing. Two ways forward.</span></div>
+            <p className="font-semibold leading-snug">{data.offer.title}</p>
+            <p className="text-sm text-muted-foreground">Most builders want more in before anyone else sees it. Nova sorts what's left into what serves the loop and what starts its own, you pick, set a length, and the projected date moves live. Extending is activity — no decay, no penalty.</p>
+            <div className="flex gap-2 pt-1 flex-wrap">
+              <Button size="sm" disabled={branch.isPending} onClick={() => branch.mutate({ phaseId: data.offer!.phaseId })} data-testid="button-keep-building"><GitBranch className="h-3.5 w-3.5 mr-1.5" />Keep building</Button>
+              <Button size="sm" variant="outline" onClick={() => toast({ title: "On to " + current.title })} data-testid="button-go-main">Go to {current.title.split(" — ")[1] ?? current.title}</Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+      {data.branch?.open && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap" data-testid="branch-strip">
+          <GitBranch className="h-3.5 w-3.5 text-primary" /><span>Extending. When this round is built:</span>
+          <Button size="sm" variant="ghost" className="h-6 text-xs" disabled={branch.isPending} onClick={() => branch.mutate({ phaseId: data.branch!.phaseId, extend: true })} data-testid="button-extend-again"><Repeat className="h-3 w-3 mr-1" />Extend again</Button>
+          <Button size="sm" variant="ghost" className="h-6 text-xs" disabled={branch.isPending} onClick={() => branch.mutate({ phaseId: null })} data-testid="button-leave-branch"><LogOut className="h-3 w-3 mr-1" />Go to users</Button>
+        </div>
+      )}
+
       {/* The one next action. */}
       {next ? (
         <Card className="border-primary/40" data-testid="next-action">
@@ -201,23 +243,47 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
             </div>
             <p className="font-semibold leading-snug" data-testid="next-action-title">{next.title}</p>
             <p className="text-sm text-muted-foreground leading-relaxed">{next.description}</p>
+            {/* Loops behind this milestone: written or not, broken into steps or not. */}
+            {next.loops.length > 0 && (
+              <div className="space-y-1" data-testid="next-loops">
+                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Loops · {next.loops.length}</p>
+                <ul className="text-sm space-y-1">
+                  {next.loops.map((l) => (
+                    <li key={l.taskId} className="flex items-center gap-2 flex-wrap">
+                      {l.status === "done" ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" /> : <Circle className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />}
+                      <span>{l.title}</span>
+                      {l.status !== "done" && <span className="text-xs text-muted-foreground">not written yet</span>}
+                      {next.expandsFrom && !l.expanded && (
+                        <Button size="sm" variant="outline" className="h-6 text-xs ml-auto" disabled={expand.isPending || !!draft} onClick={() => expand.mutate({ backboneId: next.id, loopTaskId: l.taskId })} data-testid={`button-expand-loop-${l.taskId}`}>
+                          <ListTree className="h-3 w-3 mr-1" />Break into steps
+                        </Button>
+                      )}
+                      {next.expandsFrom && l.expanded && <span className="text-xs text-muted-foreground ml-auto">steps added</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {next.step && (
               <div className="rounded-md bg-muted/50 p-3 space-y-1" data-testid="next-step">
-                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">This step</p>
+                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{next.step.isLoop ? "Write this loop" : next.step.loop ? `Step · ${next.step.loop.title}` : "This step"}</p>
                 <p className="font-medium text-sm">{next.step.title}</p>
                 {next.step.description && <p className="text-sm text-muted-foreground">{next.step.description}</p>}
               </div>
             )}
 
             {/* Nova's work on it, inline. This is what makes the actor label true. */}
-            {next.workTaskId && !(next.expandsFrom && !next.steps) && (
+            {next.workTaskId && !(next.expandsFrom && !next.steps) && !(isSource(next.id) && next.loops.length > 0 && !next.step) && (
               <div className="pt-2 border-t border-border">
                 <WorkView projectId={projectId} taskId={next.workTaskId} actor={next.step?.actor ?? next.actor} work={next.work} done={false} />
               </div>
             )}
 
             <div className="flex gap-2 pt-1 flex-wrap">
-              {next.expandsFrom && !next.steps && (
+              {isSource(next.id) && !loopForm && (
+                <Button size="sm" variant="outline" onClick={() => setLoopForm({ title: "", description: "" })} data-testid="button-add-loop"><Plus className="h-3.5 w-3.5 mr-1.5" />Add another loop</Button>
+              )}
+              {next.expandsFrom && !next.steps && next.loops.length === 0 && (
                 <Button size="sm" onClick={() => expand.mutate({ backboneId: next.id })} disabled={expand.isPending || !!draft} data-testid="button-next-expand">
                   {expand.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <ListTree className="h-3.5 w-3.5 mr-1.5" />}Break into steps with Nova
                 </Button>
@@ -230,12 +296,23 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
               )}
               <Button size="sm" variant="outline" onClick={() => onNavigate("kanban")} data-testid="button-next-open">Open in tasks</Button>
             </div>
+            {loopForm && (
+              <div className="space-y-2 pt-2 border-t border-border" data-testid="loop-form">
+                <p className="text-xs text-muted-foreground">Name the loop and, if you can, its 3–5 steps. Nova can draft the steps from the name later.</p>
+                <input className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-sm" placeholder="e.g. The feed — explore what others are building" value={loopForm.title} onChange={(e) => setLoopForm({ ...loopForm, title: e.target.value })} data-testid="input-loop-title" />
+                <Textarea rows={3} className="text-sm" placeholder="1. Open the feed 2. Read a check-in 3. React or reply 4. Follow the project" value={loopForm.description} onChange={(e) => setLoopForm({ ...loopForm, description: e.target.value })} data-testid="input-loop-description" />
+                <div className="flex gap-2">
+                  <Button size="sm" disabled={addLoop.isPending || !loopForm.title.trim()} onClick={() => addLoop.mutate({ backboneId: next.expandsFrom ?? next.id, ...loopForm })} data-testid="button-save-loop">Add loop</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setLoopForm(null)}>Cancel</Button>
+                </div>
+              </div>
+            )}
             {draft && (
               <div className="space-y-2 pt-2 border-t border-border" data-testid="artifact-draft">
                 <p className="text-xs text-muted-foreground">Nothing was written under <span className="font-medium text-foreground">{draft.sourceTitle}</span> yet, so Nova drafted it from your project. Edit anything that's wrong, then build the steps from it.</p>
                 <Textarea value={draft.text} onChange={(e) => setDraft({ ...draft, text: e.target.value })} rows={6} className="text-sm" data-testid="input-artifact-draft" />
                 <div className="flex gap-2">
-                  <Button size="sm" disabled={expand.isPending || !draft.text.trim()} onClick={() => expand.mutate({ backboneId: draft.backboneId, artifact: draft.text })} data-testid="button-confirm-draft">
+                  <Button size="sm" disabled={expand.isPending || !draft.text.trim()} onClick={() => expand.mutate({ backboneId: draft.backboneId, loopTaskId: draft.loopTaskId, artifact: draft.text })} data-testid="button-confirm-draft">
                     {expand.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <ListTree className="h-3.5 w-3.5 mr-1.5" />}Looks right — build the steps
                   </Button>
                   <Button size="sm" variant="ghost" onClick={() => setDraft(null)}>Cancel</Button>
@@ -265,6 +342,9 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
                 {phase.optional && <GitBranch className="h-3.5 w-3.5 text-muted-foreground" />}
                 <p className="text-sm font-medium">{phase.title}</p>
                 <Badge variant="secondary" className="text-[10px]">{phase.done}/{phase.total}</Badge>
+                {phase.optional && data.branch?.phaseId !== phase.id && (
+                  <Button size="sm" variant="ghost" className="h-6 text-xs ml-auto" disabled={branch.isPending} onClick={() => branch.mutate({ phaseId: phase.id })} data-testid={`button-enter-${phase.id}`}>Work this branch</Button>
+                )}
               </div>
               <ul className="space-y-1">
                 {phase.milestones.map((m) => (

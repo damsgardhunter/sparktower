@@ -402,3 +402,117 @@ describe("re-evaluating where the project is", () => {
     expect((await collectArtifacts(id)).map((a) => a.label)).toEqual(expect.arrayContaining(["milestone:SHIP.M1.1", "milestone:SHIP.M1.4"]));
   });
 });
+
+describe("more than one loop", () => {
+  it("each loop is written on its own and broken into its own steps; the milestones roll up over all of them", async () => {
+    const app = await getTestApp();
+    const agent = await owner(app);
+    const id = (await create(agent, "ship_mvp", "saas", "Loops Test")).body.id;
+    const { createExpansion } = await import("../../server/phase-trees");
+
+    const build = await agent.post(`/api/projects/${id}/path/loops`).send({ backboneId: "SHIP.M1.2", title: "Build", description: "1. Create project 2. Check in 3. Get feedback" });
+    expect(build.status).toBe(200);
+    expect(build.body.tags).toEqual(expect.arrayContaining(["parent:SHIP.M1.2", "kind:loop"]));
+    const feed = (await agent.post(`/api/projects/${id}/path/loops`).send({ backboneId: "SHIP.M1.2", title: "The feed" })).body;
+    expect((await agent.post(`/api/projects/${id}/path/loops`).send({ backboneId: "SHIP.M1.2", title: "" })).status).toBe(400);
+
+    // The core loop now shows its loops, and isn't done until each is written.
+    const core = (await agent.get(`/api/projects/${id}/path/milestones/SHIP.M1.2`)).body;
+    expect(core.isSource).toBe(true);
+    expect(core.loops.map((l: any) => l.title)).toEqual(["Build", "The feed"]);
+    for (const m of ["SHIP.M1.1"]) await agent.post(`/api/projects/${id}/path/mark`).send({ ids: [m] });
+    let status = (await agent.get(`/api/projects/${id}/path`)).body;
+    expect(status.next.id).toBe("SHIP.M1.2");
+    expect(status.next.loops.map((l: any) => l.title)).toEqual(["Build", "The feed"]);
+    expect(status.next.step).toMatchObject({ taskId: build.body.id, isLoop: true });
+
+    // Expanding without a write-up on the feed loop is refused; the build loop has one.
+    const noText = await agent.post(`/api/projects/${id}/path/expand`).send({ backboneId: "SHIP.M2.1", loopTaskId: feed.id });
+    expect(noText.status).toBe(400);
+    expect(noText.body).toMatchObject({ code: "artifact_missing", sourceTitle: "The feed", sourceTaskId: feed.id });
+    expect((await agent.post(`/api/projects/${id}/path/expand`).send({ backboneId: "SHIP.M2.1", loopTaskId: "nope" })).body.code).toBe("not_on_path");
+
+    const a = await createExpansion(id, "SHIP.M2.1", [{ title: "Create project", description: "" }, { title: "Check in", description: "" }], { loopTaskId: build.body.id });
+    const b = await createExpansion(id, "SHIP.M2.1", [{ title: "Open the feed", description: "" }], { loopTaskId: feed.id });
+    expect(a.created).toHaveLength(2);
+    expect(b.created).toHaveLength(1);
+    expect(b.created[0].tags).toContain(`loop:${feed.id}`);
+    // A second expansion of the same loop is a no-op; a manual step appends.
+    expect((await createExpansion(id, "SHIP.M2.1", [{ title: "Again", description: "" }], { loopTaskId: build.body.id })).created).toHaveLength(0);
+    const manual = await agent.post(`/api/projects/${id}/path/steps`).send({ backboneId: "SHIP.M2.1", loopTaskId: feed.id, title: "Reply to a check-in" });
+    expect(manual.status).toBe(200);
+    expect(manual.body.created[0].tags).toContain(`loop:${feed.id}`);
+
+    const loopSteps = (await agent.get(`/api/projects/${id}/path/milestones/SHIP.M2.1`)).body;
+    expect(loopSteps.sourceLoops.map((l: any) => [l.title, l.expanded])).toEqual([["Build", true], ["The feed", true]]);
+    expect(loopSteps.steps.filter((s: any) => s.loopTaskId === feed.id).map((s: any) => s.title)).toEqual(["Open the feed", "Reply to a check-in"]);
+
+    // Loop steps is done only when every step of every loop is done.
+    for (const t of [...a.created, ...b.created]) await agent.patch(`/api/kanban/${t.id}`).send({ status: "done" });
+    let m21 = (await agent.get(`/api/projects/${id}/path`)).body.phases[1].milestones.find((m: any) => m.id === "SHIP.M2.1");
+    expect(m21.steps).toEqual({ done: 3, total: 4 });
+    expect(m21.done).toBe(false);
+    await agent.patch(`/api/kanban/${manual.body.created[0].id}`).send({ status: "done" });
+    m21 = (await agent.get(`/api/projects/${id}/path`)).body.phases[1].milestones.find((m: any) => m.id === "SHIP.M2.1");
+    expect(m21.done).toBe(true);
+    // And the next action after writing both loops moves off the core loop.
+    for (const l of [build.body.id, feed.id]) await agent.patch(`/api/kanban/${l}`).send({ status: "done", description: "written" });
+    status = (await agent.get(`/api/projects/${id}/path`)).body;
+    expect(status.phases[0].milestones.find((m: any) => m.id === "SHIP.M1.2").done).toBe(true);
+    expect(status.next.id).toBe("SHIP.M1.3");
+  });
+});
+
+describe("keep building", () => {
+  it("is offered when week 2 is done, chosen explicitly, worked by Nova, extended again, and left explicitly", async () => {
+    const app = await getTestApp();
+    const agent = await owner(app);
+    const id = (await create(agent, "ship_mvp", "saas", "Branch Test")).body.id;
+    const week = (n: number) => (async () => (await agent.get(`/api/projects/${id}/path`)).body.phases.find((p: any) => p.id === `week-${n}`).milestones.map((m: any) => m.id))();
+
+    await agent.post(`/api/projects/${id}/path/mark`).send({ ids: await week(1) });
+    let s = (await agent.get(`/api/projects/${id}/path`)).body;
+    expect(s.offer).toBeNull();
+    await agent.post(`/api/projects/${id}/path/mark`).send({ ids: await week(2) });
+    s = (await agent.get(`/api/projects/${id}/path`)).body;
+    // Week 2 done: week 3 would be next, and the extension is offered instead of skipped.
+    expect(s.current.id).toBe("week-3");
+    expect(s.offer).toMatchObject({ phaseId: "branch-build" });
+    expect(s.branch).toBeNull();
+
+    expect((await agent.post(`/api/projects/${id}/path/branch`).send({ phaseId: "week-3" })).status).toBe(400);
+    const chosen = await agent.post(`/api/projects/${id}/path/branch`).send({ phaseId: "branch-build" });
+    expect(chosen.status).toBe(200);
+    s = (await agent.get(`/api/projects/${id}/path`)).body;
+    expect(s.current).toMatchObject({ id: "branch-build", optional: true, step: 1, of: 4 });
+    expect(s.next.id).toBe("SHIP.B.1");
+    expect(s.offer).toBeNull();
+    expect(s.branch).toMatchObject({ phaseId: "branch-build", open: true, round: 1 });
+
+    // Work through the round; branch work is pace.
+    const before = s.pace;
+    const tasks = (await agent.get(`/api/projects/${id}/kanban`)).body;
+    for (const b of ["SHIP.B.1", "SHIP.B.2", "SHIP.B.3"]) await agent.patch(`/api/kanban/${tasks.find((t: any) => t.tags?.includes(`backbone:${b}`)).id}`).send({ status: "done" });
+    s = (await agent.get(`/api/projects/${id}/path`)).body;
+    expect(s.next.id).toBe("SHIP.B.4");
+    expect(s.events.length).toBeGreaterThan(0);
+    expect(before.multiplier).toBeNull();
+    expect(s.pace.multiplier).not.toBeNull();
+
+    // Extend again: the branch reopens as round 2.
+    const again = await agent.post(`/api/projects/${id}/path/branch`).send({ phaseId: "branch-build", extend: true });
+    expect(again.body.round).toBe(2);
+    s = (await agent.get(`/api/projects/${id}/path`)).body;
+    expect(s.current).toMatchObject({ id: "branch-build", step: 1 });
+    expect(s.branch.round).toBe(2);
+
+    // Leave: back to the main line at week 3. Leaving sticks — no re-offer; the map has the way back.
+    await agent.post(`/api/projects/${id}/path/branch`).send({ phaseId: null }).expect(200);
+    s = (await agent.get(`/api/projects/${id}/path`)).body;
+    expect(s.current.id).toBe("week-3");
+    expect(s.branch).toBeNull();
+    expect(s.offer).toBeNull();
+    await agent.post(`/api/projects/${id}/path/branch`).send({ phaseId: "branch-build" }).expect(200);
+    expect((await agent.get(`/api/projects/${id}/path`)).body.current.id).toBe("branch-build");
+  });
+});

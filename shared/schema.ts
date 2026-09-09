@@ -132,6 +132,13 @@ export const projects = pgTable("projects", {
    * and nonsense for shipping". Plain text with a backfill default of "other".
    */
   subcategory: text("subcategory").default("other").notNull(),
+  /**
+   * The optional phase the project has chosen to be in (e.g. "branch-build",
+   * the keep-building extension after week 2), or null on the main line.
+   * Chosen explicitly, left explicitly: an extension is a dated decision,
+   * never something drifted into.
+   */
+  activeBranch: text("active_branch"),
   status: text("status", { enum: ["planning", "active", "completed"] }).default("planning").notNull(),
   teamSize: integer("team_size"),
   estimatedWeeks: integer("estimated_weeks"),

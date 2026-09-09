@@ -50,7 +50,7 @@ import { isValidSubcategory, PROJECT_GOALS } from "@shared/goals";
 import { recordActivity } from "./analytics";
 import {
   instantiatePathTree, pathStatus, onPathTaskDone, createExpansion, createInjections,
-  collectArtifacts, switchPath, backboneIdOf, reconcileMilestones, pathTaskContext, saveWork, chooseWork, milestoneDetail,
+  collectArtifacts, switchPath, backboneIdOf, reconcileMilestones, pathTaskContext, saveWork, chooseWork, milestoneDetail, createLoop, setBranch, extendBranch,
 } from "./phase-trees";
 import { draftExpansionSteps, proposeInjections, readExistingProgress, draftArtifact, produceWork } from "./phase-trees-nova";
 import { workKindFor } from "@shared/phase-trees";
@@ -2710,8 +2710,13 @@ RULES:
       if (!milestone?.expandsFrom) return res.status(400).json({ message: "That milestone doesn't break into steps.", code: "not_expandable" });
 
       const tasks = await storage.getProjectKanbanTasks(projectId);
-      const source = tasks.find((t) => backboneIdOf(t.tags) === milestone.expandsFrom);
-      const authored = resolveTree(project.goal as any, project.subcategory).flatMap((p) => p.milestones).find((m) => m.id === milestone.expandsFrom);
+      const loopTaskId = typeof req.body?.loopTaskId === "string" && req.body.loopTaskId ? req.body.loopTaskId : null;
+      // With loops, the artifact is that loop's own write-up; without, the source milestone's.
+      const source = loopTaskId
+        ? tasks.find((t) => t.id === loopTaskId && t.tags?.includes("kind:loop"))
+        : tasks.find((t) => backboneIdOf(t.tags) === milestone.expandsFrom);
+      if (loopTaskId && !source) return res.status(400).json({ message: "That loop isn't on this project.", code: "not_on_path" });
+      const authored = loopTaskId ? null : resolveTree(project.goal as any, project.subcategory).flatMap((p) => p.milestones).find((m) => m.id === milestone.expandsFrom);
       const written = typeof req.body?.artifact === "string" && req.body.artifact.trim()
         ? req.body.artifact.trim()
         : source?.description && source.description.trim() !== (authored?.description ?? "").trim() ? source.description.trim() : "";
@@ -2722,17 +2727,18 @@ RULES:
          * to edit. Confirming sends it as `artifact`, which lands on the
          * source task and becomes the thing the steps are built from.
          */
-        if (req.body?.draft === true && authored) {
+        const sourceTitle = loopTaskId ? source!.title : authored?.title ?? "that milestone";
+        if (req.body?.draft === true) {
           const ent = await requireCredits(res, userId, CREDIT_COSTS.novaGuide, "Nova drafting your answer");
           if (!ent) return;
           const state = await buildOperableProjectState(projectId, { includeIds: false, includeAudit: true });
-          const draft = await draftArtifact(ent, authored, state);
+          const draft = await draftArtifact(ent, loopTaskId ? { title: `The ${source!.title} loop`, description: "The 3–5 step sequence that delivers value in this loop." } : authored!, state);
           await storage.deductCredits(userId, CREDIT_COSTS.novaGuide);
-          return res.json({ draft, sourceTitle: authored.title, sourceTaskId: source?.id ?? null });
+          return res.json({ draft, sourceTitle, sourceTaskId: source?.id ?? null });
         }
         return res.status(400).json({
-          message: `Nothing is written under "${authored?.title ?? "that milestone"}" yet. Nova can draft it from your project for you to edit, or write it into that task yourself.`,
-          code: "artifact_missing", sourceTitle: authored?.title ?? null, sourceTaskId: source?.id ?? null,
+          message: `Nothing is written under "${sourceTitle}" yet. Nova can draft it from your project for you to edit, or write it into that task yourself.`,
+          code: "artifact_missing", sourceTitle, sourceTaskId: source?.id ?? null,
         });
       }
       const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova path steps");
@@ -2742,15 +2748,58 @@ RULES:
       if (source && typeof req.body?.artifact === "string" && req.body.artifact.trim()) {
         await storage.updateKanbanTask(source.id, { description: written } as any);
       }
-      const steps = await draftExpansionSteps(ent, milestone.title, written);
+      const steps = await draftExpansionSteps(ent, loopTaskId ? `${milestone.title} — ${source!.title}` : milestone.title, written);
       if (steps.length < 1) return res.status(502).json({ message: "Nova couldn't read steps out of that. Try adding a line or two." });
-      const result = await createExpansion(projectId, backboneId, steps);
+      const result = await createExpansion(projectId, backboneId, steps, { loopTaskId });
       await storage.deductCredits(userId, CREDIT_COSTS.taskAssist);
       res.json(result);
     } catch (error: any) {
       if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
       console.error("Path expand error:", error);
       res.status(500).json({ message: "Couldn't expand that milestone" });
+    }
+  });
+
+  /** A step added by hand to a fan-out milestone (optionally under one loop). */
+  app.post("/api/projects/:id/path/steps", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const title = String(req.body?.title ?? "").trim();
+      if (!title) return res.status(400).json({ message: "Give the step a name.", code: "invalid_input", field: "title" });
+      const result = await createExpansion(req.params.id, String(req.body?.backboneId ?? ""), [{ title, description: String(req.body?.description ?? ""), estimateHours: req.body?.estimateHours }],
+        { loopTaskId: typeof req.body?.loopTaskId === "string" && req.body.loopTaskId ? req.body.loopTaskId : null, append: true });
+      res.json({ created: result.created });
+    } catch (error: any) {
+      if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
+      console.error("Path step error:", error);
+      res.status(500).json({ message: "Couldn't add that step" });
+    }
+  });
+
+  /** Another loop under the core loop (or any fan-out source). */
+  app.post("/api/projects/:id/path/loops", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const loop = await createLoop(req.params.id, String(req.body?.backboneId ?? "SHIP.M1.2"), { title: req.body?.title, description: req.body?.description });
+      res.json(loop);
+    } catch (error: any) {
+      if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code, field: error.field });
+      console.error("Path loop error:", error);
+      res.status(500).json({ message: "Couldn't add that loop" });
+    }
+  });
+
+  /** Entering, extending or leaving an optional phase — the keep-building branch. */
+  app.post("/api/projects/:id/path/branch", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const phaseId = req.body?.phaseId == null ? null : String(req.body.phaseId);
+      const result = req.body?.extend === true && phaseId ? await extendBranch(req.params.id, phaseId) : await setBranch(req.params.id, phaseId);
+      res.json(result);
+    } catch (error: any) {
+      if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
+      console.error("Path branch error:", error);
+      res.status(500).json({ message: "Couldn't change the branch" });
     }
   });
 
