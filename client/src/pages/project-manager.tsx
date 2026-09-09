@@ -517,31 +517,34 @@ export default function ProjectManager() {
   return (
     <div className="h-full overflow-y-auto pb-20">
       <div className="border-b border-border bg-background/50 backdrop-blur-sm sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-6 py-4">
-          <div className="flex items-center gap-4 mb-4 flex-wrap">
-            <Button variant="ghost" size="icon" onClick={() => setLocation(`/projects/${projectId}`)} data-testid="button-back">
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-            <div className="flex-1 min-w-0">
-              <h1 className="text-xl font-bold truncate" data-testid="text-manager-title">{project.title}</h1>
-              <p className="text-sm text-secondary">Project Manager</p>
-            </div>
-          </div>
-          {/* Tabs wrap into as many rows as the viewport needs rather than
-              scrolling sideways, so every tab is reachable without dragging.
-              A wide screen shows one or two rows; a narrow one stacks more. */}
-          <div className="flex flex-wrap gap-1">
-            {tabs.map((tab) => (
-              <Button key={tab.id} variant={activeTab === tab.id ? "default" : "ghost"} size="sm" className="gap-2" onClick={() => setActiveTab(tab.id)} data-testid={`tab-${tab.id}`}>
-                <tab.icon className="h-4 w-4" />
-                {tab.label}
-              </Button>
-            ))}
+        <div className="max-w-7xl mx-auto px-6 py-3 flex items-center gap-4">
+          <Button variant="ghost" size="icon" onClick={() => setLocation(`/projects/${projectId}`)} data-testid="button-back">
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+          <div className="flex-1 min-w-0">
+            <h1 className="text-xl font-bold truncate" data-testid="text-manager-title">{project.title}</h1>
+            <p className="text-sm text-secondary">{tabs.find((t) => t.id === activeTab)?.label ?? "Project Manager"}</p>
           </div>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-6 py-6">
+      {/*
+       * Nova guides the main screen; the structure sits in a static rail on
+       * the right and stays put while the content changes, so switching is
+       * a glance sideways rather than a scan across the top. Narrow screens
+       * fall back to a wrapped row above the content.
+       */}
+      <div className="max-w-7xl mx-auto px-6 py-6 flex flex-col lg:flex-row gap-6 items-start">
+        <nav className="w-full lg:w-48 lg:order-2 lg:sticky lg:top-24 shrink-0 flex flex-wrap lg:flex-col gap-1" aria-label="Project sections" data-testid="manager-rail">
+          {tabs.map((tab) => (
+            <Button key={tab.id} variant={activeTab === tab.id ? "default" : "ghost"} size="sm" className="gap-2 lg:justify-start" onClick={() => setActiveTab(tab.id)} data-testid={`tab-${tab.id}`}>
+              <tab.icon className="h-4 w-4" />
+              {tab.label}
+            </Button>
+          ))}
+        </nav>
+
+        <div className="flex-1 min-w-0 w-full lg:order-1">
         <NovaHandoffProvider value={novaHandoffValue}>
         {activeTab === "nova" && projectId && (
           <NovaDashboard projectId={projectId} onNavigate={(tab) => setActiveTab(tab as TabId)} />
@@ -652,6 +655,7 @@ export default function ProjectManager() {
           <LiveChatTab projectId={projectId} />
         )}
         </NovaHandoffProvider>
+        </div>
       </div>
 
       <Dialog open={taskDialogOpen} onOpenChange={setTaskDialogOpen}>

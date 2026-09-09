@@ -7,6 +7,7 @@ import { Progress } from "@/components/ui/progress";
 import { useAuth } from "@/hooks/use-auth";
 import { useEntitlements } from "@/hooks/use-entitlements";
 import { useRequestNovaHandoff } from "@/components/nova-handoff";
+import { PathPanel } from "@/components/path-panel";
 import { novaHandoffTab, type NovaHandoff } from "@shared/nova-handoff";
 import {
   Loader2, Sparkles, ArrowRight, CheckCircle2, Circle, AlertTriangle,
@@ -129,6 +130,9 @@ export function NovaDashboard({
           )}
         </div>
       </div>
+
+      {/* The path: pace, next action, and the map one click away. */}
+      <PathPanel projectId={projectId} onNavigate={onNavigate} />
 
       {/* At-a-glance numbers */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">

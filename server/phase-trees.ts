@@ -11,11 +11,11 @@
  * Called once, at creation. Re-running would duplicate the tree; the roadmap
  * container's presence is the guard.
  */
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "./db";
 import { storage } from "./storage";
-import { projects, projectRoadmaps, roadmapPhases, projectMilestones, projectKanbanTasks } from "@shared/schema";
-import { resolveTree, treeFor, mainLineMilestones, type ResolvedMilestone, type ResolvedPhase } from "@shared/phase-trees";
+import { projects, projectKanbanTasks } from "@shared/schema";
+import { resolveTree, treeFor, mainLineMilestones, type ResolvedMilestone } from "@shared/phase-trees";
 import type { ProjectGoal } from "@shared/goals";
 
 /** Tags let the actor and tier ride on the existing task row. */
@@ -93,11 +93,12 @@ export async function pathStatus(projectId: string) {
   const phases = resolveTree(goal, project.subcategory);
   const tree = treeFor(goal);
 
-  const tasks = await db.select({ tags: projectKanbanTasks.tags, status: projectKanbanTasks.status })
+  const tasks = await db.select({ id: projectKanbanTasks.id, tags: projectKanbanTasks.tags, status: projectKanbanTasks.status })
     .from(projectKanbanTasks).where(eq(projectKanbanTasks.projectId, projectId));
-  const doneIds = new Set(
-    tasks.filter((t) => t.status === "done").map((t) => backboneIdOf(t.tags)).filter(Boolean) as string[],
-  );
+  const taskByBackbone = new Map<string, { id: string; status: string }>();
+  for (const t of tasks) { const b = backboneIdOf(t.tags); if (b) taskByBackbone.set(b, { id: t.id, status: t.status }); }
+  const doneIds = new Set([...taskByBackbone].filter(([, t]) => t.status === "done").map(([b]) => b));
+  const withTask = (m: ResolvedMilestone) => ({ ...m, done: doneIds.has(m.id), taskId: taskByBackbone.get(m.id)?.id ?? null, taskStatus: taskByBackbone.get(m.id)?.status ?? null });
 
   const main = mainLineMilestones(phases);
   const doneCount = main.filter((m) => doneIds.has(m.id)).length;
@@ -118,10 +119,10 @@ export async function pathStatus(projectId: string) {
       id: p.id, title: p.title, optional: !!p.optional, checkpoint: p.checkpoint ?? null,
       total: p.milestones.length,
       done: p.milestones.filter((m) => doneIds.has(m.id)).length,
-      milestones: p.milestones.map((m) => ({ ...m, done: doneIds.has(m.id) })),
+      milestones: p.milestones.map(withTask),
     })),
     current: { id: current.id, title: current.title, step: Math.min(inPhaseDone + 1, current.milestones.length), of: current.milestones.length },
-    next: next ? { ...next, done: false } : null,
+    next: next ? withTask(next) : null,
     mainLine: { done: doneCount, total: main.length },
   };
 }

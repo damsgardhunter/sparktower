@@ -87,6 +87,21 @@ test("a new builder signs up, creates a project, and posts the first check-in", 
   const projectId = page.url().match(/\/projects\/([0-9a-f-]{36})/)![1];
 
   /*
+   * The project is born with its path. Nova's screen leads with where you are
+   * and the one next action; the structure sits in the rail on the right.
+   * Marking the first action done moves the step, on the same screen.
+   */
+  // A brand-new account meets Nova's first-run overlay here; skip it.
+  // It arrives after its own request, so give it a moment rather than racing it.
+  await page.getByTestId("btn-skip-onboarding").click({ timeout: 10_000 }).catch(() => {});
+  await expect(page.getByTestId("nova-onboarding-overlay")).toBeHidden();
+  await expect(page.getByTestId("manager-rail")).toBeVisible();
+  await expect(page.getByTestId("path-phase")).toContainText("Week 1");
+  await expect(page.getByTestId("next-action-title")).toHaveText("Product statement");
+  await page.getByTestId("button-next-done").click();
+  await expect(page.getByTestId("next-action-title")).toHaveText("The core loop");
+
+  /*
    * The first check-in, from the home rail. Each of your projects gets a
    * "Check in" shortcut there — the manage page has a check-in list too, but
    * it sits behind a tab that defaults elsewhere, and the shortcut is the
