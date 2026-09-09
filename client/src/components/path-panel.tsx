@@ -1,14 +1,16 @@
 import { useState } from "react";
 import { Textarea } from "@/components/ui/textarea";
+import { WorkView, refreshPath, useFail, type WorkRow } from "@/components/path-work";
+import { MilestoneDetail } from "@/components/path-milestone";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ACTOR_LABEL, WORK_ACTION_LABEL, type Actor, type VerificationTier, type PaceState, type ProjectionMode, type WorkPayload } from "@shared/phase-trees";
+import { ACTOR_LABEL, type Actor, type VerificationTier, type PaceState, type ProjectionMode } from "@shared/phase-trees";
 import { PROJECT_GOALS, subcategoriesFor, type ProjectGoal } from "@shared/goals";
-import { CheckCircle2, Circle, ChevronDown, ChevronUp, Loader2, Sparkles, User, GitBranch, ListTree, Plus, ArrowRightLeft, Copy, Wrench } from "lucide-react";
+import { CheckCircle2, Circle, ChevronDown, ChevronUp, Loader2, Sparkles, User, GitBranch, ListTree, Plus, ArrowRightLeft } from "lucide-react";
 
 interface PathMilestone {
   id: string; title: string; description: string; actor: Actor; estimateMinutes: number | null;
@@ -18,7 +20,7 @@ interface PathMilestone {
 interface NextAction extends PathMilestone {
   step: { taskId: string; title: string; description: string; actor: Actor } | null;
   workTaskId: string | null;
-  work: { id: string; kind: WorkPayload["kind"]; payload: WorkPayload; chosenIndex: number | null; createdAt: string } | null;
+  work: WorkRow | null;
 }
 interface PathPhase {
   id: string; title: string; optional: boolean; checkpoint: string | null; total: number; done: number;
@@ -68,20 +70,12 @@ function projection(p: NonNullable<PathStatus["pace"]>) {
 export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavigate: (tab: string) => void }) {
   const [showMap, setShowMap] = useState(false);
   const [showSwitch, setShowSwitch] = useState(false);
+  const [open, setOpen] = useState<string | null>(null);
   const { toast } = useToast();
   const { data: raw, isLoading } = useQuery<PathStatus | NoPath>({ queryKey: ["/api/projects", projectId, "path"], enabled: !!projectId });
 
-  const refresh = () => {
-    for (const key of ["path", "kanban", "nova-briefing", "milestones", "roadmap"]) queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, key] });
-    queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
-  };
-  const fail = (e: any) => {
-    // apiRequest throws "<status>: <body>"; the body is our JSON with a sentence in it.
-    const raw = String(e?.message ?? "Something went wrong").replace(/^\d+:\s*/, "");
-    let message = raw;
-    try { message = JSON.parse(raw).message ?? raw; } catch { /* plain text */ }
-    toast({ title: message, variant: "destructive" });
-  };
+  const refresh = () => refreshPath(projectId);
+  const fail = useFail();
 
   const markDone = useMutation({ mutationFn: (taskId: string) => apiRequest("PATCH", `/api/kanban/${taskId}`, { status: "done" }), onSuccess: refresh, onError: fail });
   const [draft, setDraft] = useState<{ backboneId: string; sourceTitle: string; text: string } | null>(null);
@@ -120,18 +114,6 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
     mutationFn: (ids: string[]) => apiRequest("POST", `/api/projects/${projectId}/path/mark`, { ids }).then((r) => r.json()),
     onSuccess: refresh, onError: fail,
   });
-  const work = useMutation({
-    mutationFn: (taskId: string) => apiRequest("POST", `/api/projects/${projectId}/path/work`, { taskId }).then((r) => r.json()),
-    onSuccess: () => { setEdit(null); refresh(); },
-    onError: fail,
-  });
-  const choose = useMutation({
-    mutationFn: (b: { workId: string; index?: number; text?: string }) => apiRequest("POST", `/api/projects/${projectId}/path/work/${b.workId}/choose`, b).then((r) => r.json()),
-    onSuccess: () => { setEdit(null); refresh(); toast({ title: "Saved as your answer — on to the next step" }); },
-    onError: fail,
-  });
-  const [edit, setEdit] = useState<{ index: number | null; text: string } | null>(null);
-  const copy = (text: string) => navigator.clipboard?.writeText(text).then(() => toast({ title: "Copied" })).catch(() => {});
   const switchPath = useMutation({
     mutationFn: (body: { goal: ProjectGoal; subcategory: string }) => apiRequest("POST", `/api/projects/${projectId}/path/switch`, body).then((r) => r.json()),
     onSuccess: (r: any) => { refresh(); setShowSwitch(false); toast({ title: "Moved to the new path", description: r.carried ? `${r.carried} shared milestone${r.carried === 1 ? "" : "s"} carried across as done.` : undefined }); },
@@ -241,81 +223,13 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
             )}
 
             {/* Nova's work on it, inline. This is what makes the actor label true. */}
-            {next.work && (
-              <div className="space-y-2 pt-2 border-t border-border" data-testid="nova-work">
-                {next.work.payload.kind === "options" && (
-                  <div className="space-y-2">
-                    <p className="text-sm text-muted-foreground">{next.work.payload.intro}</p>
-                    {next.work.payload.options.map((o, i) => (
-                      <div key={i} className={`rounded-md border p-3 space-y-1 ${edit?.index === i ? "border-primary" : "border-border"}`} data-testid={`work-option-${i}`}>
-                        <p className="font-medium text-sm">{o.title}</p>
-                        {edit?.index === i
-                          ? <Textarea value={edit.text} onChange={(e) => setEdit({ index: i, text: e.target.value })} rows={5} className="text-sm" data-testid="input-work-edit" />
-                          : <p className="text-sm whitespace-pre-wrap">{o.body}</p>}
-                        {o.why && <p className="text-xs text-muted-foreground">{o.why}</p>}
-                        <div className="flex gap-2 pt-1">
-                          <Button size="sm" disabled={choose.isPending} onClick={() => choose.mutate({ workId: next.work!.id, index: i, text: edit?.index === i ? edit.text : undefined })} data-testid={`button-pick-${i}`}>
-                            {edit?.index === i ? "Use my edit" : "Use this one"}
-                          </Button>
-                          {edit?.index !== i && <Button size="sm" variant="ghost" onClick={() => setEdit({ index: i, text: o.body })}>Edit</Button>}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {next.work.payload.kind === "build" && (
-                  <div className="space-y-2" data-testid="work-build">
-                    <p className="text-sm">{next.work.payload.summary}</p>
-                    {next.work.payload.assumptions.length > 0 && (
-                      <p className="text-xs text-muted-foreground">Assumed: {next.work.payload.assumptions.join(" · ")}</p>
-                    )}
-                    {next.work.payload.files.map((f, i) => (
-                      <details key={i} className="rounded-md border border-border" data-testid={`work-file-${i}`}>
-                        <summary className="cursor-pointer px-3 py-2 text-sm flex items-center gap-2">
-                          <code className="text-xs">{f.path}</code>
-                          {f.purpose && <span className="text-xs text-muted-foreground truncate">{f.purpose}</span>}
-                          <button className="ml-auto text-xs text-primary flex items-center gap-1" onClick={(e) => { e.preventDefault(); copy(f.content); }}><Copy className="h-3 w-3" />copy</button>
-                        </summary>
-                        <pre className="text-xs p-3 overflow-x-auto bg-muted/40 max-h-80"><code>{f.content}</code></pre>
-                      </details>
-                    ))}
-                    {next.work.payload.runSteps.length > 0 && (
-                      <ol className="list-decimal pl-5 text-sm space-y-0.5">
-                        {next.work.payload.runSteps.map((r, i) => <li key={i}>{r}</li>)}
-                      </ol>
-                    )}
-                    {next.work.payload.verify && <p className="text-sm"><span className="font-medium">It works when:</span> {next.work.payload.verify}</p>}
-                    <div className="flex gap-2 pt-1 flex-wrap">
-                      <Button size="sm" disabled={choose.isPending} onClick={() => choose.mutate({ workId: next.work!.id })} data-testid="button-build-works">
-                        <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />It runs — mark done
-                      </Button>
-                      <Button size="sm" variant="outline" disabled={work.isPending} onClick={() => work.mutate(next.workTaskId!)}>Rebuild</Button>
-                    </div>
-                  </div>
-                )}
-                {next.work.payload.kind === "template" && (
-                  <div className="space-y-2" data-testid="work-template">
-                    <p className="text-sm text-muted-foreground">{next.work.payload.intro}</p>
-                    <pre className="text-sm whitespace-pre-wrap rounded-md border border-border p-3 bg-muted/40">{next.work.payload.template}</pre>
-                    <p className="text-xs text-muted-foreground"><span className="font-medium">Nova did:</span> {next.work.payload.whatNovaDid} <span className="font-medium ml-2">You do:</span> {next.work.payload.whatIsLeft}</p>
-                    <div className="flex gap-2 pt-1 flex-wrap">
-                      <Button size="sm" variant="outline" onClick={() => copy(next.work!.payload.kind === "template" ? next.work!.payload.template : "")}><Copy className="h-3.5 w-3.5 mr-1.5" />Copy</Button>
-                      <Button size="sm" disabled={choose.isPending} onClick={() => choose.mutate({ workId: next.work!.id })} data-testid="button-template-done">
-                        <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />I did this
-                      </Button>
-                    </div>
-                  </div>
-                )}
+            {next.workTaskId && !(next.expandsFrom && !next.steps) && (
+              <div className="pt-2 border-t border-border">
+                <WorkView projectId={projectId} taskId={next.workTaskId} actor={next.step?.actor ?? next.actor} work={next.work} done={false} />
               </div>
             )}
 
             <div className="flex gap-2 pt-1 flex-wrap">
-              {next.workTaskId && !next.work && (
-                <Button size="sm" disabled={work.isPending || (!!next.expandsFrom && !next.steps)} onClick={() => work.mutate(next.workTaskId!)} data-testid="button-work">
-                  {work.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Wrench className="h-3.5 w-3.5 mr-1.5" />}
-                  {work.isPending ? "Nova is on it…" : WORK_ACTION_LABEL[next.step?.actor ?? next.actor]}
-                </Button>
-              )}
               {next.expandsFrom && !next.steps && (
                 <Button size="sm" onClick={() => expand.mutate({ backboneId: next.id })} disabled={expand.isPending || !!draft} data-testid="button-next-expand">
                   {expand.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <ListTree className="h-3.5 w-3.5 mr-1.5" />}Break into steps with Nova
@@ -367,15 +281,20 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
               </div>
               <ul className="space-y-1">
                 {phase.milestones.map((m) => (
-                  <li key={m.id} className="flex items-start gap-2 text-sm">
+                  <li key={m.id} className="text-sm">
+                  <div className="flex items-start gap-2">
                     {m.done ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 mt-0.5 shrink-0" /> : <Circle className="h-3.5 w-3.5 text-muted-foreground/40 mt-0.5 shrink-0" />}
-                    <span className={m.done ? "text-muted-foreground line-through" : ""}>{m.title}{m.steps && <span className="text-muted-foreground"> ({m.steps.done}/{m.steps.total} steps)</span>}</span>
+                    <button className={`text-left hover:underline ${m.done ? "text-muted-foreground line-through" : ""}`} onClick={() => setOpen(open === m.id ? null : m.id)} data-testid={`open-${m.id}`}>
+                      {m.title}{m.steps && <span className="text-muted-foreground no-underline"> ({m.steps.done}/{m.steps.total} steps)</span>}
+                    </button>
                     <span className="text-[11px] text-muted-foreground ml-auto shrink-0">{m.actor === "user-does" ? "you" : "Nova"} · {estimate(m.estimateMinutes)}</span>
                     {!m.done && (
                       <button className="text-[11px] text-primary hover:underline shrink-0" disabled={mark.isPending} onClick={() => mark.mutate([m.id])} data-testid={`mark-${m.id}`} title="Already done? Mark it.">
                         done
                       </button>
                     )}
+                  </div>
+                  {open === m.id && <div className="mt-2 mb-3 ml-5"><MilestoneDetail projectId={projectId} backboneId={m.id} /></div>}
                   </li>
                 ))}
                 {phase.injected.map((t) => (

@@ -50,7 +50,7 @@ import { isValidSubcategory, PROJECT_GOALS } from "@shared/goals";
 import { recordActivity } from "./analytics";
 import {
   instantiatePathTree, pathStatus, onPathTaskDone, createExpansion, createInjections,
-  collectArtifacts, switchPath, backboneIdOf, reconcileMilestones, pathTaskContext, saveWork, chooseWork,
+  collectArtifacts, switchPath, backboneIdOf, reconcileMilestones, pathTaskContext, saveWork, chooseWork, milestoneDetail,
 } from "./phase-trees";
 import { draftExpansionSteps, proposeInjections, readExistingProgress, draftArtifact, produceWork } from "./phase-trees-nova";
 import { workKindFor } from "@shared/phase-trees";
@@ -2615,6 +2615,19 @@ RULES:
       if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
       console.error("Path adopt error:", error);
       res.status(500).json({ message: "Couldn't put the project on its path" });
+    }
+  });
+
+  /** One milestone in full, for the map's click-through. */
+  app.get("/api/projects/:id/path/milestones/:backboneId", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const detail = await milestoneDetail(req.params.id, req.params.backboneId);
+      if (!detail) return res.status(404).json({ message: "That milestone isn't on this path." });
+      res.json(detail);
+    } catch (error) {
+      console.error("Milestone detail error:", error);
+      res.status(500).json({ message: "Couldn't read that milestone" });
     }
   });
 

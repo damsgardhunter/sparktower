@@ -341,3 +341,34 @@ describe("Nova works the milestone", () => {
     expect(res.body.code).toBe("not_on_path");
   });
 });
+
+describe("clicking into a step", () => {
+  it("shows what it asks for, what's written, what Nova produced, how it got done, and its steps", async () => {
+    const app = await getTestApp();
+    const agent = await owner(app);
+    const id = (await create(agent, "ship_mvp", "game", "Detail Test")).body.id;
+    const { saveWork, createExpansion } = await import("../../server/phase-trees");
+
+    const fresh = (await agent.get(`/api/projects/${id}/path/milestones/SHIP.M1.1`)).body;
+    expect(fresh.phase.id).toBe("week-1");
+    expect(fresh.milestone.title).toBe("Product statement");
+    expect(fresh.task).toMatchObject({ status: "todo", how: "not-done", answer: null, work: null, actor: "nova-drafts" });
+
+    const row = await saveWork(id, fresh.task.taskId, { kind: "options", intro: "", options: [{ title: "A", body: "Players stack towers under pressure." }, { title: "B", body: "B" }, { title: "C", body: "C" }] });
+    await agent.post(`/api/projects/${id}/path/work/${row.id}/choose`).send({ index: 0 }).expect(200);
+    const done = (await agent.get(`/api/projects/${id}/path/milestones/SHIP.M1.1`)).body;
+    expect(done.task).toMatchObject({ status: "done", how: "done", answer: "Players stack towers under pressure." });
+    expect(done.task.work.chosenIndex).toBe(0);
+
+    await agent.post(`/api/projects/${id}/path/mark`).send({ ids: ["SHIP.M1.4"] });
+    expect((await agent.get(`/api/projects/${id}/path/milestones/SHIP.M1.4`)).body.task.how).toBe("you-marked");
+
+    const { created } = await createExpansion(id, "SHIP.M2.1", [{ title: "Move", description: "" }, { title: "Stack", description: "" }]);
+    await agent.patch(`/api/kanban/${created[0].id}`).send({ status: "done" }).expect(200);
+    const loop = (await agent.get(`/api/projects/${id}/path/milestones/SHIP.M2.1`)).body;
+    expect(loop.steps.map((s: any) => [s.title, s.status])).toEqual([["Move", "done"], ["Stack", "todo"]]);
+    expect(loop.milestone.description).toMatch(/moment-to-moment/); // the game variant
+
+    expect((await agent.get(`/api/projects/${id}/path/milestones/NOPE`)).status).toBe(404);
+  });
+});

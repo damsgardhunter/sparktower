@@ -100,6 +100,11 @@ test("a new builder signs up, creates a project, and posts the first check-in", 
   await expect(page.getByTestId("next-action-title")).toHaveText("Product statement");
   await page.getByTestId("button-next-done").click();
   await expect(page.getByTestId("next-action-title")).toHaveText("The core loop");
+  // Any step in the map opens in place, and says how it got done.
+  await page.getByTestId("button-toggle-path").click();
+  await page.getByTestId("open-SHIP.M1.1").click();
+  await expect(page.getByTestId("milestone-detail")).toContainText("Done");
+  await expect(page.getByTestId("milestone-detail")).toContainText("Nova drafts it");
 
   /*
    * The first check-in, from the home rail. Each of your projects gets a

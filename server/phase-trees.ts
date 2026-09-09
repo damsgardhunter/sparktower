@@ -277,6 +277,50 @@ export async function chooseWork(projectId: string, workId: string, choice: { in
   return { task: updated, answer };
 }
 
+/** How a task came to be done, read off its tags — so the map can say so. */
+export function howDone(t: { status: string; tags: string[] | null }): "not-done" | "nova-recognised" | "you-marked" | "carried" | "done" {
+  if (t.status !== "done") return "not-done";
+  if (t.tags?.includes("carried:reconciled")) return "nova-recognised";
+  if (t.tags?.includes("carried:builder")) return "you-marked";
+  if (t.tags?.some((x) => x.startsWith("carried:"))) return "carried";
+  return "done";
+}
+
+/**
+ * One milestone, in full: the authored text, what is written on it, what
+ * Nova produced, how it came to be done, and its steps — each with the
+ * same. This is what opens when a step in the map is clicked.
+ */
+export async function milestoneDetail(projectId: string, backboneId: string) {
+  const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory }).from(projects).where(eq(projects.id, projectId));
+  if (!project) return null;
+  const phases = resolveTree(project.goal as ProjectGoal, project.subcategory);
+  const phase = phases.find((p) => p.milestones.some((m) => m.id === backboneId));
+  const milestone = phase?.milestones.find((m) => m.id === backboneId);
+  if (!phase || !milestone) return null;
+  const tasks = await pathTasks(projectId);
+  const task = tasks.find((t) => backboneIdOf(t.tags) === backboneId) ?? null;
+  const describe = async (t: typeof tasks[number], authored: string) => {
+    const w = await latestWork(t.id);
+    const written = (t.description ?? "").trim();
+    return {
+      taskId: t.id, title: t.title, status: t.status, completedAt: t.completedAt, how: howDone(t),
+      actor: (tagValue(t.tags, "actor:") ?? milestone.actor) as Actor,
+      // The answer is whatever is written beyond the authored text.
+      answer: written && written !== authored.trim() ? written : null,
+      work: w ? { id: w.id, kind: w.kind, payload: w.payload, chosenIndex: w.chosenIndex, createdAt: w.createdAt } : null,
+    };
+  };
+  const steps = [];
+  for (const k of tasks.filter((t) => parentOf(t.tags) === backboneId).sort((a, b) => (a.order ?? 0) - (b.order ?? 0))) steps.push(await describe(k, ""));
+  return {
+    phase: { id: phase.id, title: phase.title, optional: !!phase.optional },
+    milestone,
+    task: task ? await describe(task, milestone.description) : null,
+    steps,
+  };
+}
+
 /** The artifacts Nova may ground an injected task in: written answers, check-ins, decisions. */
 export async function collectArtifacts(projectId: string): Promise<Artifact[]> {
   const goal = (await db.select({ goal: projects.goal, subcategory: projects.subcategory }).from(projects).where(eq(projects.id, projectId)))[0];
