@@ -52,7 +52,7 @@ import {
   instantiatePathTree, pathStatus, onPathTaskDone, createExpansion, createInjections,
   collectArtifacts, switchPath, backboneIdOf, reconcileMilestones,
 } from "./phase-trees";
-import { draftExpansionSteps, proposeInjections, readExistingProgress } from "./phase-trees-nova";
+import { draftExpansionSteps, proposeInjections, readExistingProgress, draftArtifact } from "./phase-trees-nova";
 import { resolveTree, treeFor } from "@shared/phase-trees";
 
 async function isProjectMember(userId: string, projectId: string): Promise<boolean> {
@@ -2655,13 +2655,32 @@ RULES:
         ? req.body.artifact.trim()
         : source?.description && source.description.trim() !== (authored?.description ?? "").trim() ? source.description.trim() : "";
       if (!written) {
+        /*
+         * Nothing written yet. No blank text fields anywhere: rather than
+         * refuse, Nova drafts the answer from the project and hands it back
+         * to edit. Confirming sends it as `artifact`, which lands on the
+         * source task and becomes the thing the steps are built from.
+         */
+        if (req.body?.draft === true && authored) {
+          const ent = await requireCredits(res, userId, CREDIT_COSTS.novaGuide, "Nova drafting your answer");
+          if (!ent) return;
+          const state = await buildOperableProjectState(projectId, { includeIds: false, includeAudit: true });
+          const draft = await draftArtifact(ent, authored, state);
+          await storage.deductCredits(userId, CREDIT_COSTS.novaGuide);
+          return res.json({ draft, sourceTitle: authored.title, sourceTaskId: source?.id ?? null });
+        }
         return res.status(400).json({
-          message: `Write your ${authored?.title?.toLowerCase() ?? "answer"} into that task first — Nova builds the steps from what you wrote, not from a guess.`,
-          code: "artifact_missing", sourceTaskId: source?.id ?? null,
+          message: `Nothing is written under "${authored?.title ?? "that milestone"}" yet. Nova can draft it from your project for you to edit, or write it into that task yourself.`,
+          code: "artifact_missing", sourceTitle: authored?.title ?? null, sourceTaskId: source?.id ?? null,
         });
       }
       const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova path steps");
       if (!ent) return;
+      // What they confirmed is the artifact; keep it on the source task so
+      // the rest of the path (injections, the next expansion) can read it.
+      if (source && typeof req.body?.artifact === "string" && req.body.artifact.trim()) {
+        await storage.updateKanbanTask(source.id, { description: written } as any);
+      }
       const steps = await draftExpansionSteps(ent, milestone.title, written);
       if (steps.length < 1) return res.status(502).json({ message: "Nova couldn't read steps out of that. Try adding a line or two." });
       const result = await createExpansion(projectId, backboneId, steps);

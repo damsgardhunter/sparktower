@@ -148,7 +148,8 @@ describe("the path adapts", () => {
     const res = await agent.post(`/api/projects/${id}/path/expand`).send({ backboneId: "SHIP.M2.1" });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("artifact_missing");
-    expect(res.body.message).toMatch(/core loop/i);
+    expect(res.body.message).toMatch(/Nothing is written under "The core loop" yet/);
+    expect(res.body.sourceTaskId).toBeTruthy();
     const wrong = await agent.post(`/api/projects/${id}/path/expand`).send({ backboneId: "SHIP.M1.1" });
     expect(wrong.body.code).toBe("not_expandable");
   });

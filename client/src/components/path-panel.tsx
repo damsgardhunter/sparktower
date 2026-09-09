@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Textarea } from "@/components/ui/textarea";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -69,13 +70,30 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
     for (const key of ["path", "kanban", "nova-briefing", "milestones", "roadmap"]) queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, key] });
     queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
   };
-  const fail = (e: any) => toast({ title: String(e?.message ?? "Something went wrong").replace(/^\d+:\s*/, ""), variant: "destructive" });
+  const fail = (e: any) => {
+    // apiRequest throws "<status>: <body>"; the body is our JSON with a sentence in it.
+    const raw = String(e?.message ?? "Something went wrong").replace(/^\d+:\s*/, "");
+    let message = raw;
+    try { message = JSON.parse(raw).message ?? raw; } catch { /* plain text */ }
+    toast({ title: message, variant: "destructive" });
+  };
 
   const markDone = useMutation({ mutationFn: (taskId: string) => apiRequest("PATCH", `/api/kanban/${taskId}`, { status: "done" }), onSuccess: refresh, onError: fail });
+  const [draft, setDraft] = useState<{ backboneId: string; sourceTitle: string; text: string } | null>(null);
   const expand = useMutation({
-    mutationFn: (backboneId: string) => apiRequest("POST", `/api/projects/${projectId}/path/expand`, { backboneId }).then((r) => r.json()),
-    onSuccess: (r: any) => { refresh(); toast({ title: r.created?.length ? `Nova broke it into ${r.created.length} steps` : "Steps already exist" }); },
-    onError: fail,
+    mutationFn: (body: { backboneId: string; artifact?: string }) => apiRequest("POST", `/api/projects/${projectId}/path/expand`, body).then((r) => r.json()),
+    onSuccess: (r: any) => { setDraft(null); refresh(); toast({ title: r.created?.length ? `Nova broke it into ${r.created.length} steps` : "Steps already exist" }); },
+    onError: async (e: any, body) => {
+      // Nothing written yet: ask Nova to draft it, and let them edit before it becomes the source.
+      if (String(e?.message ?? "").includes("artifact_missing")) {
+        try {
+          const r = await apiRequest("POST", `/api/projects/${projectId}/path/expand`, { backboneId: body.backboneId, draft: true }).then((x) => x.json());
+          setDraft({ backboneId: body.backboneId, sourceTitle: r.sourceTitle, text: r.draft });
+          return;
+        } catch (err) { return fail(err); }
+      }
+      fail(e);
+    },
   });
   const inject = useMutation({
     mutationFn: (phaseId: string) => apiRequest("POST", `/api/projects/${projectId}/path/inject`, { phaseId }).then((r) => r.json()),
@@ -199,8 +217,8 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
             <p className="text-sm text-muted-foreground leading-relaxed">{next.description}</p>
             <div className="flex gap-2 pt-1 flex-wrap">
               {next.expandsFrom && !next.steps && (
-                <Button size="sm" onClick={() => expand.mutate(next.id)} disabled={expand.isPending} data-testid="button-next-expand">
-                  <ListTree className="h-3.5 w-3.5 mr-1.5" />Break into steps with Nova
+                <Button size="sm" onClick={() => expand.mutate({ backboneId: next.id })} disabled={expand.isPending || !!draft} data-testid="button-next-expand">
+                  {expand.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <ListTree className="h-3.5 w-3.5 mr-1.5" />}Break into steps with Nova
                 </Button>
               )}
               {next.taskId && (
@@ -211,6 +229,18 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
               )}
               <Button size="sm" variant="outline" onClick={() => onNavigate("kanban")} data-testid="button-next-open">Open in tasks</Button>
             </div>
+            {draft && (
+              <div className="space-y-2 pt-2 border-t border-border" data-testid="artifact-draft">
+                <p className="text-xs text-muted-foreground">Nothing was written under <span className="font-medium text-foreground">{draft.sourceTitle}</span> yet, so Nova drafted it from your project. Edit anything that's wrong, then build the steps from it.</p>
+                <Textarea value={draft.text} onChange={(e) => setDraft({ ...draft, text: e.target.value })} rows={6} className="text-sm" data-testid="input-artifact-draft" />
+                <div className="flex gap-2">
+                  <Button size="sm" disabled={expand.isPending || !draft.text.trim()} onClick={() => expand.mutate({ backboneId: draft.backboneId, artifact: draft.text })} data-testid="button-confirm-draft">
+                    {expand.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <ListTree className="h-3.5 w-3.5 mr-1.5" />}Looks right — build the steps
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setDraft(null)}>Cancel</Button>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
       ) : (

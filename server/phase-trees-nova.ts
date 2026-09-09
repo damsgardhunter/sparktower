@@ -75,3 +75,17 @@ Respond ONLY with JSON: {"done":[{"id":"<milestone id>","evidence":"<one line>"}
     .map((d: any) => ({ id: String(d.id), evidence: String(d.evidence ?? "").slice(0, 300) }));
   return { done, read: String(parsed.read ?? "").slice(0, 600) };
 }
+
+/** Drafts the missing artifact (the core loop, say) from what the project already shows. */
+export async function draftArtifact(ent: UserEntitlements, milestone: { title: string; description: string }, state: string) {
+  const completion = await openai.chat.completions.create({
+    model: modelFor(ent),
+    messages: [
+      { role: "system", content: `You are Nova, writing a builder's answer to a milestone for them, from what their project already shows. ${coachingDirectiveFor(ent)}
+Write it as they would: concrete, in their product's own terms, 3–5 numbered lines at most. No preamble, no options, no questions. If the project state is thin, write the most plausible version and say in a final line what you assumed.` },
+      { role: "user", content: `Milestone: ${milestone.title}\nWhat it asks for: ${milestone.description}\n\nPROJECT STATE\n${state.slice(0, 16000)}` },
+    ],
+    temperature: 0.4,
+  });
+  return (completion.choices[0]?.message?.content ?? "").trim().slice(0, 3000);
+}
