@@ -11,7 +11,8 @@
     "db:push": "drizzle-kit push",
     "stripe:seed": "tsx --env-file=.env server/seed-stripe.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:unit": "vitest run --config vitest.unit.config.ts"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.19.0",
