@@ -19,11 +19,6 @@ regexes = [
   '''whsec_test_secret_for_signature_verification''',
   '''whsec_an_attacker_does_not_have_the_real_one''',
   '''(test|e2e)-session-secret-not-used-[a-z-]+''',
-  # Loopback Postgres URLs: the .env.example placeholder and the CI service
-  # container's former default, which lives on in old commits. Written as a
-  # structural pattern rather than the literal strings so this file doesn't
-  # itself read as a leak to a matcher. See docs/security/ for the history.
-  '''postgres(ql)?://[a-z<>]+:[a-z<>]+@(localhost|127\.0\.0\.1):5432/[a-z]+''',
 ]
 paths = [
   '''package-lock\.json''',

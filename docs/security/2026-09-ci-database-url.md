@@ -11,7 +11,7 @@ committed to the repository, in the CI workflow.
 
 ## What it actually was
 
-The string was `postgresql://postgres:<redacted>@localhost:5432/postgres` in
+The string was a `postgresql://` URL for the `postgres` user on `localhost:5432`, with the container image's documented default password, in
 `.github/workflows/ci.yml`. It is the connection string for the Postgres
 **service container** that GitHub Actions starts inside a single CI job. That
 database:
@@ -31,16 +31,20 @@ for credential-shaped tokens (OpenAI, Stripe live and webhook, GitHub, Google
 API keys):
 
 ```sh
-git log -p --all --pretty=format: | grep -oE "[a-z]+://[^/:@]+:[^@]+@[^ \"']+" | sort -u
+# every URL in history that carries credentials before the host
+git log -p --all --pretty=format: | grep -oE "[a-z]+://[^/ ]+@[^ \"']+" | sort -u
+# provider-shaped tokens
 git log -p --all --pretty=format: | grep -oE "(sk-[A-Za-z0-9_-]{20,}|sk_live_|whsec_[A-Za-z0-9]{10,}|gho_|AIza)" | sort -u
+# and the full-history scanner CI runs
+gitleaks detect --source . --redact --no-banner
 ```
 
 Findings across the entire history:
 
 | value | what it is |
 |---|---|
-| `postgresql://postgres:<redacted>@localhost:5432/postgres` | the CI container above |
-| `postgresql://<user>:<password>@127.0.0.1:5432/sparktower` | the placeholder in `.env.example` |
+| a `postgresql://` URL for `postgres` on `localhost:5432` (the image default password) | the CI container above |
+| a `postgresql://` URL for `127.0.0.1:5432/sparktower` with a placeholder user and password | the placeholder in `.env.example` |
 | `sk-test-not-a-real-key…` | test fixtures, named as fakes |
 | `6LdovJor…` in `dd47973b` | a real reCAPTCHA secret — see *The real finding* |
 
@@ -74,8 +78,13 @@ longer exists.
 **Rotation: yes, at Google.** The key is dead to this codebase but alive at
 Google's end until it is deleted. Owner action, not a code change: in the
 reCAPTCHA admin console (google.com/recaptcha/admin), find the site whose
-secret begins `6LdovJor` and delete it or regenerate the keys. Record the date
-here when done: *rotated on ________*.
+secret begins `6LdovJor` and delete it or regenerate the keys.
+
+Rotation log:
+
+| date | decision |
+|---|---|
+| 2026-09-09 | **Deferred by the owner.** The key belongs to the 2025 prototype, which is deleted; nothing live depends on it and the current app has no reCAPTCHA. It will be deleted at Google, and a fresh pair created, the next time reCAPTCHA is set up. Until then this line is the open item. |
 
 **History rewrite: no.** The value has been public on a public repository for
 over a year; rewriting history now un-publishes nothing, and it would
@@ -138,7 +147,9 @@ repository. A PR that introduces a credential cannot be merged.
 
 **Scanner false positives:** anything that matches a credential *shape*
 without being one — the placeholder in `.env.example`, this note — is written
-so it no longer matches (`<user>:<password>`, `<redacted>`). The allowlist in
+so it no longer matches: credentials are described in words, never spelled in
+the `user:password@host` form, because a scanner cannot tell an explanation
+from a leak and will keep flagging the explanation. The allowlist in
 `.gitleaks.toml` is a structural regex, not a literal, for the same reason.
 
 ## If a real credential is ever committed
