@@ -206,21 +206,37 @@ export async function createExpansion(projectId: string, backboneId: string, ste
  * builder saying so. Counted as progress, not as pace — the work happened
  * before the path was watching.
  */
-export async function reconcileMilestones(projectId: string, done: { id: string; evidence: string }[], source: "nova" | "builder") {
+export async function reconcileMilestones(projectId: string, done: { id: string; evidence: string; answer?: string }[], source: "nova" | "builder") {
+  const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory }).from(projects).where(eq(projects.id, projectId));
+  const authored = new Map(project ? resolveTree(project.goal as ProjectGoal, project.subcategory).flatMap((p) => p.milestones).map((m) => [m.id, m.description.trim()]) : []);
   const tasks = await pathTasks(projectId);
   const marked: string[] = [];
+  const filled: string[] = [];
   for (const d of done) {
     const t = tasks.find((x) => backboneIdOf(x.tags) === d.id);
-    if (!t || t.status === "done") continue;
+    if (!t) continue;
+    const written = (t.description ?? "").trim();
+    // "Written" means something beyond the authored text and beyond a bare recognition note.
+    const hasAnswer = written && written !== authored.get(d.id) && !/^(.*\n\n)?(Nova recognised this as already done|Marked done by you): /s.test(written.replace(authored.get(d.id) ?? "", "").trim());
+    const answer = d.answer?.trim();
+    if (t.status === "done") {
+      // Already done: fill in the content if it's missing and the read found it.
+      if (!hasAnswer && answer) {
+        await storage.updateKanbanTask(t.id, { description: answer } as any);
+        filled.push(d.id);
+      }
+      continue;
+    }
     await storage.updateKanbanTask(t.id, {
       status: "done", completedAt: new Date(),
-      description: `${t.description ?? ""}\n\n${source === "nova" ? "Nova recognised this as already done" : "Marked done by you"}: ${d.evidence}`.trim(),
+      description: answer && !hasAnswer ? answer : `${t.description ?? ""}\n\n${source === "nova" ? "Nova recognised this as already done" : "Marked done by you"}: ${d.evidence}`.trim(),
       tags: [...(t.tags ?? []), `carried:${source === "nova" ? "reconciled" : "builder"}`],
     } as any);
     marked.push(d.id);
+    if (answer && !hasAnswer) filled.push(d.id);
   }
   if (marked.length) await refreshPace(projectId);
-  return marked;
+  return { marked, filled };
 }
 
 /** The task a work request is about, with its actor and tier read off the path. */
@@ -306,8 +322,10 @@ export async function milestoneDetail(projectId: string, backboneId: string) {
     return {
       taskId: t.id, title: t.title, status: t.status, completedAt: t.completedAt, how: howDone(t),
       actor: (tagValue(t.tags, "actor:") ?? milestone.actor) as Actor,
-      // The answer is whatever is written beyond the authored text.
-      answer: written && written !== authored.trim() ? written : null,
+      // The answer is whatever is written beyond the authored text. A bare
+      // recognition note ("Nova recognised this as already done: …") is
+      // evidence, not content, and shows under "how", not here.
+      answer: written && written !== authored.trim() && !/^(Nova recognised this as already done|Marked done by you): /.test(written.replace(authored.trim(), "").trim()) ? written : null,
       work: w ? { id: w.id, kind: w.kind, payload: w.payload, chosenIndex: w.chosenIndex, createdAt: w.createdAt } : null,
     };
   };

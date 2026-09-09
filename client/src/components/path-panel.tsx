@@ -106,7 +106,11 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
     mutationFn: () => apiRequest("POST", `/api/projects/${projectId}/path/adopt`, {}).then((r) => r.json()),
     onSuccess: (r: any) => {
       refresh();
-      toast({ title: r.recognised?.length ? `Nova recognised ${r.recognised.length} milestone${r.recognised.length === 1 ? "" : "s"} as already done` : "Your project is on its path", description: r.read || undefined });
+      const bits = [
+        r.recognised?.length ? `${r.recognised.length} milestone${r.recognised.length === 1 ? "" : "s"} marked done` : null,
+        r.filled?.length ? `${r.filled.length} written in from your brief and audit` : null,
+      ].filter(Boolean);
+      toast({ title: bits.length ? `Nova re-read your project: ${bits.join(", ")}` : (r.built ? "Your project is on its path" : "Nothing new — the path already matches what Nova can see"), description: r.read || undefined });
     },
     onError: fail,
   });
@@ -144,7 +148,6 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
   const { current, next, mainLine, pace } = data;
   const pct = mainLine.total ? Math.round((mainLine.done / mainLine.total) * 100) : 0;
   const novaActs = next && next.actor !== "user-does";
-  const currentPhase = data.phases.find((p) => p.id === current.id);
   const goalLabel = (g: ProjectGoal) => PROJECT_GOALS.find((x) => x.id === g)?.label ?? g;
 
   return (
@@ -168,36 +171,20 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
         <div className="h-full bg-primary transition-all" style={{ width: `${pct}%` }} />
       </div>
 
-      {/* Nova panel: what it noticed, what it recalculated, one or two actions. */}
+      {/* Nova panel: one line on pace, and the button that re-reads the project. */}
       {pace && (
-        <div className="rounded-lg border border-border/60 p-3 space-y-2 text-sm" data-testid="nova-panel">
-          <div className="flex items-start gap-2">
+        <div className="rounded-lg border border-border/60 p-3 flex items-center gap-3 flex-wrap text-sm" data-testid="nova-panel">
+          <div className="flex items-start gap-2 flex-1 min-w-[16rem]">
             <Sparkles className="h-3.5 w-3.5 text-primary mt-0.5 shrink-0" />
             <p className="text-muted-foreground leading-relaxed" data-testid="pace-note">
               {pace.state === "nudge" && "A week without a check-in. The date is unchanged — one small step keeps it that way. "}
               {pace.note}
             </p>
           </div>
-          {data.events.length > 0 && (
-            <ul className="text-xs text-muted-foreground space-y-0.5 pl-5" data-testid="pace-events">
-              {data.events.slice(0, 3).map((e) => (
-                <li key={e.id}>
-                  {e.title}: {e.estimateMinutes != null ? `estimated ${estimate(e.estimateMinutes)}` : "no estimate"}
-                  {e.actualMinutes != null && `, took ${estimate(e.actualMinutes)}`}
-                  {e.projectedBefore && e.projectedAfter && day(e.projectedBefore) !== day(e.projectedAfter) && ` → ${day(e.projectedAfter)}`}
-                </li>
-              ))}
-            </ul>
-          )}
-          {currentPhase && (
-            <div className="flex gap-2 flex-wrap pl-5">
-              <Button size="sm" variant="outline" className="h-7 text-xs" disabled={inject.isPending || currentPhase.injectRoom <= 0}
-                onClick={() => inject.mutate(currentPhase.id)} data-testid="button-inject">
-                <Plus className="h-3 w-3 mr-1" />
-                {currentPhase.injectRoom > 0 ? `Ask Nova what this phase is missing (${currentPhase.injectRoom} left)` : "Nova's additions for this phase are full"}
-              </Button>
-            </div>
-          )}
+          <Button size="sm" variant="outline" className="shrink-0" disabled={adopt.isPending} onClick={() => adopt.mutate()} data-testid="button-reevaluate" title="Nova re-reads your brief, setup, audits and tasks, marks what's done and writes in what it finds.">
+            {adopt.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 mr-1.5" />}
+            {adopt.isPending ? "Nova is re-reading…" : "Re-evaluate where I'm at"}
+          </Button>
         </div>
       )}
 
@@ -306,6 +293,11 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
                 ))}
               </ul>
               {phase.checkpoint && <p className="text-xs text-muted-foreground mt-1.5 italic">{phase.checkpoint}</p>}
+              {!phase.optional && (
+                <button className="text-[11px] text-muted-foreground hover:text-foreground flex items-center gap-1 mt-1.5" disabled={inject.isPending || phase.injectRoom <= 0} onClick={() => inject.mutate(phase.id)} data-testid={`inject-${phase.id}`}>
+                  <Plus className="h-3 w-3" />{phase.injectRoom > 0 ? `Ask Nova what this phase is missing (${phase.injectRoom} left)` : "Nova's additions for this phase are full"}
+                </button>
+              )}
             </div>
           ))}
 

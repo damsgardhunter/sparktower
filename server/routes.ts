@@ -2609,8 +2609,8 @@ RULES:
         recognised = result.done; read = result.read;
         await storage.deductCredits(userId, CREDIT_COSTS.taskAssist);
       }
-      const marked = await reconcileMilestones(projectId, recognised, "nova");
-      res.json({ built: built.created, recognised: recognised.filter((r) => marked.includes(r.id)), read });
+      const { marked, filled } = await reconcileMilestones(projectId, recognised, "nova");
+      res.json({ built: built.created, recognised: recognised.filter((r) => marked.includes(r.id)), filled, read });
     } catch (error: any) {
       if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
       console.error("Path adopt error:", error);
@@ -2638,7 +2638,7 @@ RULES:
       if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
       if (!ids.length) return res.status(400).json({ message: "Say which milestones.", code: "invalid_input", field: "ids" });
-      const marked = await reconcileMilestones(req.params.id, ids.map((id) => ({ id, evidence: String(req.body?.evidence ?? "already done before this path existed") })), "builder");
+      const { marked } = await reconcileMilestones(req.params.id, ids.map((id) => ({ id, evidence: String(req.body?.evidence ?? "already done before this path existed") })), "builder");
       res.json({ marked });
     } catch (error) {
       console.error("Path mark error:", error);

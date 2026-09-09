@@ -54,6 +54,9 @@ export function MilestoneDetail({ projectId, backboneId }: { projectId: string; 
           <p className="text-sm whitespace-pre-wrap">{t.answer}</p>
         </div>
       )}
+      {!t.answer && t.status === "done" && !t.work && (
+        <p className="text-xs text-muted-foreground" data-testid="milestone-empty">Nothing written here yet. "Re-evaluate where I'm at" fills this in from your brief, setup and audit where they have it; otherwise have Nova draft it.</p>
+      )}
       <WorkView projectId={projectId} taskId={t.taskId} actor={t.actor} work={t.work} done={t.status === "done"} compact />
       <div className="flex gap-2 flex-wrap">
         {t.status === "done"

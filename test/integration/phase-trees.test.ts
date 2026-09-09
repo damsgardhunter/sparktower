@@ -372,3 +372,33 @@ describe("clicking into a step", () => {
     expect((await agent.get(`/api/projects/${id}/path/milestones/NOPE`)).status).toBe(404);
   });
 });
+
+describe("re-evaluating where the project is", () => {
+  it("fills in what a done milestone says from the read, and never overwrites what the builder wrote", async () => {
+    const app = await getTestApp();
+    const agent = await owner(app);
+    const id = (await create(agent, "ship_mvp", "saas", "Reeval Test")).body.id;
+    const { reconcileMilestones } = await import("../../server/phase-trees");
+
+    // A first read marks two done, one with content from the brief, one without.
+    const first = await reconcileMilestones(id, [
+      { id: "SHIP.M1.1", evidence: "one-liner in the brief", answer: "Plans a week of dinners from what is already in the fridge." },
+      { id: "SHIP.M1.4", evidence: "audit shows Next.js + Postgres", answer: "" },
+    ], "nova");
+    expect(first).toEqual({ marked: ["SHIP.M1.1", "SHIP.M1.4"], filled: ["SHIP.M1.1"] });
+    const stack = (await agent.get(`/api/projects/${id}/path/milestones/SHIP.M1.4`)).body.task;
+    expect(stack).toMatchObject({ status: "done", how: "nova-recognised", answer: null });
+
+    // A later read finds the stack in the audit: the empty one is filled, the written one is left alone.
+    const second = await reconcileMilestones(id, [
+      { id: "SHIP.M1.1", evidence: "brief", answer: "SOMETHING ELSE" },
+      { id: "SHIP.M1.4", evidence: "audit", answer: "Next.js 14, Postgres via Drizzle, Vercel." },
+    ], "nova");
+    expect(second).toEqual({ marked: [], filled: ["SHIP.M1.4"] });
+    expect((await agent.get(`/api/projects/${id}/path/milestones/SHIP.M1.1`)).body.task.answer).toBe("Plans a week of dinners from what is already in the fridge.");
+    expect((await agent.get(`/api/projects/${id}/path/milestones/SHIP.M1.4`)).body.task.answer).toBe("Next.js 14, Postgres via Drizzle, Vercel.");
+    // The filled answer is now an artifact for the rest of the path.
+    const { collectArtifacts } = await import("../../server/phase-trees");
+    expect((await collectArtifacts(id)).map((a) => a.label)).toEqual(expect.arrayContaining(["milestone:SHIP.M1.1", "milestone:SHIP.M1.4"]));
+  });
+});

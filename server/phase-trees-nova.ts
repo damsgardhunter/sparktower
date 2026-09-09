@@ -62,8 +62,9 @@ export async function readExistingProgress(ent: UserEntitlements, backbone: { id
     model: modelFor(ent),
     messages: [
       { role: "system", content: `You are Nova, placing a project that already exists onto its path. ${coachingDirectiveFor(ent)}
-You are given the path's milestones and the project's real state: its tasks (with status), milestones, roadmap, latest codebase audit and check-ins. Decide which path milestones are ALREADY DONE on that evidence. Be generous where the evidence is concrete (a deployed URL, a finished task that clearly is the milestone, an audit that says the thing exists) and strict where it is absent — never mark something done because it "probably" is. For each, quote the evidence in one line.
-Respond ONLY with JSON: {"done":[{"id":"<milestone id>","evidence":"<one line>"}],"read":"<two sentences: where this project actually is and what the next real step is>"}` },
+You are given the path's milestones and the project's real state: its brief fields, scope, tech stack, tasks (with status), milestones, roadmap, latest codebase audit and check-ins. Decide which path milestones are ALREADY DONE on that evidence. Be generous where the evidence is concrete (a deployed URL, a finished task that clearly is the milestone, an audit that says the thing exists, a brief field that is the milestone's content) and strict where it is absent — never mark something done because it "probably" is.
+For each done milestone, also write out its ANSWER: the milestone's actual content as the project already states it — the product statement from the brief's one-liner or value proposition, the stack from the stated tech stack or the audit, the scope cut from the scope lists, the data model from the audit's schema, the deploy from the live URL. Quote and assemble from the sources; do not invent. If the sources hold nothing for it, leave "answer" empty and say so in the evidence.
+Respond ONLY with JSON: {"done":[{"id":"<milestone id>","evidence":"<one line>","answer":"<the content, or empty>"}],"read":"<two sentences: where this project actually is and what the next real step is>"}` },
       { role: "user", content: `PATH MILESTONES\n${backbone.map((m) => `${m.id} — ${m.title}: ${m.description}`).join("\n")}\n\nPROJECT STATE\n${state.slice(0, 24000)}` },
     ],
     temperature: 0.2,
@@ -72,7 +73,7 @@ Respond ONLY with JSON: {"done":[{"id":"<milestone id>","evidence":"<one line>"}
   const ids = new Set(backbone.map((m) => m.id));
   const done = (Array.isArray(parsed.done) ? parsed.done : [])
     .filter((d: any) => d && ids.has(String(d.id)))
-    .map((d: any) => ({ id: String(d.id), evidence: String(d.evidence ?? "").slice(0, 300) }));
+    .map((d: any) => ({ id: String(d.id), evidence: String(d.evidence ?? "").slice(0, 300), answer: d.answer ? String(d.answer).slice(0, 4000) : undefined }));
   return { done, read: String(parsed.read ?? "").slice(0, 600) };
 }
 

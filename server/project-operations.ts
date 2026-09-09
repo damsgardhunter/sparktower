@@ -275,6 +275,8 @@ export async function buildOperableProjectState(
     `PROJECT: ${project.title}`,
     `STATED TECH STACK: ${(project.techStack || []).join(", ") || "(none set)"}`,
     project.repoUrl ? `REPO: ${project.repoUrl}` : "REPO: (none linked)",
+    project.liveUrl ? `LIVE URL: ${project.liveUrl}` : "LIVE URL: (not deployed, or not recorded)",
+    `DESCRIPTION: ${project.description || "(empty)"}`,
     opts.includeAudit === false ? null : renderAudit(audit),
     `BRIEF FIELDS\n${BRIEF_FIELDS.map((f) => `- ${f}: ${(project as any)[f] || "(empty)"}`).join("\n")}`,
     `SCOPE\nMVP (${scope.mvp?.length || 0}): ${scope.mvp?.join(", ") || "(empty)"}\nNice to have (${scope.niceToHave?.length || 0}): ${scope.niceToHave?.join(", ") || "(empty)"}`,
