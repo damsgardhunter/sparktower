@@ -50,9 +50,9 @@ import { isValidSubcategory, PROJECT_GOALS } from "@shared/goals";
 import { recordActivity } from "./analytics";
 import {
   instantiatePathTree, pathStatus, onPathTaskDone, createExpansion, createInjections,
-  collectArtifacts, switchPath, backboneIdOf,
+  collectArtifacts, switchPath, backboneIdOf, reconcileMilestones,
 } from "./phase-trees";
-import { draftExpansionSteps, proposeInjections } from "./phase-trees-nova";
+import { draftExpansionSteps, proposeInjections, readExistingProgress } from "./phase-trees-nova";
 import { resolveTree, treeFor } from "@shared/phase-trees";
 
 async function isProjectMember(userId: string, projectId: string): Promise<boolean> {
@@ -2581,6 +2581,58 @@ RULES:
   });
 
   /**
+   * Putting a project that predates paths onto its path. The tree is built
+   * around the roadmap it already has, then Nova reads the tasks, audit and
+   * check-ins and marks what is already done, so the dashboard starts where
+   * the project actually is rather than at week 1, step 1.
+   */
+  app.post("/api/projects/:id/path/adopt", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+      if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+
+      const built = await instantiatePathTree(projectId, project.goal as any, project.subcategory, { keepRoadmap: true });
+      const backbone = resolveTree(project.goal as any, project.subcategory).filter((p) => !p.optional).flatMap((p) => p.milestones)
+        .map((m) => ({ id: m.id, title: m.title, description: m.description }));
+
+      let recognised: { id: string; evidence: string }[] = [];
+      let read = "";
+      if (req.body?.read !== false) {
+        const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova reading your progress");
+        if (!ent) return;
+        const state = await buildOperableProjectState(projectId, { includeIds: false, includeAudit: true });
+        const result = await readExistingProgress(ent, backbone, state);
+        recognised = result.done; read = result.read;
+        await storage.deductCredits(userId, CREDIT_COSTS.taskAssist);
+      }
+      const marked = await reconcileMilestones(projectId, recognised, "nova");
+      res.json({ built: built.created, recognised: recognised.filter((r) => marked.includes(r.id)), read });
+    } catch (error: any) {
+      if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
+      console.error("Path adopt error:", error);
+      res.status(500).json({ message: "Couldn't put the project on its path" });
+    }
+  });
+
+  /** The builder marking a milestone done from the map — quick catch-up, no AI. */
+  app.post("/api/projects/:id/path/mark", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
+      if (!ids.length) return res.status(400).json({ message: "Say which milestones.", code: "invalid_input", field: "ids" });
+      const marked = await reconcileMilestones(req.params.id, ids.map((id) => ({ id, evidence: String(req.body?.evidence ?? "already done before this path existed") })), "builder");
+      res.json({ marked });
+    } catch (error) {
+      console.error("Path mark error:", error);
+      res.status(500).json({ message: "Couldn't mark that" });
+    }
+  });
+
+  /**
    * Layer 3a. A fan-out milestone ("one per step of the core loop") becomes
    * real steps. The artifact is the parent task's own written answer; with
    * no answer there is nothing to expand from, and Nova says so.
@@ -2634,6 +2686,7 @@ RULES:
       const phaseId = String(req.body?.phaseId ?? "");
       const status = await pathStatus(projectId);
       if (!status) return res.status(404).json({ message: "Project not found" });
+      if (!status.adopted) return res.status(400).json({ message: "Put the project on its path first.", code: "no_path" });
       const phase = status.phases.find((p) => p.id === phaseId);
       if (!phase) return res.status(400).json({ message: "That phase isn't on this path.", code: "not_on_path" });
       if (phase.injectRoom <= 0) return res.status(409).json({ message: "This phase already has three of Nova's additions. Finish those first.", code: "phase_at_cap" });

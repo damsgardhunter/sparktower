@@ -20,7 +20,9 @@ interface PathPhase {
   injected: { id: string; title: string; status: string; artifact: string | null }[];
   injectRoom: number;
 }
+interface NoPath { adopted: false; goal: ProjectGoal; subcategory: string; promise: string; existingTasks: number; existingDone: number }
 interface PathStatus {
+  adopted: true;
   goal: ProjectGoal; subcategory: string; promise: string; target: string;
   phases: PathPhase[];
   current: { id: string; title: string; step: number; of: number };
@@ -61,7 +63,7 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
   const [showMap, setShowMap] = useState(false);
   const [showSwitch, setShowSwitch] = useState(false);
   const { toast } = useToast();
-  const { data, isLoading } = useQuery<PathStatus>({ queryKey: ["/api/projects", projectId, "path"], enabled: !!projectId });
+  const { data: raw, isLoading } = useQuery<PathStatus | NoPath>({ queryKey: ["/api/projects", projectId, "path"], enabled: !!projectId });
 
   const refresh = () => {
     for (const key of ["path", "kanban", "nova-briefing", "milestones", "roadmap"]) queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, key] });
@@ -83,6 +85,18 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
     },
     onError: fail,
   });
+  const adopt = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/projects/${projectId}/path/adopt`, {}).then((r) => r.json()),
+    onSuccess: (r: any) => {
+      refresh();
+      toast({ title: r.recognised?.length ? `Nova recognised ${r.recognised.length} milestone${r.recognised.length === 1 ? "" : "s"} as already done` : "Your project is on its path", description: r.read || undefined });
+    },
+    onError: fail,
+  });
+  const mark = useMutation({
+    mutationFn: (ids: string[]) => apiRequest("POST", `/api/projects/${projectId}/path/mark`, { ids }).then((r) => r.json()),
+    onSuccess: refresh, onError: fail,
+  });
   const switchPath = useMutation({
     mutationFn: (body: { goal: ProjectGoal; subcategory: string }) => apiRequest("POST", `/api/projects/${projectId}/path/switch`, body).then((r) => r.json()),
     onSuccess: (r: any) => { refresh(); setShowSwitch(false); toast({ title: "Moved to the new path", description: r.carried ? `${r.carried} shared milestone${r.carried === 1 ? "" : "s"} carried across as done.` : undefined }); },
@@ -90,7 +104,25 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
   });
 
   if (isLoading) return <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-primary" /></div>;
-  if (!data) return null; // Projects made before paths existed have none; nothing to show.
+  if (!raw) return null;
+  if (!raw.adopted) {
+    // Made before paths existed. Offer the path, and Nova's read of where the work already is.
+    return (
+      <Card className="border-primary/40" data-testid="path-adopt">
+        <CardContent className="p-4 space-y-2">
+          <p className="font-semibold">Put this project on its path</p>
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            {raw.promise}. You already have {raw.existingDone} of {raw.existingTasks} tasks done — Nova will read those, your audits and check-ins, and mark what's already finished so the path starts where you are.
+          </p>
+          <Button size="sm" onClick={() => adopt.mutate()} disabled={adopt.isPending} data-testid="button-adopt-path">
+            {adopt.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 mr-1.5" />}
+            {adopt.isPending ? "Nova is reading your project…" : "Start the path and read my progress"}
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+  const data = raw;
 
   const { current, next, mainLine, pace } = data;
   const pct = mainLine.total ? Math.round((mainLine.done / mainLine.total) * 100) : 0;
@@ -209,6 +241,11 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
                     {m.done ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 mt-0.5 shrink-0" /> : <Circle className="h-3.5 w-3.5 text-muted-foreground/40 mt-0.5 shrink-0" />}
                     <span className={m.done ? "text-muted-foreground line-through" : ""}>{m.title}{m.steps && <span className="text-muted-foreground"> ({m.steps.done}/{m.steps.total} steps)</span>}</span>
                     <span className="text-[11px] text-muted-foreground ml-auto shrink-0">{m.actor === "user-does" ? "you" : "Nova"} · {estimate(m.estimateMinutes)}</span>
+                    {!m.done && (
+                      <button className="text-[11px] text-primary hover:underline shrink-0" disabled={mark.isPending} onClick={() => mark.mutate([m.id])} data-testid={`mark-${m.id}`} title="Already done? Mark it.">
+                        done
+                      </button>
+                    )}
                   </li>
                 ))}
                 {phase.injected.map((t) => (

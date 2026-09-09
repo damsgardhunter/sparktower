@@ -244,3 +244,41 @@ describe("the path adapts", () => {
     expect(path.events.map((e: any) => e.backboneId)).toEqual(["SHIP.M1.1"]);
   });
 });
+
+describe("a project that predates paths", () => {
+  it("is offered adoption, keeps its roadmap, and starts where the work already is", async () => {
+    const app = await getTestApp();
+    const agent = await owner(app);
+    const id = (await create(agent, "ship_mvp", "saas", "Old Project")).body.id;
+    // Simulate a pre-path project: strip the tree, keep an existing roadmap.
+    const { db } = await import("../../server/db");
+    const { projectKanbanTasks } = await import("@shared/schema");
+    const { eq } = await import("drizzle-orm");
+    await db.delete(projectKanbanTasks).where(eq(projectKanbanTasks.projectId, id));
+    await agent.post(`/api/projects/${id}/kanban`).send({ title: "Deployed to production", status: "done" }).expect(200);
+
+    const before = (await agent.get(`/api/projects/${id}/path`)).body;
+    expect(before.adopted).toBe(false);
+    expect(before).toMatchObject({ existingTasks: 1, existingDone: 1 });
+
+    // Adopt without Nova's read (no AI in tests); the tree is built around the existing roadmap.
+    const res = await agent.post(`/api/projects/${id}/path/adopt`).send({ read: false });
+    expect(res.status).toBe(200);
+    expect(res.body.built).toBe(true);
+    const roadmaps = await agent.get(`/api/projects/${id}/roadmap`);
+    expect(roadmaps.status).toBe(200);
+
+    // The builder catches up by hand from the map.
+    const marked = await agent.post(`/api/projects/${id}/path/mark`).send({ ids: ["SHIP.M1.1", "SHIP.M1.5", "SHIP.M1.8"] });
+    expect(marked.body.marked).toEqual(["SHIP.M1.1", "SHIP.M1.5", "SHIP.M1.8"]);
+    const after = (await agent.get(`/api/projects/${id}/path`)).body;
+    expect(after.adopted).toBe(true);
+    expect(after.mainLine.done).toBe(3);
+    expect(after.next.id).toBe("SHIP.M1.2");
+    // Caught-up work is progress, not pace.
+    expect(after.pace.multiplier).toBeNull();
+    // A second adopt is a no-op, not a second tree.
+    expect((await agent.post(`/api/projects/${id}/path/adopt`).send({ read: false })).body.built).toBe(false);
+    expect((await agent.get(`/api/projects/${id}/path`)).body.mainLine.total).toBe(after.mainLine.total);
+  });
+});

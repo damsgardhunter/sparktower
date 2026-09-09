@@ -39,14 +39,16 @@ export const injectedPhaseOf = (tags: string[] | null | undefined) => tagValue(t
 export const isArchivedPath = (tags: string[] | null | undefined) => !!tags?.some((t) => t.startsWith("archived:"));
 const minutesOf = (t: { estimateHours: number | null }) => (t.estimateHours ?? 1) * 60;
 
-export async function instantiatePathTree(projectId: string, goal: ProjectGoal, subcategory: string) {
-  const existing = await storage.getProjectRoadmap(projectId).catch(() => null);
-  if (existing) return { created: false, phases: 0, milestones: 0 };
+export async function instantiatePathTree(projectId: string, goal: ProjectGoal, subcategory: string, opts: { keepRoadmap?: boolean } = {}) {
+  // The path already exists when its backbone tasks do. A roadmap alone is
+  // not the path: projects made before paths existed have an AI roadmap and
+  // no tree, and adoption must get past that.
+  if ((await pathTasks(projectId)).length) return { created: false, phases: 0, milestones: 0 };
 
   const tree = treeFor(goal);
   const phases = resolveTree(goal, subcategory);
 
-  const roadmap = await storage.createRoadmap(
+  const roadmap = opts.keepRoadmap && (await storage.getProjectRoadmap(projectId).catch(() => null)) ? null : await storage.createRoadmap(
     {
       projectId,
       goal: tree.promise,
@@ -88,7 +90,7 @@ export async function instantiatePathTree(projectId: string, goal: ProjectGoal, 
       count++;
     }
   }
-  return { created: true, roadmapId: roadmap.id, phases: phases.length, milestones: count };
+  return { created: true, roadmapId: roadmap?.id ?? null, phases: phases.length, milestones: count };
 }
 
 /** Every live task with a backbone, parent or injected tag, i.e. everything on the current path. */
@@ -198,6 +200,29 @@ export async function createExpansion(projectId: string, backboneId: string, ste
   return { created, existing: [] };
 }
 
+/**
+ * Marks backbone milestones done on evidence that predates the path: a
+ * project's existing tasks, audits and check-ins, read by Nova, or the
+ * builder saying so. Counted as progress, not as pace — the work happened
+ * before the path was watching.
+ */
+export async function reconcileMilestones(projectId: string, done: { id: string; evidence: string }[], source: "nova" | "builder") {
+  const tasks = await pathTasks(projectId);
+  const marked: string[] = [];
+  for (const d of done) {
+    const t = tasks.find((x) => backboneIdOf(x.tags) === d.id);
+    if (!t || t.status === "done") continue;
+    await storage.updateKanbanTask(t.id, {
+      status: "done", completedAt: new Date(),
+      description: `${t.description ?? ""}\n\n${source === "nova" ? "Nova recognised this as already done" : "Marked done by you"}: ${d.evidence}`.trim(),
+      tags: [...(t.tags ?? []), `carried:${source === "nova" ? "reconciled" : "builder"}`],
+    } as any);
+    marked.push(d.id);
+  }
+  if (marked.length) await refreshPace(projectId);
+  return marked;
+}
+
 /** The artifacts Nova may ground an injected task in: written answers, check-ins, decisions. */
 export async function collectArtifacts(projectId: string): Promise<Artifact[]> {
   const goal = (await db.select({ goal: projects.goal, subcategory: projects.subcategory }).from(projects).where(eq(projects.id, projectId)))[0];
@@ -302,6 +327,12 @@ export async function pathStatus(projectId: string) {
   const phases = resolveTree(goal, project.subcategory);
   const tree = treeFor(goal);
   const tasks = await pathTasks(projectId);
+  if (tasks.length === 0) {
+    // Made before paths existed. The dashboard offers adoption rather than
+    // pretending a project with fifty finished tasks is on week 1, step 1.
+    const all = await storage.getProjectKanbanTasks(projectId).catch(() => []);
+    return { adopted: false as const, goal, subcategory: project.subcategory, promise: tree.promise, existingTasks: all.length, existingDone: all.filter((t) => t.status === "done").length };
+  }
 
   const taskByBackbone = new Map<string, typeof tasks[number]>();
   const children = new Map<string, typeof tasks>();
@@ -337,6 +368,7 @@ export async function pathStatus(projectId: string) {
   const complete = doneCount === main.length;
 
   return {
+    adopted: true as const,
     goal, subcategory: project.subcategory, promise: tree.promise, target: tree.target, tier: tree.defaultTier,
     phases: phases.map((p) => ({
       id: p.id, title: p.title, optional: !!p.optional, checkpoint: p.checkpoint ?? null,
