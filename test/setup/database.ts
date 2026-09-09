@@ -34,9 +34,9 @@ import pg from "pg";
  * importantly, cannot accidentally point the suite at their real database,
  * because the suite truncates every table it can see.
  */
-export function testDatabaseUrl(): string {
+export function testDatabaseUrl(suffix = "_test"): string {
   const explicit = process.env.TEST_DATABASE_URL;
-  if (explicit) return explicit;
+  if (explicit && suffix === "_test") return explicit;
 
   const base = process.env.DATABASE_URL;
   if (!base) {
@@ -48,8 +48,8 @@ export function testDatabaseUrl(): string {
 
   const url = new URL(base);
   const name = url.pathname.replace(/^\//, "") || "postgres";
-  if (name.endsWith("_test")) return base;
-  url.pathname = `/${name}_test`;
+  if (name.endsWith(suffix)) return base;
+  url.pathname = `/${name}${suffix}`;
   return url.toString();
 }
 
@@ -71,8 +71,8 @@ function databaseName(target: string): string {
  * before PG 15 in every distribution, so the duplicate error is caught rather
  * than pre-checked — which also makes it safe against two workers racing.
  */
-export async function ensureTestDatabase(): Promise<string> {
-  const target = testDatabaseUrl();
+export async function ensureTestDatabase(suffix = "_test"): Promise<string> {
+  const target = testDatabaseUrl(suffix);
   const name = databaseName(target);
 
   const admin = new pg.Client({ connectionString: adminUrl(target) });

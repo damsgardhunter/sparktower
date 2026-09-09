@@ -15,7 +15,8 @@
     "test:unit": "vitest run --config vitest.unit.config.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "typecheck:ratchet": "node scripts/typecheck-ratchet.mjs"
+    "typecheck:ratchet": "node scripts/typecheck-ratchet.mjs",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.19.0",
@@ -107,6 +108,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
+    "@playwright/test": "^1.63.0",
     "@replit/vite-plugin-cartographer": "^0.4.4",
     "@replit/vite-plugin-dev-banner": "^0.1.1",
     "@replit/vite-plugin-runtime-error-modal": "^0.0.3",
