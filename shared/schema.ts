@@ -1420,8 +1420,13 @@ export const insertProjectBase = createInsertSchema(projects).omit({
 }).extend({
   // Re-required here: the column's DB default is for backfill, not for
   // letting a new project skip the question.
-  goal: z.enum(PROJECT_GOAL_IDS),
-  subcategory: z.string().min(1),
+  // errorMap rather than required_error/invalid_type_error: those cover a
+  // missing or wrongly-typed value, and a *wrong* value ("get_rich") still got
+  // zod's stock "Invalid enum value. Expected …". One sentence for all three.
+  goal: z.enum(PROJECT_GOAL_IDS, {
+    errorMap: () => ({ message: "Pick a goal: ship an MVP, systemize a business, or raise funding." }),
+  }),
+  subcategory: z.string({ required_error: "Pick what kind of project it is for that goal.", invalid_type_error: "Pick what kind of project it is for that goal." }).min(1, "Pick what kind of project it is for that goal."),
 });
 
 export const insertProjectSchema = insertProjectBase.superRefine((v, ctx) => {
@@ -1431,7 +1436,7 @@ export const insertProjectSchema = insertProjectBase.superRefine((v, ctx) => {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["subcategory"],
-      message: `"${v.subcategory}" is not a kind of "${v.goal}" project`,
+      message: `"${v.subcategory}" isn't one of the kinds of project for that goal — pick one from its list.`,
     });
   }
 });

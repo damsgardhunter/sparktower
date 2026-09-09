@@ -15,6 +15,7 @@
  */
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import type { Server } from "http";
+import { ZodError } from "zod";
 import { registerRoutes } from "./routes";
 import { WebhookHandlers } from "./webhookHandlers";
 
@@ -151,10 +152,30 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
+    if (res.headersSent) return next(err);
+
+    /*
+     * A schema rejection is the caller's mistake, not the server's. Before
+     * this, every route that called `.parse()` answered a missing field with
+     * a 500 and a raw Zod dump as the message — the person saw "Internal
+     * Server Error" for their own empty box, and the error log filled with
+     * things that weren't errors. One sentence, the field it's about, and a
+     * status that says whose problem it is.
+     */
+    if (err instanceof ZodError) {
+      const first = err.issues[0];
+      const field = first?.path?.map(String).join(".") || undefined;
+      return res.status(400).json({
+        message: first?.message || "Some of that isn't right.",
+        code: "invalid_input",
+        field,
+        issues: err.issues.map((i) => ({ field: i.path.map(String).join("."), message: i.message })),
+      });
+    }
+
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
     console.error("Internal Server Error:", err);
-    if (res.headersSent) return next(err);
     return res.status(status).json({ message });
   });
 

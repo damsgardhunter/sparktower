@@ -75,12 +75,33 @@ describe("create a project", () => {
     expect(one.body.goal).toBe("ship_mvp");
   });
 
-  it("refuses a project with no goal, or an unknown one", async () => {
+  it("tells the person what to fix when the goal is missing or unknown", async () => {
     const app = await getTestApp();
     const { agent } = await signedIn(app, "Owner");
+
+    /*
+     * 400, not 500. This used to be an Internal Server Error carrying a raw
+     * Zod dump — for an empty box. Whose mistake it is is the first thing the
+     * status says, and the message has to read as a sentence a person can act
+     * on, since the client puts it straight into a toast.
+     */
     const { goal: _omit, ...withoutGoal } = aProject();
-    expect((await agent.post("/api/projects").send(withoutGoal)).status).toBeGreaterThanOrEqual(400);
-    expect((await agent.post("/api/projects").send(aProject({ goal: "get_rich" }))).status).toBeGreaterThanOrEqual(400);
+    const missing = await agent.post("/api/projects").send(withoutGoal);
+    expect(missing.status).toBe(400);
+    expect(missing.body.code).toBe("invalid_input");
+    expect(missing.body.field).toBe("goal");
+    expect(missing.body.message).toBe("Pick a goal: ship an MVP, systemize a business, or raise funding.");
+
+    const unknown = await agent.post("/api/projects").send(aProject({ goal: "get_rich" }));
+    expect(unknown.status).toBe(400);
+    expect(unknown.body.field).toBe("goal");
+    expect(unknown.body.message).toMatch(/pick a goal/i);
+
+    const { subcategory: _s, ...withoutSub } = aProject();
+    const noSub = await agent.post("/api/projects").send(withoutSub);
+    expect(noSub.status).toBe(400);
+    expect(noSub.body.field).toBe("subcategory");
+    expect(noSub.body.message).toBe("Pick what kind of project it is for that goal.");
   });
 
   it("requires a subcategory that belongs to the chosen goal", async () => {
@@ -92,7 +113,9 @@ describe("create a project", () => {
     // is not what this test is about.
     // A restaurant is a kind of business to systemize, not a kind of MVP.
     const crossed = await agent.post("/api/projects").send(aProject({ title: "Crossed", goal: "ship_mvp", subcategory: "restaurant" }));
-    expect(crossed.status).toBeGreaterThanOrEqual(400);
+    expect(crossed.status).toBe(400);
+    expect(crossed.body.field).toBe("subcategory");
+    expect(crossed.body.message).toMatch(/isn't one of the kinds of project for that goal/);
     // The same id is fine under the goal it belongs to.
     const right = await agent.post("/api/projects").send(aProject({ title: "The Corner Bistro", goal: "systemize_business", subcategory: "restaurant" }));
     expect(right.status).toBe(200);
@@ -105,6 +128,11 @@ describe("create a project", () => {
     const orphan = await agent.patch(`/api/projects/${right.body.id}`).send({ goal: "ship_mvp" });
     expect(orphan.status).toBe(400);
     expect(orphan.body.code).toBe("subcategory_mismatch");
+    expect(orphan.body.message).toMatch(/pick a subcategory for the new goal/i);
+    // And an unknown goal on update is a 400 with the same sentence as create.
+    const badUpdate = await agent.patch(`/api/projects/${right.body.id}`).send({ goal: "get_rich" });
+    expect(badUpdate.status).toBe(400);
+    expect(badUpdate.body.message).toMatch(/pick a goal/i);
     const together = await agent.patch(`/api/projects/${right.body.id}`).send({ goal: "ship_mvp", subcategory: "app" });
     expect(together.status).toBe(200);
   });
