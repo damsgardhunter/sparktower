@@ -61,10 +61,26 @@ describe("create a project", () => {
     expect(created.status).toBe(200);
     expect(created.body.id).toBeTruthy();
     expect(created.body.title).toBe("Weeknight Recipes");
+    // The goal is a required field, so it has to come back — on creation and
+    // on every read, since the roadmap and briefing branch on it.
+    expect(created.body.goal).toBe("ship_mvp");
 
     const mine = await agent.get("/api/user/projects");
     expect(mine.status).toBe(200);
     expect(mine.body.map((p: any) => p.id)).toContain(created.body.id);
+    expect(mine.body.find((p: any) => p.id === created.body.id).goal).toBe("ship_mvp");
+
+    const one = await agent.get(`/api/projects/${created.body.id}`);
+    expect(one.status).toBe(200);
+    expect(one.body.goal).toBe("ship_mvp");
+  });
+
+  it("refuses a project with no goal, or an unknown one", async () => {
+    const app = await getTestApp();
+    const { agent } = await signedIn(app, "Owner");
+    const { goal: _omit, ...withoutGoal } = aProject();
+    expect((await agent.post("/api/projects").send(withoutGoal)).status).toBeGreaterThanOrEqual(400);
+    expect((await agent.post("/api/projects").send(aProject({ goal: "get_rich" }))).status).toBeGreaterThanOrEqual(400);
   });
 
   it("refuses an anonymous caller", async () => {
