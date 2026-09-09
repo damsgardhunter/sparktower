@@ -35,10 +35,34 @@ export const objectStorageClient = new Storage({
 
 const LOCAL_OBJECT_ROOT = process.env.LOCAL_OBJECT_ROOT || path.join(process.cwd(), "local_objects");
 
+/**
+ * Whether to write to local disk instead of a bucket.
+ *
+ * Development and test, and only when no bucket is configured. Production is
+ * deliberately excluded: if PRIVATE_OBJECT_DIR is missing there, the caller
+ * throws instead, because silently writing user uploads to a container's
+ * ephemeral disk is worse than failing.
+ */
 function isLocalFallback(): boolean {
-  return !process.env.PRIVATE_OBJECT_DIR && process.env.NODE_ENV === "development";
+  return (
+    !process.env.PRIVATE_OBJECT_DIR &&
+    (process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test")
+  );
 }
 
+/** Where a local object's metadata lives, next to the object itself. */
+const sidecarPath = (filePath: string): string => `${filePath}.meta.json`;
+
+/**
+ * A file on local disk, standing in for a bucket object.
+ *
+ * Metadata is kept in a sidecar `.meta.json` rather than dropped, which it used
+ * to be: `getMetadata` returned only a size, so `getObjectAclPolicy` always saw
+ * nothing and every object read as having no policy. That meant an upload
+ * marked `visibility: "private"` was served to anyone who asked — in local
+ * development only, but that is exactly where the ACL work gets tried out and
+ * pronounced fine.
+ */
 class LocalFile {
   filePath: string;
   constructor(filePath: string) {
@@ -54,12 +78,25 @@ class LocalFile {
   }
   async getMetadata(): Promise<any[]> {
     const stat = await fsPromises.stat(this.filePath);
+    let custom: Record<string, unknown> | undefined;
+    try {
+      custom = JSON.parse(await fsPromises.readFile(sidecarPath(this.filePath), "utf8"));
+    } catch {
+      // No sidecar is the normal case: the object simply has no metadata.
+    }
     return [
       {
         contentType: "application/octet-stream",
         size: stat.size,
+        ...(custom ? { metadata: custom } : {}),
       },
     ];
+  }
+  /** Merges into whatever is already there, the way a bucket's patch does. */
+  async setMetadata(update: { metadata?: Record<string, unknown> }): Promise<void> {
+    const [existing] = await this.getMetadata();
+    const merged = { ...(existing?.metadata ?? {}), ...(update?.metadata ?? {}) };
+    await fsPromises.writeFile(sidecarPath(this.filePath), JSON.stringify(merged), "utf8");
   }
   createReadStream() {
     return fs.createReadStream(this.filePath);

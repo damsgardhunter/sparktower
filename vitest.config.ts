@@ -44,6 +44,16 @@ export default defineConfig({
       SESSION_SECRET: "test-session-secret-not-used-in-production",
       PLATFORM_REVIEWER_EMAILS: "reviewer@test.local",
       PLATFORM_OWNER_EMAIL: "owner@test.local",
+      /*
+       * Uploads go to a scratch directory on local disk, not a bucket.
+       * PRIVATE_OBJECT_DIR is deliberately left unset — that, plus NODE_ENV
+       * "test", is what selects the local fallback, so CI needs no cloud
+       * credentials and writes nothing to anyone's storage.
+       */
+      LOCAL_OBJECT_ROOT: path.resolve(import.meta.dirname, "test", ".objects"),
+      // Pinned so the presigned URL and the path derived back from it agree;
+      // both default to the PORT, which tests do not set.
+      SERVER_BASE_URL: "http://localhost:5001",
     },
     /*
      * One worker. The tests share a single database and truncate it before

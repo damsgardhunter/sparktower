@@ -38,3 +38,5 @@ mobile/android
 
 # Vitest
 coverage/
+test/.objects/
+local_objects/
