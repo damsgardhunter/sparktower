@@ -48,7 +48,7 @@ export const PROJECT_SUBCATEGORIES: Record<ProjectGoal, readonly { id: string; l
     { id: "app", label: "App" },
     { id: "saas", label: "SaaS" },
     { id: "game", label: "Game" },
-    { id: "content", label: "Content" },
+    { id: "website", label: "Website" },
     { id: "other", label: "Other" },
   ],
   systemize_business: [

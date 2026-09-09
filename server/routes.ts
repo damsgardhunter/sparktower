@@ -47,6 +47,7 @@ import {
   coachingDirectiveFor,
 } from "./entitlements";
 import { isValidSubcategory } from "@shared/goals";
+import { instantiatePathTree, pathStatus } from "./phase-trees";
 
 async function isProjectMember(userId: string, projectId: string): Promise<boolean> {
   const project = await storage.getProject(projectId);
@@ -505,7 +506,7 @@ When presenting the final summary, end with an encouraging note like "✨ This i
 After each user message, respond conversationally AND include a JSON block in your response with any updates you can extract.
 
 Format: Respond with your conversational message, then on a new line include:
-<project_update>{"title": "...", "description": "...", "goal": "ship_mvp" | "systemize_business" | "raise_funding", "subcategory": "<one of the goal's kinds: ship→app|saas|game|content|other, systemize→restaurant|service|retail|other, raise→startup_equity|local_community|loan_grant|other>", "rolesNeeded": [...], "techStack": [...], "teamSize": 2, "estimatedWeeks": 8, "category": "...", "repoUrl": "...", "liveUrl": "..."}</project_update>
+<project_update>{"title": "...", "description": "...", "goal": "ship_mvp" | "systemize_business" | "raise_funding", "subcategory": "<one of the goal's kinds: ship→app|saas|game|website|other, systemize→restaurant|service|retail|other, raise→startup_equity|local_community|loan_grant|other>", "rolesNeeded": [...], "techStack": [...], "teamSize": 2, "estimatedWeeks": 8, "category": "...", "repoUrl": "...", "liveUrl": "..."}</project_update>
 
 Only include fields you have enough info to fill. Start empty if needed.`;
 
@@ -597,6 +598,14 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     }
 
     const project = await storage.createProject(validated);
+    /*
+     * The path exists before the user does anything: the backbone for their
+     * goal, with this type's variants, becomes the roadmap, milestones and
+     * tasks they land on. Never fatal — a project without a tree is a bug to
+     * fix, not a reason to lose the project.
+     */
+    await instantiatePathTree(project.id, validated.goal, validated.subcategory)
+      .catch((err) => console.error("[phase-trees] Failed to instantiate path:", err));
 
     // Announce it on the founder feed. Private projects stay off the feed.
     if (!project.isPrivate) {
@@ -2539,6 +2548,18 @@ RULES:
   });
 
   // Analytics Events
+  /** Where this project is on its path: the phase, the step, and the one next action. */
+  app.get("/api/projects/:id/path", isAuthenticated, async (req: any, res) => {
+    try {
+      const status = await pathStatus(req.params.id);
+      if (!status) return res.status(404).json({ message: "Project not found" });
+      res.json(status);
+    } catch (error) {
+      console.error("Path status error:", error);
+      res.status(500).json({ message: "Couldn't read the path" });
+    }
+  });
+
   app.get("/api/projects/:id/analytics-events", isAuthenticated, async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
