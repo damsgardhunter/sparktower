@@ -1,0 +1,31 @@
+# Secret scanning, run by the `secrets` CI job over the full history.
+#
+# The allowlist is short and every entry names a value that is fake by
+# construction. Add to it only for something that is provably not a
+# credential; a real key that "needs" allowlisting needs rotating instead.
+
+title = "sparktower"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Values that look like secrets and are not"
+regexes = [
+  # Test fixtures. Each is a placeholder the tests never send anywhere; the
+  # names say so, so a copy in a log can't be mistaken for a credential.
+  '''sk-test-not-a-real-key[A-Za-z0-9_-]*''',
+  '''sk_test_dummy_key_not_used_for_network''',
+  '''whsec_test_secret_for_signature_verification''',
+  '''whsec_an_attacker_does_not_have_the_real_one''',
+  '''(test|e2e)-session-secret-not-used-[a-z-]+''',
+  # The documented placeholder in .env.example.
+  '''postgresql://user:password@127\.0\.0\.1:5432/sparktower''',
+  # The CI service container's former default, still present in old commits.
+  # See docs/security/2026-09-ci-database-url.md for why it was never a secret.
+  '''postgresql://postgres:postgres@localhost:5432/postgres''',
+]
+paths = [
+  '''package-lock\.json''',
+  '''mobile/package-lock\.json''',
+]

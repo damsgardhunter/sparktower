@@ -11,6 +11,13 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  # The password for the throwaway Postgres each job starts. It is not a
+  # secret — the database lives inside one job on the runner's loopback and is
+  # destroyed with it — but a literal here reads as one to every scanner, and a
+  # value derived per run means there is nothing in the repository to leak.
+  CI_DB_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
+
 jobs:
   # The web client and the API share one package, one lockfile and one
   # typecheck, so they are one job. The job names below are what branch
@@ -27,7 +34,7 @@ jobs:
         image: postgres:16
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
+          POSTGRES_PASSWORD: ${{ env.CI_DB_PASSWORD }}
           POSTGRES_DB: postgres
         ports:
           - 5432:5432
@@ -42,7 +49,7 @@ jobs:
     env:
       # The suite derives its own database from this by suffixing `_test`, and
       # creates it on first run. Nothing here touches a real environment.
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      DATABASE_URL: postgresql://postgres:${{ env.CI_DB_PASSWORD }}@localhost:5432/postgres
       NODE_ENV: test
 
     steps:
@@ -80,7 +87,7 @@ jobs:
         image: postgres:16
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
+          POSTGRES_PASSWORD: ${{ env.CI_DB_PASSWORD }}
           POSTGRES_DB: postgres
         ports:
           - 5432:5432
@@ -91,7 +98,7 @@ jobs:
           --health-retries 10
 
     env:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      DATABASE_URL: postgresql://postgres:${{ env.CI_DB_PASSWORD }}@localhost:5432/postgres
       CI: "true"
 
     steps:
@@ -121,6 +128,19 @@ jobs:
             playwright-report/
             test-results/
           retention-days: 7
+
+  # Fails the build if a credential lands in a commit. Full history, every
+  # push: a secret that was committed and then "removed" is still in git, and
+  # GitHub's own push protection only covers patterns it recognises.
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   mobile:
     runs-on: ubuntu-latest
