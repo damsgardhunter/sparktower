@@ -18,6 +18,7 @@ import { requireReviewer } from "./platform-roles";
 import {
   SURFACES, SURFACE_IDS, defaultSurfaceMap, surface,
 } from "@shared/surfaces";
+import { logModeration } from "./moderation";
 
 let cache: Record<string, boolean> = defaultSurfaceMap();
 let loaded = false;
@@ -123,6 +124,10 @@ export function registerSurfaceRoutes(app: Express) {
 
       await loadSurfaceFlags();
       console.log(`[surfaces] ${id} -> ${enabled ? "on" : "off"} by ${req.user.id}`);
+      await logModeration({
+        action: "surface_toggled", actorId: req.user.id,
+        targetType: "surface", targetId: id, details: { enabled },
+      });
       res.json({ id, enabled, label: surface(id)?.label });
     } catch (error) {
       console.error("Surface toggle error:", error);

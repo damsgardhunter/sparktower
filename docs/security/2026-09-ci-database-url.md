@@ -11,7 +11,7 @@ committed to the repository, in the CI workflow.
 
 ## What it actually was
 
-The string was `postgresql://postgres:postgres@localhost:5432/postgres` in
+The string was `postgresql://postgres:<redacted>@localhost:5432/postgres` in
 `.github/workflows/ci.yml`. It is the connection string for the Postgres
 **service container** that GitHub Actions starts inside a single CI job. That
 database:
@@ -21,7 +21,7 @@ database:
 - is not reachable from outside the runner, and holds no data that exists
   anywhere else.
 
-`postgres` / `postgres` is the container image's default. There is no
+The password was the container image's documented default — the same word as the user. There is no
 production, staging, or developer system this value opens.
 
 ## What was checked
@@ -39,8 +39,8 @@ Findings across the entire history:
 
 | value | what it is |
 |---|---|
-| `postgresql://postgres:…@localhost:5432/postgres` | the CI container above |
-| `postgresql://user:password@127.0.0.1:5432/sparktower` | the placeholder in `.env.example` |
+| `postgresql://postgres:<redacted>@localhost:5432/postgres` | the CI container above |
+| `postgresql://<user>:<password>@127.0.0.1:5432/sparktower` | the placeholder in `.env.example` |
 | `sk-test-not-a-real-key…` | test fixtures, named as fakes |
 
 No real credential has ever been committed. `.env` and `mobile/.env` have been
@@ -49,7 +49,7 @@ gitignored since before the first commit that would have needed them.
 ## What was rotated
 
 Nothing, because nothing real was exposed. The local development database
-(`project`/`project` on `127.0.0.1:5433`) is not in the repository and is not
+(on `127.0.0.1:5433`) is not in the repository and is not
 reachable off the machine. Production credentials live in Replit Secrets and
 were never in git.
 

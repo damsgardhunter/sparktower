@@ -997,6 +997,35 @@ export const loopEvents = pgTable("loop_events", {
 });
 
 /**
+ * Every moderation action, appended and never edited.
+ *
+ * Reports and suspensions are mutable rows — a report gets resolved, a
+ * suspension gets lifted — and a mutable row is a poor record of what a
+ * moderator did and when. This table is only ever inserted into. It is what
+ * you read when someone asks "who suspended me, and why", and what an audit
+ * reads when it asks whether the answer to that is honest.
+ */
+export const moderationLog = pgTable("moderation_log", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  /** suspend, reinstate, report_actioned, report_dismissed, surface_toggled … */
+  action: varchar("action").notNull(),
+  /** The moderator. Null only for automated actions. */
+  actorId: varchar("actor_id"),
+  /** The account acted on, where there is one. */
+  targetUserId: varchar("target_user_id"),
+  /** The report, surface, or content the action was about. */
+  targetType: varchar("target_type"),
+  targetId: varchar("target_id"),
+  reason: text("reason"),
+  /** Anything else worth keeping, small and non-sensitive. */
+  details: jsonb("details").default({}),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  byTarget: index("moderation_log_target_idx").on(table.targetUserId, table.createdAt),
+  byActor: index("moderation_log_actor_idx").on(table.actorId, table.createdAt),
+}));
+
+/**
  * Rate-limit hits for actions that leave no row of their own.
  *
  * Most limits count the content itself — comments, check-ins, projects — which

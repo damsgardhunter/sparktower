@@ -14,7 +14,7 @@ import type { PgTable, PgColumn } from "drizzle-orm/pg-core";
 import { db } from "./db";
 import {
   contentReports, users, userProfiles, projectCheckIns, projectComments,
-  feedPosts, feedComments, directMessages, projects, rateLimitHits,
+  feedPosts, feedComments, directMessages, projects, rateLimitHits, moderationLog,
 } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { requireReviewer } from "./platform-roles";
@@ -48,7 +48,7 @@ interface CountSource {
  * un-reacting deletes the row; a presign writes nothing; an AI call writes to
  * a dozen places.
  */
-const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai"]);
+const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai", "login"]);
 
 const hitSource = (action: RateLimitAction): CountSource => ({
   table: rateLimitHits, author: rateLimitHits.userId, created: rateLimitHits.createdAt,
@@ -106,6 +106,7 @@ const COUNTED: Record<RateLimitAction, CountSource[]> = {
   react:  [hitSource("react")],
   upload: [hitSource("upload")],
   ai:     [hitSource("ai")],
+  login:  [hitSource("login")],
 };
 
 /*
@@ -386,6 +387,34 @@ async function snapshotOf(targetType: ReportTarget, targetId: string): Promise<{
   }
 }
 
+/**
+ * Appends one moderation action to the immutable log.
+ *
+ * Never awaited on the path that matters and never allowed to fail it: the
+ * suspension has already happened by the time this runs, and a log write that
+ * could undo it would make the log the thing people attack. The row is only
+ * ever inserted — there is no route that updates or deletes from this table.
+ */
+export async function logModeration(entry: {
+  action: string; actorId?: string | null; targetUserId?: string | null;
+  targetType?: string | null; targetId?: string | null; reason?: string | null;
+  details?: Record<string, unknown>;
+}): Promise<void> {
+  try {
+    await db.insert(moderationLog).values({
+      action: entry.action,
+      actorId: entry.actorId ?? null,
+      targetUserId: entry.targetUserId ?? null,
+      targetType: entry.targetType ?? null,
+      targetId: entry.targetId ?? null,
+      reason: entry.reason ?? null,
+      details: entry.details ?? {},
+    });
+  } catch (err) {
+    console.error(`[moderation] Failed to log ${entry.action}:`, err);
+  }
+}
+
 export function registerModerationRoutes(app: Express) {
   /** Filing a report. Rate limited like any other write. */
   app.post("/api/reports", isAuthenticated, rateLimit("report"), async (req: any, res) => {
@@ -476,6 +505,12 @@ export function registerModerationRoutes(app: Express) {
         reviewNote: String(req.body?.note || "").trim().slice(0, REPORT_NOTE_MAX) || null,
       }).where(eq(contentReports.id, String(req.params.id))).returning();
       if (!updated) return res.status(404).json({ message: "Report not found" });
+      await logModeration({
+        action: status === "actioned" ? "report_actioned" : "report_dismissed",
+        actorId: req.user.id, targetUserId: updated.targetOwnerId,
+        targetType: "report", targetId: updated.id, reason: updated.reviewNote,
+        details: { reportedType: updated.targetType, reportedId: updated.targetId, reason: updated.reason },
+      });
       res.json(updated);
     } catch (error) {
       console.error("Report review error:", error);
@@ -511,10 +546,28 @@ export function registerModerationRoutes(app: Express) {
       }).where(eq(users.id, targetId)).returning({ id: users.id, suspendedAt: users.suspendedAt });
 
       console.log(`[moderation] ${targetId} ${suspend ? "suspended" : "reinstated"} by ${req.user.id}`);
+      await logModeration({
+        action: suspend ? "suspend" : "reinstate",
+        actorId: req.user.id, targetUserId: targetId, targetType: "user", targetId,
+        reason: suspend ? (String(req.body?.reason || "").trim().slice(0, 300) || "Breached the community rules") : null,
+      });
       res.json({ id: updated.id, suspended: !!updated.suspendedAt });
     } catch (error) {
       console.error("Suspend error:", error);
       res.status(500).json({ message: "Couldn't change that account" });
+    }
+  });
+
+  /** The log, newest first. Read-only by construction: there is no write route. */
+  app.get("/api/admin/moderation-log", isAuthenticated, requireReviewer, async (req, res) => {
+    try {
+      const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+      const rows = await db.select().from(moderationLog)
+        .orderBy(desc(moderationLog.createdAt)).limit(limit);
+      res.json(rows);
+    } catch (error) {
+      console.error("Moderation log error:", error);
+      res.status(500).json({ message: "Couldn't load the log" });
     }
   });
 

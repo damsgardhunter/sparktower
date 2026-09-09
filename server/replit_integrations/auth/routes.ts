@@ -5,31 +5,7 @@ import passport from "passport";
 import bcrypt from "bcryptjs";
 import { ensureUserProfile } from "../../user-provisioning";
 import { stampSignupAttribution } from "../../attribution";
-
-// Simple in-memory rate limiter for auth endpoints (IP-based)
-const loginAttempts: Map<string, { count: number; firstAttempt: number }> = new Map();
-const MAX_ATTEMPTS = 8;
-const WINDOW_MS = 15 * 60 * 1000; // 15 minutes
-
-function checkRateLimit(ip: string) {
-  const now = Date.now();
-  const data = loginAttempts.get(ip);
-  if (!data) {
-    loginAttempts.set(ip, { count: 1, firstAttempt: now });
-    return { allowed: true };
-  }
-  if (now - data.firstAttempt > WINDOW_MS) {
-    // reset window
-    loginAttempts.set(ip, { count: 1, firstAttempt: now });
-    return { allowed: true };
-  }
-  data.count += 1;
-  loginAttempts.set(ip, data);
-  if (data.count > MAX_ATTEMPTS) {
-    return { allowed: false, retryAfter: Math.ceil((WINDOW_MS - (now - data.firstAttempt)) / 1000) };
-  }
-  return { allowed: true };
-}
+import { enforceRateLimit } from "../../moderation";
 
 export function registerAuthRoutes(app: Express): void {
   app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
@@ -83,12 +59,15 @@ export function registerAuthRoutes(app: Express): void {
     }
   });
 
-  app.post("/api/auth/login", (req, res, next) => {
-    const ip = req.ip || req.headers["x-forwarded-for"] || req.connection?.remoteAddress || "unknown";
-    const rate = checkRateLimit(String(ip));
-    if (!rate.allowed) {
-      return res.status(429).json({ message: "Too many login attempts", retryAfter: rate.retryAfter });
-    }
+  app.post("/api/auth/login", async (req, res, next) => {
+    /*
+     * Durable and IP-keyed. This replaced an in-memory map, which was one
+     * counter per instance and forgot everything on restart — on autoscale
+     * that is N times the limit, and a deploy was a free reset for whoever was
+     * guessing passwords at the time.
+     */
+    const ip = req.ip || req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "unknown";
+    if (!(await enforceRateLimit(res, `ip:${String(ip).split(",")[0].trim()}`, "login"))) return;
     passport.authenticate("local", (err: any, user: any, info: any) => {
       if (err) return next(err);
       if (!user) {

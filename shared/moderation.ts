@@ -55,6 +55,15 @@ export const RATE_LIMITS = {
    * pass through. Credits cap the month; this caps the minute, which is the
    * shape a script has and a person doesn't.
    */
+  /*
+   * Keyed by IP rather than account, since there is no account yet. The old
+   * limiter was an in-memory map — per instance, and forgotten on restart,
+   * which on autoscale meant N times the limit and a free reset every deploy.
+   */
+  login: {
+    max: 8, windowMinutes: 15,
+    message: "Too many sign-in attempts. Try again in 15 minutes.",
+  },
   ai: {
     max: 30, windowMinutes: 10,
     message: "Nova needs a moment — that's a lot of requests at once. Try again in a few minutes.",
