@@ -81,7 +81,7 @@ export const FUND_TREE: PathTree = {
       checkpoint: "From here the dashboard switches to pipeline mode: conversations, stages, follow-ups. Projecting a date would be dishonest once outcomes depend on other people.",
       milestones: [
         { id: "FUND.M4.1", title: "Launch the route", actor: "user-does", estimateMinutes: h(2), tier: "claimed",
-          description: "Send, submit, publish, open presales. Yours to do — this is the day." },
+          description: "Send, submit, publish, open presales. You do this one — it is the day." },
         { id: "FUND.M4.2", title: "Response log", actor: "novva-drafts", estimateMinutes: null, tier: "artifact",
           description: "Nova structures your notes after every meeting, call, or rejection." },
         { id: "FUND.M4.3", title: "Objection tracking", actor: "novva-drafts", estimateMinutes: null, tier: "artifact",
