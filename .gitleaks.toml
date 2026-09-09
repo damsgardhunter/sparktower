@@ -29,3 +29,13 @@ paths = [
   '''package-lock\.json''',
   '''mobile/package-lock\.json''',
 ]
+# The one real finding in this repository's history: a Flask session key in the
+# August 2025 prototype, which was deleted whole when the platform replaced it.
+# The system it signed sessions for no longer exists, and the value has been
+# public since it was pushed, so neither rotation nor a history rewrite changes
+# anything — see docs/security/2026-09-ci-database-url.md, "The real finding".
+# Allowlisted by commit, not by pattern, so nothing *new* that looks like it
+# gets a pass.
+commits = [
+  "dd47973b4d101ad153e710e6fdc880906954880b",
+]

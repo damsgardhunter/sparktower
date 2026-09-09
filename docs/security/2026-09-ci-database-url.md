@@ -42,9 +42,47 @@ Findings across the entire history:
 | `postgresql://postgres:<redacted>@localhost:5432/postgres` | the CI container above |
 | `postgresql://<user>:<password>@127.0.0.1:5432/sparktower` | the placeholder in `.env.example` |
 | `sk-test-not-a-real-key…` | test fixtures, named as fakes |
+| `6LdovJor…` in `dd47973b` | a real reCAPTCHA secret — see *The real finding* |
 
-No real credential has ever been committed. `.env` and `mobile/.env` have been
-gitignored since before the first commit that would have needed them.
+`.env` and `mobile/.env` have been gitignored since before the first commit
+that would have needed them.
+
+**Correction (2026-09-09):** the first version of this note said no real
+credential had ever been committed. A full-history scan with gitleaks — run
+because a manually-triggered CI job scans history where a push scans only the
+new commits — found one. See *The real finding* below.
+
+## The real finding
+
+Commit `dd47973b` (2025-08-07, *Prepare for overwrite of GitHub repo*), the
+Flask prototype that predates the current platform, contains two values in
+`client/backend/`:
+
+| where | what | verdict |
+|---|---|---|
+| `app.py:18` `app.secret_key = "1234_5…"` | a 14-character placeholder | not a secret |
+| `routes/auth.py:49` `# secret key: '6LdovJor…'` | a **Google reCAPTCHA secret key** (the `6L…AAAAA` format) | **a real credential** |
+
+Facts that bound the impact: the file was deleted whole when the platform
+replaced the prototype (`18bf87e5`); no Python remains in the tree; the value
+appears in zero files at HEAD and in exactly one commit in history; the current
+app does not use reCAPTCHA at all. What the key can do, for whoever has read
+this public repository since August 2025: verify reCAPTCHA tokens as if they
+were that prototype's server — i.e. defeat the captcha on a site that no
+longer exists.
+
+**Rotation: yes, at Google.** The key is dead to this codebase but alive at
+Google's end until it is deleted. Owner action, not a code change: in the
+reCAPTCHA admin console (google.com/recaptcha/admin), find the site whose
+secret begins `6LdovJor` and delete it or regenerate the keys. Record the date
+here when done: *rotated on ________*.
+
+**History rewrite: no.** The value has been public on a public repository for
+over a year; rewriting history now un-publishes nothing, and it would
+invalidate every clone for no security gain. Deletion at the provider is the
+fix. The commit is allowlisted in `.gitleaks.toml` by hash — not by pattern —
+so the scan passes on history while anything *new* of the same shape still
+fails the build.
 
 ## What was rotated
 
@@ -80,7 +118,7 @@ ignored is a repo where the next, real finding is ignored too.
 
 ## Decisions
 
-**Rotation: none.** Nothing real was exposed (see *What was checked*). The
+**Rotation: one key, at Google** (see *The real finding*); nothing else. The
 container default cannot be "rotated" — it is set fresh, per run, by the
 workflow, and now derives from the run id so no fixed value exists anywhere.
 Production credentials were never in git; local ones never leave the machine.

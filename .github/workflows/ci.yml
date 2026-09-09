@@ -131,18 +131,26 @@ jobs:
             test-results/
           retention-days: 7
 
-  # Fails the build if a credential lands in a commit. Full history, every
-  # push: a secret that was committed and then "removed" is still in git, and
-  # GitHub's own push protection only covers patterns it recognises.
+  # Fails the build if a credential is anywhere in the repository's history.
+  #
+  # The gitleaks *action* scans only the pushed commits on a push event and the
+  # whole history on a manual run — so the same commit passed on push and
+  # failed on dispatch, and "required check" quietly meant "diff check". The
+  # binary is run directly instead, with no commit range, so every event scans
+  # everything and the answer can't depend on how the run was triggered.
   secrets:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install gitleaks
+        run: |
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+      - name: Scan full history
+        run: gitleaks detect --source . --redact --exit-code 1 --no-banner
 
   mobile:
     runs-on: ubuntu-latest
