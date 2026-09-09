@@ -14,10 +14,10 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "./db";
 import { storage } from "./storage";
-import { projects, projectKanbanTasks, projectCheckIns, projectRoadmaps, pathPace, pathPaceEvents } from "@shared/schema";
+import { projects, projectKanbanTasks, projectCheckIns, projectRoadmaps, pathPace, pathPaceEvents, pathWork } from "@shared/schema";
 import {
   resolveTree, treeFor, mainLineMilestones, computePace, admitInjections, NEXT_PATHS,
-  type ResolvedMilestone, type Artifact, type InjectionProposal, type PaceState,
+  type ResolvedMilestone, type Artifact, type InjectionProposal, type PaceState, type WorkPayload, type Actor,
 } from "@shared/phase-trees";
 import { PROJECT_GOALS } from "@shared/goals";
 import type { ProjectGoal } from "@shared/goals";
@@ -223,6 +223,60 @@ export async function reconcileMilestones(projectId: string, done: { id: string;
   return marked;
 }
 
+/** The task a work request is about, with its actor and tier read off the path. */
+export async function pathTaskContext(projectId: string, taskId: string) {
+  const task = (await pathTasks(projectId)).find((t) => t.id === taskId);
+  if (!task) return null;
+  const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory }).from(projects).where(eq(projects.id, projectId));
+  if (!project) return null;
+  const backbone = resolveTree(project.goal as ProjectGoal, project.subcategory).flatMap((p) => p.milestones);
+  const milestone = backbone.find((m) => m.id === (backboneIdOf(task.tags) ?? parentOf(task.tags)));
+  const actor = (tagValue(task.tags, "actor:") ?? milestone?.actor ?? "nova-builds") as Actor;
+  const tier = tagValue(task.tags, "tier:") ?? milestone?.tier ?? "artifact";
+  return { task, project, milestone, actor, tier };
+}
+
+export async function latestWork(taskId: string) {
+  const [row] = await db.select().from(pathWork).where(eq(pathWork.taskId, taskId)).orderBy(desc(pathWork.createdAt)).limit(1);
+  return row ?? null;
+}
+
+export async function saveWork(projectId: string, taskId: string, payload: WorkPayload) {
+  const [row] = await db.insert(pathWork).values({ projectId, taskId, kind: payload.kind, payload }).returning();
+  return row;
+}
+
+/**
+ * The builder picking (and possibly editing) an option, or accepting a
+ * build or template. What they chose becomes the task's written answer —
+ * the artifact — and the task is done. Their edit wins over Nova's text.
+ */
+export async function chooseWork(projectId: string, workId: string, choice: { index?: number; text?: string; done?: boolean }) {
+  const [row] = await db.select().from(pathWork).where(and(eq(pathWork.id, workId), eq(pathWork.projectId, projectId)));
+  if (!row) throw Object.assign(new Error("That work isn't on this project."), { status: 404 });
+  const payload = row.payload as WorkPayload;
+  let answer = (choice.text ?? "").trim();
+  let index: number | null = null;
+  if (payload.kind === "options") {
+    index = Number.isInteger(choice.index) ? Number(choice.index) : null;
+    const option = index != null ? payload.options[index] : null;
+    if (!option && !answer) throw Object.assign(new Error("Pick an option, or write your own."), { status: 400, code: "invalid_input" });
+    if (!answer && option) answer = option.body;
+  } else if (payload.kind === "build") {
+    if (!answer) answer = `${payload.summary}\n\nFiles: ${payload.files.map((f) => f.path).join(", ")}\nVerified by: ${payload.verify}`;
+  } else if (!answer) {
+    answer = payload.template;
+  }
+  await db.update(pathWork).set({ chosenIndex: index }).where(eq(pathWork.id, row.id));
+  const task = await storage.getKanbanTask(row.taskId);
+  if (!task) throw Object.assign(new Error("Task not found"), { status: 404 });
+  const updates: any = { description: answer };
+  if (choice.done !== false) { updates.status = "done"; updates.completedAt = new Date(); if (!task.startedAt) updates.startedAt = new Date(); }
+  const updated = await storage.updateKanbanTask(row.taskId, updates);
+  if (updates.status === "done") await onPathTaskDone(updated as any);
+  return { task: updated, answer };
+}
+
 /** The artifacts Nova may ground an injected task in: written answers, check-ins, decisions. */
 export async function collectArtifacts(projectId: string): Promise<Artifact[]> {
   const goal = (await db.select({ goal: projects.goal, subcategory: projects.subcategory }).from(projects).where(eq(projects.id, projectId)))[0];
@@ -362,6 +416,11 @@ export async function pathStatus(projectId: string) {
   const inPhaseDone = current.milestones.filter((m) => isDone(m.id)).length;
   const next = current.milestones.find((m) => !isDone(m.id)) ?? null;
 
+  // When the next milestone has been broken into steps, the next action is
+  // the first unfinished step — Nova works step by step, not on the whole.
+  const nextStepTask = next ? (children.get(next.id) ?? []).find((k) => k.status !== "done") ?? null : null;
+  const workTaskId = nextStepTask?.id ?? taskByBackbone.get(next?.id ?? "")?.id ?? null;
+  const work = workTaskId ? await latestWork(workTaskId) : null;
   const pace = await refreshPace(projectId);
   const events = await db.select().from(pathPaceEvents).where(eq(pathPaceEvents.projectId, projectId))
     .orderBy(desc(pathPaceEvents.createdAt)).limit(10);
@@ -378,7 +437,12 @@ export async function pathStatus(projectId: string) {
       injectRoom: Math.max(0, 3 - (injected.get(p.id)?.length ?? 0)),
     })),
     current: { id: current.id, title: current.title, step: Math.min(inPhaseDone + 1, current.milestones.length), of: current.milestones.length },
-    next: next ? withTask(next) : null,
+    next: next ? {
+      ...withTask(next),
+      step: nextStepTask ? { taskId: nextStepTask.id, title: nextStepTask.title, description: nextStepTask.description ?? "", actor: (tagValue(nextStepTask.tags, "actor:") ?? next.actor) as Actor } : null,
+      workTaskId,
+      work: work ? { id: work.id, kind: work.kind, payload: work.payload, chosenIndex: work.chosenIndex, createdAt: work.createdAt } : null,
+    } : null,
     mainLine: { done: doneCount, total: main.length },
     pace, events,
     proposal: complete ? NEXT_PATHS[goal] : null,

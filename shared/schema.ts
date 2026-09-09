@@ -1110,6 +1110,25 @@ export const pathPaceEvents = pgTable("path_pace_events", {
 export type PathPace = typeof pathPace.$inferSelect;
 export type PathPaceEvent = typeof pathPaceEvents.$inferSelect;
 
+
+/**
+ * What Nova produced for a task on the path: options to pick from, a build
+ * packet (files, run steps), or a template for something only the builder
+ * can do. One row per attempt; the latest is what the dashboard shows.
+ * A chosen option becomes the task's written answer — the artifact the
+ * rest of the path reads.
+ */
+export const pathWork = pgTable("path_work", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  taskId: varchar("task_id").notNull(),
+  kind: text("kind", { enum: ["options", "build", "template"] }).notNull(),
+  payload: jsonb("payload").notNull(),
+  chosenIndex: integer("chosen_index"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [index("path_work_task_idx").on(t.taskId, t.createdAt)]);
+export type PathWork = typeof pathWork.$inferSelect;
+
 export const activityEvents = pgTable("activity_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   /**

@@ -6,7 +6,7 @@
  */
 import OpenAI from "openai";
 import { modelFor, coachingDirectiveFor, type UserEntitlements } from "./entitlements";
-import type { Artifact, InjectionProposal } from "@shared/phase-trees";
+import type { Artifact, InjectionProposal, WorkPayload, WorkKind } from "@shared/phase-trees";
 
 const rawBase = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
 const openai = new OpenAI({
@@ -88,4 +88,58 @@ Write it as they would: concrete, in their product's own terms, 3–5 numbered l
     temperature: 0.4,
   });
   return (completion.choices[0]?.message?.content ?? "").trim().slice(0, 3000);
+}
+
+/**
+ * Nova doing the milestone. The kind follows the actor: options for drafts
+ * and decisions, a build packet for nova-builds, a template for user-does.
+ * Grounded in the project's state and the answers written so far, so the
+ * data model it writes matches the loop they chose and the copy uses their
+ * product's words.
+ */
+export async function produceWork(
+  ent: UserEntitlements, kind: WorkKind,
+  task: { title: string; description: string; tier: string },
+  context: { goal: string; subcategory: string; state: string; artifacts: Artifact[] },
+): Promise<WorkPayload> {
+  const shape = kind === "options"
+    ? `{"kind":"options","intro":"one sentence on how these differ","options":[{"title":"","body":"the full text they would keep — complete, not a summary","why":"one line"}]}
+Give exactly three options with genuinely different emphases, never three rewordings. Each body must be usable as-is.`
+    : kind === "build"
+    ? `{"kind":"build","summary":"2–3 sentences: what this builds and where it goes","files":[{"path":"relative/path","language":"ts","content":"complete file contents","purpose":"one line"}],"runSteps":["exact commands or clicks, in order"],"verify":"the one check that proves it works","assumptions":["anything you had to assume about their stack or repo"]}
+Write real, complete code for their stack — not pseudocode, not placeholders, no '...'. Match the data model and loop written in the artifacts. Keep it to the files this milestone needs (usually 1–4). If the milestone is not code (a deploy, an analytics wiring), files may be config and runSteps carry the work.`
+    : `{"kind":"template","intro":"one sentence","template":"the thing they will use — a message, a list structure, an observation sheet — complete and in their product's words","whatNovaDid":"one line","whatIsLeft":"one line: the part only they can do"}`;
+
+  const completion = await openai.chat.completions.create({
+    model: modelFor(ent),
+    messages: [
+      { role: "system", content: `You are Nova, doing a milestone on a builder's path — not describing it, doing it. ${coachingDirectiveFor(ent)}
+Path: ${context.goal} · type: ${context.subcategory}. Verification: ${task.tier}.
+Use the ANSWERS SO FAR as ground truth; they were chosen by the builder. Use the PROJECT STATE for stack, names and what already exists — do not rebuild what exists.
+Respond ONLY with valid JSON of exactly this shape (no markdown fences):
+${shape}` },
+      { role: "user", content: `MILESTONE: ${task.title}\n${task.description}\n\nANSWERS SO FAR\n${context.artifacts.length ? context.artifacts.map((a) => `[${a.label}] ${a.text}`).join("\n") : "(none yet)"}\n\nPROJECT STATE\n${context.state.slice(0, 20000)}` },
+    ],
+    temperature: kind === "build" ? 0.2 : 0.5,
+    max_completion_tokens: 8000,
+  });
+  const parsed = parseJson(completion.choices[0]?.message?.content ?? "{}");
+  if (kind === "options") {
+    const options = (Array.isArray(parsed.options) ? parsed.options : []).slice(0, 3)
+      .map((o: any) => ({ title: String(o.title ?? "").slice(0, 120), body: String(o.body ?? "").slice(0, 4000), why: o.why ? String(o.why).slice(0, 300) : undefined }))
+      .filter((o: any) => o.body);
+    if (!options.length) throw Object.assign(new Error("Nova didn't come back with usable options. Try again."), { status: 502 });
+    return { kind: "options", intro: String(parsed.intro ?? "").slice(0, 400), options };
+  }
+  if (kind === "build") {
+    const files = (Array.isArray(parsed.files) ? parsed.files : []).slice(0, 8)
+      .map((f: any) => ({ path: String(f.path ?? "file").slice(0, 200), language: String(f.language ?? "").slice(0, 20), content: String(f.content ?? ""), purpose: f.purpose ? String(f.purpose).slice(0, 200) : undefined }))
+      .filter((f: any) => f.content);
+    const runSteps = (Array.isArray(parsed.runSteps) ? parsed.runSteps : []).map(String).slice(0, 12);
+    if (!files.length && !runSteps.length) throw Object.assign(new Error("Nova didn't produce a build. Try again."), { status: 502 });
+    return { kind: "build", summary: String(parsed.summary ?? "").slice(0, 1200), files, runSteps, verify: String(parsed.verify ?? "").slice(0, 400), assumptions: (Array.isArray(parsed.assumptions) ? parsed.assumptions : []).map(String).slice(0, 6) };
+  }
+  const template = String(parsed.template ?? "");
+  if (!template) throw Object.assign(new Error("Nova didn't produce a template. Try again."), { status: 502 });
+  return { kind: "template", intro: String(parsed.intro ?? "").slice(0, 400), template: template.slice(0, 6000), whatNovaDid: String(parsed.whatNovaDid ?? "").slice(0, 300), whatIsLeft: String(parsed.whatIsLeft ?? "").slice(0, 300) };
 }

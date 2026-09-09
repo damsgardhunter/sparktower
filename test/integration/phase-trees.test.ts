@@ -283,3 +283,61 @@ describe("a project that predates paths", () => {
     expect((await agent.get(`/api/projects/${id}/path`)).body.mainLine.total).toBe(after.mainLine.total);
   });
 });
+
+describe("Nova works the milestone", () => {
+  it("choosing an option writes the answer and closes the task; a step becomes the next action", async () => {
+    const app = await getTestApp();
+    const agent = await owner(app);
+    const id = (await create(agent, "ship_mvp", "saas", "Work Test")).body.id;
+    const { saveWork, chooseWork, createExpansion } = await import("../../server/phase-trees");
+    const before = (await agent.get(`/api/projects/${id}/path`)).body;
+    expect(before.next.workTaskId).toBe(before.next.taskId);
+    expect(before.next.work).toBeNull();
+
+    // Nova's options for the product statement (the AI call is stubbed by saving directly).
+    const row = await saveWork(id, before.next.taskId, { kind: "options", intro: "Three emphases.", options: [
+      { title: "Speed", body: "Plan a week of dinners in thirty seconds from what's already in your fridge." },
+      { title: "Waste", body: "Stop throwing food away: dinners planned around what you already bought." },
+      { title: "Family", body: "Weeknight dinners the whole table eats, planned from your fridge." },
+    ] });
+    const shown = (await agent.get(`/api/projects/${id}/path`)).body;
+    expect(shown.next.work.id).toBe(row.id);
+    expect(shown.next.work.payload.options).toHaveLength(3);
+
+    // Pick the second, with an edit. The edit wins, lands on the task, and the task is done.
+    const res = await agent.post(`/api/projects/${id}/path/work/${row.id}/choose`).send({ index: 1, text: "Stop throwing food away. Dinners planned around what you already bought." });
+    expect(res.status).toBe(200);
+    expect(res.body.task.status).toBe("done");
+    expect(res.body.task.description).toBe("Stop throwing food away. Dinners planned around what you already bought.");
+    const after = (await agent.get(`/api/projects/${id}/path`)).body;
+    expect(after.next.id).toBe("SHIP.M1.2");
+    expect(after.mainLine.done).toBe(1);
+    // And that answer is now an artifact the rest of the path can read.
+    const { collectArtifacts } = await import("../../server/phase-trees");
+    expect((await collectArtifacts(id)).map((a) => a.label)).toContain("milestone:SHIP.M1.1");
+
+    // A build accepted without text gets a summary of what was built as its answer.
+    const build = await saveWork(id, after.next.taskId, { kind: "build", summary: "The loop, written down.", files: [{ path: "loop.md", language: "md", content: "1. Scan fridge" }], runSteps: [], verify: "It reads back.", assumptions: [] });
+    const accepted = await chooseWork(id, build.id, {});
+    expect(accepted.task.status).toBe("done");
+    expect(accepted.answer).toMatch(/Files: loop.md/);
+    expect(await (async () => { try { await chooseWork(id, "00000000-0000-0000-0000-000000000000", {}); return "ok"; } catch (e: any) { return e.status; } })()).toBe(404);
+
+    // Break the loop steps into steps: the next action is now the first step, with its own task to work.
+    const { created } = await createExpansion(id, "SHIP.M2.1", [{ title: "Scan the fridge", description: "Photo to inventory." }, { title: "Plan the week", description: "" }]);
+    for (const m of ["SHIP.M1.3", "SHIP.M1.4", "SHIP.M1.5", "SHIP.M1.6", "SHIP.M1.7", "SHIP.M1.8"]) await agent.post(`/api/projects/${id}/path/mark`).send({ ids: [m] });
+    const week2 = (await agent.get(`/api/projects/${id}/path`)).body;
+    expect(week2.next.id).toBe("SHIP.M2.1");
+    expect(week2.next.step).toMatchObject({ taskId: created[0].id, title: "Scan the fridge" });
+    expect(week2.next.workTaskId).toBe(created[0].id);
+  });
+
+  it("refuses work on a task that isn't on the path", async () => {
+    const app = await getTestApp();
+    const agent = await owner(app);
+    const id = (await create(agent, "raise_funding", "other", "Not On Path")).body.id;
+    const res = await agent.post(`/api/projects/${id}/path/work`).send({ taskId: "00000000-0000-0000-0000-000000000000" });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("not_on_path");
+  });
+});

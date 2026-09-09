@@ -50,9 +50,10 @@ import { isValidSubcategory, PROJECT_GOALS } from "@shared/goals";
 import { recordActivity } from "./analytics";
 import {
   instantiatePathTree, pathStatus, onPathTaskDone, createExpansion, createInjections,
-  collectArtifacts, switchPath, backboneIdOf, reconcileMilestones,
+  collectArtifacts, switchPath, backboneIdOf, reconcileMilestones, pathTaskContext, saveWork, chooseWork,
 } from "./phase-trees";
-import { draftExpansionSteps, proposeInjections, readExistingProgress, draftArtifact } from "./phase-trees-nova";
+import { draftExpansionSteps, proposeInjections, readExistingProgress, draftArtifact, produceWork } from "./phase-trees-nova";
+import { workKindFor } from "@shared/phase-trees";
 import { resolveTree, treeFor } from "@shared/phase-trees";
 
 async function isProjectMember(userId: string, projectId: string): Promise<boolean> {
@@ -2629,6 +2630,53 @@ RULES:
     } catch (error) {
       console.error("Path mark error:", error);
       res.status(500).json({ message: "Couldn't mark that" });
+    }
+  });
+
+  /**
+   * Nova doing the task. The actor decides what "doing" means: options to
+   * pick from, a build packet, or the template for a human-only step. The
+   * result stays on the task, and choosing it writes the answer and closes it.
+   */
+  app.post("/api/projects/:id/path/work", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+      if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
+      const ctx = await pathTaskContext(projectId, String(req.body?.taskId ?? ""));
+      if (!ctx) return res.status(400).json({ message: "That task isn't on this project's path.", code: "not_on_path" });
+      const kind = workKindFor(ctx.actor);
+      const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova working on a milestone");
+      if (!ent) return;
+      const [state, artifacts] = await Promise.all([
+        buildOperableProjectState(projectId, { includeIds: false, includeAudit: true }),
+        collectArtifacts(projectId),
+      ]);
+      const payload = await produceWork(ent, kind,
+        { title: ctx.task.title, description: ctx.task.description ?? ctx.milestone?.description ?? "", tier: ctx.tier },
+        { goal: ctx.project.goal, subcategory: ctx.project.subcategory, state, artifacts });
+      const row = await saveWork(projectId, ctx.task.id, payload);
+      await storage.deductCredits(userId, CREDIT_COSTS.taskAssist);
+      res.json({ id: row.id, kind: row.kind, payload: row.payload, chosenIndex: null, createdAt: row.createdAt });
+    } catch (error: any) {
+      if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
+      console.error("Path work error:", error);
+      res.status(500).json({ message: "Nova couldn't finish that. Try again in a moment." });
+    }
+  });
+
+  app.post("/api/projects/:id/path/work/:workId/choose", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const result = await chooseWork(req.params.id, req.params.workId, {
+        index: req.body?.index, text: typeof req.body?.text === "string" ? req.body.text : undefined, done: req.body?.done,
+      });
+      res.json(result);
+    } catch (error: any) {
+      if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
+      console.error("Path choose error:", error);
+      res.status(500).json({ message: "Couldn't save that" });
     }
   });
 
