@@ -12,7 +12,10 @@
     "stripe:seed": "tsx --env-file=.env server/seed-stripe.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:unit": "vitest run --config vitest.unit.config.ts"
+    "test:unit": "vitest run --config vitest.unit.config.ts",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "typecheck:ratchet": "node scripts/typecheck-ratchet.mjs"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.19.0",
@@ -103,6 +106,7 @@
     "zod-validation-error": "^3.5.4"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@replit/vite-plugin-cartographer": "^0.4.4",
     "@replit/vite-plugin-dev-banner": "^0.1.1",
     "@replit/vite-plugin-runtime-error-modal": "^0.0.3",
@@ -125,11 +129,13 @@
     "autoprefixer": "^10.4.20",
     "drizzle-kit": "^0.31.8",
     "esbuild": "^0.25.0",
+    "eslint": "^9.39.5",
     "postcss": "^8.4.47",
     "supertest": "^7.2.2",
     "tailwindcss": "^3.4.17",
     "tsx": "^4.20.5",
     "typescript": "5.6.3",
+    "typescript-eslint": "^8.70.0",
     "vite": "^7.3.0",
     "vitest": "^2.1.9"
   },

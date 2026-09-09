@@ -1,0 +1,97 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to the same PR cancels the run it supersedes. Nobody is waiting
+# on the result of a commit that has already been replaced.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # The web client and the API share one package, one lockfile and one
+  # typecheck, so they are one job. The job names below are what branch
+  # protection requires by name — rename one and the protection silently stops
+  # applying to it.
+  server-web:
+    runs-on: ubuntu-latest
+
+    # A real Postgres, because the suite tests behaviour only a real one has:
+    # column types, defaults, constraints, and `timestamp without time zone`
+    # semantics. A fake would pass and prove nothing.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        # Without this the job races the container and fails on connection
+        # refused, intermittently, which is the worst kind of red build.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # The suite derives its own database from this by suffixing `_test`, and
+      # creates it on first run. Nothing here touches a real environment.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      NODE_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # `npm ci`, not `npm install`: it refuses to run if package.json and the
+      # lockfile disagree, which is exactly the case where "works on my
+      # machine" is about to become "works on nobody else's".
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      # Compared to a committed baseline rather than required to be zero — see
+      # scripts/typecheck-ratchet.mjs. Fails only if the count goes up.
+      - name: Typecheck
+        run: npm run typecheck:ratchet
+
+      - name: Test
+        run: npm test
+
+  mobile:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: mobile
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          # Its own lockfile, so its cache is keyed on it and not on the root's.
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      # No tests yet on mobile; the typecheck is the gate. When a test runner
+      # is added there, it goes here, and the job name stays the same so the
+      # branch protection keeps covering it.
+      - name: Typecheck
+        run: npm run typecheck

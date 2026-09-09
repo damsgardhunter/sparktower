@@ -340,7 +340,6 @@ export default function ProjectManager() {
     setNovaHandoff(null);
     job();
     // Only the pending job should re-trigger this; the mutations are stable.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [novaHandoff]);
 
   const updateProjectMutation = useMutation({
