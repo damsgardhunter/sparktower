@@ -42,7 +42,7 @@ export const FUND_TREE: PathTree = {
         { id: "FUND.M2.1", title: "Tier 1 outreach pack", actor: "novva-drafts", estimateMinutes: 30, tier: "artifact",
           description: "Emails and call scripts for rent, suppliers, insurance, permits. Ready to send." },
         { id: "FUND.M2.2", title: "Make the calls", actor: "user-does", estimateMinutes: h(3), tier: "claimed",
-          description: "The afternoon that moves the score most. Guessed becomes quoted." },
+          description: "Your afternoon on the phone — the one that moves the score most. Guessed becomes quoted." },
         { id: "FUND.M2.3", title: "Plan updated with quotes", actor: "novva-builds", estimateMinutes: 0, tier: "artifact",
           description: "Automatic. The score moves. This is the moment the system proves itself." },
         { id: "FUND.M2.4", title: "Assumption risk pass", actor: "novva-drafts", estimateMinutes: 30, tier: "artifact",
@@ -81,7 +81,7 @@ export const FUND_TREE: PathTree = {
       checkpoint: "From here the dashboard switches to pipeline mode: conversations, stages, follow-ups. Projecting a date would be dishonest once outcomes depend on other people.",
       milestones: [
         { id: "FUND.M4.1", title: "Launch the route", actor: "user-does", estimateMinutes: h(2), tier: "claimed",
-          description: "Send, submit, publish, open presales." },
+          description: "Send, submit, publish, open presales. Yours to do — this is the day." },
         { id: "FUND.M4.2", title: "Response log", actor: "novva-drafts", estimateMinutes: null, tier: "artifact",
           description: "Nova structures your notes after every meeting, call, or rejection." },
         { id: "FUND.M4.3", title: "Objection tracking", actor: "novva-drafts", estimateMinutes: null, tier: "artifact",
