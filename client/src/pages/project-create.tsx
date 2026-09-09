@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { useLocation, Link } from "wouter";
+import { useLocation, Link, useSearch } from "wouter";
 import { useEntitlements } from "@/hooks/use-entitlements";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -42,6 +42,8 @@ import type { Project } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 import { useUpload } from "@/hooks/use-upload";
 import { PROJECT_GOALS, projectGoal, subcategoriesFor, isValidSubcategory, type ProjectGoal } from "@shared/goals";
+import { NEW_PROJECT_STEPS, type NewProjectStep, nextStep, prevStep, stepIndex } from "@shared/new-project-steps";
+import { useAuth } from "@/hooks/use-auth";
 
 interface Message {
   role: "user" | "assistant";
@@ -163,12 +165,33 @@ function ReadinessItem({ label, done }: { label: string; done: boolean }) {
   );
 }
 
+const STEP_LABELS: Record<NewProjectStep, string> = {
+  setup: "Set up with Nova", goal: "Goal", subcategory: "Kind", review: "Create",
+};
+
 export default function ProjectCreate() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const { canCreatePrivateProject, privateProjectLimit } = useEntitlements();
   const [showIntro, setShowIntro] = useState(true);
   const [messages, setMessages] = useState<Message[]>([]);
+
+  /*
+   * The step lives in the URL, so the browser's back and forward buttons move
+   * between steps for free and a refresh lands on the same one. Everything
+   * else — the conversation, the fields — lives in a per-user draft in
+   * localStorage, restored on mount and cleared when the project is created.
+   * Someone who wanders off to check a link and comes back finds their work.
+   */
+  const search = useSearch();
+  const step: NewProjectStep = (() => {
+    const v = new URLSearchParams(search).get("step") as NewProjectStep | null;
+    return v && (NEW_PROJECT_STEPS as readonly string[]).includes(v) ? v : "setup";
+  })();
+  const goTo = (next: NewProjectStep) => setLocation(`/projects/new/create?step=${next}`);
+  const { user } = useAuth();
+  const draftKey = user?.id ? `new-project-draft:${user.id}` : null;
+  const [draftRestored, setDraftRestored] = useState(false);
   const [input, setInput] = useState("");
   const [roleSelectKey, setRoleSelectKey] = useState(0);
   const [uploadedImages, setUploadedImages] = useState<{ path: string; preview: string }[]>([]);
@@ -201,6 +224,28 @@ export default function ProjectCreate() {
       toast({ title: "Upload failed", description: error.message, variant: "destructive" });
     },
   });
+
+  // Restore the draft once. Nothing saves until this has run, or the empty
+  // initial state would overwrite the draft it was about to restore.
+  useEffect(() => {
+    if (!draftKey || draftRestored) return;
+    try {
+      const raw = localStorage.getItem(draftKey);
+      if (raw) {
+        const d = JSON.parse(raw);
+        if (Array.isArray(d.messages) && d.messages.length) { setMessages(d.messages); setShowIntro(false); }
+        if (d.projectData && typeof d.projectData === "object") setProjectData((prev) => ({ ...prev, ...d.projectData }));
+      }
+    } catch { /* a corrupt draft is not worth a crash */ }
+    setDraftRestored(true);
+  }, [draftKey, draftRestored]);
+
+  useEffect(() => {
+    if (!draftKey || !draftRestored) return;
+    try {
+      localStorage.setItem(draftKey, JSON.stringify({ messages, projectData, savedAt: Date.now() }));
+    } catch { /* storage full or blocked: the page still works, it just won't remember */ }
+  }, [draftKey, draftRestored, messages, projectData]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -274,6 +319,7 @@ export default function ProjectCreate() {
       return res.json();
     },
     onSuccess: (project) => {
+      if (draftKey) { try { localStorage.removeItem(draftKey); } catch { /* fine */ } }
       toast({
         title: "Project created!",
         description: "Your project has been successfully created.",
@@ -476,11 +522,38 @@ export default function ProjectCreate() {
       </div>
 
       <div className="w-[420px] flex flex-col bg-background">
-        <header className="p-4 border-b border-border flex items-center justify-between">
-          <span className="font-semibold">Project Preview</span>
-          <span className="text-xs text-muted-foreground">{filledFields}/5 fields</span>
+        <header className="p-4 border-b border-border">
+          <ol className="flex items-center gap-1.5" data-testid="new-project-stepper">
+            {NEW_PROJECT_STEPS.map((id, i) => {
+              const done = stepIndex(id) < stepIndex(step);
+              const current = id === step;
+              return (
+                <li key={id} className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => done && goTo(id)}
+                    disabled={!done && !current}
+                    className={`h-6 min-w-6 px-2 rounded-full text-[11px] font-medium transition-colors ${
+                      current ? "bg-primary text-primary-foreground"
+                      : done ? "bg-primary/15 text-primary hover:bg-primary/25"
+                      : "bg-muted text-muted-foreground"
+                    }`}
+                    data-testid={`step-${id}`}
+                    aria-current={current ? "step" : undefined}
+                  >
+                    {i + 1}
+                  </button>
+                  <span className={`text-xs ${current ? "font-medium" : "text-muted-foreground"}`}>
+                    {STEP_LABELS[id]}
+                  </span>
+                  {i < NEW_PROJECT_STEPS.length - 1 && <span className="w-3 border-t border-border" />}
+                </li>
+              );
+            })}
+          </ol>
         </header>
         <div className="flex-1 p-5 space-y-4 overflow-y-auto">
+          {step === "setup" && (<>
           <Card className="border-border overflow-hidden">
             <div className="h-2 bg-gradient-to-r from-green-400 via-emerald-500 to-purple-500" />
             <CardContent className="p-4 space-y-4">
@@ -504,62 +577,6 @@ export default function ProjectCreate() {
                   data-testid="textarea-project-description"
                 />
               </div>
-              {/*
-                * Required, and asked as a choice rather than defaulted: the
-                * three paths get different roadmaps, different briefings and
-                * different advice, and a default would quietly put every
-                * agency and every fundraise on the MVP path.
-                */}
-              <div>
-                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1">
-                  <Target className="h-3 w-3" /> What does winning look like? *
-                </label>
-                <div className="mt-1 grid grid-cols-1 gap-1.5" data-testid="project-goal">
-                  {PROJECT_GOALS.map((g) => {
-                    const active = projectData.goal === g.id;
-                    return (
-                      <button
-                        key={g.id} type="button"
-                        onClick={() => setProjectData({ ...projectData, goal: g.id, subcategory: isValidSubcategory(g.id, projectData.subcategory) ? projectData.subcategory : undefined })}
-                        className={`text-left rounded-md border px-3 py-2 transition-colors ${
-                          active ? "border-primary bg-primary/10" : "border-border hover:bg-accent"
-                        }`}
-                        data-testid={`goal-${g.id}`}
-                        aria-pressed={active}
-                      >
-                        <span className="text-sm font-medium">{g.label}</span>
-                        <span className="block text-xs text-muted-foreground">{g.description}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-              {/* Asked only once there is a goal to ask it about; the options are the goal's. */}
-              {projectData.goal && (
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                    What kind of {projectGoal(projectData.goal).short.toLowerCase() === "ship" ? "thing are you shipping" : projectGoal(projectData.goal).short.toLowerCase() === "raise" ? "raise is it" : "business is it"}? *
-                  </label>
-                  <div className="mt-1 flex flex-wrap gap-1.5" data-testid="project-subcategory">
-                    {subcategoriesFor(projectData.goal as ProjectGoal).map((sc) => {
-                      const active = projectData.subcategory === sc.id;
-                      return (
-                        <button
-                          key={sc.id} type="button"
-                          onClick={() => setProjectData({ ...projectData, subcategory: sc.id })}
-                          className={`rounded-full border px-3 py-1 text-sm transition-colors ${
-                            active ? "border-primary bg-primary/10 font-medium" : "border-border hover:bg-accent"
-                          }`}
-                          data-testid={`subcategory-${sc.id}`}
-                          aria-pressed={active}
-                        >
-                          {sc.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1">
@@ -839,16 +856,134 @@ export default function ProjectCreate() {
             </Card>
           )}
 
-          <Button
-            className="w-full"
-            onClick={() => createMutation.mutate(projectData)}
-            disabled={!projectData.title || !projectData.description || !isValidSubcategory(projectData.goal, projectData.subcategory) || createMutation.isPending}
-            data-testid="button-create-project"
-          >
-            {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Sparkles className="h-4 w-4 mr-2" />}
-            Create Project
-          </Button>
+          </>)}
+
+          {step === "goal" && (
+            <Card className="border-border overflow-hidden">
+              <CardContent className="p-4">
+              {/*
+                * Required, and asked as a choice rather than defaulted: the
+                * three paths get different roadmaps, different briefings and
+                * different advice, and a default would quietly put every
+                * agency and every fundraise on the MVP path.
+                */}
+              <div>
+                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                  <Target className="h-3 w-3" /> What does winning look like? *
+                </label>
+                <div className="mt-1 grid grid-cols-1 gap-1.5" data-testid="project-goal">
+                  {PROJECT_GOALS.map((g) => {
+                    const active = projectData.goal === g.id;
+                    return (
+                      <button
+                        key={g.id} type="button"
+                        onClick={() => setProjectData({ ...projectData, goal: g.id, subcategory: isValidSubcategory(g.id, projectData.subcategory) ? projectData.subcategory : undefined })}
+                        className={`text-left rounded-md border px-3 py-2 transition-colors ${
+                          active ? "border-primary bg-primary/10" : "border-border hover:bg-accent"
+                        }`}
+                        data-testid={`goal-${g.id}`}
+                        aria-pressed={active}
+                      >
+                        <span className="text-sm font-medium">{g.label}</span>
+                        <span className="block text-xs text-muted-foreground">{g.description}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {step === "subcategory" && (
+            <Card className="border-border overflow-hidden">
+              <CardContent className="p-4">
+              {/* Asked only once there is a goal to ask it about; the options are the goal's. */}
+              {projectData.goal && (
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                    What kind of {projectGoal(projectData.goal).short.toLowerCase() === "ship" ? "thing are you shipping" : projectGoal(projectData.goal).short.toLowerCase() === "raise" ? "raise is it" : "business is it"}? *
+                  </label>
+                  <div className="mt-1 flex flex-wrap gap-1.5" data-testid="project-subcategory">
+                    {subcategoriesFor(projectData.goal as ProjectGoal).map((sc) => {
+                      const active = projectData.subcategory === sc.id;
+                      return (
+                        <button
+                          key={sc.id} type="button"
+                          onClick={() => setProjectData({ ...projectData, subcategory: sc.id })}
+                          className={`rounded-full border px-3 py-1 text-sm transition-colors ${
+                            active ? "border-primary bg-primary/10 font-medium" : "border-border hover:bg-accent"
+                          }`}
+                          data-testid={`subcategory-${sc.id}`}
+                          aria-pressed={active}
+                        >
+                          {sc.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              </CardContent>
+            </Card>
+          )}
+
+          {step === "review" && (
+            <Card className="border-border overflow-hidden" data-testid="project-review">
+              <div className="h-2 bg-gradient-to-r from-green-400 via-emerald-500 to-purple-500" />
+              <CardContent className="p-4 space-y-3">
+                <h3 className="font-semibold">{projectData.title}</h3>
+                <p className="text-sm text-muted-foreground whitespace-pre-wrap">{projectData.description}</p>
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                  <dt className="text-muted-foreground">Path</dt>
+                  <dd>{projectGoal(projectData.goal).label}</dd>
+                  <dt className="text-muted-foreground">Kind</dt>
+                  <dd>{subcategoriesFor(projectData.goal as ProjectGoal).find((sc) => sc.id === projectData.subcategory)?.label ?? "—"}</dd>
+                  {projectData.category && <><dt className="text-muted-foreground">Category</dt><dd>{projectData.category}</dd></>}
+                  {!!projectData.teamSize && <><dt className="text-muted-foreground">Team</dt><dd>{projectData.teamSize}</dd></>}
+                  {!!projectData.estimatedWeeks && <><dt className="text-muted-foreground">Timeline</dt><dd>{projectData.estimatedWeeks} weeks</dd></>}
+                </dl>
+                <p className="text-xs text-muted-foreground">You can change any of this later from the project's settings.</p>
+              </CardContent>
+            </Card>
+          )}
         </div>
+
+        {/*
+          * Back is always safe: it changes the URL, not the draft, and the
+          * browser's own back button does the same thing. Next is gated on
+          * what the step needs; Create on the whole thing.
+          */}
+        <footer className="p-4 border-t border-border flex items-center gap-2">
+          {prevStep(step) && (
+            <Button variant="outline" onClick={() => goTo(prevStep(step)!)} data-testid="button-back">
+              Back
+            </Button>
+          )}
+          <div className="flex-1" />
+          {step !== "review" ? (
+            <Button
+              onClick={() => goTo(nextStep(step)!)}
+              disabled={
+                (step === "setup" && (!projectData.title || !projectData.description)) ||
+                (step === "goal" && !projectData.goal) ||
+                (step === "subcategory" && !isValidSubcategory(projectData.goal, projectData.subcategory))
+              }
+              data-testid="button-next"
+            >
+              Next
+            </Button>
+          ) : (
+            <Button
+              onClick={() => createMutation.mutate(projectData)}
+              disabled={!projectData.title || !projectData.description || !isValidSubcategory(projectData.goal, projectData.subcategory) || createMutation.isPending}
+              data-testid="button-create-project"
+            >
+              {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Sparkles className="h-4 w-4 mr-2" />}
+              Create Project
+            </Button>
+          )}
+        </footer>
       </div>
     </div>
   );

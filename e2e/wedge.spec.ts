@@ -60,9 +60,27 @@ test("a new builder signs up, creates a project, and posts the first check-in", 
   await page.getByTestId("textarea-project-description").fill(
     "A small app that plans a week of dinners from what is already in the fridge.",
   );
+  await page.getByTestId("button-next").click();
+  await expect(page).toHaveURL(/step=goal/);
+
   // Which path this project is on — required, and a real choice.
   await page.getByTestId("goal-ship_mvp").click();
+  await page.getByTestId("button-next").click();
+  await expect(page).toHaveURL(/step=subcategory/);
   await page.getByTestId("subcategory-saas").click();
+
+  // Back, then forward again: the URL carries the step, the draft carries the
+  // answers, and neither is lost by moving around.
+  await page.goBack();
+  await expect(page).toHaveURL(/step=goal/);
+  await expect(page.getByTestId("goal-ship_mvp")).toHaveAttribute("aria-pressed", "true");
+  await page.goForward();
+  await expect(page).toHaveURL(/step=subcategory/);
+  await expect(page.getByTestId("subcategory-saas")).toHaveAttribute("aria-pressed", "true");
+
+  await page.getByTestId("button-next").click();
+  await expect(page).toHaveURL(/step=review/);
+  await expect(page.getByTestId("project-review")).toContainText("Weeknight Recipes");
   await page.getByTestId("button-create-project").click();
   // Creating a project lands on its manage page, which is where check-ins live.
   await page.waitForURL(/\/projects\/[0-9a-f-]{36}\/manage/, { timeout: 15_000 });

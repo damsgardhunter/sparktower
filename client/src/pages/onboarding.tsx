@@ -166,7 +166,8 @@ export default function Onboarding() {
         description: "Your profile has been set up successfully.",
       });
 
-      setLocation("/");
+      // A new account has no projects; the next thing to do is make one.
+      setLocation("/projects/new");
     } catch (error) {
       toast({
         title: "Error",

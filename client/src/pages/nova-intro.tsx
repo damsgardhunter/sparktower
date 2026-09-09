@@ -281,7 +281,7 @@ export default function NovaIntro() {
           >
             <Button
               size="lg"
-              onClick={() => setLocation("/projects/new/create")}
+              onClick={() => setLocation("/projects/new/create?step=setup")}
               className="relative overflow-hidden text-base font-semibold shadow-lg shadow-emerald-500/25"
               data-testid="button-launch-nova"
             >
