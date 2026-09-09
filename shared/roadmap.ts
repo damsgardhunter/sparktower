@@ -49,3 +49,16 @@ export function depthForPhaseCount(n: number): RoadmapDepth {
   if (n >= ROADMAP_DEPTHS.standard.min) return "standard";
   return "overview";
 }
+
+/**
+ * The depth to revise or rebuild at when the builder hasn't chosen one.
+ *
+ * Inferring from the existing length alone has a trap: every roadmap built
+ * before the picker existed has about six phases, because six was the cap —
+ * so inference reads "overview" off an artifact of the old limit and rebuilds
+ * it at six again. Standard is the floor; a roadmap only infers *up*.
+ */
+export function depthForRevision(existingCount: number): RoadmapDepth {
+  const inferred = depthForPhaseCount(existingCount);
+  return inferred === "overview" ? "standard" : inferred;
+}

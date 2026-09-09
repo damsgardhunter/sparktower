@@ -1,4 +1,4 @@
-import { ROADMAP_DEPTHS, DEFAULT_ROADMAP_DEPTH, MAX_ROADMAP_PHASES, roadmapDepth, depthForPhaseCount, type RoadmapDepth } from "@shared/roadmap";
+import { ROADMAP_DEPTHS, DEFAULT_ROADMAP_DEPTH, MAX_ROADMAP_PHASES, roadmapDepth, depthForRevision, type RoadmapDepth } from "@shared/roadmap";
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage, isTaskOnTime } from "./storage";
@@ -3718,7 +3718,7 @@ Respond ONLY with the JSON, in the same shape as before.`,
           modelFor(ent),
           `You are Nova, revising an existing project roadmap based on real progress. ${coachingDirectiveFor(ent)}
 
-Keep phases that are still correct (preserve their titles so progress isn't lost), and add new phases the project now needs. Merge two phases only when they have become the same work; a phase the builder still wants stays even if it has to move later. Mark phases already finished as completed.\n\n${roadmapSchemaInstructions(depthForPhaseCount(existing.phases.length))}
+Keep phases that are still correct (preserve their titles so progress isn't lost), and add new phases the project now needs. Merge two phases only when they have become the same work; a phase the builder still wants stays even if it has to move later. Mark phases already finished as completed.\n\n${roadmapSchemaInstructions(depthForRevision(existing.phases.length))}
 Additionally, each phase may include "status": one of "upcoming", "in-progress", "completed".`,
           [
             `PROJECT BRIEF\n${formatProjectBriefForPrompt(project)}`,
@@ -3953,7 +3953,7 @@ This is NOT an incremental revision. Re-plan the whole path to the goal against 
 
 Also resequence the milestones and re-prioritise the open tasks to match the new plan.
 
-${roadmapSchemaInstructions(req.body?.depth ? roadmapDepth(req.body.depth) : depthForPhaseCount(existing.phases.length))}
+${roadmapSchemaInstructions(req.body?.depth ? roadmapDepth(req.body.depth) : depthForRevision(existing.phases.length))}
 Each phase may also include "status": "upcoming" | "in-progress" | "completed".
 
 Additionally include:

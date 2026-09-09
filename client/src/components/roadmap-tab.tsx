@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ROADMAP_DEPTHS, ROADMAP_DEPTH_IDS, DEFAULT_ROADMAP_DEPTH, type RoadmapDepth } from "@shared/roadmap";
+import { ROADMAP_DEPTHS, ROADMAP_DEPTH_IDS, DEFAULT_ROADMAP_DEPTH, depthForRevision, type RoadmapDepth } from "@shared/roadmap";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -72,6 +72,7 @@ export function RoadmapTab({ projectId, isOwner }: { projectId: string; isOwner:
   const [rebuildSummary, setRebuildSummary] = useState<string | null>(null);
   const [whatChanged, setWhatChanged] = useState("");
   const [newGoal, setNewGoal] = useState("");
+  const [rebuildDepth, setRebuildDepth] = useState<RoadmapDepth | "">("");
   /** The phase open for hand-editing, held as a draft until saved. */
   const [editingPhase, setEditingPhase] = useState<
     { id: string; title: string; description: string; estimatedDuration: string; outcomes: string } | null
@@ -158,6 +159,7 @@ export function RoadmapTab({ projectId, isOwner }: { projectId: string; isOwner:
       const res = await apiRequest("POST", `/api/projects/${projectId}/roadmap/rebuild`, {
         whatChanged: whatChanged || undefined,
         newGoal: newGoal || undefined,
+        depth: rebuildDepth || undefined,
       });
       return res.json();
     },
@@ -511,6 +513,28 @@ export function RoadmapTab({ projectId, isOwner }: { projectId: string; isOwner:
                 data-testid="input-new-goal"
               />
             </div>
+
+              {/*
+                * A replan re-plans everything, so it is the moment to change
+                * how long the roadmap is. Left blank, the server keeps the
+                * current depth — with Standard as the floor, so a roadmap
+                * built under the old six-phase cap doesn't replan to six.
+                */}
+              <div className="space-y-2">
+                <Label>How detailed?</Label>
+                <Select value={rebuildDepth} onValueChange={(v) => setRebuildDepth(v as RoadmapDepth)}>
+                  <SelectTrigger data-testid="select-rebuild-depth">
+                    <SelectValue placeholder={`Keep current (${ROADMAP_DEPTHS[depthForRevision(data?.roadmap?.phases.length ?? 0)].label})`} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ROADMAP_DEPTH_IDS.map((id) => (
+                      <SelectItem key={id} value={id} data-testid={`rebuild-depth-${id}`}>
+                        {ROADMAP_DEPTHS[id].label} · {ROADMAP_DEPTHS[id].min}–{ROADMAP_DEPTHS[id].max} phases
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             {quote && (
               <div className="rounded-md bg-muted/40 border border-border/60 p-3 text-sm space-y-1">
                 <p className="font-medium">This rebuild costs {quote.cost} credits</p>
