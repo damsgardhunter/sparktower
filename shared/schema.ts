@@ -997,6 +997,29 @@ export const loopEvents = pgTable("loop_events", {
 });
 
 /**
+ * Rate-limit hits for actions that leave no row of their own.
+ *
+ * Most limits count the content itself — comments, check-ins, projects — which
+ * is exact and needs no bookkeeping. Three actions can't be counted that way:
+ * a reaction is a toggle (un-reacting deletes the row, so the count goes down),
+ * an upload presign writes nothing until the file lands, and an AI call leaves
+ * its result in a dozen different places. Those record a hit here instead.
+ *
+ * In Postgres rather than memory so a limit survives a restart and holds
+ * across instances — an in-memory counter on autoscale is one counter per
+ * instance, which is N times the limit. Swept after a day.
+ */
+export const rateLimitHits = pgTable("rate_limit_hits", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull(),
+  action: varchar("action").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /* The only query: this person, this action, inside the window. */
+  lookup: index("rate_limit_hits_lookup_idx").on(table.userId, table.action, table.createdAt),
+}));
+
+/**
  * The behaviour stream — every write the API takes and every page anyone opens.
  *
  * Kept apart from `loop_events` deliberately: that table is five names feeding

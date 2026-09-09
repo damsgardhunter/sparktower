@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
 import { getObjectAclPolicy, ObjectPermission } from "./objectAcl";
+import { rateLimit } from "../../moderation";
 import fs from "fs";
 import fsPromises from "fs/promises";
 import path from "path";
@@ -42,7 +43,7 @@ export function registerObjectStorageRoutes(app: Express): void {
   app.post("/api/uploads/request-url", (req: any, res, next) => {
     if (!req.user) return res.status(401).json({ error: "Authentication required" });
     next();
-  }, async (req, res) => {
+  }, rateLimit("upload"), async (req, res) => {
     try {
       const { name, size, contentType } = req.body;
 

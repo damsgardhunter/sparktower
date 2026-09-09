@@ -6,6 +6,7 @@ import {
   type BooleanFeature, type Entitlements, type TierId,
 } from "@shared/plans";
 import { TEXT_MODEL, PRIORITY_TEXT_MODEL } from "./aiModels";
+import { enforceRateLimit } from "./moderation";
 
 export interface UserEntitlements extends Entitlements {
   tier: TierId;
@@ -99,6 +100,14 @@ export async function requireCredits(
   amount: number,
   label: string
 ): Promise<UserEntitlements | null> {
+  /*
+   * Every AI endpoint passes through here for its credit check, which makes
+   * this the one place a per-minute limit covers all of them — thirty routes,
+   * none of which has to remember to add it. Credits cap the month; this caps
+   * the burst, which is the shape a script has and a person doesn't.
+   */
+  if (!(await enforceRateLimit(res, userId, "ai"))) return null;
+
   const ent = await getUserEntitlements(userId);
   const sub = await storage.getUserSubscription(userId);
 

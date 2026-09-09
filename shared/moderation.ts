@@ -42,6 +42,23 @@ export const RATE_LIMITS = {
     max: 10, windowMinutes: 60,
     message: "You've filed several reports. We'll look at those first.",
   },
+  react: {
+    max: 60, windowMinutes: 10,
+    message: "You're reacting very quickly. Give it a minute.",
+  },
+  upload: {
+    max: 30, windowMinutes: 60,
+    message: "That's a lot of uploads in an hour. Try again a little later.",
+  },
+  /*
+   * One limit for every AI endpoint, enforced at the credit check they all
+   * pass through. Credits cap the month; this caps the minute, which is the
+   * shape a script has and a person doesn't.
+   */
+  ai: {
+    max: 30, windowMinutes: 10,
+    message: "Nova needs a moment — that's a lot of requests at once. Try again in a few minutes.",
+  },
 } as const satisfies Record<string, RateLimit>;
 
 export type RateLimitAction = keyof typeof RATE_LIMITS;

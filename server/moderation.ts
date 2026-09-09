@@ -14,7 +14,7 @@ import type { PgTable, PgColumn } from "drizzle-orm/pg-core";
 import { db } from "./db";
 import {
   contentReports, users, userProfiles, projectCheckIns, projectComments,
-  feedPosts, feedComments, directMessages, projects,
+  feedPosts, feedComments, directMessages, projects, rateLimitHits,
 } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { requireReviewer } from "./platform-roles";
@@ -36,7 +36,24 @@ interface CountSource {
    * count as duplicates of the row being written.
    */
   scope?: SQL;
+  /** Applied to every query. Used to pick one action out of the hit table. */
+  where?: SQL;
 }
+
+/**
+ * Actions counted from `rate_limit_hits` rather than from content.
+ *
+ * Each of these records a row when it passes the check — that is the whole
+ * mechanism. A reaction can't be counted from its own table because
+ * un-reacting deletes the row; a presign writes nothing; an AI call writes to
+ * a dozen places.
+ */
+const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai"]);
+
+const hitSource = (action: RateLimitAction): CountSource => ({
+  table: rateLimitHits, author: rateLimitHits.userId, created: rateLimitHits.createdAt,
+  where: eq(rateLimitHits.action, action),
+});
 
 /**
  * Which tables each limited action is counted from.
@@ -86,6 +103,9 @@ const COUNTED: Record<RateLimitAction, CountSource[]> = {
   report: [{
     table: contentReports, author: contentReports.reporterId, created: contentReports.createdAt,
   }],
+  react:  [hitSource("react")],
+  upload: [hitSource("upload")],
+  ai:     [hitSource("ai")],
 };
 
 /*
@@ -136,7 +156,7 @@ const sum = (ns: number[]) => ns.reduce((a, b) => a + b, 0);
  */
 export async function withinRateLimit(
   userId: string, action: RateLimitAction,
-): Promise<{ ok: boolean; retryAfterMinutes: number }> {
+): Promise<{ ok: boolean; retryAfterMinutes: number; used: number; max: number }> {
   const limit = RATE_LIMITS[action];
 
   try {
@@ -146,14 +166,58 @@ export async function withinRateLimit(
         .where(and(
           eq(src.author, userId),
           withinMinutes(src.created, limit.windowMinutes),
+          ...(src.where ? [src.where] : []),
         ));
       return row?.n ?? 0;
     }));
-    return { ok: sum(counts) < limit.max, retryAfterMinutes: limit.windowMinutes };
+    const used = sum(counts);
+    return { ok: used < limit.max, retryAfterMinutes: limit.windowMinutes, used, max: limit.max };
   } catch (err) {
     console.error(`[moderation] Rate check failed for ${action}, allowing:`, err);
-    return { ok: true, retryAfterMinutes: 0 };
+    return { ok: true, retryAfterMinutes: 0, used: 0, max: limit.max };
   }
+}
+
+/** Marks one use of a hit-counted action. Content-counted actions need nothing. */
+async function recordHit(userId: string, action: RateLimitAction): Promise<void> {
+  if (!HIT_COUNTED.has(action)) return;
+  try {
+    await db.insert(rateLimitHits).values({ userId, action });
+  } catch (err) {
+    // A hit that fails to record errs on the side of the person, not the limit.
+    console.error(`[moderation] Could not record ${action} hit:`, err);
+  }
+}
+
+/**
+ * The refusal, in one place, so every 429 looks the same and is logged.
+ *
+ * Logged at warn with the numbers, because a limit that fires is either
+ * someone abusing the site or a limit set too low for a real person, and the
+ * log line is how you tell which — one user at 31/30 is the second, one user
+ * at 400/30 is the first.
+ */
+function refuse(res: any, userId: string, action: RateLimitAction, used: number, max: number, retryAfterMinutes: number) {
+  console.warn(`[rate-limit] refused ${action} for user ${userId}: ${used}/${max} in ${RATE_LIMITS[action].windowMinutes}m`);
+  res.setHeader("Retry-After", String(retryAfterMinutes * 60));
+  res.status(429).json({
+    message: RATE_LIMITS[action].message,
+    code: "rate_limited",
+    action,
+    retryAfterMinutes,
+  });
+}
+
+/**
+ * For handlers that check inside their own body rather than as middleware —
+ * the credit check every AI endpoint runs through is the one that matters.
+ * Returns true to proceed; on false the 429 has already been written.
+ */
+export async function enforceRateLimit(res: any, userId: string, action: RateLimitAction): Promise<boolean> {
+  const { ok, retryAfterMinutes, used, max } = await withinRateLimit(userId, action);
+  if (!ok) { refuse(res, userId, action, used, max, retryAfterMinutes); return false; }
+  await recordHit(userId, action);
+  return true;
 }
 
 /**
@@ -211,15 +275,8 @@ export function rateLimit(action: RateLimitAction): RequestHandler {
     const userId = req.user?.id;
     if (!userId) return next();
 
-    const { ok, retryAfterMinutes } = await withinRateLimit(userId, action);
-    if (!ok) {
-      res.setHeader("Retry-After", String(retryAfterMinutes * 60));
-      return res.status(429).json({
-        message: RATE_LIMITS[action].message,
-        code: "rate_limited",
-        retryAfterMinutes,
-      });
-    }
+    const { ok, retryAfterMinutes, used, max } = await withinRateLimit(userId, action);
+    if (!ok) return refuse(res, userId, action, used, max, retryAfterMinutes);
 
     const rule: DuplicateRule | undefined =
       (DUPLICATE_RULES as Partial<Record<RateLimitAction, DuplicateRule>>)[action];
@@ -234,8 +291,27 @@ export function rateLimit(action: RateLimitAction): RequestHandler {
       return res.status(409).json({ message: rule.message, code: "duplicate_content" });
     }
 
+    await recordHit(userId, action);
     next();
   };
+}
+
+/**
+ * Sweeps hits older than any window needs. Hourly, unref'd, advisory-lock
+ * free: a delete of expired rows is idempotent, so two instances doing it at
+ * once just means one of them deletes nothing.
+ */
+export function startModerationJobs(): void {
+  const sweep = async () => {
+    try {
+      await db.delete(rateLimitHits)
+        .where(sql`${rateLimitHits.createdAt} < now() - interval '1 day'`);
+    } catch (err) {
+      console.error("[moderation] Hit sweep failed:", err);
+    }
+  };
+  setTimeout(sweep, 90_000);
+  setInterval(sweep, 60 * 60_000).unref();
 }
 
 /**

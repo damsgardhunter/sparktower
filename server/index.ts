@@ -8,6 +8,7 @@ import { backfillMissingProfiles } from "./user-provisioning";
 import { loadSurfaceFlags, startSurfaceFlagRefresh } from "./surfaces";
 import { startBackingJobs } from "./backing-jobs";
 import { startAnalyticsJobs } from "./analytics";
+import { startModerationJobs } from "./moderation";
 import { checkMerchFonts } from "./merch-render";
 import { serveStatic } from "./static";
 import { createApp, log } from "./app";
@@ -87,6 +88,7 @@ let appReady = false;
   // running several server processes is safe.
   startBackingJobs();
   startAnalyticsJobs();
+  startModerationJobs();
 
   const app = await createApp({
     httpServer,

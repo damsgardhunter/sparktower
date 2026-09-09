@@ -46,6 +46,7 @@ import {
   UNCLAIMED_PREFERENCES, MAX_SHOWCASE_BADGES, BADGE_LEVELS, platformFeeCents, creatorPayoutCents, tierForAmount,
   tierNeedsShipping, type MerchConfig,
 } from "@shared/backing";
+import { rateLimit } from "./moderation";
 
 const str = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
 const clampInt = (v: unknown, min: number, max: number, fallback: number) => {
@@ -1139,7 +1140,7 @@ export function registerBackingRoutes(app: Express) {
   });
 
   /** Builds (or rebuilds) the artwork. Only the badge's owner may ask. */
-  app.post("/api/backer-badges/:id/generate", isAuthenticated, async (req: any, res) => {
+  app.post("/api/backer-badges/:id/generate", isAuthenticated, rateLimit("ai"), async (req: any, res) => {
     try {
       const [badge] = await db.select().from(backerBadges)
         .where(eq(backerBadges.id, req.params.id));

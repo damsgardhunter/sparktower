@@ -187,7 +187,7 @@ export function registerFeedRoutes(app: Express) {
    * Sets or toggles a reaction. Sending the reaction you already have clears
    * it, so the same endpoint handles like, change, and un-like.
    */
-  app.post("/api/feed/:id/react", isAuthenticated, async (req: any, res) => {
+  app.post("/api/feed/:id/react", isAuthenticated, rateLimit("react"), async (req: any, res) => {
     try {
       const userId = req.user.id;
       const { reaction } = req.body as { reaction?: string };
@@ -464,7 +464,7 @@ export function registerProjectDiscussionRoutes(app: Express) {
     }
   });
 
-  app.post("/api/project-comments/:commentId/react", isAuthenticated, async (req: any, res) => {
+  app.post("/api/project-comments/:commentId/react", isAuthenticated, rateLimit("react"), async (req: any, res) => {
     try {
       res.json(await storage.toggleCommentReaction(req.params.commentId, req.user.id));
     } catch (error) {
