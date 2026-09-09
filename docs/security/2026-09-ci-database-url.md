@@ -78,6 +78,31 @@ ignored is a repo where the next, real finding is ignored too.
    so "what variables exist and where they come from" has one answer per
    environment.
 
+## Decisions
+
+**Rotation: none.** Nothing real was exposed (see *What was checked*). The
+container default cannot be "rotated" — it is set fresh, per run, by the
+workflow, and now derives from the run id so no fixed value exists anywhere.
+Production credentials were never in git; local ones never leave the machine.
+
+**History rewrite: no.** Rewriting history to remove a container image's
+documented default password would invalidate every clone and every open
+reference to a commit, for a string that opens nothing. A rewrite is the right
+tool when a *real* credential lands in history and rotation alone leaves a
+window; it is the wrong tool for a scanner false positive. If a real
+credential is ever committed, the playbook below applies and a rewrite is
+part of it.
+
+**Merges blocked on scanning: yes.** The `secrets` CI job (gitleaks, full
+history, every push and PR) is a required status check on `main`, alongside
+`server-web`, `e2e` and `mobile`. GitHub push protection is enabled on the
+repository. A PR that introduces a credential cannot be merged.
+
+**Scanner false positives:** anything that matches a credential *shape*
+without being one — the placeholder in `.env.example`, this note — is written
+so it no longer matches (`<user>:<password>`, `<redacted>`). The allowlist in
+`.gitleaks.toml` is a structural regex, not a literal, for the same reason.
+
 ## If a real credential is ever committed
 
 1. **Rotate first, scrub second.** The moment it is pushed, assume it was

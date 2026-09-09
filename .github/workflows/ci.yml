@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual runs, for proving the suite is deterministic: the same commit, run
+  # repeatedly, must be green every time.
+  workflow_dispatch:
 
 # A new push to the same PR cancels the run it supersedes. Nobody is waiting
 # on the result of a commit that has already been replaced.
