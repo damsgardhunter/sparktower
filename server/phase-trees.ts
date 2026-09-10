@@ -658,6 +658,27 @@ export async function pathStatus(projectId: string) {
   const stepLoop = stepLoopId ? nextLoops.find((l) => l.taskId === stepLoopId) ?? null : null;
   const workTaskId = nextStepTask?.id ?? taskByBackbone.get(next?.id ?? "")?.id ?? null;
   const work = workTaskId ? await latestWork(workTaskId) : null;
+  // The loop tree: the source milestone, its loops, and each loop's steps
+  // (children of the fan-out milestone tagged with that loop). Week 2's UI.
+  const loopTree = (() => {
+    const fanOut = phases.flatMap((p) => p.milestones).find((m) => m.expandsFrom && loopsOf(m.expandsFrom).length);
+    if (!fanOut) return null;
+    const sourceId = fanOut.expandsFrom!;
+    const stepTasks = children.get(fanOut.id) ?? [];
+    const loopNodes = (children.get(sourceId) ?? []).filter((k) => isLoop(k.tags)).map((k) => {
+      const steps = stepTasks.filter((t) => loopOf(t.tags) === k.id).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      const done = steps.filter((t) => t.status === "done").length;
+      return {
+        taskId: k.id, title: k.title, description: k.description ?? "", written: k.status === "done" || !!k.description?.trim(),
+        status: k.status, actor: (tagValue(k.tags, "actor:") ?? "nova-drafts") as Actor,
+        state: steps.length ? (done === steps.length ? "built" : done > 0 ? "building" : "planned") : k.status === "done" || k.description?.trim() ? "written" : "unwritten",
+        steps: steps.map((t) => ({ taskId: t.id, title: t.title, description: t.description ?? "", status: t.status, actor: (tagValue(t.tags, "actor:") ?? fanOut.actor) as Actor, estimateHours: t.estimateHours })),
+        done, total: steps.length,
+      };
+    });
+    const unassigned = stepTasks.filter((t) => !loopOf(t.tags)).map((t) => ({ taskId: t.id, title: t.title, status: t.status }));
+    return { sourceId, sourceTitle: phases.flatMap((p) => p.milestones).find((m) => m.id === sourceId)?.title ?? "The core loop", fanOutId: fanOut.id, fanOutTitle: fanOut.title, loops: loopNodes, unassigned };
+  })();
   const pace = await refreshPace(projectId);
   const events = await db.select().from(pathPaceEvents).where(eq(pathPaceEvents.projectId, projectId))
     .orderBy(desc(pathPaceEvents.createdAt)).limit(10);
@@ -687,6 +708,7 @@ export async function pathStatus(projectId: string) {
     mainLine: { done: doneCount, total: main.length },
     pace, events,
     plan: pace?.plan ?? null,
+    loopTree,
     proposal: complete ? NEXT_PATHS[goal] : null,
   };
 }

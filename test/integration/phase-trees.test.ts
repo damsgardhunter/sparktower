@@ -549,3 +549,39 @@ describe("the plan re-sizes for the loops you're going for", () => {
     expect(again).toEqual({ created: [], updated: [] });
   });
 });
+
+describe("the loop tree", () => {
+  it("shows each loop as a branch with its state and its steps, and any node's work is readable", async () => {
+    const app = await getTestApp();
+    const agent = await owner(app);
+    const id = (await create(agent, "ship_mvp", "saas", "Tree Test")).body.id;
+    const { createExpansion, reconcileLoops, saveWork } = await import("../../server/phase-trees");
+
+    expect((await agent.get(`/api/projects/${id}/path`)).body.loopTree).toBeNull();
+    await reconcileLoops(id, [
+      { title: "Build", steps: "create → check in → feedback", state: "built", evidence: "" },
+      { title: "The feed", steps: "open → read → react", state: "partly", evidence: "" },
+      { title: "Backing", steps: "", state: "planned", evidence: "" },
+    ]);
+    let tree = (await agent.get(`/api/projects/${id}/path`)).body.loopTree;
+    expect(tree).toMatchObject({ sourceId: "SHIP.M1.2", fanOutId: "SHIP.M2.1" });
+    expect(tree.loops.map((l: any) => [l.title, l.state, l.written])).toEqual([["Build", "written", true], ["The feed", "written", true], ["Backing", "unwritten", false]]);
+
+    const feed = tree.loops[1];
+    const { created } = await createExpansion(id, "SHIP.M2.1", [{ title: "Open the feed", description: "" }, { title: "React", description: "" }], { loopTaskId: feed.taskId });
+    tree = (await agent.get(`/api/projects/${id}/path`)).body.loopTree;
+    expect(tree.loops[1]).toMatchObject({ state: "planned", done: 0, total: 2 });
+    await agent.patch(`/api/kanban/${created[0].id}`).send({ status: "done" });
+    tree = (await agent.get(`/api/projects/${id}/path`)).body.loopTree;
+    expect(tree.loops[1]).toMatchObject({ state: "building", done: 1, total: 2 });
+    expect(tree.loops[1].steps.map((s: any) => [s.title, s.status])).toEqual([["Open the feed", "done"], ["React", "todo"]]);
+    await agent.patch(`/api/kanban/${created[1].id}`).send({ status: "done" });
+    expect((await agent.get(`/api/projects/${id}/path`)).body.loopTree.loops[1].state).toBe("built");
+
+    // Any node's work is readable on its own, for the tree to open lazily.
+    expect((await agent.get(`/api/projects/${id}/path/work/${created[1].id}`)).body).toEqual({ work: null });
+    const w = await saveWork(id, created[1].id, { kind: "template", intro: "", template: "x", whatNovaDid: "", whatIsLeft: "" });
+    expect((await agent.get(`/api/projects/${id}/path/work/${created[1].id}`)).body.work.id).toBe(w.id);
+    expect((await agent.get(`/api/projects/${id}/path/work/00000000-0000-0000-0000-000000000000`)).status).toBe(404);
+  });
+});

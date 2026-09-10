@@ -50,7 +50,7 @@ import { isValidSubcategory, PROJECT_GOALS } from "@shared/goals";
 import { recordActivity } from "./analytics";
 import {
   instantiatePathTree, pathStatus, onPathTaskDone, createExpansion, createInjections,
-  collectArtifacts, switchPath, backboneIdOf, reconcileMilestones, pathTaskContext, saveWork, chooseWork, milestoneDetail, createLoop, setBranch, extendBranch, reconcileLoops,
+  collectArtifacts, switchPath, backboneIdOf, reconcileMilestones, pathTaskContext, saveWork, chooseWork, milestoneDetail, createLoop, setBranch, extendBranch, reconcileLoops, latestWork,
 } from "./phase-trees";
 import { draftExpansionSteps, proposeInjections, readExistingProgress, draftArtifact, produceWork } from "./phase-trees-nova";
 import { workKindFor } from "@shared/phase-trees";
@@ -2683,6 +2683,20 @@ RULES:
       if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
       console.error("Path work error:", error);
       res.status(500).json({ message: "Nova couldn't finish that. Try again in a moment." });
+    }
+  });
+
+  /** The latest work on one task on the path. */
+  app.get("/api/projects/:id/path/work/:taskId", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const ctx = await pathTaskContext(req.params.id, req.params.taskId);
+      if (!ctx) return res.status(404).json({ message: "That task isn't on this project's path." });
+      const w = await latestWork(ctx.task.id);
+      res.json({ work: w ? { id: w.id, kind: w.kind, payload: w.payload, chosenIndex: w.chosenIndex, createdAt: w.createdAt } : null });
+    } catch (error) {
+      console.error("Path work read error:", error);
+      res.status(500).json({ message: "Couldn't read that" });
     }
   });
 

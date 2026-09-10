@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { WorkView, refreshPath, useFail, type WorkRow } from "@/components/path-work";
 import { MilestoneDetail } from "@/components/path-milestone";
+import { LoopTree, type LoopTreeData } from "@/components/loop-tree";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -41,6 +42,7 @@ interface PathStatus {
   next: NextAction | null;
   mainLine: { done: number; total: number };
   plan: { loops: number; authoredDays: number; totalMinutes: number; doneMinutes: number } | null;
+  loopTree: LoopTreeData | null;
   pace: { state: PaceState; multiplier: number | null; mode: ProjectionMode; projectedAt: string | null; projectedLow: string | null; projectedHigh: string | null; note: string; daysSinceActivity: number } | null;
   events: { id: string; title: string; estimateMinutes: number | null; actualMinutes: number | null; projectedBefore: string | null; projectedAfter: string | null; createdAt: string }[];
   proposal: { goal: ProjectGoal; why: string }[] | null;
@@ -231,6 +233,18 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
           <GitBranch className="h-3.5 w-3.5 text-primary" /><span>Extending. When this round is built:</span>
           <Button size="sm" variant="ghost" className="h-6 text-xs" disabled={branch.isPending} onClick={() => branch.mutate({ phaseId: data.branch!.phaseId, extend: true })} data-testid="button-extend-again"><Repeat className="h-3 w-3 mr-1" />Extend again</Button>
           <Button size="sm" variant="ghost" className="h-6 text-xs" disabled={branch.isPending} onClick={() => branch.mutate({ phaseId: null })} data-testid="button-leave-branch"><LogOut className="h-3 w-3 mr-1" />Go to users</Button>
+        </div>
+      )}
+
+      {/* Week 2's screen: the product as a tree of loops, each with its steps. */}
+      {data.loopTree && (
+        <div className="space-y-2 pt-1" data-testid="loop-tree-section">
+          <div className="flex items-center gap-2">
+            <ListTree className="h-4 w-4 text-primary" />
+            <p className="font-semibold text-sm">Your loops</p>
+            <span className="text-xs text-muted-foreground">Each is written, broken into steps, and built — click any node.</span>
+          </div>
+          <LoopTree projectId={projectId} tree={data.loopTree} />
         </div>
       )}
 
