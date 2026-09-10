@@ -6,7 +6,6 @@ import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Cpu, Send, X, Loader2, CheckCircle2, ListTodo, Milestone, FileEdit, Sparkles, ChevronDown, MessageSquare, Pencil } from "lucide-react";
 
 interface NovaMessage {
@@ -80,6 +79,7 @@ function ActionCard({ action }: { action: NovaAction }) {
     create_milestones: "Created Milestones",
     edit_project: "Edited Your Project",
     complete_onboarding: "Setup Complete",
+    remember: "Nova will keep this in mind",
   };
   const Icon = icons[action.type] || Sparkles;
   const label = labels[action.type] || action.type;
@@ -99,6 +99,8 @@ function ActionCard({ action }: { action: NovaAction }) {
     // Nova returns a sentence per change; showing them is the only way the
     // user can tell what it actually touched.
     details = (action.data.changes || []).map((c: any) => c.description).join(" · ");
+  } else if (action.type === "remember") {
+    details = action.data.notes;
   } else if (action.type === "update_scope") {
     const mvp = action.data.mvp?.length || 0;
     const nth = action.data.niceToHave?.length || 0;
@@ -177,6 +179,38 @@ function ChatMessages({ messages, isLoading }: { messages: NovaMessage[]; isLoad
   );
 }
 
+
+/**
+ * The message box. Focused the moment it mounts (opening the widget puts the
+ * cursor in it, closing unmounts it so nothing keeps typing into a hidden
+ * box), and it grows with what's typed up to about eight lines, so a longer
+ * thought stays readable instead of scrolling sideways in one row.
+ */
+function NovaComposer({ value, onChange, onSend, disabled, placeholder, testId, className }: {
+  value: string; onChange: (v: string) => void; onSend: () => void; disabled?: boolean; placeholder: string; testId: string; className?: string;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => { ref.current?.focus(); }, []);
+  useEffect(() => {
+    const el = ref.current; if (!el) return;
+    el.style.height = "0px";
+    el.style.height = `${Math.min(el.scrollHeight, 8 * 22 + 16)}px`;
+  }, [value]);
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (value.trim() && !disabled) onSend(); } }}
+      placeholder={placeholder}
+      disabled={disabled}
+      rows={1}
+      data-testid={testId}
+      className={`flex-1 min-h-9 resize-none rounded-md border border-input bg-background px-3 py-2 text-sm leading-[22px] placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 ${className ?? ""}`}
+    />
+  );
+}
+
 export function NovaGuide({ projectId, currentTab, project, onProjectUpdate }: NovaGuideProps) {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -185,7 +219,6 @@ export function NovaGuide({ projectId, currentTab, project, onProjectUpdate }: N
   const [isWidgetOpen, setIsWidgetOpen] = useState(false);
   const [localMessages, setLocalMessages] = useState<NovaMessage[]>([]);
   const [hasInitialized, setHasInitialized] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
 
   const onboardingComplete = project?.novaOnboardingComplete ?? false;
 
@@ -353,16 +386,15 @@ export function NovaGuide({ projectId, currentTab, project, onProjectUpdate }: N
           <div className="px-4 pb-4 pt-2 border-t border-border">
             <form
               onSubmit={(e) => { e.preventDefault(); handleSend(); }}
-              className="flex gap-2"
+              className="flex gap-2 items-end"
             >
-              <Input
-                ref={inputRef}
+              <NovaComposer
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="Ask Nova anything about your project..."
+                onChange={setInput}
+                onSend={() => handleSend()}
+                placeholder="Ask Nova anything about your project… (Shift+Enter for a new line)"
                 disabled={sendMutation.isPending}
-                data-testid="input-nova-message"
-                className="flex-1"
+                testId="input-nova-message"
               />
               <Button
                 type="submit"
@@ -399,7 +431,7 @@ export function NovaGuide({ projectId, currentTab, project, onProjectUpdate }: N
       )}
 
       {isWidgetOpen && (
-        <div className="fixed bottom-6 right-6 z-50 w-[400px] h-[560px] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden" data-testid="nova-widget-panel">
+        <div className="fixed bottom-6 right-6 z-50 w-[min(520px,calc(100vw-2rem))] h-[min(720px,calc(100vh-3rem))] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden" data-testid="nova-widget-panel">
           <div className="flex items-center justify-between px-4 py-2.5 border-b border-border bg-primary/5">
             <div className="flex items-center gap-2.5">
               <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
@@ -438,15 +470,15 @@ export function NovaGuide({ projectId, currentTab, project, onProjectUpdate }: N
           <div className="px-3 pb-3 pt-2 border-t border-border">
             <form
               onSubmit={(e) => { e.preventDefault(); handleSend(); }}
-              className="flex gap-2"
+              className="flex gap-2 items-end"
             >
-              <Input
+              <NovaComposer
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="Ask Nova..."
+                onChange={setInput}
+                onSend={() => handleSend()}
+                placeholder="Ask Nova… (Shift+Enter for a new line)"
                 disabled={sendMutation.isPending}
-                data-testid="input-nova-widget"
-                className="flex-1 h-9 text-sm"
+                testId="input-nova-widget"
               />
               <Button
                 type="submit"

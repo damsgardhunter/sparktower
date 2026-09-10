@@ -12,7 +12,7 @@
 import { createServer, type Server } from "http";
 import type { Express } from "express";
 import { createApp } from "../../server/app";
-import { loadSurfaceFlags } from "../../server/surfaces";
+import { loadSurfaceFlags, stopSurfaceFlagRefresh } from "../../server/surfaces";
 
 let cached: { app: Express; server: Server } | null = null;
 
@@ -41,10 +41,16 @@ export async function getTestApp(): Promise<Express> {
   return app;
 }
 
-/** Releases the http server the app was registered against. */
+/**
+ * Releases the http server and the flag refresher. The database pool is
+ * deliberately left alone: server/db.ts is one module instance across the
+ * whole run, so ending it here would take it away from every file after this
+ * one.
+ */
 export async function closeTestApp(): Promise<void> {
   if (!cached) return;
   const { server } = cached;
   cached = null;
+  stopSurfaceFlagRefresh();
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }

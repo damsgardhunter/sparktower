@@ -72,6 +72,12 @@ export function startSurfaceFlagRefresh(): void {
   refresher.unref();
 }
 
+/** Stops the periodic re-read. Tests call it so a finished app leaves nothing ticking. */
+export function stopSurfaceFlagRefresh(): void {
+  if (refresher) clearInterval(refresher);
+  refresher = null;
+}
+
 export const surfaceEnabled = (id: string): boolean => cache[id] !== false;
 
 export const surfaceMap = (): Record<string, boolean> => ({ ...cache });
