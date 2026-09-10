@@ -29,6 +29,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { RoadmapTab } from "@/components/roadmap-tab";
 import { NovaDashboard } from "@/components/nova-dashboard";
+import { DataSourceCard } from "@/components/data-source-card";
 import { HealthCheckPanel } from "@/components/health-check-panel";
 import { UpgradePrompt } from "@/components/upgrade-prompt";
 import { useEntitlements } from "@/hooks/use-entitlements";
@@ -1246,7 +1247,8 @@ function SetupTab({ project, isOwner, links, isUploadingPlan, onUploadPlan, onUp
       </Card>
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+        {isOwner && <DataSourceCard projectId={project.id} />}
+      <CardHeader className="flex flex-row items-center justify-between space-y-0">
           <CardTitle className="text-lg flex items-center gap-2"><Link2 className="h-4 w-4" /> Links Hub</CardTitle>
           {isOwner && <Button variant="outline" size="sm" onClick={() => setShowLinkForm(!showLinkForm)} data-testid="button-add-link"><Plus className="h-3 w-3 mr-1" /> Add</Button>}
         </CardHeader>

@@ -27,6 +27,8 @@ import { CAPABILITY_AREAS, sanitizeCapabilities } from "@shared/capabilities";
 import { deepReadAll } from "./audit-deep-reads";
 import { computeAuditDelta } from "@shared/audit-delta";
 import { probeRuntime } from "./runtime-probe";
+import { introspectDataShape, compareWithCode } from "./data-shape";
+import { open as openSecret } from "./secret-box";
 import { verifyMilestonesFromAudit } from "./phase-tree-verifiers";
 import { refreshPace } from "./phase-trees";
 
@@ -274,6 +276,16 @@ export function registerCodeAuditRoutes(app: Express) {
         return res.status(502).json({ message: "Nova returned an unreadable audit. Please try again." });
       }
 
+      // The live database, when the owner has said where it is, read before
+      // the second reads so "built but unused" can be judged from rows.
+      let dataShape = null as Awaited<ReturnType<typeof introspectDataShape>> | null;
+      if (project.dataSource === "self" && process.env.DATABASE_URL) {
+        dataShape = compareWithCode(await introspectDataShape(process.env.DATABASE_URL, "self"), digest.signals.dataModels);
+      } else if (project.dataSource) {
+        const url = openSecret(project.dataSource);
+        if (url) dataShape = compareWithCode(await introspectDataShape(url, "connection", { ssl: true }), digest.signals.dataModels);
+      }
+
       // Second reads: one narrow question per built or partial area, against
       // the full text of its evidence files and the exact route coverage.
       // Independent and fault-tolerant; a failed read leaves the first-pass
@@ -286,6 +298,7 @@ export function registerCodeAuditRoutes(app: Express) {
         }),
         snapshot.files,
         digest.signals.routeCoverage,
+        dataShape,
       );
       const findings = {
         stackSummary: str(parsed.stackSummary, 400),
@@ -370,6 +383,7 @@ export function registerCodeAuditRoutes(app: Express) {
         findings: findings as any,
         delta: delta as any,
         runtime: runtime as any,
+        dataShape: dataShape as any,
         operations: (Array.isArray(parsed.operations) ? parsed.operations : []).slice(0, 60) as any,
       } as any);
 

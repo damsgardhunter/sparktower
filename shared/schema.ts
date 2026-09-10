@@ -152,6 +152,13 @@ export const projects = pgTable("projects", {
    * board: it is the most recent thing the builder said.
    */
   novaNotes: text("nova_notes"),
+  /**
+   * Where the project's own data lives, for the audit's data-shape read:
+   * a sealed (encrypted) read-only Postgres connection string, or "self"
+   * for the platform owner's own project, which is this application. Never
+   * returned to the client; only whether one is configured.
+   */
+  dataSource: text("data_source"),
   status: text("status", { enum: ["planning", "active", "completed"] }).default("planning").notNull(),
   teamSize: integer("team_size"),
   estimatedWeeks: integer("estimated_weeks"),
@@ -688,6 +695,12 @@ export const projectCodeAudits = pgTable("project_code_audits", {
    * "it is running".
    */
   runtime: jsonb("runtime"),
+  /**
+   * The live database as the audit saw it: tables, columns, keys, row
+   * counts, and how that compares with the schema in the code. Rows are
+   * how "built" and "built but nobody touches it" are told apart.
+   */
+  dataShape: jsonb("data_shape"),
   /** Set once the builder applies them, so the same audit can't be applied twice. */
   appliedAt: timestamp("applied_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -1508,6 +1521,8 @@ export const insertProjectBase = createInsertSchema(projects).omit({
   views: true,
   totalDonations: true,
   createdAt: true,
+  // Sealed; set only through its own route, never by a plain project patch.
+  dataSource: true,
 }).extend({
   // Re-required here: the column's DB default is for backfill, not for
   // letting a new project skip the question.

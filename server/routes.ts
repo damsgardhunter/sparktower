@@ -48,6 +48,9 @@ import {
 } from "./entitlements";
 import { isValidSubcategory, PROJECT_GOALS } from "@shared/goals";
 import { recordActivity } from "./analytics";
+import { seal } from "./secret-box";
+import { safeDbUrl } from "./data-shape";
+import { isOwner as isPlatformOwner } from "./platform-roles";
 import {
   instantiatePathTree, pathStatus, onPathTaskDone, createExpansion, createInjections,
   collectArtifacts, switchPath, backboneIdOf, reconcileMilestones, pathTaskContext, saveWork, chooseWork, milestoneDetail, createLoop, setBranch, extendBranch, reconcileLoops, latestWork, deleteLoop,
@@ -2831,6 +2834,35 @@ RULES:
       console.error("Path loop error:", error);
       res.status(500).json({ message: "Couldn't add that loop" });
     }
+  });
+
+  /**
+   * Where the project's data lives, for the audit's data-shape read. Owner
+   * only. The connection string is sealed before it is stored and never
+   * returned; the client learns only that one is configured. "self" — this
+   * application's own database — is allowed only for the platform owner.
+   */
+  app.get("/api/projects/:id/data-source", isAuthenticated, async (req: any, res) => {
+    const project = await storage.getProject(req.params.id);
+    if (!project) return res.status(404).json({ message: "Project not found" });
+    if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Only the owner can see this" });
+    res.json({ configured: !!project.dataSource, kind: project.dataSource === "self" ? "self" : project.dataSource ? "connection" : null });
+  });
+  app.put("/api/projects/:id/data-source", isAuthenticated, async (req: any, res) => {
+    const project = await storage.getProject(req.params.id);
+    if (!project) return res.status(404).json({ message: "Project not found" });
+    if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Only the owner can set this" });
+    const value = req.body?.url == null ? null : String(req.body.url).trim();
+    let stored: string | null = null;
+    if (value === "self") {
+      if (!isPlatformOwner((req.user as any).email)) return res.status(403).json({ message: "Only the platform owner can point a project at this application's database.", code: "self_not_allowed" });
+      stored = "self";
+    } else if (value) {
+      if (!safeDbUrl(value)) return res.status(400).json({ message: "That needs to be a postgres:// URL to a public host, with its own read-only user. Local and private addresses are refused.", code: "invalid_input", field: "url" });
+      stored = seal(value);
+    }
+    await db.update(projects).set({ dataSource: stored }).where(eq(projects.id, req.params.id));
+    res.json({ configured: !!stored, kind: stored === "self" ? "self" : stored ? "connection" : null });
   });
 
   /** What the builder wants Nova to keep in mind. Read by every Nova prompt. */

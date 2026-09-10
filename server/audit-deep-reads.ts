@@ -10,6 +10,7 @@ import { modelFor, coachingDirectiveFor, type UserEntitlements } from "./entitle
 import type { RepoFile } from "./code-ingest";
 import type { RouteCoverage } from "./route-coverage";
 import { renderRouteCoverage } from "./route-coverage";
+import { renderDataShape, type DataShape } from "@shared/data-shape";
 import { CAPABILITY_AREAS, sanitizeDeepRead, type CapabilityEntry, type CapabilityArea, type CapabilityDetail } from "@shared/capabilities";
 
 const rawBase = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
@@ -26,7 +27,7 @@ export const AREA_QUESTIONS: Record<CapabilityArea, string> = {
   payments: "Is every webhook verified against a signature? Are events idempotent? What syncs entitlements after payment, and what happens on failure or refund?",
   ai: "Which AI routes are metered by credits and which are not? Is there a per-user burst limit? How are model errors and unparseable responses handled, and is the user charged on failure?",
   analytics: "Which events are captured and where? What can the owner see, is it gated to the owner, and is the data retention or deletion handled?",
-  data: "How is the schema applied (migrations vs push)? Which tables carry user content, and which columns could hold secrets or PII? Is there any destructive operation without a guard?",
+  data: "How is the schema applied (migrations vs push)? Which tables carry user content, and which columns could hold secrets or PII? Is there any destructive operation without a guard? If DATA IN USE is given: which tables are empty, and which features does that make built-but-unused?",
   tests: "What do the tests actually cover — list areas with a test file for each — and what important paths have none? Is there a test database strategy, and do tests run in CI?",
   ci: "What does the pipeline run (typecheck, lint, tests, E2E, secrets scan)? What is missing? Are results required before merge, as far as the code shows?",
   deploy: "How is the app deployed and configured? Is there a health check, an environment contract, kill switches, and production-only enforcement (e.g. session secret)? What would break on a fresh deploy?",
@@ -61,7 +62,7 @@ function parseJson(raw: string): any {
  */
 export async function deepReadArea(
   ent: UserEntitlements, entry: CapabilityEntry, files: RepoFile[], coverage: RouteCoverage | null,
-  opts: { maxFiles?: number; maxCharsPerFile?: number; timeoutMs?: number } = {},
+  opts: { maxFiles?: number; maxCharsPerFile?: number; timeoutMs?: number; dataShape?: DataShape | null } = {},
 ): Promise<CapabilityDetail | null> {
   const area = CAPABILITY_AREAS.find((a) => a.id === entry.area);
   if (!area) return null;
@@ -71,9 +72,10 @@ export async function deepReadArea(
   for (const e of entry.evidence) { const f = byPath.get(e.file); if (f?.content && !chosen.includes(f)) chosen.push(f); if (chosen.length >= maxFiles) break; }
   if (!chosen.length) return null;
   const fileText = chosen.map((f) => `### ${f.path}\n${f.content!.slice(0, maxChars)}${f.content!.length > maxChars ? "\n… (truncated)" : ""}`).join("\n\n");
-  const cov = RELEVANT_TO_COVERAGE.has(entry.area) && coverage
-    ? [renderRouteCoverage(coverage, 40), rowsForArea(entry.area, coverage)].filter(Boolean).join("\n\n")
-    : null;
+  const cov = [
+    RELEVANT_TO_COVERAGE.has(entry.area) && coverage ? [renderRouteCoverage(coverage, 40), rowsForArea(entry.area, coverage)].filter(Boolean).join("\n\n") : null,
+    opts.dataShape ? renderDataShape(opts.dataShape) : null,
+  ].filter(Boolean).join("\n\n") || null;
   const allowed = new Set(files.map((f) => f.path));
 
   try {
@@ -96,10 +98,10 @@ Respond ONLY with JSON: {"coverage":"one or two sentences, quantified","gaps":[{
 }
 
 /** Second reads for every built or partial area, in parallel, each independent. */
-export async function deepReadAll(ent: UserEntitlements, caps: CapabilityEntry[], files: RepoFile[], coverage: RouteCoverage | null): Promise<CapabilityEntry[]> {
+export async function deepReadAll(ent: UserEntitlements, caps: CapabilityEntry[], files: RepoFile[], coverage: RouteCoverage | null, dataShape: DataShape | null = null): Promise<CapabilityEntry[]> {
   const results = await Promise.all(caps.map(async (c) => {
     if (c.status !== "built" && c.status !== "partial") return c;
-    const detail = await deepReadArea(ent, c, files, coverage);
+    const detail = await deepReadArea(ent, c, files, coverage, { dataShape });
     return detail ? { ...c, detail } : c;
   }));
   return results;

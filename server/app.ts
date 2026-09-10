@@ -18,6 +18,7 @@ import type { Server } from "http";
 import { ZodError } from "zod";
 import { registerRoutes } from "./routes";
 import { WebhookHandlers } from "./webhookHandlers";
+import { stripSealedFields } from "@shared/strip-sealed";
 
 export interface CreateAppOptions {
   /** Routes are registered against this — some attach to the server itself. */
@@ -64,6 +65,13 @@ export function log(message: string, source = "express") {
 export async function createApp(opts: CreateAppOptions): Promise<Express> {
   const { httpServer, isReady = () => true, logRequests = false } = opts;
   const app = express();
+
+  // Sealed fields never leave the server, whatever route built the payload.
+  app.use((_req, res, next) => {
+    const json = res.json.bind(res);
+    res.json = ((body: unknown) => json(stripSealedFields(body))) as typeof res.json;
+    next();
+  });
 
   app.get("/_health", (_req, res) => {
     res.sendStatus(200);

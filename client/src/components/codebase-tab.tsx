@@ -1,5 +1,7 @@
 import { areaLabel, type CapabilityEntry } from "@shared/capabilities";
 import type { AuditDelta } from "@shared/audit-delta";
+import type { DataShape } from "@shared/data-shape";
+import { DataMap } from "@/components/data-map";
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -216,6 +218,7 @@ export function CodebaseTab({ projectId, repoUrl }: { projectId: string; repoUrl
   type Probe = { url: string; ok: boolean; status: number | null; ms: number; error?: string } | null;
   const runtime = (audit as any).runtime as { liveUrl: Probe; health: Probe; surfaces: { loaded: boolean; enabled: number; off: string[] } | null; env: { referenced: number; setHere: string[]; missingHere: string[]; instance: string } } | null;
   const delta = (audit as any).delta as AuditDelta | null;
+  const dataShape = (audit as any).dataShape as DataShape | null;
   const running = auditMutation.isPending || isUploading;
 
   return (
@@ -400,6 +403,14 @@ export function CodebaseTab({ projectId, repoUrl }: { projectId: string; repoUrl
                 ))}
                 {runtime.surfaces && <p className="text-muted-foreground">Kill switches: {runtime.surfaces.loaded ? "loaded" : "not loaded"}, {runtime.surfaces.enabled} on{runtime.surfaces.off?.length ? `, off: ${runtime.surfaces.off.join(", ")}` : ""}</p>}
                 <p className="text-muted-foreground">Env: {runtime.env.setHere.length}/{runtime.env.referenced} referenced variables set on the {runtime.env.instance} instance{runtime.env.missingHere?.length ? ` · not set: ${runtime.env.missingHere.slice(0, 8).join(", ")}${runtime.env.missingHere.length > 8 ? " …" : ""}` : ""}</p>
+              </div>
+            )}
+
+            {/* The data map: the live database as a star, sized by rows. */}
+            {dataShape && (
+              <div className="rounded-md border border-border/60 p-2.5 space-y-2" data-testid="audit-data">
+                <p className="font-medium text-sm">Your data</p>
+                <DataMap shape={dataShape} />
               </div>
             )}
 
