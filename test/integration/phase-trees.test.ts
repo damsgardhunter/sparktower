@@ -650,3 +650,45 @@ describe("telling Nova something durable", () => {
     expect((await buildOperableProjectState(id, { includeIds: false, includeAudit: false })).includes("STANDING NOTES")).toBe(false);
   });
 });
+
+describe("verified by the audit", () => {
+  it("marks the milestones an audit can prove, stamps already-done ones, never undoes, and counts code movement as activity", async () => {
+    const app = await getTestApp();
+    const agent = await owner(app);
+    const id = (await create(agent, "ship_mvp", "saas", "Verify Test")).body.id;
+    const { verifyMilestonesFromAudit } = await import("../../server/phase-tree-verifiers");
+    await agent.post(`/api/projects/${id}/path/mark`).send({ ids: ["SHIP.M3.5"] });
+
+    const proof = {
+      id: "audit-1",
+      signals: { serverEntry: "server/app.ts", stack: [{ name: "Express", evidence: "package.json" }, { name: "Drizzle ORM", evidence: "package.json" }] },
+      findings: { capabilities: [{ area: "auth", status: "built", summary: "", evidence: [] }, { area: "data", status: "built", summary: "", evidence: [] }, { area: "analytics", status: "built", summary: "", evidence: [] }] },
+      runtime: { liveUrl: { url: "https://example.com/", ok: true, status: 200, ms: 120 }, health: null, surfaces: null, env: { referenced: 0, setHere: [], missingHere: [], instance: "test" } },
+    };
+    const r = await verifyMilestonesFromAudit(id, proof as any);
+    expect(r.marked.sort()).toEqual(["SHIP.M1.5", "SHIP.M1.8", "SHIP.M2.4"]);
+    expect(r.verified.sort()).toEqual(["SHIP.M1.5", "SHIP.M1.8", "SHIP.M2.4", "SHIP.M3.5"]);
+    const deploy = (await agent.get(`/api/projects/${id}/path/milestones/SHIP.M1.8`)).body.task;
+    expect(deploy).toMatchObject({ status: "done", how: "verified" });
+    expect(deploy.answer).toMatch(/Verified by the codebase audit: live URL answers 200/);
+    expect((await agent.get(`/api/projects/${id}/path/milestones/SHIP.M3.5`)).body.task.how).toBe("verified");
+
+    // A weaker audit later doesn't undo anything, and doesn't re-stamp.
+    const weak = { id: "audit-2", signals: {}, findings: { capabilities: [] }, runtime: null };
+    expect(await verifyMilestonesFromAudit(id, weak as any)).toEqual({ verified: [], marked: [] });
+    expect((await agent.get(`/api/projects/${id}/path/milestones/SHIP.M1.8`)).body.task.status).toBe("done");
+
+    // An audit whose delta says the code moved is a day of activity for pace.
+    const { db } = await import("../../server/db");
+    const { projectCodeAudits, projects } = await import("@shared/schema");
+    const { eq } = await import("drizzle-orm");
+    const owner_ = (await db.select({ ownerId: projects.ownerId }).from(projects).where(eq(projects.id, id)))[0].ownerId;
+    await db.update(projects).set({ createdAt: new Date(Date.now() - 20 * 86_400_000) }).where(eq(projects.id, id));
+    await db.insert(projectCodeAudits).values({ projectId: id, createdById: owner_, source: "github:x/y@main", sourceKind: "github", delta: { changed: true } as any, createdAt: new Date(Date.now() - 2 * 86_400_000) } as any);
+    // Reset pace so the recalculation reads activity fresh.
+    const { pathPace } = await import("@shared/schema");
+    await db.delete(pathPace).where(eq(pathPace.projectId, id));
+    const s = (await agent.get(`/api/projects/${id}/path`)).body;
+    expect(s.pace.state).toBe("active");
+  });
+});

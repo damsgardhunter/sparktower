@@ -11,6 +11,8 @@
 import { storage } from "./storage";
 import { renderCapabilities } from "@shared/capabilities";
 import { renderRouteCoverage } from "./route-coverage";
+import { renderAuditDelta } from "@shared/audit-delta";
+import { renderRuntime } from "./runtime-probe";
 
 /** One edit Nova wants to make. Shapes mirror the JSON Nova is told to emit. */
 export type ProjectOperation =
@@ -124,6 +126,8 @@ export function renderAudit(audit: any): string {
       : "Its suggested changes have NOT been applied to the board yet.",
     f.stackSummary ? `Stack actually in the code: ${f.stackSummary}` : null,
     audit.summary ? `Nova's read: ${audit.summary}` : null,
+    renderRuntime(audit.runtime),
+    renderAuditDelta(audit.delta),
     renderCapabilities(f.capabilities),
     renderRouteCoverage((audit.signals as any)?.routeCoverage),
     f.built?.length ? `Verified as built: ${list(f.built, (b) => b.item, 20)}` : null,

@@ -7,7 +7,7 @@ import { ACTOR_LABEL, type Actor, type VerificationTier } from "@shared/phase-tr
 import { WorkView, refreshPath, useFail, type WorkRow } from "@/components/path-work";
 import { CheckCircle2, Circle, Loader2, RotateCcw, Sparkles, User, Plus } from "lucide-react";
 
-type How = "not-done" | "nova-recognised" | "you-marked" | "carried" | "done";
+type How = "not-done" | "verified" | "nova-recognised" | "you-marked" | "carried" | "done";
 interface TaskView { taskId: string; title: string; status: string; completedAt: string | null; how: How; actor: Actor; answer: string | null; work: WorkRow | null }
 interface Detail {
   phase: { id: string; title: string; optional: boolean };
@@ -21,6 +21,7 @@ interface Detail {
 
 const HOW: Record<How, string> = {
   "not-done": "Not done yet",
+  "verified": "Verified by the codebase audit",
   "nova-recognised": "Nova recognised this as already done when the project joined its path",
   "you-marked": "You marked this done",
   "carried": "Carried over from another path",

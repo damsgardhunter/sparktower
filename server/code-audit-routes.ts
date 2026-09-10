@@ -25,6 +25,10 @@ import {
 import { buildCodeDigest } from "./code-digest";
 import { CAPABILITY_AREAS, sanitizeCapabilities } from "@shared/capabilities";
 import { deepReadAll } from "./audit-deep-reads";
+import { computeAuditDelta } from "@shared/audit-delta";
+import { probeRuntime } from "./runtime-probe";
+import { verifyMilestonesFromAudit } from "./phase-tree-verifiers";
+import { refreshPace } from "./phase-trees";
 
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
@@ -348,18 +352,30 @@ export function registerCodeAuditRoutes(app: Express) {
         repo: repoMeta,
       };
 
+      // The snapshot's velocity and its runtime, alongside what the code contains.
+      const previous = await storage.getLatestCodeAudit(projectId).catch(() => undefined);
+      const runtime = await probeRuntime({ liveUrl: project.liveUrl, envVarNames: digest.signals.envVarNames });
+      const completionPercent = Math.max(0, Math.min(100, Math.round(Number(parsed.completionPercent) || 0)));
+      const delta = computeAuditDelta(previous ?? null, { id: "pending", createdAt: new Date(), completionPercent, signals: digest.signals, findings });
+
       const audit = await storage.createCodeAudit({
         projectId,
         createdById: userId,
         source: snapshot.source,
         sourceKind,
         stage: str(parsed.stage, 40) || "prototype",
-        completionPercent: Math.max(0, Math.min(100, Math.round(Number(parsed.completionPercent) || 0))),
+        completionPercent,
         summary: str(parsed.summary, 2000),
         signals: digest.signals as any,
         findings: findings as any,
+        delta: delta as any,
+        runtime: runtime as any,
         operations: (Array.isArray(parsed.operations) ? parsed.operations : []).slice(0, 60) as any,
       } as any);
+
+      // Code that moved is activity, and a few milestones are verified by what the audit saw.
+      const verified = await verifyMilestonesFromAudit(projectId, { id: audit.id, signals: digest.signals, findings, runtime }).catch((e) => { console.error("[audit] verifiers failed:", e); return { verified: [], marked: [] }; });
+      if (delta.changed) await refreshPace(projectId, { taskId: audit.id, backboneId: null, title: `Audit: +${delta.routes.added.length} routes, +${delta.tables.added.length} tables since ${delta.daysSince}d ago`, estimateMinutes: null, actualMinutes: null }).catch(() => {});
 
       await storage.deductCredits(userId, CREDIT_COSTS.codeAudit);
       await storage.logActivity({
@@ -369,7 +385,7 @@ export function registerCodeAuditRoutes(app: Express) {
         metadata: { source: snapshot.source, stage: audit.stage },
       }).catch(() => {});
 
-      res.json({ audit, creditsCharged: CREDIT_COSTS.codeAudit });
+      res.json({ audit, creditsCharged: CREDIT_COSTS.codeAudit, verifiedMilestones: verified });
     } catch (error: any) {
       console.error("Code audit error:", error);
       // Ingest errors carry messages written for the user; keep them.

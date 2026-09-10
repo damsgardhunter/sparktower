@@ -1,4 +1,5 @@
 import { areaLabel, type CapabilityEntry } from "@shared/capabilities";
+import type { AuditDelta } from "@shared/audit-delta";
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -212,6 +213,9 @@ export function CodebaseTab({ projectId, repoUrl }: { projectId: string; repoUrl
 
   const findings = (audit?.findings as any) || {};
   const scan = findings.scan || {};
+  type Probe = { url: string; ok: boolean; status: number | null; ms: number; error?: string } | null;
+  const runtime = (audit as any).runtime as { liveUrl: Probe; health: Probe; surfaces: { loaded: boolean; enabled: number; off: string[] } | null; env: { referenced: number; setHere: string[]; missingHere: string[]; instance: string } } | null;
+  const delta = (audit as any).delta as AuditDelta | null;
   const running = auditMutation.isPending || isUploading;
 
   return (
@@ -380,6 +384,41 @@ export function CodebaseTab({ projectId, repoUrl }: { projectId: string; repoUrl
             </div>
 
             <p className="text-sm text-secondary leading-relaxed" data-testid="text-audit-summary">{audit.summary}</p>
+
+            {/* Runtime: is it running, not just written. */}
+            {runtime && (
+              <div className="rounded-md border border-border/60 p-2.5 text-xs space-y-1" data-testid="audit-runtime">
+                <p className="font-medium text-sm">Running?</p>
+                {[
+                  ["Live URL", runtime.liveUrl], ["Health", runtime.health],
+                ].map(([label, r]: any) => (
+                  <p key={label} className="flex items-center gap-2">
+                    <span className={`h-2 w-2 rounded-full ${!r ? "bg-muted-foreground/40" : r.ok ? "bg-emerald-500" : "bg-rose-500"}`} />
+                    <span className="font-medium">{label}:</span>
+                    <span className="text-muted-foreground">{!r ? "no public URL to probe" : r.ok ? `${r.status} in ${r.ms}ms` : `not answering (${r.status ?? r.error ?? "no response"})`}</span>
+                  </p>
+                ))}
+                {runtime.surfaces && <p className="text-muted-foreground">Kill switches: {runtime.surfaces.loaded ? "loaded" : "not loaded"}, {runtime.surfaces.enabled} on{runtime.surfaces.off?.length ? `, off: ${runtime.surfaces.off.join(", ")}` : ""}</p>}
+                <p className="text-muted-foreground">Env: {runtime.env.setHere.length}/{runtime.env.referenced} referenced variables set on the {runtime.env.instance} instance{runtime.env.missingHere?.length ? ` · not set: ${runtime.env.missingHere.slice(0, 8).join(", ")}${runtime.env.missingHere.length > 8 ? " …" : ""}` : ""}</p>
+              </div>
+            )}
+
+            {/* Velocity: what moved since the last audit. */}
+            {delta && (
+              <div className="rounded-md border border-border/60 p-2.5 text-xs space-y-1" data-testid="audit-delta">
+                <p className="font-medium text-sm">{delta.previousAuditId ? `Since the last audit (${delta.daysSince} days ago)` : "First audit"}</p>
+                {delta.previousAuditId ? (
+                  <>
+                    <p className="text-muted-foreground">{delta.changed ? "The code moved." : "No meaningful change in the code."}</p>
+                    <p>Routes {delta.routes.before}→{delta.routes.after}{delta.routes.added.length ? ` · added ${delta.routes.added.slice(0, 6).join(", ")}${delta.routes.added.length > 6 ? ` +${delta.routes.added.length - 6}` : ""}` : ""}</p>
+                    <p>Tables {delta.tables.before}→{delta.tables.after}{delta.tables.added.length ? ` · added ${delta.tables.added.join(", ")}` : ""}</p>
+                    <p>Tests {delta.tests.before}→{delta.tests.after} files · lines {delta.linesOfCode.before.toLocaleString()}→{delta.linesOfCode.after.toLocaleString()} · completion {delta.completionPercent.before ?? "?"}%→{delta.completionPercent.after ?? "?"}%</p>
+                    {delta.areas.length > 0 && <p>Areas moved: {delta.areas.map((a: any) => `${areaLabel(a.area)} ${a.from}→${a.to}`).join("; ")}</p>}
+                    {delta.coverage && <p>Writes rate-limited {delta.coverage.writesRateLimited[0]}→{delta.coverage.writesRateLimited[1]} of {delta.coverage.writes[1]} · costly metered {delta.coverage.costlyMetered[0]}→{delta.coverage.costlyMetered[1]}</p>}
+                  </>
+                ) : <p className="text-muted-foreground">Run another audit later and this shows what moved.</p>}
+              </div>
+            )}
 
             {/* Deterministic scan facts — measured, not inferred. */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">

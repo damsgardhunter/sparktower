@@ -673,6 +673,21 @@ export const projectCodeAudits = pgTable("project_code_audits", {
   findings: jsonb("findings").default({}),
   /** Operations that would bring the board in line with the code. */
   operations: jsonb("operations").default([]),
+  /**
+   * What changed since the previous audit: routes and tables added or
+   * removed, areas that moved between partial and built, coverage deltas.
+   * An audit is a snapshot; this is the velocity between two of them, and
+   * the code evidence the pace model reads alongside task completions.
+   */
+  delta: jsonb("delta"),
+  /**
+   * Runtime facts from a small probe at audit time: does the live URL
+   * answer, does the health endpoint, are the surface flags loaded, and
+   * which referenced environment variables are set on the instance that
+   * ran the audit (names only, never values). Separates "code exists" from
+   * "it is running".
+   */
+  runtime: jsonb("runtime"),
   /** Set once the builder applies them, so the same audit can't be applied twice. */
   appliedAt: timestamp("applied_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),

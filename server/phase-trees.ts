@@ -14,7 +14,7 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "./db";
 import { storage } from "./storage";
-import { projects, projectKanbanTasks, projectCheckIns, projectRoadmaps, pathPace, pathPaceEvents, pathWork } from "@shared/schema";
+import { projects, projectKanbanTasks, projectCheckIns, projectRoadmaps, pathPace, pathPaceEvents, pathWork, projectCodeAudits } from "@shared/schema";
 import {
   resolveTree, treeFor, mainLineMilestones, computePace, admitInjections, NEXT_PATHS, loopsAlike, splitMergedPaths,
   type ResolvedMilestone, type Artifact, type InjectionProposal, type PaceState, type WorkPayload, type Actor,
@@ -129,6 +129,9 @@ export async function refreshPace(projectId: string, effort?: {
     .filter((t) => t.status === "done" && t.completedAt && !carried(t) && (backboneIdOf(t.tags) || parentOf(t.tags) || injectedPhaseOf(t.tags)))
     .map((t) => ({ at: new Date(t.completedAt!), estimateMinutes: minutesOf(t) }));
   const checkIns = await db.select({ at: projectCheckIns.createdAt }).from(projectCheckIns).where(eq(projectCheckIns.projectId, projectId));
+  // Code evidence: an audit whose delta shows the code moved is a day of activity.
+  const audits = await db.select({ at: projectCodeAudits.createdAt, delta: projectCodeAudits.delta }).from(projectCodeAudits).where(eq(projectCodeAudits.projectId, projectId));
+  const codeActivity = audits.filter((a) => (a.delta as any)?.changed).map((a) => new Date(a.at));
 
   const totalMinutes = plan.totalMinutes;
   const doneMinutes = plan.doneMinutes;
@@ -140,7 +143,7 @@ export async function refreshPace(projectId: string, effort?: {
 
   const result = computePace({
     now: new Date(), createdAt: new Date(project.createdAt), completions,
-    activityDates: checkIns.map((c) => new Date(c.at)),
+    activityDates: [...checkIns.map((c) => new Date(c.at)), ...codeActivity],
     remainingMinutes: Math.max(0, totalMinutes - doneMinutes), totalMinutes,
     authoredDays: plan.authoredDays,
     tier: tree.defaultTier, pipeline: inMarket,
@@ -461,8 +464,9 @@ export async function chooseWork(projectId: string, workId: string, choice: { in
 }
 
 /** How a task came to be done, read off its tags — so the map can say so. */
-export function howDone(t: { status: string; tags: string[] | null }): "not-done" | "nova-recognised" | "you-marked" | "carried" | "done" {
+export function howDone(t: { status: string; tags: string[] | null }): "not-done" | "verified" | "nova-recognised" | "you-marked" | "carried" | "done" {
   if (t.status !== "done") return "not-done";
+  if (t.tags?.some((x) => x.startsWith("verified:"))) return "verified";
   if (t.tags?.includes("carried:reconciled")) return "nova-recognised";
   if (t.tags?.includes("carried:builder")) return "you-marked";
   if (t.tags?.some((x) => x.startsWith("carried:"))) return "carried";
