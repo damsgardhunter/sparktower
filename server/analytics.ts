@@ -21,6 +21,7 @@ import {
   ACTIVITY_EVENTS, MAX_BATCH_EVENTS, RETENTION_DAYS, SESSION_IDLE_MINUTES,
   routePattern,
 } from "@shared/analytics";
+import { rateLimit } from "./moderation";
 
 /** Cookie holding the visitor id. Not httpOnly: the client stamps events too. */
 const VISITOR_COOKIE = "st_vid";
@@ -199,7 +200,7 @@ export function registerAnalyticsIngest(app: Express) {
    * the server's own view of who is sending it rather than anything the body
    * claims.
    */
-  app.post("/api/track", async (req: any, res) => {
+  app.post("/api/track", rateLimit("track"), async (req: any, res) => {
     // Answer immediately. The client has nothing to do with the outcome, and
     // this endpoint is on the path of every page change.
     res.status(202).json({ ok: true });

@@ -11,6 +11,8 @@ export interface RouteCoverageRow {
   method: string;
   path: string;
   file: string;
+  /** False when nothing imports the file: registered nowhere, so not a live route. */
+  mounted: boolean;
   write: boolean;
   /** Calls a model or is credit-metered: costs money per request. */
   cost: boolean;
@@ -39,6 +41,26 @@ export interface RouteCoverage {
   unmeteredCost: string[];
   /** Surface prefixes found, so a reader knows what a kill switch covers. */
   surfacePrefixes: { prefix: string; surface: string }[];
+  /** Route files nothing imports: their routes exist in code and nowhere else. */
+  unmountedFiles: string[];
+}
+
+/** Files some non-test source imports, by path without extension. Entry points count as imported. */
+function importedFiles(files: RepoFile[]): Set<string> {
+  const imported = new Set<string>();
+  const strip = (p: string) => p.replace(/\.(ts|tsx|js|jsx|mjs|cjs)$/, "").replace(/\/index$/, "");
+  for (const f of files) {
+    if (!f.content || isTestPath(f.path)) continue;
+    const dir = f.path.split("/").slice(0, -1).join("/");
+    for (const m of f.content.matchAll(/from\s+["'](\.{1,2}\/[^"']+)["']|require\(\s*["'](\.{1,2}\/[^"']+)["']\s*\)/g)) {
+      const rel = m[1] ?? m[2];
+      const parts = dir ? dir.split("/") : [];
+      for (const seg of rel.split("/")) { if (seg === "..") parts.pop(); else if (seg !== ".") parts.push(seg); }
+      imported.add(strip(parts.join("/")));
+    }
+  }
+  for (const f of files) if (/(^|\/)(index|server|app|main|routes)\.(ts|js)$/.test(f.path)) imported.add(strip(f.path));
+  return imported;
 }
 
 const isTestPath = (p: string) => /(^|\/)(tests?|__tests__|spec|e2e|cypress|playwright)(\/|$)/i.test(p) || /\.(test|spec)\.[cm]?[jt]sx?$/.test(p)
@@ -69,9 +91,12 @@ export function buildRouteCoverage(files: RepoFile[]): RouteCoverage {
   const prefixes = detectSurfacePrefixes(files);
   const rows: RouteCoverageRow[] = [];
   const seen = new Set<string>();
+  const imported = importedFiles(files);
+  const isMounted = (path: string) => imported.has(path.replace(/\.(ts|tsx|js|jsx|mjs|cjs)$/, "").replace(/\/index$/, ""));
 
   for (const file of files) {
     if (!file.content || isTestPath(file.path)) continue;
+    const mounted = isMounted(file.path);
     const src = file.content;
     const matches = [...src.matchAll(REGISTRATION)];
     for (let i = 0; i < matches.length; i++) {
@@ -98,7 +123,7 @@ export function buildRouteCoverage(files: RepoFile[]): RouteCoverage {
       const credits = /\brequireCredits\s*\(|\bdeductCredits\s*\(/.test(body);
       const cost = credits || /\b(openai|anthropic)\s*\.|completions\.create\(|\bgetOpenAI\(\)/.test(body);
       rows.push({
-        method, path, file: file.path, write, cost,
+        method, path, file: file.path, mounted, write, cost,
         auth: /\b(isAuthenticated|requireAuth|withAuth|authMiddleware|ensureLoggedIn|requireUser|attachBearerUser)\b/.test(middleware) || /\brequireOwner\b|\brequireReviewer\b|\brequireAdmin\b/.test(middleware),
         rateLimited: /\brateLimit\s*\(/.test(middleware) || /\benforceRateLimit\s*\(/.test(body) || credits,
         surface, credits,
@@ -109,22 +134,24 @@ export function buildRouteCoverage(files: RepoFile[]): RouteCoverage {
     }
   }
 
-  const writes = rows.filter((r) => r.write);
-  const costly = rows.filter((r) => r.cost);
+  const live = rows.filter((r) => r.mounted);
+  const writes = live.filter((r) => r.write);
+  const costly = live.filter((r) => r.cost);
   const label = (r: RouteCoverageRow) => `${r.method} ${r.path}`;
   return {
     rows,
     summary: {
-      routes: rows.length, writes: writes.length, costly: costly.length,
+      routes: live.length, writes: writes.length, costly: costly.length,
       writesWithAuth: writes.filter((r) => r.auth).length,
       writesRateLimited: writes.filter((r) => r.rateLimited).length,
       costlyMetered: costly.filter((r) => r.credits).length,
-      surfaceGated: rows.filter((r) => r.surface).length,
+      surfaceGated: live.filter((r) => r.surface).length,
     },
     unguardedWrites: writes.filter((r) => !r.auth).map(label),
     unlimitedWrites: writes.filter((r) => !r.rateLimited).map(label),
     unmeteredCost: costly.filter((r) => !r.credits && !r.rateLimited).map(label),
     surfacePrefixes: prefixes,
+    unmountedFiles: [...new Set(rows.filter((r) => !r.mounted).map((r) => r.file))].sort(),
   };
 }
 
@@ -139,5 +166,6 @@ export function renderRouteCoverage(c: RouteCoverage | null | undefined, maxList
     `- Writes rate-limited or credit-metered: ${s.writesRateLimited}/${s.writes}. Unlimited writes: ${lst(c.unlimitedWrites)}`,
     `- Costly routes credit-metered: ${s.costlyMetered}/${s.costly}. Unmetered costly: ${lst(c.unmeteredCost)}`,
     `- Behind a surface kill switch: ${s.surfaceGated}/${s.routes}${c.surfacePrefixes.length ? ` (prefixes: ${c.surfacePrefixes.map((p) => `${p.prefix}→${p.surface}`).join(", ")})` : ""}`,
-  ].join("\n");
+    c.unmountedFiles.length ? `- Not counted: routes in files nothing imports (dead code, not live endpoints): ${c.unmountedFiles.join(", ")}` : null,
+  ].filter(Boolean).join("\n");
 }

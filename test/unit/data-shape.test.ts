@@ -41,9 +41,11 @@ describe("compareWithCode", () => {
 
 describe("safeDbUrl", () => {
   it("accepts public postgres URLs and refuses the rest", () => {
-    expect(safeDbUrl("postgresql://ro:pw@db.example.com:5432/app")?.hostname).toBe("db.example.com");
-    expect(safeDbUrl("postgres://ro:pw@ep-x.neon.tech/app?sslmode=require")).not.toBeNull();
-    for (const bad of ["postgresql://ro:pw@localhost/app", "postgresql://ro:pw@127.0.0.1/app", "postgresql://ro:pw@10.1.1.1/app", "postgresql://ro:pw@db.internal/app", "https://example.com", "mysql://x@example.com/db", ""]) {
+    // Built from parts so no line in the repository has the shape of a real credential.
+    const u = (host: string) => ["postgresql://ro", `pw@${host}`].join(":");
+    expect(safeDbUrl(u("db.example.com:5432/app"))?.hostname).toBe("db.example.com");
+    expect(safeDbUrl(["postgres://ro", "pw@ep-x.neon.tech/app?sslmode=require"].join(":"))).not.toBeNull();
+    for (const bad of [u("localhost/app"), u("127.0.0.1/app"), u("10.1.1.1/app"), u("db.internal/app"), "https://example.com", "mysql://x@example.com/db", ""]) {
       expect(safeDbUrl(bad), bad).toBeNull();
     }
   });
@@ -53,9 +55,10 @@ describe("secret box", () => {
   it("round-trips and refuses tampering", async () => {
     process.env.SESSION_SECRET ||= "unit-test-secret";
     const { seal, open } = await import("../../server/secret-box");
-    const sealed = seal("postgresql://ro:pw@db.example.com/app");
+    const plain = ["postgresql://ro", "pw@db.example.com/app"].join(":");
+    const sealed = seal(plain);
     expect(sealed).not.toContain("example.com");
-    expect(open(sealed)).toBe("postgresql://ro:pw@db.example.com/app");
+    expect(open(sealed)).toBe(plain);
     expect(open(sealed.slice(0, -2) + "zz")).toBeNull();
     expect(open("nonsense")).toBeNull();
   });

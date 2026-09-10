@@ -25,6 +25,9 @@ const app = f("server/routes.ts", `
 `);
 const registry = f("shared/surfaces.ts", `export const NOVA_SURFACES = [{ id: "projects", label: "P", prefixes: ["/api/projects"] }];`);
 const test = f("test/integration/x.test.ts", `app.post("/api/should-not-count", async (req, res) => {});`);
+const entry = f("server/routes.ts", `import { registerX } from "./x-routes";`);
+const live = f("server/x-routes.ts", `export function registerX(app) { app.post("/api/live", isAuthenticated, async (req, res) => {}); }`);
+const dead = f("server/replit_integrations/chat/routes.ts", `app.post("/api/conversations", async (req, res) => {});`);
 
 describe("buildRouteCoverage", () => {
   it("reads guards off each route and names the gaps exactly", () => {
@@ -46,6 +49,30 @@ describe("buildRouteCoverage", () => {
     expect(detectSurfacePrefixes([app, registry])).toEqual([{ prefix: "/api/feed", surface: "feed" }, { prefix: "/api/projects", surface: "projects" }]);
     expect(renderRouteCoverage(c)).toMatch(/Unguarded writes: POST \/api\/open/);
     expect(renderRouteCoverage(null)).toBeNull();
+  });
+
+  it("does not count routes in files nothing imports", () => {
+    const c = buildRouteCoverage([entry, live, dead]);
+    expect(c.rows.find((r) => r.path === "/api/live")?.mounted).toBe(true);
+    expect(c.rows.find((r) => r.path === "/api/conversations")?.mounted).toBe(false);
+    expect(c.unmountedFiles).toEqual(["server/replit_integrations/chat/routes.ts"]);
+    expect(c.unguardedWrites).toEqual([]);
+    expect(c.summary.routes).toBe(1);
+    expect(renderRouteCoverage(c)).toMatch(/dead code, not live endpoints\): server\/replit_integrations\/chat\/routes\.ts/);
+  });
+});
+
+describe("detectSecrets", () => {
+  it("flags a real-looking database URL and not a documented placeholder", async () => {
+    const { detectSecrets } = await import("../../server/code-digest");
+    const realish = ["postgresql://app", "Zx9!kq2m@db-prod-7.internal-cloud.net:5432/app"].join(":");
+    const files = [
+      f("server/config.ts", `const url = "${realish}";`),
+      f("docs/setup.md", `Use ${["postgresql://ro", "pw@db.example.com/app"].join(":")} as a template.`),
+      f("test/x.test.ts", `const u = "${["postgresql://a", "b@203.0.113.9/x"].join(":")}";`),
+      f("client/card.tsx", `placeholder="${["postgresql://user", "…@host:5432/db"].join(":")}"`),
+    ];
+    expect(detectSecrets(files)).toEqual([{ file: "server/config.ts", hint: "a database URL with a password in it" }]);
   });
 });
 

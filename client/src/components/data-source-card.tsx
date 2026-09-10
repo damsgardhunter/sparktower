@@ -68,7 +68,7 @@ export function DataSourceCard({ projectId, isOwner }: { projectId: string; isOw
             {status.data?.configured && <Button size="sm" variant="ghost" disabled={busy} onClick={() => save.mutate(null)} data-testid="button-remove-data-source">Remove</Button>}
           </div>
           <div className="flex gap-2">
-            <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="or a read-only postgresql://user:…@host:5432/db" className="h-8 text-sm" data-testid="input-data-source" />
+            <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="or a read-only postgres URL to your database (its own user and password)" className="h-8 text-sm" data-testid="input-data-source" />
             <Button size="sm" disabled={busy || !url.trim()} onClick={() => save.mutate(url.trim())} data-testid="button-save-data-source">
               {save.isPending && save.variables !== "self" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Connect"}
             </Button>

@@ -594,7 +594,7 @@ Respond ONLY with valid JSON, no markdown fences:
    * pipe for six specific numbers, not a general event sink someone can fill
    * with whatever they like.
    */
-  app.post("/api/loop-events", async (req: any, res) => {
+  app.post("/api/loop-events", rateLimit("track"), async (req: any, res) => {
     try {
       const name = String(req.body?.name || "");
       if (!CLIENT_EVENTS.includes(name as any)) {

@@ -68,6 +68,21 @@ export const RATE_LIMITS = {
     max: 30, windowMinutes: 10,
     message: "Nova needs a moment — that's a lot of requests at once. Try again in a few minutes.",
   },
+  /**
+   * The floor under every write. Generous — a person editing a board for
+   * an hour stays far below it — but a script hammering any endpoint,
+   * including ones nobody thought to limit, hits it. Per user when signed
+   * in, per address otherwise.
+   */
+  write: {
+    max: 240, windowMinutes: 10,
+    message: "That's a lot of changes at once. Give it a few minutes.",
+  },
+  /** Analytics beacons from the browser: per address, since they're unauthenticated. */
+  track: {
+    max: 600, windowMinutes: 10,
+    message: "Too many events from this address. Try again shortly.",
+  },
 } as const satisfies Record<string, RateLimit>;
 
 export type RateLimitAction = keyof typeof RATE_LIMITS;

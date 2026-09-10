@@ -5,7 +5,7 @@ import passport from "passport";
 import bcrypt from "bcryptjs";
 import { ensureUserProfile } from "../../user-provisioning";
 import { stampSignupAttribution } from "../../attribution";
-import { enforceRateLimit } from "../../moderation";
+import { enforceRateLimit, ipKey } from "../../moderation";
 
 export function registerAuthRoutes(app: Express): void {
   app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
@@ -21,6 +21,8 @@ export function registerAuthRoutes(app: Express): void {
   });
 
   app.post("/api/auth/register", async (req, res, next) => {
+    // Registration attempts count with sign-in attempts: same address, same budget.
+    if (!(await enforceRateLimit(res, ipKey(req), "login"))) return;
     try {
       const { email, password, firstName, lastName } = req.body;
       if (!email || !password) {

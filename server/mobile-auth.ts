@@ -20,6 +20,7 @@ import { eq, and, isNull, gt } from "drizzle-orm";
 import { storage } from "./storage";
 import { ensureUserProfile } from "./user-provisioning";
 import { stampSignupAttribution } from "./attribution";
+import { enforceRateLimit, ipKey } from "./moderation";
 
 const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;          // 15 minutes
 const REFRESH_TOKEN_TTL_DAYS = 60;
@@ -150,6 +151,7 @@ export const attachBearerUser: RequestHandler = async (req: any, _res, next) => 
 export function registerMobileAuthRoutes(app: Express) {
   /** Email + password sign-in for mobile. */
   app.post("/api/auth/mobile/login", async (req, res) => {
+    if (!(await enforceRateLimit(res, ipKey(req), "login"))) return;
     try {
       const { email, password, device } = req.body as {
         email?: string; password?: string; device?: string;
@@ -175,6 +177,7 @@ export function registerMobileAuthRoutes(app: Express) {
 
   /** Registration, so someone can create an account from the app. */
   app.post("/api/auth/mobile/register", async (req, res) => {
+    if (!(await enforceRateLimit(res, ipKey(req), "login"))) return;
     try {
       const { email, password, firstName, lastName, device } = req.body as Record<string, string>;
       if (!email || !password) {
@@ -216,6 +219,7 @@ export function registerMobileAuthRoutes(app: Express) {
    * resulting ID token here for verification.
    */
   app.post("/api/auth/mobile/google", async (req, res) => {
+    if (!(await enforceRateLimit(res, ipKey(req), "login"))) return;
     try {
       const { idToken, device } = req.body as { idToken?: string; device?: string };
       if (!idToken) return res.status(400).json({ message: "idToken is required" });
@@ -287,6 +291,7 @@ export function registerMobileAuthRoutes(app: Express) {
    * only good until the real device next refreshes.
    */
   app.post("/api/auth/mobile/refresh", async (req, res) => {
+    if (!(await enforceRateLimit(res, ipKey(req), "login"))) return;
     try {
       const { refreshToken, device } = req.body as { refreshToken?: string; device?: string };
       if (!refreshToken) return res.status(400).json({ message: "refreshToken is required" });

@@ -48,7 +48,7 @@ interface CountSource {
  * un-reacting deletes the row; a presign writes nothing; an AI call writes to
  * a dozen places.
  */
-const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai", "login"]);
+const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai", "login", "write", "track"]);
 
 const hitSource = (action: RateLimitAction): CountSource => ({
   table: rateLimitHits, author: rateLimitHits.userId, created: rateLimitHits.createdAt,
@@ -107,7 +107,16 @@ const COUNTED: Record<RateLimitAction, CountSource[]> = {
   upload: [hitSource("upload")],
   ai:     [hitSource("ai")],
   login:  [hitSource("login")],
+  write:  [hitSource("write")],
+  track:  [hitSource("track")],
 };
+
+/** The caller's address as a limiter key, for requests with no user. First hop of X-Forwarded-For, as the auth routes already do. */
+export function ipKey(req: any): string {
+  const fwd = req.headers?.["x-forwarded-for"];
+  const ip = (typeof fwd === "string" && fwd.split(",")[0].trim()) || req.ip || req.socket?.remoteAddress || "unknown";
+  return `ip:${ip}`;
+}
 
 /*
  * Windows are expressed in the database's own terms rather than as a JS Date.
@@ -273,7 +282,13 @@ const DUPLICATE_TEXT: Partial<Record<RateLimitAction, (body: any) => string>> = 
 /** Express guard for a limited action: volume first, then repetition. */
 export function rateLimit(action: RateLimitAction): RequestHandler {
   return async (req: any, res, next) => {
-    const userId = req.user?.id;
+    /*
+     * No user, no count — was the rule, which made this a no-op on every
+     * endpoint without auth, auth endpoints included. Hit-counted actions
+     * can key on the address instead; content-counted ones genuinely need
+     * an author and pass through.
+     */
+    const userId: string | undefined = req.user?.id ?? (HIT_COUNTED.has(action) ? ipKey(req) : undefined);
     if (!userId) return next();
 
     const { ok, retryAfterMinutes, used, max } = await withinRateLimit(userId, action);
@@ -323,6 +338,26 @@ export function startModerationJobs(): void {
  * person can still see why, and taking their own content away from them isn't
  * the goal.
  */
+/**
+ * The floor under every write, mounted once. Any POST, PUT, PATCH or DELETE
+ * under /api counts against the "write" limit — per user, or per address
+ * when nobody is signed in — on top of whatever tighter limit the route
+ * has. Covers the endpoints nobody remembered to limit, which is the whole
+ * point of a floor. Signature-verified webhooks are exempt: their caller is
+ * a payment provider, and refusing them loses money, not spam.
+ */
+const WRITE_FLOOR_EXEMPT = ["/api/stripe/webhook", "/api/webhooks/"];
+export const limitWrites: RequestHandler = async (req: any, res, next) => {
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) return next();
+  if (!req.path.startsWith("/api/")) return next();
+  if (WRITE_FLOOR_EXEMPT.some((p) => req.path.startsWith(p))) return next();
+  const key = req.user?.id ?? ipKey(req);
+  const { ok, retryAfterMinutes, used, max } = await withinRateLimit(key, "write");
+  if (!ok) return refuse(res, key, "write", used, max, retryAfterMinutes);
+  await recordHit(key, "write");
+  next();
+};
+
 export const blockSuspended: RequestHandler = async (req: any, _res, next) => {
   const res = _res;
   try {

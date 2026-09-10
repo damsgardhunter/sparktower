@@ -288,7 +288,7 @@ function detectDataModels(files: RepoFile[]): { name: string; file: string }[] {
   return models;
 }
 
-function detectSecrets(files: RepoFile[]): { file: string; hint: string }[] {
+export function detectSecrets(files: RepoFile[]): { file: string; hint: string }[] {
   const found: { file: string; hint: string }[] = [];
   const patterns: [RegExp, string][] = [
     [/\bsk-[A-Za-z0-9]{20,}/, "an OpenAI-style secret key"],
@@ -307,10 +307,16 @@ function detectSecrets(files: RepoFile[]): { file: string; hint: string }[] {
     // A sample file is meant to hold placeholders.
     if (/\.(example|sample|template)$|\.env\.(example|sample)$/.test(file.path)) continue;
     for (const [pattern, hint] of patterns) {
-      if (pattern.test(file.content)) {
-        found.push({ file: file.path, hint });
-        break;
-      }
+      const m = file.content.match(pattern);
+      if (!m) continue;
+      // A documented placeholder is not a credential: example/test/invalid
+      // hosts, the RFC 5737 test networks, localhost, or an obvious stand-in
+      // password ("pw", "password", "…", "<…>", "xxx").
+      const line = file.content.slice(Math.max(0, m.index! - 40), m.index! + m[0].length + 160);
+      if (/@(?:[\w.-]*\.(?:example\.com|example\.org|example\.net|test|invalid|local)|localhost|127\.\d+\.\d+\.\d+|192\.0\.2\.\d+|198\.51\.100\.\d+|203\.0\.113\.\d+)\b/.test(line)) continue;
+      if (/:\/\/[^\s:@]+:(?:pw|pass|password|secret|xxx+|…|<[^>]*>|\$\{[^}]*\}|\.\.\.)@/.test(line)) continue;
+      found.push({ file: file.path, hint });
+      break;
     }
     if (found.length >= 25) break;
   }

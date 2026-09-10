@@ -18,7 +18,7 @@ import { registerCodeAuditRoutes } from "./code-audit-routes";
 import { registerBackingRoutes } from "./backing-routes";
 import { registerCheckInRoutes } from "./check-in-routes";
 import { registerSurfaceRoutes, requireSurface } from "./surfaces";
-import { registerModerationRoutes, blockSuspended, rateLimit } from "./moderation";
+import { registerModerationRoutes, blockSuspended, rateLimit, limitWrites } from "./moderation";
 import { attachVisitor, captureWrites, registerAnalyticsIngest } from "./analytics";
 import { registerAnalyticsRoutes } from "./analytics-routes";
 import { captureAttribution } from "./attribution";
@@ -303,6 +303,7 @@ export async function registerRoutes(
    * decorate is not a suspension.
    */
   app.use(blockSuspended);
+  app.use(limitWrites);
   /*
    * Behaviour capture, mounted here for two reasons.
    *

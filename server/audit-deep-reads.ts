@@ -38,11 +38,12 @@ const RELEVANT_TO_COVERAGE = new Set<CapabilityArea>(["auth", "rateLimiting", "a
 
 /** The matrix rows this area's question is about, one compact line each, so "which routes" is answerable from evidence. */
 export function rowsForArea(area: CapabilityArea, cov: RouteCoverage, max = 140): string | null {
-  const pick = area === "rateLimiting" ? cov.rows.filter((r) => r.write || r.cost)
-    : area === "auth" ? cov.rows.filter((r) => r.write || r.privileged)
-    : area === "ai" ? cov.rows.filter((r) => r.cost)
-    : area === "moderation" ? cov.rows.filter((r) => /report|moderat|admin|ban|suspend|hide|comment|feed|check-in/i.test(r.path))
-    : area === "deploy" ? cov.rows.filter((r) => r.surface || /health|surfaces|admin/i.test(r.path))
+  const rows = cov.rows.filter((r) => r.mounted !== false);
+  const pick = area === "rateLimiting" ? rows.filter((r) => r.write || r.cost)
+    : area === "auth" ? rows.filter((r) => r.write || r.privileged)
+    : area === "ai" ? rows.filter((r) => r.cost)
+    : area === "moderation" ? rows.filter((r) => /report|moderat|admin|ban|suspend|hide|comment|feed|check-in/i.test(r.path))
+    : area === "deploy" ? rows.filter((r) => r.surface || /health|surfaces|admin/i.test(r.path))
     : [];
   if (!pick.length) return null;
   const line = (r: typeof pick[number]) => `${r.method} ${r.path}  auth:${r.auth ? "y" : "n"} limit:${r.rateLimited ? "y" : "n"} credits:${r.credits ? "y" : "n"}${r.surface ? ` surface:${r.surface}` : ""}${r.privileged ? " privileged" : ""}  [${r.file}]`;

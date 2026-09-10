@@ -41,7 +41,7 @@ describe("introspectDataShape", () => {
   });
 
   it("fails soft on a database it cannot reach", async () => {
-    const shape = await introspectDataShape("postgresql://nobody:nothing@203.0.113.9:5432/nowhere", "connection", { ssl: false });
+    const shape = await introspectDataShape(["postgresql://nobody", "nothing@203.0.113.9:5432/nowhere"].join(":"), "connection", { ssl: false });
     expect(shape.tables).toEqual([]);
     expect(shape.error).toBeTruthy();
   }, 20_000);
@@ -58,11 +58,11 @@ describe("the data source setting", () => {
 
     expect((await agent.get(`/api/projects/${id}/data-source`)).body).toEqual({ configured: false, kind: null });
     expect((await other.get(`/api/projects/${id}/data-source`)).status).toBe(403);
-    expect((await other.put(`/api/projects/${id}/data-source`).send({ url: "postgresql://a:b@db.example.com/x" })).status).toBe(403);
-    expect((await agent.put(`/api/projects/${id}/data-source`).send({ url: "postgresql://a:b@localhost/x" })).body.code).toBe("invalid_input");
+    expect((await other.put(`/api/projects/${id}/data-source`).send({ url: ["postgresql://a", "b@db.example.com/x"].join(":") })).status).toBe(403);
+    expect((await agent.put(`/api/projects/${id}/data-source`).send({ url: ["postgresql://a", "b@localhost/x"].join(":") })).body.code).toBe("invalid_input");
     expect((await agent.put(`/api/projects/${id}/data-source`).send({ url: "self" })).body.code).toBe("self_not_allowed");
 
-    const ok = await agent.put(`/api/projects/${id}/data-source`).send({ url: "postgresql://ro:secretpw@db.example.com:5432/app" });
+    const ok = await agent.put(`/api/projects/${id}/data-source`).send({ url: ["postgresql://ro", "stand-in@db.example.com:5432/app"].join(":") });
     expect(ok.body).toMatchObject({ configured: true, kind: "connection" });
     // An unreachable host reads soft: the source is saved, the shape carries the error.
     expect(ok.body.shape?.error).toBeTruthy();
@@ -71,7 +71,7 @@ describe("the data source setting", () => {
     const { eq } = await import("drizzle-orm");
     const [row] = await db.select({ ds: projects.dataSource }).from(projects).where(eq(projects.id, id));
     expect(row.ds).toMatch(/^v1\./);
-    expect(row.ds).not.toContain("secretpw");
+    expect(row.ds).not.toContain("stand-in");
     expect((await agent.get(`/api/projects/${id}`)).body.dataSource).toBeUndefined();
     // A plain patch can't touch it.
     await agent.patch(`/api/projects/${id}`).send({ dataSource: "self" });

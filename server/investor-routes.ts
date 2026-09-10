@@ -16,6 +16,7 @@ import { requireFeature, requireCredits, modelFor, coachingDirectiveFor } from "
 import { CREDIT_COSTS } from "@shared/plans";
 import { formatProjectBriefForPrompt } from "@shared/project-sections";
 import type { Project } from "@shared/schema";
+import { rateLimit } from "./moderation";
 
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
@@ -605,7 +606,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   });
 
   /** Ends the session and produces a closing verdict. */
-  app.post("/api/mock-interviews/:id/finish", isAuthenticated, async (req: any, res) => {
+  app.post("/api/mock-interviews/:id/finish", isAuthenticated, rateLimit("ai"), async (req: any, res) => {
     try {
       const userId = req.user.id;
       const interview = await storage.getMockInterview(req.params.id);

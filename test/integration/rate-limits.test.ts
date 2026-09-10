@@ -148,3 +148,48 @@ describe("the AI limit at the credit chokepoint", () => {
     }
   });
 });
+
+describe("limits without a user", () => {
+  it("counts registration and mobile sign-in attempts per address, like web sign-in", async () => {
+    const app = await getTestApp();
+    const ip = "198.51.100.77";
+    const limit = RATE_LIMITS.login.max;
+    let last: any;
+    for (let i = 0; i <= limit; i++) {
+      last = await request(app).post("/api/auth/register").set("x-forwarded-for", ip).send({ email: `r${i}-${Date.now()}@example.test`, password: "Testpass123!" });
+    }
+    expect(last.status).toBe(429);
+    expect(last.body.code).toBe("rate_limited");
+    expect(last.headers["retry-after"]).toBeTruthy();
+    // The same budget covers mobile sign-in from that address; another address is unaffected.
+    expect((await request(app).post("/api/auth/mobile/login").set("x-forwarded-for", ip).send({ email: "x@example.test", password: "nope" })).status).toBe(429);
+    expect((await request(app).post("/api/auth/mobile/login").set("x-forwarded-for", "198.51.100.78").send({ email: "x@example.test", password: "nope" })).status).not.toBe(429);
+  });
+
+  it("limits analytics beacons per address", async () => {
+    const app = await getTestApp();
+    const ip = "198.51.100.90";
+    let last: any;
+    for (let i = 0; i <= RATE_LIMITS.track.max; i++) last = await request(app).post("/api/track").set("x-forwarded-for", ip).send({ events: [] });
+    expect(last.status).toBe(429);
+  }, 60_000);
+});
+
+describe("the floor under every write", () => {
+  it("refuses a signed-in user past the write budget on any endpoint, and exempts the payment webhook", async () => {
+    const app = await getTestApp();
+    const { agent } = await signedIn(app);
+    const project = await agent.post("/api/projects").send({ title: "Floor", description: "A project used to hit the write floor with many small edits.", category: "saas", goal: "ship_mvp", subcategory: "saas" });
+    expect(project.status).toBe(200);
+    let last: any;
+    // Every write counts — including ones with no limiter of their own.
+    for (let i = 0; i <= RATE_LIMITS.write.max; i++) last = await agent.patch(`/api/projects/${project.body.id}`).send({ description: `Edit ${i}: a small change to the description of the project.` });
+    expect(last.status).toBe(429);
+    expect(last.body).toMatchObject({ code: "rate_limited", action: "write" });
+    // Reads are untouched.
+    expect((await agent.get(`/api/projects/${project.body.id}`)).status).toBe(200);
+    // The webhook is exempt: it is signature-verified and its caller is not a person.
+    const hook = await request(app).post("/api/stripe/webhook").set("x-forwarded-for", "198.51.100.5").send({});
+    expect(hook.status).not.toBe(429);
+  }, 90_000);
+});
