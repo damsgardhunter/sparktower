@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { snowflakeLayout, suggestConsolidations, type DataShape, type MapNode } from "@shared/data-shape";
 import { Button } from "@/components/ui/button";
 import { ZoomIn, ZoomOut, Maximize2, Lightbulb } from "lucide-react";
@@ -37,6 +37,21 @@ export function DataMap({ shape }: { shape: DataShape }) {
   });
   const fitted = useRef(false);
   if (!fitted.current && layout.nodes.length) { fitted.current = true; setTimeout(fit, 0); }
+  const canvas = useRef<HTMLDivElement>(null);
+  // React registers wheel listeners as passive, so preventDefault there does
+  // nothing and the page scrolls under the map. A native, non-passive
+  // listener is the only way to keep the wheel on the map.
+  useEffect(() => {
+    const el = canvas.current; if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      zoomBy(e.deltaY < 0 ? 1.12 : 0.9, (e.clientX - r.left) * (VIEW_W / r.width), (e.clientY - r.top) * (VIEW_H / r.height));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (shape.error) return <p className="text-sm text-muted-foreground" data-testid="data-map-error">The data read failed: {shape.error}</p>;
   if (!shape.tables.length) return <p className="text-sm text-muted-foreground">No tables found.</p>;
@@ -62,11 +77,17 @@ export function DataMap({ shape }: { shape: DataShape }) {
       )}
 
       <div className="grid gap-3 lg:grid-cols-[1fr_18rem]">
-        <div className="rounded-md border border-border bg-muted/20 overflow-hidden select-none" style={{ height: VIEW_H }}
-          onWheel={(e) => { e.preventDefault(); const r = (e.currentTarget as HTMLDivElement).getBoundingClientRect(); zoomBy(e.deltaY < 0 ? 1.12 : 0.9, e.clientX - r.left, e.clientY - r.top); }}
-          onMouseDown={(e) => { drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y }; }}
-          onMouseMove={(e) => { if (!drag.current) return; setView((v) => ({ ...v, x: drag.current!.vx + (e.clientX - drag.current!.x), y: drag.current!.vy + (e.clientY - drag.current!.y) })); }}
-          onMouseUp={() => { drag.current = null; }} onMouseLeave={() => { drag.current = null; }}
+        <div ref={canvas} className="rounded-md border border-border bg-muted/20 overflow-hidden select-none touch-none" style={{ height: VIEW_H }}
+          onPointerDown={(e) => { if (e.button !== 0) return; (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId); drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y }; }}
+          onPointerMove={(e) => {
+            const d = drag.current; if (!d) return;
+            // Read the drag origin now: by the time a queued state update runs, pointer-up may have cleared it.
+            const r = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
+            const sx = VIEW_W / r.width, sy = VIEW_H / r.height;
+            const nx = d.vx + (e.clientX - d.x) * sx, ny = d.vy + (e.clientY - d.y) * sy;
+            setView((v) => ({ ...v, x: nx, y: ny }));
+          }}
+          onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}
           data-testid="map-canvas">
           <svg width="100%" height="100%" viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} role="img" aria-label="Data map" className="cursor-grab active:cursor-grabbing">
             <defs>
