@@ -251,3 +251,40 @@ export function describeDataModel(shape: DataShape): string | null {
     cons.length ? `- Could be simpler (heuristics, check before acting): ${cons.slice(0, 6).map((c) => `${c.tables.join(" + ")} — ${c.reason}`).join(" | ")}` : null,
   ].filter(Boolean).join("\n");
 }
+
+export interface RelatedTable {
+  name: string;
+  /** "referenced-by": that table holds a key to this one (it is the many side). "references": this one points at it. */
+  direction: "referenced-by" | "references";
+  via: string;
+  rows: number;
+  /** Relations that table has beyond this one — whether the trail goes on. */
+  further: number;
+}
+
+/** The tables one hop from `name`, children (many side) first, biggest first. */
+export function relatedTables(shape: DataShape, name: string): RelatedTable[] {
+  const byName = new Map(shape.tables.map((t) => [t.name, t]));
+  const me = byName.get(name);
+  if (!me) return [];
+  const degree = (t: ShapeTable) => new Set([...t.foreignKeys.map((f) => f.refTable), ...shape.tables.filter((o) => o.foreignKeys.some((f) => f.refTable === t.name)).map((o) => o.name)]).size;
+  const out: RelatedTable[] = [];
+  for (const t of shape.tables) {
+    if (t.name === name) continue;
+    for (const f of t.foreignKeys) if (f.refTable === name) out.push({ name: t.name, direction: "referenced-by", via: f.column, rows: t.rows, further: Math.max(0, degree(t) - 1) });
+  }
+  for (const f of me.foreignKeys) {
+    const t = byName.get(f.refTable);
+    if (t && t.name !== name) out.push({ name: t.name, direction: "references", via: f.column, rows: t.rows, further: Math.max(0, degree(t) - 1) });
+  }
+  const seen = new Set<string>();
+  return out
+    .filter((r) => { const k = `${r.direction}:${r.name}:${r.via}`; if (seen.has(k)) return false; seen.add(k); return true; })
+    .sort((a, b) => (a.direction === b.direction ? b.rows - a.rows || a.name.localeCompare(b.name) : a.direction === "referenced-by" ? -1 : 1));
+}
+
+/** The table to open on: the most-referenced one. */
+export function hubTable(shape: DataShape): string | null {
+  if (!shape.tables.length) return null;
+  return [...shape.tables].sort((a, b) => b.inbound - a.inbound || b.rows - a.rows || a.name.localeCompare(b.name))[0].name;
+}

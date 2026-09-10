@@ -1,196 +1,164 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { snowflakeLayout, suggestConsolidations, type DataShape, type MapNode } from "@shared/data-shape";
+import { useMemo, useState } from "react";
+import { relatedTables, hubTable, suggestConsolidations, type DataShape, type RelatedTable } from "@shared/data-shape";
 import { Button } from "@/components/ui/button";
-import { ZoomIn, ZoomOut, Maximize2, Lightbulb } from "lucide-react";
+import { ArrowLeft, ChevronRight, Lightbulb, Database } from "lucide-react";
 
-/** Where a line from the centre of `a` toward `b` leaves a's box. */
-function edgePoint(a: MapNode, b: MapNode) {
-  const dx = b.x - a.x, dy = b.y - a.y;
-  if (!dx && !dy) return { x: a.x, y: a.y };
-  const hw = a.w / 2, hh = a.h / 2;
-  const t = Math.min(hw / Math.abs(dx || 1e-9), hh / Math.abs(dy || 1e-9));
-  return { x: a.x + dx * t, y: a.y + dy * t };
+/** The relation between the current table (off to the left) and a listed one: crow's foot on the many side. */
+function RelationGlyph({ direction }: { direction: RelatedTable["direction"] }) {
+  // Left end = current table, right end = the listed table.
+  const many = direction === "referenced-by" ? "right" : "left";
+  return (
+    <svg width="64" height="28" viewBox="0 0 64 28" className="text-muted-foreground shrink-0" aria-hidden>
+      <line x1="10" y1="14" x2="54" y2="14" stroke="currentColor" strokeWidth="1.6" />
+      {many === "left"
+        ? <path d="M10 14 L0 6 M10 14 L0 14 M10 14 L0 22" fill="none" stroke="currentColor" strokeWidth="1.6" />
+        : <path d="M14 6 L14 22" fill="none" stroke="currentColor" strokeWidth="1.6" />}
+      {many === "right"
+        ? <path d="M54 14 L64 6 M54 14 L64 14 M54 14 L64 22" fill="none" stroke="currentColor" strokeWidth="1.6" />
+        : <path d="M50 6 L50 22" fill="none" stroke="currentColor" strokeWidth="1.6" />}
+    </svg>
+  );
+}
+
+/** A stub going on to the right: this table has relations beyond the current one. */
+function FurtherStub({ count }: { count: number }) {
+  return (
+    <span className="flex items-center gap-1 text-xs text-muted-foreground shrink-0" title={`${count} more relation${count === 1 ? "" : "s"} from here`}>
+      <svg width="40" height="28" viewBox="0 0 40 28" aria-hidden>
+        <line x1="0" y1="14" x2="26" y2="14" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M26 14 L36 6 M26 14 L36 14 M26 14 L36 22" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      </svg>
+      +{count}
+    </span>
+  );
 }
 
 /**
- * The data map as a snowflake of table boxes: the hub at the centre, every
- * table placed outward from the one it references, crow's feet on the
- * many side of each relation. Wheel to zoom, drag to pan, buttons to
- * step or fit. Click a table for its columns and both directions of its
- * relations; the consolidation panel names where the schema could be
- * simpler and why.
+ * The database as a star you walk, not a picture you squint at. It opens
+ * on the hub table alone. Open it and you see the tables one hop away as
+ * a list: the relation glyph on the left (crow's foot on the many side),
+ * the table with its key columns, and on the right a stub if the trail
+ * goes further. Click any to step into it; breadcrumbs and Back bring
+ * you home. Columns of the current table are listed below, with the
+ * foreign keys as links.
  */
 export function DataMap({ shape }: { shape: DataShape }) {
-  const [open, setOpen] = useState<string | null>(null);
-  const [view, setView] = useState({ x: 0, y: 0, k: 1 });
-  const [allEdges, setAllEdges] = useState(false);
-  const drag = useRef<{ x: number; y: number; vx: number; vy: number; moved: boolean } | null>(null);
-  const layout = useMemo(() => snowflakeLayout(shape), [shape]);
-  const cons = useMemo(() => suggestConsolidations(shape), [shape]);
+  const hub = useMemo(() => hubTable(shape), [shape]);
+  const [trail, setTrail] = useState<string[]>([]);
+  const [showCons, setShowCons] = useState(false);
   const byName = useMemo(() => new Map(shape.tables.map((t) => [t.name, t])), [shape]);
-  const pos = useMemo(() => new Map(layout.nodes.map((n) => [n.name, n])), [layout]);
-  const selected = open ? byName.get(open) : null;
-  const VIEW_W = 900, VIEW_H = 620;
-  // Fit the whole map, but never below a scale where a box is readable;
-  // a big schema opens centred on the hub instead, and the wheel does the rest.
-  const fit = () => {
-    const k = Math.max(0.42, Math.min(VIEW_W / layout.width, VIEW_H / layout.height));
-    setView({ k, x: VIEW_W / 2 - (layout.width / 2) * k, y: VIEW_H / 2 - (layout.height / 2) * k });
-  };
-  const zoomBy = (f: number, cx = VIEW_W / 2, cy = VIEW_H / 2) => setView((v) => {
-    const k = Math.min(4, Math.max(0.15, v.k * f));
-    return { k, x: cx - (cx - v.x) * (k / v.k), y: cy - (cy - v.y) * (k / v.k) };
-  });
-  const fitted = useRef(false);
-  if (!fitted.current && layout.nodes.length) { fitted.current = true; setTimeout(fit, 0); }
-  const canvas = useRef<HTMLDivElement>(null);
-  // React registers wheel listeners as passive, so preventDefault there does
-  // nothing and the page scrolls under the map. A native, non-passive
-  // listener is the only way to keep the wheel on the map.
-  useEffect(() => {
-    const el = canvas.current; if (!el) return;
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const r = el.getBoundingClientRect();
-      zoomBy(e.deltaY < 0 ? 1.12 : 0.9, (e.clientX - r.left) * (VIEW_W / r.width), (e.clientY - r.top) * (VIEW_H / r.height));
-    };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, []);
+  const cons = useMemo(() => suggestConsolidations(shape), [shape]);
+  const current = trail[trail.length - 1] ?? null;
+  const table = current ? byName.get(current) : null;
+  const related = useMemo(() => (current ? relatedTables(shape, current) : []), [shape, current]);
+  const go = (name: string) => setTrail((t) => [...t, name]);
+  const back = () => setTrail((t) => t.slice(0, -1));
 
   if (shape.error) return <p className="text-sm text-muted-foreground" data-testid="data-map-error">The data read failed: {shape.error}</p>;
-  if (!shape.tables.length) return <p className="text-sm text-muted-foreground">No tables found.</p>;
+  if (!shape.tables.length || !hub) return <p className="text-sm text-muted-foreground">No tables found.</p>;
 
-  const related = (name: string) => layout.edges.filter((e) => e.from === name || e.to === name);
-  const hot = new Set(open ? related(open).flatMap((e) => [e.from, e.to]) : []);
+  const Header = () => (
+    <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
+      <span>{shape.totals.tables} tables · {shape.totals.rows.toLocaleString()} rows · {shape.totals.emptyTables} empty</span>
+      {shape.compare && (shape.compare.inCodeNotInDb.length > 0 || shape.compare.inDbNotInCode.length > 0) && (
+        <span className="text-amber-700 dark:text-amber-400" data-testid="data-map-drift">drift: code-only {shape.compare.inCodeNotInDb.join(", ") || "none"} · db-only {shape.compare.inDbNotInCode.join(", ") || "none"}</span>
+      )}
+      <button className="ml-auto flex items-center gap-1 hover:text-foreground" onClick={() => setShowCons((v) => !v)} data-testid="toggle-consolidations"><Lightbulb className="h-3 w-3" />Could be simpler ({cons.length})</button>
+    </div>
+  );
+
+  const Consolidations = () => showCons ? (
+    <div className="rounded-md border border-border p-3 text-xs space-y-1.5" data-testid="consolidations">
+      {cons.length ? cons.map((c, i) => (
+        <div key={i}>
+          <p className="font-medium">{c.tables.map((t, j) => <span key={t}>{j > 0 && " + "}<button className="underline" onClick={() => setTrail([t])}>{t}</button></span>)}</p>
+          <p className="text-muted-foreground">{c.reason} {c.suggestion}</p>
+        </div>
+      )) : <p className="text-muted-foreground">Nothing obvious. Every table has a distinct shape and a place.</p>}
+    </div>
+  ) : null;
+
+  // Home: the hub, alone.
+  if (!table) {
+    const h = byName.get(hub)!;
+    return (
+      <div className="space-y-3" data-testid="data-map">
+        <Header />
+        <Consolidations />
+        <div className="flex flex-col items-center py-6">
+          <button onClick={() => go(hub)} className="w-72 rounded-xl border-2 border-primary bg-primary/5 p-4 text-left hover:bg-primary/10" data-testid={`node-${hub}`}>
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground flex items-center gap-1"><Database className="h-3 w-3" />Your main table</p>
+            <p className="text-xl font-semibold">{h.name}</p>
+            <p className="text-sm text-muted-foreground">{h.rows.toLocaleString()} rows · {h.columns.length} columns · {h.inbound} tables point at it</p>
+            <p className="text-xs text-primary mt-2 flex items-center gap-1">Open <ChevronRight className="h-3 w-3" /></p>
+          </button>
+          <p className="text-xs text-muted-foreground mt-3">Everything else hangs off this. Step in to walk the relations.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3" data-testid="data-map">
-      <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
-        <span>{shape.totals.tables} tables · {layout.edges.length} relations · {shape.totals.rows.toLocaleString()} rows · {shape.totals.emptyTables} empty</span>
-        <span>hub: <span className="font-medium text-foreground">{layout.hub}</span></span>
-        <span className="ml-auto flex items-center gap-1">
-          <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => zoomBy(1.25)} data-testid="map-zoom-in" title="Zoom in"><ZoomIn className="h-3.5 w-3.5" /></Button>
-          <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => zoomBy(0.8)} data-testid="map-zoom-out" title="Zoom out"><ZoomOut className="h-3.5 w-3.5" /></Button>
-          <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={fit} data-testid="map-fit" title="Fit to view"><Maximize2 className="h-3.5 w-3.5 mr-1" />Fit</Button>
-          <Button size="sm" variant={allEdges ? "default" : "outline"} className="h-7 px-2 text-xs" onClick={() => setAllEdges((v) => !v)} data-testid="map-all-edges" title="Show every relation, not just the tree">{allEdges ? "All relations" : "Tree only"}</Button>
-        </span>
+      <Header />
+      <Consolidations />
+      {/* Trail */}
+      <div className="flex items-center gap-2 flex-wrap text-sm">
+        <Button size="sm" variant="outline" className="h-7" onClick={back} data-testid="map-back"><ArrowLeft className="h-3.5 w-3.5 mr-1" />Back</Button>
+        <button className="text-muted-foreground hover:text-foreground" onClick={() => setTrail([])} data-testid="map-home">Home</button>
+        {trail.map((t, i) => (
+          <span key={i} className="flex items-center gap-2">
+            <ChevronRight className="h-3 w-3 text-muted-foreground" />
+            {i === trail.length - 1 ? <span className="font-medium">{t}</span> : <button className="text-muted-foreground hover:text-foreground" onClick={() => setTrail(trail.slice(0, i + 1))}>{t}</button>}
+          </span>
+        ))}
       </div>
-      {shape.compare && (shape.compare.inCodeNotInDb.length > 0 || shape.compare.inDbNotInCode.length > 0) && (
-        <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="data-map-drift">
-          Schema drift · in code but not in the database: {shape.compare.inCodeNotInDb.join(", ") || "none"} · in the database but not in code: {shape.compare.inDbNotInCode.join(", ") || "none"}
-        </p>
-      )}
 
-      <div className="grid gap-3 lg:grid-cols-[1fr_18rem]">
-        <div ref={canvas} className="rounded-md border border-border bg-muted/20 overflow-hidden select-none touch-none" style={{ height: VIEW_H }}
-          onPointerDown={(e) => { if (e.button !== 0) return; drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false }; }}
-          onPointerMove={(e) => {
-            const d = drag.current; if (!d) return;
-            // A drag only starts after real movement, so a click on a box stays a click.
-            if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 4) return;
-            d.moved = true;
-            // Read the drag origin now: by the time a queued state update runs, pointer-up may have cleared it.
-            const r = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
-            const sx = VIEW_W / r.width, sy = VIEW_H / r.height;
-            const nx = d.vx + (e.clientX - d.x) * sx, ny = d.vy + (e.clientY - d.y) * sy;
-            setView((v) => ({ ...v, x: nx, y: ny }));
-          }}
-          onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }} onPointerLeave={() => { drag.current = null; }}
-          data-testid="map-canvas">
-          <svg width="100%" height="100%" viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} role="img" aria-label="Data map" className="cursor-grab active:cursor-grabbing">
-            <defs>
-              {/* Crow's foot on the many side; a bar on the one side. */}
-              <marker id="crow" viewBox="0 0 14 14" refX="1" refY="7" markerWidth="14" markerHeight="14" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
-                <path d="M13 7 L1 1 M13 7 L1 7 M13 7 L1 13" fill="none" stroke="currentColor" strokeWidth="1.4" />
-              </marker>
-              <marker id="one" viewBox="0 0 10 14" refX="9" refY="7" markerWidth="10" markerHeight="14" orient="auto" markerUnits="userSpaceOnUse">
-                <path d="M6 1 L6 13" fill="none" stroke="currentColor" strokeWidth="1.4" />
-              </marker>
-            </defs>
-            <g transform={`translate(${view.x},${view.y}) scale(${view.k})`}>
-              {layout.edges.map((e, i) => {
-                const a = pos.get(e.from), b = pos.get(e.to);
-                if (!a || !b) return null;
-                // Only the tree by default: every extra relation is a line across the map. All of them, or the selected table's, on request.
-                if (!e.tree && !allEdges && !(open && (e.from === open || e.to === open))) return null;
-                const p1 = edgePoint(a, b), p2 = edgePoint(b, a);
-                const isHot = open && (e.from === open || e.to === open);
-                return (
-                  <line key={i} x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke="currentColor"
-                    className={isHot ? "text-primary" : e.tree ? "text-muted-foreground/45" : "text-muted-foreground/20"}
-                    strokeWidth={isHot ? 1.8 : 1} strokeDasharray={e.tree ? undefined : "4 3"}
-                    markerStart="url(#crow)" markerEnd="url(#one)" />
-                );
-              })}
-              {layout.nodes.map((n) => {
-                const t = byName.get(n.name)!;
-                const empty = n.rows === 0;
-                const isOpen = open === n.name;
-                const dim = open && !isOpen && !hot.has(n.name);
-                const keys = t.columns.filter((c) => c.pk).map((c) => c.name).slice(0, 2);
-                const fks = t.foreignKeys.length;
-                return (
-                  <g key={n.name} transform={`translate(${n.x - n.w / 2},${n.y - n.h / 2})`} className="cursor-pointer" opacity={dim ? 0.35 : 1}
-                    onClick={(ev) => { ev.stopPropagation(); setOpen(isOpen ? null : n.name); }} data-testid={`node-${n.name}`}>
-                    <rect width={n.w} height={n.h} rx={6} fill="currentColor" className={isOpen ? "text-primary/15" : n.depth === 0 ? "text-primary/10" : "text-background"} />
-                    <rect width={n.w} height={n.h} rx={6} fill="none" stroke="currentColor" strokeWidth={isOpen ? 2.5 : n.depth === 0 ? 2 : 1.2}
-                      strokeDasharray={empty ? "5 3" : undefined} className={isOpen ? "text-primary" : empty ? "text-muted-foreground/60" : n.depth === 0 ? "text-primary" : "text-muted-foreground/70"} />
-                    <rect width={n.w} height={24} rx={6} fill="currentColor" className={n.depth === 0 ? "text-primary/25" : "text-muted/80"} />
-                    <text x={10} y={17} fontSize={14} fontWeight={600} className="fill-foreground">{n.name.length > 20 ? n.name.slice(0, 19) + "…" : n.name}</text>
-                    <text x={n.w - 10} y={17} fontSize={12} textAnchor="end" className="fill-muted-foreground">{n.rows.toLocaleString()}{t.exact ? "" : "~"} rows</text>
-                    <text x={10} y={44} fontSize={12} className="fill-muted-foreground">{keys.length ? `PK ${keys.join(", ")}` : "no primary key"}</text>
-                    <text x={10} y={62} fontSize={12} className="fill-muted-foreground">{t.columns.length} cols · {fks} FK{fks === 1 ? "" : "s"} · {t.inbound} referenced by</text>
-                  </g>
-                );
-              })}
-            </g>
-          </svg>
+      <div className="grid gap-3 lg:grid-cols-[1fr_20rem]">
+        {/* Related tables, one hop away */}
+        <div className="space-y-2" data-testid="related-list">
+          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Connected to {table.name} · {related.length}</p>
+          {related.length === 0 && <p className="text-sm text-muted-foreground">Nothing points at {table.name} and it points at nothing.</p>}
+          {related.map((r) => {
+            const t = byName.get(r.name)!;
+            const keys = t.columns.filter((c) => c.pk).map((c) => c.name);
+            return (
+              <div key={`${r.direction}:${r.name}:${r.via}`} className="flex items-center gap-2" data-testid={`related-${r.name}`}>
+                <RelationGlyph direction={r.direction} />
+                <button onClick={() => go(r.name)} className={`flex-1 min-w-0 rounded-lg border p-3 text-left hover:border-primary/60 ${t.rows === 0 ? "border-dashed border-border" : "border-border bg-background"}`}>
+                  <div className="flex items-baseline justify-between gap-2">
+                    <p className="font-semibold text-base truncate">{t.name}</p>
+                    <p className="text-sm text-muted-foreground shrink-0">{t.rows.toLocaleString()}{t.exact ? "" : "~"} rows</p>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    {r.direction === "referenced-by" ? <>many <span className="text-foreground">{t.name}</span> per {table.name}, via <code className="text-xs">{r.via}</code></> : <>each {table.name} has one <span className="text-foreground">{t.name}</span>, via <code className="text-xs">{r.via}</code></>}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">{keys.length ? `PK ${keys.join(", ")} · ` : ""}{t.columns.length} columns · {t.foreignKeys.length} FK{t.foreignKeys.length === 1 ? "" : "s"}</p>
+                </button>
+                {r.further > 0 ? <FurtherStub count={r.further} /> : <span className="w-[52px] shrink-0" />}
+              </div>
+            );
+          })}
         </div>
 
-        <div className="rounded-md border border-border p-3 text-xs space-y-3 overflow-auto" style={{ maxHeight: VIEW_H }} data-testid="data-map-detail">
-          {selected ? (
-            <>
-              <p className="font-semibold text-sm">{selected.name} <span className="font-normal text-muted-foreground">· {selected.rows.toLocaleString()} rows{selected.exact ? "" : " (estimate)"}</span></p>
-              <div>
-                <p className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">Columns</p>
-                <ul className="space-y-0.5 max-h-52 overflow-auto">
-                  {selected.columns.map((c) => (
-                    <li key={c.name} className="flex justify-between gap-2">
-                      <span>{c.pk && <span className="text-primary mr-1">PK</span>}{c.name}{selected.foreignKeys.some((f) => f.column === c.name) && <span className="text-muted-foreground ml-1">→ {selected.foreignKeys.find((f) => f.column === c.name)!.refTable}</span>}</span>
-                      <span className="text-muted-foreground shrink-0">{c.type}{c.nullable ? "?" : ""}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              <div>
-                <p className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">Relations</p>
-                <ul className="space-y-0.5">
-                  {selected.foreignKeys.map((f) => <li key={f.column}>many <span className="font-medium">{selected.name}</span> → one <button className="underline" onClick={() => setOpen(f.refTable)}>{f.refTable}</button> <span className="text-muted-foreground">via {f.column}</span></li>)}
-                  {related(selected.name).filter((e) => e.to === selected.name).map((e) => <li key={e.from + e.column}>one <span className="font-medium">{selected.name}</span> ← many <button className="underline" onClick={() => setOpen(e.from)}>{e.from}</button> <span className="text-muted-foreground">via {e.column}</span></li>)}
-                  {!related(selected.name).length && <li className="text-muted-foreground">Stands alone: no relations either way.</li>}
-                </ul>
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="text-muted-foreground">Click a table for its columns and relations. Solid lines are the tree from the hub; the selected table's other relations show dashed, or all of them with "All relations". Crow's feet mark the many side.</p>
-              <p className="text-muted-foreground">Dashed boxes are empty tables.</p>
-            </>
-          )}
-          <div className="border-t border-border pt-2" data-testid="consolidations">
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1 flex items-center gap-1"><Lightbulb className="h-3 w-3" />Could be simpler</p>
-            {cons.length ? (
-              <ul className="space-y-1.5">
-                {cons.map((c, i) => (
-                  <li key={i}>
-                    <p className="font-medium">{c.tables.map((t, j) => <span key={t}>{j > 0 && " + "}<button className="underline" onClick={() => setOpen(t)}>{t}</button></span>)}</p>
-                    <p className="text-muted-foreground">{c.reason} {c.suggestion}</p>
-                  </li>
-                ))}
-              </ul>
-            ) : <p className="text-muted-foreground">Nothing obvious. Every table has a distinct shape and a place.</p>}
+        {/* The current table's columns */}
+        <div className="rounded-lg border-2 border-primary/60 bg-primary/5 p-3 text-sm space-y-2 self-start" data-testid="current-table">
+          <div>
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Current table</p>
+            <p className="text-lg font-semibold">{table.name}</p>
+            <p className="text-xs text-muted-foreground">{table.rows.toLocaleString()}{table.exact ? "" : "~"} rows · {table.inbound} tables point at it</p>
           </div>
+          <ul className="space-y-0.5 max-h-96 overflow-auto text-xs" data-testid="current-columns">
+            {table.columns.map((c) => {
+              const fk = table.foreignKeys.find((f) => f.column === c.name);
+              return (
+                <li key={c.name} className="flex justify-between gap-2">
+                  <span>{c.pk && <span className="text-primary mr-1 font-semibold">PK</span>}{c.name}{fk && <> → <button className="underline text-primary" onClick={() => go(fk.refTable)}>{fk.refTable}</button></>}</span>
+                  <span className="text-muted-foreground shrink-0">{c.type}{c.nullable ? "?" : ""}</span>
+                </li>
+              );
+            })}
+          </ul>
         </div>
       </div>
     </div>

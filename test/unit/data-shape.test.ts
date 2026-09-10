@@ -3,7 +3,7 @@
  * URL guard for connection strings, and the seal that keeps them at rest.
  */
 import { describe, it, expect } from "vitest";
-import { snowflakeLayout, suggestConsolidations, describeDataModel, renderDataShape, type DataShape } from "@shared/data-shape";
+import { snowflakeLayout, suggestConsolidations, describeDataModel, renderDataShape, relatedTables, hubTable, type DataShape } from "@shared/data-shape";
 import { safeDbUrl, compareWithCode } from "../../server/data-shape-guard";
 
 const shape: DataShape = {
@@ -152,5 +152,21 @@ describe("a wide profile table", () => {
     expect(note.suggestion).toMatch(/links \(3\)/);
     expect(note.suggestion).toMatch(/working style & preferences \(4\)/);
     expect(note.suggestion).not.toMatch(/several kinds of row/i);
+  });
+});
+
+describe("relatedTables", () => {
+  it("lists one hop from a table: the many side first, with whether the trail goes on", () => {
+    expect(hubTable(shape)).toBe("users");
+    const r = relatedTables(shape, "users");
+    expect(r.map((x) => [x.name, x.direction, x.via, x.further])).toEqual([
+      ["rate_limit_hits", "referenced-by", "user_id", 0],
+      ["projects", "referenced-by", "owner_id", 2],
+      ["project_check_ins", "referenced-by", "user_id", 1],
+    ]);
+    const p = relatedTables(shape, "projects");
+    expect(p.map((x) => [x.name, x.direction])).toEqual([["project_check_ins", "referenced-by"], ["path_pace", "referenced-by"], ["users", "references"]]);
+    expect(relatedTables(shape, "sessions")).toEqual([]);
+    expect(relatedTables(shape, "nope")).toEqual([]);
   });
 });
