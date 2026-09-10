@@ -36,6 +36,21 @@ export const AREA_QUESTIONS: Record<CapabilityArea, string> = {
 
 const RELEVANT_TO_COVERAGE = new Set<CapabilityArea>(["auth", "rateLimiting", "ai", "moderation", "deploy"]);
 
+/** Where each area's code usually lives, by file name. Added to the evidence files for the read. */
+const AREA_FILE_HINTS: Partial<Record<CapabilityArea, RegExp>> = {
+  auth: /auth|session|passport|token|login/i,
+  rateLimiting: /moderation|rate-?limit|limiter/i,
+  moderation: /moderation|report|admin/i,
+  payments: /stripe|billing|payment|webhook|subscription|entitle/i,
+  ai: /openai|nova|ai-?models|prompt|entitle/i,
+  analytics: /analytics|metrics|track/i,
+  data: /schema|storage|db\b|migrat/i,
+  tests: /vitest|playwright|test\/setup|test\/helpers/i,
+  ci: /\.github\/workflows|ci\b/i,
+  deploy: /index\.ts$|app\.ts$|surfaces|health|env-contract|\.replit|Dockerfile/i,
+  mobile: /^mobile\/(app|src)\/|mobile-auth/i,
+};
+
 /** The matrix rows this area's question is about, one compact line each, so "which routes" is answerable from evidence. */
 export function rowsForArea(area: CapabilityArea, cov: RouteCoverage, max = 140): string | null {
   const rows = cov.rows.filter((r) => r.mounted !== false);
@@ -71,6 +86,13 @@ export async function deepReadArea(
   const byPath = new Map(files.map((f) => [f.path, f]));
   const chosen: RepoFile[] = [];
   for (const e of entry.evidence) { const f = byPath.get(e.file); if (f?.content && !chosen.includes(f)) chosen.push(f); if (chosen.length >= maxFiles) break; }
+  // Files the area's question is about, by name, so "not present in the
+  // files provided" stops being the answer when the file exists.
+  const hint = AREA_FILE_HINTS[entry.area];
+  if (hint) for (const f of files) {
+    if (chosen.length >= maxFiles) break;
+    if (f.content && !chosen.includes(f) && hint.test(f.path) && !/(^|\/)(test|tests|e2e)\//.test(f.path)) chosen.push(f);
+  }
   if (!chosen.length) return null;
   const fileText = chosen.map((f) => `### ${f.path}\n${f.content!.slice(0, maxChars)}${f.content!.length > maxChars ? "\n… (truncated)" : ""}`).join("\n\n");
   const cov = [

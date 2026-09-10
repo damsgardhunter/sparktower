@@ -59,7 +59,8 @@ function importedFiles(files: RepoFile[]): Set<string> {
       imported.add(strip(parts.join("/")));
     }
   }
-  for (const f of files) if (/(^|\/)(index|server|app|main|routes)\.(ts|js)$/.test(f.path)) imported.add(strip(f.path));
+  // Entry points: index/server/app/main/routes at the root or one directory down. A routes.ts three levels deep is not one.
+  for (const f of files) if (/^(?:[^/]+\/)?(index|server|app|main|routes)\.(ts|js)$/.test(f.path)) imported.add(strip(f.path));
   return imported;
 }
 

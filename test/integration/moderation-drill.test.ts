@@ -125,21 +125,24 @@ describe("sign-in limiter", () => {
     const victim = await signedIn(app, "Victim");
     const { max } = RATE_LIMITS.login;
 
+    // Registration now counts against the same per-address budget, so the
+    // attacker gets their own address: the test is about the attempts.
+    const attacker = "198.51.100.44";
     for (let i = 0; i < max; i++) {
-      const r = await request(app).post("/api/auth/login").send({ email: victim.email, password: "wrong" });
+      const r = await request(app).post("/api/auth/login").set("x-forwarded-for", attacker).send({ email: victim.email, password: "wrong" });
       expect(r.status).toBe(401);
     }
-    const locked = await request(app).post("/api/auth/login").send({ email: victim.email, password: "wrong" });
+    const locked = await request(app).post("/api/auth/login").set("x-forwarded-for", attacker).send({ email: victim.email, password: "wrong" });
     expect(locked.status).toBe(429);
     expect(locked.body.action).toBe("login");
 
     // The right password is refused too — the limit is on attempts, not on
     // wrong ones, or the ninth guess would be the free one.
-    expect((await request(app).post("/api/auth/login").send({ email: victim.email, password })).status).toBe(429);
+    expect((await request(app).post("/api/auth/login").set("x-forwarded-for", attacker).send({ email: victim.email, password })).status).toBe(429);
 
     // Durable: a fresh app instance, same address, still locked.
     await closeTestApp();
     const fresh = await getTestApp();
-    expect((await request(fresh).post("/api/auth/login").send({ email: victim.email, password })).status).toBe(429);
+    expect((await request(fresh).post("/api/auth/login").set("x-forwarded-for", attacker).send({ email: victim.email, password })).status).toBe(429);
   });
 });

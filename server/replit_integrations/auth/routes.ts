@@ -6,6 +6,11 @@ import bcrypt from "bcryptjs";
 import { ensureUserProfile } from "../../user-provisioning";
 import { stampSignupAttribution } from "../../attribution";
 import { enforceRateLimit, ipKey } from "../../moderation";
+import { db } from "../../db";
+import { mobileRefreshTokens } from "@shared/models/auth";
+import { and, eq, isNull, sql } from "drizzle-orm";
+/** The session cookie's name, as express-session is configured. */
+const SESSION_COOKIE = "connect.sid";
 
 export function registerAuthRoutes(app: Express): void {
   app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
@@ -100,9 +105,36 @@ export function registerAuthRoutes(app: Express): void {
     res.redirect("/");
   });
 
-  app.get("/api/logout", (req, res) => {
+  /**
+   * Signing out destroys the session row, not just the login state on it:
+   * a cookie that is later replayed finds nothing. POST is the real form;
+   * GET stays for existing links and does the same before redirecting.
+   */
+  const endSession = (req: any, res: any, then: () => void) => {
     req.logout(() => {
-      res.redirect("/");
+      const done = () => { res.clearCookie(SESSION_COOKIE); then(); };
+      if (req.session) req.session.destroy(done); else done();
     });
+  };
+  app.post("/api/logout", (req: any, res) => endSession(req, res, () => res.json({ ok: true })));
+  app.get("/api/logout", (req: any, res) => endSession(req, res, () => res.redirect("/")));
+
+  /**
+   * Sign out everywhere: every web session for this user and every mobile
+   * refresh token. For a lost phone or a shared computer. The current
+   * session goes too, so the caller ends signed out.
+   */
+  app.post("/api/auth/logout-all", isAuthenticated, async (req: any, res) => {
+    const userId = req.user.id;
+    try {
+      const sessions = await db.execute(sql`DELETE FROM sessions WHERE sess->'passport'->>'user' = ${userId}`);
+      const tokens = await db.update(mobileRefreshTokens).set({ revokedAt: new Date() })
+        .where(and(eq(mobileRefreshTokens.userId, userId), isNull(mobileRefreshTokens.revokedAt))).returning({ id: mobileRefreshTokens.id });
+      res.clearCookie(SESSION_COOKIE);
+      res.json({ ok: true, sessionsEnded: Number((sessions as any).rowCount ?? 0), devicesSignedOut: tokens.length });
+    } catch (err) {
+      console.error("logout-all failed:", err);
+      res.status(500).json({ message: "Couldn't sign out everywhere. Try again." });
+    }
   });
 }

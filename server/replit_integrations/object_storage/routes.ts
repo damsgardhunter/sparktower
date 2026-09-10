@@ -74,10 +74,16 @@ export function registerObjectStorageRoutes(app: Express): void {
   // Accepts PUT /internal-local-upload/:id and writes the body to local disk under local_objects/uploads/:id
   app.put("/internal-local-upload/:id", async (req: any, res) => {
     try {
-      if (process.env.PRIVATE_OBJECT_DIR) {
+      // Development only, twice over: never when real storage is configured,
+      // and never in production even if it isn't. It writes to local disk.
+      if (process.env.PRIVATE_OBJECT_DIR || process.env.NODE_ENV === "production") {
         return res.status(404).json({ error: "Not found" });
       }
-      const id = req.params.id;
+      // The id names a file on disk; it must be a plain token, never a path.
+      const id = String(req.params.id ?? "");
+      if (!/^[A-Za-z0-9_-]{1,120}$/.test(id)) return res.status(400).json({ error: "Invalid upload id" });
+      // The presigned-style URL was issued to a signed-in user; only one may use it.
+      if (!req.user?.id) return res.status(401).json({ error: "Sign in to upload" });
       const localRoot = process.env.LOCAL_OBJECT_ROOT || path.join(process.cwd(), "local_objects");
       const uploadsDir = path.join(localRoot, "uploads");
       await fsPromises.mkdir(uploadsDir, { recursive: true });

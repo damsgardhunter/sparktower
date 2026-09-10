@@ -1,4 +1,3 @@
-export { registerAudioRoutes } from "./routes";
 export {
   openai,
   detectAudioFormat,
