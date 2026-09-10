@@ -1308,9 +1308,10 @@ export class DatabaseStorage implements IStorage {
           ? and(
               eq(projectComments.projectId, projectId),
               eq(projectComments.targetType, target.targetType as any),
-              eq(projectComments.targetId, target.targetId)
+              eq(projectComments.targetId, target.targetId),
+              isNull(projectComments.hiddenAt)
             )
-          : eq(projectComments.projectId, projectId)
+          : and(eq(projectComments.projectId, projectId), isNull(projectComments.hiddenAt))
       )
       .orderBy(asc(projectComments.createdAt));
 
@@ -1395,7 +1396,7 @@ export class DatabaseStorage implements IStorage {
     viewerId?: string; limit: number; before?: string;
     authorId?: string; projectId?: string; postType?: string;
   }): Promise<FeedPostWithDetails[]> {
-    const conditions = [];
+    const conditions = [isNull(feedPosts.hiddenAt)];
     if (options.authorId) conditions.push(eq(feedPosts.authorId, options.authorId));
     if (options.projectId) conditions.push(eq(feedPosts.projectId, options.projectId));
     if (options.postType) conditions.push(eq(feedPosts.postType, options.postType as any));
@@ -1432,6 +1433,8 @@ export class DatabaseStorage implements IStorage {
 
   async getFeedPost(id: string, viewerId?: string): Promise<FeedPostWithDetails | undefined> {
     const [post] = await db.select().from(feedPosts).where(eq(feedPosts.id, id));
+    // Taken down: not there, except to its author.
+    if (post?.hiddenAt && post.authorId !== viewerId) return undefined;
     if (!post) return undefined;
     return this.hydrateFeedPost(post, viewerId);
   }

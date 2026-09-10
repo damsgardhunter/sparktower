@@ -16,6 +16,8 @@ import {
 } from "@shared/moderation";
 
 interface Report {
+  /** Null when this kind of target can't be taken down. */
+  targetHidden?: boolean | null;
   id: string;
   targetType: ReportTarget;
   targetId: string;
@@ -97,6 +99,17 @@ export default function AdminReports() {
     onError: () => toast({ title: "Couldn't update that", variant: "destructive" }),
   });
 
+  const takedown = useMutation({
+    mutationFn: async ({ type, id, hide }: { type: string; id: string; hide: boolean }) => {
+      const res = await apiRequest("POST", `/api/admin/content/${type}/${id}/${hide ? "hide" : "restore"}`, { reason: note || undefined });
+      return res.json();
+    },
+    onSuccess: (r: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/reports"] });
+      toast({ title: r.hidden ? "Taken down — hidden from everyone but its author" : "Restored" });
+    },
+    onError: (e: any) => { const raw = String(e?.message ?? "").replace(/^\d+:\s*/, ""); let m = raw; try { m = JSON.parse(raw).message ?? raw; } catch { /* plain */ } toast({ title: m, variant: "destructive" }); },
+  });
   const suspend = useMutation({
     mutationFn: async ({ userId, suspended }: { userId: string; suspended: boolean }) => {
       const res = await apiRequest("POST", `/api/admin/users/${userId}/suspend`, {
@@ -250,6 +263,17 @@ export default function AdminReports() {
                             onClick={() => setNoteFor(r.id)}
                           >
                             Add a note
+                          </Button>
+                        )}
+                        {r.targetHidden !== null && r.targetHidden !== undefined && (
+                          <Button
+                            size="sm" variant={r.targetHidden ? "outline" : "destructive"} className="h-7 text-xs"
+                            disabled={takedown.isPending || (!r.targetHidden && !note.trim())}
+                            title={r.targetHidden ? "Put it back" : "Hide it from everyone but its author (needs a note)"}
+                            onClick={() => takedown.mutate({ type: r.targetType, id: r.targetId, hide: !r.targetHidden })}
+                            data-testid={`button-${r.targetHidden ? "restore" : "takedown"}-${r.id}`}
+                          >
+                            {r.targetHidden ? "Restore content" : "Take down"}
                           </Button>
                         )}
                         {r.ownerId && (

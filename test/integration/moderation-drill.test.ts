@@ -146,3 +146,46 @@ describe("sign-in limiter", () => {
     expect((await request(fresh).post("/api/auth/login").set("x-forwarded-for", attacker).send({ email: victim.email, password })).status).toBe(429);
   });
 });
+
+describe("takedown", () => {
+  it("hides reported content from every read for everyone but its author, logs it, and restores", async () => {
+    const app = await getTestApp();
+    const author = await signedIn(app, "Author");
+    const stranger = await signedIn(app, "Stranger");
+    const mod = await reviewer(app);
+
+    const project = await author.agent.post("/api/projects").send({ title: "Takedown", description: "A project whose check-in will be taken down and restored.", category: "saas", goal: "ship_mvp", subcategory: "saas" });
+    const checkIn = await author.agent.post(`/api/projects/${project.body.id}/check-ins`).send({ goal: "Ship the thing", proof: "Shipped it, honestly", nextStep: "Tell people", needsFeedback: true, visibility: "public" });
+    expect(checkIn.status).toBe(200);
+    const id = checkIn.body.id;
+    expect((await stranger.agent.get(`/api/check-ins/${id}`)).status).toBe(200);
+
+    await stranger.agent.post("/api/reports").send({ targetType: "check_in", targetId: id, reason: "spam", note: "Not a real update" }).expect(200);
+    const queue = (await mod.agent.get("/api/admin/reports")).body;
+    const report = queue.find((r: any) => r.targetId === id);
+    expect(report.targetHidden).toBe(false);
+
+    // Needs a reason; a wrong kind of target is refused plainly.
+    expect((await mod.agent.post(`/api/admin/content/check_in/${id}/hide`).send({})).body.code).toBe("invalid_input");
+    expect((await mod.agent.post(`/api/admin/content/user/${author.userId}/hide`).send({ reason: "x" })).body.code).toBe("not_takedownable");
+    expect((await stranger.agent.post(`/api/admin/content/check_in/${id}/hide`).send({ reason: "x" })).status).toBe(404);
+
+    const hide = await mod.agent.post(`/api/admin/content/check_in/${id}/hide`).send({ reason: "Spam" });
+    expect(hide.status).toBe(200);
+    // Gone from the page, the project's list and the feedback queue for a stranger; the author still sees it.
+    expect((await stranger.agent.get(`/api/check-ins/${id}`)).status).toBe(404);
+    expect((await request(app).get(`/api/check-ins/${id}`)).status).toBe(404);
+    expect((await author.agent.get(`/api/projects/${project.body.id}/check-ins`)).body.some((c: any) => c.id === id)).toBe(false);
+    expect(((await request(app).get("/api/check-ins/queue/needs-feedback")).body as any[]).some((c: any) => c.id === id)).toBe(false);
+    expect((await author.agent.get(`/api/check-ins/${id}`)).status).toBe(200);
+    expect((await mod.agent.get("/api/admin/reports")).body.find((r: any) => r.targetId === id).targetHidden).toBe(true);
+
+    const restore = await mod.agent.post(`/api/admin/content/check_in/${id}/restore`).send({});
+    expect(restore.status).toBe(200);
+    expect((await stranger.agent.get(`/api/check-ins/${id}`)).status).toBe(200);
+
+    const log = (await mod.agent.get("/api/admin/moderation-log")).body;
+    const actions = (Array.isArray(log) ? log : log.entries ?? []).filter((e: any) => e.targetId === id).map((e: any) => e.action);
+    expect(actions).toEqual(expect.arrayContaining(["content_hidden", "content_restored"]));
+  });
+});

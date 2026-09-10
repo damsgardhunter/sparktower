@@ -5,6 +5,7 @@ import { rateLimit } from "../../moderation";
 import fs from "fs";
 import fsPromises from "fs/promises";
 import path from "path";
+import { consumeLocalUpload } from "./local-uploads";
 
 /**
  * Register object storage routes for file uploads.
@@ -82,8 +83,9 @@ export function registerObjectStorageRoutes(app: Express): void {
       // The id names a file on disk; it must be a plain token, never a path.
       const id = String(req.params.id ?? "");
       if (!/^[A-Za-z0-9_-]{1,120}$/.test(id)) return res.status(400).json({ error: "Invalid upload id" });
-      // The presigned-style URL was issued to a signed-in user; only one may use it.
-      if (!req.user?.id) return res.status(401).json({ error: "Sign in to upload" });
+      // The URL is the credential, as with a real presigned URL: only an id
+      // this server issued, within its window, once. Anything else is a guess.
+      if (!consumeLocalUpload(id)) return res.status(404).json({ error: "Not found" });
       const localRoot = process.env.LOCAL_OBJECT_ROOT || path.join(process.cwd(), "local_objects");
       const uploadsDir = path.join(localRoot, "uploads");
       await fsPromises.mkdir(uploadsDir, { recursive: true });

@@ -887,6 +887,10 @@ export const projectComments = pgTable("project_comments", {
   mentions: jsonb("mentions").default([]),
   parentCommentId: varchar("parent_comment_id"),
   reactionCount: integer("reaction_count").default(0).notNull(),
+  /** Taken down by a reviewer: hidden from every read, with who and why. Null means visible. */
+  hiddenAt: timestamp("hidden_at"),
+  hiddenById: varchar("hidden_by_id"),
+  hiddenReason: text("hidden_reason"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -936,6 +940,10 @@ export const feedPosts = pgTable("feed_posts", {
   reactionCount: integer("reaction_count").default(0).notNull(),
   commentCount: integer("comment_count").default(0).notNull(),
   editedAt: timestamp("edited_at"),
+  /** Taken down by a reviewer: hidden from every read, with who and why. Null means visible. */
+  hiddenAt: timestamp("hidden_at"),
+  hiddenById: varchar("hidden_by_id"),
+  hiddenReason: text("hidden_reason"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -1025,6 +1033,10 @@ export const projectCheckIns = pgTable("project_check_ins", {
     .default("unlisted").notNull(),
   /** Set when a builder asks for feedback, which routes it to the queue. */
   needsFeedback: boolean("needs_feedback").default(false).notNull(),
+  /** Taken down by a reviewer: hidden from every read, with who and why. Null means visible. */
+  hiddenAt: timestamp("hidden_at"),
+  hiddenById: varchar("hidden_by_id"),
+  hiddenReason: text("hidden_reason"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   /** One check-in per person per project per week. */

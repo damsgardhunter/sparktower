@@ -82,7 +82,9 @@ export async function deepReadArea(
 ): Promise<CapabilityDetail | null> {
   const area = CAPABILITY_AREAS.find((a) => a.id === entry.area);
   if (!area) return null;
-  const maxFiles = opts.maxFiles ?? 6, maxChars = opts.maxCharsPerFile ?? 14000;
+  // Whole files for the ones that matter: a mechanism cut off mid-function
+  // reads as "cannot be verified", which is worse than a longer prompt.
+  const maxFiles = opts.maxFiles ?? 10, maxChars = opts.maxCharsPerFile ?? 60000;
   const byPath = new Map(files.map((f) => [f.path, f]));
   const chosen: RepoFile[] = [];
   for (const e of entry.evidence) { const f = byPath.get(e.file); if (f?.content && !chosen.includes(f)) chosen.push(f); if (chosen.length >= maxFiles) break; }

@@ -493,6 +493,12 @@ export function registerModerationRoutes(app: Express) {
   });
 
   /** The moderation queue. */
+  const TAKEDOWN_TABLES: Record<string, { table: any; author: any }> = {
+    check_in: { table: projectCheckIns, author: projectCheckIns.userId },
+    comment: { table: projectComments, author: projectComments.authorId },
+    feed_post: { table: feedPosts, author: feedPosts.authorId },
+  };
+
   app.get("/api/admin/reports", isAuthenticated, requireReviewer, async (req: any, res) => {
     try {
       const status = (REPORT_STATUSES as readonly string[]).includes(String(req.query.status))
@@ -513,18 +519,49 @@ export function registerModerationRoutes(app: Express) {
         .orderBy(desc(contentReports.createdAt))
         .limit(100);
 
-      res.json(rows.map((r) => ({
+      const hiddenOf = async (type: string, id: string): Promise<boolean | null> => {
+        const t = TAKEDOWN_TABLES[type];
+        if (!t) return null;
+        const [x] = await db.select({ h: t.table.hiddenAt }).from(t.table).where(eq(t.table.id, id));
+        return x ? !!x.h : null;
+      };
+      res.json(await Promise.all(rows.map(async (r) => ({
         ...r.report,
         reporterName: r.reporterName || "Someone",
         ownerName: r.ownerName || null,
         ownerId: r.ownerId,
         ownerSuspended: !!r.ownerSuspendedAt,
-      })));
+        /** Null when this kind of target can't be taken down. */
+        targetHidden: await hiddenOf(r.report.targetType, r.report.targetId),
+      }))));
     } catch (error) {
       console.error("Report queue error:", error);
       res.status(500).json({ message: "Couldn't load the queue" });
     }
   });
+
+  /**
+   * Taking content down, and putting it back. The action that was missing
+   * from the chain: report → queue → THIS → enforcement in reads → undo.
+   * Hidden content vanishes from every list and page for everyone but its
+   * author, who sees why. Logged both ways. Reviewer only.
+   */
+  const setHidden = async (req: any, res: any, hide: boolean) => {
+    const type = String(req.params.type), id = String(req.params.id);
+    const t = TAKEDOWN_TABLES[type];
+    if (!t) return res.status(400).json({ message: "That kind of content can't be taken down here. Suspend the account instead.", code: "not_takedownable" });
+    const reason = String(req.body?.reason ?? "").trim().slice(0, 500);
+    if (hide && !reason) return res.status(400).json({ message: "Say why — the author sees it, and so does the log.", code: "invalid_input", field: "reason" });
+    const [row] = await db.select({ id: t.table.id, author: t.author, hiddenAt: t.table.hiddenAt }).from(t.table).where(eq(t.table.id, id));
+    if (!row) return res.status(404).json({ message: "Not found" });
+    await db.update(t.table)
+      .set(hide ? { hiddenAt: new Date(), hiddenById: req.user.id, hiddenReason: reason } : { hiddenAt: null, hiddenById: null, hiddenReason: null })
+      .where(eq(t.table.id, id));
+    await logModeration({ action: hide ? "content_hidden" : "content_restored", actorId: req.user.id, targetUserId: row.author, targetType: type, targetId: id, reason: hide ? reason : null });
+    res.json({ ok: true, hidden: hide });
+  };
+  app.post("/api/admin/content/:type/:id/hide", isAuthenticated, requireReviewer, (req: any, res) => setHidden(req, res, true).catch((e) => { console.error("takedown failed:", e); res.status(500).json({ message: "Couldn't take that down" }); }));
+  app.post("/api/admin/content/:type/:id/restore", isAuthenticated, requireReviewer, (req: any, res) => setHidden(req, res, false).catch((e) => { console.error("restore failed:", e); res.status(500).json({ message: "Couldn't restore that" }); }));
 
   /** Resolving one. Actioned or dismissed — both close it. */
   app.patch("/api/admin/reports/:id", isAuthenticated, requireReviewer, async (req: any, res) => {

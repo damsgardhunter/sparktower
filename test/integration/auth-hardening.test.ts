@@ -47,16 +47,20 @@ describe("signing out", () => {
 });
 
 describe("the development upload endpoint", () => {
-  it("refuses strangers, path-shaped ids, and production", async () => {
+  it("accepts only an id it issued, once, and never in production", async () => {
     const app = await getTestApp();
-    expect((await request(app).put("/internal-local-upload/abc123").send("data")).status).toBe(401);
-    const { agent } = await signedIn(app, "up");
-    expect((await agent.put("/internal-local-upload/..%2F..%2Fetc").send("data")).status).toBe(400);
-    const ok = await agent.put("/internal-local-upload/test-upload-1").set("Content-Type", "application/octet-stream").send("data");
-    expect(ok.status).toBe(200);
+    const { ObjectStorageService } = await import("../../server/replit_integrations/object_storage");
+    // A guessed id, even a well-formed one, is a 404: the URL is the credential.
+    expect((await request(app).put("/internal-local-upload/abc123").send("data")).status).toBe(404);
+    expect((await request(app).put("/internal-local-upload/..%2F..%2Fetc").send("data")).status).toBe(400);
+    // An issued one works without any session — that's how a client uses a presigned URL — and only once.
+    const url = new URL(await new ObjectStorageService().getObjectEntityUploadURL());
+    expect((await request(app).put(url.pathname).set("Content-Type", "application/octet-stream").send("data")).status).toBe(200);
+    expect((await request(app).put(url.pathname).send("again")).status).toBe(404);
+    const again = new URL(await new ObjectStorageService().getObjectEntityUploadURL());
     const prev = process.env.NODE_ENV;
     process.env.NODE_ENV = "production";
-    try { expect((await agent.put("/internal-local-upload/test-upload-2").send("data")).status).toBe(404); }
+    try { expect((await request(app).put(again.pathname).send("data")).status).toBe(404); }
     finally { process.env.NODE_ENV = prev; }
   });
 });

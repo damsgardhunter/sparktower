@@ -13,7 +13,7 @@
  * property rather than an assumption.
  */
 import type { Express } from "express";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "./db";
 import { storage } from "./storage";
 import {
@@ -430,7 +430,7 @@ Respond ONLY with valid JSON, no markdown fences:
       }).from(projectCheckIns)
         .leftJoin(users, eq(users.id, projectCheckIns.userId))
         .leftJoin(userProfiles, eq(userProfiles.userId, projectCheckIns.userId))
-        .where(eq(projectCheckIns.projectId, projectId))
+        .where(and(eq(projectCheckIns.projectId, projectId), isNull(projectCheckIns.hiddenAt)))
         .orderBy(desc(projectCheckIns.weekStart), desc(projectCheckIns.createdAt));
 
       res.json(rows.map((r) => ({
@@ -474,6 +474,8 @@ Respond ONLY with valid JSON, no markdown fences:
         .where(eq(projectCheckIns.id, String(req.params.id)));
 
       if (!row) return res.status(404).json({ message: "Check-in not found" });
+      // Taken down: gone for everyone but its author, who sees why.
+      if (row.checkIn.hiddenAt && (req as any).user?.id !== row.checkIn.userId) return res.status(404).json({ message: "Check-in not found" });
 
       /*
        * A private project's check-ins stay inside the project, whatever the
@@ -646,6 +648,7 @@ Respond ONLY with valid JSON, no markdown fences:
         .leftJoin(userProfiles, eq(userProfiles.userId, projectCheckIns.userId))
         .where(and(
           eq(projectCheckIns.needsFeedback, true),
+          isNull(projectCheckIns.hiddenAt),
           eq(projectCheckIns.visibility, "public"),
           eq(projects.isPrivate, false),
         ))

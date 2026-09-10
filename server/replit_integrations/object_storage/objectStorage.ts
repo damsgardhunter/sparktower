@@ -4,6 +4,7 @@ import { randomUUID } from "crypto";
 import fs from "fs";
 import fsPromises from "fs/promises";
 import path from "path";
+import { issueLocalUpload } from "./local-uploads";
 import {
   ObjectAclPolicy,
   ObjectPermission,
@@ -313,6 +314,7 @@ export class ObjectStorageService {
       const uploadsDir = path.join(LOCAL_OBJECT_ROOT, "uploads");
       await fsPromises.mkdir(uploadsDir, { recursive: true });
       const serverBase = process.env.SERVER_BASE_URL || `http://localhost:${process.env.PORT || 5001}`;
+      issueLocalUpload(objectId);
       return `${serverBase}/internal-local-upload/${objectId}`;
     }
 
