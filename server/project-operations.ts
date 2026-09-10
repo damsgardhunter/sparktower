@@ -148,8 +148,15 @@ export function renderAudit(audit: any): string {
     ...((audit.signals as any)?.routes?.length
       ? [`ROUTES AND PAGES FOUND IN CODE (${(audit.signals as any).routes.length}; every write or cost endpoint you plan for must come from this list, by exact path — never a guessed one)\n${(audit.signals as any).routes.slice(0, 120).map((r: any) => `- ${r.label}  [${r.file}]`).join("\n")}`]
       : []),
-    ...((audit.signals as any)?.authSignals?.length || (audit.signals as any)?.envVarNames?.length
-      ? [`GUARDS AND INFRASTRUCTURE ALREADY IN CODE: ${[...((audit.signals as any).authSignals ?? [])].join("; ") || "none detected"}. Environment variables referenced: ${((audit.signals as any).envVarNames ?? []).slice(0, 40).join(", ") || "none"}. Before planning a safety mechanism, check this and the file tree for an existing one (server/surfaces.ts = kill switches; server/moderation.ts = durable rate limits and moderation log, if present) and extend it rather than proposing it from scratch.`]
+    ...(((audit.signals as any)?.guards?.length || (audit.signals as any)?.authSignals?.length || (audit.signals as any)?.packageManager)
+      ? [[
+          `LAYOUT FACTS (use these exactly; never invent a directory, a package manager or a script): package manager = ${(audit.signals as any).packageManager ?? "unknown"}; server entry = ${(audit.signals as any).serverEntry ?? "not recognised"}; top-level = ${((audit.signals as any).topLevelDirs ?? []).join(", ") || "unknown"}; scripts = ${((audit.signals as any).scriptNames ?? []).join(", ") || "unknown"}.`,
+          `MECHANISMS ALREADY IN CODE (each with the file that proves it — a plan that proposes one of these from scratch is wrong; the milestone is to extend, wire or verify the existing one, in that file):\n${[
+            ...((audit.signals as any).guards ?? []).map((g: any) => `- ${g.name}  [${g.evidence}]`),
+            ...((audit.signals as any).authSignals ?? []).map((a: string) => `- ${a}`),
+          ].join("\n") || "- none detected"}`,
+          `Environment variables referenced: ${((audit.signals as any).envVarNames ?? []).slice(0, 40).join(", ") || "none"}.`,
+        ].join("\n")]
       : []),
     ...((audit.signals as any)?.productDocs?.length
       ? [`THE BUILDER'S OWN DOCS (from the repo, ${(audit.signals as any).productDocs.length} files about loops, journeys or the plan)\n${(audit.signals as any).productDocs.slice(0, 6).map((d: any, i: number) => `### ${d.path}\n${String(d.excerpt).slice(0, i === 0 ? 4000 : 1500)}`).join("\n\n")}`]

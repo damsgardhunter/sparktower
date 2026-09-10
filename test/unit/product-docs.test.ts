@@ -60,3 +60,25 @@ describe("splitMergedPaths", () => {
     expect(out[0].steps).toMatch(/on the Ship an MVP path/);
   });
 });
+
+describe("detectGuards", () => {
+  it("names the mechanisms that exist with application code as evidence, never a scanner, config or lockfile", async () => {
+    const { detectGuards } = await import("../../server/code-digest");
+    const f = (path: string, content: string) => ({ path, size: content.length, content });
+    const guards = detectGuards([
+      f("server/moderation.ts", "export async function enforceRateLimit(res, userId, name) { await db.insert(rateLimitHits) }"),
+      f("server/surfaces.ts", "export function requireSurface(id) {}"),
+      f("server/code-digest.ts", "const checks = [{ test: /rate_limit_hits|requireSurface|helmet\\(/ }]"),
+      f("vitest.config.ts", "process.env.SESSION_SECRET = 'x'; // production refuse"),
+      f("package.json", '{"devDependencies":{"supertest":"7"}}'),
+      f("test/integration/auth.test.ts", "import request from 'supertest'; request(app)"),
+      f(".github/workflows/ci.yml", "name: ci"),
+    ]);
+    expect(guards).toEqual([
+      { name: "Durable (database-backed) rate limiting", evidence: "server/moderation.ts" },
+      { name: "Feature kill switches / surface flags", evidence: "server/surfaces.ts" },
+      { name: "Test suite (integration)", evidence: "test/integration/auth.test.ts" },
+      { name: "CI workflow", evidence: ".github/workflows/ci.yml" },
+    ]);
+  });
+});

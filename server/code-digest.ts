@@ -51,6 +51,18 @@ export interface DigestSignals {
   dependencyCount: number;
   topLevelDirs: string[];
   /**
+   * Safety and operational mechanisms already in the code, each with the
+   * file that proves it. Without this list, Nova plans a rate limiter for
+   * a repo that has one, in a directory the repo doesn't have.
+   */
+  guards: { name: string; evidence: string }[];
+  /** "npm" | "pnpm" | "yarn" | "bun", from the lockfile. */
+  packageManager: string | null;
+  /** The server's entry file, if one is recognisable. */
+  serverEntry: string | null;
+  /** package.json scripts, names only, so a plan uses real commands. */
+  scriptNames: string[];
+  /**
    * The product's own written intent: markdown files that talk about loops,
    * user journeys, phases or the plan. Builders write down what they mean
    * to build; an audit that only reads code misses it. Kept on the audit so
@@ -321,6 +333,54 @@ function detectAuth(files: RepoFile[]): string[] {
   return [...signals];
 }
 
+/** Mechanisms that already exist, with the file that shows each one. First match wins per guard. */
+export function detectGuards(files: RepoFile[]): { name: string; evidence: string }[] {
+  const checks: { name: string; test: RegExp; prefer?: RegExp }[] = [
+    { name: "Durable (database-backed) rate limiting", test: /rate_limit_hits|rateLimitHits|enforceRateLimit\b|\brateLimit\(["']/, prefer: /moderation|rate/i },
+    { name: "In-memory rate limiting (express-rate-limit or similar)", test: /express-rate-limit|rateLimiter\s*=\s*new|RateLimiterMemory/ },
+    { name: "Feature kill switches / surface flags", test: /requireSurface\b|surface_flags|surfaceFlags|killSwitch|featureFlags?\b/, prefer: /surface|flag/i },
+    { name: "Moderation log / reports queue", test: /moderation_log|moderationLog|logModeration\b|content_reports|reportContent\b/, prefer: /moderation/i },
+    { name: "Duplicate-content guard", test: /duplicate_content|DUPLICATE_RULES|isDuplicateContent/ },
+    { name: "CSRF protection", test: /csurf|csrfToken|SameSite/ },
+    { name: "HTTP security headers (helmet)", test: /\bhelmet\(/ },
+    { name: "Input validation (zod schemas on requests)", test: /\.parse\(req\.body\)|safeParse\(req\.body\)/ },
+    { name: "Webhook signature verification", test: /constructEvent\(|verifySignature|webhookSecret|WEBHOOK_SECRET/ },
+    { name: "Credit / usage metering", test: /requireCredits\b|deductCredits\b|creditsUsed/ },
+    { name: "Owner / admin-only routes", test: /requireOwner\b|requireAdmin\b|isAdmin\b/ },
+    { name: "Session secret enforced in production", test: /SESSION_SECRET[\s\S]{0,200}(production|refuse|throw)/ },
+    { name: "Test suite (integration)", test: /supertest|request\(app\)/ },
+    { name: "CI workflow", test: /^\.github\/workflows\//, },
+  ];
+  // Evidence has to be application code: not a tool that scans for these
+  // patterns (this file), not build tooling, config, lockfiles or docs.
+  const notEvidence = /code-digest|(^|\/)(script|scripts|tools|\.github)\/|\.config\.(t|j)s$|(^|\/)package(-lock)?\.json$|\.(md|lock|ya?ml)$/;
+  const out: { name: string; evidence: string }[] = [];
+  for (const c of checks) {
+    const hits = c.name === "CI workflow"
+      ? files.filter((f) => c.test.test(f.path))
+      : c.name === "Test suite (integration)"
+        ? files.filter((f) => !!f.content && c.test.test(f.content) && /(^|\/)(test|tests|__tests__|e2e|spec)\//.test(f.path))
+        : files.filter((f) => !!f.content && c.test.test(f.content) && !notEvidence.test(f.path));
+    if (!hits.length) continue;
+    const best = (c.prefer && hits.find((h) => c.prefer!.test(h.path))) ?? hits.sort((a, b) => a.path.length - b.path.length)[0];
+    out.push({ name: c.name, evidence: best.path });
+  }
+  return out;
+}
+
+function detectPackageManager(files: RepoFile[]): string | null {
+  if (files.some((f) => /(^|\/)pnpm-lock\.yaml$/.test(f.path))) return "pnpm";
+  if (files.some((f) => /(^|\/)yarn\.lock$/.test(f.path))) return "yarn";
+  if (files.some((f) => /(^|\/)bun\.lockb?$/.test(f.path))) return "bun";
+  if (files.some((f) => /(^|\/)package-lock\.json$/.test(f.path))) return "npm";
+  return null;
+}
+
+function detectServerEntry(files: RepoFile[]): string | null {
+  const candidates = files.filter((f) => /^(server|src|api|backend)\/(index|main|server|app)\.(t|j)s$/.test(f.path) || /^(index|server|app)\.(t|j)s$/.test(f.path));
+  return candidates.sort((a, b) => a.path.length - b.path.length)[0]?.path ?? null;
+}
+
 /**
  * Scores a file by how much it reveals about the project's intent.
  *
@@ -465,6 +525,9 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
   const dataModels = detectDataModels(read);
   const suspectedSecrets = detectSecrets(read);
   const authSignals = detectAuth(read);
+  const guards = detectGuards(files);
+  const packageManager = detectPackageManager(files);
+  const serverEntry = detectServerEntry(files);
 
   const topLevelDirs = [...new Set(
     files.map((f) => (f.path.includes("/") ? f.path.split("/")[0] : "(root files)")),
@@ -490,6 +553,10 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
     authSignals,
     dependencyCount,
     topLevelDirs,
+    guards,
+    packageManager,
+    serverEntry,
+    scriptNames: Object.keys(packageScripts).slice(0, 30),
   };
 
   // --- excerpts -----------------------------------------------------------
@@ -531,6 +598,8 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
       ? dataModels.slice(0, 60).map((m) => `- ${m.name}  [${m.file}]`).join("\n")
       : "- none detected. There is no schema, or it isn't in a recognised format."),
     section("AUTH", authSignals.length ? authSignals.map((a) => `- ${a}`).join("\n") : "- no authentication code detected"),
+    section("GUARDS AND MECHANISMS ALREADY IN CODE", guards.length ? guards.map((g) => `- ${g.name}  [${g.evidence}]`).join("\n") : "- none detected"),
+    section("LAYOUT FACTS", [`Package manager: ${packageManager ?? "unknown (no lockfile)"}`, `Server entry: ${serverEntry ?? "not recognised"}`, `Top-level: ${topLevelDirs.join(", ")}`].join("\n")),
     section("ENGINEERING SIGNALS", [
       `Tests: ${signals.testFiles} test files${signals.testFrameworks.length ? ` (${signals.testFrameworks.join(", ")})` : " — no test framework in the manifest"}`,
       `CI: ${hasCi ? "configured" : "none"}`,
