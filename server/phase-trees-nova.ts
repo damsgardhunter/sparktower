@@ -7,6 +7,7 @@
 import OpenAI from "openai";
 import { modelFor, coachingDirectiveFor, type UserEntitlements } from "./entitlements";
 import type { Artifact, InjectionProposal, WorkPayload, WorkKind } from "@shared/phase-trees";
+import { parseModelJson } from "./ai-json";
 
 const rawBase = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
 const openai = new OpenAI({
@@ -14,10 +15,6 @@ const openai = new OpenAI({
   baseURL: rawBase ? (rawBase.endsWith("/v1") ? rawBase : `${rawBase.replace(/\/$/, "")}/v1`) : undefined,
 });
 
-function parseJson(raw: string): any {
-  const match = raw.match(/[\[{][\s\S]*[\]}]/);
-  return JSON.parse(match ? match[0] : raw);
-}
 
 /** 3–5 steps from the written core loop (or whatever the parent milestone answered). */
 export async function draftExpansionSteps(ent: UserEntitlements, milestoneTitle: string, artifact: string) {
@@ -31,7 +28,7 @@ Respond ONLY with JSON: {"steps":[{"title":"","description":"","estimateHours":1
     ],
     temperature: 0.4,
   });
-  const parsed = parseJson(completion.choices[0]?.message?.content ?? "{}");
+  const parsed = parseModelJson(completion.choices[0]?.message?.content ?? "{}");
   return Array.isArray(parsed.steps) ? parsed.steps as { title: string; description: string; estimateHours?: number }[] : [];
 }
 
@@ -48,7 +45,7 @@ Respond ONLY with JSON: {"tasks":[{"title":"","description":"","artifact":"<exac
     ],
     temperature: 0.4,
   });
-  const parsed = parseJson(completion.choices[0]?.message?.content ?? "{}");
+  const parsed = parseModelJson(completion.choices[0]?.message?.content ?? "{}");
   return Array.isArray(parsed.tasks) ? parsed.tasks : [];
 }
 
@@ -76,7 +73,7 @@ Respond ONLY with JSON: {"done":[{"id":"<milestone id>","evidence":"<one line>",
     ],
     temperature: 0.2,
   });
-  const parsed = parseJson(completion.choices[0]?.message?.content ?? "{}");
+  const parsed = parseModelJson(completion.choices[0]?.message?.content ?? "{}");
   const ids = new Set(backbone.map((m) => m.id));
   const done = (Array.isArray(parsed.done) ? parsed.done : [])
     .filter((d: any) => d && ids.has(String(d.id)))
@@ -140,7 +137,7 @@ ${shape}` },
     temperature: kind === "build" ? 0.2 : 0.5,
     max_completion_tokens: 8000,
   });
-  const parsed = parseJson(completion.choices[0]?.message?.content ?? "{}");
+  const parsed = parseModelJson(completion.choices[0]?.message?.content ?? "{}");
   if (kind === "options") {
     const options = (Array.isArray(parsed.options) ? parsed.options : []).slice(0, 3)
       .map((o: any) => ({ title: String(o.title ?? "").slice(0, 120), body: String(o.body ?? "").slice(0, 4000), why: o.why ? String(o.why).slice(0, 300) : undefined }))

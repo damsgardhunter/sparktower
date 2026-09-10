@@ -23,6 +23,7 @@ import {
   stripIdFragments, collectProjectIds, OPERATION_SCHEMA_INSTRUCTIONS,
 } from "./project-operations";
 import { NOVA_SURFACES, type NovaSurfaceId } from "@shared/nova-surfaces";
+import { parseModelJson } from "./ai-json";
 
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
@@ -170,7 +171,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       try {
         const raw = completion.choices[0].message.content || "{}";
         const match = raw.match(/\{[\s\S]*\}/);
-        parsed = JSON.parse(match ? match[0] : raw);
+        parsed = parseModelJson(raw);
       } catch (err) {
         console.error(`Nova assist parse failed (${surface}):`, err);
         return res.status(502).json({ message: "Nova returned an unreadable answer. Please try again." });

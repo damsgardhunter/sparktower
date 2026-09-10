@@ -17,6 +17,7 @@ import { CREDIT_COSTS } from "@shared/plans";
 import { formatProjectBriefForPrompt } from "@shared/project-sections";
 import type { Project } from "@shared/schema";
 import { rateLimit } from "./moderation";
+import { parseModelJson } from "./ai-json";
 
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
@@ -31,7 +32,7 @@ function getOpenAI(): OpenAI {
 /** Parses a JSON object out of a model response that may be fenced. */
 function parseJsonObject(raw: string): any {
   const match = raw.match(/\{[\s\S]*\}/);
-  return JSON.parse(match ? match[0] : raw);
+  return parseModelJson(raw);
 }
 
 const INVESTOR_PERSONAS = [

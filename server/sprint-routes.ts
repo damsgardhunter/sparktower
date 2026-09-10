@@ -7,6 +7,7 @@ import { requireFeature, requireCredits, getUserEntitlements, modelFor, coaching
 import { CREDIT_COSTS } from "@shared/plans";
 import type { CofounderSprint } from "@shared/schema";
 import OpenAI from "openai";
+import { parseModelJson } from "./ai-json";
 
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
@@ -308,7 +309,7 @@ export function registerSprintRoutes(app: Express) {
       try {
         const raw = completion.choices[0]?.message?.content || "{}";
         const match = raw.match(/\{[\s\S]*\}/);
-        ideas = normalizeIdeas(JSON.parse(match ? match[0] : raw));
+        ideas = normalizeIdeas(parseModelJson(raw));
       } catch (parseErr) {
         console.error("Idea options parse failed:", parseErr);
       }
@@ -369,7 +370,6 @@ export function registerSprintRoutes(app: Express) {
       if (!(await requireFeature(res, req.user.id, "createSprints", "Creating your own Sprints"))) return;
       const ent = await requireCredits(res, req.user.id, CREDIT_COSTS.practiceSprint, "a practice sprint");
       if (!ent) return;
-      await storage.deductCredits(req.user.id, CREDIT_COSTS.practiceSprint);
 
       let productName: string;
       let productDescription: string;
@@ -402,9 +402,11 @@ export function registerSprintRoutes(app: Express) {
             temperature: 1,
             max_completion_tokens: 2000,
           });
+          // Charged only now, with the model's answer in hand. A failed call costs nothing.
+          await storage.deductCredits(req.user.id, CREDIT_COSTS.practiceSprint);
           const raw = response.choices[0]?.message?.content || "{}";
           const match = raw.match(/\{[\s\S]*\}/);
-          const [first] = normalizeIdeas(JSON.parse(match ? match[0] : raw));
+          const [first] = normalizeIdeas(parseModelJson(raw));
           if (first) {
             productName = first.name;
             productDescription = ideaToDescription(first);
@@ -560,7 +562,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       try {
         const raw = completion.choices[0]?.message?.content || "{}";
         const match = raw.match(/\{[\s\S]*\}/);
-        parsed = JSON.parse(match ? match[0] : raw);
+        parsed = parseModelJson(raw);
       } catch (parseErr) {
         console.error("Nova answers parse failed:", parseErr);
         return res.status(502).json({ message: "Nova's answers came back unreadable. Try again." });
@@ -879,7 +881,6 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       const { productStyle, partnerId } = req.body;
       const ent = await requireCredits(res, req.user.id, CREDIT_COSTS.sprintIdeaSuggestion, "a Nova product idea");
       if (!ent) return;
-      await storage.deductCredits(req.user.id, CREDIT_COSTS.sprintIdeaSuggestion);
 
       const [profile1, profile2] = await Promise.all([
         storage.getUserProfile(req.user.id),
@@ -904,6 +905,8 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         temperature: 0.9,
         max_completion_tokens: 1200,
       });
+      // Charged only now, with the model's answer in hand. A failed call costs nothing.
+      await storage.deductCredits(req.user.id, CREDIT_COSTS.sprintIdeaSuggestion);
 
       const content = response.choices[0]?.message?.content || "";
       try {
@@ -929,7 +932,6 @@ Respond ONLY with valid JSON (no markdown, no code fences):
 
       const ent = await requireCredits(res, req.user.id, CREDIT_COSTS.sprintReport, "a sprint compatibility report");
       if (!ent) return;
-      await storage.deductCredits(req.user.id, CREDIT_COSTS.sprintReport);
 
       const [responses, deliverables, ratings, decisions, metrics, user1, user2] = await Promise.all([
         storage.getSprintResponses(sprint.id),
@@ -991,6 +993,8 @@ ${metrics.map(m => {
         temperature: 0.7,
         max_completion_tokens: 2000,
       });
+      // Charged only now, with the model's answer in hand. A failed call costs nothing.
+      await storage.deductCredits(req.user.id, CREDIT_COSTS.sprintReport);
 
       const reportContent = aiResponse.choices[0]?.message?.content || "";
       let reportData;

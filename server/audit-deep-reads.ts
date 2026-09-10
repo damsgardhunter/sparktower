@@ -12,6 +12,7 @@ import type { RouteCoverage } from "./route-coverage";
 import { renderRouteCoverage } from "./route-coverage";
 import { renderDataShape, type DataShape } from "@shared/data-shape";
 import { CAPABILITY_AREAS, sanitizeDeepRead, type CapabilityEntry, type CapabilityArea, type CapabilityDetail } from "@shared/capabilities";
+import { parseModelJson } from "./ai-json";
 
 const rawBase = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
 const openai = new OpenAI({
@@ -39,10 +40,10 @@ const RELEVANT_TO_COVERAGE = new Set<CapabilityArea>(["auth", "rateLimiting", "a
 /** Where each area's code usually lives, by file name. Added to the evidence files for the read. */
 const AREA_FILE_HINTS: Partial<Record<CapabilityArea, RegExp>> = {
   auth: /auth|session|passport|token|login/i,
-  rateLimiting: /moderation|rate-?limit|limiter/i,
+  rateLimiting: /moderation|rate-?limit|limiter|entitle|plans/i,
   moderation: /moderation|report|admin/i,
   payments: /stripe|billing|payment|webhook|subscription|entitle/i,
-  ai: /openai|nova|ai-?models|prompt|entitle/i,
+  ai: /openai|nova|ai-?models|prompt|entitle|plans|ai-json|ai-metering|moderation/i,
   analytics: /analytics|metrics|track/i,
   data: /schema|storage|db\b|migrat/i,
   tests: /vitest|playwright|test\/setup|test\/helpers/i,
@@ -65,10 +66,6 @@ export function rowsForArea(area: CapabilityArea, cov: RouteCoverage, max = 140)
   return `ROUTES RELEVANT TO THIS AREA (${pick.length}${pick.length > max ? `, first ${max}` : ""}; read off the source, exact)\n${pick.slice(0, max).map(line).join("\n")}`;
 }
 
-function parseJson(raw: string): any {
-  const match = raw.match(/\{[\s\S]*\}/);
-  return JSON.parse(match ? match[0] : raw);
-}
 
 /**
  * One area, read properly. Given the full text of its evidence files (and
@@ -115,7 +112,7 @@ Respond ONLY with JSON: {"coverage":"one or two sentences, quantified","gaps":[{
         { role: "user", content: `QUESTION\n${AREA_QUESTIONS[entry.area]}\n\n${cov ? `${cov}\n\n` : ""}FILES\n${fileText}` },
       ],
     }, { timeout: opts.timeoutMs ?? 120_000 });
-    return sanitizeDeepRead(parseJson(completion.choices[0]?.message?.content ?? "{}"), allowed);
+    return sanitizeDeepRead(parseModelJson(completion.choices[0]?.message?.content ?? "{}"), allowed);
   } catch (err) {
     console.error(`[audit] deep read failed for ${entry.area}:`, (err as Error)?.message ?? err);
     return null;

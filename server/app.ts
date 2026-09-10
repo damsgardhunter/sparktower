@@ -18,6 +18,7 @@ import type { Server } from "http";
 import { ZodError } from "zod";
 import { registerRoutes } from "./routes";
 import { WebhookHandlers, WebhookVerificationError } from "./webhookHandlers";
+import { ModelResponseError } from "./ai-json";
 import { stripSealedFields } from "@shared/strip-sealed";
 
 export interface CreateAppOptions {
@@ -187,6 +188,10 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
       });
     }
 
+    if (err instanceof ModelResponseError) {
+      console.error("[ai] unreadable model response:", err.raw?.slice(0, 200) ?? "(empty)");
+      return res.status(502).json({ message: err.message, code: err.code });
+    }
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
     console.error("Internal Server Error:", err);

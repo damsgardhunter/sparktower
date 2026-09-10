@@ -24,6 +24,7 @@ import {
   buildOperableProjectState, stripIdFragments, collectProjectIds,
 } from "./project-operations";
 import { renderDocumentPdf } from "./document-pdf";
+import { parseModelJson } from "./ai-json";
 import {
   BLOCK_KINDS, BLOCK_KIND_CONTENT_RULES, DEFAULT_SETTINGS, MAX_GRID_COLUMNS,
   MAX_PAGES, MAX_BLOCKS_PER_PAGE, normalizePage, emptyBlocks, blockWordBudget, pageWordBudget,
@@ -44,7 +45,7 @@ const str = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
 
 function parseJson(raw: string): any {
   const match = raw.match(/\{[\s\S]*\}/);
-  return JSON.parse(match ? match[0] : raw);
+  return parseModelJson(raw);
 }
 
 /** Coerces whatever the model returned into legal, renderable pages. */

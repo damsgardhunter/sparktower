@@ -58,6 +58,7 @@ import {
 import { draftExpansionSteps, proposeInjections, readExistingProgress, draftArtifact, produceWork } from "./phase-trees-nova";
 import { workKindFor } from "@shared/phase-trees";
 import { resolveTree, treeFor } from "@shared/phase-trees";
+import { parseModelJson } from "./ai-json";
 
 async function isProjectMember(userId: string, projectId: string): Promise<boolean> {
   const project = await storage.getProject(projectId);
@@ -957,7 +958,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       try {
         const raw = completion.choices[0].message.content || "{}";
         const match = raw.match(/\{[\s\S]*\}/);
-        parsed = JSON.parse(match ? match[0] : raw);
+        parsed = parseModelJson(raw);
       } catch (parseErr) {
         console.error("Task sequence parse failed:", parseErr);
         return res.status(502).json({ message: "Nova returned an unreadable order. Please try again." });
@@ -1217,7 +1218,7 @@ If the ask has nothing to do with planning tasks, say so in "summary", return an
       try {
         const raw = completion.choices[0].message.content || "{}";
         const match = raw.match(/\{[\s\S]*\}/);
-        parsed = JSON.parse(match ? match[0] : raw);
+        parsed = parseModelJson(raw);
       } catch (parseErr) {
         console.error("Task assist parse failed:", parseErr);
         return res.status(502).json({ message: "Nova returned an unreadable plan. Please try again." });
@@ -3563,7 +3564,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences),
       try {
         const rawContent = scenesResponse.choices[0].message.content || "[]";
         const jsonMatch = rawContent.match(/\[[\s\S]*\]/);
-        const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : rawContent);
+        const parsed = parseModelJson(rawContent);
         scenes = parsed.slice(0, 5).map((s: any) => {
           let svgContent = s.svg || "";
           if (svgContent && !svgContent.includes("xmlns")) {
@@ -3910,7 +3911,7 @@ ${PLAIN_LANGUAGE_RULES}`;
 
   function parseRoadmapJson(raw: string): { summary: string; phases: any[] } {
     const match = raw.match(/\{[\s\S]*\}/);
-    const parsed = JSON.parse(match ? match[0] : raw);
+    const parsed = parseModelJson(raw);
     const phases = Array.isArray(parsed.phases) ? parsed.phases : [];
     return {
       summary: typeof parsed.summary === "string" ? parsed.summary : "",
@@ -4297,7 +4298,7 @@ ${PLAIN_LANGUAGE_RULES}`,
       let parsed: any;
       try {
         const match = nextActionsRaw.match(/\{[\s\S]*\}/);
-        parsed = JSON.parse(match ? match[0] : nextActionsRaw);
+        parsed = parseModelJson(nextActionsRaw);
       } catch (parseErr) {
         console.error("Next actions parse failed:", parseErr);
         return res.status(502).json({ message: "Nova's answer came back unreadable. Try again." });
@@ -4435,7 +4436,7 @@ Additionally include:
       let parsed: any;
       try {
         const match = rebuildRaw.match(/\{[\s\S]*\}/);
-        parsed = JSON.parse(match ? match[0] : rebuildRaw);
+        parsed = parseModelJson(rebuildRaw);
       } catch (parseErr) {
         console.error("Roadmap rebuild parse failed:", parseErr);
         return res.status(502).json({ message: "Nova's rebuild came back unreadable. Try again." });
@@ -4776,7 +4777,7 @@ Produce 3-6 findings.`,
       try {
         const raw = completion.choices[0].message.content || "{}";
         const match = raw.match(/\{[\s\S]*\}/);
-        parsed = JSON.parse(match ? match[0] : raw);
+        parsed = parseModelJson(raw);
       } catch (parseErr) {
         console.error("Health check parse failed:", parseErr);
         return res.status(502).json({ message: "Nova returned an unreadable assessment. Please try again." });
@@ -4870,7 +4871,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       try {
         const raw = completion.choices[0].message.content || "{}";
         const match = raw.match(/\{[\s\S]*\}/);
-        parsed = JSON.parse(match ? match[0] : raw);
+        parsed = parseModelJson(raw);
       } catch (parseErr) {
         console.error("Health fix parse failed:", parseErr);
         return res.status(502).json({ message: "Nova returned an unreadable plan. Please try again." });
