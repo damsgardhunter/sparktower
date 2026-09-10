@@ -50,7 +50,6 @@ export function DataMap({ shape }: { shape: DataShape }) {
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (shape.error) return <p className="text-sm text-muted-foreground" data-testid="data-map-error">The data read failed: {shape.error}</p>;
