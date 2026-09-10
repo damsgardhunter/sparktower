@@ -216,9 +216,9 @@ export function CodebaseTab({ projectId, repoUrl }: { projectId: string; repoUrl
   const findings = (audit?.findings as any) || {};
   const scan = findings.scan || {};
   type Probe = { url: string; ok: boolean; status: number | null; ms: number; error?: string } | null;
-  const runtime = (audit as any).runtime as { liveUrl: Probe; health: Probe; surfaces: { loaded: boolean; enabled: number; off: string[] } | null; env: { referenced: number; setHere: string[]; missingHere: string[]; instance: string } } | null;
-  const delta = (audit as any).delta as AuditDelta | null;
-  const dataShape = (audit as any).dataShape as DataShape | null;
+  const runtime = ((audit as any)?.runtime ?? null) as { liveUrl: Probe; health: Probe; surfaces: { loaded: boolean; enabled: number; off: string[] } | null; env: { referenced: number; setHere: string[]; missingHere: string[]; instance: string } } | null;
+  const delta = ((audit as any)?.delta ?? null) as AuditDelta | null;
+  const dataShape = ((audit as any)?.dataShape ?? null) as DataShape | null;
   const running = auditMutation.isPending || isUploading;
 
   return (
