@@ -2691,9 +2691,13 @@ RULES:
         buildOperableProjectState(projectId, { includeIds: false, includeAudit: true }),
         collectArtifacts(projectId),
       ]);
+      const all = await storage.getProjectKanbanTasks(projectId);
+      const loops = all.filter((t) => t.tags?.includes("kind:loop") && !t.tags.some((x) => x.startsWith("archived:")))
+        .map((t) => ({ title: t.title, description: t.description ?? "", status: t.status }));
+      const full = await storage.getProject(projectId);
       const payload = await produceWork(ent, kind,
         { title: ctx.task.title, description: ctx.task.description ?? ctx.milestone?.description ?? "", tier: ctx.tier },
-        { goal: ctx.project.goal, subcategory: ctx.project.subcategory, state, artifacts });
+        { goal: ctx.project.goal, subcategory: ctx.project.subcategory, state, artifacts, loops, rejectedLoops: full?.rejectedLoops ?? [] });
       const row = await saveWork(projectId, ctx.task.id, payload);
       await storage.deductCredits(userId, CREDIT_COSTS.taskAssist);
       res.json({ id: row.id, kind: row.kind, payload: row.payload, chosenIndex: null, createdAt: row.createdAt });

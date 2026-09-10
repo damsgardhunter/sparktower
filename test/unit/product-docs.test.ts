@@ -47,3 +47,16 @@ describe("loopsAlike", () => {
     expect(loopsAlike(norm("Explore"), norm("Explore: discover builders and follow up"))).toBe(true);
   });
 });
+
+describe("splitMergedPaths", () => {
+  it("splits a loop that spans several paths into one per path, and leaves single loops alone", async () => {
+    const { splitMergedPaths } = await import("@shared/phase-trees");
+    const out = splitMergedPaths([
+      { title: "Build: follow a goal path (Ship/Systemize/Fund)", steps: "pick path → do next milestone → repeat", state: "partly", evidence: "" },
+      { title: "Explore builders", steps: "open feed → follow", state: "built", evidence: "" },
+      { title: "Raise funding", steps: "generate deck → critique → iterate", state: "partly", evidence: "" },
+    ]);
+    expect(out.map((l) => l.title)).toEqual(["Ship an MVP", "Systemize a business", "Raise funding", "Explore builders", "Raise funding"]);
+    expect(out[0].steps).toMatch(/on the Ship an MVP path/);
+  });
+});

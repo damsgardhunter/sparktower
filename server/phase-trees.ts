@@ -16,7 +16,7 @@ import { db } from "./db";
 import { storage } from "./storage";
 import { projects, projectKanbanTasks, projectCheckIns, projectRoadmaps, pathPace, pathPaceEvents, pathWork } from "@shared/schema";
 import {
-  resolveTree, treeFor, mainLineMilestones, computePace, admitInjections, NEXT_PATHS, loopsAlike,
+  resolveTree, treeFor, mainLineMilestones, computePace, admitInjections, NEXT_PATHS, loopsAlike, splitMergedPaths,
   type ResolvedMilestone, type Artifact, type InjectionProposal, type PaceState, type WorkPayload, type Actor,
 } from "@shared/phase-trees";
 import { PROJECT_GOALS } from "@shared/goals";
@@ -278,7 +278,8 @@ export async function createLoop(projectId: string, sourceBackboneId: string, lo
  * core loop with their steps written; a built one is done. Existing loops
  * are matched by name, never duplicated, never overwritten.
  */
-export async function reconcileLoops(projectId: string, found: { title: string; steps: string; state: "built" | "partly" | "planned"; evidence: string }[], sourceBackboneId = "SHIP.M1.2") {
+export async function reconcileLoops(projectId: string, foundRaw: { title: string; steps: string; state: "built" | "partly" | "planned"; evidence: string }[], sourceBackboneId = "SHIP.M1.2") {
+  const found = splitMergedPaths(foundRaw);
   const tasks = await pathTasks(projectId);
   const source = tasks.find((t) => backboneIdOf(t.tags) === sourceBackboneId);
   if (!source) return { created: [], updated: [] };

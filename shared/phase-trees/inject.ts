@@ -3,7 +3,7 @@
  * and the grounding requirement are enforced by code that a test can hold
  * to account, not by a sentence in a prompt.
  */
-import type { ProjectGoal } from "../goals";
+import { PROJECT_GOALS, type ProjectGoal } from "../goals";
 
 /** Injected tasks per phase. The doc says 2–3; three is the ceiling. */
 export const INJECT_CAP_PER_PHASE = 3;
@@ -81,4 +81,25 @@ export function loopsAlike(a: string, b: string): boolean {
   if (!ta.size || !tb.size) return false;
   let shared = 0; for (const w of ta) if (tb.has(w)) shared++;
   return shared / Math.min(ta.size, tb.size) >= 0.5;
+}
+
+/**
+ * A loop whose name spans several of the product's paths ("follow a goal
+ * path (Ship/Systemize/Fund)") is the merge the read is told not to make.
+ * Split it here, one loop per path named, so it can't reach the tree merged
+ * whatever the model did.
+ */
+export function splitMergedPaths<T extends { title: string; steps: string }>(found: T[]): T[] {
+  const out: T[] = [];
+  for (const f of found) {
+    const hay = `${f.title} ${f.steps}`.toLowerCase();
+    const hits = PROJECT_GOALS.filter((g) => {
+      const words = g.label.toLowerCase().split(" ");
+      return hay.includes(g.label.toLowerCase()) || hay.includes(words[0]) || (g.id === "raise_funding" && /\bfund/.test(hay));
+    });
+    if (hits.length >= 2 && /\b(path|paths|goal|goals|journey)\b/.test(hay)) {
+      for (const g of hits) out.push({ ...f, title: g.label, steps: f.steps ? `${f.steps} (on the ${g.label} path)` : "" });
+    } else out.push(f);
+  }
+  return out;
 }

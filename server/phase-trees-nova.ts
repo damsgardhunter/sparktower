@@ -70,7 +70,7 @@ If THE BUILDER'S OWN DOCS appear in the state, they are the primary source for l
 If THE BUILDER'S STANDING NOTES appear, obey them over everything else: if they say something is being removed or is not a loop, it is not a loop.
 ${opts.rejectedLoops?.length ? `The builder has REMOVED these as not loops — never propose them again, under any name, and do not fold them into another loop: ${opts.rejectedLoops.join("; ")}.` : ""}
 Work it out in two passes before answering. First, list the kinds of user the product has (e.g. builder, backer, reviewer, visitor). Second, for each kind, ask what they come back to do repeatedly — that is their loop; a kind of user with nothing to come back for has no loop. Then check every candidate against the test above and drop the ones that fail.
-Name each loop by what the user is doing (build, explore, back, sell), one line of steps, one user per loop. Keep loops SEPARATE: never fold two cycles for different users or motivations into one entry. Most products have two to four; report fewer rather than pad. State on the evidence — "built" (the cycle works end to end), "partly", or "planned". ${opts.knownLoops?.length ? `Loops ALREADY RECORDED — do not list these again, under any name, and do not fold them into new ones; only return loops that are missing from this list: ${opts.knownLoops.join("; ")}.` : ""}` : ""}
+Name each loop in 2–5 words by what the user is doing ("Ship an MVP", "Explore builders", "Back a project") — the steps go in "steps", never in the title. One user per loop. Keep loops SEPARATE: never fold two cycles for different users or motivations into one entry. Most products have two to four; report fewer rather than pad. State on the evidence — "built" (the cycle works end to end), "partly", or "planned". ${opts.knownLoops?.length ? `Loops ALREADY RECORDED — do not list these again, under any name, and do not fold them into new ones; only return loops that are missing from this list: ${opts.knownLoops.join("; ")}.` : ""}` : ""}
 Respond ONLY with JSON: {"done":[{"id":"<milestone id>","evidence":"<one line>","answer":"<the content, or empty>"}]${opts.findLoops ? `,"loops":[{"title":"","steps":"","state":"built|partly|planned","evidence":"one line"}]` : ""},"read":"<two sentences: where this project actually is and what the next real step is>"}` },
       { role: "user", content: `PATH MILESTONES\n${backbone.map((m) => `${m.id} — ${m.title}: ${m.description}`).join("\n")}\n\nPROJECT STATE\n${state.slice(0, 24000)}` },
     ],
@@ -112,7 +112,7 @@ Write it as they would: concrete, in their product's own terms, 3–5 numbered l
 export async function produceWork(
   ent: UserEntitlements, kind: WorkKind,
   task: { title: string; description: string; tier: string },
-  context: { goal: string; subcategory: string; state: string; artifacts: Artifact[] },
+  context: { goal: string; subcategory: string; state: string; artifacts: Artifact[]; loops?: { title: string; description: string; status: string }[]; rejectedLoops?: string[] },
 ): Promise<WorkPayload> {
   const shape = kind === "options"
     ? `{"kind":"options","intro":"one sentence on how these differ","options":[{"title":"","body":"the full text they would keep — complete, not a summary","why":"one line"}]}
@@ -128,6 +128,9 @@ Write real, complete code for their stack — not pseudocode, not placeholders, 
       { role: "system", content: `You are Nova, doing a milestone on a builder's path — not describing it, doing it. ${coachingDirectiveFor(ent)}
 Path: ${context.goal} · type: ${context.subcategory}. Verification: ${task.tier}.
 Use the ANSWERS SO FAR as ground truth; they were chosen by the builder. Use the PROJECT STATE for stack, names and what already exists — do not rebuild what exists.
+If THE BUILDER'S STANDING NOTES appear in the state, obey them over everything else in it, including the brief, the board and the audit.
+${context.loops?.length ? `THE PRODUCT'S LOOPS, as recorded on the path (these ARE the loops — never invent a different "core loop", never reframe the product around anything else):\n${context.loops.map((l) => `- ${l.title}${l.description ? `: ${l.description}` : ""} [${l.status === "done" ? "written" : "not written yet"}]`).join("\n")}` : ""}
+${context.rejectedLoops?.length ? `NOT loops, by the builder's decision — never build an option, a step or a plan around these: ${context.rejectedLoops.join("; ")}.` : ""}
 Respond ONLY with valid JSON of exactly this shape (no markdown fences):
 ${shape}` },
       { role: "user", content: `MILESTONE: ${task.title}\n${task.description}\n\nANSWERS SO FAR\n${context.artifacts.length ? context.artifacts.map((a) => `[${a.label}] ${a.text}`).join("\n") : "(none yet)"}\n\nPROJECT STATE\n${context.state.slice(0, 20000)}` },
