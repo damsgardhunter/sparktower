@@ -8,6 +8,7 @@ import { CREDIT_COSTS } from "@shared/plans";
 import type { CofounderSprint } from "@shared/schema";
 import OpenAI from "openai";
 import { parseModelJson } from "./ai-json";
+import { rateLimit } from "./moderation";
 
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
@@ -327,7 +328,7 @@ export function registerSprintRoutes(app: Express) {
   });
 
   /** Locks a chosen idea onto a matched sprint during setup. */
-  app.post("/api/sprints/:id/choose-idea", isAuthenticated, async (req: any, res) => {
+  app.post("/api/sprints/:id/choose-idea", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       const sprint = await storage.getSprint(req.params.id);
       if (!sprint) return res.status(404).json({ message: "Sprint not found" });
@@ -680,7 +681,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     }
   });
 
-  app.post("/api/sprints/:id/responses", isAuthenticated, async (req: any, res) => {
+  app.post("/api/sprints/:id/responses", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       const sprint = await storage.getSprint(req.params.id);
       if (!sprint) return res.status(404).json({ message: "Sprint not found" });
@@ -718,7 +719,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     }
   });
 
-  app.post("/api/sprints/:id/deliverables", isAuthenticated, async (req: any, res) => {
+  app.post("/api/sprints/:id/deliverables", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       const sprint = await storage.getSprint(req.params.id);
       if (!sprint) return res.status(404).json({ message: "Sprint not found" });
@@ -749,7 +750,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     }
   });
 
-  app.post("/api/sprints/:id/messages", isAuthenticated, async (req: any, res) => {
+  app.post("/api/sprints/:id/messages", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       const sprint = await storage.getSprint(req.params.id);
       if (!sprint) return res.status(404).json({ message: "Sprint not found" });
@@ -793,7 +794,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     }
   });
 
-  app.post("/api/sprints/:id/tasks", isAuthenticated, async (req: any, res) => {
+  app.post("/api/sprints/:id/tasks", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       const sprint = await storage.getSprint(req.params.id);
       if (!sprint) return res.status(404).json({ message: "Sprint not found" });
@@ -821,7 +822,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     }
   });
 
-  app.post("/api/sprints/:id/decisions", isAuthenticated, async (req: any, res) => {
+  app.post("/api/sprints/:id/decisions", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       const sprint = await storage.getSprint(req.params.id);
       if (!sprint) return res.status(404).json({ message: "Sprint not found" });
@@ -839,7 +840,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     }
   });
 
-  app.post("/api/sprints/:id/ratings", isAuthenticated, async (req: any, res) => {
+  app.post("/api/sprints/:id/ratings", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       const sprint = await storage.getSprint(req.params.id);
       if (!sprint) return res.status(404).json({ message: "Sprint not found" });
@@ -859,7 +860,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     }
   });
 
-  app.post("/api/sprints/:id/update-alignment", isAuthenticated, async (req: any, res) => {
+  app.post("/api/sprints/:id/update-alignment", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       const sprint = await storage.getSprint(req.params.id);
       if (!sprint) return res.status(404).json({ message: "Sprint not found" });
@@ -1172,7 +1173,7 @@ ${metrics.map(m => {
     }
   });
 
-  app.post("/api/sprints/:id/propose-name", isAuthenticated, async (req: any, res) => {
+  app.post("/api/sprints/:id/propose-name", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       const sprint = await storage.getSprint(req.params.id);
       if (!sprint) return res.status(404).json({ message: "Sprint not found" });

@@ -83,6 +83,11 @@ export function detectSurfacePrefixes(files: RepoFile[]): { prefix: string; surf
     for (const m of f.content.matchAll(/id:\s*[`'"]([\w-]+)[`'"][\s\S]{0,400}?prefixes:\s*\[([^\]]*)\]/g)) {
       for (const p of m[2].matchAll(/[`'"]([^`'"]+)[`'"]/g)) out.push({ prefix: p[1], surface: m[1] });
     }
+    // The shared map: `SURFACE_API_PREFIXES = { id: ["/api/x", ...], ... }`.
+    const map = f.content.match(/SURFACE_API_PREFIXES[^=]*=\s*\{([\s\S]*?)\n\};/);
+    if (map) for (const line of map[1].matchAll(/^\s*(\w+):\s*\[([^\]]*)\]/gm)) {
+      for (const p of line[2].matchAll(/[`'"]([^`'"]+)[`'"]/g)) out.push({ prefix: p[1], surface: line[1] });
+    }
   }
   const seen = new Set<string>();
   return out.filter((x) => { const k = `${x.prefix}|${x.surface}`; if (seen.has(k)) return false; seen.add(k); return true; });
@@ -110,7 +115,12 @@ export function buildRouteCoverage(files: RepoFile[]): RouteCoverage {
       // The registration's text runs to the next registration in the file:
       // the middleware list, then the handler body.
       const start = m.index! + m[0].length;
-      const end = i + 1 < matches.length ? matches[i + 1].index! : Math.min(src.length, start + 12000);
+      // The registration ends at its own closing line (a route inside a
+      // register function closes at two-space indent); helpers that sit
+      // between two routes must not be attributed to the first.
+      const closing = src.indexOf("\n  });", start);
+      const nextReg = i + 1 < matches.length ? matches[i + 1].index! : src.length;
+      const end = Math.min(closing > 0 ? closing + 6 : nextReg, nextReg, start + 12000);
       const chunk = src.slice(start, end);
       // Middleware list: everything before the handler's parameter list.
       const handlerAt = chunk.search(/(async\s*)?\(\s*(req|_req|request)\b/);

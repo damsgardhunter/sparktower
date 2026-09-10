@@ -38,6 +38,8 @@ export interface SurfaceDef {
 export const SURFACES: SurfaceDef[] = [
   // --- Core: the company-building toolkit -------------------------------
   { id: "projects",   label: "Projects & brief",     cls: "core", defaultEnabled: true, note: "The object everything else hangs off." },
+  { id: "signup",     label: "New accounts",         cls: "core", defaultEnabled: true, note: "Registration, web and mobile. Off closes the door to new people without touching anyone signed in." },
+  { id: "uploads",    label: "Uploads",              cls: "core", defaultEnabled: true, note: "Every file upload. The first thing to turn off under a storage or abuse incident." },
   { id: "tasks",      label: "Tasks & kanban",       cls: "core", defaultEnabled: true, note: "Most-used surface in the product." },
   { id: "milestones", label: "Milestones",           cls: "core", defaultEnabled: true, note: "In use." },
   { id: "roadmap",    label: "Roadmap",              cls: "core", defaultEnabled: true, note: "In use." },
@@ -107,6 +109,39 @@ export const SURFACE_ROUTES: Record<string, string[]> = {
   discover: ["/discover"],
   checkIns: ["/c/", "/feedback"],
   backing: ["/admin/backing"],
+};
+
+/**
+ * API prefixes each surface owns. Mounted as one guard per prefix on the
+ * server, so a surface that is off answers 404 for everything under it —
+ * sub-routes that don't exist yet included. This is the map the kill
+ * switches enforce; the client routes above are cosmetics on top of it.
+ * Express prefix matching is by path segment: "/api/projects/:id/nova"
+ * covers "/api/projects/x/nova/apply" and not "/api/projects/x/nova-notes".
+ */
+export const SURFACE_API_PREFIXES: Record<string, string[]> = {
+  signup: ["/api/auth/register", "/api/auth/mobile/register", "/api/auth/mobile/google"],
+  uploads: ["/api/uploads", "/api/objects/upload", "/internal-local-upload"],
+  nova: ["/api/chat", "/api/projects/:id/nova", "/api/projects/:id/nova-guide", "/api/projects/:id/tasks/nova-assist", "/api/projects/:id/path/work", "/api/projects/:id/path/expand", "/api/projects/:id/path/inject", "/api/projects/:id/path/adopt", "/api/projects/:id/next-actions", "/api/projects/:id/health-check"],
+  roadmap: ["/api/projects/:id/roadmap"],
+  codeAudit: ["/api/projects/:id/code-audit", "/api/code-audits"],
+  documents: ["/api/projects/:id/documents", "/api/documents"],
+  personas: ["/api/projects/:id/personas", "/api/projects/:id/interviews", "/api/projects/:id/experiments"],
+  investor: ["/api/investor", "/api/mock-interviews", "/api/projects/:id/investor", "/api/projects/:id/pitch"],
+  launch: ["/api/projects/:id/waitlist", "/api/projects/:id/landing", "/api/projects/:id/legal", "/api/projects/:id/deploy-checklist", "/api/projects/:id/launch", "/api/projects/:id/pricing"],
+  storyboards: ["/api/storyboards", "/api/projects/:id/storyboards", "/api/generate-image"],
+  backing: ["/api/projects/:id/backing", "/api/backing-tiers", "/api/admin/backing", "/api/backer-badges", "/api/me/badges"],
+  checkIns: ["/api/check-ins", "/api/loop-events", "/api/projects/:id/check-ins"],
+  discover: ["/api/discover"],
+  feed: ["/api/feed", "/api/projects/:id/comments", "/api/project-comments"],
+  matches: ["/api/matches"],
+  sprints: ["/api/sprints", "/api/sprint"],
+  connections: ["/api/connections"],
+  messages: ["/api/messages", "/api/conversations"],
+  leaderboard: ["/api/leaderboard"],
+  contests: ["/api/contests"],
+  liveChat: ["/api/projects/:id/live-chat"],
+  games: ["/api/games"],
 };
 
 /** True when a path belongs to a surface that's currently off. */

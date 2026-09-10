@@ -47,6 +47,7 @@ import {
   coachingDirectiveFor,
 } from "./entitlements";
 import { isValidSubcategory, PROJECT_GOALS } from "@shared/goals";
+import { SURFACE_API_PREFIXES } from "@shared/surfaces";
 import { recordActivity } from "./analytics";
 import { seal } from "./secret-box";
 import { safeDbUrl, refreshDataShape, getDataShape } from "./data-shape";
@@ -292,6 +293,16 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  /*
+   * Kill switches first, before any route exists. Express serves in
+   * registration order, so a guard mounted after the auth or upload routes
+   * never ran for them — a switch that only covered what happened to be
+   * registered later.
+   */
+  for (const [id, prefixes] of Object.entries(SURFACE_API_PREFIXES)) {
+    for (const prefix of prefixes) app.use(prefix, requireSurface(id));
+  }
+
   await setupAuth(app);
   // Bearer auth must run before every guarded route so a mobile caller's token
   // populates req.user. It sits above registerAuthRoutes too — otherwise
@@ -343,21 +354,6 @@ export async function registerRoutes(
    * don't exist yet. This is the point at which a surface is genuinely off —
    * the nav filtering on the client is only cosmetics on top of it.
    */
-  for (const [prefix, id] of [
-    ["/api/games", "games"],
-    ["/api/contests", "contests"],
-    ["/api/sprints", "sprints"],
-    ["/api/sprint", "sprints"],
-    ["/api/matches", "matches"],
-    ["/api/connections", "connections"],
-    ["/api/messages", "messages"],
-    ["/api/leaderboard", "leaderboard"],
-    ["/api/feed", "feed"],
-    ["/api/check-ins", "checkIns"],
-    ["/api/loop-events", "checkIns"],
-  ] as const) {
-    app.use(prefix, requireSurface(id));
-  }
 
   registerSurfaceRoutes(app);
   registerModerationRoutes(app);
@@ -464,11 +460,8 @@ export async function registerRoutes(
   app.post("/api/chat", isAuthenticated, async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
-      const hasCredits = await storage.checkCredits(userId, 1);
-      if (!hasCredits) {
-        const sub = await storage.getUserSubscription(userId);
-        return res.status(403).json({ message: "Insufficient credits", creditsRemaining: sub.creditsRemaining, tier: sub.tier });
-      }
+      // Through the one chokepoint, so the AI burst limit covers this too.
+      if (!(await requireCredits(res, userId, 1, "Nova chat"))) return;
 
       const { message, history = [] } = req.body;
       if (!message) return res.status(400).json({ message: "Message is required" });
@@ -1272,7 +1265,7 @@ If the ask has nothing to do with planning tasks, say so in "summary", return an
    * Applies a plan the builder reviewed. No second AI call, so no second
    * charge — the operations were already paid for when the plan was made.
    */
-  app.post("/api/projects/:id/tasks/nova-assist/apply", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/tasks/nova-assist/apply", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       const projectId = req.params.id;
@@ -2467,7 +2460,7 @@ RULES:
     } catch (error) { res.status(500).json({ message: "Failed to get chat messages" }); }
   });
 
-  app.post("/api/projects/:id/live-chat", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/live-chat", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
@@ -2492,7 +2485,7 @@ RULES:
       res.json(await storage.getWaitlistEntries(req.params.id));
     } catch (e) { res.status(500).json({ message: "Failed to get waitlist" }); }
   });
-  app.post("/api/projects/:id/waitlist", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/waitlist", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       const data = insertWaitlistEntrySchema.parse({ ...req.body, projectId: req.params.id });
@@ -2514,7 +2507,7 @@ RULES:
       res.json(await storage.getProjectInterviews(req.params.id));
     } catch (e) { res.status(500).json({ message: "Failed to get interviews" }); }
   });
-  app.post("/api/projects/:id/interviews", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/interviews", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       const data = insertInterviewSchema.parse({ ...req.body, projectId: req.params.id, userId: (req.user as any).id });
@@ -2810,7 +2803,7 @@ RULES:
   });
 
   /** A step added by hand to a fan-out milestone (optionally under one loop). */
-  app.post("/api/projects/:id/path/steps", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/path/steps", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       const title = String(req.body?.title ?? "").trim();
@@ -2826,7 +2819,7 @@ RULES:
   });
 
   /** Another loop under the core loop (or any fan-out source). */
-  app.post("/api/projects/:id/path/loops", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/path/loops", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       const loop = await createLoop(req.params.id, String(req.body?.backboneId ?? "SHIP.M1.2"), { title: req.body?.title, description: req.body?.description });
@@ -4643,7 +4636,7 @@ Additionally include:
    * check, so Nova either drops the point or engages with the objection
    * instead of repeating itself.
    */
-  app.post("/api/projects/:id/health-findings/feedback", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/health-findings/feedback", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       const projectId = req.params.id;

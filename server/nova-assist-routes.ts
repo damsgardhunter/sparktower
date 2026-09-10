@@ -24,6 +24,7 @@ import {
 } from "./project-operations";
 import { NOVA_SURFACES, type NovaSurfaceId } from "@shared/nova-surfaces";
 import { parseModelJson } from "./ai-json";
+import { rateLimit } from "./moderation";
 
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
@@ -200,7 +201,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   /**
    * Applies a reviewed suggestion. No AI call, so no second charge.
    */
-  app.post("/api/projects/:id/nova/apply", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/nova/apply", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       const projectId = req.params.id;

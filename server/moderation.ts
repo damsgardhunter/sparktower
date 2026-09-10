@@ -48,7 +48,7 @@ interface CountSource {
  * un-reacting deletes the row; a presign writes nothing; an AI call writes to
  * a dozen places.
  */
-const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai", "login", "write", "track"]);
+const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai", "login", "write", "track", "post"]);
 
 const hitSource = (action: RateLimitAction): CountSource => ({
   table: rateLimitHits, author: rateLimitHits.userId, created: rateLimitHits.createdAt,
@@ -109,6 +109,7 @@ const COUNTED: Record<RateLimitAction, CountSource[]> = {
   login:  [hitSource("login")],
   write:  [hitSource("write")],
   track:  [hitSource("track")],
+  post:   [hitSource("post")],
 };
 
 /** The caller's address as a limiter key, for requests with no user. First hop of X-Forwarded-For, as the auth routes already do. */

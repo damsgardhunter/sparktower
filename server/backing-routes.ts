@@ -293,7 +293,7 @@ export function registerBackingRoutes(app: Express) {
   });
 
   /** Seeds the five-rung ladder. Refuses rather than duplicating existing work. */
-  app.post("/api/projects/:id/backing/tiers/apply-template", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/backing/tiers/apply-template", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       const projectId = req.params.id;
       if (!(await isOwner(req.user.id, projectId))) {
@@ -323,7 +323,7 @@ export function registerBackingRoutes(app: Express) {
     }
   });
 
-  app.post("/api/projects/:id/backing/tiers", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/backing/tiers", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       const projectId = req.params.id;
       if (!(await isOwner(req.user.id, projectId))) {
@@ -417,7 +417,7 @@ export function registerBackingRoutes(app: Express) {
   });
 
   /** Puts the project in the reviewer's queue. Payouts wait on this. */
-  app.post("/api/projects/:id/backing/submit-review", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/backing/submit-review", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       const projectId = req.params.id;
       if (!(await isOwner(req.user.id, projectId))) {
@@ -453,7 +453,7 @@ export function registerBackingRoutes(app: Express) {
    * quietly diverge from what actually gets handed out. Cached on the campaign
    * because each call costs a model request and this screen gets reopened.
    */
-  app.post("/api/projects/:id/backing/badge-preview", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/backing/badge-preview", isAuthenticated, rateLimit("ai"), async (req: any, res) => {
     try {
       const projectId = req.params.id;
       if (!(await isOwner(req.user.id, projectId))) {
@@ -673,7 +673,7 @@ export function registerBackingRoutes(app: Express) {
    * the webhook, not here — a session that is created and abandoned must not
    * leave a pledge on the backer wall.
    */
-  app.post("/api/projects/:id/backing/checkout", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/backing/checkout", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       const projectId = req.params.id;
       const backerId = req.user.id;
@@ -1158,7 +1158,7 @@ export function registerBackingRoutes(app: Express) {
   });
 
   /** Replaces the pinned set, in order. */
-  app.put("/api/me/badges/showcase", isAuthenticated, async (req: any, res) => {
+  app.put("/api/me/badges/showcase", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       const ids = Array.isArray(req.body.badgeIds)
         ? req.body.badgeIds.map(String).slice(0, MAX_SHOWCASE_BADGES)

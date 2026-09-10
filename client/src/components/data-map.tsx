@@ -51,7 +51,13 @@ export function DataMap({ shape }: { shape: DataShape }) {
   const current = trail[trail.length - 1] ?? null;
   const table = current ? byName.get(current) : null;
   const related = useMemo(() => (current ? relatedTables(shape, current) : []), [shape, current]);
-  const go = (name: string) => setTrail((t) => [...t, name]);
+  // Stepping into a table already on the trail goes back to it instead of
+  // stacking it again: users › projects › users › … was a trail nobody
+  // could read, and it lost where the reader actually was.
+  const go = (name: string) => setTrail((t) => {
+    const at = t.indexOf(name);
+    return at >= 0 ? t.slice(0, at + 1) : [...t, name];
+  });
   const back = () => setTrail((t) => t.slice(0, -1));
 
   if (shape.error) return <p className="text-sm text-muted-foreground" data-testid="data-map-error">The data read failed: {shape.error}</p>;
@@ -109,7 +115,9 @@ export function DataMap({ shape }: { shape: DataShape }) {
         {trail.map((t, i) => (
           <span key={i} className="flex items-center gap-2">
             <ChevronRight className="h-3 w-3 text-muted-foreground" />
-            {i === trail.length - 1 ? <span className="font-medium">{t}</span> : <button className="text-muted-foreground hover:text-foreground" onClick={() => setTrail(trail.slice(0, i + 1))}>{t}</button>}
+            {i === trail.length - 1
+              ? <span className="font-semibold rounded-md bg-primary/10 text-primary px-2 py-0.5" data-testid="trail-current">{t}</span>
+              : <button className="text-muted-foreground hover:text-foreground underline-offset-2 hover:underline" onClick={() => setTrail(trail.slice(0, i + 1))}>{t}</button>}
           </span>
         ))}
       </div>
@@ -127,7 +135,7 @@ export function DataMap({ shape }: { shape: DataShape }) {
                 <RelationGlyph direction={r.direction} />
                 <button onClick={() => go(r.name)} className={`flex-1 min-w-0 rounded-lg border p-3 text-left hover:border-primary/60 ${t.rows === 0 ? "border-dashed border-border" : "border-border bg-background"}`}>
                   <div className="flex items-baseline justify-between gap-2">
-                    <p className="font-semibold text-base truncate">{t.name}</p>
+                    <p className="font-semibold text-base truncate">{t.name}{trail.includes(r.name) && <span className="ml-2 text-[10px] font-normal uppercase tracking-wide text-muted-foreground">on your trail · back</span>}</p>
                     <p className="text-sm text-muted-foreground shrink-0">{t.rows.toLocaleString()}{t.exact ? "" : "~"} rows</p>
                   </div>
                   <p className="text-sm text-muted-foreground">

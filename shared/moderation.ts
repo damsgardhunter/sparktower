@@ -78,6 +78,15 @@ export const RATE_LIMITS = {
     max: 240, windowMinutes: 10,
     message: "That's a lot of changes at once. Give it a few minutes.",
   },
+  /**
+   * Content writes that have no table of their own to count — sprint
+   * messages, live chat, waitlist entries, interview notes, feedback on
+   * findings. Tighter than the write floor, looser than a public post.
+   */
+  post: {
+    max: 60, windowMinutes: 10,
+    message: "That's a lot of posting at once. Give it a few minutes.",
+  },
   /** Analytics beacons from the browser: per address, since they're unauthenticated. */
   track: {
     max: 600, windowMinutes: 10,
