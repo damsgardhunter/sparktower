@@ -77,7 +77,8 @@ const INTENT_TERMS = /\b(loop|loops|user journey|journey|wedge|flywheel|retentio
  */
 export function collectProductDocs(files: RepoFile[], max = 8, perDoc = 2400): ProductDoc[] {
   const docs = files.filter((f) => f.content && /\.(md|mdx)$/i.test(f.path)
-    && !/(^|\/)(node_modules|vendor|dist|build|\.git)\//.test(f.path)
+    && !/(^|\/)(node_modules|vendor|dist|build|coverage|test-results|\.git|\.cache|\.bun|\.npm|\.yarn|\.pnpm|\.local|\.claude|\.replit|\.github)\//.test(f.path)
+    && !/\/cache\//i.test(f.path)
     && !/(^|\/)(CHANGELOG|LICENSE|CODE_OF_CONDUCT|CONTRIBUTING|SECURITY|PULL_REQUEST_TEMPLATE)/i.test(f.path));
   const ranked = docs.map((f) => {
     const content = f.content!;

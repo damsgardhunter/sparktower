@@ -143,7 +143,7 @@ export function renderAudit(audit: any): string {
       : null,
     "Where the audit and the board disagree, the audit is the evidence. Say so, and offer to correct the board.",
       ...((audit.signals as any)?.productDocs?.length
-      ? [`THE BUILDER'S OWN DOCS (from the repo, ${(audit.signals as any).productDocs.length} files about loops, journeys or the plan)\n${(audit.signals as any).productDocs.slice(0, 6).map((d: any) => `### ${d.path}\n${String(d.excerpt).slice(0, 1800)}`).join("\n\n")}`]
+      ? [`THE BUILDER'S OWN DOCS (from the repo, ${(audit.signals as any).productDocs.length} files about loops, journeys or the plan)\n${(audit.signals as any).productDocs.slice(0, 6).map((d: any, i: number) => `### ${d.path}\n${String(d.excerpt).slice(0, i === 0 ? 4000 : 1500)}`).join("\n\n")}`]
       : []),
 ].filter(Boolean).join("\n");
 }

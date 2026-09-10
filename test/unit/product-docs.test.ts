@@ -16,6 +16,8 @@ describe("collectProductDocs", () => {
       file("docs/product/loops.md", "# Loops we are going for\n\n## Build loop\n\nBuilder posts weekly → gets feedback → returns.\n\n## Explore loop\n\nVisitor reads the feed → follows a project → comes back for updates.\n\n## Fund loop\n\nBacker backs a project → gets updates → backs again."),
       file("CHANGELOG.md", "## 1.0\n- loop fixed\n- loop fixed again\n- loop loop loop"),
       file("node_modules/x/README.md", "loop loop loop loop loop"),
+      file(".cache/.bun/install/cache/glob/README.md", "loop loop loop loop loop loop"),
+      file(".local/skills/foo/SKILL.md", "loop loop loop loop loop loop loop"),
       file("docs/setup.md", "# Setup\n\nRun the migrations."),
     ]);
     expect(docs.map((d) => d.path)).toEqual(["docs/product/loops.md", "README.md"]);
@@ -32,5 +34,16 @@ describe("collectProductDocs", () => {
     const docs = collectProductDocs(many, 3, 500);
     expect(docs).toHaveLength(3);
     for (const d of docs) expect(d.excerpt.length).toBeLessThanOrEqual(520);
+  });
+});
+
+describe("loopsAlike", () => {
+  it("catches a removed loop coming back under a new name", async () => {
+    const { loopsAlike } = await import("@shared/phase-trees");
+    const norm = (x: string) => x.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+    expect(loopsAlike(norm("Build: post a weekly check-in and get feedback"), norm("Build: ship weekly check-ins on a project"))).toBe(true);
+    expect(loopsAlike(norm("Explore: fast feedback (needs-feedback queue)"), norm("Fast feedback queue"))).toBe(true);
+    expect(loopsAlike(norm("Build: post a weekly check-in and get feedback"), norm("Raise funding"))).toBe(false);
+    expect(loopsAlike(norm("Explore"), norm("Explore: discover builders and follow up"))).toBe(true);
   });
 });

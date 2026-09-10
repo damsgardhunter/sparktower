@@ -139,6 +139,12 @@ export const projects = pgTable("projects", {
    * never something drifted into.
    */
   activeBranch: text("active_branch"),
+  /**
+   * Loops the builder removed, by name. A removed loop is a standing
+   * instruction: Nova never proposes it again, however loudly the code or
+   * the brief still talk about it.
+   */
+  rejectedLoops: text("rejected_loops").array().default([]).notNull(),
   status: text("status", { enum: ["planning", "active", "completed"] }).default("planning").notNull(),
   teamSize: integer("team_size"),
   estimatedWeeks: integer("estimated_weeks"),

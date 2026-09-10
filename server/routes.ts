@@ -2608,7 +2608,7 @@ RULES:
         const state = await buildOperableProjectState(projectId, { includeIds: false, includeAudit: true });
         const ship = project.goal === "ship_mvp";
         const known = ship ? (await storage.getProjectKanbanTasks(projectId)).filter((t) => t.tags?.includes("kind:loop") && t.tags?.includes("parent:SHIP.M1.2")).map((t) => t.title) : [];
-        const result = await readExistingProgress(ent, backbone, state, { findLoops: ship, knownLoops: known });
+        const result = await readExistingProgress(ent, backbone, state, { findLoops: ship, knownLoops: known, rejectedLoops: project.rejectedLoops ?? [] });
         recognised = result.done; read = result.read;
         if (ship && result.loops.length) {
           const r = await reconcileLoops(projectId, result.loops);

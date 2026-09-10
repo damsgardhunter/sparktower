@@ -16,7 +16,7 @@ import { db } from "./db";
 import { storage } from "./storage";
 import { projects, projectKanbanTasks, projectCheckIns, projectRoadmaps, pathPace, pathPaceEvents, pathWork } from "@shared/schema";
 import {
-  resolveTree, treeFor, mainLineMilestones, computePace, admitInjections, NEXT_PATHS,
+  resolveTree, treeFor, mainLineMilestones, computePace, admitInjections, NEXT_PATHS, loopsAlike,
   type ResolvedMilestone, type Artifact, type InjectionProposal, type PaceState, type WorkPayload, type Actor,
 } from "@shared/phase-trees";
 import { PROJECT_GOALS } from "@shared/goals";
@@ -262,6 +262,7 @@ export async function createLoop(projectId: string, sourceBackboneId: string, lo
   if (!source) throw Object.assign(new Error("That milestone isn't on this project's path."), { code: "not_on_path", status: 400 });
   const title = String(loop.title ?? "").trim();
   if (!title) throw Object.assign(new Error("Give the loop a name."), { code: "invalid_input", field: "title", status: 400 });
+  await db.update(projects).set({ rejectedLoops: sql`array_remove(${projects.rejectedLoops}, ${title})` }).where(eq(projects.id, projectId));
   const siblings = tasks.filter((t) => parentOf(t.tags) === sourceBackboneId && isLoop(t.tags));
   if (siblings.length >= 6) throw Object.assign(new Error("Six loops is already a lot for one month. Finish some first."), { code: "loop_cap", status: 409 });
   return storage.createKanbanTask({
@@ -283,9 +284,16 @@ export async function reconcileLoops(projectId: string, found: { title: string; 
   if (!source) return { created: [], updated: [] };
   const norm = (x: string) => x.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
   const existing = tasks.filter((t) => parentOf(t.tags) === sourceBackboneId && isLoop(t.tags));
+  const [proj] = await db.select({ rejected: projects.rejectedLoops }).from(projects).where(eq(projects.id, projectId));
+  const rejected = (proj?.rejected ?? []).map(norm);
+  // A removed loop stays removed under a new name: "post a weekly check-in and
+  // get feedback" and "ship weekly check-ins on a project" share most of their
+  // words, and that is the test — not the exact title.
+  const isRejected = (title: string) => rejected.some((r) => r && loopsAlike(r, norm(title)));
   const created: string[] = [];
   const updated: string[] = [];
   for (const f of found) {
+    if (isRejected(f.title)) continue;
     const match = existing.find((e) => norm(e.title) === norm(f.title) || norm(e.title).includes(norm(f.title)) || norm(f.title).includes(norm(e.title)));
     if (match) {
       if (!match.description?.trim() && f.steps) { await storage.updateKanbanTask(match.id, { description: f.steps } as any); updated.push(match.id); }
@@ -317,6 +325,8 @@ export async function deleteLoop(projectId: string, loopTaskId: string) {
     else { await storage.deleteKanbanTask(s.id); removed++; }
   }
   await storage.deleteKanbanTask(loop.id);
+  // Removing a loop is the builder saying "not this one" — remembered, so the next read doesn't propose it again.
+  await db.update(projects).set({ rejectedLoops: sql`array_append(array_remove(${projects.rejectedLoops}, ${loop.title}), ${loop.title})` }).where(eq(projects.id, projectId));
   await refreshPace(projectId);
   return { removedSteps: removed, keptSteps: kept };
 }

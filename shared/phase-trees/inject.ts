@@ -66,3 +66,19 @@ export const NEXT_PATHS: Record<ProjectGoal, { goal: ProjectGoal; why: string }[
     { goal: "systemize_business", why: "Capital raised against a plan now needs operations that hold up without you." },
   ],
 };
+
+const LOOP_STOPWORDS = new Set(["the", "a", "an", "and", "or", "of", "to", "on", "in", "for", "with", "by", "at", "it", "its", "get", "then", "from", "into", "loop", "loops"]);
+const loopTokens = (s: string) => new Set(s.split(" ").map((w) => w.replace(/s$/, "")).filter((w) => w.length >= 3 && !LOOP_STOPWORDS.has(w)));
+/**
+ * True when two normalised loop names share at least half of the shorter
+ * one's meaningful words. A removed loop stays removed under a new name:
+ * "post a weekly check-in and get feedback" and "ship weekly check-ins on a
+ * project" are the same loop, and that is the test — not the exact title.
+ */
+export function loopsAlike(a: string, b: string): boolean {
+  if (a === b || a.includes(b) || b.includes(a)) return true;
+  const ta = loopTokens(a), tb = loopTokens(b);
+  if (!ta.size || !tb.size) return false;
+  let shared = 0; for (const w of ta) if (tb.has(w)) shared++;
+  return shared / Math.min(ta.size, tb.size) >= 0.5;
+}

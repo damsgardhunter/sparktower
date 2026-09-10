@@ -615,5 +615,16 @@ describe("a wrong loop can be removed", () => {
     expect(tree.unassigned.map((u: any) => u.title)).toEqual(["Open"]);
     expect((await agent.delete(`/api/projects/${id}/path/loops/${feed.taskId}`)).status).toBe(404);
     expect((await agent.get(`/api/projects/${id}/path`)).body.plan.loops).toBe(1);
+
+    // Removed means removed: the next read can't bring it back, even renamed — until the builder adds it by hand.
+    const { reconcileLoops: again } = await import("../../server/phase-trees");
+    const back = await again(id, [
+      { title: "Explore the feed and follow builders", steps: "open → follow", state: "built", evidence: "" },
+      { title: "Back a project", steps: "browse → back → get updates", state: "planned", evidence: "" },
+    ]);
+    expect(back.created).toHaveLength(1);
+    expect((await agent.get(`/api/projects/${id}/path`)).body.loopTree.loops.map((l: any) => l.title)).toEqual(["Weekly check-in", "Back a project"]);
+    await agent.post(`/api/projects/${id}/path/loops`).send({ backboneId: "SHIP.M1.2", title: "Explore the feed" }).expect(200);
+    expect((await agent.get(`/api/projects/${id}`)).body.rejectedLoops).toEqual([]);
   });
 });
