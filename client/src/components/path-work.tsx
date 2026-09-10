@@ -62,6 +62,9 @@ export function WorkView({ projectId, taskId, actor, work, done, compact }: {
 
   return (
     <div className="space-y-2" data-testid="nova-work">
+      {(p.kind === "options" || p.kind === "build") && p.existing && (
+        <p className="text-xs rounded-md bg-muted/50 px-2 py-1.5" data-testid="work-existing"><span className="font-medium">Already in place:</span> {p.existing}</p>
+      )}
       {p.kind === "options" && (
         <div className="space-y-2">
           <p className="text-sm text-muted-foreground">{p.intro}</p>

@@ -115,10 +115,10 @@ export async function produceWork(
   context: { goal: string; subcategory: string; state: string; artifacts: Artifact[]; loops?: { title: string; description: string; status: string }[]; rejectedLoops?: string[] },
 ): Promise<WorkPayload> {
   const shape = kind === "options"
-    ? `{"kind":"options","intro":"one sentence on how these differ","options":[{"title":"","body":"the full text they would keep — complete, not a summary","why":"one line"}]}
+    ? `{"kind":"options","existing":"one line: what the CAPABILITY INVENTORY and the code already have for this milestone, with files — or 'nothing yet'","intro":"one sentence on how these differ","options":[{"title":"","body":"the full text they would keep — complete, not a summary","why":"one line"}]}
 Give exactly three options with genuinely different emphases, never three rewordings. Each body must be usable as-is.`
     : kind === "build"
-    ? `{"kind":"build","summary":"2–3 sentences: what this builds and where it goes","files":[{"path":"relative/path","language":"ts","content":"complete file contents","purpose":"one line"}],"runSteps":["exact commands or clicks, in order"],"verify":"the one check that proves it works","assumptions":["anything you had to assume about their stack or repo"]}
+    ? `{"kind":"build","existing":"one line: what the CAPABILITY INVENTORY and the code already have for this milestone, with files — or 'nothing yet'. Answer this BEFORE planning; the build must extend it.","summary":"2–3 sentences: what this builds and where it goes","files":[{"path":"relative/path","language":"ts","content":"complete file contents","purpose":"one line"}],"runSteps":["exact commands or clicks, in order"],"verify":"the one check that proves it works","assumptions":["anything you had to assume about their stack or repo"]}
 Write real, complete code for their stack — not pseudocode, not placeholders, no '...'. Match the data model and loop written in the artifacts. Keep it to the files this milestone needs (usually 1–4). If the milestone is not code (a deploy, an analytics wiring), files may be config and runSteps carry the work.
 Read LAYOUT FACTS and MECHANISMS ALREADY IN CODE first. If the thing this milestone asks for is listed there, the build is the change that wires, extends or verifies the existing one in the file named — never a new implementation beside it. Every file path you write must sit under the real top-level layout, and every command must use the real package manager and a real script name.
 Never write "unknown", "needs inventory" or "not derivable" about the codebase: the PROJECT STATE carries the audit's route list, file tree, guards and env vars. Use those exact paths and names. If something truly isn't in the state, say which file to open to find it, in one line, and build the rest.`
@@ -146,7 +146,7 @@ ${shape}` },
       .map((o: any) => ({ title: String(o.title ?? "").slice(0, 120), body: String(o.body ?? "").slice(0, 4000), why: o.why ? String(o.why).slice(0, 300) : undefined }))
       .filter((o: any) => o.body);
     if (!options.length) throw Object.assign(new Error("Nova didn't come back with usable options. Try again."), { status: 502 });
-    return { kind: "options", intro: String(parsed.intro ?? "").slice(0, 400), options };
+    return { kind: "options", existing: String(parsed.existing ?? "").slice(0, 400) || undefined, intro: String(parsed.intro ?? "").slice(0, 400), options };
   }
   if (kind === "build") {
     const files = (Array.isArray(parsed.files) ? parsed.files : []).slice(0, 8)
@@ -154,7 +154,7 @@ ${shape}` },
       .filter((f: any) => f.content);
     const runSteps = (Array.isArray(parsed.runSteps) ? parsed.runSteps : []).map(String).slice(0, 12);
     if (!files.length && !runSteps.length) throw Object.assign(new Error("Nova didn't produce a build. Try again."), { status: 502 });
-    return { kind: "build", summary: String(parsed.summary ?? "").slice(0, 1200), files, runSteps, verify: String(parsed.verify ?? "").slice(0, 400), assumptions: (Array.isArray(parsed.assumptions) ? parsed.assumptions : []).map(String).slice(0, 6) };
+    return { kind: "build", existing: String(parsed.existing ?? "").slice(0, 400) || undefined, summary: String(parsed.summary ?? "").slice(0, 1200), files, runSteps, verify: String(parsed.verify ?? "").slice(0, 400), assumptions: (Array.isArray(parsed.assumptions) ? parsed.assumptions : []).map(String).slice(0, 6) };
   }
   const template = String(parsed.template ?? "");
   if (!template) throw Object.assign(new Error("Nova didn't produce a template. Try again."), { status: 502 });

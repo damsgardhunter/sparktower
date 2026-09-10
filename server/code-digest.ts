@@ -565,12 +565,17 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
     .map((f) => ({ file: f, score: intentScore(f) }))
     .sort((a, b) => b.score - a.score);
 
+  // The files that prove a mechanism exists are always excerpted, and given
+  // more lines: a model that only sees them in the tree cannot tell what they
+  // do, and then plans the mechanism again. The ranked set fills the rest.
+  const guardPaths = new Set(guards.map((g) => g.evidence));
+  const guardFiles = read.filter((f) => guardPaths.has(f.path));
   const excerptBudget = 26;
-  const excerpts = ranked.slice(0, excerptBudget).map(({ file }) => ({
-    path: file.path,
-    lines: (file.content!.match(/\n/g)?.length ?? 0) + 1,
-    body: excerpt(file, 45),
-  }));
+  const rest = ranked.filter(({ file }) => !guardPaths.has(file.path)).slice(0, Math.max(10, excerptBudget - guardFiles.length));
+  const excerpts = [
+    ...guardFiles.map((file) => ({ path: file.path, lines: (file.content!.match(/\n/g)?.length ?? 0) + 1, body: excerpt(file, 70) })),
+    ...rest.map(({ file }) => ({ path: file.path, lines: (file.content!.match(/\n/g)?.length ?? 0) + 1, body: excerpt(file, 45) })),
+  ];
 
   // --- the prompt ---------------------------------------------------------
   const section = (title: string, body: string) => `## ${title}\n${body}`;

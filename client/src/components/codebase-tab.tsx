@@ -1,3 +1,4 @@
+import { areaLabel, type CapabilityEntry } from "@shared/capabilities";
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -469,6 +470,28 @@ export function CodebaseTab({ projectId, repoUrl }: { projectId: string; repoUrl
               </Section>
             )}
 
+            {findings.capabilities?.length > 0 && (
+              <Section title="What the code already has" count={findings.capabilities.filter((c: CapabilityEntry) => c.status === "built").length} icon={CheckCircle2} defaultOpen>
+                <div className="space-y-1.5" data-testid="capability-inventory">
+                  {(findings.capabilities as CapabilityEntry[]).map((c) => (
+                    <div key={c.area} className="flex items-start gap-2 text-sm" data-testid={`capability-${c.area}`}>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 mt-0.5 ${
+                        c.status === "built" ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+                        : c.status === "partial" ? "bg-amber-500/15 text-amber-700 dark:text-amber-400"
+                        : c.status === "missing" ? "bg-rose-500/15 text-rose-700 dark:text-rose-400"
+                        : "bg-muted text-muted-foreground"}`}>{c.status}</span>
+                      <div className="min-w-0">
+                        <p className="font-medium">{areaLabel(c.area)}</p>
+                        {c.summary && <p className="text-muted-foreground">{c.summary}</p>}
+                        {c.missing && <p className="text-muted-foreground">Missing: {c.missing}</p>}
+                        {c.evidence.length > 0 && <p className="text-xs text-muted-foreground truncate">{c.evidence.map((e) => e.route ? `${e.route} · ${e.file}` : e.file).join(" · ")}</p>}
+                        {c.note && <p className="text-xs text-amber-700 dark:text-amber-400">{c.note}</p>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Section>
+            )}
             {findings.risks?.length > 0 && (
               <Section title="Risks" count={findings.risks.length} icon={AlertTriangle} defaultOpen>
                 {findings.risks.map((r: any, i: number) => {

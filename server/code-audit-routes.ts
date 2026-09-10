@@ -23,6 +23,7 @@ import {
   type RepoSnapshot,
 } from "./code-ingest";
 import { buildCodeDigest } from "./code-digest";
+import { CAPABILITY_AREAS, sanitizeCapabilities } from "@shared/capabilities";
 
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
@@ -46,6 +47,13 @@ const AUDIT_SCHEMA = `Respond ONLY with valid JSON (no markdown, no code fences)
   "completionPercent": 0-100,
   "summary": "3-5 sentences: what this codebase actually is, how far along it really is, and the single most important thing it's missing. Address the builder directly.",
   "stackSummary": "one sentence naming what it's built with",
+  "capabilities": [
+    { "area": "auth" | "rateLimiting" | "moderation" | "payments" | "ai" | "analytics" | "data" | "tests" | "ci" | "deploy" | "mobile",
+      "status": "built" | "partial" | "missing",
+      "summary": "one or two sentences on what exists, using the code's own names",
+      "evidence": [ { "file": "exact path from the digest", "route": "exact label from the route list, if one applies" } ],
+      "missing": "for partial only: what still isn't there" }
+  ],
   "built": [
     { "item": "a capability that demonstrably exists", "evidence": ["path/to/file.ts"] }
   ],
@@ -71,6 +79,33 @@ const AUDIT_SCHEMA = `Respond ONLY with valid JSON (no markdown, no code fences)
   "nextThreeThings": ["the three highest-leverage things to do next, in order"],
   "operations": [ ... ]
 }`;
+
+
+/** The audit's system prompt, on its own so it can be exercised outside the route. */
+export function auditSystemPrompt(ent: Parameters<typeof coachingDirectiveFor>[0]): string {
+  return `You are Nova, auditing a builder's real codebase against the plan they've been working from. ${coachingDirectiveFor(ent)}
+
+Your job is reconciliation, not code review. The plan says what they intend; the code says what exists. Where those disagree, the code wins and you say so.
+
+Ground every claim in the digest. Cite file paths as evidence. If the digest doesn't show something, say it isn't there rather than assuming it is — and remember the digest is a partial view: it lists every file but only excerpts some, so absence of an excerpt is not absence of a file. Never invent a path.
+
+Be specific and be honest. "No tests exist anywhere in the repository" is useful. "Consider adding tests" is not. If the project is further along than the board suggests, lead with that; if it's a scaffold with a README, say that plainly instead of being encouraging about it.
+
+Judging progress:
+- A route or page that exists and reads from real storage is built. A component with hardcoded sample data is partial.
+- A capability in the plan with no matching file, route, model or dependency is missing.
+- Something substantial in the code that the plan never mentions is worth flagging: it's either scope the builder forgot to write down, or work that isn't serving the goal.
+
+THE CAPABILITY INVENTORY comes first and matters most. One entry for EVERY area listed below, no area skipped. "built" needs at least one file that is really in the digest's file tree and that you can see does the thing; "partial" says what exists and what is missing; "missing" means no file, route, model or dependency for it. Never cite a path that is not in the file tree, and never cite a route that is not in the route list — the inventory is validated against both and unsupported claims are downgraded. This is what every later plan reads to avoid re-proposing what exists, so it must be exact.
+Areas and what counts:
+${CAPABILITY_AREAS.map((a) => `- ${a.id} (${a.label}): ${a.counts}`).join("\n")}
+
+For "operations", propose the changes that would make the board match the code: move tasks that are demonstrably finished to done, and create tasks for real gaps you found. Be conservative — only move a task to done when the evidence is unambiguous. Do not touch anything you're unsure about.
+
+${OPERATION_SCHEMA_INSTRUCTIONS}
+
+${AUDIT_SCHEMA}`;
+}
 
 export function registerCodeAuditRoutes(app: Express) {
   /** Audits on record, newest first. Bodies trimmed for the list view. */
@@ -207,24 +242,7 @@ export function registerCodeAuditRoutes(app: Express) {
         messages: [
           {
             role: "system",
-            content: `You are Nova, auditing a builder's real codebase against the plan they've been working from. ${coachingDirectiveFor(ent)}
-
-Your job is reconciliation, not code review. The plan says what they intend; the code says what exists. Where those disagree, the code wins and you say so.
-
-Ground every claim in the digest. Cite file paths as evidence. If the digest doesn't show something, say it isn't there rather than assuming it is — and remember the digest is a partial view: it lists every file but only excerpts some, so absence of an excerpt is not absence of a file. Never invent a path.
-
-Be specific and be honest. "No tests exist anywhere in the repository" is useful. "Consider adding tests" is not. If the project is further along than the board suggests, lead with that; if it's a scaffold with a README, say that plainly instead of being encouraging about it.
-
-Judging progress:
-- A route or page that exists and reads from real storage is built. A component with hardcoded sample data is partial.
-- A capability in the plan with no matching file, route, model or dependency is missing.
-- Something substantial in the code that the plan never mentions is worth flagging: it's either scope the builder forgot to write down, or work that isn't serving the goal.
-
-For "operations", propose the changes that would make the board match the code: move tasks that are demonstrably finished to done, and create tasks for real gaps you found. Be conservative — only move a task to done when the evidence is unambiguous. Do not touch anything you're unsure about.
-
-${OPERATION_SCHEMA_INSTRUCTIONS}
-
-${AUDIT_SCHEMA}`,
+            content: auditSystemPrompt(ent),
           },
           {
             role: "user",
@@ -253,6 +271,10 @@ ${AUDIT_SCHEMA}`,
 
       const findings = {
         stackSummary: str(parsed.stackSummary, 400),
+        capabilities: sanitizeCapabilities(parsed.capabilities, {
+          files: new Set(snapshot.files.map((f) => f.path)),
+          routes: new Set(digest.signals.routes.map((r) => r.label)),
+        }),
         built: (Array.isArray(parsed.built) ? parsed.built : []).slice(0, 30).map((b: any) => ({
           item: str(b?.item, 300), evidence: strList(b?.evidence, 8, 200),
         })).filter((b: any) => b.item),

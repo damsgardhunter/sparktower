@@ -11,8 +11,8 @@ export type WorkKind = "options" | "build" | "template";
 export interface WorkOption { title: string; body: string; why?: string }
 export interface WorkFile { path: string; language: string; content: string; purpose?: string }
 
-export interface OptionsPayload { kind: "options"; intro: string; options: WorkOption[] }
-export interface BuildPayload { kind: "build"; summary: string; files: WorkFile[]; runSteps: string[]; verify: string; assumptions: string[] }
+export interface OptionsPayload { kind: "options"; existing?: string; intro: string; options: WorkOption[] }
+export interface BuildPayload { kind: "build"; existing?: string; summary: string; files: WorkFile[]; runSteps: string[]; verify: string; assumptions: string[] }
 export interface TemplatePayload { kind: "template"; intro: string; template: string; whatNovaDid: string; whatIsLeft: string }
 export type WorkPayload = OptionsPayload | BuildPayload | TemplatePayload;
 

@@ -9,6 +9,7 @@
  * than claiming success.
  */
 import { storage } from "./storage";
+import { renderCapabilities } from "@shared/capabilities";
 
 /** One edit Nova wants to make. Shapes mirror the JSON Nova is told to emit. */
 export type ProjectOperation =
@@ -122,6 +123,7 @@ export function renderAudit(audit: any): string {
       : "Its suggested changes have NOT been applied to the board yet.",
     f.stackSummary ? `Stack actually in the code: ${f.stackSummary}` : null,
     audit.summary ? `Nova's read: ${audit.summary}` : null,
+    renderCapabilities(f.capabilities),
     f.built?.length ? `Verified as built: ${list(f.built, (b) => b.item, 20)}` : null,
     f.partial?.length ? `Partly built: ${list(f.partial, (b) => `${b.item} (missing: ${b.missing})`, 6)}` : null,
     f.missing?.length ? `Missing from the code entirely: ${list(f.missing, (b) => b.item, 10)}` : null,
