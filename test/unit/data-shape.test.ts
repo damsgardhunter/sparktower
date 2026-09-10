@@ -3,8 +3,8 @@
  * URL guard for connection strings, and the seal that keeps them at rest.
  */
 import { describe, it, expect } from "vitest";
-import { starLayout, renderDataShape, type DataShape } from "@shared/data-shape";
-import { safeDbUrl, compareWithCode } from "../../server/data-shape";
+import { snowflakeLayout, suggestConsolidations, describeDataModel, renderDataShape, type DataShape } from "@shared/data-shape";
+import { safeDbUrl, compareWithCode } from "../../server/data-shape-guard";
 
 const shape: DataShape = {
   at: "2026-09-10T00:00:00Z", source: "self",
@@ -19,24 +19,6 @@ const shape: DataShape = {
   totals: { tables: 6, rows: 2_000_204, emptyTables: 1 },
   compare: { inCodeNotInDb: ["loopNotes"], inDbNotInCode: ["legacy_widgets"] },
 };
-
-describe("starLayout", () => {
-  it("puts the most-referenced table at the centre, its referrers on ring one, the rest outside, sized by rows", () => {
-    const l = starLayout(shape, 760);
-    const by = Object.fromEntries(l.nodes.map((n) => [n.name, n]));
-    expect(by.users).toMatchObject({ ring: 0, x: 380, y: 380 });
-    expect(by.projects.ring).toBe(1);
-    expect(by.rate_limit_hits.ring).toBe(1);
-    expect(by.project_check_ins.ring).toBe(1);
-    expect(by.path_pace.ring).toBe(2);
-    expect(by.sessions.ring).toBe(2);
-    expect(by.sessions.r).toBeGreaterThan(by.path_pace.r);
-    expect(l.edges).toContainEqual({ from: "projects", to: "users" });
-    expect(l.edges.some((e) => e.from === "users")).toBe(false);
-    // Deterministic.
-    expect(starLayout(shape, 760)).toEqual(l);
-  });
-});
 
 describe("renderDataShape", () => {
   it("leads with rows, names empty tables, and states drift", () => {
@@ -87,5 +69,57 @@ describe("stripSealedFields", () => {
       .toEqual({ id: "p", createdAt: d, nested: [{ keep: 1 }], n: null });
     expect(stripSealedFields("plain")).toBe("plain");
     expect(stripSealedFields([1, { dataSource: 1 }])).toEqual([1, {}]);
+  });
+});
+
+describe("snowflakeLayout", () => {
+  it("puts the hub at the centre and every table outward from the one it references, without crossing back", () => {
+    const l = snowflakeLayout(shape);
+    const by = Object.fromEntries(l.nodes.map((n) => [n.name, n]));
+    expect(l.hub).toBe("users");
+    expect(by.users).toMatchObject({ depth: 0, parent: null });
+    expect(by.projects).toMatchObject({ depth: 1, parent: "users" });
+    // check-ins reference both users and projects; they hang off the busier hub they point at.
+    expect(by.project_check_ins.parent).toBe("users");
+    expect(by.path_pace).toMatchObject({ depth: 2, parent: "projects" });
+    const dist = (n: string) => Math.hypot(by[n].x - by.users.x, by[n].y - by.users.y);
+    expect(dist("path_pace")).toBeGreaterThan(dist("projects"));
+    // A child sits in its parent's direction, not across the middle.
+    const ang = (n: string) => Math.atan2(by[n].y - by.users.y, by[n].x - by.users.x);
+    expect(Math.abs(ang("path_pace") - ang("projects"))).toBeLessThan(0.8);
+    // sessions has no relations: a tree of its own on the rim.
+    expect(by.sessions).toMatchObject({ depth: 1, parent: null });
+    expect(l.orphans).toEqual(["sessions"]);
+    expect(l.edges.find((e) => e.from === "projects" && e.to === "users")?.tree).toBe(true);
+    expect(l.edges.find((e) => e.from === "project_check_ins" && e.to === "projects")?.tree).toBe(false);
+    expect(snowflakeLayout(shape)).toEqual(l);
+  });
+});
+
+describe("suggestConsolidations", () => {
+  it("names similar tables, empty orphans, one-to-one satellites and wide-nullable tables, with reasons", () => {
+    const col = (name: string, nullable = false, pk = false) => ({ name, type: "text", nullable, pk });
+    const s: DataShape = {
+      ...shape,
+      tables: [
+        { name: "users", rows: 100, exact: true, columns: [col("id", false, true), col("email"), col("name"), col("bio", true), col("avatar", true)], foreignKeys: [], inbound: 3 },
+        { name: "posts", rows: 50, exact: true, columns: [col("id", false, true), col("title"), col("body"), col("author_id"), col("published_at", true)], foreignKeys: [{ column: "author_id", refTable: "users", refColumn: "id" }], inbound: 0 },
+        { name: "articles", rows: 20, exact: true, columns: [col("id", false, true), col("title"), col("body"), col("author_id"), col("published_at", true)], foreignKeys: [{ column: "author_id", refTable: "users", refColumn: "id" }], inbound: 0 },
+        { name: "user_settings", rows: 80, exact: true, columns: [col("id", false, true), col("user_id"), col("theme"), col("locale")], foreignKeys: [{ column: "user_id", refTable: "users", refColumn: "id" }], inbound: 0 },
+        { name: "legacy_widgets", rows: 0, exact: true, columns: [col("id", false, true)], foreignKeys: [], inbound: 0 },
+        { name: "everything", rows: 5, exact: true, columns: [col("id", false, true), ...Array.from({ length: 9 }, (_, i) => col(`f${i}`, i < 8))], foreignKeys: [], inbound: 0 },
+      ],
+    };
+    const c = suggestConsolidations(s);
+    expect(c.map((x) => [x.kind, x.tables.join("+")])).toEqual([
+      ["similar-columns", "posts+articles"],
+      ["empty-orphan", "legacy_widgets"],
+      ["one-to-one-satellite", "user_settings+users"],
+      ["wide-nullable", "everything"],
+    ]);
+    expect(c[0].reason).toMatch(/4 of their columns are the same/);
+    expect(c[2].reason).toMatch(/2 real columns, about one row per users row/);
+    expect(describeDataModel(s)).toMatch(/The hub is "users" \(3 tables reference it\)/);
+    expect(describeDataModel(s)).toMatch(/Could be simpler/);
   });
 });
