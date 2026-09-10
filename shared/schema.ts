@@ -145,6 +145,13 @@ export const projects = pgTable("projects", {
    * the brief still talk about it.
    */
   rejectedLoops: text("rejected_loops").array().default([]).notNull(),
+  /**
+   * What the builder told Nova to keep in mind — corrections to the brief,
+   * things being removed, what the loops really are. Read by every Nova
+   * prompt through the project state, and it outranks the brief and the
+   * board: it is the most recent thing the builder said.
+   */
+  novaNotes: text("nova_notes"),
   status: text("status", { enum: ["planning", "active", "completed"] }).default("planning").notNull(),
   teamSize: integer("team_size"),
   estimatedWeeks: integer("estimated_weeks"),

@@ -612,7 +612,7 @@ export async function switchPath(projectId: string, goal: ProjectGoal, subcatego
  * pace, the recalculation log, and — at the end — Nova's case for what's next.
  */
 export async function pathStatus(projectId: string) {
-  const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory, activeBranch: projects.activeBranch })
+  const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory, activeBranch: projects.activeBranch, novaNotes: projects.novaNotes, rejectedLoops: projects.rejectedLoops })
     .from(projects).where(eq(projects.id, projectId));
   if (!project) return null;
 
@@ -739,6 +739,8 @@ export async function pathStatus(projectId: string) {
     pace, events,
     plan: pace?.plan ?? null,
     loopTree,
+    novaNotes: project.novaNotes ?? "",
+    rejectedLoops: project.rejectedLoops ?? [],
     proposal: complete ? NEXT_PATHS[goal] : null,
   };
 }

@@ -276,6 +276,9 @@ export async function buildOperableProjectState(
 
   return [
     `PROJECT: ${project.title}`,
+    project.novaNotes?.trim()
+      ? `THE BUILDER'S STANDING NOTES TO NOVA (most recent intent — these override the brief, the board and the code where they disagree)\n${project.novaNotes.trim().slice(0, 2000)}`
+      : null,
     `STATED TECH STACK: ${(project.techStack || []).join(", ") || "(none set)"}`,
     project.repoUrl ? `REPO: ${project.repoUrl}` : "REPO: (none linked)",
     project.liveUrl ? `LIVE URL: ${project.liveUrl}` : "LIVE URL: (not deployed, or not recorded)",

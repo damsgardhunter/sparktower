@@ -117,7 +117,7 @@ export function LoopTree({ projectId, tree }: { projectId: string; tree: LoopTre
                         <div className="flex items-center gap-1 shrink-0">
                           <span className={`text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap ${st.cls}`} data-testid={`loop-state-${loop.taskId}`}>{st.label}</span>
                           <button className="text-muted-foreground hover:text-foreground" title="Rename or rewrite" onClick={() => setRename({ taskId: loop.taskId, title: loop.title, description: loop.description })} data-testid={`rename-loop-${loop.taskId}`}><Pencil className="h-3 w-3" /></button>
-                          <button className="text-muted-foreground hover:text-destructive" title="Not a loop — remove it" disabled={remove.isPending} onClick={() => { if (window.confirm(`Remove "${loop.title}"? Unfinished steps go with it.`)) remove.mutate(loop.taskId); }} data-testid={`delete-loop-${loop.taskId}`}><Trash2 className="h-3 w-3" /></button>
+                          <button className="text-[11px] text-muted-foreground hover:text-destructive flex items-center gap-0.5" title="Remove it, and Nova never proposes it again" disabled={remove.isPending} onClick={() => { if (window.confirm(`Remove "${loop.title}"? Unfinished steps go with it, and Nova won't propose it again.`)) remove.mutate(loop.taskId); }} data-testid={`delete-loop-${loop.taskId}`}><Trash2 className="h-3 w-3" />Not a loop</button>
                         </div>
                       </div>
                       {loop.description

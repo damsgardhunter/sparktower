@@ -2811,6 +2811,19 @@ RULES:
     }
   });
 
+  /** What the builder wants Nova to keep in mind. Read by every Nova prompt. */
+  app.put("/api/projects/:id/nova-notes", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const notes = typeof req.body?.notes === "string" ? req.body.notes.trim().slice(0, 2000) : "";
+      await db.update(projects).set({ novaNotes: notes || null }).where(eq(projects.id, req.params.id));
+      res.json({ notes: notes || null });
+    } catch (error) {
+      console.error("Nova notes error:", error);
+      res.status(500).json({ message: "Couldn't save that" });
+    }
+  });
+
   app.delete("/api/projects/:id/path/loops/:taskId", isAuthenticated, async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });

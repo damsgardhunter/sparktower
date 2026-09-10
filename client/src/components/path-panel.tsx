@@ -43,6 +43,8 @@ interface PathStatus {
   mainLine: { done: number; total: number };
   plan: { loops: number; authoredDays: number; totalMinutes: number; doneMinutes: number } | null;
   loopTree: LoopTreeData | null;
+  novaNotes: string;
+  rejectedLoops: string[];
   pace: { state: PaceState; multiplier: number | null; mode: ProjectionMode; projectedAt: string | null; projectedLow: string | null; projectedHigh: string | null; note: string; daysSinceActivity: number } | null;
   events: { id: string; title: string; estimateMinutes: number | null; actualMinutes: number | null; projectedBefore: string | null; projectedAfter: string | null; createdAt: string }[];
   proposal: { goal: ProjectGoal; why: string }[] | null;
@@ -138,6 +140,12 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
     onSuccess: () => { setLoopForm(null); refresh(); toast({ title: "Loop added — write it down, then break it into steps" }); },
     onError: fail,
   });
+  const [notes, setNotes] = useState<string | null>(null);
+  const saveNotes = useMutation({
+    mutationFn: (n: string) => apiRequest("PUT", `/api/projects/${projectId}/nova-notes`, { notes: n }).then((r) => r.json()),
+    onSuccess: () => { setNotes(null); refresh(); toast({ title: "Nova will keep that in mind on every read" }); },
+    onError: fail,
+  });
   const switchPath = useMutation({
     mutationFn: (body: { goal: ProjectGoal; subcategory: string }) => apiRequest("POST", `/api/projects/${projectId}/path/switch`, body).then((r) => r.json()),
     onSuccess: (r: any) => { refresh(); setShowSwitch(false); toast({ title: "Moved to the new path", description: r.carried ? `${r.carried} shared milestone${r.carried === 1 ? "" : "s"} carried across as done.` : undefined }); },
@@ -207,10 +215,28 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
               {pace.note}
             </p>
           </div>
-          <Button size="sm" variant="outline" className="shrink-0" disabled={adopt.isPending} onClick={() => adopt.mutate()} data-testid="button-reevaluate" title="Nova re-reads your brief, setup, audits and tasks, marks what's done and writes in what it finds.">
-            {adopt.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 mr-1.5" />}
-            {adopt.isPending ? "Nova is re-reading…" : "Re-evaluate where I'm at"}
-          </Button>
+          <div className="flex items-center gap-2 shrink-0">
+            <Button size="sm" variant="ghost" className="text-xs" onClick={() => setNotes(notes == null ? data.novaNotes : null)} data-testid="button-nova-notes" title="Something Nova keeps getting wrong? Tell it once; every read obeys it.">
+              {data.novaNotes ? "Edit your note to Nova" : "Tell Nova something"}
+            </Button>
+            <Button size="sm" variant="outline" disabled={adopt.isPending} onClick={() => adopt.mutate()} data-testid="button-reevaluate" title="Nova re-reads your brief, setup, audits and tasks, marks what's done and writes in what it finds.">
+              {adopt.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 mr-1.5" />}
+              {adopt.isPending ? "Nova is re-reading…" : "Re-evaluate where I'm at"}
+            </Button>
+          </div>
+          {notes != null && (
+            <div className="w-full space-y-2 pt-1" data-testid="nova-notes-form">
+              <p className="text-xs text-muted-foreground">This outranks the brief and the board on every read. Say what's being removed, what your loops really are, anything Nova keeps getting wrong.</p>
+              <Textarea rows={3} className="text-sm" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. Check-ins are being removed — they are not a loop. My loops are the three paths: Ship an MVP, Systemize a business, Raise funding." data-testid="input-nova-notes" />
+              <div className="flex gap-2">
+                <Button size="sm" disabled={saveNotes.isPending} onClick={() => saveNotes.mutate(notes)} data-testid="button-save-nova-notes">Save</Button>
+                <Button size="sm" variant="ghost" onClick={() => setNotes(null)}>Cancel</Button>
+              </div>
+            </div>
+          )}
+          {data.rejectedLoops.length > 0 && (
+            <p className="w-full text-[11px] text-muted-foreground" data-testid="rejected-loops">Not loops (Nova won't propose these again): {data.rejectedLoops.join(" · ")}</p>
+          )}
         </div>
       )}
 

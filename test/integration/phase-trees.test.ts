@@ -628,3 +628,25 @@ describe("a wrong loop can be removed", () => {
     expect((await agent.get(`/api/projects/${id}`)).body.rejectedLoops).toEqual([]);
   });
 });
+
+describe("telling Nova something durable", () => {
+  it("keeps the builder's note on the project and puts it at the top of every Nova read", async () => {
+    const app = await getTestApp();
+    const agent = await owner(app);
+    const id = (await create(agent, "ship_mvp", "saas", "Notes Test")).body.id;
+    const res = await agent.put(`/api/projects/${id}/nova-notes`).send({ notes: "  Check-ins are being removed. My loops are the three paths.  " });
+    expect(res.status).toBe(200);
+    expect(res.body.notes).toBe("Check-ins are being removed. My loops are the three paths.");
+    expect((await agent.get(`/api/projects/${id}/path`)).body.novaNotes).toBe("Check-ins are being removed. My loops are the three paths.");
+
+    const { buildOperableProjectState } = await import("../../server/project-operations");
+    const state = await buildOperableProjectState(id, { includeIds: false, includeAudit: false });
+    const at = state.indexOf("THE BUILDER'S STANDING NOTES TO NOVA");
+    expect(at).toBeGreaterThan(-1);
+    expect(at).toBeLessThan(state.indexOf("BRIEF FIELDS"));
+    expect(state.slice(at)).toMatch(/Check-ins are being removed/);
+
+    await agent.put(`/api/projects/${id}/nova-notes`).send({ notes: "" }).expect(200);
+    expect((await buildOperableProjectState(id, { includeIds: false, includeAudit: false })).includes("STANDING NOTES")).toBe(false);
+  });
+});
