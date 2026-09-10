@@ -226,6 +226,11 @@ export const donations = pgTable("donations", {
   donorId: varchar("donor_id").notNull().references(() => users.id),
   amount: integer("amount").notNull(), // in cents
   message: text("message"),
+  /** The checkout session and payment behind it. The session id is unique: one session, one donation, however many times Stripe delivers. */
+  stripeSessionId: varchar("stripe_session_id").unique(),
+  stripePaymentIntentId: varchar("stripe_payment_intent_id"),
+  stripeChargeId: varchar("stripe_charge_id"),
+  refundedAt: timestamp("refunded_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -1200,6 +1205,21 @@ export const projectDataShapes = pgTable("project_data_shapes", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 export type ProjectDataShape = typeof projectDataShapes.$inferSelect;
+
+/**
+ * Every Stripe event we have seen, by Stripe's own id. Idempotency and
+ * retry in one place: a delivery of an id already processed is a no-op, a
+ * delivery of one that failed is retried, and a delivery in flight is not
+ * processed twice. Stripe retries on a 5xx; this is what makes that safe.
+ */
+export const stripeEvents = pgTable("stripe_events", {
+  id: varchar("id").primaryKey(),
+  type: text("type").notNull(),
+  status: text("status", { enum: ["processing", "processed", "failed"] }).notNull(),
+  error: text("error"),
+  receivedAt: timestamp("received_at").defaultNow().notNull(),
+  processedAt: timestamp("processed_at"),
+});
 
 export const activityEvents = pgTable("activity_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

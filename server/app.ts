@@ -17,7 +17,7 @@ import express, { type Express, type Request, type Response, type NextFunction }
 import type { Server } from "http";
 import { ZodError } from "zod";
 import { registerRoutes } from "./routes";
-import { WebhookHandlers } from "./webhookHandlers";
+import { WebhookHandlers, WebhookVerificationError } from "./webhookHandlers";
 import { stripSealedFields } from "@shared/strip-sealed";
 
 export interface CreateAppOptions {
@@ -101,11 +101,17 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
         if (!Buffer.isBuffer(req.body)) {
           return res.status(500).json({ error: "Webhook processing error" });
         }
-        await WebhookHandlers.processWebhook(req.body as Buffer, sig);
-        res.status(200).json({ received: true });
+        const result = await WebhookHandlers.processWebhook(req.body as Buffer, sig);
+        res.status(200).json({ received: true, duplicate: result.duplicate });
       } catch (error: any) {
-        console.error("Webhook error:", error.message);
-        res.status(400).json({ error: "Webhook processing error" });
+        // A bad signature is the sender's problem: 400, no retry. Anything
+        // after verification is ours: 500, so Stripe retries the delivery.
+        if (error instanceof WebhookVerificationError) {
+          console.error("Webhook rejected:", error.message);
+          return res.status(400).json({ error: "Webhook signature verification failed" });
+        }
+        console.error("Webhook handler failed (Stripe will retry):", error?.message ?? error);
+        res.status(500).json({ error: "Webhook processing error" });
       }
     },
   );

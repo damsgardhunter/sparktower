@@ -24,7 +24,7 @@ import request from "supertest";
 import Stripe from "stripe";
 import { eq } from "drizzle-orm";
 import { db } from "../../server/db";
-import { users } from "@shared/schema";
+import { users, projects, donations, stripeEvents } from "@shared/schema";
 
 const WEBHOOK_SECRET = "whsec_test_secret_for_signature_verification";
 const stripe = new Stripe("sk_test_dummy_key_not_used_for_network", {
@@ -124,7 +124,7 @@ describe("stripe webhook signature verification", () => {
       .send(body);
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ received: true });
+    expect(res.body).toMatchObject({ received: true, duplicate: false });
 
     // Processed, observably: the cancellation moved them off the paid tier.
     expect(await tierOf(user.id)).toBe("free");
@@ -222,5 +222,86 @@ describe("stripe webhook signature verification", () => {
     expect(Buffer.isBuffer(delivered[0].payload)).toBe(true);
     expect((delivered[0].payload as Buffer).toString("utf8")).toBe(body);
     expect(delivered[0].signature).toBe(signature);
+  });
+});
+
+/** Signs and delivers one event the way Stripe would. */
+async function deliver(app: any, event: unknown) {
+  const body = JSON.stringify(event);
+  const signature = stripe.webhooks.generateTestHeaderString({ payload: body, secret: WEBHOOK_SECRET });
+  return request(app).post("/api/stripe/webhook").set("Content-Type", "application/json").set("stripe-signature", signature).send(body);
+}
+
+async function aProjectWithDonor() {
+  const { user } = await aPaidUser();
+  const [project] = await db.insert(projects).values({ ownerId: user.id, title: "Donate", description: "A project that receives donations through Stripe.", category: "saas", goal: "ship_mvp", subcategory: "saas" } as any).returning();
+  return { donor: user, project };
+}
+const totalOf = async (id: string) => (await db.select({ t: projects.totalDonations }).from(projects).where(eq(projects.id, id)))[0].t;
+
+describe("idempotency and retry", () => {
+  it("records a donation once however many times the event arrives, and once per session even under a new event id", async () => {
+    const app = await getTestApp();
+    const { donor, project } = await aProjectWithDonor();
+    const session = { id: "cs_test_once", object: "checkout.session", mode: "payment", payment_intent: "pi_test_once", customer: donor.stripeCustomerId, metadata: { type: "donation", projectId: project.id, donorId: donor.id, amount: "2500" } };
+    const event = { id: "evt_once", object: "event", type: "checkout.session.completed", data: { object: session } };
+
+    expect((await deliver(app, event)).body).toMatchObject({ received: true, duplicate: false });
+    expect((await deliver(app, event)).body).toMatchObject({ received: true, duplicate: true });
+    expect((await deliver(app, { ...event, id: "evt_once_redelivered_under_new_id" })).status).toBe(200);
+
+    const rows = await db.select().from(donations).where(eq(donations.projectId, project.id));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ amount: 2500, stripeSessionId: "cs_test_once", stripePaymentIntentId: "pi_test_once" });
+    expect(await totalOf(project.id)).toBe(2500);
+    const [ledger] = await db.select().from(stripeEvents).where(eq(stripeEvents.id, "evt_once"));
+    expect(ledger).toMatchObject({ type: "checkout.session.completed", status: "processed" });
+    expect(ledger.processedAt).toBeTruthy();
+  });
+
+  it("answers 500 when a handler fails so Stripe retries, records the failure, and processes the retry", async () => {
+    const app = await getTestApp();
+    const { donor } = await aProjectWithDonor();
+    // A donation to a project that doesn't exist fails at the database: that is our fault, not Stripe's.
+    const bad = { id: "evt_fails", object: "event", type: "checkout.session.completed", data: { object: { id: "cs_test_fail", mode: "payment", metadata: { type: "donation", projectId: "00000000-0000-0000-0000-000000000000", donorId: donor.id, amount: "100" } } } };
+    const first = await deliver(app, bad);
+    expect(first.status).toBe(500);
+    const [after] = await db.select().from(stripeEvents).where(eq(stripeEvents.id, "evt_fails"));
+    expect(after.status).toBe("failed");
+    expect(after.error).toBeTruthy();
+    // The retry is not treated as a duplicate: it runs again (and fails again here, honestly).
+    expect((await deliver(app, bad)).status).toBe(500);
+    // A bad signature never reaches the ledger.
+    const res = await request(app).post("/api/stripe/webhook").set("Content-Type", "application/json").set("stripe-signature", "t=1,v1=bad").send(JSON.stringify({ id: "evt_unsigned", type: "checkout.session.completed", data: { object: {} } }));
+    expect(res.status).toBe(400);
+    expect(await db.select().from(stripeEvents).where(eq(stripeEvents.id, "evt_unsigned"))).toHaveLength(0);
+  });
+});
+
+describe("refunds", () => {
+  it("marks a refunded donation and lowers the project total once", async () => {
+    const app = await getTestApp();
+    const { donor, project } = await aProjectWithDonor();
+    await deliver(app, { id: "evt_pay", object: "event", type: "checkout.session.completed", data: { object: { id: "cs_test_refund", mode: "payment", payment_intent: "pi_test_refund", metadata: { type: "donation", projectId: project.id, donorId: donor.id, amount: "4000" } } } });
+    expect(await totalOf(project.id)).toBe(4000);
+
+    const refund = { id: "evt_refund", object: "event", type: "charge.refunded", data: { object: { id: "ch_test_refund", object: "charge", payment_intent: "pi_test_refund", refunds: { data: [{ id: "re_test_1" }] } } } };
+    expect((await deliver(app, refund)).status).toBe(200);
+    expect(await totalOf(project.id)).toBe(0);
+    const [d] = await db.select().from(donations).where(eq(donations.stripeSessionId, "cs_test_refund"));
+    expect(d.refundedAt).toBeTruthy();
+    expect(d.stripeChargeId).toBe("ch_test_refund");
+    // Delivered again (new id, same charge): nothing changes and nothing goes negative.
+    expect((await deliver(app, { ...refund, id: "evt_refund_again" })).status).toBe(200);
+    expect(await totalOf(project.id)).toBe(0);
+  });
+
+  it("acknowledges a failed payment without touching the tier — the subscription status event does that", async () => {
+    const app = await getTestApp();
+    const { user, customerId } = await aPaidUser();
+    expect((await deliver(app, { id: "evt_pf", object: "event", type: "invoice.payment_failed", data: { object: { id: "in_1", customer: customerId, last_payment_error: { message: "card declined" } } } })).status).toBe(200);
+    expect(await tierOf(user.id)).toBe("pro");
+    expect((await deliver(app, { id: "evt_pastdue", object: "event", type: "customer.subscription.updated", data: { object: { id: "sub_test_123", customer: customerId, status: "past_due" } } })).status).toBe(200);
+    expect(await tierOf(user.id)).toBe("free");
   });
 });
