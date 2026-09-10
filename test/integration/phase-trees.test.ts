@@ -585,3 +585,35 @@ describe("the loop tree", () => {
     expect((await agent.get(`/api/projects/${id}/path/work/00000000-0000-0000-0000-000000000000`)).status).toBe(404);
   });
 });
+
+describe("loops are reviewed, not imposed", () => {
+  it("accepts only what the builder kept, and a wrong loop can be removed without losing finished work", async () => {
+    const app = await getTestApp();
+    const agent = await owner(app);
+    const id = (await create(agent, "ship_mvp", "saas", "Review Test")).body.id;
+    const { createExpansion } = await import("../../server/phase-trees");
+
+    expect((await agent.post(`/api/projects/${id}/path/loops/accept`).send({ loops: [] })).status).toBe(400);
+    const r = await agent.post(`/api/projects/${id}/path/loops/accept`).send({ loops: [
+      { title: "Weekly check-in", steps: "post → get comments → post again", state: "built" },
+      { title: "Explore the feed", steps: "open → read → react → follow", state: "partly" },
+    ] });
+    expect(r.status).toBe(200);
+    expect(r.body.created).toHaveLength(2);
+    let tree = (await agent.get(`/api/projects/${id}/path`)).body.loopTree;
+    expect(tree.loops.map((l: any) => l.title)).toEqual(["Weekly check-in", "Explore the feed"]);
+
+    // The second one was a feature after all. Give it steps, finish one, then remove it.
+    const feed = tree.loops[1];
+    const { created } = await createExpansion(id, "SHIP.M2.1", [{ title: "Open", description: "" }, { title: "React", description: "" }], { loopTaskId: feed.taskId });
+    await agent.patch(`/api/kanban/${created[0].id}`).send({ status: "done" });
+    const del = await agent.delete(`/api/projects/${id}/path/loops/${feed.taskId}`);
+    expect(del.status).toBe(200);
+    expect(del.body).toEqual({ removedSteps: 1, keptSteps: 1 });
+    tree = (await agent.get(`/api/projects/${id}/path`)).body.loopTree;
+    expect(tree.loops.map((l: any) => l.title)).toEqual(["Weekly check-in"]);
+    expect(tree.unassigned.map((u: any) => u.title)).toEqual(["Open"]);
+    expect((await agent.delete(`/api/projects/${id}/path/loops/${feed.taskId}`)).status).toBe(404);
+    expect((await agent.get(`/api/projects/${id}/path`)).body.plan.loops).toBe(1);
+  });
+});

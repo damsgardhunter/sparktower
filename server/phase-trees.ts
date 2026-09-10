@@ -302,6 +302,26 @@ export async function reconcileLoops(projectId: string, found: { title: string; 
 }
 
 /**
+ * Removing a loop that isn't one. Its unfinished steps go with it; finished
+ * steps stay on the board as work that happened, just no longer filed
+ * under a loop.
+ */
+export async function deleteLoop(projectId: string, loopTaskId: string) {
+  const tasks = await pathTasks(projectId);
+  const loop = tasks.find((t) => t.id === loopTaskId && isLoop(t.tags));
+  if (!loop) throw Object.assign(new Error("That loop isn't on this project."), { code: "not_on_path", status: 404 });
+  const steps = tasks.filter((t) => loopOf(t.tags) === loopTaskId);
+  let removed = 0, kept = 0;
+  for (const s of steps) {
+    if (s.status === "done") { await storage.updateKanbanTask(s.id, { tags: (s.tags ?? []).filter((x) => x !== `loop:${loopTaskId}`) } as any); kept++; }
+    else { await storage.deleteKanbanTask(s.id); removed++; }
+  }
+  await storage.deleteKanbanTask(loop.id);
+  await refreshPace(projectId);
+  return { removedSteps: removed, keptSteps: kept };
+}
+
+/**
  * Entering or leaving an optional phase. Nine builders in ten want to keep
  * building after week 2; choosing it is what makes Nova work the extension
  * instead of asking week-3 questions. Leaving is the same explicit act.
