@@ -169,6 +169,9 @@ export function renderAudit(audit: any, dataShape?: any): string {
           `Environment variables referenced: ${((audit.signals as any).envVarNames ?? []).slice(0, 40).join(", ") || "none"}.`,
         ].join("\n")]
       : []),
+    ...((audit.signals as any)?.testFilePaths?.length
+      ? [`TEST FILES (${(audit.signals as any).testFiles}): ${(audit.signals as any).testFilePaths.join(", ")}`]
+      : []),
     ...((audit.signals as any)?.productDocs?.length
       ? [`THE BUILDER'S OWN DOCS (from the repo, ${(audit.signals as any).productDocs.length} files about loops, journeys or the plan)\n${(audit.signals as any).productDocs.slice(0, 6).map((d: any, i: number) => `### ${d.path}\n${String(d.excerpt).slice(0, i === 0 ? 4000 : 1500)}`).join("\n\n")}`]
       : []),

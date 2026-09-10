@@ -46,8 +46,8 @@ const AREA_FILE_HINTS: Partial<Record<CapabilityArea, RegExp>> = {
   ai: /openai|nova|ai-?models|prompt|entitle|plans|ai-json|ai-metering|moderation/i,
   analytics: /analytics|metrics|track/i,
   data: /schema|storage|db\b|migrat/i,
-  tests: /vitest|playwright|test\/setup|test\/helpers/i,
-  ci: /\.github\/workflows|ci\b/i,
+  tests: /vitest|playwright|test\/setup|test\/helpers|test\/integration|test\/unit|e2e\//i,
+  ci: /\.github\/workflows|ci-stability|release-checklist/i,
   deploy: /index\.ts$|app\.ts$|surfaces|health|env-contract|\.replit|Dockerfile/i,
   mobile: /^mobile\/(app|src)\/|mobile-auth/i,
 };

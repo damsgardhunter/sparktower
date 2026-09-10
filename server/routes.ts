@@ -4915,7 +4915,15 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   app.post("/api/projects/:id/milestones", isAuthenticated, async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
-      const milestone = await storage.createMilestone({ ...req.body, projectId: req.params.id });
+      const { id: _id, projectId: _p, createdAt: _c, targetDate, ...body } = req.body ?? {};
+      if (!String(body.title ?? "").trim()) return res.status(400).json({ message: "Give the milestone a title.", code: "invalid_input", field: "title" });
+      // Clients send dates as strings; the column wants a Date. A bad one is their problem, said plainly, not a 500.
+      let when: Date | null = null;
+      if (targetDate != null && targetDate !== "") {
+        when = new Date(targetDate);
+        if (Number.isNaN(when.getTime())) return res.status(400).json({ message: "That target date isn't a date.", code: "invalid_input", field: "targetDate" });
+      }
+      const milestone = await storage.createMilestone({ ...body, targetDate: when, projectId: req.params.id });
       await storage.logActivity({ projectId: req.params.id, userId: (req.user as any).id, action: "created milestone", entityType: "milestone", entityId: milestone.id, metadata: { title: milestone.title } });
       res.json(milestone);
     } catch (error) { res.status(500).json({ message: "Failed to create milestone" }); }

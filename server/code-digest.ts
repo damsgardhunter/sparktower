@@ -65,6 +65,8 @@ export interface DigestSignals {
   scriptNames: string[];
   /** Every route with the guards on it, and the gaps. Deterministic. */
   routeCoverage: RouteCoverage;
+  /** The test files by path, so a read can say what is covered instead of "no evidence". */
+  testFilePaths: string[];
   /**
    * The product's own written intent: markdown files that talk about loops,
    * user journeys, phases or the plan. Builders write down what they mean
@@ -552,6 +554,7 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
     routes,
     dataModels,
     testFiles: testFileList.length,
+    testFilePaths: testFileList.map((f) => f.path).sort().slice(0, 80),
     testFrameworks: [...testFrameworks],
     hasCi, hasDocker,
     hasReadme: !!readme,
