@@ -123,3 +123,34 @@ describe("suggestConsolidations", () => {
     expect(describeDataModel(s)).toMatch(/Could be simpler/);
   });
 });
+
+describe("snowflakeLayout on a crowded ring", () => {
+  it("never overlaps boxes on the same ring, even with forty tables off one hub", () => {
+    const col = (name: string, nullable = false, pk = false) => ({ name, type: "text", nullable, pk });
+    const tables = [{ name: "users", rows: 100, exact: true, columns: [col("id", false, true)], foreignKeys: [], inbound: 40 }];
+    for (let i = 0; i < 40; i++) tables.push({ name: `t${i}`, rows: i, exact: true, columns: [col("id", false, true), col("user_id")], foreignKeys: [{ column: "user_id", refTable: "users", refColumn: "id" }], inbound: 0 });
+    const l = snowflakeLayout({ ...shape, tables, totals: { tables: 41, rows: 0, emptyTables: 1 }, compare: null });
+    const ring = l.nodes.filter((n) => n.depth === 1);
+    expect(ring).toHaveLength(40);
+    for (let i = 0; i < ring.length; i++) for (let j = i + 1; j < ring.length; j++) {
+      const a = ring[i], b = ring[j];
+      const overlap = Math.abs(a.x - b.x) < (a.w + b.w) / 2 && Math.abs(a.y - b.y) < (a.h + b.h) / 2;
+      expect(overlap, `${a.name} overlaps ${b.name}`).toBe(false);
+    }
+  });
+});
+
+describe("a wide profile table", () => {
+  it("is called optional-by-design with its column groups, not 'several kinds of row'", () => {
+    const col = (name: string, nullable = true) => ({ name, type: "text", nullable, pk: false });
+    const t: DataShape = { ...shape, compare: null, tables: [
+      { name: "users", rows: 100, exact: true, columns: [{ name: "id", type: "text", nullable: false, pk: true }], foreignKeys: [], inbound: 1 },
+      { name: "user_profiles", rows: 90, exact: true, columns: [{ name: "id", type: "text", nullable: false, pk: true }, col("user_id", false), col("display_name"), col("username"), col("bio"), col("github_url"), col("linkedin_url"), col("website_url"), col("avatar_url"), col("cover_url"), col("risk_tolerance"), col("schedule_style"), col("conflict_style"), col("hours_per_week"), col("experience"), col("education"), col("resume_url"), col("skills")], foreignKeys: [{ column: "user_id", refTable: "users", refColumn: "id" }], inbound: 0 },
+    ] };
+    const note = suggestConsolidations(t).find((c) => c.kind === "wide-nullable")!;
+    expect(note.reason).toMatch(/expected for a profile that fills in over time, one row per users/);
+    expect(note.suggestion).toMatch(/links \(3\)/);
+    expect(note.suggestion).toMatch(/working style & preferences \(4\)/);
+    expect(note.suggestion).not.toMatch(/several kinds of row/i);
+  });
+});

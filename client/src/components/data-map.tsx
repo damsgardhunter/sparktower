@@ -23,7 +23,8 @@ function edgePoint(a: MapNode, b: MapNode) {
 export function DataMap({ shape }: { shape: DataShape }) {
   const [open, setOpen] = useState<string | null>(null);
   const [view, setView] = useState({ x: 0, y: 0, k: 1 });
-  const drag = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null);
+  const [allEdges, setAllEdges] = useState(false);
+  const drag = useRef<{ x: number; y: number; vx: number; vy: number; moved: boolean } | null>(null);
   const layout = useMemo(() => snowflakeLayout(shape), [shape]);
   const cons = useMemo(() => suggestConsolidations(shape), [shape]);
   const byName = useMemo(() => new Map(shape.tables.map((t) => [t.name, t])), [shape]);
@@ -67,6 +68,7 @@ export function DataMap({ shape }: { shape: DataShape }) {
           <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => zoomBy(1.25)} data-testid="map-zoom-in" title="Zoom in"><ZoomIn className="h-3.5 w-3.5" /></Button>
           <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => zoomBy(0.8)} data-testid="map-zoom-out" title="Zoom out"><ZoomOut className="h-3.5 w-3.5" /></Button>
           <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={fit} data-testid="map-fit" title="Fit to view"><Maximize2 className="h-3.5 w-3.5 mr-1" />Fit</Button>
+          <Button size="sm" variant={allEdges ? "default" : "outline"} className="h-7 px-2 text-xs" onClick={() => setAllEdges((v) => !v)} data-testid="map-all-edges" title="Show every relation, not just the tree">{allEdges ? "All relations" : "Tree only"}</Button>
         </span>
       </div>
       {shape.compare && (shape.compare.inCodeNotInDb.length > 0 || shape.compare.inDbNotInCode.length > 0) && (
@@ -77,16 +79,19 @@ export function DataMap({ shape }: { shape: DataShape }) {
 
       <div className="grid gap-3 lg:grid-cols-[1fr_18rem]">
         <div ref={canvas} className="rounded-md border border-border bg-muted/20 overflow-hidden select-none touch-none" style={{ height: VIEW_H }}
-          onPointerDown={(e) => { if (e.button !== 0) return; (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId); drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y }; }}
+          onPointerDown={(e) => { if (e.button !== 0) return; drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, moved: false }; }}
           onPointerMove={(e) => {
             const d = drag.current; if (!d) return;
+            // A drag only starts after real movement, so a click on a box stays a click.
+            if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 4) return;
+            d.moved = true;
             // Read the drag origin now: by the time a queued state update runs, pointer-up may have cleared it.
             const r = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
             const sx = VIEW_W / r.width, sy = VIEW_H / r.height;
             const nx = d.vx + (e.clientX - d.x) * sx, ny = d.vy + (e.clientY - d.y) * sy;
             setView((v) => ({ ...v, x: nx, y: ny }));
           }}
-          onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}
+          onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }} onPointerLeave={() => { drag.current = null; }}
           data-testid="map-canvas">
           <svg width="100%" height="100%" viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} role="img" aria-label="Data map" className="cursor-grab active:cursor-grabbing">
             <defs>
@@ -102,6 +107,8 @@ export function DataMap({ shape }: { shape: DataShape }) {
               {layout.edges.map((e, i) => {
                 const a = pos.get(e.from), b = pos.get(e.to);
                 if (!a || !b) return null;
+                // Only the tree by default: every extra relation is a line across the map. All of them, or the selected table's, on request.
+                if (!e.tree && !allEdges && !(open && (e.from === open || e.to === open))) return null;
                 const p1 = edgePoint(a, b), p2 = edgePoint(b, a);
                 const isHot = open && (e.from === open || e.to === open);
                 return (
@@ -162,7 +169,7 @@ export function DataMap({ shape }: { shape: DataShape }) {
             </>
           ) : (
             <>
-              <p className="text-muted-foreground">Click a table for its columns and relations. Solid lines are the tree from the hub; dashed lines are the other relations. Crow's feet mark the many side.</p>
+              <p className="text-muted-foreground">Click a table for its columns and relations. Solid lines are the tree from the hub; the selected table's other relations show dashed, or all of them with "All relations". Crow's feet mark the many side.</p>
               <p className="text-muted-foreground">Dashed boxes are empty tables.</p>
             </>
           )}

@@ -93,37 +93,70 @@ export function snowflakeLayout(shape: DataShape): MapLayout {
   const hubLeaves = leaves.get(hub) ?? 1;
   const otherLeaves = roots.slice(1).reduce((s, r) => s + (leaves.get(r) ?? 1), 0);
 
-  // Depth → radius: rings far enough apart for boxes to fit, growing with the crowd on that ring.
-  const maxDepth = (() => { let d = 0; const walk = (n: string, k: number) => { d = Math.max(d, k); for (const c of children.get(n) ?? []) walk(c, k + 1); }; roots.forEach((r) => walk(r, r === hub ? 0 : 1)); return d; })();
-  const ringGap = Math.max(210, Math.ceil((tables.length * (BOX_W + 26)) / (2 * Math.PI * Math.max(1, maxDepth)) / Math.max(1, maxDepth)) + 60);
-  const size = 2 * (ringGap * (maxDepth + 1)) + BOX_W;
-  const c = size / 2;
-  const nodes: MapNode[] = [];
+  // First pass: angles only. Each node gets the middle of its sector; children split the parent's sector by leaf count.
+  const angleOf = new Map<string, number>();
+  const depthOf = new Map<string, number>();
+  const parentUsed = new Map<string, string | null>();
   const treeEdges = new Set<string>();
-
-  const place = (n: string, depth: number, a0: number, a1: number, parent: string | null) => {
-    const mid = (a0 + a1) / 2;
-    const r = depth * ringGap;
-    nodes.push({ name: n, x: c + r * Math.cos(mid), y: c + r * Math.sin(mid), w: BOX_W, h: BOX_H, depth, rows: byName.get(n)!.rows, parent });
+  const assign = (n: string, depth: number, a0: number, a1: number, parent: string | null) => {
+    angleOf.set(n, (a0 + a1) / 2); depthOf.set(n, depth); parentUsed.set(n, parent);
     if (parent) treeEdges.add(`${n}→${parent}`);
     const kids = children.get(n) ?? [];
     const total = kids.reduce((s, k) => s + (leaves.get(k) ?? 1), 0) || 1;
     let a = a0;
-    for (const k of kids) { const span = ((a1 - a0) * (leaves.get(k) ?? 1)) / total; place(k, depth + 1, a, a + span, n); a += span; }
+    for (const k of kids) { const span = ((a1 - a0) * (leaves.get(k) ?? 1)) / total; assign(k, depth + 1, a, a + span, n); a += span; }
   };
-  // The hub takes the whole circle for its descendants, minus a slice for other trees on the rim.
   const rimShare = otherLeaves ? Math.min(0.35, otherLeaves / (hubLeaves + otherLeaves)) : 0;
   const hubSpan = 2 * Math.PI * (1 - rimShare);
   const start = -Math.PI / 2;
-  // Hub at the centre; its children split the circle.
-  nodes.push({ name: hub, x: c, y: c, w: BOX_W + 12, h: BOX_H + 8, depth: 0, rows: byName.get(hub)!.rows, parent: null });
+  angleOf.set(hub, 0); depthOf.set(hub, 0); parentUsed.set(hub, null);
   const hubKids = children.get(hub) ?? [];
   const hubTotal = hubKids.reduce((s, k) => s + (leaves.get(k) ?? 1), 0) || 1;
   let a = start;
-  for (const k of hubKids) { const span = (hubSpan * (leaves.get(k) ?? 1)) / hubTotal; place(k, 1, a, a + span, hub); a += span; }
-  // Other trees share the remaining slice, on ring one outward.
+  for (const k of hubKids) { const span = (hubSpan * (leaves.get(k) ?? 1)) / hubTotal; assign(k, 1, a, a + span, hub); a += span; }
   let b = start + hubSpan;
-  for (const r of roots.slice(1)) { const span = (2 * Math.PI * rimShare * (leaves.get(r) ?? 1)) / Math.max(1, otherLeaves); place(r, 1, b, b + span, null); b += span; }
+  for (const r of roots.slice(1)) { const span = (2 * Math.PI * rimShare * (leaves.get(r) ?? 1)) / Math.max(1, otherLeaves); assign(r, 1, b, b + span, null); b += span; }
+
+  // Second pass: each ring's radius comes from the tightest angular gap on
+  // it, with neighbours staggered in and out so every other box only has to
+  // clear the one two along. That is what keeps a crowded ring readable
+  // instead of a pile of boxes over each other.
+  const maxDepth = Math.max(0, ...depthOf.values());
+  const GAP = 24, STAGGER = BOX_H + 18;
+  const radii: number[] = [0];
+  const stagger = new Map<string, number>();
+  const boxW = (d: number) => (d === 0 ? BOX_W + 12 : BOX_W), boxH = (d: number) => (d === 0 ? BOX_H + 8 : BOX_H);
+  const at = (n: string, r: number) => ({ x: r * Math.cos(angleOf.get(n)!), y: r * Math.sin(angleOf.get(n)!) });
+  const collide = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.abs(a.x - b.x) < BOX_W + GAP && Math.abs(a.y - b.y) < BOX_H + GAP / 2;
+  for (let d = 1; d <= maxDepth; d++) {
+    const ring = [...depthOf.entries()].filter(([, k]) => k === d).map(([n]) => n).sort((x, y) => angleOf.get(x)! - angleOf.get(y)!);
+    ring.forEach((n, i) => stagger.set(n, i % 2 === 0 ? -STAGGER / 2 : STAGGER / 2));
+    // Start from a first guess off the every-other angular gap, then widen
+    // the ring until no two boxes on it collide. Guaranteed, and still
+    // deterministic.
+    let minGap2 = 2 * Math.PI;
+    if (ring.length >= 3) for (let i = 0; i < ring.length; i++) {
+      let g = angleOf.get(ring[(i + 2) % ring.length])! - angleOf.get(ring[i])!; if (g <= 0) g += 2 * Math.PI; minGap2 = Math.min(minGap2, g);
+    }
+    let r = Math.max(radii[d - 1] + BOX_W + STAGGER + 40, ring.length ? (BOX_W + GAP) / Math.max(0.02, minGap2) : 0);
+    for (let iter = 0; iter < 60; iter++) {
+      const p = ring.map((n) => at(n, r + stagger.get(n)!));
+      let hit = false;
+      for (let i = 0; i < p.length && !hit; i++) for (let j = i + 1; j < p.length; j++) if (collide(p[i], p[j])) { hit = true; break; }
+      if (!hit) break;
+      r *= 1.08;
+    }
+    radii[d] = r;
+  }
+  const size = 2 * (radii[maxDepth] + STAGGER + BOX_W) + 40;
+  const c = size / 2;
+  const nodes: MapNode[] = [];
+  for (const [n, depth] of depthOf) {
+    const r = depth === 0 ? 0 : radii[depth] + (stagger.get(n) ?? 0);
+    const q = at(n, r);
+    nodes.push({ name: n, x: c + q.x, y: c + q.y, w: boxW(depth), h: boxH(depth), depth, rows: byName.get(n)!.rows, parent: parentUsed.get(n) ?? null });
+  }
+  nodes.sort((x, y) => x.depth - y.depth || x.name.localeCompare(y.name));
 
   for (const e of edges) e.tree = treeEdges.has(`${e.from}→${e.to}`);
   const orphans = tables.filter((t) => !t.foreignKeys.length && t.inbound === 0).map((t) => t.name);
@@ -165,9 +198,41 @@ export function suggestConsolidations(shape: DataShape): Consolidation[] {
     const real = x.columns.filter((c) => !c.pk);
     if (real.length < 8) continue;
     const nullable = real.filter((c) => c.nullable).length;
-    if (nullable / real.length >= 0.75) out.push({ kind: "wide-nullable", tables: [x.name], reason: `${nullable} of ${real.length} columns are optional.`, suggestion: "Several kinds of row are probably sharing one table; a type column or a split would make the shape honest." });
+    if (nullable / real.length < 0.75) continue;
+    // One row per parent row (a unique FK, or a *_profiles/_settings name) is a
+    // profile that fills in gradually: optional by design. The useful note is
+    // the column groups, not a split by type.
+    const oneToOne = (x.foreignKeys.length === 1 && x.inbound === 0 && t.some((p) => p.name === x.foreignKeys[0].refTable && p.rows > 0 && x.rows <= p.rows)) || /_(profiles?|settings|preferences)$/.test(x.name);
+    if (oneToOne) {
+      const groups = columnGroups(real.filter((c) => c.nullable).map((c) => c.name));
+      out.push({ kind: "wide-nullable", tables: [x.name], reason: `${nullable} of ${real.length} columns are optional — expected for a profile that fills in over time, one row per ${x.foreignKeys[0]?.refTable ?? "owner"}.`, suggestion: groups.length ? `The columns fall into groups that different features read: ${groups.map((g) => `${g.label} (${g.columns.length})`).join(", ")}. Each group could be one jsonb column or its own small table if only one feature touches it.` : "Fine as it is unless one feature reads most of it and the rest never does." });
+    } else {
+      out.push({ kind: "wide-nullable", tables: [x.name], reason: `${nullable} of ${real.length} columns are optional.`, suggestion: "Several kinds of row are probably sharing one table; a type column or a split would make the shape honest." });
+    }
   }
   return out.slice(0, 20);
+}
+
+/** Optional columns grouped by what they're about, from their names: links, media, style/preference enums, parsed documents, and the rest. */
+export function columnGroups(names: string[]): { label: string; columns: string[] }[] {
+  // First match wins, so a resume_url is a document and an avatar_url is media, not a link.
+  const rules: { label: string; test: RegExp }[] = [
+    { label: "media", test: /avatar|cover|image|photo|logo|banner/ },
+    { label: "experience & documents", test: /experience|education|portfolio|resume|skills|interests|parsed/ },
+    { label: "working style & preferences", test: /_style$|tolerance|_vs_|builder_type|hours_per|looking_for|availability|preference/ },
+    { label: "links", test: /_url$|^url$|website|github|linkedin|twitter|handle/ },
+    { label: "identity & bio", test: /display_name|username|headline|bio|location|tagline|summary/ },
+  ];
+  const taken = new Set<string>();
+  const out = rules.map((r) => {
+    const columns = names.filter((n) => !taken.has(n) && r.test.test(n));
+    columns.forEach((n) => taken.add(n));
+    return { label: r.label, columns };
+  }).filter((g) => g.columns.length >= 2);
+  const used = new Set(out.flatMap((g) => g.columns));
+  const rest = names.filter((n) => !used.has(n));
+  if (rest.length >= 2 && out.length) out.push({ label: "other", columns: rest });
+  return out;
 }
 
 /** What the schema is, in words: the hub, the relations, what stands alone. */
