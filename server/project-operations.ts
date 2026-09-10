@@ -142,7 +142,16 @@ export function renderAudit(audit: any): string {
       ? `Measured: ${f.scan.linesOfCode?.toLocaleString?.() ?? f.scan.linesOfCode} lines, ${f.scan.routeCount} routes, ${f.scan.dataModels?.length ?? 0} data models, ${f.scan.testFiles} test files, CI ${f.scan.hasCi ? "configured" : "absent"}${f.scan.suspectedSecrets?.length ? `, ${f.scan.suspectedSecrets.length} possible committed credential(s)` : ""}.`
       : null,
     "Where the audit and the board disagree, the audit is the evidence. Say so, and offer to correct the board.",
-      ...((audit.signals as any)?.productDocs?.length
+      // What the code actually exposes. Without this, Nova plans "an inventory
+    // of routes" instead of reading the one the audit already took, and
+    // re-invents guards (kill switches, rate limits) that exist.
+    ...((audit.signals as any)?.routes?.length
+      ? [`ROUTES AND PAGES FOUND IN CODE (${(audit.signals as any).routes.length}; every write or cost endpoint you plan for must come from this list, by exact path — never a guessed one)\n${(audit.signals as any).routes.slice(0, 120).map((r: any) => `- ${r.label}  [${r.file}]`).join("\n")}`]
+      : []),
+    ...((audit.signals as any)?.authSignals?.length || (audit.signals as any)?.envVarNames?.length
+      ? [`GUARDS AND INFRASTRUCTURE ALREADY IN CODE: ${[...((audit.signals as any).authSignals ?? [])].join("; ") || "none detected"}. Environment variables referenced: ${((audit.signals as any).envVarNames ?? []).slice(0, 40).join(", ") || "none"}. Before planning a safety mechanism, check this and the file tree for an existing one (server/surfaces.ts = kill switches; server/moderation.ts = durable rate limits and moderation log, if present) and extend it rather than proposing it from scratch.`]
+      : []),
+    ...((audit.signals as any)?.productDocs?.length
       ? [`THE BUILDER'S OWN DOCS (from the repo, ${(audit.signals as any).productDocs.length} files about loops, journeys or the plan)\n${(audit.signals as any).productDocs.slice(0, 6).map((d: any, i: number) => `### ${d.path}\n${String(d.excerpt).slice(0, i === 0 ? 4000 : 1500)}`).join("\n\n")}`]
       : []),
 ].filter(Boolean).join("\n");

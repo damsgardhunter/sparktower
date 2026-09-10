@@ -28,7 +28,7 @@ export async function getTestApp(): Promise<Express> {
   if (cached) return cached.app;
 
   const server = createServer();
-  const app = await createApp({ httpServer: server, logRequests: false });
+  const app = await createApp({ httpServer: server, logRequests: process.env.TEST_LOG_REQUESTS === "1" });
 
   /*
    * Kill switches decide whether whole route prefixes answer at all, so the

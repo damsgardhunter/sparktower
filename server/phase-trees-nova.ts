@@ -119,7 +119,8 @@ export async function produceWork(
 Give exactly three options with genuinely different emphases, never three rewordings. Each body must be usable as-is.`
     : kind === "build"
     ? `{"kind":"build","summary":"2–3 sentences: what this builds and where it goes","files":[{"path":"relative/path","language":"ts","content":"complete file contents","purpose":"one line"}],"runSteps":["exact commands or clicks, in order"],"verify":"the one check that proves it works","assumptions":["anything you had to assume about their stack or repo"]}
-Write real, complete code for their stack — not pseudocode, not placeholders, no '...'. Match the data model and loop written in the artifacts. Keep it to the files this milestone needs (usually 1–4). If the milestone is not code (a deploy, an analytics wiring), files may be config and runSteps carry the work.`
+Write real, complete code for their stack — not pseudocode, not placeholders, no '...'. Match the data model and loop written in the artifacts. Keep it to the files this milestone needs (usually 1–4). If the milestone is not code (a deploy, an analytics wiring), files may be config and runSteps carry the work.
+Never write "unknown", "needs inventory" or "not derivable" about the codebase: the PROJECT STATE carries the audit's route list, file tree, guards and env vars. Use those exact paths and names. If something truly isn't in the state, say which file to open to find it, in one line, and build the rest.`
     : `{"kind":"template","intro":"one sentence","template":"the thing they will use — a message, a list structure, an observation sheet — complete and in their product's words","whatNovaDid":"one line","whatIsLeft":"one line: the part only they can do"}`;
 
   const completion = await openai.chat.completions.create({
