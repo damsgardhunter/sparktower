@@ -2610,14 +2610,15 @@ RULES:
         const known = ship ? (await storage.getProjectKanbanTasks(projectId)).filter((t) => t.tags?.includes("kind:loop") && t.tags?.includes("parent:SHIP.M1.2")).map((t) => t.title) : [];
         const result = await readExistingProgress(ent, backbone, state, { findLoops: ship, knownLoops: known });
         recognised = result.done; read = result.read;
-        // Loops are proposed, never applied unseen: the builder accepts,
-        // edits, merges or drops them, then they're recorded.
-        if (ship && result.loops.length) loops = { created: [], updated: [], found: result.loops };
+        if (ship && result.loops.length) {
+          const r = await reconcileLoops(projectId, result.loops);
+          loops = { ...r, found: result.loops };
+        }
         await storage.deductCredits(userId, CREDIT_COSTS.taskAssist);
       }
       const { marked, filled } = await reconcileMilestones(projectId, recognised, "nova");
       const status = await pathStatus(projectId);
-      res.json({ built: built.created, recognised: recognised.filter((r) => marked.includes(r.id)), filled, proposedLoops: loops.found, plan: status?.adopted ? status.plan : null, read });
+      res.json({ built: built.created, recognised: recognised.filter((r) => marked.includes(r.id)), filled, loops, plan: status?.adopted ? status.plan : null, read });
     } catch (error: any) {
       if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
       console.error("Path adopt error:", error);
@@ -2807,23 +2808,6 @@ RULES:
       if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code, field: error.field });
       console.error("Path loop error:", error);
       res.status(500).json({ message: "Couldn't add that loop" });
-    }
-  });
-
-  /** The loops the builder accepted from Nova's proposals (edited as they like). */
-  app.post("/api/projects/:id/path/loops/accept", isAuthenticated, async (req: any, res) => {
-    try {
-      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      const loops = (Array.isArray(req.body?.loops) ? req.body.loops : [])
-        .map((l: any) => ({ title: String(l?.title ?? "").trim().slice(0, 80), steps: String(l?.steps ?? "").trim().slice(0, 1000), state: (["built", "partly", "planned"].includes(l?.state) ? l.state : "planned") as "built" | "partly" | "planned", evidence: "accepted by you" }))
-        .filter((l: any) => l.title);
-      if (!loops.length) return res.status(400).json({ message: "Pick at least one loop.", code: "invalid_input", field: "loops" });
-      const r = await reconcileLoops(req.params.id, loops);
-      res.json(r);
-    } catch (error: any) {
-      if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
-      console.error("Path loops accept error:", error);
-      res.status(500).json({ message: "Couldn't add those loops" });
     }
   });
 

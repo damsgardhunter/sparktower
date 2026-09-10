@@ -491,7 +491,9 @@ describe("keep building", () => {
 
     // Work through the round; branch work is pace.
     const before = s.pace;
-    const tasks = (await agent.get(`/api/projects/${id}/kanban`)).body;
+    const kanban = await agent.get(`/api/projects/${id}/kanban`);
+    expect(kanban.status, JSON.stringify(kanban.body).slice(0, 300)).toBe(200);
+    const tasks = kanban.body;
     for (const b of ["SHIP.B.1", "SHIP.B.2", "SHIP.B.3"]) await agent.patch(`/api/kanban/${tasks.find((t: any) => t.tags?.includes(`backbone:${b}`)).id}`).send({ status: "done" });
     s = (await agent.get(`/api/projects/${id}/path`)).body;
     expect(s.next.id).toBe("SHIP.B.4");
@@ -586,20 +588,18 @@ describe("the loop tree", () => {
   });
 });
 
-describe("loops are reviewed, not imposed", () => {
-  it("accepts only what the builder kept, and a wrong loop can be removed without losing finished work", async () => {
+describe("a wrong loop can be removed", () => {
+  it("takes its unfinished steps with it and keeps finished work on the board", async () => {
     const app = await getTestApp();
     const agent = await owner(app);
-    const id = (await create(agent, "ship_mvp", "saas", "Review Test")).body.id;
-    const { createExpansion } = await import("../../server/phase-trees");
+    const id = (await create(agent, "ship_mvp", "saas", "Remove Test")).body.id;
+    const { createExpansion, reconcileLoops } = await import("../../server/phase-trees");
 
-    expect((await agent.post(`/api/projects/${id}/path/loops/accept`).send({ loops: [] })).status).toBe(400);
-    const r = await agent.post(`/api/projects/${id}/path/loops/accept`).send({ loops: [
-      { title: "Weekly check-in", steps: "post → get comments → post again", state: "built" },
-      { title: "Explore the feed", steps: "open → read → react → follow", state: "partly" },
-    ] });
-    expect(r.status).toBe(200);
-    expect(r.body.created).toHaveLength(2);
+    const r = await reconcileLoops(id, [
+      { title: "Weekly check-in", steps: "post → get comments → post again", state: "built", evidence: "" },
+      { title: "Explore the feed", steps: "open → read → react → follow", state: "partly", evidence: "" },
+    ]);
+    expect(r.created).toHaveLength(2);
     let tree = (await agent.get(`/api/projects/${id}/path`)).body.loopTree;
     expect(tree.loops.map((l: any) => l.title)).toEqual(["Weekly check-in", "Explore the feed"]);
 

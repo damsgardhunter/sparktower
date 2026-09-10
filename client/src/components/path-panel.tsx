@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { WorkView, refreshPath, useFail, type WorkRow } from "@/components/path-work";
 import { MilestoneDetail } from "@/components/path-milestone";
-import { LoopTree, LoopReview, type LoopTreeData, type ProposedLoop } from "@/components/loop-tree";
+import { LoopTree, type LoopTreeData } from "@/components/loop-tree";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -109,16 +109,15 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
     },
     onError: fail,
   });
-  const [proposed, setProposed] = useState<ProposedLoop[] | null>(null);
   const adopt = useMutation({
     mutationFn: () => apiRequest("POST", `/api/projects/${projectId}/path/adopt`, {}).then((r) => r.json()),
     onSuccess: (r: any) => {
       refresh();
-      if (r.proposedLoops?.length) setProposed(r.proposedLoops);
       const bits = [
         r.recognised?.length ? `${r.recognised.length} milestone${r.recognised.length === 1 ? "" : "s"} marked done` : null,
         r.filled?.length ? `${r.filled.length} written in from your brief and audit` : null,
-        r.proposedLoops?.length ? `${r.proposedLoops.length} possible loop${r.proposedLoops.length === 1 ? "" : "s"} to review below` : null,
+        r.loops?.created?.length ? `${r.loops.created.length} loop${r.loops.created.length === 1 ? "" : "s"} found (${r.loops.found.map((l: any) => l.title).join(", ")})` : null,
+        r.plan && r.plan.loops > 1 ? `plan re-sized for ${r.plan.loops} loops: ${Math.round(r.plan.authoredDays / 7)} weeks` : null,
       ].filter(Boolean);
       toast({ title: bits.length ? `Nova re-read your project: ${bits.join(", ")}` : (r.built ? "Your project is on its path" : "Nothing new — the path already matches what Nova can see"), description: r.read || undefined });
     },
@@ -235,10 +234,6 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
           <Button size="sm" variant="ghost" className="h-6 text-xs" disabled={branch.isPending} onClick={() => branch.mutate({ phaseId: data.branch!.phaseId, extend: true })} data-testid="button-extend-again"><Repeat className="h-3 w-3 mr-1" />Extend again</Button>
           <Button size="sm" variant="ghost" className="h-6 text-xs" disabled={branch.isPending} onClick={() => branch.mutate({ phaseId: null })} data-testid="button-leave-branch"><LogOut className="h-3 w-3 mr-1" />Go to users</Button>
         </div>
-      )}
-
-      {proposed && (
-        <LoopReview projectId={projectId} proposals={proposed} onDone={() => { setProposed(null); refresh(); }} />
       )}
 
       {/* Week 2's screen: the product as a tree of loops, each with its steps. */}

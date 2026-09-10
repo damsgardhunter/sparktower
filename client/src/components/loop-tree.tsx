@@ -24,55 +24,6 @@ const STATE: Record<LoopNode["state"], { label: string; cls: string }> = {
   built: { label: "Built", cls: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" },
 };
 
-export interface ProposedLoop { title: string; steps: string; state: "built" | "partly" | "planned"; evidence: string }
-
-/**
- * Nova's proposed loops, reviewed before anything is recorded. Untick what
- * isn't a loop, edit names and steps, and accept — merging is editing one
- * entry to hold both and unticking the other.
- */
-export function LoopReview({ projectId, proposals, onDone }: { projectId: string; proposals: ProposedLoop[]; onDone: () => void }) {
-  const { toast } = useToast();
-  const fail = useFail();
-  const [rows, setRows] = useState(proposals.map((p) => ({ ...p, keep: true })));
-  const accept = useMutation({
-    mutationFn: (loops: ProposedLoop[]) => apiRequest("POST", `/api/projects/${projectId}/path/loops/accept`, { loops }).then((r) => r.json()),
-    onSuccess: (r: any) => { toast({ title: `${r.created.length} loop${r.created.length === 1 ? "" : "s"} added${r.updated.length ? `, ${r.updated.length} updated` : ""}` }); onDone(); },
-    onError: fail,
-  });
-  const kept = rows.filter((r) => r.keep && r.title.trim());
-  return (
-    <div className="rounded-lg border border-primary/40 p-3 space-y-2" data-testid="loop-review">
-      <div className="flex items-center gap-2">
-        <Sparkles className="h-4 w-4 text-primary" />
-        <p className="text-sm font-semibold">Nova thinks these might be your loops</p>
-        <span className="text-xs text-muted-foreground">A loop is what one kind of user does over and over. Untick anything that's a feature or a setup path, fix names and steps, then add.</span>
-      </div>
-      <ul className="space-y-2">
-        {rows.map((r, i) => (
-          <li key={i} className={`rounded-md border p-2 space-y-1 ${r.keep ? "border-border" : "border-border/40 opacity-60"}`} data-testid={`proposal-${i}`}>
-            <div className="flex items-center gap-2">
-              <input type="checkbox" checked={r.keep} onChange={(e) => setRows(rows.map((x, j) => j === i ? { ...x, keep: e.target.checked } : x))} data-testid={`proposal-keep-${i}`} />
-              <input className="flex-1 rounded-md border border-border bg-background px-2 py-1 text-sm" value={r.title} onChange={(e) => setRows(rows.map((x, j) => j === i ? { ...x, title: e.target.value } : x))} data-testid={`proposal-title-${i}`} />
-              <select className="rounded-md border border-border bg-background px-2 py-1 text-xs" value={r.state} onChange={(e) => setRows(rows.map((x, j) => j === i ? { ...x, state: e.target.value as ProposedLoop["state"] } : x))}>
-                <option value="built">built</option><option value="partly">partly</option><option value="planned">planned</option>
-              </select>
-            </div>
-            <Textarea rows={2} className="text-xs" value={r.steps} onChange={(e) => setRows(rows.map((x, j) => j === i ? { ...x, steps: e.target.value } : x))} data-testid={`proposal-steps-${i}`} />
-            {r.evidence && <p className="text-[11px] text-muted-foreground">Why Nova thinks so: {r.evidence}</p>}
-          </li>
-        ))}
-      </ul>
-      <div className="flex gap-2">
-        <Button size="sm" disabled={accept.isPending || kept.length === 0} onClick={() => accept.mutate(kept.map(({ keep: _k, ...l }) => l))} data-testid="button-accept-loops">
-          {accept.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Plus className="h-3.5 w-3.5 mr-1.5" />}Add {kept.length} loop{kept.length === 1 ? "" : "s"}
-        </Button>
-        <Button size="sm" variant="ghost" onClick={onDone}>Not now</Button>
-      </div>
-    </div>
-  );
-}
-
 /** The latest work on one task, fetched when a node is opened. */
 function NodeWork({ projectId, taskId, actor, done }: { projectId: string; taskId: string; actor: Actor; done: boolean }) {
   const { data, isLoading } = useQuery<{ work: WorkRow | null }>({

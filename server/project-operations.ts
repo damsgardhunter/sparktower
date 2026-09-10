@@ -122,7 +122,7 @@ export function renderAudit(audit: any): string {
       : "Its suggested changes have NOT been applied to the board yet.",
     f.stackSummary ? `Stack actually in the code: ${f.stackSummary}` : null,
     audit.summary ? `Nova's read: ${audit.summary}` : null,
-    f.built?.length ? `Verified as built: ${list(f.built, (b) => b.item, 10)}` : null,
+    f.built?.length ? `Verified as built: ${list(f.built, (b) => b.item, 20)}` : null,
     f.partial?.length ? `Partly built: ${list(f.partial, (b) => `${b.item} (missing: ${b.missing})`, 6)}` : null,
     f.missing?.length ? `Missing from the code entirely: ${list(f.missing, (b) => b.item, 10)}` : null,
     f.undocumented?.length ? `In the code but not in the plan: ${list(f.undocumented, (b) => b.item, 6)}` : null,
@@ -142,7 +142,10 @@ export function renderAudit(audit: any): string {
       ? `Measured: ${f.scan.linesOfCode?.toLocaleString?.() ?? f.scan.linesOfCode} lines, ${f.scan.routeCount} routes, ${f.scan.dataModels?.length ?? 0} data models, ${f.scan.testFiles} test files, CI ${f.scan.hasCi ? "configured" : "absent"}${f.scan.suspectedSecrets?.length ? `, ${f.scan.suspectedSecrets.length} possible committed credential(s)` : ""}.`
       : null,
     "Where the audit and the board disagree, the audit is the evidence. Say so, and offer to correct the board.",
-  ].filter(Boolean).join("\n");
+      ...((audit.signals as any)?.productDocs?.length
+      ? [`THE BUILDER'S OWN DOCS (from the repo, ${(audit.signals as any).productDocs.length} files about loops, journeys or the plan)\n${(audit.signals as any).productDocs.slice(0, 6).map((d: any) => `### ${d.path}\n${String(d.excerpt).slice(0, 1800)}`).join("\n\n")}`]
+      : []),
+].filter(Boolean).join("\n");
 }
 
 /**

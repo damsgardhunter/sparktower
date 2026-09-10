@@ -50,6 +50,68 @@ export interface DigestSignals {
   authSignals: string[];
   dependencyCount: number;
   topLevelDirs: string[];
+  /**
+   * The product's own written intent: markdown files that talk about loops,
+   * user journeys, phases or the plan. Builders write down what they mean
+   * to build; an audit that only reads code misses it. Kept on the audit so
+   * Nova's later reads (where is this project, what loops is it going for)
+   * can quote them.
+   */
+  productDocs: ProductDoc[];
+}
+
+export interface ProductDoc {
+  path: string;
+  /** How many loop/journey/phase terms it uses — the ranking signal. */
+  intentHits: number;
+  /** The most relevant passages, not the whole file. */
+  excerpt: string;
+}
+
+const INTENT_TERMS = /\b(loop|loops|user journey|journey|wedge|flywheel|retention|core action|habit|phase|milestone|roadmap|path|persona|jobs?-to-be-done)\b/gi;
+
+/**
+ * Picks the markdown that explains the product rather than the code: ranked
+ * by intent terms, excerpted around the paragraphs that use them, capped so
+ * a docs-heavy repo doesn't crowd the digest.
+ */
+export function collectProductDocs(files: RepoFile[], max = 8, perDoc = 2400): ProductDoc[] {
+  const docs = files.filter((f) => f.content && /\.(md|mdx)$/i.test(f.path)
+    && !/(^|\/)(node_modules|vendor|dist|build|\.git)\//.test(f.path)
+    && !/(^|\/)(CHANGELOG|LICENSE|CODE_OF_CONDUCT|CONTRIBUTING|SECURITY|PULL_REQUEST_TEMPLATE)/i.test(f.path));
+  const ranked = docs.map((f) => {
+    const content = f.content!;
+    const hits = (content.match(INTENT_TERMS) || []).length;
+    return { f, hits };
+  }).filter((d) => d.hits > 0).sort((a, b) => b.hits - a.hits || a.f.path.length - b.f.path.length).slice(0, max);
+  return ranked.map(({ f, hits }) => {
+    // Paragraphs that use the terms, with their nearest heading, in file order.
+    const paras = f.content!.split(/\n\s*\n/);
+    let heading = "";
+    // A heading about loops makes the paragraphs under it relevant even when
+    // they don't repeat the word; the heading itself is context, not content.
+    let underRelevantHeading = 0;
+    const picked: string[] = [];
+    let used = 0;
+    for (const para of paras) {
+      const h = para.match(/^#{1,4}\s+(.+)$/m);
+      if (h) {
+        heading = h[1].trim();
+        INTENT_TERMS.lastIndex = 0;
+        underRelevantHeading = INTENT_TERMS.test(heading) ? 3 : 0;
+        if (para.trim() === h[0].trim()) continue;
+      }
+      INTENT_TERMS.lastIndex = 0;
+      const relevant = INTENT_TERMS.test(para) || underRelevantHeading > 0;
+      if (underRelevantHeading > 0) underRelevantHeading--;
+      if (!relevant) continue;
+      const block = (heading ? `[${heading}] ` : "") + para.replace(/^#{1,4}\s+.+$/m, "").trim().replace(/\s+/g, " ");
+      if (!block.replace(/^\[[^\]]*\]\s*/, "")) continue;
+      if (used + block.length > perDoc) { picked.push(block.slice(0, Math.max(0, perDoc - used)) + "…"); break; }
+      picked.push(block); used += block.length;
+    }
+    return { path: f.path, intentHits: hits, excerpt: picked.join("\n") };
+  });
 }
 
 const LANGUAGE_BY_EXT: Record<string, string> = {
@@ -373,6 +435,7 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
   const hasDocker = files.some((f) => /(^|\/)(Dockerfile|docker-compose\.ya?ml)$/.test(f.path));
   const hasCi = files.some((f) => /^\.github\/workflows\/.+\.ya?ml$/.test(f.path) || /(^|\/)(\.gitlab-ci\.yml|\.circleci\/config\.yml|azure-pipelines\.yml|Jenkinsfile)$/.test(f.path));
   const readme = findFile(files, (p) => /^readme(\.md|\.rst|\.txt)?$/i.test(p.split("/").pop() || ""));
+  const productDocs = collectProductDocs(files);
   const envExample = findFile(files, (p) => /\.env\.(example|sample|template)$/.test(p));
 
   // --- environment variables (names only — never values) ------------------
@@ -418,6 +481,7 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
     testFrameworks: [...testFrameworks],
     hasCi, hasDocker,
     hasReadme: !!readme,
+    productDocs,
     hasEnvExample: !!envExample,
     envVarNames: [...envVarNames].sort().slice(0, 60),
     todoCount, consoleCount,
@@ -484,6 +548,10 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
     section("SOURCE EXCERPTS (opening lines of the most revealing files)",
       excerpts.map((e) => `### ${e.path} (${e.lines} lines)\n\`\`\`\n${e.body}\n\`\`\``).join("\n\n")),
     readme?.content ? section("README", text(readme.content, 3000)) : "",
+    productDocs.length
+      ? section(`THE BUILDER'S OWN DOCS (${productDocs.length} files that describe loops, journeys or the plan — what they MEAN to build; check it against what the code shows)`,
+        productDocs.map((d) => `### ${d.path}\n${d.excerpt}`).join("\n\n"))
+      : "",
   ].filter(Boolean).join("\n\n");
 
   return { signals, prompt };
