@@ -52,7 +52,9 @@ describe("the data source setting", () => {
     const app = await getTestApp();
     const { agent } = await signedIn(app, "owner");
     const { agent: other } = await signedIn(app, "other");
-    const id = (await agent.post("/api/projects").send({ title: "DS", description: "A project whose data source is being configured.", category: "saas", goal: "ship_mvp", subcategory: "saas" })).body.id;
+    const created = await agent.post("/api/projects").send({ title: "DS", description: "A project whose data source is being configured.", category: "saas", goal: "ship_mvp", subcategory: "saas" });
+    expect(created.status, JSON.stringify(created.body).slice(0, 300)).toBe(200);
+    const id = created.body.id;
 
     expect((await agent.get(`/api/projects/${id}/data-source`)).body).toEqual({ configured: false, kind: null });
     expect((await other.get(`/api/projects/${id}/data-source`)).status).toBe(403);
@@ -61,7 +63,9 @@ describe("the data source setting", () => {
     expect((await agent.put(`/api/projects/${id}/data-source`).send({ url: "self" })).body.code).toBe("self_not_allowed");
 
     const ok = await agent.put(`/api/projects/${id}/data-source`).send({ url: "postgresql://ro:secretpw@db.example.com:5432/app" });
-    expect(ok.body).toEqual({ configured: true, kind: "connection" });
+    expect(ok.body).toMatchObject({ configured: true, kind: "connection" });
+    // An unreachable host reads soft: the source is saved, the shape carries the error.
+    expect(ok.body.shape?.error).toBeTruthy();
     const { db } = await import("../../server/db");
     const { projects } = await import("@shared/schema");
     const { eq } = await import("drizzle-orm");
@@ -72,7 +76,7 @@ describe("the data source setting", () => {
     // A plain patch can't touch it.
     await agent.patch(`/api/projects/${id}`).send({ dataSource: "self" });
     expect((await db.select({ ds: projects.dataSource }).from(projects).where(eq(projects.id, id)))[0].ds).toMatch(/^v1\./);
-    expect((await agent.put(`/api/projects/${id}/data-source`).send({ url: null })).body).toEqual({ configured: false, kind: null });
+    expect((await agent.put(`/api/projects/${id}/data-source`).send({ url: null })).body).toMatchObject({ configured: false, kind: null, shape: null });
   });
 });
 
