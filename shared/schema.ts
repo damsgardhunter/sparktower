@@ -1177,6 +1177,18 @@ export const pathWork = pgTable("path_work", {
 }, (t) => [index("path_work_task_idx").on(t.taskId, t.createdAt)]);
 export type PathWork = typeof pathWork.$inferSelect;
 
+/**
+ * The latest read of a project's live database, kept on its own so the
+ * data map exists the moment a source is set, not after the next audit.
+ * Audits refresh it and copy it onto themselves for history.
+ */
+export const projectDataShapes = pgTable("project_data_shapes", {
+  projectId: varchar("project_id").primaryKey().references(() => projects.id, { onDelete: "cascade" }),
+  shape: jsonb("shape").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export type ProjectDataShape = typeof projectDataShapes.$inferSelect;
+
 export const activityEvents = pgTable("activity_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   /**

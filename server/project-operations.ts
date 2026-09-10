@@ -14,6 +14,7 @@ import { renderRouteCoverage } from "./route-coverage";
 import { renderAuditDelta } from "@shared/audit-delta";
 import { renderRuntime } from "./runtime-probe";
 import { renderDataShape } from "@shared/data-shape";
+import { getDataShape } from "./data-shape";
 
 /** One edit Nova wants to make. Shapes mirror the JSON Nova is told to emit. */
 export type ProjectOperation =
@@ -103,7 +104,7 @@ function parseDate(v: unknown): Date | null {
  * Deliberately compact. The full findings run to several thousand words; what
  * every caller needs is the verdict, the gaps and the reconciliation.
  */
-export function renderAudit(audit: any): string {
+export function renderAudit(audit: any, dataShape?: any): string {
   if (!audit) {
     return [
       "LATEST CODEBASE AUDIT",
@@ -128,7 +129,7 @@ export function renderAudit(audit: any): string {
     f.stackSummary ? `Stack actually in the code: ${f.stackSummary}` : null,
     audit.summary ? `Nova's read: ${audit.summary}` : null,
     renderRuntime(audit.runtime),
-    renderDataShape(audit.dataShape),
+    renderDataShape(dataShape ?? audit.dataShape),
     renderAuditDelta(audit.delta),
     renderCapabilities(f.capabilities),
     renderRouteCoverage((audit.signals as any)?.routeCoverage),
@@ -263,8 +264,8 @@ export async function collectProjectIds(projectId: string): Promise<string[]> {
  * context to begin with.
  */
 export async function renderLatestAudit(projectId: string): Promise<string> {
-  const audit = await storage.getLatestCodeAudit(projectId).catch(() => undefined);
-  return renderAudit(audit);
+  const [audit, shape] = await Promise.all([storage.getLatestCodeAudit(projectId).catch(() => undefined), getDataShape(projectId).catch(() => null)]);
+  return renderAudit(audit, shape);
 }
 
 /**
@@ -309,7 +310,7 @@ export async function buildOperableProjectState(
     project.repoUrl ? `REPO: ${project.repoUrl}` : "REPO: (none linked)",
     project.liveUrl ? `LIVE URL: ${project.liveUrl}` : "LIVE URL: (not deployed, or not recorded)",
     `DESCRIPTION: ${project.description || "(empty)"}`,
-    opts.includeAudit === false ? null : renderAudit(audit),
+    opts.includeAudit === false ? null : renderAudit(audit, await getDataShape(projectId).catch(() => null)),
     `BRIEF FIELDS\n${BRIEF_FIELDS.map((f) => `- ${f}: ${(project as any)[f] || "(empty)"}`).join("\n")}`,
     `SCOPE\nMVP (${scope.mvp?.length || 0}): ${scope.mvp?.join(", ") || "(empty)"}\nNice to have (${scope.niceToHave?.length || 0}): ${scope.niceToHave?.join(", ") || "(empty)"}`,
     `TASKS ON THE BOARD (${tasks.length})\n${tasks.length

@@ -75,3 +75,41 @@ describe("the data source setting", () => {
     expect((await agent.put(`/api/projects/${id}/data-source`).send({ url: null })).body).toEqual({ configured: false, kind: null });
   });
 });
+
+describe("saving a source reads the database right then", () => {
+  it("returns the shape on save for the platform owner's 'self', serves it to members, and re-reads on demand", async () => {
+    const app = await getTestApp();
+    const { agent, email } = await signedIn(app, "platform-owner");
+    const { agent: member } = await signedIn(app, "member");
+    const { agent: stranger } = await signedIn(app, "stranger");
+    const id = (await agent.post("/api/projects").send({ title: "Self", description: "The platform owner's own project reading its own database.", category: "saas", goal: "ship_mvp", subcategory: "saas" })).body.id;
+    const memberId = (await member.get("/api/auth/user")).body.id;
+    const { db } = await import("../../server/db");
+    const { projectMembers } = await import("@shared/schema");
+    await db.insert(projectMembers).values({ projectId: id, userId: memberId, role: "member" } as any);
+
+    const prev = process.env.PLATFORM_OWNER_EMAIL;
+    process.env.PLATFORM_OWNER_EMAIL = email;
+    try {
+      const saved = await agent.put(`/api/projects/${id}/data-source`).send({ url: "self" });
+      expect(saved.status).toBe(200);
+      expect(saved.body).toMatchObject({ configured: true, kind: "self" });
+      expect(saved.body.shape.totals.tables).toBeGreaterThan(50);
+      expect(saved.body.shape.tables.find((t: any) => t.name === "projects").rows).toBe(1);
+    } finally { process.env.PLATFORM_OWNER_EMAIL = prev; }
+
+    const forMember = await member.get(`/api/projects/${id}/data-shape`);
+    expect(forMember.status).toBe(200);
+    expect(forMember.body.shape.totals.tables).toBeGreaterThan(50);
+    expect((await stranger.get(`/api/projects/${id}/data-shape`)).status).toBe(403);
+    expect((await member.post(`/api/projects/${id}/data-shape/refresh`)).status).toBe(403);
+    const again = await agent.post(`/api/projects/${id}/data-shape/refresh`);
+    expect(again.status).toBe(200);
+    expect(again.body.shape.totals.tables).toBeGreaterThan(50);
+
+    // Removing the source removes the map.
+    await agent.put(`/api/projects/${id}/data-source`).send({ url: null }).expect(200);
+    expect((await agent.get(`/api/projects/${id}/data-shape`)).body.shape).toBeNull();
+    expect((await agent.post(`/api/projects/${id}/data-shape/refresh`)).body.code).toBe("no_data_source");
+  });
+});

@@ -6,6 +6,11 @@
 import pg from "pg";
 import { isIP } from "net";
 import type { DataShape, ShapeTable } from "@shared/data-shape";
+import { db } from "./db";
+import { storage } from "./storage";
+import { projectDataShapes } from "@shared/schema";
+import { eq } from "drizzle-orm";
+import { open as openSecret } from "./secret-box";
 
 /** Postgres URLs only, to public hosts, with credentials; "self" is handled by the caller. */
 export function safeDbUrl(raw: string | null | undefined): URL | null {
@@ -81,4 +86,35 @@ export function compareWithCode(shape: DataShape, dataModels: { name: string }[]
   const codeSet = new Set(code.keys());
   const inDbNotInCode = shape.tables.map((t) => t.name).filter((n) => !has(codeSet, norm(n))).sort();
   return { ...shape, compare: { inCodeNotInDb, inDbNotInCode } };
+}
+
+/**
+ * Reads the project's database now, from whatever source the owner set,
+ * compares with the schema the latest audit saw in code (if any), and
+ * stores the result as the project's current shape. Null when no source
+ * is configured.
+ */
+export async function refreshDataShape(projectId: string): Promise<DataShape | null> {
+  const project = await storage.getProject(projectId);
+  if (!project?.dataSource) return null;
+  let shape: DataShape;
+  if (project.dataSource === "self") {
+    if (!process.env.DATABASE_URL) return null;
+    shape = await introspectDataShape(process.env.DATABASE_URL, "self");
+  } else {
+    const url = openSecret(project.dataSource);
+    if (!url) return { at: new Date().toISOString(), source: "connection", tables: [], totals: { tables: 0, rows: 0, emptyTables: 0 }, compare: null, error: "The stored connection could not be unsealed; set it again." };
+    shape = await introspectDataShape(url, "connection", { ssl: true });
+  }
+  const audit = await storage.getLatestCodeAudit(projectId).catch(() => undefined);
+  const models = ((audit?.signals as any)?.dataModels ?? []) as { name: string }[];
+  if (models.length) shape = compareWithCode(shape, models);
+  await db.insert(projectDataShapes).values({ projectId, shape, updatedAt: new Date() })
+    .onConflictDoUpdate({ target: projectDataShapes.projectId, set: { shape, updatedAt: new Date() } });
+  return shape;
+}
+
+export async function getDataShape(projectId: string): Promise<DataShape | null> {
+  const [row] = await db.select().from(projectDataShapes).where(eq(projectDataShapes.projectId, projectId));
+  return (row?.shape as DataShape) ?? null;
 }

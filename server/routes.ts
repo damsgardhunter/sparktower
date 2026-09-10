@@ -3,7 +3,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage, isTaskOnTime } from "./storage";
 import { db } from "./db";
-import { users, projectMembers, projects, userProfiles } from "@shared/schema";
+import { users, projectMembers, projects, userProfiles, projectDataShapes } from "@shared/schema";
 import { setupAuth, isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { registerAuthRoutes } from "./replit_integrations/auth/routes";
 import { attachBearerUser, registerMobileAuthRoutes } from "./mobile-auth";
@@ -49,7 +49,7 @@ import {
 import { isValidSubcategory, PROJECT_GOALS } from "@shared/goals";
 import { recordActivity } from "./analytics";
 import { seal } from "./secret-box";
-import { safeDbUrl } from "./data-shape";
+import { safeDbUrl, refreshDataShape, getDataShape } from "./data-shape";
 import { isOwner as isPlatformOwner } from "./platform-roles";
 import {
   instantiatePathTree, pathStatus, onPathTaskDone, createExpansion, createInjections,
@@ -2862,7 +2862,24 @@ RULES:
       stored = seal(value);
     }
     await db.update(projects).set({ dataSource: stored }).where(eq(projects.id, req.params.id));
-    res.json({ configured: !!stored, kind: stored === "self" ? "self" : stored ? "connection" : null });
+    // Read it now: the map should exist the moment the source does.
+    const shape = stored ? await refreshDataShape(req.params.id).catch((e) => ({ error: String(e?.message ?? e).slice(0, 200) })) : null;
+    if (!stored) await db.delete(projectDataShapes).where(eq(projectDataShapes.projectId, req.params.id));
+    res.json({ configured: !!stored, kind: stored === "self" ? "self" : stored ? "connection" : null, shape });
+  });
+
+  /** The project's current data shape, for the map. Members. */
+  app.get("/api/projects/:id/data-shape", isAuthenticated, async (req: any, res) => {
+    if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+    res.json({ shape: await getDataShape(req.params.id) });
+  });
+  /** Re-read the database now. Owner. */
+  app.post("/api/projects/:id/data-shape/refresh", isAuthenticated, async (req: any, res) => {
+    const project = await storage.getProject(req.params.id);
+    if (!project) return res.status(404).json({ message: "Project not found" });
+    if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Only the owner can do this" });
+    if (!project.dataSource) return res.status(400).json({ message: "Set a data source first.", code: "no_data_source" });
+    res.json({ shape: await refreshDataShape(req.params.id) });
   });
 
   /** What the builder wants Nova to keep in mind. Read by every Nova prompt. */

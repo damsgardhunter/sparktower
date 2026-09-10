@@ -27,8 +27,7 @@ import { CAPABILITY_AREAS, sanitizeCapabilities } from "@shared/capabilities";
 import { deepReadAll } from "./audit-deep-reads";
 import { computeAuditDelta } from "@shared/audit-delta";
 import { probeRuntime } from "./runtime-probe";
-import { introspectDataShape, compareWithCode } from "./data-shape";
-import { open as openSecret } from "./secret-box";
+import { refreshDataShape, compareWithCode } from "./data-shape";
 import { verifyMilestonesFromAudit } from "./phase-tree-verifiers";
 import { refreshPace } from "./phase-trees";
 
@@ -278,13 +277,8 @@ export function registerCodeAuditRoutes(app: Express) {
 
       // The live database, when the owner has said where it is, read before
       // the second reads so "built but unused" can be judged from rows.
-      let dataShape = null as Awaited<ReturnType<typeof introspectDataShape>> | null;
-      if (project.dataSource === "self" && process.env.DATABASE_URL) {
-        dataShape = compareWithCode(await introspectDataShape(process.env.DATABASE_URL, "self"), digest.signals.dataModels);
-      } else if (project.dataSource) {
-        const url = openSecret(project.dataSource);
-        if (url) dataShape = compareWithCode(await introspectDataShape(url, "connection", { ssl: true }), digest.signals.dataModels);
-      }
+      let dataShape = await refreshDataShape(projectId).catch(() => null);
+      if (dataShape && !dataShape.error) dataShape = compareWithCode(dataShape, digest.signals.dataModels);
 
       // Second reads: one narrow question per built or partial area, against
       // the full text of its evidence files and the exact route coverage.
