@@ -325,7 +325,10 @@ describe("Nova works the milestone", () => {
 
     // Break the loop steps into steps: the next action is now the first step, with its own task to work.
     const { created } = await createExpansion(id, "SHIP.M2.1", [{ title: "Scan the fridge", description: "Photo to inventory." }, { title: "Plan the week", description: "" }]);
-    for (const m of ["SHIP.M1.3", "SHIP.M1.4", "SHIP.M1.5", "SHIP.M1.6", "SHIP.M1.7", "SHIP.M1.8"]) await agent.post(`/api/projects/${id}/path/mark`).send({ ids: [m] });
+    for (const m of ["SHIP.M1.3", "SHIP.M1.4", "SHIP.M1.5", "SHIP.M1.6", "SHIP.M1.7", "SHIP.M1.8"]) {
+      const marked = await agent.post(`/api/projects/${id}/path/mark`).send({ ids: [m] });
+      expect(marked.status, `${m}: ${JSON.stringify(marked.body).slice(0, 200)}`).toBe(200);
+    }
     const week2 = (await agent.get(`/api/projects/${id}/path`)).body;
     expect(week2.next.id).toBe("SHIP.M2.1");
     expect(week2.next.step).toMatchObject({ taskId: created[0].id, title: "Scan the fridge" });

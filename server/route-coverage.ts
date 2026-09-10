@@ -135,8 +135,10 @@ export function buildRouteCoverage(files: RepoFile[]): RouteCoverage {
       const cost = credits || /\b(openai|anthropic)\s*\.|completions\.create\(|\bgetOpenAI\(\)/.test(body);
       rows.push({
         method, path, file: file.path, mounted, write, cost,
-        auth: /\b(isAuthenticated|requireAuth|withAuth|authMiddleware|ensureLoggedIn|requireUser|attachBearerUser)\b/.test(middleware) || /\brequireOwner\b|\brequireReviewer\b|\brequireAdmin\b/.test(middleware),
-        rateLimited: /\brateLimit\s*\(/.test(middleware) || /\benforceRateLimit\s*\(/.test(body) || credits,
+        // A guard counts wherever it sits in the chain: after an inline
+        // middleware, or as an explicit check at the top of the handler.
+        auth: /\b(isAuthenticated|requireAuth|withAuth|authMiddleware|ensureLoggedIn|requireUser|attachBearerUser)\b/.test(chunk) || /\brequireOwner\b|\brequireReviewer\b|\brequireAdmin\b/.test(middleware) || /if\s*\(\s*!req\.user(?:\?\.id)?\s*\)[^\n]*\b401\b/.test(chunk),
+        rateLimited: /\brateLimit\s*\(/.test(chunk) || /\benforceRateLimit\s*\(/.test(body) || credits,
         surface, credits,
         privileged: /\b(requireOwner|requireReviewer|requireAdmin|isAdmin)\b/.test(middleware + body.slice(0, 600)),
         guards,

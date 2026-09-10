@@ -41,7 +41,7 @@ export function registerObjectStorageRoutes(app: Express): void {
    * IMPORTANT: The client should NOT send the file to this endpoint.
    * Send JSON metadata only, then upload the file directly to uploadURL.
    */
-  app.post("/api/uploads/request-url", rateLimit("upload"), (req: any, res, next) => {
+  app.post("/api/uploads/request-url", (req: any, res, next) => {
     if (!req.user) return res.status(401).json({ error: "Authentication required" });
     next();
   }, rateLimit("upload"), async (req, res) => {
