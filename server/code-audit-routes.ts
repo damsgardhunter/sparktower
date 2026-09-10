@@ -24,6 +24,7 @@ import {
 } from "./code-ingest";
 import { buildCodeDigest } from "./code-digest";
 import { CAPABILITY_AREAS, sanitizeCapabilities } from "@shared/capabilities";
+import { deepReadAll } from "./audit-deep-reads";
 
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
@@ -269,12 +270,22 @@ export function registerCodeAuditRoutes(app: Express) {
         return res.status(502).json({ message: "Nova returned an unreadable audit. Please try again." });
       }
 
-      const findings = {
-        stackSummary: str(parsed.stackSummary, 400),
-        capabilities: sanitizeCapabilities(parsed.capabilities, {
+      // Second reads: one narrow question per built or partial area, against
+      // the full text of its evidence files and the exact route coverage.
+      // Independent and fault-tolerant; a failed read leaves the first-pass
+      // verdict, which is honest.
+      const capabilities = await deepReadAll(
+        ent,
+        sanitizeCapabilities(parsed.capabilities, {
           files: new Set(snapshot.files.map((f) => f.path)),
           routes: new Set(digest.signals.routes.map((r) => r.label)),
         }),
+        snapshot.files,
+        digest.signals.routeCoverage,
+      );
+      const findings = {
+        stackSummary: str(parsed.stackSummary, 400),
+        capabilities,
         built: (Array.isArray(parsed.built) ? parsed.built : []).slice(0, 30).map((b: any) => ({
           item: str(b?.item, 300), evidence: strList(b?.evidence, 8, 200),
         })).filter((b: any) => b.item),

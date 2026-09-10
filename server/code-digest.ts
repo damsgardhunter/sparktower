@@ -13,6 +13,7 @@
  * from the reasoning rather than from which files got sampled.
  */
 import type { RepoFile, RepoSnapshot } from "./code-ingest";
+import { buildRouteCoverage, renderRouteCoverage, type RouteCoverage } from "./route-coverage";
 
 const text = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
 
@@ -62,6 +63,8 @@ export interface DigestSignals {
   serverEntry: string | null;
   /** package.json scripts, names only, so a plan uses real commands. */
   scriptNames: string[];
+  /** Every route with the guards on it, and the gaps. Deterministic. */
+  routeCoverage: RouteCoverage;
   /**
    * The product's own written intent: markdown files that talk about loops,
    * user journeys, phases or the plan. Builders write down what they mean
@@ -526,6 +529,7 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
   const suspectedSecrets = detectSecrets(read);
   const authSignals = detectAuth(read);
   const guards = detectGuards(files);
+  const routeCoverage = buildRouteCoverage(files);
   const packageManager = detectPackageManager(files);
   const serverEntry = detectServerEntry(files);
 
@@ -557,6 +561,7 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
     packageManager,
     serverEntry,
     scriptNames: Object.keys(packageScripts).slice(0, 30),
+    routeCoverage: { ...routeCoverage, rows: routeCoverage.rows.slice(0, 200) },
   };
 
   // --- excerpts -----------------------------------------------------------
@@ -603,6 +608,7 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
       ? dataModels.slice(0, 60).map((m) => `- ${m.name}  [${m.file}]`).join("\n")
       : "- none detected. There is no schema, or it isn't in a recognised format."),
     section("AUTH", authSignals.length ? authSignals.map((a) => `- ${a}`).join("\n") : "- no authentication code detected"),
+    renderRouteCoverage(routeCoverage) ?? "",
     section("GUARDS AND MECHANISMS ALREADY IN CODE", guards.length ? guards.map((g) => `- ${g.name}  [${g.evidence}]`).join("\n") : "- none detected"),
     section("LAYOUT FACTS", [`Package manager: ${packageManager ?? "unknown (no lockfile)"}`, `Server entry: ${serverEntry ?? "not recognised"}`, `Top-level: ${topLevelDirs.join(", ")}`].join("\n")),
     section("ENGINEERING SIGNALS", [

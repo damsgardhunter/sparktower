@@ -484,6 +484,17 @@ export function CodebaseTab({ projectId, repoUrl }: { projectId: string; repoUrl
                         <p className="font-medium">{areaLabel(c.area)}</p>
                         {c.summary && <p className="text-muted-foreground">{c.summary}</p>}
                         {c.missing && <p className="text-muted-foreground">Missing: {c.missing}</p>}
+                        {c.detail?.coverage && <p className="text-sm" data-testid={`coverage-${c.area}`}>{c.detail.coverage}</p>}
+                        {c.detail?.gaps?.length ? (
+                          <ul className="text-xs space-y-0.5 mt-1" data-testid={`gaps-${c.area}`}>
+                            {c.detail.gaps.map((g, i) => (
+                              <li key={i} className="flex items-start gap-1.5">
+                                <span className={`shrink-0 mt-1 h-1.5 w-1.5 rounded-full ${g.severity === "high" ? "bg-rose-500" : g.severity === "medium" ? "bg-amber-500" : "bg-muted-foreground/50"}`} />
+                                <span>{g.item}{g.file && <code className="ml-1 text-[10px] text-muted-foreground">{g.file}</code>}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
                         {c.evidence.length > 0 && <p className="text-xs text-muted-foreground truncate">{c.evidence.map((e) => e.route ? `${e.route} · ${e.file}` : e.file).join(" · ")}</p>}
                         {c.note && <p className="text-xs text-amber-700 dark:text-amber-400">{c.note}</p>}
                       </div>

@@ -25,6 +25,12 @@ export const CAPABILITY_STATUSES = ["built", "partial", "missing", "unreported"]
 export type CapabilityStatus = (typeof CAPABILITY_STATUSES)[number];
 
 export interface CapabilityEvidence { file: string; route?: string }
+/** The second read's answer: quantified coverage and the specific gaps. */
+export interface CapabilityDetail {
+  coverage: string;
+  gaps: { item: string; file?: string; severity: "low" | "medium" | "high" }[];
+  strengths: string[];
+}
 export interface CapabilityEntry {
   area: CapabilityArea;
   status: CapabilityStatus;
@@ -35,6 +41,8 @@ export interface CapabilityEntry {
   missing?: string;
   /** Set by validation when the model claimed more than it cited. */
   note?: string;
+  /** From the targeted second read, when one ran. */
+  detail?: CapabilityDetail;
 }
 
 export const areaLabel = (id: string) => CAPABILITY_AREAS.find((a) => a.id === id)?.label ?? id;
@@ -91,7 +99,31 @@ export function renderCapabilities(caps: CapabilityEntry[] | null | undefined): 
   const order: Record<CapabilityStatus, number> = { built: 0, partial: 1, missing: 2, unreported: 3 };
   const lines = [...caps].sort((a, b) => order[a.status] - order[b.status]).map((c) => {
     const ev = c.evidence.map((e) => (e.route ? `${e.route} in ${e.file}` : e.file)).join(", ");
-    return `- ${areaLabel(c.area)}: ${c.status.toUpperCase()}${c.summary ? ` — ${c.summary}` : ""}${ev ? ` [${ev}]` : ""}${c.missing ? ` Missing: ${c.missing}` : ""}${c.note ? ` (${c.note})` : ""}`;
+    const detail = c.detail
+      ? `${c.detail.coverage ? ` Coverage: ${c.detail.coverage}` : ""}${c.detail.gaps.length ? ` Gaps: ${c.detail.gaps.slice(0, 5).map((g) => `${g.item}${g.file ? ` (${g.file})` : ""}`).join("; ")}` : ""}`
+      : "";
+    return `- ${areaLabel(c.area)}: ${c.status.toUpperCase()}${c.summary ? ` — ${c.summary}` : ""}${ev ? ` [${ev}]` : ""}${c.missing ? ` Missing: ${c.missing}` : ""}${detail}${c.note ? ` (${c.note})` : ""}`;
   });
   return `CAPABILITY INVENTORY (from the latest audit — what already exists, with the files that prove it. A plan that proposes something marked BUILT from scratch is wrong; extend or wire the file named.)\n${lines.join("\n")}`;
+}
+
+/** Holds a second read to the files it was given. */
+export function sanitizeDeepRead(raw: unknown, allowedFiles: Set<string>): CapabilityDetail | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as any;
+  const gaps = (Array.isArray(r.gaps) ? r.gaps : []).slice(0, 12).map((g: any) => {
+    const file = g?.file ? String(g.file).trim() : undefined;
+    return {
+      item: String(g?.item ?? "").trim().slice(0, 300),
+      file: file && allowedFiles.has(file) ? file : undefined,
+      severity: ((["low", "medium", "high"] as string[]).includes(g?.severity) ? g.severity : "medium") as "low" | "medium" | "high",
+    };
+  }).filter((g: any) => g.item);
+  const coverage = String(r.coverage ?? "").trim().slice(0, 500);
+  if (!coverage && !gaps.length) return null;
+  return {
+    coverage,
+    gaps,
+    strengths: (Array.isArray(r.strengths) ? r.strengths : []).map((x: any) => String(x).trim().slice(0, 200)).filter(Boolean).slice(0, 6),
+  };
 }
