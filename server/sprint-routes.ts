@@ -262,7 +262,7 @@ export function registerSprintRoutes(app: Express) {
         user2Id: partnerId,
         duration,
         status: "setup",
-        productStyle: productStyle || null,
+        productStyle: (["past", "modern", "futuristic"].includes(productStyle ?? "") ? productStyle : null) as "past" | "modern" | "futuristic" | null,
       });
       res.json(sprint);
     } catch (error: any) {
@@ -423,7 +423,7 @@ export function registerSprintRoutes(app: Express) {
         user2Id: req.user.id,
         duration,
         status: "setup",
-        productStyle: productStyle || null,
+        productStyle: (["past", "modern", "futuristic"].includes(productStyle ?? "") ? productStyle : null) as "past" | "modern" | "futuristic" | null,
         productName,
         productDescription,
         isPractice: true,
@@ -891,7 +891,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         past: "an innovative reimagining of a past product/concept that could be modernized",
         modern: "an improvement or innovation on a current modern-day product or service",
         futuristic: "a product that doesn't exist yet but could in the future",
-      }[productStyle || "modern"];
+      }[(["past", "modern", "futuristic"].includes(productStyle ?? "") ? productStyle : "modern") as "past" | "modern" | "futuristic"];
 
       const response = await getOpenAI().chat.completions.create({
         model: modelFor(ent),

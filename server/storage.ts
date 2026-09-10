@@ -2298,7 +2298,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getGameLeaderboard(gameType: string, limit: number = 50): Promise<(GameLeaderboardEntry & { user: User; profile?: UserProfile })[]> {
-    const entries = await db.select().from(gameLeaderboard).where(eq(gameLeaderboard.gameType, gameType)).orderBy(desc(gameLeaderboard.score)).limit(limit);
+    const entries = await db.select().from(gameLeaderboard).where(eq(gameLeaderboard.gameType, gameType as typeof gameLeaderboard.$inferSelect.gameType)).orderBy(desc(gameLeaderboard.score)).limit(limit);
     return await Promise.all(entries.map(async (e) => {
       const [user] = await db.select().from(users).where(eq(users.id, e.userId));
       const [profile] = await db.select().from(userProfiles).where(eq(userProfiles.userId, e.userId));
@@ -2570,7 +2570,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async addSprintDecision(data: { sprintId: string; userId: string; decision: string; reason: string }): Promise<SprintDecision> {
-    const [dec] = await db.insert(sprintDecisions).values(data).returning();
+    const [dec] = await db.insert(sprintDecisions).values(data as typeof sprintDecisions.$inferInsert).returning();
     return dec;
   }
 

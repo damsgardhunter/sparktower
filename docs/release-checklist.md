@@ -30,8 +30,8 @@ export PROD_DB="postgresql://…"                   # from Replit → Secrets �
       Additive changes (new tables, new nullable columns) are safe to apply
       ahead of the code: the old build ignores columns it doesn't know.
 
-- [ ] **Type errors didn't grow.** `npm run typecheck:ratchet` is at or under
-      the number in `typecheck-baseline.json`. If you lowered it, commit that.
+- [ ] **Zero type errors.** `npm run typecheck` passes. There is no baseline
+      any more; a new error is a red build.
 
 - [ ] **`.env.example` is still true.** Any new `process.env.X` the server
       reads is listed there. A deploy that needs a variable nobody wrote down

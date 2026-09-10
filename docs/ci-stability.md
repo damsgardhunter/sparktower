@@ -21,7 +21,7 @@ none could cancel another. Same code, same database image, ten times.
 | 10 | 34354175152 | success |
 
 Each run executes all four required checks: `server-web` (lint, typecheck
-ratchet, 117 API/unit tests against a real Postgres), `e2e` (two Playwright
+typecheck at zero errors, the API/unit tests against a real Postgres), `e2e` (two Playwright
 browser journeys), `secrets` (gitleaks over full history), `mobile`
 (typecheck). Verify with:
 

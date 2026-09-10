@@ -2445,7 +2445,7 @@ RULES:
       model: "gpt-5.2",
       messages: [
         { role: "system", content: `You are Nova, SparkTower's project partner, helping plan "${project.title}". ${coachingDirectiveFor(await getUserEntitlements(userId))} Give concrete, sequenced advice on timeline, team, roadmap and tech stack.` },
-        ...history.map(m => ({ role: m.role, content: m.content }))
+        ...history.map((m) => ({ role: m.role as "user" | "assistant" | "system", content: m.content }))
       ],
       stream: false, // Session plan says streaming SSE but storage might not support it easily. Let's start with simple.
     });
@@ -6155,7 +6155,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       const scenarioName = req.body.scenario;
       const scenario = SIGNAL_NOISE_SCENARIOS.find(s => s.scenario === scenarioName) || SIGNAL_NOISE_SCENARIOS[Math.floor(Math.random() * SIGNAL_NOISE_SCENARIOS.length)];
       const shuffledCards = [...scenario.cards].sort(() => Math.random() - 0.5);
-      const game = await storage.createSignalNoiseGame({ userId, scenario: scenario.scenario, difficulty: scenario.difficulty, cards: shuffledCards, decisions: [] });
+      const game = await storage.createSignalNoiseGame({ userId, scenario: scenario.scenario, difficulty: scenario.difficulty as "beginner" | "intermediate" | "advanced", cards: shuffledCards, decisions: [] });
       res.json(game);
     } catch (error) { console.error("Start signal noise error:", error); res.status(500).json({ message: "Failed to start game" }); }
   });

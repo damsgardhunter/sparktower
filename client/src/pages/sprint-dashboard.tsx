@@ -27,6 +27,10 @@ import {
 import { CREDIT_COSTS } from "@shared/plans";
 import { SprintIdeaPicker, type SprintIdea } from "@/components/sprint-idea-picker";
 
+/** The partner row carries profile fields alongside the user's; the user type doesn't know that. */
+const profileOf = (u: unknown) => (u ?? {}) as { headline?: string | null; bio?: string | null; skills?: string[] | null };
+
+
 const SPRINT_PHASES = ["setup", "ideation", "alignment", "building", "validation", "review", "completed"] as const;
 
 const PHASE_LABELS: Record<string, string> = {
@@ -752,14 +756,14 @@ function SetupPhase({ sprint, user, onAdvance, isPending }: {
               <UserAvatar src={partner.profileImageUrl} name={partner.firstName || "Partner"} className="h-14 w-14" />
               <div>
                 <h3 className="text-lg font-semibold">{partner.firstName} {partner.lastName}</h3>
-                {partner.headline && <p className="text-sm text-muted-foreground">{partner.headline}</p>}
+                {profileOf(partner).headline && <p className="text-sm text-muted-foreground">{profileOf(partner).headline}</p>}
               </div>
             </div>
-            {partner.bio && (
-              <p className="text-sm text-muted-foreground mb-3">{partner.bio}</p>
+            {profileOf(partner).bio && (
+              <p className="text-sm text-muted-foreground mb-3">{profileOf(partner).bio}</p>
             )}
             <div className="flex flex-wrap gap-2">
-              {(partner.skills as string[] | null)?.slice(0, 6).map((skill, i) => (
+              {profileOf(partner).skills?.slice(0, 6).map((skill, i) => (
                 <Badge key={i} variant="secondary">{skill}</Badge>
               ))}
             </div>
@@ -1690,25 +1694,25 @@ function CompletedPhase({ sprint, report, decisions, ratings, userId, currentUse
                   </div>
                   <p className="text-sm text-muted-foreground mt-1">Compatibility Score</p>
                 </div>
-                {report.strengths && Array.isArray(report.strengths) && (
+                {Array.isArray(report.strengths) && (
                   <div>
                     <h4 className="text-sm font-medium flex items-center gap-1 mb-2"><TrendingUp className="h-3.5 w-3.5 text-green-600" />Strengths</h4>
                     <ul className="space-y-1">
                       {(report.strengths as string[]).map((s, i) => (
                         <li key={i} className="text-sm text-muted-foreground flex items-start gap-2">
-                          <CheckCircle2 className="h-3.5 w-3.5 text-green-600 mt-0.5 shrink-0" />{s}
+                          <CheckCircle2 className="h-3.5 w-3.5 text-green-600 mt-0.5 shrink-0" />{String(s)}
                         </li>
                       ))}
                     </ul>
                   </div>
                 )}
-                {report.risks && Array.isArray(report.risks) && (
+                {Array.isArray(report.risks) && (
                   <div>
                     <h4 className="text-sm font-medium flex items-center gap-1 mb-2"><AlertTriangle className="h-3.5 w-3.5 text-yellow-600" />Risks</h4>
                     <ul className="space-y-1">
                       {(report.risks as string[]).map((r, i) => (
                         <li key={i} className="text-sm text-muted-foreground flex items-start gap-2">
-                          <AlertTriangle className="h-3.5 w-3.5 text-yellow-600 mt-0.5 shrink-0" />{r}
+                          <AlertTriangle className="h-3.5 w-3.5 text-yellow-600 mt-0.5 shrink-0" />{String(r)}
                         </li>
                       ))}
                     </ul>
