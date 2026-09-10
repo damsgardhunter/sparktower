@@ -48,8 +48,8 @@ export interface MapNode { name: string; x: number; y: number; w: number; h: num
 export interface MapEdge { from: string; to: string; column: string; tree: boolean }
 export interface MapLayout { width: number; height: number; nodes: MapNode[]; edges: MapEdge[]; hub: string; orphans: string[] }
 
-export const BOX_W = 168;
-export const BOX_H = 56;
+export const BOX_W = 208;
+export const BOX_H = 72;
 
 /**
  * A snowflake: the most-referenced table at the centre, and every table
@@ -122,12 +122,14 @@ export function snowflakeLayout(shape: DataShape): MapLayout {
   // clear the one two along. That is what keeps a crowded ring readable
   // instead of a pile of boxes over each other.
   const maxDepth = Math.max(0, ...depthOf.values());
-  const GAP = 24, STAGGER = BOX_H + 18;
+  // Tight: the collision check below is the guarantee, so the first guess
+  // and the minimum ring step can be as small as a box and a margin.
+  const GAP = 14, STAGGER = BOX_H + 10;
   const radii: number[] = [0];
   const stagger = new Map<string, number>();
   const boxW = (d: number) => (d === 0 ? BOX_W + 12 : BOX_W), boxH = (d: number) => (d === 0 ? BOX_H + 8 : BOX_H);
   const at = (n: string, r: number) => ({ x: r * Math.cos(angleOf.get(n)!), y: r * Math.sin(angleOf.get(n)!) });
-  const collide = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.abs(a.x - b.x) < BOX_W + GAP && Math.abs(a.y - b.y) < BOX_H + GAP / 2;
+  const collide = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.abs(a.x - b.x) < BOX_W + GAP && Math.abs(a.y - b.y) < BOX_H + GAP;
   for (let d = 1; d <= maxDepth; d++) {
     const ring = [...depthOf.entries()].filter(([, k]) => k === d).map(([n]) => n).sort((x, y) => angleOf.get(x)! - angleOf.get(y)!);
     ring.forEach((n, i) => stagger.set(n, i % 2 === 0 ? -STAGGER / 2 : STAGGER / 2));
@@ -138,13 +140,13 @@ export function snowflakeLayout(shape: DataShape): MapLayout {
     if (ring.length >= 3) for (let i = 0; i < ring.length; i++) {
       let g = angleOf.get(ring[(i + 2) % ring.length])! - angleOf.get(ring[i])!; if (g <= 0) g += 2 * Math.PI; minGap2 = Math.min(minGap2, g);
     }
-    let r = Math.max(radii[d - 1] + BOX_W + STAGGER + 40, ring.length ? (BOX_W + GAP) / Math.max(0.02, minGap2) : 0);
-    for (let iter = 0; iter < 60; iter++) {
+    let r = Math.max(radii[d - 1] + BOX_W * 0.9 + STAGGER, ring.length ? ((BOX_W + GAP) / Math.max(0.02, minGap2)) * 0.85 : 0);
+    for (let iter = 0; iter < 80; iter++) {
       const p = ring.map((n) => at(n, r + stagger.get(n)!));
       let hit = false;
       for (let i = 0; i < p.length && !hit; i++) for (let j = i + 1; j < p.length; j++) if (collide(p[i], p[j])) { hit = true; break; }
       if (!hit) break;
-      r *= 1.08;
+      r *= 1.05;
     }
     radii[d] = r;
   }

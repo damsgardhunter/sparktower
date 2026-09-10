@@ -31,7 +31,12 @@ export function DataMap({ shape }: { shape: DataShape }) {
   const pos = useMemo(() => new Map(layout.nodes.map((n) => [n.name, n])), [layout]);
   const selected = open ? byName.get(open) : null;
   const VIEW_W = 900, VIEW_H = 620;
-  const fit = () => { const k = Math.min(VIEW_W / layout.width, VIEW_H / layout.height); setView({ k, x: (VIEW_W - layout.width * k) / 2, y: (VIEW_H - layout.height * k) / 2 }); };
+  // Fit the whole map, but never below a scale where a box is readable;
+  // a big schema opens centred on the hub instead, and the wheel does the rest.
+  const fit = () => {
+    const k = Math.max(0.42, Math.min(VIEW_W / layout.width, VIEW_H / layout.height));
+    setView({ k, x: VIEW_W / 2 - (layout.width / 2) * k, y: VIEW_H / 2 - (layout.height / 2) * k });
+  };
   const zoomBy = (f: number, cx = VIEW_W / 2, cy = VIEW_H / 2) => setView((v) => {
     const k = Math.min(4, Math.max(0.15, v.k * f));
     return { k, x: cx - (cx - v.x) * (k / v.k), y: cy - (cy - v.y) * (k / v.k) };
@@ -131,11 +136,11 @@ export function DataMap({ shape }: { shape: DataShape }) {
                     <rect width={n.w} height={n.h} rx={6} fill="currentColor" className={isOpen ? "text-primary/15" : n.depth === 0 ? "text-primary/10" : "text-background"} />
                     <rect width={n.w} height={n.h} rx={6} fill="none" stroke="currentColor" strokeWidth={isOpen ? 2.5 : n.depth === 0 ? 2 : 1.2}
                       strokeDasharray={empty ? "5 3" : undefined} className={isOpen ? "text-primary" : empty ? "text-muted-foreground/60" : n.depth === 0 ? "text-primary" : "text-muted-foreground/70"} />
-                    <rect width={n.w} height={18} rx={6} fill="currentColor" className={n.depth === 0 ? "text-primary/25" : "text-muted/80"} />
-                    <text x={8} y={13} fontSize={11} fontWeight={600} className="fill-foreground">{n.name.length > 22 ? n.name.slice(0, 21) + "…" : n.name}</text>
-                    <text x={n.w - 8} y={13} fontSize={9.5} textAnchor="end" className="fill-muted-foreground">{n.rows.toLocaleString()}{t.exact ? "" : "~"} rows</text>
-                    <text x={8} y={33} fontSize={9.5} className="fill-muted-foreground">{keys.length ? `PK ${keys.join(", ")}` : "no primary key"}</text>
-                    <text x={8} y={47} fontSize={9.5} className="fill-muted-foreground">{t.columns.length} cols · {fks} FK{fks === 1 ? "" : "s"} · {t.inbound} referenced by</text>
+                    <rect width={n.w} height={24} rx={6} fill="currentColor" className={n.depth === 0 ? "text-primary/25" : "text-muted/80"} />
+                    <text x={10} y={17} fontSize={14} fontWeight={600} className="fill-foreground">{n.name.length > 20 ? n.name.slice(0, 19) + "…" : n.name}</text>
+                    <text x={n.w - 10} y={17} fontSize={12} textAnchor="end" className="fill-muted-foreground">{n.rows.toLocaleString()}{t.exact ? "" : "~"} rows</text>
+                    <text x={10} y={44} fontSize={12} className="fill-muted-foreground">{keys.length ? `PK ${keys.join(", ")}` : "no primary key"}</text>
+                    <text x={10} y={62} fontSize={12} className="fill-muted-foreground">{t.columns.length} cols · {fks} FK{fks === 1 ? "" : "s"} · {t.inbound} referenced by</text>
                   </g>
                 );
               })}
