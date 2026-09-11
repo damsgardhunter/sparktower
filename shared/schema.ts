@@ -5,7 +5,7 @@ import { sql } from "drizzle-orm";
 import { PROJECT_GOAL_IDS, isValidSubcategory } from "./goals";
 
 // Re-exporting from auth models as requested
-export { sessions, users, mobileRefreshTokens, type User, type UpsertUser, type MobileRefreshToken } from "./models/auth";
+export { sessions, users, mobileRefreshTokens, mcpTokens, type User, type UpsertUser, type MobileRefreshToken, type McpToken } from "./models/auth";
 import { users, mobileRefreshTokens } from "./models/auth";
 
 export const userProfiles = pgTable("user_profiles", {
@@ -487,6 +487,12 @@ export const connections = pgTable("connections", {
   requesterId: varchar("requester_id").notNull().references(() => users.id),
   receiverId: varchar("receiver_id").notNull().references(() => users.id),
   status: text("status", { enum: ["pending", "accepted", "rejected"] }).default("pending").notNull(),
+  /**
+   * An optional hello with the request — why you'd like to connect. The only
+   * way to say anything to someone before they accept, since messages wait for
+   * that. Capped at CONNECTION_NOTE_MAX.
+   */
+  note: text("note"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -527,6 +533,26 @@ export const projectFollows = pgTable("project_follows", {
   /* The unique covers project-first lookups; this covers "what am I following". */
   userIdx: index("project_follows_user_idx").on(table.userId),
 }));
+
+/**
+ * One builder following another. One-way and instant — unlike a connection,
+ * which is mutual and waits on the other person — because following is how
+ * someone says "show me what they're doing" without asking anything of them.
+ * With project follows, it's what the Following feed is made of.
+ */
+export const userFollows = pgTable("user_follows", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  followerId: varchar("follower_id").notNull().references(() => users.id),
+  followeeId: varchar("followee_id").notNull().references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /* In column order, for the same drizzle-kit reason as project_follows above. */
+  followerFolloweeUnique: unique().on(table.followerId, table.followeeId),
+  /* The unique covers "who do I follow"; this covers "who follows them". */
+  followeeIdx: index("user_follows_followee_idx").on(table.followeeId),
+}));
+
+export type UserFollow = typeof userFollows.$inferSelect;
 
 export const projectKanbanTasks = pgTable("project_kanban_tasks", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -896,6 +922,12 @@ export const projectComments = pgTable("project_comments", {
   hiddenAt: timestamp("hidden_at"),
   hiddenById: varchar("hidden_by_id"),
   hiddenReason: text("hidden_reason"),
+  /**
+   * How it's hidden, when it is. "removed": gone for everyone, its author
+   * included. "shadow": gone for everyone but its author, who still sees it as
+   * posted. Hidden with no mode is an older takedown, read as removed.
+   */
+  hiddenMode: text("hidden_mode", { enum: ["removed", "shadow"] }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -1096,12 +1128,22 @@ export const moderationLog = pgTable("moderation_log", {
   targetType: varchar("target_type"),
   targetId: varchar("target_id"),
   reason: text("reason"),
+  /** One of MODERATION_REASON_CODES (shared/moderation.ts). Required for actions taken from the queue. */
+  reasonCode: varchar("reason_code"),
+  /**
+   * What the target looked like just before, and just after. The pair is the
+   * change; the first half is what an undo puts back, exactly.
+   */
+  previousState: jsonb("previous_state"),
+  resultingState: jsonb("resulting_state"),
   /** Anything else worth keeping, small and non-sensitive. */
   details: jsonb("details").default({}),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   byTarget: index("moderation_log_target_idx").on(table.targetUserId, table.createdAt),
   byActor: index("moderation_log_actor_idx").on(table.actorId, table.createdAt),
+  /** "Everything that happened to this comment." */
+  byContent: index("moderation_log_content_idx").on(table.targetType, table.targetId, table.createdAt),
 }));
 
 /**

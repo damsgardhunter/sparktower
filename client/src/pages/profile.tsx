@@ -1,3 +1,7 @@
+import { errorText } from "@/lib/api-error";
+import { FollowBuilderButton } from "@/components/discover-actions";
+import { trackExplore } from "@/lib/explore";
+import { EXPLORE_EVENTS } from "@shared/explore-events";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { BackerCredits } from "@/components/backer-credits";
 import { BackerBadgeShowcase } from "@/components/backer-badge-showcase";
@@ -16,7 +20,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { MapPin, Globe, Github, Linkedin, Mail, MessageSquare, UserPlus, UserMinus, Edit, Loader2, FileText, Award, Rocket, Star, Users as UsersIcon, Sparkles, Trophy, Upload, CheckCircle, X, Clock, DollarSign, ExternalLink, Search, Heart, Activity } from "lucide-react";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useAuth } from "@/hooks/use-auth";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+import { markSeen } from "@/lib/seen";
 import { useUpload } from "@/hooks/use-upload";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -28,6 +33,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { UserCard } from "@/components/user-card";
+import { EditorAccess } from "@/components/editor-access";
 import { ReputationCard } from "@/components/reputation-card";
 import { ProfileCredentials } from "@/components/profile-credentials";
 import { ProfileResumePanel } from "@/components/profile-resume-panel";
@@ -52,12 +58,14 @@ export default function Profile() {
       toast({ title: "Resume uploaded", description: "Your resume has been uploaded successfully." });
     },
     onError: (error) => {
-      toast({ title: "Upload failed", description: error.message, variant: "destructive" });
+      toast({ title: "Upload failed", description: errorText(error), variant: "destructive" });
     },
   });
 
   const isOwnProfile = !id || (currentUser && id === currentUser.id);
   const userId = id || currentUser?.id;
+  // Someone else's profile, looked at: the "since" for news from them on Discover.
+  useEffect(() => { if (id && !isOwnProfile) markSeen("builder", id); }, [id, isOwnProfile]);
 
   const { data: profileData, isLoading: profileLoading } = useQuery<any>({
     queryKey: [id ? `/api/users/${id}` : "/api/profile"],
@@ -159,11 +167,12 @@ export default function Profile() {
       return res.json();
     },
     onSuccess: () => {
+      if (userId) trackExplore(EXPLORE_EVENTS.connectRequest, { matchType: "builder", targetId: userId, source: "profile_page" });
       queryClient.invalidateQueries({ queryKey: ["/api/connections/status", userId] });
       toast({ title: "Connection request sent" });
     },
     onError: (err: any) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: "Error", description: errorText(err), variant: "destructive" });
     },
   });
 
@@ -212,7 +221,7 @@ export default function Profile() {
       if (data.url) window.location.href = data.url;
     },
     onError: (err: any) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: "Error", description: errorText(err), variant: "destructive" });
     },
   });
 
@@ -672,14 +681,21 @@ export default function Profile() {
                   </DialogContent>
                 </Dialog>
               ) : (
-                renderConnectionButton()
+                <div className="flex flex-wrap items-center gap-2">
+                  {currentUser && !isOwnProfile && userId && <FollowBuilderButton userId={userId} />}
+                  {renderConnectionButton()}
+                </div>
               )}
             </div>
           </div>
         </div>
       </Card>
 
-      <Tabs defaultValue="about" className="space-y-6">
+      {/*
+       * The hash so "Manage" from the dashboard lands on the tokens rather
+       * than on the About tab with no clue where to go next.
+       */}
+      <Tabs defaultValue={typeof window !== "undefined" && window.location.hash === "#editor" ? "editor" : "about"} className="space-y-6">
         <TabsList data-testid="profile-tabs">
           <TabsTrigger value="about" data-testid="tab-about">About</TabsTrigger>
           <TabsTrigger value="projects" data-testid="tab-projects">
@@ -703,10 +719,19 @@ export default function Profile() {
           {isOwnProfile && (
             <TabsTrigger value="earnings" data-testid="tab-earnings">Earnings</TabsTrigger>
           )}
+          {isOwnProfile && (
+            <TabsTrigger value="editor" data-testid="tab-editor">Editor access</TabsTrigger>
+          )}
           {isOwnProfile && isSiteOwner && (
             <TabsTrigger value="behaviour" data-testid="tab-behaviour">Behaviour</TabsTrigger>
           )}
         </TabsList>
+
+        {isOwnProfile && (
+          <TabsContent value="editor">
+            <EditorAccess />
+          </TabsContent>
+        )}
 
         <TabsContent value="about">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8 items-start">
@@ -930,6 +955,8 @@ export default function Profile() {
                           <div>
                             <p className="font-medium text-sm">{req.profile?.displayName || req.user.firstName || "User"}</p>
                             {req.profile?.headline && <p className="text-xs text-muted-foreground">{req.profile.headline}</p>}
+                            {/* The note they sent with it — the only thing they could say before you accept. */}
+                            {req.note && <p className="text-sm mt-1 italic" data-testid={`connection-note-${req.id}`}>“{req.note}”</p>}
                           </div>
                         </div>
                         <div className="flex gap-2">

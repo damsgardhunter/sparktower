@@ -45,6 +45,7 @@ export const SURFACES: SurfaceDef[] = [
   { id: "roadmap",    label: "Roadmap",              cls: "core", defaultEnabled: true, note: "In use." },
   { id: "nova",       label: "Nova assistant",       cls: "core", defaultEnabled: true, note: "The differentiator; drives every other surface." },
   { id: "codeAudit",  label: "Codebase audit",       cls: "core", defaultEnabled: true, note: "In use, and genuinely unusual." },
+  { id: "mcp",        label: "Editor bridge (MCP)",  cls: "core", defaultEnabled: true, note: "Nova over MCP, for Claude Code, Cursor and VS Code agent mode. Long-lived tokens and whole source trees arrive here — the first switch to reach for if one leaks." },
   { id: "documents",  label: "Documents",            cls: "core", defaultEnabled: true, note: "In use." },
   { id: "personas",   label: "Personas & research",  cls: "core", defaultEnabled: true, note: "In use." },
 
@@ -125,6 +126,7 @@ export const SURFACE_API_PREFIXES: Record<string, string[]> = {
   nova: ["/api/chat", "/api/projects/:id/nova", "/api/projects/:id/nova-guide", "/api/projects/:id/tasks/nova-assist", "/api/projects/:id/path/work", "/api/projects/:id/path/expand", "/api/projects/:id/path/inject", "/api/projects/:id/path/adopt", "/api/projects/:id/next-actions", "/api/projects/:id/health-check"],
   roadmap: ["/api/projects/:id/roadmap"],
   codeAudit: ["/api/projects/:id/code-audit", "/api/code-audits"],
+  mcp: ["/api/mcp", "/api/mcp-tokens"],
   documents: ["/api/projects/:id/documents", "/api/documents"],
   personas: ["/api/projects/:id/personas", "/api/projects/:id/interviews", "/api/projects/:id/experiments"],
   investor: ["/api/investor", "/api/mock-interviews", "/api/projects/:id/investor", "/api/projects/:id/pitch"],

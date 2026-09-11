@@ -1,0 +1,33 @@
+{
+  "name": "@sparktower/nova-mcp",
+  "version": "0.1.0",
+  "description": "Nova over MCP: the plan, the path and the verification, for an editor-side agent that owns the code.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "nova-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "prepublishOnly": "npm run typecheck && npm run build",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0"
+  },
+  "devDependencies": {
+    "@sparktower/nova-core": "file:../nova-core",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}

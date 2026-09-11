@@ -133,6 +133,56 @@ function looksBinary(buffer: Buffer): boolean {
  * Sizes come from the central directory, so an oversized entry is rejected
  * without ever being decompressed.
  */
+/**
+ * A snapshot from files an editor-side agent handed over.
+ *
+ * The third source, and the only one where the sender already read the disk.
+ * Treated exactly as hostile as the other two: the same ignore list, the same
+ * per-file and total budgets, and paths normalised and refused if they try to
+ * climb out of the tree. A client that respects the limits sends nothing that
+ * gets dropped here — but the limits are enforced here, because the client is
+ * someone else's process on someone else's machine.
+ */
+export function snapshotFromFiles(
+  input: { path?: unknown; content?: unknown }[],
+  source: string,
+): RepoSnapshot {
+  const files: RepoFile[] = [];
+  const seen = new Set<string>();
+  let totalBytes = 0, skipped = 0, truncated = false;
+
+  for (const raw of input) {
+    if (files.length >= MAX_FILES) { truncated = true; break; }
+
+    const path = String(raw?.path ?? "").replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "").trim();
+    // No absolute paths, no climbing, no duplicates. None of these can be a
+    // legitimate repository-relative path, so they are dropped rather than
+    // sanitised into something that was never sent.
+    if (!path || path.endsWith("/") || path.split("/").includes("..") || seen.has(path)) continue;
+    seen.add(path);
+    if (isIgnored(path)) continue;
+
+    const content = typeof raw?.content === "string" ? raw.content : undefined;
+    const size = content ? Buffer.byteLength(content, "utf8") : 0;
+
+    if (content === undefined || !isTextual(path) || size > MAX_FILE_BYTES) {
+      files.push({ path, size });
+      skipped++;
+      continue;
+    }
+    if (totalBytes + size > MAX_TOTAL_BYTES) {
+      files.push({ path, size });
+      skipped++;
+      truncated = true;
+      continue;
+    }
+    totalBytes += size;
+    files.push({ path, size, content });
+  }
+
+  return { files, source, skipped, truncated, totalBytes };
+}
+
 export function snapshotFromZip(archive: Buffer, source: string): RepoSnapshot {
   if (archive.length > MAX_ARCHIVE_BYTES) {
     throw new Error(

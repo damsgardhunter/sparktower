@@ -1,3 +1,4 @@
+import { errorText } from "@/lib/api-error";
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -37,7 +38,7 @@ export function MediaGallery({ projectId, mediaUrls, isOwner }: MediaGalleryProp
       addMediaMutation.mutate(response.objectPath);
     },
     onError: (error) => {
-      toast({ title: "Upload failed", description: error.message, variant: "destructive" });
+      toast({ title: "Upload failed", description: errorText(error), variant: "destructive" });
     },
   });
 

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { errorText } from "@/lib/api-error";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -12,7 +13,8 @@ import {
   Loader2, Flag, ShieldAlert, Check, X, UserX, UserCheck, ExternalLink,
 } from "lucide-react";
 import {
-  REPORT_TARGET_LABEL, reportReasonLabel, type ReportTarget, type ReportStatus,
+  REPORT_TARGET_LABEL, reportReasonLabel, MODERATION_ACTIONS, reasonCodesFor, moderationReasonLabel,
+  type ReportTarget, type ReportStatus, type ModerationAction,
 } from "@shared/moderation";
 
 interface Report {
@@ -32,6 +34,127 @@ interface Report {
   ownerName: string | null;
   ownerId: string | null;
   ownerSuspended: boolean;
+  /** "removed" or "shadow" when a reported comment is hidden. */
+  targetHiddenMode?: string | null;
+  /** Decided with an action and a reason code, rather than the older buttons. */
+  actionable?: boolean;
+}
+
+interface LogEntry {
+  id: string;
+  action: string;
+  actorName: string | null;
+  reason: string | null;
+  reasonCode: string | null;
+  createdAt: string;
+}
+
+const SELECT = "h-8 w-full rounded-md border border-input bg-background px-2 text-sm disabled:opacity-50";
+
+/** How a log entry reads in the history list. */
+const ACTION_WORDS: Record<string, string> = {
+  comment_remove: "Removed",
+  comment_shadow_hide: "Shadow-hidden",
+  comment_ban: "Author banned, comment removed",
+  comment_dismiss: "Dismissed",
+  content_hidden: "Taken down",
+  content_restored: "Restored",
+};
+
+/**
+ * Deciding a reported comment: an action and a reason code, both required.
+ * The code is what makes a mistake findable later; the server keeps what the
+ * comment looked like before, so it can be put back.
+ */
+function DecidePanel({ report, onDone }: { report: Report; onDone: () => void }) {
+  const { toast } = useToast();
+  const [action, setAction] = useState<ModerationAction | "">("");
+  const [reasonCode, setReasonCode] = useState("");
+  const [note, setNote] = useState("");
+  const chosen = MODERATION_ACTIONS.find((a) => a.id === action);
+
+  const act = useMutation({
+    mutationFn: async () =>
+      (await apiRequest("POST", `/api/admin/reports/${report.id}/act`, { action, reasonCode, note: note.trim() || undefined })).json(),
+    onSuccess: () => {
+      toast({ title: `${chosen?.label ?? "Done"} — ${moderationReasonLabel(reasonCode)}`, description: "Recorded in the moderation log." });
+      onDone();
+    },
+    onError: (e) => toast({ title: "Couldn't apply that", description: errorText(e), variant: "destructive" }),
+  });
+
+  return (
+    <div className="space-y-2 pt-2 border-t border-border/50" data-testid={`decide-${report.id}`}>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <label className="space-y-1 text-xs">
+          <span className="text-muted-foreground">Action</span>
+          <select
+            className={SELECT} value={action}
+            onChange={(e) => { setAction(e.target.value as ModerationAction | ""); setReasonCode(""); }}
+            data-testid={`act-action-${report.id}`}
+          >
+            <option value="">Choose…</option>
+            {MODERATION_ACTIONS.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
+          </select>
+        </label>
+        <label className="space-y-1 text-xs">
+          <span className="text-muted-foreground">Reason code</span>
+          <select
+            className={SELECT} value={reasonCode} disabled={!action}
+            onChange={(e) => setReasonCode(e.target.value)}
+            data-testid={`act-reason-${report.id}`}
+          >
+            <option value="">{action ? "Choose…" : "Pick an action first"}</option>
+            {action && reasonCodesFor(action).map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+          </select>
+        </label>
+      </div>
+      {chosen && <p className="text-xs text-muted-foreground">{chosen.detail}</p>}
+      <Textarea
+        value={note} onChange={(e) => setNote(e.target.value)}
+        placeholder="Note for the log (optional)"
+        className="min-h-[48px] text-sm"
+        data-testid={`act-note-${report.id}`}
+      />
+      <Button
+        size="sm" className="h-7 text-xs"
+        variant={action === "dismiss" ? "outline" : "destructive"}
+        disabled={!action || !reasonCode || act.isPending}
+        onClick={() => act.mutate()}
+        data-testid={`act-apply-${report.id}`}
+      >
+        {act.isPending && <Loader2 className="h-3 w-3 animate-spin" />} Apply
+      </Button>
+    </div>
+  );
+}
+
+/** What has been done to one reported thing, from the moderation log. */
+function History({ targetType, targetId }: { targetType: string; targetId: string }) {
+  const { data } = useQuery<LogEntry[]>({
+    queryKey: ["/api/admin/moderation-log", targetType, targetId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/moderation-log?targetType=${encodeURIComponent(targetType)}&targetId=${encodeURIComponent(targetId)}`, { credentials: "include" });
+      return res.ok ? res.json() : [];
+    },
+  });
+  if (!data?.length) return null;
+  return (
+    <div className="rounded-md border border-border/60 p-2.5 space-y-1" data-testid={`history-${targetId}`}>
+      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">History</p>
+      <ul className="space-y-1">
+        {data.map((e) => (
+          <li key={e.id} className="text-xs">
+            <span className="font-medium">{ACTION_WORDS[e.action] ?? e.action}</span>
+            {" · "}{moderationReasonLabel(e.reasonCode)}
+            {" · "}{e.actorName ?? "a reviewer"}
+            {" · "}{new Date(e.createdAt).toLocaleString()}
+            {e.reason && <span className="text-muted-foreground"> — “{e.reason}”</span>}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 const TABS: { id: ReportStatus; label: string }[] = [
@@ -65,6 +188,7 @@ export default function AdminReports() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<ReportStatus>("open");
+  const [kind, setKind] = useState<"all" | "comment">("all");
   const [noteFor, setNoteFor] = useState<string | null>(null);
   const [note, setNote] = useState("");
 
@@ -72,9 +196,9 @@ export default function AdminReports() {
     && ((user as any).platformRole === "reviewer" || (user as any).platformRole === "admin");
 
   const { data: reports, isLoading } = useQuery<Report[]>({
-    queryKey: ["/api/admin/reports", tab],
+    queryKey: ["/api/admin/reports", tab, kind],
     queryFn: async () => {
-      const res = await fetch(`/api/admin/reports?status=${tab}`, { credentials: "include" });
+      const res = await fetch(`/api/admin/reports?status=${tab}${kind === "all" ? "" : `&type=${kind}`}`, { credentials: "include" });
       if (!res.ok) throw new Error("failed");
       return res.json();
     },
@@ -84,6 +208,7 @@ export default function AdminReports() {
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ["/api/admin/reports"] });
     queryClient.invalidateQueries({ queryKey: ["/api/admin/reports/count"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/admin/moderation-log"] });
   };
 
   const resolve = useMutation({
@@ -108,7 +233,7 @@ export default function AdminReports() {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/reports"] });
       toast({ title: r.hidden ? "Taken down — hidden from everyone but its author" : "Restored" });
     },
-    onError: (e: any) => { const raw = String(e?.message ?? "").replace(/^\d+:\s*/, ""); let m = raw; try { m = JSON.parse(raw).message ?? raw; } catch { /* plain */ } toast({ title: m, variant: "destructive" }); },
+    onError: (e) => toast({ title: errorText(e), variant: "destructive" }),
   });
   const suspend = useMutation({
     mutationFn: async ({ userId, suspended }: { userId: string; suspended: boolean }) => {
@@ -121,15 +246,7 @@ export default function AdminReports() {
       toast({ title: r.suspended ? "Account suspended" : "Account reinstated" });
       refresh();
     },
-    onError: (err: any) => {
-      const raw = err?.message || "";
-      const start = raw.indexOf("{");
-      let description = "Try again.";
-      if (start >= 0) {
-        try { description = JSON.parse(raw.slice(start)).message || description; } catch { /* keep */ }
-      }
-      toast({ title: "Couldn't change that account", description, variant: "destructive" });
-    },
+    onError: (err) => toast({ title: "Couldn't change that account", description: errorText(err, "Try again."), variant: "destructive" }),
   });
 
   if (authLoading) {
@@ -151,13 +268,22 @@ export default function AdminReports() {
         </p>
       </header>
 
-      <div className="flex gap-1">
+      <div className="flex gap-1 flex-wrap">
         {TABS.map((t) => (
           <Button
             key={t.id} size="sm" variant={tab === t.id ? "default" : "outline"}
             onClick={() => setTab(t.id)} data-testid={`tab-${t.id}`}
           >
             {t.label}
+          </Button>
+        ))}
+        <span className="mx-1 w-px bg-border" aria-hidden />
+        {(["all", "comment"] as const).map((k) => (
+          <Button
+            key={k} size="sm" variant={kind === k ? "secondary" : "ghost"}
+            onClick={() => setKind(k)} data-testid={`type-${k}`}
+          >
+            {k === "all" ? "All kinds" : "Comments"}
           </Button>
         ))}
       </div>
@@ -188,6 +314,11 @@ export default function AdminReports() {
                           {REPORT_TARGET_LABEL[r.targetType]}
                         </Badge>
                         <Badge className="text-[10px]">{reportReasonLabel(r.reason)}</Badge>
+                        {r.targetHiddenMode && (
+                          <Badge variant="secondary" className="text-[10px]" data-testid={`hidden-mode-${r.id}`}>
+                            {r.targetHiddenMode === "shadow" ? "shadow-hidden" : "removed"}
+                          </Badge>
+                        )}
                         {r.ownerSuspended && (
                           <Badge variant="destructive" className="text-[10px] gap-1">
                             <UserX className="h-2.5 w-2.5" /> author suspended
@@ -229,7 +360,10 @@ export default function AdminReports() {
                     </div>
                   )}
 
-                  {r.status === "open" && (
+                  {r.actionable && r.status === "open" && <DecidePanel report={r} onDone={refresh} />}
+                  {r.actionable && <History targetType={r.targetType} targetId={r.targetId} />}
+
+                  {!r.actionable && r.status === "open" && (
                     <div className="space-y-2 pt-1 border-t border-border/50">
                       {noteFor === r.id && (
                         <Textarea

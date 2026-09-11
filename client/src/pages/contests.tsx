@@ -1,3 +1,4 @@
+import { errorText } from "@/lib/api-error";
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
@@ -103,7 +104,7 @@ export default function Contests() {
       queryClient.invalidateQueries({ queryKey: ["/api/contests"] });
     },
     onError: (err: any) => {
-      toast({ title: "Could not join", description: err.message || "Something went wrong.", variant: "destructive" });
+      toast({ title: "Could not join", description: errorText(err, "Something went wrong."), variant: "destructive" });
     },
   });
 

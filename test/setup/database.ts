@@ -23,6 +23,7 @@
  * nothing — which is exactly the class of bug that only a real database, with
  * real column types and real defaults, can reproduce.
  */
+import { applyModerationLogRules } from "../../server/moderation-log-rules";
 import { execFileSync } from "child_process";
 import pg from "pg";
 
@@ -103,6 +104,20 @@ export function applySchema(databaseUrl: string): void {
     stdio: "pipe",
     encoding: "utf8",
   });
+}
+
+/**
+ * Rules drizzle-kit can't express — today, that the moderation log is
+ * append-only — applied the same way the server applies them at boot.
+ */
+export async function applyDatabaseRules(databaseUrl: string): Promise<void> {
+  const client = new pg.Client({ connectionString: databaseUrl });
+  await client.connect();
+  try {
+    await applyModerationLogRules((q) => client.query(q));
+  } finally {
+    await client.end();
+  }
 }
 
 /**

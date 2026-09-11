@@ -89,6 +89,40 @@ export const mobileRefreshTokens = pgTable(
   (table) => [index("IDX_mobile_refresh_user").on(table.userId)]
 );
 
+/**
+ * Personal access tokens for the editor bridge.
+ *
+ * Neither existing style fits a CLI. A cookie session belongs to a browser,
+ * and the mobile access token lives fifteen minutes and refreshes itself —
+ * fine for an app that runs a refresh loop, useless for an MCP process that a
+ * user pastes a secret into once and forgets about.
+ *
+ * So: a long-lived token, shown once at creation and stored only as a
+ * SHA-256, revocable from the web app, optionally pinned to one project so a
+ * token pasted into a repo's config can't reach the rest of the account.
+ */
+export const mcpTokens = pgTable(
+  "mcp_tokens",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    userId: varchar("user_id").notNull().references(() => users.id),
+    tokenHash: varchar("token_hash").notNull().unique(),
+    /** The user's own name for it, e.g. "MacBook · Claude Code". */
+    label: varchar("label").notNull(),
+    /** First characters of the token, so a row is recognisable in a list without being usable. */
+    prefix: varchar("prefix").notNull(),
+    /** When set, the token may only act on this project. */
+    projectId: varchar("project_id"),
+    expiresAt: timestamp("expires_at"),
+    revokedAt: timestamp("revoked_at"),
+    lastUsedAt: timestamp("last_used_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [index("IDX_mcp_tokens_user").on(table.userId)]
+);
+
+export type McpToken = typeof mcpTokens.$inferSelect;
+
 export type UpsertUser = typeof users.$inferInsert;
 export type UserRow = typeof users.$inferSelect;
 export type MobileRefreshToken = typeof mobileRefreshTokens.$inferSelect;

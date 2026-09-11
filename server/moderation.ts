@@ -20,8 +20,9 @@ import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { requireReviewer } from "./platform-roles";
 import {
   RATE_LIMITS, DUPLICATE_RULES, REPORT_TARGETS, REPORT_REASON_IDS, REPORT_NOTE_MAX,
-  REPORT_STATUSES,
-  type RateLimitAction, type ReportTarget, type DuplicateRule,
+  REPORT_STATUSES, RATE_LIMITED, MODERATION_ACTION_IDS, isActionableTarget, isReasonCode,
+  reasonCodesFor, moderationReasonLabel,
+  type RateLimitAction, type ReportTarget, type DuplicateRule, type RateLimitedBody, type ModerationAction,
 } from "@shared/moderation";
 
 /** One table an action's writes land in, and the columns needed to judge them. */
@@ -48,7 +49,7 @@ interface CountSource {
  * un-reacting deletes the row; a presign writes nothing; an AI call writes to
  * a dozen places.
  */
-const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai", "login", "write", "track", "post"]);
+const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai", "login", "write", "track", "post", "connect"]);
 
 const hitSource = (action: RateLimitAction): CountSource => ({
   table: rateLimitHits, author: rateLimitHits.userId, created: rateLimitHits.createdAt,
@@ -110,13 +111,20 @@ const COUNTED: Record<RateLimitAction, CountSource[]> = {
   write:  [hitSource("write")],
   track:  [hitSource("track")],
   post:   [hitSource("post")],
+  // Every attempt counts, refused ones included: that's what stops hammering someone with requests.
+  connect: [hitSource("connect")],
 };
 
-/** The caller's address as a limiter key, for requests with no user. First hop of X-Forwarded-For, as the auth routes already do. */
+/**
+ * The caller's address as a limiter key, for requests with no user.
+ *
+ * `req.ip`, which Express works out from X-Forwarded-For using the app's
+ * `trust proxy` setting — the address our own proxy saw. This used to take the
+ * header's first entry, which is the one the client writes: sending a new
+ * made-up address with every attempt reset the sign-in limit each time.
+ */
 export function ipKey(req: any): string {
-  const fwd = req.headers?.["x-forwarded-for"];
-  const ip = (typeof fwd === "string" && fwd.split(",")[0].trim()) || req.ip || req.socket?.remoteAddress || "unknown";
-  return `ip:${ip}`;
+  return `ip:${req.ip || req.socket?.remoteAddress || "unknown"}`;
 }
 
 /*
@@ -159,33 +167,92 @@ const DUPLICATE_SCAN_LIMIT = 300;
 
 const sum = (ns: number[]) => ns.reduce((a, b) => a + b, 0);
 
+/*
+ * Accounts the limits don't stop: platform admins, and testers listed by email
+ * in RATE_LIMIT_EXEMPT_EMAILS. Their use is still recorded — an exempt account
+ * running away is exactly what the hit table should show — they just aren't
+ * refused. Only a signed-in account can be exempt, never an address, since
+ * nothing proves who is behind one. So sign-in attempts are limited for
+ * everybody.
+ *
+ * Only asked once someone is over a limit, so it costs nothing normally. The
+ * account's role and email are cached briefly; the list is read live, so
+ * changing it needs no restart.
+ */
+const EXEMPT_LOOKUP_TTL_MS = 30_000;
+const exemptLookups = new Map<string, { role: string | null; email: string | null; at: number }>();
+
+function exemptEmails(): Set<string> {
+  return new Set((process.env.RATE_LIMIT_EXEMPT_EMAILS || "")
+    .split(",").map((e) => e.trim().toLowerCase()).filter(Boolean));
+}
+
+async function isExempt(key: string): Promise<boolean> {
+  if (key.startsWith("ip:")) return false;
+  let who = exemptLookups.get(key);
+  if (!who || Date.now() - who.at > EXEMPT_LOOKUP_TTL_MS) {
+    try {
+      const [row] = await db.select({ role: users.platformRole, email: users.email }).from(users).where(eq(users.id, key));
+      who = { role: row?.role ?? null, email: row?.email?.toLowerCase() ?? null, at: Date.now() };
+      exemptLookups.set(key, who);
+    } catch {
+      return false; // Can't tell who this is, so the limit applies.
+    }
+  }
+  return who.role === "admin" || (!!who.email && exemptEmails().has(who.email));
+}
+
+export interface RateCheck {
+  ok: boolean;
+  /** Over the limit, but let through because the account is on the allowlist. */
+  exempt: boolean;
+  used: number;
+  max: number;
+  /** When room next opens; 0 when there's room now. */
+  retryAfterSeconds: number;
+}
+
 /**
- * True when this person has room to do the thing.
+ * Whether this person (or address) has room to do the thing, and if not,
+ * how long until they do.
+ *
+ * The wait is measured to the oldest counted use leaving the window, in the
+ * database's clock like the window itself. Past the limit by more than one it
+ * is a lower bound — a retry at that moment may still be early — but it is
+ * never the "come back in fifteen minutes" that someone one second from room
+ * used to be told.
  *
  * Fails open on a database error: a limiter that blocks writes when it can't
  * count is worse than the spam it prevents.
  */
-export async function withinRateLimit(
-  userId: string, action: RateLimitAction,
-): Promise<{ ok: boolean; retryAfterMinutes: number; used: number; max: number }> {
+export async function withinRateLimit(key: string, action: RateLimitAction): Promise<RateCheck> {
   const limit = RATE_LIMITS[action];
+  const windowSeconds = limit.windowMinutes * 60;
 
   try {
-    const counts = await Promise.all(COUNTED[action].map(async (src) => {
-      const [row] = await db.select({ n: sql<number>`count(*)::int` })
+    const rows = await Promise.all(COUNTED[action].map(async (src) => {
+      const [row] = await db.select({
+        n: sql<number>`count(*)::int`,
+        frees: sql<number | null>`ceil(extract(epoch from (min(${src.created}) + interval '${sql.raw(String(limit.windowMinutes))} minutes' - now())))::int`,
+      })
         .from(src.table as any)
         .where(and(
-          eq(src.author, userId),
+          eq(src.author, key),
           withinMinutes(src.created, limit.windowMinutes),
           ...(src.where ? [src.where] : []),
         ));
-      return row?.n ?? 0;
+      return { n: Number(row?.n ?? 0), frees: row?.frees == null ? null : Number(row.frees) };
     }));
-    const used = sum(counts);
-    return { ok: used < limit.max, retryAfterMinutes: limit.windowMinutes, used, max: limit.max };
+    const used = sum(rows.map((r) => r.n));
+    if (used < limit.max) return { ok: true, exempt: false, used, max: limit.max, retryAfterSeconds: 0 };
+    if (await isExempt(key)) return { ok: true, exempt: true, used, max: limit.max, retryAfterSeconds: 0 };
+
+    const frees = rows.map((r) => r.frees).filter((s): s is number => s !== null);
+    const soonest = frees.length ? Math.min(...frees) : windowSeconds;
+    return { ok: false, exempt: false, used, max: limit.max, retryAfterSeconds: Math.min(windowSeconds, Math.max(1, soonest)) };
   } catch (err) {
     console.error(`[moderation] Rate check failed for ${action}, allowing:`, err);
-    return { ok: true, retryAfterMinutes: 0, used: 0, max: limit.max };
+    return { ok: true, exempt: false, used: 0, max: limit.max, retryAfterSeconds: 0 };
   }
 }
 
@@ -208,15 +275,17 @@ async function recordHit(userId: string, action: RateLimitAction): Promise<void>
  * log line is how you tell which — one user at 31/30 is the second, one user
  * at 400/30 is the first.
  */
-function refuse(res: any, userId: string, action: RateLimitAction, used: number, max: number, retryAfterMinutes: number) {
-  console.warn(`[rate-limit] refused ${action} for user ${userId}: ${used}/${max} in ${RATE_LIMITS[action].windowMinutes}m`);
-  res.setHeader("Retry-After", String(retryAfterMinutes * 60));
-  res.status(429).json({
+function refuse(res: any, key: string, action: RateLimitAction, check: RateCheck) {
+  console.warn(`[rate-limit] refused ${action} for user ${key}: ${check.used}/${check.max} in ${RATE_LIMITS[action].windowMinutes}m`);
+  const body: RateLimitedBody = {
     message: RATE_LIMITS[action].message,
-    code: "rate_limited",
+    code: RATE_LIMITED,
     action,
-    retryAfterMinutes,
-  });
+    retryAfterSeconds: check.retryAfterSeconds,
+    retryAfterMinutes: Math.ceil(check.retryAfterSeconds / 60),
+  };
+  res.setHeader("Retry-After", String(check.retryAfterSeconds));
+  res.status(429).json(body);
 }
 
 /**
@@ -225,8 +294,8 @@ function refuse(res: any, userId: string, action: RateLimitAction, used: number,
  * Returns true to proceed; on false the 429 has already been written.
  */
 export async function enforceRateLimit(res: any, userId: string, action: RateLimitAction): Promise<boolean> {
-  const { ok, retryAfterMinutes, used, max } = await withinRateLimit(userId, action);
-  if (!ok) { refuse(res, userId, action, used, max, retryAfterMinutes); return false; }
+  const check = await withinRateLimit(userId, action);
+  if (!check.ok) { refuse(res, userId, action, check); return false; }
   await recordHit(userId, action);
   return true;
 }
@@ -292,8 +361,8 @@ export function rateLimit(action: RateLimitAction): RequestHandler {
     const userId: string | undefined = req.user?.id ?? (HIT_COUNTED.has(action) ? ipKey(req) : undefined);
     if (!userId) return next();
 
-    const { ok, retryAfterMinutes, used, max } = await withinRateLimit(userId, action);
-    if (!ok) return refuse(res, userId, action, used, max, retryAfterMinutes);
+    const check = await withinRateLimit(userId, action);
+    if (!check.ok) return refuse(res, userId, action, check);
 
     const rule: DuplicateRule | undefined =
       (DUPLICATE_RULES as Partial<Record<RateLimitAction, DuplicateRule>>)[action];
@@ -353,8 +422,8 @@ export const limitWrites: RequestHandler = async (req: any, res, next) => {
   if (!req.path.startsWith("/api/")) return next();
   if (WRITE_FLOOR_EXEMPT.some((p) => req.path.startsWith(p))) return next();
   const key = req.user?.id ?? ipKey(req);
-  const { ok, retryAfterMinutes, used, max } = await withinRateLimit(key, "write");
-  if (!ok) return refuse(res, key, "write", used, max, retryAfterMinutes);
+  const check = await withinRateLimit(key, "write");
+  if (!check.ok) return refuse(res, key, "write", check);
   await recordHit(key, "write");
   next();
 };
@@ -434,6 +503,7 @@ async function snapshotOf(targetType: ReportTarget, targetId: string): Promise<{
 export async function logModeration(entry: {
   action: string; actorId?: string | null; targetUserId?: string | null;
   targetType?: string | null; targetId?: string | null; reason?: string | null;
+  reasonCode?: string | null; previousState?: unknown; resultingState?: unknown;
   details?: Record<string, unknown>;
 }): Promise<void> {
   try {
@@ -444,6 +514,9 @@ export async function logModeration(entry: {
       targetType: entry.targetType ?? null,
       targetId: entry.targetId ?? null,
       reason: entry.reason ?? null,
+      reasonCode: entry.reasonCode ?? null,
+      previousState: entry.previousState ?? null,
+      resultingState: entry.resultingState ?? null,
       details: entry.details ?? {},
     });
   } catch (err) {
@@ -505,6 +578,8 @@ export function registerModerationRoutes(app: Express) {
       const status = (REPORT_STATUSES as readonly string[]).includes(String(req.query.status))
         ? String(req.query.status) as (typeof REPORT_STATUSES)[number]
         : "open";
+      // Optionally one kind of content: `?type=comment`.
+      const kind = (REPORT_TARGETS as readonly string[]).includes(String(req.query.type)) ? String(req.query.type) : null;
       const rows = await db.select({
         report: contentReports,
         reporterName: sql<string>`coalesce(reporter_profile.display_name, reporter.first_name)`,
@@ -516,7 +591,7 @@ export function registerModerationRoutes(app: Express) {
         .leftJoin(sql`${userProfiles} AS reporter_profile`, sql`reporter_profile.user_id = ${contentReports.reporterId}`)
         .leftJoin(sql`${users} AS owner`, sql`owner.id = ${contentReports.targetOwnerId}`)
         .leftJoin(sql`${userProfiles} AS owner_profile`, sql`owner_profile.user_id = ${contentReports.targetOwnerId}`)
-        .where(eq(contentReports.status, status))
+        .where(and(eq(contentReports.status, status), kind ? eq(contentReports.targetType, kind) : undefined))
         .orderBy(desc(contentReports.createdAt))
         .limit(100);
 
@@ -526,6 +601,10 @@ export function registerModerationRoutes(app: Express) {
         const [x] = await db.select({ h: t.table.hiddenAt }).from(t.table).where(eq(t.table.id, id));
         return x ? !!x.h : null;
       };
+      const commentMode = async (id: string): Promise<string | null> => {
+        const [c] = await db.select({ h: projectComments.hiddenAt, m: projectComments.hiddenMode }).from(projectComments).where(eq(projectComments.id, id));
+        return c?.h ? (c.m ?? "removed") : null;
+      };
       res.json(await Promise.all(rows.map(async (r) => ({
         ...r.report,
         reporterName: r.reporterName || "Someone",
@@ -534,6 +613,10 @@ export function registerModerationRoutes(app: Express) {
         ownerSuspended: !!r.ownerSuspendedAt,
         /** Null when this kind of target can't be taken down. */
         targetHidden: await hiddenOf(r.report.targetType, r.report.targetId),
+        /** "removed" or "shadow" when a comment is hidden; null otherwise. */
+        targetHiddenMode: r.report.targetType === "comment" ? await commentMode(r.report.targetId) : null,
+        /** Decided through `/act` (action + reason code) rather than the older buttons. */
+        actionable: isActionableTarget(r.report.targetType),
       }))));
     } catch (error) {
       console.error("Report queue error:", error);
@@ -553,16 +636,141 @@ export function registerModerationRoutes(app: Express) {
     if (!t) return res.status(400).json({ message: "That kind of content can't be taken down here. Suspend the account instead.", code: "not_takedownable" });
     const reason = String(req.body?.reason ?? "").trim().slice(0, 500);
     if (hide && !reason) return res.status(400).json({ message: "Say why — the author sees it, and so does the log.", code: "invalid_input", field: "reason" });
-    const [row] = await db.select({ id: t.table.id, author: t.author, hiddenAt: t.table.hiddenAt }).from(t.table).where(eq(t.table.id, id));
+    const reasonCode = req.body?.reasonCode ? String(req.body.reasonCode) : null;
+    if (reasonCode && !isReasonCode(reasonCode)) return res.status(400).json({ message: "Unknown reason code.", code: "invalid_input", field: "reasonCode" });
+    const [row] = await db.select({ author: t.author, current: t.table }).from(t.table).where(eq(t.table.id, id));
     if (!row) return res.status(404).json({ message: "Not found" });
-    await db.update(t.table)
-      .set(hide ? { hiddenAt: new Date(), hiddenById: req.user.id, hiddenReason: reason } : { hiddenAt: null, hiddenById: null, hiddenReason: null })
-      .where(eq(t.table.id, id));
-    await logModeration({ action: hide ? "content_hidden" : "content_restored", actorId: req.user.id, targetUserId: row.author, targetType: type, targetId: id, reason: hide ? reason : null });
+    const isComment = type === "comment";
+    const stateOf = (r: any) => ({
+      hiddenAt: r.hiddenAt ?? null, hiddenById: r.hiddenById ?? null, hiddenReason: r.hiddenReason ?? null,
+      ...(isComment ? { hiddenMode: r.hiddenMode ?? null } : {}),
+    });
+    const change = hide
+      ? { hiddenAt: new Date(), hiddenById: req.user.id, hiddenReason: reason, ...(isComment ? { hiddenMode: "removed" } : {}) }
+      : { hiddenAt: null, hiddenById: null, hiddenReason: null, ...(isComment ? { hiddenMode: null } : {}) };
+    // The change and its record together, or neither.
+    await db.transaction(async (tx) => {
+      const [after] = await tx.update(t.table).set(change).where(eq(t.table.id, id)).returning();
+      await tx.insert(moderationLog).values({
+        action: hide ? "content_hidden" : "content_restored", actorId: req.user.id, targetUserId: row.author,
+        targetType: type, targetId: id, reason: hide ? reason : null, reasonCode,
+        previousState: stateOf(row.current), resultingState: stateOf(after),
+      });
+    });
     res.json({ ok: true, hidden: hide });
   };
   app.post("/api/admin/content/:type/:id/hide", isAuthenticated, requireReviewer, (req: any, res) => setHidden(req, res, true).catch((e) => { console.error("takedown failed:", e); res.status(500).json({ message: "Couldn't take that down" }); }));
   app.post("/api/admin/content/:type/:id/restore", isAuthenticated, requireReviewer, (req: any, res) => setHidden(req, res, false).catch((e) => { console.error("restore failed:", e); res.status(500).json({ message: "Couldn't restore that" }); }));
+
+  /**
+   * Deciding a reported comment — the step of the loop that changes anything.
+   *
+   * One of four actions, each with a required reason code: remove, shadow-hide,
+   * ban (suspend the author and remove the comment), or dismiss. The content
+   * change, the author's suspension, closing the report and the log entry are
+   * one transaction: there is no action without its record, and no record of
+   * an action that didn't happen. The entry keeps the prior state of
+   * everything it changed, so an undo can put it back exactly.
+   *
+   * The report row is locked for the decision, so two reviewers acting on the
+   * same report at once get one action and one "already decided".
+   */
+  app.post("/api/admin/reports/:id/act", isAuthenticated, requireReviewer, async (req: any, res) => {
+    try {
+      const action = String(req.body?.action ?? "") as ModerationAction;
+      const reasonCode = String(req.body?.reasonCode ?? "");
+      const note = String(req.body?.note ?? "").trim().slice(0, REPORT_NOTE_MAX) || null;
+      if (!MODERATION_ACTION_IDS.includes(action)) {
+        return res.status(400).json({ message: "Pick what to do.", code: "invalid_input", field: "action" });
+      }
+      if (!reasonCodesFor(action).some((r) => r.id === reasonCode)) {
+        return res.status(400).json({
+          message: action === "dismiss" ? "Pick why it's being dismissed." : "Pick the rule it broke.",
+          code: "invalid_input", field: "reasonCode",
+        });
+      }
+
+      const outcome = await db.transaction(async (tx) => {
+        const [report] = await tx.select().from(contentReports)
+          .where(eq(contentReports.id, String(req.params.id))).for("update");
+        if (!report) return { status: 404, body: { message: "Report not found" } };
+        if (!isActionableTarget(report.targetType)) {
+          return { status: 400, body: { message: "Only comments are decided here so far. Use the buttons on the report.", code: "not_actionable" } };
+        }
+        if (report.status !== "open") {
+          return { status: 409, body: { message: "This report has already been decided.", code: "already_resolved", reportStatus: report.status } };
+        }
+
+        const [comment] = await tx.select().from(projectComments)
+          .where(eq(projectComments.id, report.targetId)).for("update");
+        if (!comment && action !== "dismiss") {
+          return { status: 404, body: { message: "That comment no longer exists. Dismiss the report instead.", code: "target_gone" } };
+        }
+        const [author] = comment
+          ? await tx.select({ id: users.id, platformRole: users.platformRole, suspendedAt: users.suspendedAt, suspendedReason: users.suspendedReason })
+            .from(users).where(eq(users.id, comment.authorId))
+          : [];
+        if (action === "ban") {
+          if (!author) return { status: 404, body: { message: "The author's account no longer exists.", code: "target_gone" } };
+          if (author.id === req.user.id) return { status: 400, body: { message: "You can't ban yourself.", code: "invalid_input" } };
+          if (author.platformRole !== "user") return { status: 400, body: { message: "Reviewers can't be banned from here.", code: "invalid_input" } };
+        }
+
+        const commentState = (c: typeof comment | undefined) => c
+          ? { hiddenAt: c.hiddenAt, hiddenMode: c.hiddenMode, hiddenById: c.hiddenById, hiddenReason: c.hiddenReason }
+          : null;
+        const authorState = (a: { suspendedAt: Date | null; suspendedReason: string | null }) =>
+          ({ suspendedAt: a.suspendedAt, suspendedReason: a.suspendedReason });
+        const label = moderationReasonLabel(reasonCode);
+
+        let commentAfter = commentState(comment);
+        if (action !== "dismiss") {
+          const [updated] = await tx.update(projectComments).set({
+            hiddenAt: new Date(), hiddenMode: action === "shadow_hide" ? "shadow" : "removed",
+            hiddenById: req.user.id, hiddenReason: label,
+          }).where(eq(projectComments.id, comment!.id)).returning();
+          commentAfter = commentState(updated);
+        }
+        let authorAfter: ReturnType<typeof authorState> | null = null;
+        if (action === "ban") {
+          const [u] = await tx.update(users).set({ suspendedAt: new Date(), suspendedReason: label })
+            .where(eq(users.id, author!.id)).returning({ suspendedAt: users.suspendedAt, suspendedReason: users.suspendedReason });
+          authorAfter = authorState(u);
+        }
+
+        const reportStatus = action === "dismiss" ? "dismissed" : "actioned";
+        await tx.update(contentReports).set({
+          status: reportStatus, reviewedById: req.user.id, reviewedAt: new Date(), reviewNote: note,
+        }).where(eq(contentReports.id, report.id));
+
+        const [entry] = await tx.insert(moderationLog).values({
+          action: `comment_${action}`,
+          actorId: req.user.id,
+          targetUserId: comment?.authorId ?? report.targetOwnerId,
+          targetType: "comment",
+          targetId: report.targetId,
+          reason: note,
+          reasonCode,
+          previousState: {
+            report: { status: report.status },
+            comment: commentState(comment),
+            ...(action === "ban" ? { author: authorState(author!) } : {}),
+          },
+          resultingState: {
+            report: { status: reportStatus },
+            comment: commentAfter,
+            ...(authorAfter ? { author: authorAfter } : {}),
+          },
+          details: { reportId: report.id, reportReason: report.reason },
+        }).returning();
+        return { status: 200, body: { ok: true, reportStatus, logId: entry.id } };
+      });
+      res.status(outcome.status).json(outcome.body);
+    } catch (error) {
+      console.error("Moderation action error:", error);
+      res.status(500).json({ message: "Couldn't apply that. Nothing was changed." });
+    }
+  });
 
   /** Resolving one. Actioned or dismissed — both close it. */
   app.patch("/api/admin/reports/:id", isAuthenticated, requireReviewer, async (req: any, res) => {
@@ -571,6 +779,8 @@ export function registerModerationRoutes(app: Express) {
       if (status !== "actioned" && status !== "dismissed") {
         return res.status(400).json({ message: "Status must be actioned or dismissed" });
       }
+      const [before] = await db.select({ status: contentReports.status }).from(contentReports)
+        .where(eq(contentReports.id, String(req.params.id)));
       const [updated] = await db.update(contentReports).set({
         status,
         reviewedById: req.user.id,
@@ -582,6 +792,7 @@ export function registerModerationRoutes(app: Express) {
         action: status === "actioned" ? "report_actioned" : "report_dismissed",
         actorId: req.user.id, targetUserId: updated.targetOwnerId,
         targetType: "report", targetId: updated.id, reason: updated.reviewNote,
+        previousState: { status: before?.status ?? null }, resultingState: { status: updated.status },
         details: { reportedType: updated.targetType, reportedId: updated.targetId, reason: updated.reason },
       });
       res.json(updated);
@@ -616,13 +827,16 @@ export function registerModerationRoutes(app: Express) {
         suspendedReason: suspend
           ? (String(req.body?.reason || "").trim().slice(0, 300) || "Breached the community rules")
           : null,
-      }).where(eq(users.id, targetId)).returning({ id: users.id, suspendedAt: users.suspendedAt });
+      }).where(eq(users.id, targetId)).returning({ id: users.id, suspendedAt: users.suspendedAt, suspendedReason: users.suspendedReason });
 
       console.log(`[moderation] ${targetId} ${suspend ? "suspended" : "reinstated"} by ${req.user.id}`);
       await logModeration({
         action: suspend ? "suspend" : "reinstate",
         actorId: req.user.id, targetUserId: targetId, targetType: "user", targetId,
         reason: suspend ? (String(req.body?.reason || "").trim().slice(0, 300) || "Breached the community rules") : null,
+        reasonCode: req.body?.reasonCode && isReasonCode(String(req.body.reasonCode)) ? String(req.body.reasonCode) : null,
+        previousState: { suspendedAt: target.suspendedAt, suspendedReason: target.suspendedReason },
+        resultingState: { suspendedAt: updated.suspendedAt, suspendedReason: updated.suspendedReason },
       });
       res.json({ id: updated.id, suspended: !!updated.suspendedAt });
     } catch (error) {
@@ -631,13 +845,31 @@ export function registerModerationRoutes(app: Express) {
     }
   });
 
-  /** The log, newest first. Read-only by construction: there is no write route. */
+  /**
+   * The log, newest first, optionally narrowed: `?targetType=comment&targetId=…`
+   * for everything that happened to one comment, `?action=` or `?actorId=` for
+   * what one kind of action or one reviewer did. Read-only: there is no write
+   * route, and the database refuses edits and deletes (moderation-log-rules.ts).
+   */
   app.get("/api/admin/moderation-log", isAuthenticated, requireReviewer, async (req, res) => {
     try {
       const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
-      const rows = await db.select().from(moderationLog)
+      const filters = ([
+        ["targetType", moderationLog.targetType], ["targetId", moderationLog.targetId],
+        ["action", moderationLog.action], ["actorId", moderationLog.actorId],
+      ] as const).flatMap(([param, col]) => {
+        const v = req.query[param];
+        return typeof v === "string" && v ? [eq(col, v)] : [];
+      });
+      const rows = await db.select({
+        entry: moderationLog,
+        actorName: sql<string | null>`coalesce(actor_profile.display_name, actor.first_name)`,
+      }).from(moderationLog)
+        .leftJoin(sql`${users} AS actor`, sql`actor.id = ${moderationLog.actorId}`)
+        .leftJoin(sql`${userProfiles} AS actor_profile`, sql`actor_profile.user_id = ${moderationLog.actorId}`)
+        .where(filters.length ? and(...filters) : undefined)
         .orderBy(desc(moderationLog.createdAt)).limit(limit);
-      res.json(rows);
+      res.json(rows.map((r) => ({ ...r.entry, actorName: r.actorName ?? null })));
     } catch (error) {
       console.error("Moderation log error:", error);
       res.status(500).json({ message: "Couldn't load the log" });

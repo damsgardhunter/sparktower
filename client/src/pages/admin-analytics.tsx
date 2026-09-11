@@ -54,6 +54,14 @@ interface Summary {
   failing: { pattern: string; label: string; method: string | null; status: number | null; n: number }[];
   signupSources: { source: string; medium: string | null; campaign: string | null; signups: number }[];
   byHour: { hour: string; events: number; people: number }[];
+  /** Absent from a server older than the Explore loop. */
+  explore?: {
+    funnel: { key: string; label: string; sessions: number; ofOpened: number | null }[];
+    events: { name: string; label: string; sessions: number; events: number; people: number }[];
+    timeToFirstAction: { sessions: number; p50Ms: number | null; p90Ms: number | null };
+    repeat: { people: number; repeated: number; rate: number | null };
+    cycles?: { sessions: number; completedOne: number; twoPlus: number; rate: number | null };
+  };
 }
 
 /** Anonymous visitors have no name; a short id is still a handle to recognise. */
@@ -426,6 +434,78 @@ export default function AdminAnalytics() {
                 </li>
               ))}
             </ul>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* --- The Explore loop ------------------------------------------ */}
+      {/*
+       * Discover → a match → a closer look → follow, connect or message →
+       * back again. Three signals, the ones the loop is judged on: how far
+       * people get, how long it takes them to act, and whether they return.
+       * See docs/explore-loop.md for what each counts.
+       */}
+      <Card data-testid="card-explore-loop">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-semibold">Explore loop</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {!summary?.explore || !summary.explore.funnel[0]?.sessions ? (
+            <p className="text-sm text-muted-foreground py-6 text-center">Nobody opened Discover in this window.</p>
+          ) : (
+            <div className="grid md:grid-cols-3 gap-6">
+              <ul className="md:col-span-2 space-y-2.5" data-testid="explore-funnel">
+                {summary.explore.funnel.map((step) => (
+                  <li key={step.key} className="space-y-1">
+                    <div className="flex items-baseline gap-2 text-sm">
+                      <span className="truncate">{step.label}</span>
+                      <span className="flex-1 border-b border-dashed border-border/60" />
+                      <span className="tabular-nums shrink-0">{step.sessions}</span>
+                      <span className="text-[11px] text-muted-foreground tabular-nums shrink-0 w-10 text-right">
+                        {step.ofOpened == null ? "" : `${Math.round(step.ofOpened * 100)}%`}
+                      </span>
+                    </div>
+                    <div className="h-1.5 rounded bg-muted overflow-hidden">
+                      <div className="h-full bg-primary/70" style={{ width: `${Math.round((step.ofOpened ?? 0) * 100)}%` }} />
+                    </div>
+                  </li>
+                ))}
+                <li className="text-[11px] text-muted-foreground pt-1">Sessions, as a share of those that opened Discover.</li>
+              </ul>
+              <div className="space-y-5">
+                <div>
+                  <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Time to first action</p>
+                  <p className="text-2xl font-semibold tabular-nums" data-testid="explore-ttfa">
+                    {summary.explore.timeToFirstAction.p50Ms == null ? "—" : duration(summary.explore.timeToFirstAction.p50Ms)}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    median
+                    {summary.explore.timeToFirstAction.p90Ms != null && <> · 90% within {duration(summary.explore.timeToFirstAction.p90Ms)}</>}
+                    {" "}· {summary.explore.timeToFirstAction.sessions} session{summary.explore.timeToFirstAction.sessions === 1 ? "" : "s"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Repeat rate</p>
+                  <p className="text-2xl font-semibold tabular-nums" data-testid="explore-repeat">
+                    {summary.explore.repeat.rate == null ? "—" : `${Math.round(summary.explore.repeat.rate * 100)}%`}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {summary.explore.repeat.repeated} of {summary.explore.repeat.people} came back on another visit
+                  </p>
+                </div>
+                {summary.explore.cycles && (
+                  <div>
+                    <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Two or more full loops</p>
+                    <p className="text-2xl font-semibold tabular-nums" data-testid="explore-cycles">
+                      {summary.explore.cycles.rate == null ? "—" : `${Math.round(summary.explore.cycles.rate * 100)}%`}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {summary.explore.cycles.twoPlus} of {summary.explore.cycles.sessions} sessions went open → act → back, twice
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
           )}
         </CardContent>
       </Card>

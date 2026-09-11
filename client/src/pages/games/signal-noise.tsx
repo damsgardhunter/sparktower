@@ -1,3 +1,4 @@
+import { errorText } from "@/lib/api-error";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -79,7 +80,7 @@ function ScenarioSelection({ onStart }: { onStart: (game: Game) => void }) {
       onStart(game);
     },
     onError: (err: Error) => {
-      toast({ title: "Failed to start game", description: err.message, variant: "destructive" });
+      toast({ title: "Failed to start game", description: errorText(err), variant: "destructive" });
     },
   });
 
@@ -182,7 +183,7 @@ function GamePlay({
       onComplete(result, decisions);
     },
     onError: (err: Error) => {
-      toast({ title: "Failed to complete game", description: err.message, variant: "destructive" });
+      toast({ title: "Failed to complete game", description: errorText(err), variant: "destructive" });
     },
   });
 

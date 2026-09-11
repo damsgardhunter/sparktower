@@ -24,7 +24,17 @@ let cache: Record<string, boolean> = defaultSurfaceMap();
 let loaded = false;
 
 /** Reads the flags into memory. Called at boot and after every change. */
+/**
+ * Which read is the latest. Reads overlap — the ten-second refresh and the one
+ * a toggle triggers — and they can finish out of order. Without this, an older
+ * read that started before a kill switch was flipped could land after the
+ * newer one and put the old value back: the switch undone, on that instance,
+ * until the next refresh. Only the most recently started read may write.
+ */
+let generation = 0;
+
 export async function loadSurfaceFlags(): Promise<Record<string, boolean>> {
+  const mine = ++generation;
   try {
     const rows = await db.select().from(surfaceFlags);
     const next = defaultSurfaceMap();
@@ -33,9 +43,11 @@ export async function loadSurfaceFlags(): Promise<Record<string, boolean>> {
       // resurrected — the registry is the source of truth for what exists.
       if (row.surfaceId in next) next[row.surfaceId] = row.enabled;
     }
+    if (mine !== generation) return cache;
     cache = next;
     loaded = true;
   } catch (err) {
+    if (mine !== generation) return cache;
     /*
      * Fall back to the shipped defaults rather than failing closed on
      * everything. A database blip shouldn't take the whole product down, and

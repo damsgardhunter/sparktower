@@ -8,7 +8,7 @@
  * bring the board in line with reality through the same operations engine the
  * health check and Nova chat use.
  */
-import type { Express } from "express";
+import type { Express, Response } from "express";
 import OpenAI from "openai";
 import { storage } from "./storage";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
@@ -111,6 +111,202 @@ For "operations", propose the changes that would make the board match the code: 
 ${OPERATION_SCHEMA_INSTRUCTIONS}
 
 ${AUDIT_SCHEMA}`;
+}
+
+/**
+ * Everything the audit does once the code is in hand.
+ *
+ * Extracted from the route because the code can now arrive two ways: uploaded
+ * or fetched by the web app, or handed over by an editor-side agent that
+ * already has the working tree on disk. The second one is the interesting
+ * case — it audits what the builder is actually looking at, uncommitted work
+ * included, rather than the last thing they pushed. Both must produce the same
+ * audit, so there is one of these and not two.
+ *
+ * The caller charges: `requireCredits` sits at each route, right after the
+ * code is in hand, so the route table can still answer "what does this cost
+ * and what stops it". This deducts on success.
+ *
+ * Takes `res` because the entitlement checks answer on it directly; throws
+ * otherwise, and the caller's handler owns the error shape.
+ */
+export async function runCodeAudit(opts: {
+  projectId: string;
+  userId: string;
+  project: any;
+  ent: Awaited<ReturnType<typeof requireFeature>> & {};
+  res: Response;
+  snapshot: RepoSnapshot;
+  sourceKind: "github" | "upload" | "worktree";
+  repoMeta: Awaited<ReturnType<typeof import("./code-ingest").fetchRepoMeta>> | null;
+}): Promise<Response | void> {
+  const { projectId, userId, project, ent, res, snapshot, sourceKind, repoMeta } = opts;
+  const digest = buildCodeDigest(snapshot);
+
+  // --- the plan, for reconciliation ------------------------------------
+  const [state, completions, milestones] = await Promise.all([
+    /*
+     * Without the previous audit. A fresh audit has to judge the code on
+     * its own merits — handed its predecessor's verdict it anchors on it
+     * and reproduces the old conclusion instead of reading what's there.
+     * The history list is where comparisons belong.
+     */
+    buildOperableProjectState(projectId, { includeAudit: false }),
+    storage.getProjectTaskCompletions(projectId, 40).catch(() => []),
+    storage.getProjectMilestones(projectId).catch(() => []),
+  ]);
+
+  const completion = await getOpenAI().chat.completions.create({
+    model: modelFor(ent),
+    messages: [
+      {
+        role: "system",
+        content: auditSystemPrompt(ent),
+      },
+      {
+        role: "user",
+        content: [
+          `THE PLAN\n${formatProjectBriefForPrompt(project)}`,
+          `MILESTONE COUNT: ${milestones.length}`,
+          completions.length
+            ? `TASKS THE BUILDER HAS ALREADY COMPLETED (${completions.length})\n${completions.slice(0, 30).map((c) => `- ${c.title}`).join("\n")}`
+            : "TASKS ALREADY COMPLETED\nNone recorded.",
+          `CURRENT BOARD AND PLAN STATE (use these ids for operations)\n${state}`,
+          `THE ACTUAL CODEBASE\n${digest.prompt}`,
+        ].join("\n\n"),
+      },
+    ],
+  });
+
+  let parsed: any;
+  try {
+    const raw = completion.choices[0].message.content || "{}";
+    const match = raw.match(/\{[\s\S]*\}/);
+    parsed = JSON.parse(match ? match[0] : raw);
+  } catch (err) {
+    console.error("Code audit parse failed:", err);
+    return res.status(502).json({ message: "Nova returned an unreadable audit. Please try again." });
+  }
+
+  // The live database, when the owner has said where it is, read before
+  // the second reads so "built but unused" can be judged from rows.
+  let dataShape = await refreshDataShape(projectId).catch(() => null);
+  if (dataShape && !dataShape.error) dataShape = compareWithCode(dataShape, digest.signals.dataModels);
+
+  // Second reads: one narrow question per built or partial area, against
+  // the full text of its evidence files and the exact route coverage.
+  // Independent and fault-tolerant; a failed read leaves the first-pass
+  // verdict, which is honest.
+  const capabilities = await deepReadAll(
+    ent,
+    sanitizeCapabilities(parsed.capabilities, {
+      files: new Set(snapshot.files.map((f) => f.path)),
+      routes: new Set(digest.signals.routes.map((r) => r.label)),
+    }),
+    snapshot.files,
+    digest.signals.routeCoverage,
+    dataShape,
+  );
+  const findings = {
+    stackSummary: str(parsed.stackSummary, 400),
+    capabilities,
+    built: (Array.isArray(parsed.built) ? parsed.built : []).slice(0, 30).map((b: any) => ({
+      item: str(b?.item, 300), evidence: strList(b?.evidence, 8, 200),
+    })).filter((b: any) => b.item),
+    partial: (Array.isArray(parsed.partial) ? parsed.partial : []).slice(0, 25).map((b: any) => ({
+      item: str(b?.item, 300), exists: str(b?.exists, 400),
+      missing: str(b?.missing, 400), evidence: strList(b?.evidence, 8, 200),
+    })).filter((b: any) => b.item),
+    missing: (Array.isArray(parsed.missing) ? parsed.missing : []).slice(0, 30).map((b: any) => ({
+      item: str(b?.item, 300), matters: str(b?.matters, 400),
+    })).filter((b: any) => b.item),
+    undocumented: (Array.isArray(parsed.undocumented) ? parsed.undocumented : []).slice(0, 20).map((b: any) => ({
+      item: str(b?.item, 300), evidence: strList(b?.evidence, 6, 200),
+    })).filter((b: any) => b.item),
+    risks: (Array.isArray(parsed.risks) ? parsed.risks : []).slice(0, 20).map((r: any) => ({
+      area: str(r?.area, 80),
+      severity: SEVERITIES.includes(r?.severity) ? r.severity : "medium",
+      finding: str(r?.finding, 800),
+      evidence: strList(r?.evidence, 6, 200),
+      recommendation: str(r?.recommendation, 600),
+    })).filter((r: any) => r.finding),
+    taskReconciliation: {
+      looksDone: (Array.isArray(parsed.taskReconciliation?.looksDone) ? parsed.taskReconciliation.looksDone : [])
+        .slice(0, 30).map((t: any) => ({ title: str(t?.title, 200), evidence: strList(t?.evidence, 6, 200) }))
+        .filter((t: any) => t.title),
+      notStarted: (Array.isArray(parsed.taskReconciliation?.notStarted) ? parsed.taskReconciliation.notStarted : [])
+        .slice(0, 30).map((t: any) => ({ title: str(t?.title, 200), why: str(t?.why, 400) }))
+        .filter((t: any) => t.title),
+    },
+    milestones: (Array.isArray(parsed.milestones) ? parsed.milestones : []).slice(0, 25).map((m: any) => ({
+      title: str(m?.title, 200),
+      verdict: ["complete", "in-progress", "not-started"].includes(m?.verdict) ? m.verdict : "not-started",
+      why: str(m?.why, 400),
+    })).filter((m: any) => m.title),
+    nextThreeThings: strList(parsed.nextThreeThings, 5, 400),
+    /** Scan facts the builder should see even if the model ignored them. */
+    scan: {
+      fileCount: digest.signals.fileCount,
+      readCount: digest.signals.readCount,
+      linesOfCode: digest.signals.linesOfCode,
+      languages: digest.signals.languages,
+      stack: digest.signals.stack,
+      routeCount: digest.signals.routes.length,
+      routes: digest.signals.routes.slice(0, 60),
+      dataModels: digest.signals.dataModels.slice(0, 40),
+      testFiles: digest.signals.testFiles,
+      testFrameworks: digest.signals.testFrameworks,
+      hasCi: digest.signals.hasCi,
+      hasDocker: digest.signals.hasDocker,
+      hasReadme: digest.signals.hasReadme,
+      hasEnvExample: digest.signals.hasEnvExample,
+      envVarCount: digest.signals.envVarNames.length,
+      todoCount: digest.signals.todoCount,
+      consoleCount: digest.signals.consoleCount,
+      suspectedSecrets: digest.signals.suspectedSecrets,
+      authSignals: digest.signals.authSignals,
+      dependencyCount: digest.signals.dependencyCount,
+      truncated: snapshot.truncated,
+      skipped: snapshot.skipped,
+    },
+    repo: repoMeta,
+  };
+
+  // The snapshot's velocity and its runtime, alongside what the code contains.
+  const previous = await storage.getLatestCodeAudit(projectId).catch(() => undefined);
+  const runtime = await probeRuntime({ liveUrl: project.liveUrl, envVarNames: digest.signals.envVarNames });
+  const completionPercent = Math.max(0, Math.min(100, Math.round(Number(parsed.completionPercent) || 0)));
+  const delta = computeAuditDelta(previous ?? null, { id: "pending", createdAt: new Date(), completionPercent, signals: digest.signals, findings });
+
+  const audit = await storage.createCodeAudit({
+    projectId,
+    createdById: userId,
+    source: snapshot.source,
+    sourceKind,
+    stage: str(parsed.stage, 40) || "prototype",
+    completionPercent,
+    summary: str(parsed.summary, 2000),
+    signals: digest.signals as any,
+    findings: findings as any,
+    delta: delta as any,
+    runtime: runtime as any,
+    dataShape: dataShape as any,
+    operations: (Array.isArray(parsed.operations) ? parsed.operations : []).slice(0, 60) as any,
+  } as any);
+
+  // Code that moved is activity, and a few milestones are verified by what the audit saw.
+  const verified = await verifyMilestonesFromAudit(projectId, { id: audit.id, signals: digest.signals, findings, runtime }).catch((e) => { console.error("[audit] verifiers failed:", e); return { verified: [], marked: [] }; });
+  if (delta.changed) await refreshPace(projectId, { taskId: audit.id, backboneId: null, title: `Audit: +${delta.routes.added.length} routes, +${delta.tables.added.length} tables since ${delta.daysSince}d ago`, estimateMinutes: null, actualMinutes: null }).catch(() => {});
+
+  await storage.deductCredits(userId, CREDIT_COSTS.codeAudit);
+  await storage.logActivity({
+    projectId, userId,
+    action: "ran a codebase audit",
+    entityType: "project", entityId: projectId,
+    metadata: { source: snapshot.source, stage: audit.stage },
+  }).catch(() => {});
+
+  res.json({ audit, creditsCharged: CREDIT_COSTS.codeAudit, verifiedMilestones: verified });
 }
 
 export function registerCodeAuditRoutes(app: Express) {
@@ -224,176 +420,12 @@ export function registerCodeAuditRoutes(app: Express) {
         return res.status(400).json({ message: "Give Nova a GitHub repository or a zip to audit." });
       }
 
-      const digest = buildCodeDigest(snapshot);
-
       // Charged only once the code is in hand — a repo that can't be fetched
-      // costs nothing.
+      // costs nothing. Kept at the route rather than inside the run, so what
+      // this endpoint costs and what stops it is readable from the route table.
       if (!(await requireCredits(res, userId, CREDIT_COSTS.codeAudit, "a codebase audit"))) return;
 
-      // --- the plan, for reconciliation ------------------------------------
-      const [state, completions, milestones] = await Promise.all([
-        /*
-         * Without the previous audit. A fresh audit has to judge the code on
-         * its own merits — handed its predecessor's verdict it anchors on it
-         * and reproduces the old conclusion instead of reading what's there.
-         * The history list is where comparisons belong.
-         */
-        buildOperableProjectState(projectId, { includeAudit: false }),
-        storage.getProjectTaskCompletions(projectId, 40).catch(() => []),
-        storage.getProjectMilestones(projectId).catch(() => []),
-      ]);
-
-      const completion = await getOpenAI().chat.completions.create({
-        model: modelFor(ent),
-        messages: [
-          {
-            role: "system",
-            content: auditSystemPrompt(ent),
-          },
-          {
-            role: "user",
-            content: [
-              `THE PLAN\n${formatProjectBriefForPrompt(project)}`,
-              `MILESTONE COUNT: ${milestones.length}`,
-              completions.length
-                ? `TASKS THE BUILDER HAS ALREADY COMPLETED (${completions.length})\n${completions.slice(0, 30).map((c) => `- ${c.title}`).join("\n")}`
-                : "TASKS ALREADY COMPLETED\nNone recorded.",
-              `CURRENT BOARD AND PLAN STATE (use these ids for operations)\n${state}`,
-              `THE ACTUAL CODEBASE\n${digest.prompt}`,
-            ].join("\n\n"),
-          },
-        ],
-      });
-
-      let parsed: any;
-      try {
-        const raw = completion.choices[0].message.content || "{}";
-        const match = raw.match(/\{[\s\S]*\}/);
-        parsed = JSON.parse(match ? match[0] : raw);
-      } catch (err) {
-        console.error("Code audit parse failed:", err);
-        return res.status(502).json({ message: "Nova returned an unreadable audit. Please try again." });
-      }
-
-      // The live database, when the owner has said where it is, read before
-      // the second reads so "built but unused" can be judged from rows.
-      let dataShape = await refreshDataShape(projectId).catch(() => null);
-      if (dataShape && !dataShape.error) dataShape = compareWithCode(dataShape, digest.signals.dataModels);
-
-      // Second reads: one narrow question per built or partial area, against
-      // the full text of its evidence files and the exact route coverage.
-      // Independent and fault-tolerant; a failed read leaves the first-pass
-      // verdict, which is honest.
-      const capabilities = await deepReadAll(
-        ent,
-        sanitizeCapabilities(parsed.capabilities, {
-          files: new Set(snapshot.files.map((f) => f.path)),
-          routes: new Set(digest.signals.routes.map((r) => r.label)),
-        }),
-        snapshot.files,
-        digest.signals.routeCoverage,
-        dataShape,
-      );
-      const findings = {
-        stackSummary: str(parsed.stackSummary, 400),
-        capabilities,
-        built: (Array.isArray(parsed.built) ? parsed.built : []).slice(0, 30).map((b: any) => ({
-          item: str(b?.item, 300), evidence: strList(b?.evidence, 8, 200),
-        })).filter((b: any) => b.item),
-        partial: (Array.isArray(parsed.partial) ? parsed.partial : []).slice(0, 25).map((b: any) => ({
-          item: str(b?.item, 300), exists: str(b?.exists, 400),
-          missing: str(b?.missing, 400), evidence: strList(b?.evidence, 8, 200),
-        })).filter((b: any) => b.item),
-        missing: (Array.isArray(parsed.missing) ? parsed.missing : []).slice(0, 30).map((b: any) => ({
-          item: str(b?.item, 300), matters: str(b?.matters, 400),
-        })).filter((b: any) => b.item),
-        undocumented: (Array.isArray(parsed.undocumented) ? parsed.undocumented : []).slice(0, 20).map((b: any) => ({
-          item: str(b?.item, 300), evidence: strList(b?.evidence, 6, 200),
-        })).filter((b: any) => b.item),
-        risks: (Array.isArray(parsed.risks) ? parsed.risks : []).slice(0, 20).map((r: any) => ({
-          area: str(r?.area, 80),
-          severity: SEVERITIES.includes(r?.severity) ? r.severity : "medium",
-          finding: str(r?.finding, 800),
-          evidence: strList(r?.evidence, 6, 200),
-          recommendation: str(r?.recommendation, 600),
-        })).filter((r: any) => r.finding),
-        taskReconciliation: {
-          looksDone: (Array.isArray(parsed.taskReconciliation?.looksDone) ? parsed.taskReconciliation.looksDone : [])
-            .slice(0, 30).map((t: any) => ({ title: str(t?.title, 200), evidence: strList(t?.evidence, 6, 200) }))
-            .filter((t: any) => t.title),
-          notStarted: (Array.isArray(parsed.taskReconciliation?.notStarted) ? parsed.taskReconciliation.notStarted : [])
-            .slice(0, 30).map((t: any) => ({ title: str(t?.title, 200), why: str(t?.why, 400) }))
-            .filter((t: any) => t.title),
-        },
-        milestones: (Array.isArray(parsed.milestones) ? parsed.milestones : []).slice(0, 25).map((m: any) => ({
-          title: str(m?.title, 200),
-          verdict: ["complete", "in-progress", "not-started"].includes(m?.verdict) ? m.verdict : "not-started",
-          why: str(m?.why, 400),
-        })).filter((m: any) => m.title),
-        nextThreeThings: strList(parsed.nextThreeThings, 5, 400),
-        /** Scan facts the builder should see even if the model ignored them. */
-        scan: {
-          fileCount: digest.signals.fileCount,
-          readCount: digest.signals.readCount,
-          linesOfCode: digest.signals.linesOfCode,
-          languages: digest.signals.languages,
-          stack: digest.signals.stack,
-          routeCount: digest.signals.routes.length,
-          routes: digest.signals.routes.slice(0, 60),
-          dataModels: digest.signals.dataModels.slice(0, 40),
-          testFiles: digest.signals.testFiles,
-          testFrameworks: digest.signals.testFrameworks,
-          hasCi: digest.signals.hasCi,
-          hasDocker: digest.signals.hasDocker,
-          hasReadme: digest.signals.hasReadme,
-          hasEnvExample: digest.signals.hasEnvExample,
-          envVarCount: digest.signals.envVarNames.length,
-          todoCount: digest.signals.todoCount,
-          consoleCount: digest.signals.consoleCount,
-          suspectedSecrets: digest.signals.suspectedSecrets,
-          authSignals: digest.signals.authSignals,
-          dependencyCount: digest.signals.dependencyCount,
-          truncated: snapshot.truncated,
-          skipped: snapshot.skipped,
-        },
-        repo: repoMeta,
-      };
-
-      // The snapshot's velocity and its runtime, alongside what the code contains.
-      const previous = await storage.getLatestCodeAudit(projectId).catch(() => undefined);
-      const runtime = await probeRuntime({ liveUrl: project.liveUrl, envVarNames: digest.signals.envVarNames });
-      const completionPercent = Math.max(0, Math.min(100, Math.round(Number(parsed.completionPercent) || 0)));
-      const delta = computeAuditDelta(previous ?? null, { id: "pending", createdAt: new Date(), completionPercent, signals: digest.signals, findings });
-
-      const audit = await storage.createCodeAudit({
-        projectId,
-        createdById: userId,
-        source: snapshot.source,
-        sourceKind,
-        stage: str(parsed.stage, 40) || "prototype",
-        completionPercent,
-        summary: str(parsed.summary, 2000),
-        signals: digest.signals as any,
-        findings: findings as any,
-        delta: delta as any,
-        runtime: runtime as any,
-        dataShape: dataShape as any,
-        operations: (Array.isArray(parsed.operations) ? parsed.operations : []).slice(0, 60) as any,
-      } as any);
-
-      // Code that moved is activity, and a few milestones are verified by what the audit saw.
-      const verified = await verifyMilestonesFromAudit(projectId, { id: audit.id, signals: digest.signals, findings, runtime }).catch((e) => { console.error("[audit] verifiers failed:", e); return { verified: [], marked: [] }; });
-      if (delta.changed) await refreshPace(projectId, { taskId: audit.id, backboneId: null, title: `Audit: +${delta.routes.added.length} routes, +${delta.tables.added.length} tables since ${delta.daysSince}d ago`, estimateMinutes: null, actualMinutes: null }).catch(() => {});
-
-      await storage.deductCredits(userId, CREDIT_COSTS.codeAudit);
-      await storage.logActivity({
-        projectId, userId,
-        action: "ran a codebase audit",
-        entityType: "project", entityId: projectId,
-        metadata: { source: snapshot.source, stage: audit.stage },
-      }).catch(() => {});
-
-      res.json({ audit, creditsCharged: CREDIT_COSTS.codeAudit, verifiedMilestones: verified });
+      await runCodeAudit({ projectId, userId, project, ent, res, snapshot, sourceKind, repoMeta });
     } catch (error: any) {
       console.error("Code audit error:", error);
       // Ingest errors carry messages written for the user; keep them.

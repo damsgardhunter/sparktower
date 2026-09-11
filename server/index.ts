@@ -1,3 +1,5 @@
+import { pool } from "./db";
+import { applyModerationLogRules } from "./moderation-log-rules";
 import { createServer } from "http";
 import { networkInterfaces } from "os";
 import { runMigrations } from "stripe-replit-sync";
@@ -79,6 +81,10 @@ let appReady = false;
   // Reviewer rights are granted from the environment, never through the API,
   // and are re-derived here so a removed reviewer loses them on restart.
   await syncPlatformRoles();
+  // The moderation log refuses edits and deletes at the database. A failure
+  // here is logged rather than fatal: the site should still come up.
+  await applyModerationLogRules((q) => pool.query(q)).catch((err) =>
+    console.error("[moderation] Couldn't apply the append-only rule to moderation_log:", err));
 
   // Merch artwork is generated from committed font files; fail loudly at
   // boot rather than when someone's order needs a print file.

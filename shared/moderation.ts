@@ -30,6 +30,15 @@ export const RATE_LIMITS = {
     max: 10, windowMinutes: 60,
     message: "You've posted a lot in the last hour. Try again later.",
   },
+  /**
+   * Connection requests. They carry a note to someone who hasn't agreed to
+   * hear from you yet, which makes them a way to reach strangers — so they're
+   * limited on their own rather than only by the floor under every write.
+   */
+  connect: {
+    max: 20, windowMinutes: 60,
+    message: "That's a lot of connection requests. Try again in a little while.",
+  },
   message: {
     max: 60, windowMinutes: 10,
     message: "You're sending messages very quickly. Try again in a few minutes.",
@@ -95,6 +104,30 @@ export const RATE_LIMITS = {
 } as const satisfies Record<string, RateLimit>;
 
 export type RateLimitAction = keyof typeof RATE_LIMITS;
+
+/** The machine-readable code on every rate-limit refusal. */
+export const RATE_LIMITED = "rate_limited" as const;
+
+/**
+ * What a rate-limited request gets back, from every limited endpoint alike:
+ * status 429, this body, and a `Retry-After` header equal to
+ * `retryAfterSeconds`. The server writes it in one place (`refuse` in
+ * server/moderation.ts); the client reads it in one place (`errorText`).
+ *
+ * `retryAfterSeconds` is when room next opens — the oldest counted use
+ * leaving the window — not the window's whole length.
+ */
+export interface RateLimitedBody {
+  message: string;
+  code: typeof RATE_LIMITED;
+  action: RateLimitAction;
+  retryAfterSeconds: number;
+  /** The same wait, rounded up, for anything that only speaks minutes. */
+  retryAfterMinutes: number;
+}
+
+/** How long a note on a connection request may be. A hello, not a letter. */
+export const CONNECTION_NOTE_MAX = 280;
 
 // --- Duplicate content --------------------------------------------------
 
@@ -200,3 +233,47 @@ export type ReportStatus = (typeof REPORT_STATUSES)[number];
 
 /** Free-text on a report. Enough for context, not enough for an essay. */
 export const REPORT_NOTE_MAX = 500;
+
+// --- Acting on a report ---------------------------------------------------
+
+/**
+ * The content types the queue can act on directly. Comments first; other
+ * types still use the older hide/restore and suspend buttons.
+ */
+export const ACTIONABLE_TARGETS = ["comment"] as const satisfies readonly ReportTarget[];
+export const isActionableTarget = (t: string): boolean => (ACTIONABLE_TARGETS as readonly string[]).includes(t);
+
+/** What a reviewer can do about a reported comment. */
+export const MODERATION_ACTIONS = [
+  { id: "remove", label: "Remove", detail: "Hidden from everyone, its author included." },
+  { id: "shadow_hide", label: "Shadow-hide", detail: "Hidden from everyone but its author, who still sees it as posted." },
+  { id: "ban", label: "Ban author", detail: "Suspends the author's account and removes the comment." },
+  { id: "dismiss", label: "Dismiss", detail: "No rule broken. The comment stays; the report closes." },
+] as const;
+export type ModerationAction = (typeof MODERATION_ACTIONS)[number]["id"];
+export const MODERATION_ACTION_IDS: readonly string[] = MODERATION_ACTIONS.map((a) => a.id);
+
+/**
+ * Why a reviewer acted, as a code rather than prose, so a mistaken action is
+ * easy to find later ("every removal for 'spam' last Tuesday"). Violations
+ * go with remove, shadow-hide and ban; dismissals only with dismiss — a
+ * removal can't be for "no rule broken", and a dismissal can't be for spam.
+ */
+export const MODERATION_REASON_CODES = [
+  { id: "spam", label: "Spam or advertising", kind: "violation" },
+  { id: "harassment", label: "Harassment or abuse", kind: "violation" },
+  { id: "hate", label: "Hate or slurs", kind: "violation" },
+  { id: "sexual", label: "Sexual or graphic content", kind: "violation" },
+  { id: "misleading", label: "Misleading or a scam", kind: "violation" },
+  { id: "off_topic", label: "Off-topic or disruptive", kind: "violation" },
+  { id: "no_violation", label: "No rule broken", kind: "dismissal" },
+  { id: "duplicate", label: "Already handled", kind: "dismissal" },
+  { id: "insufficient_context", label: "Not enough to act on", kind: "dismissal" },
+] as const;
+export type ModerationReasonCode = (typeof MODERATION_REASON_CODES)[number]["id"];
+
+export const reasonCodesFor = (action: ModerationAction) =>
+  MODERATION_REASON_CODES.filter((r) => r.kind === (action === "dismiss" ? "dismissal" : "violation"));
+export const isReasonCode = (id: string): boolean => MODERATION_REASON_CODES.some((r) => r.id === id);
+export const moderationReasonLabel = (id: string | null | undefined): string =>
+  MODERATION_REASON_CODES.find((r) => r.id === id)?.label ?? (id || "No reason code");

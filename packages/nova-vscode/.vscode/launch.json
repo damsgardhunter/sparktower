@@ -1,0 +1,21 @@
+{
+  // Open this folder (packages/nova-vscode) in VS Code and press F5. A second
+  // window starts with the extension loaded from source — no packaging, no
+  // install, and reloading it picks up a rebuild.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run the extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        // The window opens on the app repo, so there's a real tree to verify
+        // and audit against rather than an empty folder.
+        "${workspaceFolder}/../.."
+      ],
+      "outFiles": ["${workspaceFolder}/dist/**/*.js"],
+      "preLaunchTask": "npm: build"
+    }
+  ]
+}

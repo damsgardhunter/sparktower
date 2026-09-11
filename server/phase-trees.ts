@@ -19,6 +19,7 @@ import {
   resolveTree, treeFor, mainLineMilestones, computePace, admitInjections, NEXT_PATHS, loopsAlike, splitMergedPaths,
   type ResolvedMilestone, type Artifact, type InjectionProposal, type PaceState, type WorkPayload, type Actor,
 } from "@shared/phase-trees";
+import { withRunGroups } from "@shared/phase-trees/run-steps";
 import { PROJECT_GOALS } from "@shared/goals";
 import type { ProjectGoal } from "@shared/goals";
 
@@ -254,6 +255,62 @@ export async function createExpansion(
 }
 
 /**
+ * What a fan-out milestone would expand from, resolved.
+ *
+ * Fiddly enough to be worth having once. "One per step of the core loop"
+ * doesn't know how many steps there are until an earlier milestone has been
+ * answered, so expanding means finding that answer: either a loop's own
+ * write-up, or the source milestone's — and distinguishing a real answer from
+ * the authored placeholder still sitting in the description, which is the part
+ * that gets got wrong.
+ *
+ * Returns `written: ""` when there's nothing to expand from yet. That isn't an
+ * error; it's the branch where Nova offers to draft it.
+ */
+export async function expansionSource(
+  projectId: string,
+  backboneId: string,
+  opts: { loopTaskId?: string | null; artifact?: string } = {},
+) {
+  const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory }).from(projects).where(eq(projects.id, projectId));
+  if (!project) throw Object.assign(new Error("Project not found"), { status: 404 });
+
+  const all = resolveTree(project.goal as ProjectGoal, project.subcategory).flatMap((p) => p.milestones);
+  const milestone = all.find((m) => m.id === backboneId);
+  if (!milestone?.expandsFrom) {
+    throw Object.assign(new Error("That milestone doesn't break into steps."), { code: "not_expandable", status: 400 });
+  }
+
+  const tasks = await pathTasks(projectId);
+  const loopTaskId = opts.loopTaskId || null;
+  const source = loopTaskId
+    ? tasks.find((t) => t.id === loopTaskId && isLoop(t.tags))
+    : tasks.find((t) => backboneIdOf(t.tags) === milestone.expandsFrom);
+  if (loopTaskId && !source) {
+    throw Object.assign(new Error("That loop isn't on this project."), { code: "not_on_path", status: 400 });
+  }
+
+  // Without a loop, the answer is whatever has replaced the authored text on
+  // the source milestone's task. Still equal to the authored text means
+  // nobody has answered it, however long the description is.
+  const authored = loopTaskId ? null : all.find((m) => m.id === milestone.expandsFrom) ?? null;
+  const supplied = typeof opts.artifact === "string" ? opts.artifact.trim() : "";
+  const written = supplied
+    ? supplied
+    : source?.description && source.description.trim() !== (authored?.description ?? "").trim()
+    ? source.description.trim()
+    : "";
+
+  return {
+    milestone,
+    source: source ?? null,
+    authored,
+    written,
+    sourceTitle: loopTaskId ? source!.title : authored?.title ?? "that milestone",
+  };
+}
+
+/**
  * Another loop. A product can have several — the feed people come back to,
  * the thing they build, the thing they buy — and each is written down on
  * its own, then broken into its own steps. Loops hang off the source
@@ -424,12 +481,14 @@ export async function pathTaskContext(projectId: string, taskId: string) {
 
 export async function latestWork(taskId: string) {
   const [row] = await db.select().from(pathWork).where(eq(pathWork.taskId, taskId)).orderBy(desc(pathWork.createdAt)).limit(1);
-  return row ?? null;
+  // Every screen reads packets through here or saveWork, so this is where an
+  // older packet gets its run steps as blocks — derived on read, never rewritten.
+  return row ? { ...row, payload: withRunGroups(row.payload as WorkPayload) } : null;
 }
 
 export async function saveWork(projectId: string, taskId: string, payload: WorkPayload) {
   const [row] = await db.insert(pathWork).values({ projectId, taskId, kind: payload.kind, payload }).returning();
-  return row;
+  return { ...row, payload: withRunGroups(row.payload as WorkPayload) };
 }
 
 /**

@@ -1,3 +1,4 @@
+import { errorText } from "@/lib/api-error";
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -80,7 +81,7 @@ export function ReputationCard({ userId, isOwnProfile }: ReputationCardProps) {
       toast({ title: "Reputation Updated", description: "Your Builder Index has been recalculated" });
     },
     onError: (error: any) => {
-      toast({ title: "Calculation Failed", description: error.message || "Could not calculate reputation", variant: "destructive" });
+      toast({ title: "Calculation Failed", description: errorText(error, "Could not calculate reputation"), variant: "destructive" });
     },
   });
 

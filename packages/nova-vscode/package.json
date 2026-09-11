@@ -1,0 +1,277 @@
+{
+  "name": "nova-sparktower",
+  "displayName": "Nova for SparkTower",
+  "description": "Your project's path in the sidebar: the next milestone, what counts as done, and Nova's build packet previewed as a diff before anything is written.",
+  "version": "0.1.0",
+  "publisher": "sparktower",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other",
+    "SCM Providers"
+  ],
+  "keywords": [
+    "nova",
+    "sparktower",
+    "roadmap",
+    "milestones",
+    "codebase audit"
+  ],
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sparktower/sparktower"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "nova",
+          "title": "Nova",
+          "icon": "media/nova.svg"
+        }
+      ]
+    },
+    "views": {
+      "nova": [
+        {
+          "id": "nova.next",
+          "name": "Next step",
+          "type": "webview"
+        },
+        {
+          "id": "nova.loops",
+          "name": "Loops"
+        },
+        {
+          "id": "nova.path",
+          "name": "The path"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "nova.path",
+        "contents": "Connect this workspace to a SparkTower project to see its path.\n[Sign in to Nova](command:nova.signIn)\n\nYou'll need a token from Profile \u2192 Editor access."
+      },
+      {
+        "view": "nova.loops",
+        "contents": "Your product's loops appear here once you're signed in \u2014 each one broken into steps Nova can build."
+      }
+    ],
+    "commands": [
+      {
+        "command": "nova.signIn",
+        "title": "Nova: Sign in",
+        "icon": "$(key)"
+      },
+      {
+        "command": "nova.signOut",
+        "title": "Nova: Sign out"
+      },
+      {
+        "command": "nova.selectProject",
+        "title": "Nova: Choose project",
+        "icon": "$(repo)"
+      },
+      {
+        "command": "nova.refresh",
+        "title": "Nova: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "nova.work",
+        "title": "Nova: Work this step"
+      },
+      {
+        "command": "nova.applyPacket",
+        "title": "Nova: Preview and apply the packet"
+      },
+      {
+        "command": "nova.verify",
+        "title": "Nova: Verify against the code"
+      },
+      {
+        "command": "nova.audit",
+        "title": "Nova: Audit this codebase"
+      },
+      {
+        "command": "nova.markDone",
+        "title": "Nova: Mark this milestone done"
+      },
+      {
+        "command": "nova.openMilestone",
+        "title": "Nova: Open milestone"
+      },
+      {
+        "command": "nova.showLog",
+        "title": "Nova: Show log"
+      },
+      {
+        "command": "nova.setServerUrl",
+        "title": "Nova: Set the server URL"
+      },
+      {
+        "command": "nova.addLoop",
+        "title": "Nova: Add a loop",
+        "icon": "$(add)"
+      },
+      {
+        "command": "nova.loopSteps",
+        "title": "Nova: Break this loop into steps",
+        "icon": "$(list-ordered)"
+      },
+      {
+        "command": "nova.dropLoop",
+        "title": "Nova: Not a loop",
+        "icon": "$(close)"
+      },
+      {
+        "command": "nova.buildStep",
+        "title": "Nova: Build this step",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "nova.openStep",
+        "title": "Nova: Open this step"
+      },
+      {
+        "command": "nova.unfocus",
+        "title": "Nova: Back to the next step"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "nova.refresh",
+          "when": "view == nova.path",
+          "group": "navigation@1"
+        },
+        {
+          "command": "nova.selectProject",
+          "when": "view == nova.path",
+          "group": "navigation@2"
+        },
+        {
+          "command": "nova.audit",
+          "when": "view == nova.path",
+          "group": "1_run"
+        },
+        {
+          "command": "nova.setServerUrl",
+          "when": "view == nova.path",
+          "group": "9_account"
+        },
+        {
+          "command": "nova.verify",
+          "when": "view == nova.path",
+          "group": "1_run"
+        },
+        {
+          "command": "nova.signOut",
+          "when": "view == nova.path",
+          "group": "9_account"
+        },
+        {
+          "command": "nova.addLoop",
+          "when": "view == nova.loops",
+          "group": "navigation@1"
+        },
+        {
+          "command": "nova.refresh",
+          "when": "view == nova.loops",
+          "group": "navigation@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "nova.openMilestone",
+          "when": "false"
+        },
+        {
+          "command": "nova.loopSteps",
+          "when": "false"
+        },
+        {
+          "command": "nova.dropLoop",
+          "when": "false"
+        },
+        {
+          "command": "nova.buildStep",
+          "when": "false"
+        },
+        {
+          "command": "nova.openStep",
+          "when": "false"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "nova.buildStep",
+          "when": "view == nova.loops && viewItem == novaLoopStep.open",
+          "group": "inline"
+        },
+        {
+          "command": "nova.buildStep",
+          "when": "view == nova.loops && viewItem == novaLoopStep.open",
+          "group": "1_step@1"
+        },
+        {
+          "command": "nova.loopSteps",
+          "when": "view == nova.loops && viewItem == novaLoop.unexpanded",
+          "group": "inline@1"
+        },
+        {
+          "command": "nova.loopSteps",
+          "when": "view == nova.loops && viewItem == novaLoop.unexpanded",
+          "group": "1_loop@1"
+        },
+        {
+          "command": "nova.dropLoop",
+          "when": "view == nova.loops && viewItem =~ /^novaLoop\\./",
+          "group": "1_loop@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Nova",
+      "properties": {
+        "nova.baseUrl": {
+          "type": "string",
+          "default": "https://sparktower.app",
+          "description": "Where SparkTower is \u2014 the address you open in your browser. Point it at your own server if you're self-hosting or running it locally (e.g. http://localhost:5001)."
+        },
+        "nova.projectId": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "The project this workspace belongs to. Set by 'Nova: Choose project'."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "package": "npm run typecheck && npm run build && vsce package --no-dependencies",
+    "publish": "vsce publish --no-dependencies",
+    "test": "vitest run"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@sparktower/nova-core": "file:../nova-core",
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.9"
+  }
+}

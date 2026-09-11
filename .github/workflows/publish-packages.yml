@@ -1,0 +1,112 @@
+name: publish-packages
+
+# Tag-driven, one tag per artefact:
+#   nova-mcp-v0.1.0       → npm
+#   nova-vscode-v0.1.0    → the VS Code marketplace
+#
+# Separate tags because they version independently — a fix to the extension's
+# diff view has nothing to say about the MCP server, and forcing them to move
+# together would mean publishing an unchanged package to keep the numbers
+# aligned.
+on:
+  push:
+    tags:
+      - "nova-mcp-v*"
+      - "nova-vscode-v*"
+  # For a dry run: builds and packages, publishes nothing.
+  workflow_dispatch:
+
+jobs:
+  npm:
+    if: startsWith(github.ref, 'refs/tags/nova-mcp-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # npm trusted publishing, so no long-lived token sits in the repository.
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Build the shared core
+        working-directory: packages/nova-core
+        run: npm ci && npm run build
+
+      - name: Build
+        working-directory: packages/nova-mcp
+        run: npm ci && npm run typecheck && npm run build
+
+      # The tag is the claim; package.json is the fact. A mismatch here is a
+      # release that publishes a version nobody asked for, so it stops now.
+      - name: The tag matches the version
+        working-directory: packages/nova-mcp
+        run: |
+          tagged="${GITHUB_REF_NAME#nova-mcp-v}"
+          declared="$(node -p "require('./package.json').version")"
+          test "$tagged" = "$declared" || { echo "tag $tagged != package.json $declared"; exit 1; }
+
+      - name: Publish
+        working-directory: packages/nova-mcp
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  marketplace:
+    if: startsWith(github.ref, 'refs/tags/nova-vscode-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build the shared core
+        working-directory: packages/nova-core
+        run: npm ci && npm run build
+
+      - name: Build
+        working-directory: packages/nova-vscode
+        run: npm ci && npm run typecheck && npm run build
+
+      - name: The tag matches the version
+        working-directory: packages/nova-vscode
+        run: |
+          tagged="${GITHUB_REF_NAME#nova-vscode-v}"
+          declared="$(node -p "require('./package.json').version")"
+          test "$tagged" = "$declared" || { echo "tag $tagged != package.json $declared"; exit 1; }
+
+      # Packaged before publishing and kept, so the exact artefact that went out
+      # can be installed by hand if the marketplace listing is ever in doubt.
+      - name: Package
+        working-directory: packages/nova-vscode
+        run: npx vsce package --no-dependencies -o nova-${{ github.ref_name }}.vsix
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vsix
+          path: packages/nova-vscode/*.vsix
+
+      - name: Publish to the marketplace
+        working-directory: packages/nova-vscode
+        run: npx vsce publish --no-dependencies --packagePath nova-${{ github.ref_name }}.vsix
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+      # Best effort: VS Code forks (VSCodium, Cursor, Windsurf) install from
+      # Open VSX, and an extension only on the Microsoft marketplace is
+      # invisible to them. Skipped rather than failed when no token is set.
+      - name: Publish to Open VSX
+        if: ${{ env.OVSX_PAT != '' }}
+        working-directory: packages/nova-vscode
+        run: npx ovsx publish nova-${{ github.ref_name }}.vsix --pat "$OVSX_PAT"
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}

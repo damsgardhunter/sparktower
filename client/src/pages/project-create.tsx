@@ -1,3 +1,4 @@
+import { errorText } from "@/lib/api-error";
 import { useState, useRef, useEffect } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -221,7 +222,7 @@ export default function ProjectCreate() {
       toast({ title: "Image uploaded" });
     },
     onError: (error) => {
-      toast({ title: "Upload failed", description: error.message, variant: "destructive" });
+      toast({ title: "Upload failed", description: errorText(error), variant: "destructive" });
     },
   });
 

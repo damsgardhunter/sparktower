@@ -20,12 +20,16 @@ interface QueuedEvent {
   referrer?: string;
   title?: string;
   msOnPage?: number;
+  /** Small, fixed properties for named events. The server keeps only what it recognises. */
+  props?: Record<string, unknown>;
 }
 
 let queue: QueuedEvent[] = [];
 let timer: ReturnType<typeof setTimeout> | null = null;
 let lastPath: string | null = null;
 let enteredAt = 0;
+/** Things that want to add one last event before the page goes. See onBeforeLeave. */
+const leaveHooks: (() => void)[] = [];
 
 /**
  * Sends what's queued and clears it.
@@ -63,6 +67,26 @@ function enqueue(event: QueuedEvent) {
   queue.push(event);
   if (queue.length >= MAX_BATCH_EVENTS) return flush();
   if (!timer) timer = setTimeout(() => flush(), CLIENT_FLUSH_MS);
+}
+
+/**
+ * A named event with a few properties, for things only the browser sees — the
+ * Explore loop's card impressions and clicks, for one. Rides the same batch as
+ * page views, so it costs no extra requests.
+ */
+export function trackEvent(name: string, props: Record<string, unknown> = {}) {
+  enqueue({ name, path: typeof location !== "undefined" ? location.pathname : "/", props });
+}
+
+/**
+ * Runs just before the last batch is sent as the page is left.
+ *
+ * Registered through here rather than with a second `pagehide` listener,
+ * because listener order isn't something to rely on: one that ran after this
+ * file's flush would queue its event into a page that's already gone.
+ */
+export function onBeforeLeave(hook: () => void) {
+  leaveHooks.push(hook);
 }
 
 /**
@@ -107,6 +131,9 @@ export function installAnalytics() {
    * sessions actually end.
    */
   window.addEventListener("pagehide", () => {
+    for (const hook of leaveHooks) {
+      try { hook(); } catch { /* never surfaces */ }
+    }
     if (lastPath && enteredAt) {
       enqueue({
         name: ACTIVITY_EVENTS.pageView,

@@ -1,3 +1,4 @@
+import { errorText } from "@/lib/api-error";
 import { useState, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -73,7 +74,7 @@ export function ProfileResumePanel({ hasProfileContent }: { hasProfileContent: b
 
   const { uploadFile, isUploading } = useUpload({
     onSuccess: (response) => attachResume.mutate(response.objectPath),
-    onError: (error) => toast({ title: "Upload failed", description: error.message, variant: "destructive" }),
+    onError: (error) => toast({ title: "Upload failed", description: errorText(error), variant: "destructive" }),
   });
 
   const canRead = !!resumeStatus?.hasResume && resumeStatus.readable;

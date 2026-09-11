@@ -73,8 +73,7 @@ export function registerAuthRoutes(app: Express): void {
      * that is N times the limit, and a deploy was a free reset for whoever was
      * guessing passwords at the time.
      */
-    const ip = req.ip || req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "unknown";
-    if (!(await enforceRateLimit(res, `ip:${String(ip).split(",")[0].trim()}`, "login"))) return;
+    if (!(await enforceRateLimit(res, ipKey(req), "login"))) return;
     passport.authenticate("local", (err: any, user: any, info: any) => {
       if (err) return next(err);
       if (!user) {

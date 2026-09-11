@@ -1,3 +1,4 @@
+import { errorText } from "@/lib/api-error";
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -39,12 +40,7 @@ const VERDICT_STYLES: Record<string, string> = {
 
 /** Pulls the server's message out of an apiRequest error string. */
 function errorMessage(err: any, fallback: string): string {
-  const raw = err?.message || "";
-  const start = raw.indexOf("{");
-  if (start >= 0) {
-    try { return JSON.parse(raw.slice(start)).message || fallback; } catch { /* fall through */ }
-  }
-  return fallback;
+  return errorText(err, fallback);
 }
 
 export function InvestorTools({ projectId }: { projectId: string }) {

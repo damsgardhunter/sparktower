@@ -1,3 +1,4 @@
+import { errorText } from "@/lib/api-error";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
@@ -80,7 +81,7 @@ function LobbyView() {
       navigate(`/games/typing/${data.id}`);
     },
     onError: (err: Error) => {
-      toast({ title: "Error creating race", description: err.message, variant: "destructive" });
+      toast({ title: "Error creating race", description: errorText(err), variant: "destructive" });
     },
   });
 
@@ -94,7 +95,7 @@ function LobbyView() {
       navigate(`/games/typing/${raceId}`);
     },
     onError: (err: Error) => {
-      toast({ title: "Error joining race", description: err.message, variant: "destructive" });
+      toast({ title: "Error joining race", description: errorText(err), variant: "destructive" });
     },
   });
 
@@ -187,7 +188,7 @@ function RaceView({ raceId }: { raceId: string }) {
       queryClient.invalidateQueries({ queryKey: ["/api/games/typing", raceId] });
     },
     onError: (err: Error) => {
-      toast({ title: "Error starting race", description: err.message, variant: "destructive" });
+      toast({ title: "Error starting race", description: errorText(err), variant: "destructive" });
     },
   });
 

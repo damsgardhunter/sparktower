@@ -28,6 +28,7 @@ export default tseslint.config(
       ".local/**",           // Claude skill scaffolding, not project code.
       "client/replit_integrations/**", // Vendored, like the server-side one.
       "mobile/**",           // Its own package, typechecked in its own CI job.
+      "packages/**",         // Standalone published packages, each built by its own tsconfig.
       "local_objects/**",
       "test/.objects/**",
       "client/src/components/ui/**", // Vendored shadcn primitives.

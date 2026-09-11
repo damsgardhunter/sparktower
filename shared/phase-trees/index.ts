@@ -9,6 +9,7 @@ export { SHARED_MILESTONES } from "./shared";
 export * from "./pace";
 export * from "./inject";
 export * from "./work";
+export * from "./run-steps";
 
 export const PATH_TREES: Record<ProjectGoal, PathTree> = {
   ship_mvp: SHIP_TREE,

@@ -23,6 +23,9 @@ import { attachVisitor, captureWrites, registerAnalyticsIngest } from "./analyti
 import { registerAnalyticsRoutes } from "./analytics-routes";
 import { captureAttribution } from "./attribution";
 import { registerNovaAssistRoutes } from "./nova-assist-routes";
+import { registerMcpRoutes } from "./mcp-routes";
+import { registerDiscoverRoutes } from "./discover-routes";
+import { CONNECTION_NOTE_MAX } from "@shared/moderation";
 import {
   applyProjectOperations, buildOperableProjectState, renderLatestAudit,
   stripIdFragments, collectProjectIds, OPERATION_SCHEMA_INSTRUCTIONS,
@@ -54,7 +57,7 @@ import { safeDbUrl, refreshDataShape, getDataShape } from "./data-shape";
 import { isOwner as isPlatformOwner } from "./platform-roles";
 import {
   instantiatePathTree, pathStatus, onPathTaskDone, createExpansion, createInjections,
-  collectArtifacts, switchPath, backboneIdOf, reconcileMilestones, pathTaskContext, saveWork, chooseWork, milestoneDetail, createLoop, setBranch, extendBranch, reconcileLoops, latestWork, deleteLoop,
+  collectArtifacts, switchPath, backboneIdOf, reconcileMilestones, pathTaskContext, saveWork, chooseWork, milestoneDetail, createLoop, setBranch, extendBranch, reconcileLoops, latestWork, deleteLoop, expansionSource,
 } from "./phase-trees";
 import { draftExpansionSteps, proposeInjections, readExistingProgress, draftArtifact, produceWork } from "./phase-trees-nova";
 import { workKindFor } from "@shared/phase-trees";
@@ -346,6 +349,8 @@ export async function registerRoutes(
   registerDocumentRoutes(app);
   registerCodeAuditRoutes(app);
   registerNovaAssistRoutes(app);
+  registerMcpRoutes(app);
+  registerDiscoverRoutes(app);
   /*
    * Kill switches, mounted as path prefixes rather than per-route.
    *
@@ -750,16 +755,52 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       const userId = (req.user as any).id;
       const projectId = req.params.id;
       const following = await storage.isFollowing(userId, projectId);
-      if (following) {
-        await storage.unfollowProject(userId, projectId);
-        res.json({ following: false });
-      } else {
-        await storage.followProject(userId, projectId);
-        res.json({ following: true });
-      }
+      // An explicit `following` sets the state, so a retry or a double tap
+      // can't undo itself; without one it toggles, as older clients expect.
+      const want = typeof req.body?.following === "boolean" ? req.body.following : !following;
+      if (want && !following) await storage.followProject(userId, projectId);
+      if (!want && following) await storage.unfollowProject(userId, projectId);
+      res.json({ following: want });
     } catch (error) {
       console.error("Follow error:", error);
       res.status(500).json({ message: "Failed to toggle follow" });
+    }
+  });
+
+  /**
+   * Following a builder: one-way, instant, nothing asked of them. An explicit
+   * `following` sets the state, so a retry or a double tap can't undo itself;
+   * without one it toggles. Limited like any per-request action, since a
+   * follow notifies nobody but is still a write someone could script.
+   */
+  app.post("/api/users/:id/follow", isAuthenticated, rateLimit("post"), async (req: any, res) => {
+    try {
+      const me = (req.user as any).id as string;
+      const target = String(req.params.id);
+      if (target === me) return res.status(400).json({ message: "You can't follow yourself." });
+      if (!(await storage.getUser(target))) return res.status(404).json({ message: "No such builder." });
+      const following = await storage.isFollowingUser(me, target);
+      const want = typeof req.body?.following === "boolean" ? req.body.following : !following;
+      if (want && !following) await storage.followUser(me, target);
+      if (!want && following) await storage.unfollowUser(me, target);
+      res.json({ following: want, followers: await storage.getUserFollowerCount(target) });
+    } catch (error) {
+      console.error("Follow user error:", error);
+      res.status(500).json({ message: "Couldn't update that follow" });
+    }
+  });
+
+  app.get("/api/users/:id/follow-status", isAuthenticated, async (req: any, res) => {
+    try {
+      const me = (req.user as any).id as string;
+      const target = String(req.params.id);
+      res.json({
+        following: target !== me && (await storage.isFollowingUser(me, target)),
+        followers: await storage.getUserFollowerCount(target),
+      });
+    } catch (error) {
+      console.error("User follow status error:", error);
+      res.status(500).json({ message: "Couldn't read that follow" });
     }
   });
 
@@ -2746,51 +2787,40 @@ RULES:
       const projectId = req.params.id;
       if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
       const backboneId = String(req.body?.backboneId ?? "");
-      const project = await storage.getProject(projectId);
-      if (!project) return res.status(404).json({ message: "Project not found" });
-      const milestone = resolveTree(project.goal as any, project.subcategory).flatMap((p) => p.milestones).find((m) => m.id === backboneId);
-      if (!milestone?.expandsFrom) return res.status(400).json({ message: "That milestone doesn't break into steps.", code: "not_expandable" });
-
-      const tasks = await storage.getProjectKanbanTasks(projectId);
       const loopTaskId = typeof req.body?.loopTaskId === "string" && req.body.loopTaskId ? req.body.loopTaskId : null;
-      // With loops, the artifact is that loop's own write-up; without, the source milestone's.
-      const source = loopTaskId
-        ? tasks.find((t) => t.id === loopTaskId && t.tags?.includes("kind:loop"))
-        : tasks.find((t) => backboneIdOf(t.tags) === milestone.expandsFrom);
-      if (loopTaskId && !source) return res.status(400).json({ message: "That loop isn't on this project.", code: "not_on_path" });
-      const authored = loopTaskId ? null : resolveTree(project.goal as any, project.subcategory).flatMap((p) => p.milestones).find((m) => m.id === milestone.expandsFrom);
-      const written = typeof req.body?.artifact === "string" && req.body.artifact.trim()
-        ? req.body.artifact.trim()
-        : source?.description && source.description.trim() !== (authored?.description ?? "").trim() ? source.description.trim() : "";
-      if (!written) {
+      const src = await expansionSource(projectId, backboneId, { loopTaskId, artifact: req.body?.artifact });
+
+      if (!src.written) {
         /*
          * Nothing written yet. No blank text fields anywhere: rather than
          * refuse, Nova drafts the answer from the project and hands it back
          * to edit. Confirming sends it as `artifact`, which lands on the
          * source task and becomes the thing the steps are built from.
          */
-        const sourceTitle = loopTaskId ? source!.title : authored?.title ?? "that milestone";
         if (req.body?.draft === true) {
           const ent = await requireCredits(res, userId, CREDIT_COSTS.novaGuide, "Nova drafting your answer");
           if (!ent) return;
           const state = await buildOperableProjectState(projectId, { includeIds: false, includeAudit: true });
-          const draft = await draftArtifact(ent, loopTaskId ? { title: `The ${source!.title} loop`, description: "The 3–5 step sequence that delivers value in this loop." } : authored!, state);
+          const draft = await draftArtifact(ent, loopTaskId
+            ? { title: `The ${src.source!.title} loop`, description: "The 3–5 step sequence that delivers value in this loop." }
+            : src.authored!, state);
           await storage.deductCredits(userId, CREDIT_COSTS.novaGuide);
-          return res.json({ draft, sourceTitle, sourceTaskId: source?.id ?? null });
+          return res.json({ draft, sourceTitle: src.sourceTitle, sourceTaskId: src.source?.id ?? null });
         }
         return res.status(400).json({
-          message: `Nothing is written under "${sourceTitle}" yet. Nova can draft it from your project for you to edit, or write it into that task yourself.`,
-          code: "artifact_missing", sourceTitle, sourceTaskId: source?.id ?? null,
+          message: `Nothing is written under "${src.sourceTitle}" yet. Nova can draft it from your project for you to edit, or write it into that task yourself.`,
+          code: "artifact_missing", sourceTitle: src.sourceTitle, sourceTaskId: src.source?.id ?? null,
         });
       }
+
       const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova path steps");
       if (!ent) return;
       // What they confirmed is the artifact; keep it on the source task so
       // the rest of the path (injections, the next expansion) can read it.
-      if (source && typeof req.body?.artifact === "string" && req.body.artifact.trim()) {
-        await storage.updateKanbanTask(source.id, { description: written } as any);
+      if (src.source && typeof req.body?.artifact === "string" && req.body.artifact.trim()) {
+        await storage.updateKanbanTask(src.source.id, { description: src.written } as any);
       }
-      const steps = await draftExpansionSteps(ent, loopTaskId ? `${milestone.title} — ${source!.title}` : milestone.title, written);
+      const steps = await draftExpansionSteps(ent, loopTaskId ? `${src.milestone.title} — ${src.source!.title}` : src.milestone.title, src.written);
       if (steps.length < 1) return res.status(502).json({ message: "Nova couldn't read steps out of that. Try adding a line or two." });
       const result = await createExpansion(projectId, backboneId, steps, { loopTaskId });
       await storage.deductCredits(userId, CREDIT_COSTS.taskAssist);
@@ -5272,13 +5302,15 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   });
 
   // Connections
-  app.post("/api/connections/request", isAuthenticated, async (req: any, res) => {
+  app.post("/api/connections/request", isAuthenticated, rateLimit("connect"), async (req: any, res) => {
     try {
       const requesterId = (req.user as any).id;
       const { userId: receiverId } = req.body;
       if (!receiverId) return res.status(400).json({ message: "userId is required" });
       if (requesterId === receiverId) return res.status(400).json({ message: "Cannot connect with yourself" });
-      const conn = await storage.sendConnectionRequest(requesterId, receiverId);
+      // An optional hello, capped: it's text going to someone who hasn't agreed to hear from you yet.
+      const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, CONNECTION_NOTE_MAX) || null : null;
+      const conn = await storage.sendConnectionRequest(requesterId, receiverId, note);
       res.json(conn);
     } catch (error: any) {
       if (error.message === "Connection already exists") {
@@ -5352,6 +5384,36 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     } catch (error) {
       console.error("Get connection requests error:", error);
       res.status(500).json({ message: "Failed to get connection requests" });
+    }
+  });
+
+  /**
+   * Where you stand with a list of people, in one request.
+   *
+   * A grid of cards asking one at a time is dozens of requests to draw a
+   * page. States are from the asker's side: "requested" (you asked),
+   * "incoming" (they asked you — the connection id lets you accept in place),
+   * "connected", "declined" (you declined them), or "none". A request of
+   * yours that was declined still reads "requested": that's theirs to know.
+   */
+  app.get("/api/connections/statuses", isAuthenticated, async (req: any, res) => {
+    try {
+      const me = (req.user as any).id as string;
+      const ids = String(req.query.ids ?? "").split(",").map((s) => s.trim()).filter(Boolean).slice(0, 100);
+      const states: Record<string, { state: string; connectionId: string | null }> = {};
+      for (const id of ids) states[id] = { state: "none", connectionId: null };
+      for (const conn of await storage.getConnectionsBetween(me, ids)) {
+        const mine = conn.requesterId === me;
+        const other = mine ? conn.receiverId : conn.requesterId;
+        const state = conn.status === "accepted" ? "connected"
+          : conn.status === "pending" ? (mine ? "requested" : "incoming")
+          : (mine ? "requested" : "declined");
+        states[other] = { state, connectionId: conn.id };
+      }
+      res.json(states);
+    } catch (error) {
+      console.error("Get connection statuses error:", error);
+      res.status(500).json({ message: "Failed to get connection statuses" });
     }
   });
 

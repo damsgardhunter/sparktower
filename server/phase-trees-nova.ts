@@ -6,7 +6,9 @@
  */
 import OpenAI from "openai";
 import { modelFor, coachingDirectiveFor, type UserEntitlements } from "./entitlements";
+import { CODE_MODEL, CODE_REASONING_EFFORT } from "./aiModels";
 import type { Artifact, InjectionProposal, WorkPayload, WorkKind } from "@shared/phase-trees";
+import { flattenRunGroups, groupRunSteps, sanitizeRunGroups } from "@shared/phase-trees";
 import { parseModelJson } from "./ai-json";
 
 const rawBase = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
@@ -100,6 +102,47 @@ Write it as they would: concrete, in their product's own terms, 3–5 numbered l
 }
 
 /**
+ * One JSON-producing call, routed by what's being produced.
+ *
+ * Code goes to the coding model, on the Responses API it's served from.
+ * Everything else — options to pick from, templates for the human part — stays
+ * on the general model, where a better sentence is what matters.
+ *
+ * The fallback is for the model being *refused* (no access on this account, a
+ * proxy that doesn't carry it, an outage): the packet still arrives, from the
+ * general model, and the log says so. It is deliberately not a retry on a bad
+ * answer. An unreadable reply is a 502 the builder isn't charged for, same as
+ * every other AI route; quietly spending a second model call to paper over it
+ * would hide the thing worth knowing.
+ */
+async function complete(ent: UserEntitlements, kind: WorkKind, system: string, user: string): Promise<{ text: string; model: string }> {
+  if (kind === "build") {
+    try {
+      const response = await openai.responses.create({
+        model: CODE_MODEL,
+        instructions: system,
+        input: user,
+        reasoning: { effort: CODE_REASONING_EFFORT },
+        // Reasoning tokens count against this too, and a packet is whole files.
+        max_output_tokens: 32000,
+      });
+      if (response.output_text?.trim()) return { text: response.output_text, model: CODE_MODEL };
+      console.warn(`[nova] ${CODE_MODEL} returned no text (status ${response.status}); using ${modelFor(ent)}`);
+    } catch (error: any) {
+      console.warn(`[nova] ${CODE_MODEL} unavailable (${error?.status ?? "no status"}: ${String(error?.message ?? error).slice(0, 160)}); using ${modelFor(ent)}`);
+    }
+  }
+  const model = modelFor(ent);
+  const completion = await openai.chat.completions.create({
+    model,
+    messages: [{ role: "system", content: system }, { role: "user", content: user }],
+    temperature: kind === "build" ? 0.2 : 0.5,
+    max_completion_tokens: 8000,
+  });
+  return { text: completion.choices[0]?.message?.content ?? "{}", model };
+}
+
+/**
  * Nova doing the milestone. The kind follows the actor: options for drafts
  * and decisions, a build packet for nova-builds, a template for user-does.
  * Grounded in the project's state and the answers written so far, so the
@@ -115,29 +158,24 @@ export async function produceWork(
     ? `{"kind":"options","existing":"one line: what the CAPABILITY INVENTORY and the code already have for this milestone, with files — or 'nothing yet'","intro":"one sentence on how these differ","options":[{"title":"","body":"the full text they would keep — complete, not a summary","why":"one line"}]}
 Give exactly three options with genuinely different emphases, never three rewordings. Each body must be usable as-is.`
     : kind === "build"
-    ? `{"kind":"build","existing":"one line: what the CAPABILITY INVENTORY and the code already have for this milestone, with files — or 'nothing yet'. Answer this BEFORE planning; the build must extend it.","summary":"2–3 sentences: what this builds and where it goes","files":[{"path":"relative/path","language":"ts","content":"complete file contents","purpose":"one line"}],"runSteps":["exact commands or clicks, in order"],"verify":"the one check that proves it works","assumptions":["anything you had to assume about their stack or repo"]}
-Write real, complete code for their stack — not pseudocode, not placeholders, no '...'. Match the data model and loop written in the artifacts. Keep it to the files this milestone needs (usually 1–4). If the milestone is not code (a deploy, an analytics wiring), files may be config and runSteps carry the work.
+    ? `{"kind":"build","existing":"one line: what the CAPABILITY INVENTORY and the code already have for this milestone, with files — or 'nothing yet'. Answer this BEFORE planning; the build must extend it.","summary":"2–3 sentences: what this builds and where it goes","files":[{"path":"relative/path","language":"ts","content":"complete file contents","purpose":"one line"}],"runGroups":[{"where":"terminal | new-terminal | browser-console | browser | manual","cwd":"folder relative to the repo root — only when not the root","label":"one short line","commands":["one runnable line each, verbatim"],"note":"what to adjust or wait for, if anything","longRunning":false}],"verify":"the one check that proves it works","assumptions":["anything you had to assume about their stack or repo"]}
+Write real, complete code for their stack — not pseudocode, not placeholders, no '...'. Match the data model and loop written in the artifacts. Keep it to the files this milestone needs (usually 1–4). If the milestone is not code (a deploy, an analytics wiring), files may be config and runGroups carry the work.
+runGroups: split what to run by where it runs. Commands that run together go in one terminal group, one command per line, so they can be pasted at once. A command that keeps running (a dev server) sets longRunning:true and ends its group; anything after it that needs a terminal is a new-terminal group. Browser console snippets go in one browser-console group, one expression per line, in the order they must run. Something to do rather than run (open a page, click a button) is a manual group with the instruction as its label and no commands. Never put prose, backticks or comments inside commands.
 Read LAYOUT FACTS and MECHANISMS ALREADY IN CODE first. If the thing this milestone asks for is listed there, the build is the change that wires, extends or verifies the existing one in the file named — never a new implementation beside it. Every file path you write must sit under the real top-level layout, and every command must use the real package manager and a real script name.
 Never write "unknown", "needs inventory" or "not derivable" about the codebase: the PROJECT STATE carries the audit's route list, file tree, guards and env vars. Use those exact paths and names. If something truly isn't in the state, say which file to open to find it, in one line, and build the rest.`
     : `{"kind":"template","intro":"one sentence","template":"the thing they will use — a message, a list structure, an observation sheet — complete and in their product's words","whatNovaDid":"one line","whatIsLeft":"one line: the part only they can do"}`;
 
-  const completion = await openai.chat.completions.create({
-    model: modelFor(ent),
-    messages: [
-      { role: "system", content: `You are Nova, doing a milestone on a builder's path — not describing it, doing it. ${coachingDirectiveFor(ent)}
+  const system = `You are Nova, doing a milestone on a builder's path — not describing it, doing it. ${coachingDirectiveFor(ent)}
 Path: ${context.goal} · type: ${context.subcategory}. Verification: ${task.tier}.
 Use the ANSWERS SO FAR as ground truth; they were chosen by the builder. Use the PROJECT STATE for stack, names and what already exists — do not rebuild what exists.
 If THE BUILDER'S STANDING NOTES appear in the state, obey them over everything else in it, including the brief, the board and the audit.
 ${context.loops?.length ? `THE PRODUCT'S LOOPS, as recorded on the path (these ARE the loops — never invent a different "core loop", never reframe the product around anything else):\n${context.loops.map((l) => `- ${l.title}${l.description ? `: ${l.description}` : ""} [${l.status === "done" ? "written" : "not written yet"}]`).join("\n")}` : ""}
 ${context.rejectedLoops?.length ? `NOT loops, by the builder's decision — never build an option, a step or a plan around these: ${context.rejectedLoops.join("; ")}.` : ""}
 Respond ONLY with valid JSON of exactly this shape (no markdown fences):
-${shape}` },
-      { role: "user", content: `MILESTONE: ${task.title}\n${task.description}\n\nANSWERS SO FAR\n${context.artifacts.length ? context.artifacts.map((a) => `[${a.label}] ${a.text}`).join("\n") : "(none yet)"}\n\nPROJECT STATE\n${context.state.slice(0, 20000)}` },
-    ],
-    temperature: kind === "build" ? 0.2 : 0.5,
-    max_completion_tokens: 8000,
-  });
-  const parsed = parseModelJson(completion.choices[0]?.message?.content ?? "{}");
+${shape}`;
+  const user = `MILESTONE: ${task.title}\n${task.description}\n\nANSWERS SO FAR\n${context.artifacts.length ? context.artifacts.map((a) => `[${a.label}] ${a.text}`).join("\n") : "(none yet)"}\n\nPROJECT STATE\n${context.state.slice(0, 20000)}`;
+  const { text, model } = await complete(ent, kind, system, user);
+  const parsed = parseModelJson(text);
   if (kind === "options") {
     const options = (Array.isArray(parsed.options) ? parsed.options : []).slice(0, 3)
       .map((o: any) => ({ title: String(o.title ?? "").slice(0, 120), body: String(o.body ?? "").slice(0, 4000), why: o.why ? String(o.why).slice(0, 300) : undefined }))
@@ -149,9 +187,14 @@ ${shape}` },
     const files = (Array.isArray(parsed.files) ? parsed.files : []).slice(0, 8)
       .map((f: any) => ({ path: String(f.path ?? "file").slice(0, 200), language: String(f.language ?? "").slice(0, 20), content: String(f.content ?? ""), purpose: f.purpose ? String(f.purpose).slice(0, 200) : undefined }))
       .filter((f: any) => f.content);
-    const runSteps = (Array.isArray(parsed.runSteps) ? parsed.runSteps : []).map(String).slice(0, 12);
+    // Grouped run steps are what's asked for; a model on the old habit (or the
+    // general-model fallback) may still send a flat list, which is grouped here.
+    const asked = sanitizeRunGroups(parsed.runGroups);
+    const legacy = (Array.isArray(parsed.runSteps) ? parsed.runSteps : []).map(String).slice(0, 12);
+    const runGroups = asked.length ? asked : groupRunSteps(legacy);
+    const runSteps = asked.length ? flattenRunGroups(asked) : legacy;
     if (!files.length && !runSteps.length) throw Object.assign(new Error("Nova didn't produce a build. Try again."), { status: 502 });
-    return { kind: "build", existing: String(parsed.existing ?? "").slice(0, 400) || undefined, summary: String(parsed.summary ?? "").slice(0, 1200), files, runSteps, verify: String(parsed.verify ?? "").slice(0, 400), assumptions: (Array.isArray(parsed.assumptions) ? parsed.assumptions : []).map(String).slice(0, 6) };
+    return { kind: "build", model, existing: String(parsed.existing ?? "").slice(0, 400) || undefined, summary: String(parsed.summary ?? "").slice(0, 1200), files, runSteps, runGroups, verify: String(parsed.verify ?? "").slice(0, 400), assumptions: (Array.isArray(parsed.assumptions) ? parsed.assumptions : []).map(String).slice(0, 6) };
   }
   const template = String(parsed.template ?? "");
   if (!template) throw Object.assign(new Error("Nova didn't produce a template. Try again."), { status: 502 });

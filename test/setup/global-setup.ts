@@ -12,7 +12,7 @@
  * it is missing.
  */
 import { loadEnvFile } from "./env";
-import { ensureTestDatabase, applySchema } from "./database";
+import { ensureTestDatabase, applySchema, applyDatabaseRules } from "./database";
 
 export default async function setup() {
   loadEnvFile();
@@ -20,5 +20,6 @@ export default async function setup() {
 
   console.log("[test-db] applying schema…");
   applySchema(url);
+  await applyDatabaseRules(url);
   console.log("[test-db] ready");
 }
