@@ -194,10 +194,9 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   let parsed: any;
   try {
     const raw = completion.choices[0].message.content || "{}";
-    const match = raw.match(/\{[\s\S]*\}/);
     parsed = parseModelJson(raw);
   } catch (err) {
-    console.error(`Nova assist parse failed (${surface}):`, err);
+    console.error("Nova assist parse failed (%s):", String(surface).replace(/[\r\n]+/g, " ").slice(0, 60), err);
     return res.status(502).json({ message: "Nova returned an unreadable answer. Please try again." });
   }
 

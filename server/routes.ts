@@ -5400,17 +5400,19 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     try {
       const me = (req.user as any).id as string;
       const ids = String(req.query.ids ?? "").split(",").map((s) => s.trim()).filter(Boolean).slice(0, 100);
-      const states: Record<string, { state: string; connectionId: string | null }> = {};
-      for (const id of ids) states[id] = { state: "none", connectionId: null };
+      // A Map, then plain entries: the ids come from the query string, and one
+      // named "__proto__" has to be a key, not a way to reach Object.prototype.
+      const states = new Map<string, { state: string; connectionId: string | null }>();
+      for (const id of ids) states.set(id, { state: "none", connectionId: null });
       for (const conn of await storage.getConnectionsBetween(me, ids)) {
         const mine = conn.requesterId === me;
         const other = mine ? conn.receiverId : conn.requesterId;
         const state = conn.status === "accepted" ? "connected"
           : conn.status === "pending" ? (mine ? "requested" : "incoming")
           : (mine ? "requested" : "declined");
-        states[other] = { state, connectionId: conn.id };
+        states.set(other, { state, connectionId: conn.id });
       }
-      res.json(states);
+      res.json(Object.fromEntries(states));
     } catch (error) {
       console.error("Get connection statuses error:", error);
       res.status(500).json({ message: "Failed to get connection statuses" });

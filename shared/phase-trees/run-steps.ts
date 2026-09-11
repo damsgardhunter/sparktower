@@ -63,7 +63,8 @@ const looksLikeShell = (text: string): boolean => SHELL.test(text.trim());
 const EXPRESSION = /^(?:await\s+|import\(|fetch\(|\(|[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\()/;
 const DECLARATION = /^(?:const|let|var|function|class|if|for|while|return|import\s|export\s)/;
 
-const quoteIfNeeded = (path: string) => (/^[\w./-]+$/.test(path) ? path : `"${path.replace(/"/g, '\\"')}"`);
+// Inside double quotes the shell still treats \\, ", $ and ` specially, so all four are escaped.
+const quoteIfNeeded = (path: string) => (/^[\w./-]+$/.test(path) ? path : `"${path.replace(/[\\"$`]/g, "\\$&")}"`);
 const capitalize = (text: string) => (text ? text[0].toUpperCase() + text.slice(1) : text);
 const sentence = (text: string) => {
   const trimmed = capitalize(text.trim());

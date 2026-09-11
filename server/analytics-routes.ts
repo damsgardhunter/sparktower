@@ -10,7 +10,7 @@
  * of latency is well inside what "live" means to someone watching.
  */
 import type { Express, Response } from "express";
-import { and, desc, eq, gte, isNotNull, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, gte, sql, type SQL } from "drizzle-orm";
 import { db } from "./db";
 import { activityEvents, users, userProfiles } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";

@@ -37,7 +37,10 @@ export function exportedNames(source: string): Set<string> {
   for (const match of source.matchAll(NAMED)) names.add(match[1]);
   for (const match of source.matchAll(LISTED)) {
     for (const part of match[1].split(",")) {
-      const exported = part.trim().split(/\s+as\s+/).pop()?.replace(/^type\s+/, "").trim();
+      // Word by word rather than `\s+as\s+`, which backtracks badly on long runs of spaces.
+      const words = part.trim().split(/\s+/).filter(Boolean);
+      const at = words.lastIndexOf("as");
+      const exported = at >= 0 ? words[at + 1] : words.filter((w) => w !== "type").pop();
       if (exported) names.add(exported);
     }
   }

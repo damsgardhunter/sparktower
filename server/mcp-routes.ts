@@ -21,9 +21,6 @@
  */
 import type { Express, Response } from "express";
 import { storage } from "./storage";
-import { db } from "./db";
-import { eq } from "drizzle-orm";
-import { projects } from "@shared/schema";
 import { requireMcpToken, mintToken, listTokens, revokeToken } from "./mcp-tokens";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";

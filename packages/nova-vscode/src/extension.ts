@@ -26,7 +26,7 @@ import { PathTreeProvider, RemoteMilestones } from "./path-view";
 import { LoopsTreeProvider, type StepNode } from "./loops-view";
 import { NextViewProvider } from "./next-view";
 import { ProposedContentProvider, PROPOSED_SCHEME } from "./proposed";
-import { applyFiles, classify, pickFiles, describeRisk, resolveTarget, showDiff, stageRunSteps, stageRunGroup, type ClassifiedFile } from "./apply";
+import { applyFiles, classify, pickFiles, describeRisk, showDiff, stageRunSteps, stageRunGroup, type ClassifiedFile } from "./apply";
 import { showAudit, showMilestone } from "./report";
 
 let log: vscode.OutputChannel;

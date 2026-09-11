@@ -11,7 +11,7 @@
  * whatever arrives, so a drift between the two lists costs a wasted upload,
  * never a wrong audit.
  */
-import { readdir, readFile, stat } from "node:fs/promises";
+import { open, readdir, type FileHandle } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 
 const IGNORED_DIRS = new Set([
@@ -100,22 +100,33 @@ export async function collectTree(root: string, limits: Limits): Promise<Collect
       if (/\.min\.(js|css)$/.test(entry.name) || entry.name.endsWith(".map")) continue;
 
       const rel = relative(root, full).split(sep).join("/");
-      let size = 0;
-      try { size = (await stat(full)).size; } catch { continue; }
-
-      if (!isTextual(entry.name) || size > limits.maxFileBytes || bytes + size > limits.maxTotalBytes) {
-        // Recorded by path so the tree Nova sees is complete, but not read.
-        files.push({ path: rel });
-        if (bytes + size > limits.maxTotalBytes) truncated = true;
-        continue;
-      }
+      /*
+       * One handle for the size check and the read. Checking the path and then
+       * reading the path could be raced — a file swapped or grown in between
+       * would be read past the size limit.
+       */
+      let handle: FileHandle;
+      try { handle = await open(full, "r"); } catch { continue; }
       try {
-        const content = await readFile(full, "utf8");
-        files.push({ path: rel, content });
-        bytes += size;
-        read++;
-      } catch {
-        files.push({ path: rel });
+        let size: number;
+        try { size = (await handle.stat()).size; } catch { continue; }
+
+        if (!isTextual(entry.name) || size > limits.maxFileBytes || bytes + size > limits.maxTotalBytes) {
+          // Recorded by path so the tree Nova sees is complete, but not read.
+          files.push({ path: rel });
+          if (bytes + size > limits.maxTotalBytes) truncated = true;
+          continue;
+        }
+        try {
+          const content = await handle.readFile("utf8");
+          files.push({ path: rel, content });
+          bytes += size;
+          read++;
+        } catch {
+          files.push({ path: rel });
+        }
+      } finally {
+        await handle.close().catch(() => {});
       }
     }
     if (files.length >= limits.maxFiles) { truncated = true; break; }
