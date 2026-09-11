@@ -17,7 +17,7 @@ import { CREDIT_COSTS } from "@shared/plans";
 import { formatProjectBriefForPrompt } from "@shared/project-sections";
 import type { Project } from "@shared/schema";
 import { rateLimit } from "./moderation";
-import { parseModelJson } from "./ai-json";
+import { parseModelJson, ModelResponseError, answerUnreadable } from "./ai-json";
 
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
@@ -140,7 +140,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
 
       let parsed: any;
       try {
-        parsed = parseJsonObject(completion.choices[0].message.content || "{}");
+        parsed = parseJsonObject(completion.choices[0].message.content ?? "");
       } catch (err) {
         console.error("Pitch deck parse failed:", err);
         return res.status(502).json({ message: "Nova's outline came back unreadable. Try again." });
@@ -233,10 +233,11 @@ Respond ONLY with valid JSON (no markdown, no code fences):
 
       let parsed: any;
       try {
-        parsed = parseJsonObject(completion.choices[0].message.content || "{}");
+        // No `|| "{}"`: an empty answer is unreadable, not an empty result — it used to parse as {} and be charged.
+        parsed = parseJsonObject(completion.choices[0].message.content ?? "");
       } catch (err) {
         console.error("Readiness score parse failed:", err);
-        return res.status(502).json({ message: "Nova's score came back unreadable. Try again." });
+        return res.status(502).json({ message: "Nova's score came back unreadable. Try again.", code: "model_unreadable" });
       }
 
       const overall = Math.max(0, Math.min(100, Number(parsed.overall) || 0));
@@ -316,7 +317,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
 
       let parsed: any;
       try {
-        parsed = parseJsonObject(completion.choices[0].message.content || "{}");
+        parsed = parseJsonObject(completion.choices[0].message.content ?? "");
       } catch (err) {
         console.error("Pitch critique parse failed:", err);
         return res.status(502).json({ message: "Nova's critique came back unreadable. Try again." });
@@ -399,10 +400,11 @@ Respond ONLY with valid JSON (no markdown, no code fences):
 
       let parsed: any;
       try {
-        parsed = parseJsonObject(completion.choices[0].message.content || "{}");
+        // No `|| "{}"`: an empty answer is unreadable, not an empty result — it used to parse as {} and be charged.
+        parsed = parseJsonObject(completion.choices[0].message.content ?? "");
       } catch (err) {
         console.error("Pricing analysis parse failed:", err);
-        return res.status(502).json({ message: "Nova's analysis came back unreadable. Try again." });
+        return res.status(502).json({ message: "Nova's analysis came back unreadable. Try again.", code: "model_unreadable" });
       }
 
       const artifact = await storage.createInvestorArtifact({
@@ -460,7 +462,16 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         creditsCharged: CREDIT_COSTS.mockInterviewQuestion,
       });
 
-      const question = await askNextQuestion(interview.id, project, persona, level, ent, []);
+      let question;
+      try {
+        question = await askNextQuestion(interview.id, project, persona, level, ent, []);
+      } catch (err) {
+        // No first question, no interview: close it uncharged rather than
+        // leave an empty one open claiming a credit it never took.
+        await storage.updateMockInterview(interview.id, { status: "completed", creditsCharged: 0, completedAt: new Date() }).catch(() => {});
+        if (err instanceof ModelResponseError) return answerUnreadable(res, err, "interview question");
+        throw err;
+      }
       await storage.deductCredits(userId, CREDIT_COSTS.mockInterviewQuestion);
 
       res.json({
@@ -583,12 +594,17 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       let nextCharged = 0;
       if (answered.length < MAX_QUESTIONS) {
         if (await storage.checkCredits(userId, CREDIT_COSTS.mockInterviewQuestion)) {
-          nextQuestion = await askNextQuestion(
-            interview.id, project, persona, interview.difficulty, ent,
-            answered.map((t) => ({ question: t.question, answer: t.answer || "", score: t.score || 0 }))
-          );
-          await storage.deductCredits(userId, CREDIT_COSTS.mockInterviewQuestion);
-          nextCharged = CREDIT_COSTS.mockInterviewQuestion;
+          try {
+            nextQuestion = await askNextQuestion(
+              interview.id, project, persona, interview.difficulty, ent,
+              answered.map((t) => ({ question: t.question, answer: t.answer || "", score: t.score || 0 }))
+            );
+            await storage.deductCredits(userId, CREDIT_COSTS.mockInterviewQuestion);
+            nextCharged = CREDIT_COSTS.mockInterviewQuestion;
+          } catch (err) {
+            // The grading stands, and was charged; the follow-up failed, so it isn't.
+            console.error("Follow-up interview question failed (not charged):", err);
+          }
         }
       }
 
@@ -613,6 +629,13 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       const interview = await storage.getMockInterview(req.params.id);
       if (!interview || interview.userId !== userId) {
         return res.status(404).json({ message: "Interview not found" });
+      }
+
+      // Once. The verdict is free because the questions were paid for — so
+      // finishing again returns the stored one. It used to run the model again,
+      // unmetered, every time finish was called.
+      if (interview.status === "completed") {
+        return res.json({ interview, questionsAnswered: interview.turns.filter((t) => t.score != null).length, alreadyFinished: true });
       }
 
       const answered = interview.turns.filter((t) => t.score != null);
@@ -695,8 +718,10 @@ Reply with the question text alone — no JSON, no quotes.`,
       ],
     });
 
-    const question = completion.choices[0].message.content?.trim().replace(/^["']|["']$/g, "")
-      || "What's the riskiest assumption in this business right now?";
+    const question = completion.choices[0].message.content?.trim().replace(/^["']|["']$/g, "");
+    // An empty answer is a failed call, not a question: no stock question,
+    // and nothing charged for one.
+    if (!question) throw new ModelResponseError("interview question");
 
     return storage.createInterviewTurn({
       interviewId,

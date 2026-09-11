@@ -193,7 +193,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
 
   let parsed: any;
   try {
-    const raw = completion.choices[0].message.content || "{}";
+    const raw = completion.choices[0].message.content ?? "";
     parsed = parseModelJson(raw);
   } catch (err) {
     console.error("Nova assist parse failed (%s):", String(surface).replace(/[\r\n]+/g, " ").slice(0, 60), err);

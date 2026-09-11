@@ -115,8 +115,29 @@ export function registerAuthRoutes(app: Express): void {
       if (req.session) req.session.destroy(done); else done();
     });
   };
-  app.post("/api/logout", (req: any, res) => endSession(req, res, () => res.json({ ok: true })));
-  app.get("/api/logout", (req: any, res) => endSession(req, res, () => res.redirect("/")));
+  /*
+   * No auth guard, on purpose: signing out has to work with an expired or
+   * half-broken session, or the cookie could never be cleared.
+   *
+   * What it mustn't do is sign someone out from another site. Browsers label
+   * every request with Sec-Fetch-Site, and a link or form on someone else's
+   * page arrives as "cross-site" (or "same-site" from a sibling subdomain).
+   * Those are refused; this site's own requests ("same-origin"), a typed or
+   * bookmarked URL ("none"), and clients that don't send the header — the
+   * mobile app, older browsers — work as before.
+   */
+  const fromElsewhere = (req: any) => {
+    const site = String(req.headers["sec-fetch-site"] ?? "");
+    return site !== "" && site !== "same-origin" && site !== "none";
+  };
+  app.post("/api/logout", (req: any, res) => {
+    if (fromElsewhere(req)) return res.status(403).json({ message: "Sign out from SparkTower itself.", code: "cross_site" });
+    endSession(req, res, () => res.json({ ok: true }));
+  });
+  app.get("/api/logout", (req: any, res) => {
+    if (fromElsewhere(req)) return res.redirect("/");
+    endSession(req, res, () => res.redirect("/"));
+  });
 
   /**
    * Sign out everywhere: every web session for this user and every mobile

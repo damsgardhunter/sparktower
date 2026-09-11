@@ -6,7 +6,7 @@ import {
   type BooleanFeature, type Entitlements, type TierId,
 } from "@shared/plans";
 import { TEXT_MODEL, PRIORITY_TEXT_MODEL } from "./aiModels";
-import { enforceRateLimit } from "./moderation";
+import { enforceRateLimit, consumeRateLimit } from "./moderation";
 
 export interface UserEntitlements extends Entitlements {
   tier: TierId;
@@ -140,6 +140,18 @@ export async function requireCredits(
   }
 
   return ent;
+}
+
+/**
+ * The non-refusing form of requireCredits, for AI that's an optional extra on
+ * a route that works without it (Nova's match reasons). True means the credits
+ * are there and the AI burst limit has room (the use is counted): go ahead,
+ * and deduct `amount` once the answer is in. False means skip the AI part.
+ * Nothing is written to the response.
+ */
+export async function reserveOptionalAi(userId: string, amount: number): Promise<boolean> {
+  if (!(await storage.checkCredits(userId, amount))) return false;
+  return consumeRateLimit(userId, "ai");
 }
 
 /** Pro gets the stronger model; everyone else the standard one. */

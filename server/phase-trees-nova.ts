@@ -30,7 +30,7 @@ Respond ONLY with JSON: {"steps":[{"title":"","description":"","estimateHours":1
     ],
     temperature: 0.4,
   });
-  const parsed = parseModelJson(completion.choices[0]?.message?.content ?? "{}");
+  const parsed = parseModelJson(completion.choices[0]?.message?.content ?? "");
   return Array.isArray(parsed.steps) ? parsed.steps as { title: string; description: string; estimateHours?: number }[] : [];
 }
 
@@ -47,7 +47,7 @@ Respond ONLY with JSON: {"tasks":[{"title":"","description":"","artifact":"<exac
     ],
     temperature: 0.4,
   });
-  const parsed = parseModelJson(completion.choices[0]?.message?.content ?? "{}");
+  const parsed = parseModelJson(completion.choices[0]?.message?.content ?? "");
   return Array.isArray(parsed.tasks) ? parsed.tasks : [];
 }
 
@@ -75,7 +75,7 @@ Respond ONLY with JSON: {"done":[{"id":"<milestone id>","evidence":"<one line>",
     ],
     temperature: 0.2,
   });
-  const parsed = parseModelJson(completion.choices[0]?.message?.content ?? "{}");
+  const parsed = parseModelJson(completion.choices[0]?.message?.content ?? "");
   const ids = new Set(backbone.map((m) => m.id));
   const done = (Array.isArray(parsed.done) ? parsed.done : [])
     .filter((d: any) => d && ids.has(String(d.id)))

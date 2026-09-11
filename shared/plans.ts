@@ -262,6 +262,10 @@ export const CREDIT_COSTS = {
   roadmapRebuildMax: 15,
   /** Nova reads a résumé and builds out the profile. */
   resumeEvaluation: 4,
+  /** Nova's one-line reasons on generated matches — an optional extra on a free route. */
+  matchExplanation: 1,
+  /** Recalculating a builder's reputation. No model runs; priced as it always was, charged on success. */
+  reputationEvaluation: 1,
   /** Checks pricing against the target customer and comparable products. */
   pricingAnalysis: 5,
   // Investor readiness suite

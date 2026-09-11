@@ -838,7 +838,7 @@ export function registerBackingRoutes(app: Express) {
    * flushes any merch that was queued waiting for a human to confirm the
    * project is real.
    */
-  app.post("/api/admin/backing/:projectId/decision", isAuthenticated, requireReviewer, async (req: any, res) => {
+  app.post("/api/admin/backing/:projectId/decision", isAuthenticated, requireReviewer, rateLimit("payout"), async (req: any, res) => {
     try {
       const { projectId } = req.params;
       const decision = req.body.decision;
@@ -884,7 +884,7 @@ export function registerBackingRoutes(app: Express) {
    * releasing says "send this specific money", and one reviewer mistake
    * should not be able to do both at once.
    */
-  app.post("/api/admin/backing/:projectId/release", isAuthenticated, requireReviewer, async (req: any, res) => {
+  app.post("/api/admin/backing/:projectId/release", isAuthenticated, requireReviewer, rateLimit("payout"), async (req: any, res) => {
     try {
       const { projectId } = req.params;
       const [campaign] = await db.select().from(projectBackingCampaigns)

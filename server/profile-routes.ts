@@ -1,6 +1,7 @@
 /**
  * Profile build-out: Nova résumé evaluation and the public "looking for" call.
  */
+import { parseModelJson } from "./ai-json";
 import type { Express } from "express";
 import OpenAI from "openai";
 import { storage } from "./storage";
@@ -281,12 +282,11 @@ Respond ONLY with valid JSON (no markdown, no code fences):
 
       let parsed: any;
       try {
-        const raw = completion.choices[0].message.content || "{}";
-        const match = raw.match(/\{[\s\S]*\}/);
-        parsed = JSON.parse(match ? match[0] : raw);
+        parsed = parseModelJson(completion.choices[0].message.content, "resume evaluation");
       } catch (err) {
         console.error("Resume parse failed:", err);
         return res.status(502).json({
+          code: "model_unreadable",
           message: source === "upload"
             ? "Nova couldn't read that file. Try pasting the text instead."
             : "Nova couldn't read that. Try pasting plain text.",

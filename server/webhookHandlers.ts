@@ -1,7 +1,8 @@
 import { getStripeSync, getUncachableStripeClient } from './stripeClient';
 import { db } from './db';
-import { users, donations, projects, projectBackings, stripeEvents } from '@shared/schema';
-import { and, eq, isNull, or, sql } from 'drizzle-orm';
+import { users, donations, projects, projectBackings, projectMerchOrders, stripeEvents } from '@shared/schema';
+import { isPaidSubscriptionStatus } from '@shared/subscriptions';
+import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import { recordBacking } from './backing-routes';
 
 /** Thrown only when the signature check fails: the caller answers 400, and Stripe does not retry. */
@@ -39,7 +40,19 @@ export class WebhookHandlers {
     try {
       await sync.processWebhook(payload, signature);
     } catch (err) {
-      throw new WebhookVerificationError((err as Error)?.message ?? "Signature verification failed");
+      const message = String((err as Error)?.message ?? "");
+      /*
+       * No secret to check against is our misconfiguration, not a forgery.
+       * It used to surface as a 400 — and Stripe never retries a 400 — so a
+       * deployment whose webhook registration was missing dropped every
+       * payment event without a trace. As a 500 it's retried for three days
+       * and shows up in Stripe's dashboard as failing.
+       */
+      if (/no webhook secret/i.test(message)) {
+        console.error("[stripe] Webhook received but no signing secret is configured — set STRIPE_WEBHOOK_SECRET or register the endpoint (PUBLIC_URL). Stripe will retry.");
+        throw new Error("Stripe webhook signing secret is not configured");
+      }
+      throw new WebhookVerificationError(message || "Signature verification failed");
     }
 
     // Verified above; parsing the bytes we verified is the only honest source of the event.
@@ -98,7 +111,7 @@ export class WebhookHandlers {
     }
     if (type === 'customer.subscription.created' || type === 'customer.subscription.updated') {
       const status = subscription.status;
-      if (status !== 'active' && status !== 'trialing') {
+      if (!isPaidSubscriptionStatus(status)) {
         await db.update(users).set({ subscriptionTier: 'free', stripeSubscriptionId: subscription.id }).where(eq(users.id, user.id));
         return;
       }
@@ -144,16 +157,26 @@ export class WebhookHandlers {
       if (!user) return;
       const stripe = await getUncachableStripeClient();
       const subscription = await stripe.subscriptions.retrieve(typeof session.subscription === "string" ? session.subscription : session.subscription.id);
-      const tier = (subscription.status === 'active' || subscription.status === 'trialing') ? await WebhookHandlers.tierForSubscription(subscription) : 'free';
+      const tier = isPaidSubscriptionStatus(subscription.status) ? await WebhookHandlers.tierForSubscription(subscription) : 'free';
       await db.update(users).set({ subscriptionTier: tier, stripeSubscriptionId: subscription.id }).where(eq(users.id, user.id));
       console.log(`Checkout subscription for user ${user.id}: tier=${tier}`);
     }
   }
 
   /**
-   * Money going back. A refunded donation is marked and the project's total
-   * comes down once; a refunded backing moves to its refunded state. Matched
-   * on the payment intent or the charge, whichever the event carries.
+   * Money going back.
+   *
+   * Stripe sends `charge.refunded` for every refund on a charge, partial ones
+   * included, each carrying the charge's running `amount_refunded`. So what
+   * gets recorded is that running total, and the project's figure moves by
+   * the difference from what was recorded before. That makes the handler
+   * idempotent across *different* events for the same refund, not just
+   * redeliveries of one event (the ledger handles those): the same running
+   * total twice moves nothing. It also fixes the partial refund, which used
+   * to mark the whole donation refunded and take all of it off the total.
+   *
+   * Rows are locked for the decision, so two refund events for one charge
+   * processed at the same moment can't both move the total.
    */
   static async handleRefund(event: any): Promise<void> {
     if (event.type !== 'charge.refunded') return;
@@ -166,18 +189,46 @@ export class WebhookHandlers {
       ...(paymentIntent ? [eq(piCol, paymentIntent)] : []),
       ...(chargeId ? [eq(chCol, chargeId)] : []),
     );
+    // Real charge.refunded events always carry both. One without a running
+    // total is read as a full refund, which is what this handler always did.
+    const refundedSoFar: number = typeof charge.amount_refunded === "number" ? Math.max(0, charge.amount_refunded) : Number.POSITIVE_INFINITY;
+    const inFull = charge.refunded === true || refundedSoFar === Number.POSITIVE_INFINITY;
+    const latestRefundId: string | null = charge.refunds?.data?.[0]?.id ?? null;
 
     await db.transaction(async (tx) => {
-      const [donation] = await tx.select().from(donations).where(and(match(donations.stripePaymentIntentId, donations.stripeChargeId), isNull(donations.refundedAt)));
+      const [donation] = await tx.select().from(donations).where(match(donations.stripePaymentIntentId, donations.stripeChargeId)).for("update");
       if (donation) {
-        await tx.update(donations).set({ refundedAt: new Date(), stripeChargeId: donation.stripeChargeId ?? chargeId }).where(eq(donations.id, donation.id));
-        await tx.update(projects).set({ totalDonations: sql`greatest(0, ${projects.totalDonations} - ${donation.amount})` }).where(eq(projects.id, donation.projectId));
-        console.log(`Donation ${donation.id} refunded; project ${donation.projectId} total reduced by ${donation.amount}`);
+        const nowRefunded = Math.min(donation.amount, inFull ? donation.amount : refundedSoFar);
+        const delta = nowRefunded - (donation.refundedAmount ?? 0);
+        if (delta > 0) {
+          await tx.update(donations).set({
+            refundedAmount: nowRefunded,
+            refundedAt: nowRefunded >= donation.amount ? new Date() : donation.refundedAt,
+            stripeChargeId: donation.stripeChargeId ?? chargeId,
+          }).where(eq(donations.id, donation.id));
+          await tx.update(projects).set({ totalDonations: sql`greatest(0, ${projects.totalDonations} - ${delta})` }).where(eq(projects.id, donation.projectId));
+          console.log(`Donation ${donation.id}: ${nowRefunded}/${donation.amount} cents refunded; project ${donation.projectId} total reduced by ${delta}`);
+        }
       }
-      const [backing] = await tx.select({ id: projectBackings.id, status: projectBackings.status }).from(projectBackings).where(match(projectBackings.stripePaymentIntentId, projectBackings.stripeChargeId));
+
+      const [backing] = await tx.select({ id: projectBackings.id, status: projectBackings.status, amountCents: projectBackings.amountCents, projectId: projectBackings.projectId })
+        .from(projectBackings).where(match(projectBackings.stripePaymentIntentId, projectBackings.stripeChargeId)).for("update");
       if (backing && backing.status !== 'refunded') {
-        await tx.update(projectBackings).set({ status: 'refunded', stripeRefundId: charge.refunds?.data?.[0]?.id ?? null, resolvedAt: new Date() }).where(eq(projectBackings.id, backing.id));
-        console.log(`Backing ${backing.id} marked refunded from Stripe`);
+        if (!inFull && refundedSoFar < backing.amountCents) {
+          // A backing is escrow: it's held, released or refunded, not part of
+          // each. A partial refund is someone acting in the Stripe dashboard,
+          // and it needs a person to decide what the backing now is.
+          console.warn(`[stripe] partial refund on backing ${backing.id}: ${refundedSoFar}/${backing.amountCents} cents — left ${backing.status} for a reviewer`);
+          return;
+        }
+        await tx.update(projectBackings).set({ status: 'refunded', stripeRefundId: latestRefundId, resolvedAt: new Date() }).where(eq(projectBackings.id, backing.id));
+        // Refunded outside the platform's own sweep — the dashboard, a dispute.
+        // The public "raised" figure gives the money back here, and only here:
+        // the move to "refunded" is the guard, and the sweep checks it too.
+        await tx.update(projects).set({ totalDonations: sql`greatest(0, ${projects.totalDonations} - ${backing.amountCents})` }).where(eq(projects.id, backing.projectId));
+        await tx.update(projectMerchOrders).set({ status: 'canceled', updatedAt: new Date() })
+          .where(and(eq(projectMerchOrders.backingId, backing.id), inArray(projectMerchOrders.status, ['queued', 'failed'])));
+        console.log(`Backing ${backing.id} refunded from Stripe; project ${backing.projectId} total reduced by ${backing.amountCents}`);
       }
     });
   }

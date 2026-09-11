@@ -24,7 +24,7 @@ import request from "supertest";
 import Stripe from "stripe";
 import { eq } from "drizzle-orm";
 import { db } from "../../server/db";
-import { users, projects, donations, stripeEvents } from "@shared/schema";
+import { users, projects, donations, stripeEvents, projectBackings } from "@shared/schema";
 
 const WEBHOOK_SECRET = "whsec_test_secret_for_signature_verification";
 const stripe = new Stripe("sk_test_dummy_key_not_used_for_network", {
@@ -54,6 +54,8 @@ vi.mock("../../server/stripeClient", async (importOriginal) => {
     getStripeSync: async () => ({
       processWebhook: async (payload: Buffer, signature: string) => {
         delivered.push({ payload, signature });
+        // The library's own words when it has no secret to check against.
+        if (signature === "no-secret-configured") throw new Error("No webhook secret provided. Either create a managed webhook or configure stripeWebhookSecret.");
         client.webhooks.constructEvent(payload, signature, WEBHOOK_SECRET);
       },
     }),
@@ -303,5 +305,71 @@ describe("refunds", () => {
     expect(await tierOf(user.id)).toBe("pro");
     expect((await deliver(app, { id: "evt_pastdue", object: "event", type: "customer.subscription.updated", data: { object: { id: "sub_test_123", customer: customerId, status: "past_due" } } })).status).toBe(200);
     expect(await tierOf(user.id)).toBe("free");
+  });
+});
+
+describe("partial refunds, and refunds from outside the platform", () => {
+  /** Stripe's charge.refunded: the charge's running refunded total, and whether that's all of it. */
+  const refunded = (id: string, pi: string, amountRefunded: number, inFull: boolean, refundId: string) => ({
+    id, object: "event", type: "charge.refunded",
+    data: { object: { id: `ch_${pi}`, object: "charge", payment_intent: pi, amount_refunded: amountRefunded, refunded: inFull, refunds: { data: [{ id: refundId }] } } },
+  });
+  const donationFor = async (session: string) => (await db.select().from(donations).where(eq(donations.stripeSessionId, session)))[0];
+
+  it("lowers a donation's total by what went back — once per refund, whatever the event id — and the rest when it's refunded in full", async () => {
+    const app = await getTestApp();
+    const { donor, project } = await aProjectWithDonor();
+    // Other money already counted, so a second subtraction couldn't hide behind zero.
+    await db.update(projects).set({ totalDonations: 1000 }).where(eq(projects.id, project.id));
+    await deliver(app, { id: "evt_part_pay", object: "event", type: "checkout.session.completed", data: { object: { id: "cs_part", mode: "payment", payment_intent: "pi_part", metadata: { type: "donation", projectId: project.id, donorId: donor.id, amount: "4000" } } } });
+    expect(await totalOf(project.id)).toBe(5000);
+
+    expect((await deliver(app, refunded("evt_part_1", "pi_part", 1500, false, "re_1"))).status).toBe(200);
+    expect(await totalOf(project.id)).toBe(3500);
+    expect(await donationFor("cs_part")).toMatchObject({ refundedAmount: 1500, refundedAt: null });
+
+    // The same refund again under a new event id: nothing moves.
+    await deliver(app, refunded("evt_part_1_again", "pi_part", 1500, false, "re_1"));
+    expect(await totalOf(project.id)).toBe(3500);
+
+    // The rest, refunded: the remaining 2500 comes off, and the donation is marked.
+    await deliver(app, refunded("evt_part_2", "pi_part", 4000, true, "re_2"));
+    expect(await totalOf(project.id)).toBe(1000);
+    const full = await donationFor("cs_part");
+    expect(full.refundedAmount).toBe(4000);
+    expect(full.refundedAt).toBeTruthy();
+    await deliver(app, refunded("evt_part_2_again", "pi_part", 4000, true, "re_2"));
+    expect(await totalOf(project.id)).toBe(1000);
+  });
+
+  it("gives a backing refunded from the Stripe dashboard back to the project's total once; a partial refund leaves it held", async () => {
+    const app = await getTestApp();
+    const { donor, project } = await aProjectWithDonor();
+    await db.update(projects).set({ totalDonations: 8000 }).where(eq(projects.id, project.id));
+    const [backing] = await db.insert(projectBackings).values({
+      projectId: project.id, backerId: donor.id, amountCents: 5000, status: "held", stripePaymentIntentId: "pi_back",
+    } as any).returning();
+    const backingNow = async () => (await db.select().from(projectBackings).where(eq(projectBackings.id, backing.id)))[0];
+
+    await deliver(app, refunded("evt_back_partial", "pi_back", 2000, false, "re_b1"));
+    expect((await backingNow()).status).toBe("held");
+    expect(await totalOf(project.id)).toBe(8000);
+
+    await deliver(app, refunded("evt_back_full", "pi_back", 5000, true, "re_b2"));
+    expect(await backingNow()).toMatchObject({ status: "refunded", stripeRefundId: "re_b2" });
+    expect(await totalOf(project.id)).toBe(3000);
+
+    await deliver(app, refunded("evt_back_full_again", "pi_back", 5000, true, "re_b2"));
+    expect(await totalOf(project.id)).toBe(3000);
+  });
+});
+
+describe("a webhook that arrives before a signing secret is configured", () => {
+  it("answers 500 — so Stripe retries — rather than a 400 that drops the event for good", async () => {
+    const app = await getTestApp();
+    const res = await request(app).post("/api/stripe/webhook").set("Content-Type", "application/json")
+      .set("stripe-signature", "no-secret-configured").send(JSON.stringify(cancellationEvent("cus_nobody")));
+    expect(res.status).toBe(500);
+    expect(await db.select().from(stripeEvents)).toHaveLength(0);
   });
 });
