@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import { transformWithEsbuild } from "vite";
 import path from "path";
 import { loadEnvFile } from "./test/setup/env";
 import { testDatabaseUrl } from "./test/setup/database";
@@ -16,7 +17,34 @@ import { testDatabaseUrl } from "./test/setup/database";
 loadEnvFile();
 const DATABASE_URL = testDatabaseUrl();
 
+/*
+ * A few unit tests import pure modules from mobile/ (the Discover feed, the
+ * message templates) to test them, and to check they haven't drifted from the
+ * web copies. By default Vite compiles those with mobile/tsconfig.json, which
+ * extends "expo/tsconfig.base" — and the server-web CI job doesn't install the
+ * mobile app, so both files crashed there before a test ran. They're compiled
+ * here with an inline tsconfig instead: a string `tsconfigRaw` means no config
+ * file is looked up at all.
+ */
+const MOBILE_DIR = path.resolve(import.meta.dirname, "mobile") + path.sep;
+const MOBILE_SOURCE = new RegExp(`^${MOBILE_DIR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*\\.tsx?$`);
+const isMobileSource = (id: string) => MOBILE_SOURCE.test(id);
+
 export default defineConfig({
+  // Vite's own TypeScript step skips them; the plugin below compiles them instead.
+  esbuild: { exclude: [MOBILE_SOURCE] },
+  plugins: [{
+    name: "mobile-sources-without-expo",
+    enforce: "pre",
+    transform(code: string, id: string) {
+      if (!isMobileSource(id)) return null;
+      return transformWithEsbuild(code, id, {
+        loader: id.endsWith(".tsx") ? "tsx" : "ts",
+        jsx: "automatic",
+        tsconfigRaw: JSON.stringify({ compilerOptions: { strict: true } }),
+      });
+    },
+  }],
   resolve: {
     // Mirrors vite.config.ts. Server code imports @shared/* the same way the
     // client does, so the aliases have to match or nothing resolves.
