@@ -108,6 +108,13 @@ export async function getStripeSync() {
         max: 2,
       },
       stripeSecretKey: secretKey,
+      /*
+       * Without this the library looks the secret up in its managed-webhook
+       * table, which exists only once boot has registered an endpoint (and
+       * that needs PUBLIC_URL). Set it to the whsec_… that `stripe listen`
+       * prints, or to the dashboard endpoint's signing secret.
+       */
+      stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET || undefined,
     });
   }
   return stripeSync;

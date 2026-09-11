@@ -49,7 +49,7 @@ interface CountSource {
  * un-reacting deletes the row; a presign writes nothing; an AI call writes to
  * a dozen places.
  */
-const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai", "login", "write", "track", "post", "connect"]);
+const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai", "login", "write", "track", "post", "connect", "review", "payout"]);
 
 const hitSource = (action: RateLimitAction): CountSource => ({
   table: rateLimitHits, author: rateLimitHits.userId, created: rateLimitHits.createdAt,
@@ -113,6 +113,9 @@ const COUNTED: Record<RateLimitAction, CountSource[]> = {
   post:   [hitSource("post")],
   // Every attempt counts, refused ones included: that's what stops hammering someone with requests.
   connect: [hitSource("connect")],
+  // Reviewer actions change state elsewhere (a hidden flag, a suspension), so they're counted as hits.
+  review: [hitSource("review")],
+  payout: [hitSource("payout")],
 };
 
 /**
@@ -301,6 +304,19 @@ export async function enforceRateLimit(res: any, userId: string, action: RateLim
 }
 
 /**
+ * The same check, for work that's optional inside a request that mustn't be
+ * refused — Nova's match reasons on an otherwise free route. True when there's
+ * room, and the use is counted; false means skip the optional part. Nothing
+ * is written to the response either way.
+ */
+export async function consumeRateLimit(key: string, action: RateLimitAction): Promise<boolean> {
+  const check = await withinRateLimit(key, action);
+  if (!check.ok) return false;
+  await recordHit(key, action);
+  return true;
+}
+
+/**
  * True when this person has already written this same thing too many times.
  *
  * Counts the content itself, like the limiter above, so it needs no store of
@@ -416,7 +432,10 @@ export function startModerationJobs(): void {
  * point of a floor. Signature-verified webhooks are exempt: their caller is
  * a payment provider, and refusing them loses money, not spam.
  */
-const WRITE_FLOOR_EXEMPT = ["/api/stripe/webhook", "/api/webhooks/"];
+// Only the webhook that exists. A general "/api/webhooks/" exemption covered
+// no route at all — it would have let a future, unverified webhook skip the
+// floor without anyone deciding it should.
+const WRITE_FLOOR_EXEMPT = ["/api/stripe/webhook"];
 export const limitWrites: RequestHandler = async (req: any, res, next) => {
   if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) return next();
   if (!req.path.startsWith("/api/")) return next();
@@ -659,8 +678,8 @@ export function registerModerationRoutes(app: Express) {
     });
     res.json({ ok: true, hidden: hide });
   };
-  app.post("/api/admin/content/:type/:id/hide", isAuthenticated, requireReviewer, (req: any, res) => setHidden(req, res, true).catch((e) => { console.error("takedown failed:", e); res.status(500).json({ message: "Couldn't take that down" }); }));
-  app.post("/api/admin/content/:type/:id/restore", isAuthenticated, requireReviewer, (req: any, res) => setHidden(req, res, false).catch((e) => { console.error("restore failed:", e); res.status(500).json({ message: "Couldn't restore that" }); }));
+  app.post("/api/admin/content/:type/:id/hide", isAuthenticated, requireReviewer, rateLimit("review"), (req: any, res) => setHidden(req, res, true).catch((e) => { console.error("takedown failed:", e); res.status(500).json({ message: "Couldn't take that down" }); }));
+  app.post("/api/admin/content/:type/:id/restore", isAuthenticated, requireReviewer, rateLimit("review"), (req: any, res) => setHidden(req, res, false).catch((e) => { console.error("restore failed:", e); res.status(500).json({ message: "Couldn't restore that" }); }));
 
   /**
    * Deciding a reported comment — the step of the loop that changes anything.
@@ -675,7 +694,7 @@ export function registerModerationRoutes(app: Express) {
    * The report row is locked for the decision, so two reviewers acting on the
    * same report at once get one action and one "already decided".
    */
-  app.post("/api/admin/reports/:id/act", isAuthenticated, requireReviewer, async (req: any, res) => {
+  app.post("/api/admin/reports/:id/act", isAuthenticated, requireReviewer, rateLimit("review"), async (req: any, res) => {
     try {
       const action = String(req.body?.action ?? "") as ModerationAction;
       const reasonCode = String(req.body?.reasonCode ?? "");
@@ -773,7 +792,7 @@ export function registerModerationRoutes(app: Express) {
   });
 
   /** Resolving one. Actioned or dismissed — both close it. */
-  app.patch("/api/admin/reports/:id", isAuthenticated, requireReviewer, async (req: any, res) => {
+  app.patch("/api/admin/reports/:id", isAuthenticated, requireReviewer, rateLimit("review"), async (req: any, res) => {
     try {
       const status = String(req.body?.status || "");
       if (status !== "actioned" && status !== "dismissed") {
@@ -809,7 +828,7 @@ export function registerModerationRoutes(app: Express) {
    * suspension, and a suspension often covers several. Keeping them apart
    * means neither is a side effect of the other.
    */
-  app.post("/api/admin/users/:id/suspend", isAuthenticated, requireReviewer, async (req: any, res) => {
+  app.post("/api/admin/users/:id/suspend", isAuthenticated, requireReviewer, rateLimit("review"), async (req: any, res) => {
     try {
       const targetId = String(req.params.id);
       if (targetId === req.user.id) {

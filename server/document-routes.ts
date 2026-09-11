@@ -203,7 +203,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
           ],
         });
 
-        const parsed = parseJson(completion.choices[0].message.content || "{}");
+        const parsed = parseJson(completion.choices[0].message.content ?? "");
         for (const entry of Array.isArray(parsed.blocks) ? parsed.blocks : []) {
           const id = str(entry?.id, 40);
           const content = stripIdFragments(str(entry?.content, 20_000), opts.knownIds ?? []);
@@ -325,7 +325,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
 
       let parsed: any;
       try {
-        parsed = parseJson(completion.choices[0].message.content || "{}");
+        parsed = parseJson(completion.choices[0].message.content ?? "");
       } catch (err) {
         console.error("Document plan parse failed:", err);
         return res.status(502).json({ message: "Nova returned an unreadable plan. Please try again." });
@@ -571,7 +571,7 @@ Return one entry per block you were asked to write, and nothing else.`,
             ],
           });
 
-          const parsed = parseJson(completion.choices[0].message.content || "{}");
+          const parsed = parseJson(completion.choices[0].message.content ?? "");
           let appliedHere = 0;
           for (const entry of Array.isArray(parsed.blocks) ? parsed.blocks : []) {
             const id = str(entry?.id, 40);
@@ -723,7 +723,7 @@ Respond ONLY with valid JSON:
 
       let parsed: any;
       try {
-        parsed = parseJson(completion.choices[0].message.content || "{}");
+        parsed = parseJson(completion.choices[0].message.content ?? "");
       } catch {
         return res.status(502).json({ message: "Nova returned an unreadable structure. Please try again." });
       }

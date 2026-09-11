@@ -7,7 +7,7 @@
  * pledge. The lock is released as soon as the pass finishes; if a process dies
  * holding it, Postgres drops it with the connection.
  */
-import { and, eq, inArray, isNotNull, lt, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, lt, ne, sql } from "drizzle-orm";
 import { db, pool } from "./db";
 import {
   projectBackings, projectBackingCampaigns, projectMerchOrders, projects,
@@ -253,16 +253,20 @@ export async function runRefundSweep(): Promise<{ refunded: number; converted: n
           metadata: { backingId: backing.id, reason: "refund_window_elapsed" },
         }, { idempotencyKey: `sweep_refund_${backing.id}` });
 
-        await db.update(projectBackings).set({
-          status: "refunded",
-          stripeRefundId: refund.id,
-          resolvedAt: new Date(),
-        }).where(eq(projectBackings.id, backing.id));
-
-        // The public "raised" figure has to give the money back too.
-        await db.update(projects)
-          .set({ totalDonations: sql`greatest(0, ${projects.totalDonations} - ${backing.amountCents})` })
-          .where(eq(projects.id, backing.projectId));
+        // The public "raised" figure has to give the money back too — but only
+        // on the move to "refunded". Stripe's charge.refunded webhook may have
+        // recorded this refund first, and gave the money back when it did.
+        await db.transaction(async (tx) => {
+          const [moved] = await tx.update(projectBackings).set({
+            status: "refunded",
+            stripeRefundId: refund.id,
+            resolvedAt: new Date(),
+          }).where(and(eq(projectBackings.id, backing.id), ne(projectBackings.status, "refunded"))).returning({ id: projectBackings.id });
+          if (!moved) return;
+          await tx.update(projects)
+            .set({ totalDonations: sql`greatest(0, ${projects.totalDonations} - ${backing.amountCents})` })
+            .where(eq(projects.id, backing.projectId));
+        });
 
         // Nothing physical can have shipped — merch waits on approval and
         // these are unapproved by definition — so cancelling is safe.

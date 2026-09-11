@@ -3,11 +3,11 @@ import { storage } from "./storage";
 import { db } from "./db";
 import { projectMembers } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
-import { requireFeature, requireCredits, getUserEntitlements, modelFor, coachingDirectiveFor, memoryLimitFor } from "./entitlements";
+import { requireFeature, requireCredits, reserveOptionalAi, getUserEntitlements, modelFor, coachingDirectiveFor, memoryLimitFor } from "./entitlements";
 import { CREDIT_COSTS } from "@shared/plans";
 import type { CofounderSprint } from "@shared/schema";
 import OpenAI from "openai";
-import { parseModelJson } from "./ai-json";
+import { parseModelJson, ModelResponseError, answerUnreadable } from "./ai-json";
 import { rateLimit } from "./moderation";
 
 let _openai: OpenAI | null = null;
@@ -194,7 +194,13 @@ export function novaQuestionKey(key: string): string {
   return key.startsWith(NOVA_KEY_PREFIX) ? key : `${NOVA_KEY_PREFIX}${key}`;
 }
 
-async function generatePracticeNovaContent(sprintId: string, phase: string, sprint: any, model: string) {
+/**
+ * Nova's side of a practice sprint phase. True only when Nova's model wrote
+ * answers and they were saved — the one outcome the builder pays for. A
+ * failed or unreadable generation seeds placeholders and returns false; so
+ * does a phase Nova's model doesn't write for.
+ */
+async function generatePracticeNovaContent(sprintId: string, phase: string, sprint: any, model: string): Promise<boolean> {
   const novaUserId = sprint.user1Id;
 
   if (phase === "ideation") {
@@ -217,17 +223,16 @@ async function generatePracticeNovaContent(sprintId: string, phase: string, spri
         temperature: 0.7,
         max_completion_tokens: 2000,
       });
-      const content = response.choices[0]?.message?.content || "";
-      const cleaned = content.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
-      const answers = JSON.parse(cleaned);
-      for (const q of questions) {
-        if (answers[q.key]) {
-          await storage.addSprintResponse({
-            sprintId, userId: novaUserId, questionKey: novaQuestionKey(q.key),
-            answer: answers[q.key], isNova: true,
-          });
-        }
+      const answers = parseModelJson<Record<string, unknown>>(response.choices[0]?.message?.content, "sprint answers");
+      const answered = questions.filter((q) => typeof answers?.[q.key] === "string" && String(answers[q.key]).trim());
+      if (!answered.length) throw new ModelResponseError("sprint answers");
+      for (const q of answered) {
+        await storage.addSprintResponse({
+          sprintId, userId: novaUserId, questionKey: novaQuestionKey(q.key),
+          answer: String(answers[q.key]), isNova: true,
+        });
       }
+      return true;
     } catch (err) {
       console.error("Nova ideation generation failed, seeding placeholders:", err);
       for (const q of questions) {
@@ -236,6 +241,7 @@ async function generatePracticeNovaContent(sprintId: string, phase: string, spri
           answer: `[Nova couldn't answer "${q.prompt}" right now — try asking in chat.]`
         });
       }
+      return false;
     }
   }
 
@@ -247,6 +253,8 @@ async function generatePracticeNovaContent(sprintId: string, phase: string, spri
       });
     } catch {}
   }
+  // Nothing Nova's model wrote this phase (the review decision above is canned).
+  return false;
 }
 
 export function registerSprintRoutes(app: Express) {
@@ -308,7 +316,7 @@ export function registerSprintRoutes(app: Express) {
 
       let ideas: SprintIdea[] = [];
       try {
-        const raw = completion.choices[0]?.message?.content || "{}";
+        const raw = completion.choices[0]?.message?.content ?? "";
         const match = raw.match(/\{[\s\S]*\}/);
         ideas = normalizeIdeas(parseModelJson(raw));
       } catch (parseErr) {
@@ -403,14 +411,14 @@ export function registerSprintRoutes(app: Express) {
             temperature: 1,
             max_completion_tokens: 2000,
           });
-          // Charged only now, with the model's answer in hand. A failed call costs nothing.
-          await storage.deductCredits(req.user.id, CREDIT_COSTS.practiceSprint);
-          const raw = response.choices[0]?.message?.content || "{}";
-          const match = raw.match(/\{[\s\S]*\}/);
-          const [first] = normalizeIdeas(parseModelJson(raw));
+          const [first] = normalizeIdeas(parseModelJson(response.choices[0]?.message?.content, "product idea"));
           if (first) {
             productName = first.name;
             productDescription = ideaToDescription(first);
+            // Charged for a real idea only. An unreadable or empty answer falls
+            // back to the placeholder — free. It used to be charged before the
+            // answer was read, placeholder or not.
+            await storage.deductCredits(req.user.id, CREDIT_COSTS.practiceSprint);
           }
         } catch (ideaErr) {
           console.error("Practice idea generation failed, using placeholder:", ideaErr);
@@ -561,7 +569,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
 
       let parsed: { answers?: { questionKey?: string; answer?: string }[] };
       try {
-        const raw = completion.choices[0]?.message?.content || "{}";
+        const raw = completion.choices[0]?.message?.content ?? "";
         const match = raw.match(/\{[\s\S]*\}/);
         parsed = parseModelJson(raw);
       } catch (parseErr) {
@@ -657,24 +665,31 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       /*
        * On a practice sprint, Nova produces the partner's side of the new
        * phase. This runs in the background so advancing stays snappy, and the
-       * credit is charged up front — if the builder can't afford it the phase
+       * credit is charged once Nova's answers land — if the builder can't afford it the phase
        * still advances, they just don't get Nova's contribution.
        */
-      let novaCharged = 0;
+      /*
+       * Charged when Nova's answers land, and only then. It used to be charged
+       * up front on every phase — but only ideation runs the model; review is
+       * a canned decision and the rest write nothing — and a failed
+       * generation that seeded placeholders was billed all the same.
+       */
+      let novaCreditsOnSuccess = 0;
       if (sprint.isPractice) {
         const ent = await getUserEntitlements(req.user.id);
-        if (await storage.checkCredits(req.user.id, CREDIT_COSTS.novaPartnerAnswers)) {
-          await storage.deductCredits(req.user.id, CREDIT_COSTS.novaPartnerAnswers);
-          novaCharged = CREDIT_COSTS.novaPartnerAnswers;
-          generatePracticeNovaContent(sprint.id, nextPhase, sprint, modelFor(ent)).catch(err =>
-            console.error("Practice Nova content error:", err)
-          );
+        const userId = req.user.id as string;
+        const novaWrites = nextPhase === "ideation";
+        if (!novaWrites || (await reserveOptionalAi(userId, CREDIT_COSTS.novaPartnerAnswers))) {
+          if (novaWrites) novaCreditsOnSuccess = CREDIT_COSTS.novaPartnerAnswers;
+          generatePracticeNovaContent(sprint.id, nextPhase, sprint, modelFor(ent))
+            .then((generated) => (generated ? storage.deductCredits(userId, CREDIT_COSTS.novaPartnerAnswers) : undefined))
+            .catch((err) => console.error("Practice Nova content error:", err));
         } else {
-          console.log(`Skipping Nova phase content for sprint ${sprint.id}: insufficient credits`);
+          console.log(`Skipping Nova's answers for sprint ${sprint.id}: no credits or AI burst room`);
         }
       }
 
-      res.json({ ...updated, novaCreditsCharged: novaCharged });
+      res.json({ ...updated, novaCreditsOnSuccess });
     } catch (error) {
       console.error("Advance sprint error:", error);
       res.status(500).json({ message: "Failed to advance sprint" });
@@ -906,17 +921,19 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         temperature: 0.9,
         max_completion_tokens: 1200,
       });
-      // Charged only now, with the model's answer in hand. A failed call costs nothing.
-      await storage.deductCredits(req.user.id, CREDIT_COSTS.sprintIdeaSuggestion);
-
-      const content = response.choices[0]?.message?.content || "";
+      // Read first, charge after. An unreadable answer used to be charged and
+      // served as a made-up "Innovative Product"; now it's a 502 that costs nothing.
+      let suggestion: { name?: unknown; description?: unknown };
       try {
-        const cleaned = content.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
-        const suggestion = JSON.parse(cleaned);
-        res.json(suggestion);
-      } catch {
-        res.json({ name: "Innovative Product", description: content.substring(0, 200) });
+        suggestion = parseModelJson(response.choices[0]?.message?.content, "product idea");
+      } catch (err) {
+        return answerUnreadable(res, err, "product idea");
       }
+      if (typeof suggestion?.name !== "string" || !suggestion.name.trim()) {
+        return answerUnreadable(res, new ModelResponseError("product idea"), "product idea");
+      }
+      await storage.deductCredits(req.user.id, CREDIT_COSTS.sprintIdeaSuggestion);
+      res.json(suggestion);
     } catch (error: any) {
       console.error("Nova suggest error:", error);
       res.status(500).json({ message: "Failed to generate suggestion" });
@@ -994,16 +1011,14 @@ ${metrics.map(m => {
         temperature: 0.7,
         max_completion_tokens: 2000,
       });
-      // Charged only now, with the model's answer in hand. A failed call costs nothing.
-      await storage.deductCredits(req.user.id, CREDIT_COSTS.sprintReport);
-
-      const reportContent = aiResponse.choices[0]?.message?.content || "";
-      let reportData;
+      // Read first, charge once the report is saved. An unreadable answer used
+      // to be charged and saved as a canned "score 50" report; now it's a 502
+      // that costs nothing.
+      let reportData: any;
       try {
-        const cleaned = reportContent.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
-        reportData = JSON.parse(cleaned);
-      } catch {
-        reportData = { overallScore: 50, strengths: ["Completed the sprint"], risks: ["Insufficient data for full analysis"], recommendation: reportContent.substring(0, 300) };
+        reportData = parseModelJson(aiResponse.choices[0]?.message?.content, "sprint report");
+      } catch (err) {
+        return answerUnreadable(res, err, "sprint report");
       }
 
       const report = await storage.saveCompatibilityReport({
@@ -1014,6 +1029,7 @@ ${metrics.map(m => {
         recommendation: reportData.recommendation,
       });
 
+      await storage.deductCredits(req.user.id, CREDIT_COSTS.sprintReport);
       res.json(report);
     } catch (error: any) {
       console.error("Report generation error:", error);

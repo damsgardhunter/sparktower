@@ -24,7 +24,8 @@ export async function calculateUserReputation(userId: string, storage: IStorage)
   const executionScore = calculateExecution(stats);
   const contributionScore = calculateContribution(stats);
   const marketSignalScore = calculateMarketSignal(stats);
-  const strategicThinkingScore = await calculateStrategicThinking(stats, storage, userId);
+  const strategic = await calculateStrategicThinking(stats, storage, userId);
+  const strategicThinkingScore = strategic.score;
 
   const builderIndex = clamp(
     Math.round(
@@ -70,7 +71,8 @@ export async function calculateUserReputation(userId: string, storage: IStorage)
     details,
   });
 
-  return reputation;
+  // Whether Nova scored the strategic thinking — what the route charges for.
+  return { ...reputation, aiEvaluated: strategic.fromModel };
 }
 
 function calculateExecution(stats: Awaited<ReturnType<IStorage["getReputationStats"]>>): number {
@@ -134,8 +136,10 @@ async function calculateStrategicThinking(
   stats: Awaited<ReturnType<IStorage["getReputationStats"]>>,
   storage: IStorage,
   userId: string
-): Promise<number> {
+): Promise<{ score: number; fromModel: boolean }> {
   let score = 0;
+  // True only when the model returned a usable score; otherwise it's an estimate.
+  let fromModel = false;
 
   score += Math.min(stats.contestWins / 3, 1) * 25;
 
@@ -166,9 +170,13 @@ async function calculateStrategicThinking(
         temperature: 0.3,
       });
 
-      const aiScore = parseInt(response.choices[0]?.message?.content?.trim() || "0");
+      const text = response.choices[0]?.message?.content?.trim() ?? "";
+      // A score is a number and nothing else. An empty or wordy answer isn't
+      // one — it used to read as 0 and count as Nova having scored it.
+      const aiScore = /^\d{1,3}$/.test(text) ? parseInt(text, 10) : NaN;
       if (!isNaN(aiScore) && aiScore >= 0 && aiScore <= 100) {
         score += (aiScore / 100) * 50;
+        fromModel = true;
       }
     } catch (err) {
       console.error("AI strategic thinking evaluation failed:", err);
@@ -176,5 +184,5 @@ async function calculateStrategicThinking(
     }
   }
 
-  return clamp(score, 0, 100);
+  return { score: clamp(score, 0, 100), fromModel };
 }

@@ -5,7 +5,7 @@ import { rateLimit } from "../../moderation";
 import fs from "fs";
 import fsPromises from "fs/promises";
 import path from "path";
-import { consumeLocalUpload } from "./local-uploads";
+import { consumeLocalUpload, LOCAL_UPLOAD_MAX_BYTES } from "./local-uploads";
 
 /**
  * Register object storage routes for file uploads.
@@ -83,6 +83,13 @@ export function registerObjectStorageRoutes(app: Express): void {
       // The id names a file on disk; it must be a plain token, never a path.
       const id = String(req.params.id ?? "");
       if (!/^[A-Za-z0-9_-]{1,120}$/.test(id)) return res.status(400).json({ error: "Invalid upload id" });
+      // Refused on its declared size before the id is spent, so an oversized
+      // attempt doesn't cost the real upload its one use.
+      if (Number(req.headers["content-length"] ?? 0) > LOCAL_UPLOAD_MAX_BYTES) {
+        // The body goes unread, so the connection can't be reused.
+        res.set("Connection", "close");
+        return res.status(413).json({ error: "File too large" });
+      }
       // The URL is the credential, as with a real presigned URL: only an id
       // this server issued, within its window, once. Anything else is a guess.
       if (!consumeLocalUpload(id)) return res.status(404).json({ error: "Not found" });
@@ -92,13 +99,25 @@ export function registerObjectStorageRoutes(app: Express): void {
       const filePath = path.join(uploadsDir, id);
 
       const writeStream = fs.createWriteStream(filePath);
+      // Counted as it arrives too: a chunked body declares no length at all.
+      let received = 0;
+      req.on("data", (chunk: Buffer) => {
+        received += chunk.length;
+        if (received > LOCAL_UPLOAD_MAX_BYTES && !res.headersSent) {
+          req.unpipe(writeStream);
+          writeStream.destroy();
+          void fsPromises.rm(filePath, { force: true });
+          res.status(413).json({ error: "File too large" });
+          req.resume(); // Drain the rest, so the client reads the answer rather than a reset.
+        }
+      });
       req.pipe(writeStream);
       writeStream.on("finish", () => {
-        res.json({ success: true, objectPath: `/objects/uploads/${id}` });
+        if (!res.headersSent) res.json({ success: true, objectPath: `/objects/uploads/${id}` });
       });
       writeStream.on("error", (err: any) => {
         console.error("Local upload error:", err);
-        res.status(500).json({ error: "Failed to write file" });
+        if (!res.headersSent) res.status(500).json({ error: "Failed to write file" });
       });
     } catch (error) {
       console.error("Local upload handler error:", error);

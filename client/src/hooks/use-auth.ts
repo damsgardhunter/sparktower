@@ -28,7 +28,7 @@ export function useAuth() {
 
   const logoutMutation = useMutation({
     mutationFn: async () => {
-      await fetch("/api/logout", { credentials: "include" });
+      await fetch("/api/logout", { method: "POST", credentials: "include" });
       window.location.href = "/";
     },
     onSuccess: () => {

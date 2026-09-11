@@ -8,6 +8,7 @@
  * bring the board in line with reality through the same operations engine the
  * health check and Nova chat use.
  */
+import { parseModelJson, answerUnreadable } from "./ai-json";
 import type { Express, Response } from "express";
 import OpenAI from "openai";
 import { storage } from "./storage";
@@ -180,12 +181,9 @@ export async function runCodeAudit(opts: {
 
   let parsed: any;
   try {
-    const raw = completion.choices[0].message.content || "{}";
-    const match = raw.match(/\{[\s\S]*\}/);
-    parsed = JSON.parse(match ? match[0] : raw);
+    parsed = parseModelJson(completion.choices[0].message.content, "audit");
   } catch (err) {
-    console.error("Code audit parse failed:", err);
-    return res.status(502).json({ message: "Nova returned an unreadable audit. Please try again." });
+    return answerUnreadable(res, err, "audit");
   }
 
   // The live database, when the owner has said where it is, read before

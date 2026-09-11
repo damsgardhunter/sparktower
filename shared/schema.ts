@@ -230,6 +230,13 @@ export const donations = pgTable("donations", {
   stripeSessionId: varchar("stripe_session_id").unique(),
   stripePaymentIntentId: varchar("stripe_payment_intent_id"),
   stripeChargeId: varchar("stripe_charge_id"),
+  /**
+   * Cents refunded so far — Stripe's running total for the charge. A partial
+   * refund lowers the project's total by what actually went back, and a
+   * repeated event for the same refund moves nothing.
+   */
+  refundedAmount: integer("refunded_amount").default(0).notNull(),
+  /** Set once the donation is refunded in full. */
   refundedAt: timestamp("refunded_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

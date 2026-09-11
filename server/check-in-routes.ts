@@ -12,6 +12,7 @@
  * `GET /api/check-ins/:id` is unauthenticated, and why visibility is a stored
  * property rather than an assumption.
  */
+import { parseModelJson } from "./ai-json";
 import type { Express } from "express";
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "./db";
@@ -379,10 +380,9 @@ Respond ONLY with valid JSON, no markdown fences:
 
       let parsed: any;
       try {
-        const raw = completion.choices[0].message.content || "{}";
-        parsed = JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] ?? raw);
+        parsed = parseModelJson(completion.choices[0].message.content, "draft");
       } catch {
-        return res.status(502).json({ message: "Nova's draft came back unreadable. Try again." });
+        return res.status(502).json({ message: "Nova's draft came back unreadable. Try again.", code: "model_unreadable" });
       }
 
       const draft = {

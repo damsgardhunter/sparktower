@@ -14,6 +14,8 @@ export PROD_DB="postgresql://…"                   # from Replit → Secrets �
 
 ## 1. Before you deploy
 
+- [ ] **User testing passed** — every *Blocker* in
+  [pre-deploy-user-testing.md](pre-deploy-user-testing.md) is ticked.
 - [ ] **CI is green on `main`** — `server-web`, `e2e`, and `mobile`.
       ```sh
       gh run list --branch main --workflow ci --limit 1

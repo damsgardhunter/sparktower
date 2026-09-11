@@ -1,3 +1,5 @@
+import { paidSubscription } from "@shared/subscriptions";
+import { registerStripeHealthRoutes } from "./stripe-health";
 import { ROADMAP_DEPTHS, DEFAULT_ROADMAP_DEPTH, MAX_ROADMAP_PHASES, roadmapDepth, depthForRevision, type RoadmapDepth } from "@shared/roadmap";
 import type { Express } from "express";
 import { createServer, type Server } from "http";
@@ -47,7 +49,7 @@ import {
 import {
   getUserEntitlements, requireFeature, requireLevel, requireCredits,
   checkPrivateProjectQuota, modelFor, memoryLimitFor, taskLimitFor,
-  coachingDirectiveFor,
+  coachingDirectiveFor, reserveOptionalAi,
 } from "./entitlements";
 import { isValidSubcategory, PROJECT_GOALS } from "@shared/goals";
 import { SURFACE_API_PREFIXES } from "@shared/surfaces";
@@ -62,7 +64,7 @@ import {
 import { draftExpansionSteps, proposeInjections, readExistingProgress, draftArtifact, produceWork } from "./phase-trees-nova";
 import { workKindFor } from "@shared/phase-trees";
 import { resolveTree, treeFor } from "@shared/phase-trees";
-import { parseModelJson } from "./ai-json";
+import { parseModelJson, answerUnreadable, ModelResponseError } from "./ai-json";
 
 async function isProjectMember(userId: string, projectId: string): Promise<boolean> {
   const project = await storage.getProject(projectId);
@@ -351,6 +353,7 @@ export async function registerRoutes(
   registerNovaAssistRoutes(app);
   registerMcpRoutes(app);
   registerDiscoverRoutes(app);
+  registerStripeHealthRoutes(app);
   /*
    * Kill switches, mounted as path prefixes rather than per-route.
    *
@@ -466,7 +469,7 @@ export async function registerRoutes(
     try {
       const userId = (req.user as any).id;
       // Through the one chokepoint, so the AI burst limit covers this too.
-      if (!(await requireCredits(res, userId, 1, "Nova chat"))) return;
+      if (!(await requireCredits(res, userId, CREDIT_COSTS.novaChat, "Nova chat"))) return;
 
       const { message, history = [] } = req.body;
       if (!message) return res.status(400).json({ message: "Message is required" });
@@ -533,22 +536,30 @@ Only include fields you have enough info to fill. Start empty if needed.`;
         messages,
       });
 
-      const rawReply = response.choices[0].message.content || "I'd love to help! Tell me more about your project idea.";
-      
-      // Extract project updates from response
-      const updateMatch = rawReply.match(/<project_update>([\s\S]*?)<\/project_update>/);
-      let projectUpdates = null;
-      let reply = rawReply;
-      
-      if (updateMatch) {
+      /*
+       * The reply is prose by design; the <project_update> block is an optional
+       * extra. So an empty answer is a failed call — 502 model_unreadable,
+       * nothing charged (it used to be swapped for a canned line and charged).
+       * The block always comes out of what the user reads, finished or cut
+       * off, and is read with the shared parser: a malformed one means no
+       * update this turn, not a lost reply.
+       */
+      const rawReply = response.choices[0].message.content?.trim();
+      if (!rawReply) return answerUnreadable(res, new ModelResponseError("reply"), "reply");
+      const block = rawReply.match(/<project_update>([\s\S]*?)<\/project_update>/);
+      const reply = rawReply.replace(/<project_update>[\s\S]*?(<\/project_update>|$)/, "").trim();
+      let projectUpdates: Record<string, unknown> | null = null;
+      if (block) {
         try {
-          projectUpdates = JSON.parse(updateMatch[1]);
-          reply = rawReply.replace(/<project_update>[\s\S]*?<\/project_update>/, "").trim();
-        } catch {}
+          projectUpdates = parseModelJson(block[1], "project update");
+        } catch (err) {
+          console.warn("[ai] chat: unreadable <project_update>, reply kept without it:", String((err as Error)?.message ?? err));
+        }
       }
+      if (!reply && !projectUpdates) return answerUnreadable(res, new ModelResponseError("reply"), "reply");
 
-      await storage.deductCredits(userId, 1);
-      res.json({ reply, projectUpdates });
+      await storage.deductCredits(userId, CREDIT_COSTS.novaChat);
+      res.json({ reply: reply || "Noted — I've updated the project details.", projectUpdates });
     } catch (error: any) {
       // Improved logging for OpenAI client errors to aid diagnosis without
       // exposing secrets to clients. In development, include the error message.
@@ -990,12 +1001,13 @@ Respond ONLY with valid JSON (no markdown, no code fences):
 
       let parsed: any;
       try {
-        const raw = completion.choices[0].message.content || "{}";
+        // No `|| "{}"`: an empty answer is unreadable, not an empty result — it used to parse as {} and be charged.
+        const raw = completion.choices[0].message.content ?? "";
         const match = raw.match(/\{[\s\S]*\}/);
         parsed = parseModelJson(raw);
       } catch (parseErr) {
         console.error("Task sequence parse failed:", parseErr);
-        return res.status(502).json({ message: "Nova returned an unreadable order. Please try again." });
+        return res.status(502).json({ message: "Nova returned an unreadable order. Please try again.", code: "model_unreadable" });
       }
 
       const openIds = new Set(open.map((t: any) => t.id));
@@ -1250,7 +1262,7 @@ If the ask has nothing to do with planning tasks, say so in "summary", return an
 
       let parsed: any;
       try {
-        const raw = completion.choices[0].message.content || "{}";
+        const raw = completion.choices[0].message.content ?? "";
         const match = raw.match(/\{[\s\S]*\}/);
         parsed = parseModelJson(raw);
       } catch (parseErr) {
@@ -1815,11 +1827,8 @@ At most ${maxTasks} tasks, most important first.
 ${PLAIN_LANGUAGE_RULES}`;
 
       const raw = await askInPlainLanguage(modelFor(ent), systemContent, userContent);
-
-      await storage.deductCredits(userId, CREDIT_COSTS.taskGeneration);
-
-      const cleaned = raw.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
-      const content = JSON.parse(cleaned);
+      // Read first, charge once the tasks are on the board: an unreadable answer is a 502 and costs nothing.
+      const content = parseModelJson(raw, "task list");
       // Enforce the tier cap here too — the model can overshoot its instruction.
       const proposed = (content.tasks || content || []).slice(0, maxTasks);
 
@@ -1846,8 +1855,10 @@ ${PLAIN_LANGUAGE_RULES}`;
         });
         created.push(task);
       }
+      await storage.deductCredits(userId, CREDIT_COSTS.taskGeneration);
       res.json(created);
     } catch (error) {
+      if (error instanceof ModelResponseError) return answerUnreadable(res, error, "task list");
       console.error("AI kanban generate error:", error);
       res.status(500).json({ message: "Failed to generate tasks" });
     }
@@ -1889,8 +1900,7 @@ ${PLAIN_LANGUAGE_RULES}`;
       const userId = (req.user as any).id;
       if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       await storage.resetCreditsIfNeeded(userId);
-      const hasCredits = await storage.checkCredits(userId, 1);
-      if (!hasCredits) return res.status(403).json({ message: "Insufficient credits" });
+      if (!(await requireCredits(res, userId, CREDIT_COSTS.personaGeneration, "Nova generating a persona"))) return;
       const project = await storage.getProject(req.params.id);
       if (!project) return res.status(404).json({ message: "Project not found" });
 
@@ -1906,11 +1916,8 @@ ${PLAIN_LANGUAGE_RULES}`;
         temperature: 0.9,
       });
 
-      await storage.deductCredits(userId, 1);
-
-      const rawContent = completion.choices[0].message.content || "{}";
-      const cleaned = rawContent.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
-      const personaData = JSON.parse(cleaned);
+      // Read first, charge once the persona is saved: an unreadable answer is a 502 and costs nothing.
+      const personaData = parseModelJson(completion.choices[0].message.content, "persona");
       const persona = await storage.createPersona({
         projectId: req.params.id,
         name: personaData.name,
@@ -1923,8 +1930,10 @@ ${PLAIN_LANGUAGE_RULES}`;
         avatarDescription: personaData.avatarDescription,
         isAiGenerated: true,
       });
+      await storage.deductCredits(userId, CREDIT_COSTS.personaGeneration);
       res.json(persona);
     } catch (error) {
+      if (error instanceof ModelResponseError) return answerUnreadable(res, error, "persona");
       console.error("Generate persona error:", error);
       res.status(500).json({ message: "Failed to generate persona" });
     }
@@ -1950,8 +1959,7 @@ ${PLAIN_LANGUAGE_RULES}`;
       const userId = (req.user as any).id;
       if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       await storage.resetCreditsIfNeeded(userId);
-      const hasCredits = await storage.checkCredits(userId, 1);
-      if (!hasCredits) return res.status(403).json({ message: "Insufficient credits" });
+      if (!(await requireCredits(res, userId, CREDIT_COSTS.peopleRecommendation, "Nova recommending people"))) return;
       const project = await storage.getProject(req.params.id);
       if (!project) return res.status(404).json({ message: "Project not found" });
 
@@ -1977,19 +1985,18 @@ ${PLAIN_LANGUAGE_RULES}`;
         temperature: 0.7,
       });
 
-      await storage.deductCredits(userId, 1);
-
-      const rawContent = completion.choices[0].message.content || "{}";
-      const cleaned = rawContent.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
-      const content = JSON.parse(cleaned);
+      // Read first, charge once the people are found: an unreadable answer is a 502 and costs nothing.
+      const content = parseModelJson(completion.choices[0].message.content, "recommendations");
       const recs = content.recommendations || [];
       const enriched = await Promise.all(recs.map(async (r: any) => {
         const [user] = await db.select().from(users).where(eq(users.id, r.userId));
         const [profile] = await db.select().from(userProfiles).where(eq(userProfiles.userId, r.userId));
         return { ...r, user, profile };
       }));
+      await storage.deductCredits(userId, CREDIT_COSTS.peopleRecommendation);
       res.json(enriched.filter((r: any) => r.user));
     } catch (error) {
+      if (error instanceof ModelResponseError) return answerUnreadable(res, error, "recommendations");
       console.error("Recommend people error:", error);
       res.status(500).json({ message: "Failed to recommend people" });
     }
@@ -2266,7 +2273,10 @@ RULES:
         temperature: 0.7,
       });
 
-      const rawReply = response.choices[0].message.content || "I'm here to help! Tell me more about your project.";
+      // An empty answer is a failed call: 502, nothing charged. It used to be
+      // swapped for "I'm here to help!…" and charged.
+      const rawReply = response.choices[0].message.content?.trim();
+      if (!rawReply) return answerUnreadable(res, new ModelResponseError("reply"), "reply");
 
       const { actions: parsedActions, cleaned } = extractNovaActions(rawReply);
       const actionsTaken: any[] = [];
@@ -2431,7 +2441,7 @@ RULES:
       }
 
       await storage.addNovaGuideMessage({ projectId, role: "assistant", content: cleanReply, actionsTaken });
-      await storage.deductCredits(userId, 1);
+      await storage.deductCredits(userId, CREDIT_COSTS.novaGuide);
 
       res.json({ reply: cleanReply, actionsTaken });
     } catch (error) {
@@ -2459,11 +2469,7 @@ RULES:
     const userId = (req.user as any).id;
     const { message } = req.body;
 
-    const hasCredits = await storage.checkCredits(userId, 1);
-    if (!hasCredits) {
-      const sub = await storage.getUserSubscription(userId);
-      return res.status(403).json({ message: "Insufficient credits", creditsRemaining: sub.creditsRemaining, tier: sub.tier });
-    }
+    if (!(await requireCredits(res, userId, CREDIT_COSTS.novaChat, "Nova chat"))) return;
     
     const project = await storage.getProject(projectId);
     if (!project) return res.status(404).json({ message: "Project not found" });
@@ -2484,10 +2490,13 @@ RULES:
       stream: false, // Session plan says streaming SSE but storage might not support it easily. Let's start with simple.
     });
 
-    const aiContent = response.choices[0].message.content || "I'm sorry, I couldn't generate a response.";
+    // An empty answer is a failed call, not a reply: 502, nothing stored, nothing
+    // charged. It used to be stored as "I'm sorry, I couldn't…" and charged.
+    const aiContent = response.choices[0].message.content?.trim();
+    if (!aiContent) return answerUnreadable(res, new ModelResponseError("reply"), "reply");
     const aiMessage = await storage.addProjectChatMessage(projectId, "assistant", aiContent);
     
-    await storage.deductCredits(userId, 1);
+    await storage.deductCredits(userId, CREDIT_COSTS.novaChat);
     res.json(aiMessage);
   });
 
@@ -3335,7 +3344,9 @@ RULES:
         return res.json([]);
       }
 
-      const hasCredits = wantsAiReasons && (await storage.checkCredits(userId, CREDIT_COSTS.peopleRecommendation));
+      // Optional: reasons need the credits and room under the AI burst limit.
+      // Without either, the matches still come back — just without reasons.
+      const hasCredits = wantsAiReasons && (await reserveOptionalAi(userId, CREDIT_COSTS.matchExplanation));
       let matchReasons: Record<string, string[]> = {};
 
       if (hasCredits && topMatches.length > 0) {
@@ -3363,7 +3374,7 @@ RULES:
           const rawContent = (response.choices[0].message.content || '{"reasons":{}}').replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
           const parsed = JSON.parse(rawContent);
           matchReasons = parsed.reasons || {};
-          await storage.deductCredits(userId, 1);
+          await storage.deductCredits(userId, CREDIT_COSTS.matchExplanation);
         } catch (e) {
           console.error("AI reason generation failed, using defaults:", e);
         }
@@ -3413,12 +3424,14 @@ RULES:
   app.post("/api/reputation/calculate", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.id;
-      const hasCredits = await storage.checkCredits(userId, 1);
-      if (!hasCredits) {
-        return res.status(403).json({ message: "Insufficient credits for AI evaluation" });
-      }
-      await storage.deductCredits(userId, 1);
+      // Checked first, charged once the calculation has succeeded. It used to be
+      // charged before, so a failed calculation still cost a credit. The
+      // strategic-thinking part is Nova's (server/reputation.ts).
+      if (!(await requireCredits(res, userId, CREDIT_COSTS.reputationEvaluation, "a reputation evaluation"))) return;
       const reputation = await calculateUserReputation(userId, storage);
+      // Only when Nova actually scored it. With no projects to read, or a failed
+      // call, that part is an estimate — and an estimate is free.
+      if (reputation.aiEvaluated) await storage.deductCredits(userId, CREDIT_COSTS.reputationEvaluation);
       res.json(reputation);
     } catch (error: any) {
       console.error("Reputation calculation error:", error);
@@ -3492,11 +3505,7 @@ RULES:
   app.post("/api/projects/:id/generate-video", isAuthenticated, async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
-      const hasCredits = await storage.checkCredits(userId, 5);
-      if (!hasCredits) {
-        const sub = await storage.getUserSubscription(userId);
-        return res.status(403).json({ message: "Insufficient credits. Video generation costs 5 credits.", creditsRemaining: sub.creditsRemaining, tier: sub.tier });
-      }
+      if (!(await requireCredits(res, userId, CREDIT_COSTS.videoGeneration, "generating a video"))) return;
 
       const project = await storage.getProject(req.params.id);
       if (!project) return res.status(404).json({ message: "Project not found" });
@@ -3584,6 +3593,8 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences),
       });
 
       let scenes: { prompt: string; caption: string; imageUrl: string }[] = [];
+      // Whether the scenes are Nova's, or the generic fallback. Only Nova's are billed.
+      let scenesFromModel = false;
       try {
         const rawContent = scenesResponse.choices[0].message.content || "[]";
         const jsonMatch = rawContent.match(/\[[\s\S]*\]/);
@@ -3603,6 +3614,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences),
           };
         });
         if (scenes.length === 0) throw new Error("Empty scenes array");
+        scenesFromModel = true;
       } catch (parseErr) {
         console.error("Error parsing scenes:", parseErr);
         scenes = generateFallbackScenes(style);
@@ -3714,10 +3726,14 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences),
         imageModel: imageModelUsed,
       });
 
-      await storage.deductCredits(userId, CREDIT_COSTS.videoGeneration);
+      // Charged only when the scenes are Nova's. When they came back unreadable
+      // the storyboard falls back to generic scenes — shown, not billed. (Scene
+      // images falling back to illustrations is by design and still billed.)
+      if (scenesFromModel) await storage.deductCredits(userId, CREDIT_COSTS.videoGeneration);
 
       res.json({
         storyboardId: saved.id,
+        creditsCharged: scenesFromModel ? CREDIT_COSTS.videoGeneration : 0,
         storyboard,
         // Scene images are served from an owner-checked route, never inlined
         // as data URIs and never added to the project's media gallery.
@@ -3984,7 +4000,7 @@ ${PLAIN_LANGUAGE_RULES}`;
       { role: "user", content: user },
     ];
     const ask = async (msgs: any[]) =>
-      (await openai.chat.completions.create({ model, messages: msgs })).choices[0].message.content || "{}";
+      (await openai.chat.completions.create({ model, messages: msgs })).choices[0].message.content ?? "";
 
     const raw = await ask(messages);
     const jargon = findJargon(raw);
@@ -4798,12 +4814,13 @@ Produce 3-6 findings.`,
 
       let parsed: any;
       try {
-        const raw = completion.choices[0].message.content || "{}";
+        // No `|| "{}"`: an empty answer is unreadable, not an empty result — it used to parse as {} and be charged.
+        const raw = completion.choices[0].message.content ?? "";
         const match = raw.match(/\{[\s\S]*\}/);
         parsed = parseModelJson(raw);
       } catch (parseErr) {
         console.error("Health check parse failed:", parseErr);
-        return res.status(502).json({ message: "Nova returned an unreadable assessment. Please try again." });
+        return res.status(502).json({ message: "Nova returned an unreadable assessment. Please try again.", code: "model_unreadable" });
       }
 
       const score = Math.max(0, Math.min(100, Number(parsed.score) || 0));
@@ -4892,7 +4909,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
 
       let parsed: any;
       try {
-        const raw = completion.choices[0].message.content || "{}";
+        const raw = completion.choices[0].message.content ?? "";
         const match = raw.match(/\{[\s\S]*\}/);
         parsed = parseModelJson(raw);
       } catch (parseErr) {
@@ -5144,8 +5161,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     try {
       const userId = (req.user as any).id;
       if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
-      const hasCredits = await storage.checkCredits(userId, 1);
-      if (!hasCredits) return res.status(403).json({ message: "Insufficient credits" });
+      if (!(await requireCredits(res, userId, CREDIT_COSTS.progressSummary, "a progress summary"))) return;
 
       const project = await storage.getProject(req.params.id);
       const tasks = await storage.getProjectKanbanTasks(req.params.id);
@@ -5173,8 +5189,11 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         temperature: 0.7,
       });
 
-      await storage.deductCredits(userId, 1);
-      res.json({ summary: completion.choices[0].message.content });
+      const summary = completion.choices[0].message.content?.trim();
+      // An empty summary is a failed call: 502, nothing charged.
+      if (!summary) return answerUnreadable(res, new ModelResponseError("summary"), "summary");
+      await storage.deductCredits(userId, CREDIT_COSTS.progressSummary);
+      res.json({ summary });
     } catch (error) {
       console.error("AI summarize error:", error);
       res.status(500).json({ message: "Failed to generate summary" });
@@ -5185,8 +5204,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     try {
       const userId = (req.user as any).id;
       if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
-      const hasCredits = await storage.checkCredits(userId, 1);
-      if (!hasCredits) return res.status(403).json({ message: "Insufficient credits" });
+      if (!(await requireCredits(res, userId, CREDIT_COSTS.gapDetection, "gap detection"))) return;
 
       const project = await storage.getProject(req.params.id);
       const tasks = await storage.getProjectKanbanTasks(req.params.id);
@@ -5206,12 +5224,13 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         temperature: 0.7,
       });
 
-      await storage.deductCredits(userId, 1);
-      const rawContent = completion.choices[0].message.content || "{}";
-      const cleaned = rawContent.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
-      const parsed = JSON.parse(cleaned);
+      // Read first, charge after: an unreadable answer is a 502 and costs nothing.
+      // (It used to be charged before the parse — a 500 that still cost a credit.)
+      const parsed = parseModelJson(completion.choices[0].message.content, "gap check");
+      await storage.deductCredits(userId, CREDIT_COSTS.gapDetection);
       res.json(parsed);
     } catch (error) {
+      if (error instanceof ModelResponseError) return answerUnreadable(res, error, "gap check");
       console.error("AI detect gaps error:", error);
       res.status(500).json({ message: "Failed to detect gaps" });
     }
@@ -5816,18 +5835,19 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       }
 
       const stripe = await getUncachableStripeClient();
+      // Every status, then the paying one: a trial pays for its tier here as it
+      // does in the webhook. Asking only for "active" dropped trials to free.
       const subscriptions = await stripe.subscriptions.list({
         customer: user.stripeCustomerId,
-        status: "active",
-        limit: 1,
+        status: "all",
+        limit: 10,
       });
 
-      if (subscriptions.data.length === 0) {
+      const sub = paidSubscription(subscriptions.data);
+      if (!sub) {
         await storage.updateUserStripeInfo(userId, { subscriptionTier: "free", stripeSubscriptionId: undefined });
         return res.json({ tier: "free" });
       }
-
-      const sub = subscriptions.data[0];
       const priceId = sub.items.data[0]?.price?.id;
       if (priceId) {
         const price = await stripe.prices.retrieve(priceId);
@@ -6261,172 +6281,6 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       if (!game) return res.status(404).json({ message: "Game not found" });
       res.json(game);
     } catch (error) { res.status(500).json({ message: "Failed to get game" }); }
-  });
-
-  app.post("/api/seed", async (req, res) => {
-    try {
-      // 1. Create some users if they don't exist
-      const demoUsers = [
-        { id: "user1", email: "alice@example.com", firstName: "Alice", lastName: "Smith" },
-        { id: "user2", email: "bob@example.com", firstName: "Bob", lastName: "Jones" },
-        { id: "user3", email: "charlie@example.com", firstName: "Charlie", lastName: "Brown" },
-      ];
-
-      for (const u of demoUsers) {
-        const existing = await storage.getUser(u.id);
-        if (!existing) {
-          await db.insert(users).values(u).onConflictDoNothing();
-          
-          await storage.upsertUserProfile({
-            userId: u.id,
-            headline: `${u.firstName}'s Headline`,
-            bio: `This is ${u.firstName}'s bio.`,
-            skills: ["React", "TypeScript", "Node.js"],
-            interests: ["Web Development", "AI"],
-            experienceLevel: "intermediate",
-            location: "Remote",
-            isOnboarded: true,
-          });
-        }
-      }
-
-      // 2. Create some projects
-      const projectsData = [
-        {
-          ownerId: "user1",
-          title: "SparkTower AI",
-          description: "An AI-powered platform for collaboration.",
-          category: "Software",
-          goal: "ship_mvp" as const,
-          subcategory: "app",
-          status: "active" as const,
-          rolesNeeded: ["Frontend Developer", "Backend Developer", "ML Engineer"],
-          teamSize: 3,
-          estimatedWeeks: 12,
-          mediaUrls: [],
-        },
-        {
-          ownerId: "user2",
-          title: "Green Energy Tracker",
-          description: "Track your energy consumption and reduce your carbon footprint.",
-          category: "Sustainability",
-          goal: "ship_mvp" as const,
-          subcategory: "app",
-          status: "planning" as const,
-          rolesNeeded: ["Data Analyst", "Backend Developer"],
-          teamSize: 2,
-          estimatedWeeks: 8,
-        },
-        {
-          ownerId: "user3",
-          title: "Crypto Wallet",
-          description: "A secure and easy-to-use crypto wallet.",
-          category: "Fintech",
-          goal: "ship_mvp" as const,
-          subcategory: "app",
-          status: "completed" as const,
-          rolesNeeded: ["Mobile Developer", "Full Stack Developer", "Security Engineer"],
-          teamSize: 4,
-          estimatedWeeks: 16,
-        },
-        {
-          ownerId: "user1",
-          title: "Smart Home Assistant",
-          description: "Control your home with your voice.",
-          category: "IoT",
-          goal: "ship_mvp" as const,
-          subcategory: "app",
-          status: "active" as const,
-          rolesNeeded: ["DevOps Engineer", "Full Stack Developer"],
-          teamSize: 1,
-          estimatedWeeks: 6,
-        }
-      ];
-
-      for (const p of projectsData) {
-        await storage.createProject(p);
-      }
-
-      // 3. Create badges
-      const badgesData = [
-        { name: "Early Adopter", description: "Joined SparkTower in its early days", icon: "rocket", rarity: "rare" as const, category: "community" },
-        { name: "First Project", description: "Created your first project on SparkTower", icon: "star", rarity: "common" as const, category: "milestone" },
-        { name: "Hackathon Winner", description: "Won a SparkTower hackathon", icon: "trophy", rarity: "legendary" as const, category: "competition" },
-        { name: "Team Player", description: "Joined 3 or more projects", icon: "users", rarity: "common" as const, category: "collaboration" },
-        { name: "AI Explorer", description: "Generated an AI storyboard", icon: "sparkles", rarity: "rare" as const, category: "innovation" },
-        { name: "Top Contributor", description: "Reached the top 10 on the leaderboard", icon: "award", rarity: "epic" as const, category: "competition" },
-      ];
-      for (const b of badgesData) {
-        await storage.createBadge(b);
-      }
-
-      // 4. Create contests
-      const badges = await storage.getBadges();
-      const hackathonBadge = badges.find(b => b.name === "Hackathon Winner");
-      const now = new Date();
-      const contestsData = [
-        {
-          title: "Build a Climate Dashboard",
-          description: "Create an interactive dashboard that visualizes climate data. Use any tech stack you prefer. Projects will be judged on design, functionality, and impact.",
-          category: "Sustainability",
-          difficulty: "intermediate" as const,
-          status: "active" as const,
-          prize: "$500 + Featured on SparkTower",
-          badgeId: hackathonBadge?.id || null,
-          startDate: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000),
-          endDate: new Date(now.getTime() + 21 * 24 * 60 * 60 * 1000),
-          maxParticipants: 50,
-          promoted: true,
-        },
-        {
-          title: "AI-Powered Portfolio Generator",
-          description: "Build a tool that uses AI to generate personalized developer portfolios. Bonus points for creative layouts and customization options.",
-          category: "AI/ML",
-          difficulty: "advanced" as const,
-          status: "active" as const,
-          prize: "$300 + SparkTower Pro Membership",
-          badgeId: null,
-          startDate: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000),
-          endDate: new Date(now.getTime() + 25 * 24 * 60 * 60 * 1000),
-          maxParticipants: 30,
-          promoted: false,
-        },
-        {
-          title: "Beginner Hackathon: Todo App Showdown",
-          description: "New to coding? Build the best todo app you can! Focus on user experience, clean code, and creative features. All skill levels welcome.",
-          category: "Web App",
-          difficulty: "beginner" as const,
-          status: "upcoming" as const,
-          prize: "SparkTower Swag Pack",
-          badgeId: null,
-          startDate: new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000),
-          endDate: new Date(now.getTime() + 28 * 24 * 60 * 60 * 1000),
-          maxParticipants: 100,
-          promoted: true,
-        },
-        {
-          title: "Open Source Contribution Sprint",
-          description: "Contribute to open source projects and earn points. The more impactful your contributions, the higher you score. Document your PRs and contributions.",
-          category: "DevOps",
-          difficulty: "intermediate" as const,
-          status: "completed" as const,
-          prize: "$200 + Badge",
-          badgeId: null,
-          startDate: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000),
-          endDate: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000),
-          maxParticipants: null,
-          promoted: false,
-        },
-      ];
-      for (const c of contestsData) {
-        await storage.createContest(c);
-      }
-
-      res.json({ message: "Seed data created successfully" });
-    } catch (error) {
-      console.error("Error seeding data:", error);
-      res.status(500).json({ message: "Failed to seed data", error: error instanceof Error ? error.message : String(error) });
-    }
   });
 
   return httpServer;

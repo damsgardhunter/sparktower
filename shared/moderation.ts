@@ -101,6 +101,21 @@ export const RATE_LIMITS = {
     max: 600, windowMinutes: 10,
     message: "Too many events from this address. Try again shortly.",
   },
+  /**
+   * Reviewer actions: taking content down, deciding reports, suspending. A
+   * person working the queue quickly stays well under it; a stolen reviewer
+   * session can't sweep the site in one go. (Platform admins are exempt, as
+   * from every limit.)
+   */
+  review: {
+    max: 120, windowMinutes: 10,
+    message: "That's a lot of moderation in a few minutes. Give it a moment.",
+  },
+  /** Backing decisions and releases — the routes that move money. Rare by nature, so tight. */
+  payout: {
+    max: 20, windowMinutes: 60,
+    message: "That's a lot of backing decisions in an hour. Try again later.",
+  },
 } as const satisfies Record<string, RateLimit>;
 
 export type RateLimitAction = keyof typeof RATE_LIMITS;

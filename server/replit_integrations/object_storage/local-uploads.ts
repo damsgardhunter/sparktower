@@ -5,6 +5,9 @@
  * issued is a stranger guessing, and is treated as such.
  */
 const issued = new Map<string, number>();
+
+/** The same ceiling the storage service puts on a file it reads back. */
+export const LOCAL_UPLOAD_MAX_BYTES = 15 * 1024 * 1024;
 const TTL_MS = 10 * 60_000;
 
 export function issueLocalUpload(id: string): void {

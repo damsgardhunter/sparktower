@@ -41,7 +41,6 @@ const FLOOR_ONLY_ALLOWED: Record<string, string> = {
   "DELETE /api/feed/:id": "author-only delete",
   "DELETE /api/feed/comments/:commentId": "author-only delete",
   "DELETE /api/project-comments/:commentId": "author-only delete",
-  "PATCH /api/admin/reports/:id": "reviewer-only",
   "PUT /internal-local-upload/:id": "development only; the issued id is the credential",
   "POST /api/projects/:id/nova-guide/complete-onboarding": "flag flip",
   "DELETE /api/projects/:id/waitlist/:entryId": "member-only delete",
@@ -95,6 +94,74 @@ describe("rate limits on the abuse-prone surface", () => {
       expect(row, `${l} is in the allowlist but not in the code — remove the line`).toBeTruthy();
       expect(row!.rateLimited || row!.credits, `${l} now has its own limit — remove it from the allowlist`).toBe(false);
     }
+  });
+});
+
+describe("authentication on the write surface", () => {
+  it("every MCP route is behind the token guard mounted on its prefix", () => {
+    const mcp = live.filter((r) => r.path.startsWith("/api/mcp/"));
+    expect(mcp.length).toBeGreaterThan(10);
+    const open = mcp.filter((r) => !r.auth).map(label);
+    expect(open, `MCP routes the scan reads as unauthenticated: ${open.join(", ")}`).toEqual([]);
+    expect(mcp.every((r) => r.guards.some((g) => g.startsWith("requireMcpToken")))).toBe(true);
+  });
+
+  it("reviewer actions and the money routes have limits of their own, not just the floor", () => {
+    for (const p of [
+      "POST /api/admin/content/:type/:id/hide", "POST /api/admin/content/:type/:id/restore",
+      "POST /api/admin/reports/:id/act", "PATCH /api/admin/reports/:id", "POST /api/admin/users/:id/suspend",
+      "POST /api/admin/backing/:projectId/decision", "POST /api/admin/backing/:projectId/release",
+    ]) {
+      const row = live.find((r) => label(r) === p);
+      expect(row, p).toBeTruthy();
+      expect(row!.rateLimited, `${p} relies on the floor alone`).toBe(true);
+    }
+  });
+
+  it("the coverage knows the write floor, so floor-limited writes don't read as unlimited", () => {
+    expect(cov.writeFloor.mounted).toBe(true);
+    expect(cov.writeFloor.exempt).toEqual(["/api/stripe/webhook"]);
+    expect(live.find((r) => label(r) === "POST /api/logout")!.floor).toBe(true);
+    expect(live.find((r) => label(r) === "POST /api/stripe/webhook")!.floor).toBe(false);
+    // Under /api, the only write with no limit at all is the signed webhook.
+    expect(cov.unlimitedWrites.filter((l) => l.includes(" /api/"))).toEqual(["POST /api/stripe/webhook"]);
+  });
+
+  it("the only inbound webhook is Stripe's (its signature is checked in stripe-webhook.test.ts)", () => {
+    expect(live.filter((r) => /webhook/i.test(r.path)).map(label)).toEqual(["POST /api/stripe/webhook"]);
+  });
+
+  it("the demo-data seed route doesn't exist", () => {
+    expect(cov.rows.find((r) => r.path === "/api/seed")).toBeUndefined();
+  });
+
+  /*
+   * Every write reachable without signing in, each with the reason it has to
+   * be. A new one — or a seed route coming back — fails here until someone
+   * writes down why it's safe; a line whose route gained auth or went away
+   * fails too, so the list can't rot.
+   */
+  const PUBLIC_WRITES: Record<string, string> = {
+    "POST /api/auth/login": "signing in; limited per address",
+    "POST /api/auth/register": "signing up; limited per address",
+    "POST /api/auth/mobile/login": "signing in; limited per address",
+    "POST /api/auth/mobile/register": "signing up; limited per address",
+    "POST /api/auth/mobile/google": "signing in with a Google ID token the server verifies",
+    "POST /api/auth/mobile/refresh": "the refresh token is the credential; single-use, hashed, limited",
+    "POST /api/auth/mobile/logout": "revokes the refresh token it's given; nothing else",
+    "POST /api/logout": "must work with an expired session; refuses cross-site requests",
+    "POST /api/stripe/webhook": "Stripe's signature is the credential",
+    "POST /api/track": "anonymous analytics beacons; limited per address",
+    "POST /api/loop-events": "anonymous loop beacons; limited per address",
+    "PUT /internal-local-upload/:id": "development only; the issued, single-use id is the credential, size-capped",
+  };
+
+  it("every write without sign-in is on a written list, with its reason", () => {
+    const open = live.filter((r) => r.write && !r.auth).map(label);
+    const unexplained = open.filter((l) => !(l in PUBLIC_WRITES));
+    expect(unexplained, `writes reachable without sign-in — guard them, or say why in PUBLIC_WRITES:\n  ${unexplained.join("\n  ")}`).toEqual([]);
+    const stale = Object.keys(PUBLIC_WRITES).filter((l) => !open.includes(l));
+    expect(stale, `in PUBLIC_WRITES but now guarded or gone — remove the line:\n  ${stale.join("\n  ")}`).toEqual([]);
   });
 });
 
