@@ -1,18 +1,31 @@
+import { ReturnBanner } from "@/components/return-banner";
+import { useExploreUpdates } from "@/hooks/use-explore-updates";
+import { useConnectionStates } from "@/components/discover-actions";
 import { useQuery } from "@tanstack/react-query";
+import { useSearch } from "wouter";
 import { UserCard } from "@/components/user-card";
 import { Input } from "@/components/ui/input";
 import { Loader2, Search, SlidersHorizontal } from "lucide-react";
 import type { UserProfile, User } from "@shared/schema";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { openDiscover } from "@/lib/explore";
 import { Button } from "@/components/ui/button";
 
 type UserWithProfile = User & { profile: UserProfile };
 
 export default function Discover() {
-  const [search, setSearch] = useState("");
+  // `?q=` — where "More like this" sends people, searched by a skill.
+  const query = new URLSearchParams(useSearch()).get("q");
+  const [search, setSearch] = useState(query ?? "");
+  useEffect(() => { if (query !== null) setSearch(query); }, [query]);
   const { data: users, isLoading } = useQuery<UserWithProfile[]>({
     queryKey: [`/api/users/search?q=${encodeURIComponent(search)}`],
   });
+
+  // The Explore loop starts here — see lib/explore.ts.
+  useEffect(() => { openDiscover("discover"); }, []);
+  const { data: connections } = useConnectionStates((users ?? []).map((u) => u.id));
+  const { updates, byKey } = useExploreUpdates();
 
   return (
     <div className="p-6 h-full overflow-y-auto">
@@ -23,6 +36,8 @@ export default function Discover() {
             Find entrepreneurs and freelancers to join your next project.
           </p>
         </div>
+
+        <div className="mb-6"><ReturnBanner updates={updates} /></div>
 
         <div className="flex flex-col md:flex-row gap-4 mb-8">
           <div className="relative flex-1">
@@ -47,11 +62,14 @@ export default function Discover() {
           </div>
         ) : users && users.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {users.map((user) => (
+            {users.map((user, i) => (
               <UserCard
                 key={user.id}
                 profile={user.profile}
                 userName={user.firstName || user.email || "Anonymous"}
+                explore={{ source: "discover", rankPosition: i + 1 }}
+                connection={connections?.[user.id]}
+                update={byKey.get(`builder:${user.id}`)}
               />
             ))}
           </div>

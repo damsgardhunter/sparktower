@@ -8,6 +8,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useEntitlements } from "@/hooks/use-entitlements";
 import { useRequestNovaHandoff } from "@/components/nova-handoff";
 import { PathPanel } from "@/components/path-panel";
+import { ConnectEditorBar } from "@/components/editor-access";
 import { novaHandoffTab, type NovaHandoff } from "@shared/nova-handoff";
 import {
   Loader2, Sparkles, ArrowRight, CheckCircle2, Circle, AlertTriangle,
@@ -130,6 +131,14 @@ export function NovaDashboard({
           )}
         </div>
       </div>
+
+      {/*
+       * Connecting an editor sits above the path deliberately. The path is
+       * what you do next; this is where you do it, and someone who never finds
+       * it works the whole thing in a browser without knowing there was
+       * another way.
+       */}
+      <ConnectEditorBar projectId={projectId} />
 
       {/* The path: pace, next action, and the map one click away. */}
       <PathPanel projectId={projectId} onNavigate={onNavigate} />

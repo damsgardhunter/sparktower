@@ -1,3 +1,5 @@
+import { trackExplore } from "@/lib/explore";
+import { EXPLORE_EVENTS } from "@shared/explore-events";
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -188,6 +190,7 @@ function ChatPanel({
       return res.json();
     },
     onSuccess: () => {
+      if (userId) trackExplore(EXPLORE_EVENTS.messageSent, { matchType: "builder", targetId: userId, source: "messages" });
       queryClient.invalidateQueries({ queryKey: ["/api/messages", userId] });
       queryClient.invalidateQueries({ queryKey: ["/api/messages/conversations"] });
       queryClient.invalidateQueries({ queryKey: ["/api/messages/unread-count"] });
@@ -359,7 +362,14 @@ function ChatPanel({
 
 export default function MessagesPage() {
   const { user } = useAuth();
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  // `?with=<userId>` opens straight to that conversation — where "Sent" in a
+  // toast links to. `?user=` too: the profile page's Message button has always
+  // linked that way, and until now it opened an empty inbox.
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    const params = new URLSearchParams(window.location.search);
+    return params.get("with") ?? params.get("user");
+  });
   const [searchQuery, setSearchQuery] = useState("");
 
   const { data: conversations = [], isLoading } = useQuery<Conversation[]>({

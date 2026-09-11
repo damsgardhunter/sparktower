@@ -11,18 +11,18 @@
  * nothing is written until they say yes — the same contract as the task
  * planner and the health-check fixes.
  */
-import type { Express } from "express";
+import type { Express, Response } from "express";
 import OpenAI from "openai";
 import { storage } from "./storage";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
-import { requireCredits, requireFeature, modelFor, coachingDirectiveFor } from "./entitlements";
+import { requireCredits, requireFeature, modelFor, coachingDirectiveFor, type UserEntitlements } from "./entitlements";
 import { CREDIT_COSTS } from "@shared/plans";
 import { formatProjectBriefForPrompt } from "@shared/project-sections";
 import {
   applyProjectOperations, buildOperableProjectState, renderLatestAudit,
   stripIdFragments, collectProjectIds, OPERATION_SCHEMA_INSTRUCTIONS,
 } from "./project-operations";
-import { NOVA_SURFACES, type NovaSurfaceId } from "@shared/nova-surfaces";
+import { NOVA_SURFACES, type NovaSurfaceId, type NovaSurfaceConfig } from "@shared/nova-surfaces";
 import { parseModelJson } from "./ai-json";
 import { rateLimit } from "./moderation";
 
@@ -87,49 +87,72 @@ Where instrumentation is missing, create the tasks to add it. Where the brief's 
 Every task gets a whole-hour estimate a real person could hit, ordered so prerequisites come first. Between 5 and 10 tasks per milestone — more than that is a backlog, not a plan.`,
 };
 
-export function registerNovaAssistRoutes(app: Express) {
-  /**
-   * Nova proposes changes for one surface. Writes nothing.
-   */
-  app.post("/api/projects/:id/nova/suggest", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = (req.user as any).id;
-      const projectId = req.params.id;
-      if (!(await isMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
+export interface NovaAsk { surface?: string; ask?: string; entityId?: string }
 
-      const project = await storage.getProject(projectId);
-      if (!project) return res.status(404).json({ message: "Project not found" });
+/**
+ * Checks an ask before anything is spent on it. Answers on `res` and returns
+ * null when it's no good, so a caller reads as `if (!config) return`.
+ *
+ * Separate from the call below so both callers can validate first and charge
+ * second — an unknown surface or an empty ask shouldn't cost a credit or a
+ * slot in the per-minute budget.
+ */
+export function validateNovaAsk(input: NovaAsk, res: Response): NovaSurfaceConfig | null {
+  const config = NOVA_SURFACES[input.surface as NovaSurfaceId];
+  if (!config) {
+    res.status(400).json({ message: `Unknown surface. Expected one of: ${Object.keys(NOVA_SURFACES).join(", ")}.` });
+    return null;
+  }
+  if (!input.ask?.trim()) {
+    res.status(400).json({ message: "Tell Nova what you want help with." });
+    return null;
+  }
+  if (input.ask.length > 2000) {
+    res.status(400).json({ message: "That's a lot to ask at once — trim it down." });
+    return null;
+  }
+  return config;
+}
 
-      const ent = await requireFeature(res, userId, "aiMilestones", "Nova's assistant");
-      if (!ent) return;
+/**
+ * Nova's proposal for one surface. Writes nothing — the operations come back
+ * for a person to look at, and `applyProjectOperations` is what commits them.
+ *
+ * A function rather than a route body because the editor bridge asks the same
+ * question over its own transport. The two callers differ in how they
+ * authenticate and in nothing else, and a second copy of this prompt would
+ * start telling a different Nova to the one in the app within a release.
+ *
+ * The entitlement and the credit check are the caller's, deliberately: a
+ * guard that only appears three files deep is one the route coverage can't
+ * see, and "which routes cost money and what stops them" is a question that
+ * has to be answerable from the route table.
+ */
+export async function novaSuggest(
+  projectId: string,
+  userId: string,
+  input: NovaAsk,
+  ent: UserEntitlements,
+  config: NovaSurfaceConfig,
+  res: Response,
+): Promise<Response | void> {
+  const project = await storage.getProject(projectId);
+  if (!project) return res.status(404).json({ message: "Project not found" });
 
-      const { surface, ask, entityId } = req.body as {
-        surface?: string; ask?: string; entityId?: string;
-      };
+  const { surface, ask, entityId } = input;
 
-      const config = NOVA_SURFACES[surface as NovaSurfaceId];
-      if (!config) {
-        return res.status(400).json({
-          message: `Unknown surface. Expected one of: ${Object.keys(NOVA_SURFACES).join(", ")}.`,
-        });
-      }
-      if (!ask?.trim()) return res.status(400).json({ message: "Tell Nova what you want help with." });
-      if (ask.length > 2000) return res.status(400).json({ message: "That's a lot to ask at once — trim it down." });
+  const extra = await buildSurfaceContext(projectId, surface as NovaSurfaceId);
+  const [state, auditText] = await Promise.all([
+    buildOperableProjectState(projectId),
+    renderLatestAudit(projectId),
+  ]);
 
-      if (!(await requireCredits(res, userId, CREDIT_COSTS.novaAssist, `Nova's help with ${config.label.toLowerCase()}`))) return;
-
-      const extra = await buildSurfaceContext(projectId, surface as NovaSurfaceId);
-      const [state, auditText] = await Promise.all([
-        buildOperableProjectState(projectId),
-        renderLatestAudit(projectId),
-      ]);
-
-      const completion = await getOpenAI().chat.completions.create({
-        model: modelFor(ent),
-        messages: [
-          {
-            role: "system",
-            content: `You are Nova, working alongside a builder inside SparkTower. ${coachingDirectiveFor(ent)}
+  const completion = await getOpenAI().chat.completions.create({
+    model: modelFor(ent),
+    messages: [
+      {
+        role: "system",
+        content: `You are Nova, working alongside a builder inside SparkTower. ${coachingDirectiveFor(ent)}
 
 ${SURFACE_GUIDANCE[surface as NovaSurfaceId]}
 
@@ -147,51 +170,71 @@ Respond ONLY with valid JSON (no markdown, no code fences):
 {
   "summary": "2-4 sentences: what you're proposing and why it's the right next move here.",
   "items": [
-    { "label": "one line naming the change", "detail": "one or two sentences of reasoning" }
+{ "label": "one line naming the change", "detail": "one or two sentences of reasoning" }
   ],
   "operations": [ ... ]
 }
 "items" must describe the same changes as "operations", in the same order, so the builder can read the plan before applying it.`,
-          },
-          {
-            role: "user",
-            content: [
-              `WHAT THE BUILDER ASKED FOR\n${ask.trim()}`,
-              `SURFACE: ${config.label}`,
-              entityId ? `THEY HAVE THIS SELECTED: ${entityId}` : null,
-              `PROJECT BRIEF\n${formatProjectBriefForPrompt(project)}`,
-              extra,
-              auditText,
-              `CURRENT STATE (use these ids for operations)\n${state}`,
-            ].filter(Boolean).join("\n\n"),
-          },
-        ],
-      });
+      },
+      {
+        role: "user",
+        content: [
+          `WHAT THE BUILDER ASKED FOR\n${(ask ?? "").trim()}`,
+          `SURFACE: ${config.label}`,
+          entityId ? `THEY HAVE THIS SELECTED: ${entityId}` : null,
+          `PROJECT BRIEF\n${formatProjectBriefForPrompt(project)}`,
+          extra,
+          auditText,
+          `CURRENT STATE (use these ids for operations)\n${state}`,
+        ].filter(Boolean).join("\n\n"),
+      },
+    ],
+  });
 
-      let parsed: any;
-      try {
-        const raw = completion.choices[0].message.content || "{}";
-        const match = raw.match(/\{[\s\S]*\}/);
-        parsed = parseModelJson(raw);
-      } catch (err) {
-        console.error(`Nova assist parse failed (${surface}):`, err);
-        return res.status(502).json({ message: "Nova returned an unreadable answer. Please try again." });
-      }
+  let parsed: any;
+  try {
+    const raw = completion.choices[0].message.content || "{}";
+    parsed = parseModelJson(raw);
+  } catch (err) {
+    console.error("Nova assist parse failed (%s):", String(surface).replace(/[\r\n]+/g, " ").slice(0, 60), err);
+    return res.status(502).json({ message: "Nova returned an unreadable answer. Please try again." });
+  }
 
-      await storage.deductCredits(userId, CREDIT_COSTS.novaAssist);
+  await storage.deductCredits(userId, CREDIT_COSTS.novaAssist);
 
-      // Ids belong in operations, never in the text the builder reads.
-      const knownIds = await collectProjectIds(projectId).catch(() => []);
-      res.json({
-        surface,
-        summary: stripIdFragments(str(parsed.summary, 1500), knownIds),
-        items: (Array.isArray(parsed.items) ? parsed.items : []).slice(0, 25).map((i: any) => ({
-          label: stripIdFragments(str(i?.label, 300), knownIds),
-          detail: stripIdFragments(str(i?.detail, 600), knownIds),
-        })).filter((i: any) => i.label),
-        operations: (Array.isArray(parsed.operations) ? parsed.operations : []).slice(0, 60),
-        creditsCharged: CREDIT_COSTS.novaAssist,
-      });
+  // Ids belong in operations, never in the text the builder reads.
+  const knownIds = await collectProjectIds(projectId).catch(() => []);
+  res.json({
+    surface,
+    summary: stripIdFragments(str(parsed.summary, 1500), knownIds),
+    items: (Array.isArray(parsed.items) ? parsed.items : []).slice(0, 25).map((i: any) => ({
+      label: stripIdFragments(str(i?.label, 300), knownIds),
+      detail: stripIdFragments(str(i?.detail, 600), knownIds),
+    })).filter((i: any) => i.label),
+    operations: (Array.isArray(parsed.operations) ? parsed.operations : []).slice(0, 60),
+    creditsCharged: CREDIT_COSTS.novaAssist,
+  });
+}
+
+export function registerNovaAssistRoutes(app: Express) {
+  /**
+   * Nova proposes changes for one surface. Writes nothing.
+   */
+  app.post("/api/projects/:id/nova/suggest", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+      if (!(await isMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
+
+      const input = (req.body ?? {}) as NovaAsk;
+      const config = validateNovaAsk(input, res);
+      if (!config) return;
+
+      const ent = await requireFeature(res, userId, "aiMilestones", "Nova's assistant");
+      if (!ent) return;
+      if (!(await requireCredits(res, userId, CREDIT_COSTS.novaAssist, `Nova's help with ${config.label.toLowerCase()}`))) return;
+
+      await novaSuggest(projectId, userId, input, ent, config, res);
     } catch (error) {
       console.error("Nova assist error:", error);
       res.status(500).json({ message: "Nova couldn't help with that" });

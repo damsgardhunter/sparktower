@@ -1,4 +1,9 @@
-import { useState, useRef } from "react";
+import { errorText } from "@/lib/api-error";
+import { ToastAction } from "@/components/ui/toast";
+import { trackExplore } from "@/lib/explore";
+import { EXPLORE_EVENTS } from "@shared/explore-events";
+import { useState, useRef, useEffect } from "react";
+import { markSeen } from "@/lib/seen";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -69,6 +74,8 @@ export default function ProjectDashboard() {
   const { user } = useAuth();
   const { toast } = useToast();
   const projectId = params?.id;
+  // A project, looked at: the "since" for news on it back on Discover.
+  useEffect(() => { if (projectId) markSeen("project", projectId); }, [projectId]);
   const [videoModalOpen, setVideoModalOpen] = useState(false);
   const [videoPrompt, setVideoPrompt] = useState("");
   const [selectedStyle, setSelectedStyle] = useState<StyleOption>("professional");
@@ -91,7 +98,7 @@ export default function ProjectDashboard() {
       setApplyResumeUrl(response.objectPath);
       toast({ title: "Resume uploaded" });
     },
-    onError: (error) => toast({ title: "Upload failed", description: error.message, variant: "destructive" }),
+    onError: (error) => toast({ title: "Upload failed", description: errorText(error), variant: "destructive" }),
   });
 
   const { data: project, isLoading: projectLoading } = useQuery<Project>({
@@ -135,13 +142,46 @@ export default function ProjectDashboard() {
     enabled: !!projectId && !!user && project?.ownerId === user?.id,
   });
 
+  /*
+   * Follow says what it wants rather than toggling, so a double click can't
+   * undo itself; it changes at once and goes back if refused. Following is
+   * only worth it if something visibly changes, so the feed is told and the
+   * notification says where this project's updates now appear.
+   */
+  const followKey = ["/api/projects", projectId, "follow-status"];
   const followMutation = useMutation({
-    mutationFn: async () => {
-      await apiRequest("POST", `/api/projects/${projectId}/follow`);
+    mutationFn: async (want: boolean) => {
+      const res = await apiRequest("POST", `/api/projects/${projectId}/follow`, { following: want });
+      return res.json() as Promise<{ following: boolean }>;
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "follow-status"] });
+    onMutate: async (want) => {
+      await queryClient.cancelQueries({ queryKey: followKey });
+      const before = queryClient.getQueryData<{ following: boolean; count: number }>(followKey);
+      queryClient.setQueryData(followKey, { following: want, count: Math.max(0, (before?.count ?? 0) + (want ? 1 : -1)) });
+      return { before };
+    },
+    onError: (_error, _want, context) => {
+      queryClient.setQueryData(followKey, context?.before);
+      toast({ title: "Couldn't update", description: "Try again in a moment.", variant: "destructive" });
+    },
+    onSuccess: (_result, want) => {
+      if (!want) {
+        toast({ title: "Unfollowed" });
+        return;
+      }
+      if (projectId) {
+        trackExplore(EXPLORE_EVENTS.follow, { matchType: "project", targetId: projectId, source: "project_page" });
+      }
+      toast({
+        title: "Following",
+        description: "This project's updates now show in your Following feed.",
+        action: <ToastAction altText="Open your Following feed" onClick={() => setLocation("/?feed=following")} data-testid="toast-open-following">Open Following</ToastAction>,
+      });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: followKey });
       queryClient.invalidateQueries({ queryKey: ["/api/user/followed-projects"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/feed"] });
     },
   });
 
@@ -166,7 +206,7 @@ export default function ProjectDashboard() {
       queryClient.invalidateQueries({ queryKey: ["/api/user/applications"] });
     },
     onError: (error: any) => {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
+      toast({ title: "Error", description: errorText(error), variant: "destructive" });
     },
   });
 
@@ -304,8 +344,7 @@ export default function ProjectDashboard() {
               variant={followStatus?.following ? "default" : "outline"}
               size="sm"
               className="gap-2"
-              onClick={() => followMutation.mutate()}
-              disabled={followMutation.isPending}
+              onClick={() => followMutation.mutate(!followStatus?.following)}
               data-testid="button-follow-project"
             >
               {followStatus?.following ? <Heart className="h-4 w-4 fill-current" /> : <Heart className="h-4 w-4" />}

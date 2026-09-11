@@ -8,7 +8,7 @@
  */
 import { execFileSync } from "node:child_process";
 
-const REQUIRED = ["server-web", "e2e", "secrets", "mobile", "dependencies", "codeql"];
+const REQUIRED = ["server-web", "e2e", "secrets", "mobile", "packages", "dependencies", "codeql"];
 
 let protection;
 try {

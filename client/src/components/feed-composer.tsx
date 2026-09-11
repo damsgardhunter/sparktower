@@ -1,3 +1,4 @@
+import { errorText } from "@/lib/api-error";
 import { useState, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -52,7 +53,7 @@ export function FeedComposer({ defaultProjectId }: { defaultProjectId?: string }
 
   const { uploadFile, isUploading } = useUpload({
     onSuccess: (response) => setMediaUrls((prev) => [...prev, response.objectPath].slice(0, MAX_POST_MEDIA)),
-    onError: (error) => toast({ title: "Upload failed", description: error.message, variant: "destructive" }),
+    onError: (error) => toast({ title: "Upload failed", description: errorText(error), variant: "destructive" }),
   });
 
   const def = POST_TYPES_BY_KEY[postType];

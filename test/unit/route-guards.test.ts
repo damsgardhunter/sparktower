@@ -62,9 +62,10 @@ const FLOOR_ONLY_ALLOWED: Record<string, string> = {
   "POST /api/projects/:id/path/branch": "member-only phase choice",
   "POST /api/projects/:id/path/switch": "owner-only, one per project at a time",
   "DELETE /api/projects/:id/path/loops/:taskId": "member-only delete",
+  "DELETE /api/mcp-tokens/:id": "owner-only revoke of one's own token; refusing it is the harm",
 };
 
-const SENSITIVE = /^\/api\/(auth|feed|projects\/:id\/comments|project-comments|uploads|objects\/upload|messages|conversations|chat|projects\/:id\/nova|projects\/:id\/tasks\/nova-assist|projects\/:id\/path|reports|check-ins|projects\/:id\/check-ins|documents|projects\/:id\/documents|generate-image|sprints|mock-interviews|storyboards|projects\/:id\/(live-chat|waitlist|interviews|health-findings)|me\/badges|projects\/:id\/backing)/;
+const SENSITIVE = /^\/api\/(auth|feed|projects\/:id\/comments|project-comments|uploads|objects\/upload|messages|conversations|chat|projects\/:id\/nova|projects\/:id\/tasks\/nova-assist|projects\/:id\/path|reports|check-ins|projects\/:id\/check-ins|documents|projects\/:id\/documents|generate-image|sprints|mock-interviews|storyboards|projects\/:id\/(live-chat|waitlist|interviews|health-findings)|me\/badges|projects\/:id\/backing|mcp|mcp-tokens)/;
 
 describe("rate limits on the abuse-prone surface", () => {
   it("every write under a sensitive family has its own limit or metering, or a written reason for the floor alone", () => {

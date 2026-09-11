@@ -109,8 +109,12 @@ export function registerFeedRoutes(app: Express) {
   app.get("/api/feed", async (req: any, res) => {
     try {
       const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string) || 20));
+      // The Following feed is personal, so it needs someone to be personal to.
+      const following = req.query.scope === "following";
+      if (following && !req.user) return res.status(401).json({ message: "Sign in to see who you follow." });
       const posts = await storage.getFeedPosts({
         viewerId: req.user?.id,
+        followedBy: following ? req.user.id : undefined,
         limit,
         before: (req.query.before as string) || undefined,
         authorId: (req.query.authorId as string) || undefined,
@@ -123,6 +127,8 @@ export function registerFeedRoutes(app: Express) {
         posts,
         // Cursor for the next page; null when we've reached the end.
         nextCursor: posts.length === limit ? posts[posts.length - 1].createdAt : null,
+        // So an empty Following feed can say which kind of empty: nobody followed, or nobody posting.
+        ...(following ? { followingCount: await storage.getFollowingCount(req.user.id) } : {}),
       });
     } catch (error) {
       console.error("Feed error:", error);

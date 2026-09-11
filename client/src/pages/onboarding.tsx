@@ -1,3 +1,4 @@
+import { errorText } from "@/lib/api-error";
 import { useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
@@ -54,7 +55,7 @@ export default function Onboarding() {
       toast({ title: "Resume uploaded", description: "Your resume has been uploaded successfully." });
     },
     onError: (error) => {
-      toast({ title: "Upload failed", description: error.message, variant: "destructive" });
+      toast({ title: "Upload failed", description: errorText(error), variant: "destructive" });
     },
   });
 

@@ -1,3 +1,10 @@
+import { isSeen } from "@/lib/seen";
+import { updateLabel, type ExploreUpdate } from "@/hooks/use-explore-updates";
+import { useAuth } from "@/hooks/use-auth";
+import { BuilderActions, type ConnectionState } from "@/components/discover-actions";
+import { useExploreImpression } from "@/hooks/use-explore-impression";
+import { trackExplore } from "@/lib/explore";
+import { EXPLORE_EVENTS, type ExploreSource } from "@shared/explore-events";
 import {
   Card,
   CardContent,
@@ -14,10 +21,21 @@ interface UserCardProps {
   userName?: string;
   matchScore?: number;
   matchReasons?: string[];
+  /** Set on Explore surfaces — Discover, Matches — so seeing and opening the card are counted. */
+  explore?: { source: ExploreSource; rankPosition?: number };
+  /** Where you stand with this person, from the page's one batched lookup. Shows Connect / Message on Explore surfaces. */
+  connection?: ConnectionState;
+  /** New posts from them since you last looked, when there are any. */
+  update?: ExploreUpdate;
 }
 
-export function UserCard({ profile, userName, matchScore, matchReasons }: UserCardProps) {
+export function UserCard({ profile, userName, matchScore, matchReasons, explore, connection, update }: UserCardProps) {
+  const { user: me } = useAuth();
   const [, setLocation] = useLocation();
+  const target = explore && profile
+    ? { matchType: "builder" as const, targetId: profile.userId, source: explore.source, rankPosition: explore.rankPosition }
+    : null;
+  const impressionRef = useExploreImpression(target);
 
   if (!profile) return null;
 
@@ -25,15 +43,28 @@ export function UserCard({ profile, userName, matchScore, matchReasons }: UserCa
 
   return (
     <Card
+      ref={impressionRef}
       className="hover-elevate cursor-pointer overflow-visible"
-      onClick={() => setLocation(`/profile/${profile.userId}`)}
+      onClick={() => {
+        if (target) trackExplore(EXPLORE_EVENTS.openProfile, target);
+        setLocation(`/profile/${profile.userId}`);
+      }}
       data-testid={`card-user-${profile.userId}`}
+      // "Continue exploring" looks for the first of these you haven't looked at.
+      data-explore-card={explore ? "" : undefined}
+      data-seen={explore && isSeen("builder", profile.userId) ? "" : undefined}
+      tabIndex={explore ? -1 : undefined}
     >
       <CardHeader className="flex flex-row items-center gap-4 pb-2">
         <UserAvatar src={profile.avatarUrl} name={displayLabel} className="h-12 w-12" />
         <div className="flex-1">
           <div className="flex items-center justify-between">
             <h3 className="font-bold text-lg">{displayLabel}</h3>
+            {update && (
+              <Badge variant="secondary" className="bg-primary/15 text-primary border-transparent" data-testid={`badge-update-${profile.userId}`}>
+                {updateLabel(update)}
+              </Badge>
+            )}
             {matchScore !== undefined && (
               <Badge variant="default" className="bg-primary/20 text-primary border-transparent">
                 {matchScore}% Match
@@ -68,6 +99,17 @@ export function UserCard({ profile, userName, matchScore, matchReasons }: UserCa
               ))}
             </ul>
           </div>
+        )}
+        {explore && me?.id !== profile.userId && (
+          <BuilderActions
+            userId={profile.userId}
+            name={displayLabel}
+            reason={matchReasons?.[0]}
+            headline={profile.headline}
+            connection={connection}
+            explore={explore}
+            moreLikeThis={profile.skills?.[0] ? `/discover?q=${encodeURIComponent(profile.skills[0])}` : undefined}
+          />
         )}
       </CardContent>
     </Card>

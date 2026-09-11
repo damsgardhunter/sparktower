@@ -1,3 +1,6 @@
+import { ReturnBanner } from "@/components/return-banner";
+import { useExploreUpdates } from "@/hooks/use-explore-updates";
+import { useFollowedProjectIds } from "@/components/discover-actions";
 import { useQuery } from "@tanstack/react-query";
 import { ProjectCard } from "@/components/project-card";
 import { Input } from "@/components/ui/input";
@@ -8,9 +11,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { openDiscover } from "@/lib/explore";
 import { Button } from "@/components/ui/button";
-import { Link } from "wouter";
+import { Link, useSearch } from "wouter";
 import type { Project, User, UserProfile } from "@shared/schema";
 import { Loader2, Search, Plus } from "lucide-react";
 
@@ -18,8 +22,16 @@ type ProjectWithDetails = Project & { owner: User; profile?: UserProfile };
 
 export default function ProjectsPage() {
   const [search, setSearch] = useState("");
-  const [category, setCategory] = useState("all");
+  // `?category=` — where "More like this" sends people after following a project.
+  const wantedCategory = new URLSearchParams(useSearch()).get("category");
+  const [category, setCategory] = useState(wantedCategory ?? "all");
+  useEffect(() => { if (wantedCategory) setCategory(wantedCategory); }, [wantedCategory]);
   const [status, setStatus] = useState("all");
+
+  // The project list is an Explore surface — see lib/explore.ts.
+  useEffect(() => { openDiscover("projects"); }, []);
+  const followed = useFollowedProjectIds();
+  const { updates, byKey } = useExploreUpdates();
 
   const { data: projects, isLoading } = useQuery<ProjectWithDetails[]>({
     queryKey: ["/api/projects"],
@@ -37,6 +49,7 @@ export default function ProjectsPage() {
 
   return (
     <div className="p-6 space-y-6 overflow-y-auto h-full pb-20">
+      <ReturnBanner updates={updates} />
       <div className="flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <h1 className="text-3xl font-bold tracking-tight">Browse Projects</h1>
@@ -91,8 +104,8 @@ export default function ProjectsPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredProjects?.map((project) => (
-            <ProjectCard key={project.id} project={project} />
+          {filteredProjects?.map((project, i) => (
+            <ProjectCard key={project.id} project={project} explore={{ source: "projects", rankPosition: i + 1 }} following={followed.has(project.id)} update={byKey.get(`project:${project.id}`)} />
           ))}
           {filteredProjects?.length === 0 && (
             <div className="col-span-full text-center py-12 text-secondary">

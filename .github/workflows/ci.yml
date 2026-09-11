@@ -188,6 +188,52 @@ jobs:
         with:
           category: "/language:javascript-typescript"
 
+  # The two things that ship outside this repository: the MCP server on npm and
+  # the extension on the marketplace. Neither is covered by the root typecheck —
+  # they have their own tsconfigs, their own dependencies, and a bundler between
+  # source and what anyone actually runs. So the gate is that both *build*, and
+  # that the extension packages: a .vsix that won't assemble is a release that
+  # fails at the last step, after the tag is already pushed.
+  packages:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Built first and explicitly. Both consumers bundle it in, and neither
+      # runs its build for them — a `prepare` script would need devDependencies
+      # that a consumer's install doesn't fetch.
+      # The path guard and the tree walker: what may be written to, and what a
+      # verification is allowed to see. Both are pure, both look obviously
+      # correct, and neither is.
+      - name: Build and test the shared core
+        working-directory: packages/nova-core
+        run: npm ci && npm run build && npm test
+
+      - name: Build the MCP server
+        working-directory: packages/nova-mcp
+        run: npm ci && npm run typecheck && npm run build
+
+      # Proves the bundle is self-contained: nova-core is a devDependency, so
+      # if it were still required at runtime this would throw rather than print
+      # the missing-token message.
+      - name: The MCP server runs standalone
+        working-directory: packages/nova-mcp
+        run: |
+          rm -rf node_modules/@sparktower
+          node dist/index.js 2>&1 | grep -q "No Nova token"
+
+      # The apply flow is tested against a stubbed editor API rather than a real
+      # one: what's worth asserting is which files get offered and what gets
+      # written, and that needs a comparison, not an Electron download.
+      - name: Test, build and package the extension
+        working-directory: packages/nova-vscode
+        run: npm ci && npm run typecheck && npm test && npm run build && npx vsce package --no-dependencies -o /tmp/nova.vsix
+
   mobile:
     runs-on: ubuntu-latest
 

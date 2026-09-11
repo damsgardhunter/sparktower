@@ -22,6 +22,7 @@ import {
   routePattern,
 } from "@shared/analytics";
 import { rateLimit } from "./moderation";
+import { EXPLORE_EVENT_NAMES, isExploreEvent, sanitizeExploreProps } from "@shared/explore-events";
 
 /** Cookie holding the visitor id. Not httpOnly: the client stamps events too. */
 const VISITOR_COOKIE = "st_vid";
@@ -207,8 +208,9 @@ export function registerAnalyticsIngest(app: Express) {
 
     try {
       const batch = Array.isArray(req.body?.events) ? req.body.events : [];
-      // Page views only. "Arrived" is the server's to emit — see attachVisitor.
-      const allowed = new Set<string>([ACTIVITY_EVENTS.pageView]);
+      // Page views, and the Explore loop's events (shared/explore-events.ts).
+      // "Arrived" is the server's to emit — see attachVisitor.
+      const allowed = new Set<string>([ACTIVITY_EVENTS.pageView, ...EXPLORE_EVENT_NAMES]);
 
       for (const e of batch.slice(0, MAX_BATCH_EVENTS)) {
         const name = String(e?.name || "");
@@ -223,7 +225,9 @@ export function registerAnalyticsIngest(app: Express) {
           path,
           referrer: typeof e?.referrer === "string" ? e.referrer : null,
           userAgent: req.headers["user-agent"],
-          props: {
+          // An Explore event keeps its five properties and nothing else; see
+          // sanitizeExploreProps for why that's the boundary.
+          props: isExploreEvent(name) ? { ...sanitizeExploreProps(e?.props) } : {
             ...(typeof e?.title === "string" ? { title: e.title.slice(0, 200) } : {}),
             ...(Number.isFinite(e?.msOnPage) ? { msOnPage: Math.round(e.msOnPage) } : {}),
           },

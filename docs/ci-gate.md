@@ -10,8 +10,16 @@ requires these status checks by job name, so the names in
 | `e2e` | the browser journeys (sign up → project → path → check-in; a stranger reads a shared check-in) |
 | `secrets` | gitleaks over the full history, every run, whatever the trigger |
 | `mobile` | the Expo app typechecks |
+| `packages` | the MCP server and the VS Code extension build, the MCP bundle runs with its workspace dependency removed, and the extension packages into a .vsix |
 | `dependencies` | no known high or critical vulnerability in production dependencies, server/web and mobile |
 | `codeql` | GitHub's static analysis for JavaScript/TypeScript, security-and-quality queries |
+
+`packages` is the gate on everything that ships outside this repository. Both
+artefacts bundle `packages/nova-core`, and the failure that job exists to catch
+is a bundle that still reaches for it at runtime — which installs cleanly and
+crashes on someone else's machine, long after the tag is pushed. Publishing is
+separate (`.github/workflows/publish-packages.yml`, tag-driven) and re-runs the
+same builds before it releases anything.
 
 Settings on `main`: required checks as above; branches must be up to date
 before merging is **off** (pushes land directly on main today); enforce for

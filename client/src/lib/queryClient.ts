@@ -1,10 +1,9 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { toApiError } from "./api-error";
 
 async function throwIfResNotOk(res: Response) {
-  if (!res.ok) {
-    const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
-  }
+  // An ApiError, so screens can say what the server said (see errorText).
+  if (!res.ok) throw await toApiError(res);
 }
 
 export async function apiRequest(

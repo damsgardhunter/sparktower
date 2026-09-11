@@ -1,3 +1,4 @@
+import { RunBlocks } from "@/components/run-blocks";
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -104,7 +105,7 @@ export function WorkView({ projectId, taskId, actor, work, done, compact }: {
               <pre className="text-xs p-3 overflow-x-auto bg-muted/40 max-h-80"><code>{f.content}</code></pre>
             </details>
           ))}
-          {p.runSteps.length > 0 && <ol className="list-decimal pl-5 text-sm space-y-0.5">{p.runSteps.map((r, i) => <li key={i}>{r}</li>)}</ol>}
+          {p.runSteps.length > 0 && <RunBlocks groups={p.runGroups} steps={p.runSteps} />}
           {p.verify && <p className="text-sm"><span className="font-medium">It works when:</span> {p.verify}</p>}
           {!done && (
             <Button size="sm" disabled={choose.isPending} onClick={() => choose.mutate({ workId: work.id })} data-testid="button-build-works">

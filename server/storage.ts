@@ -57,7 +57,7 @@ import {
   connections,
   directMessages,
   projectApplications,
-  projectFollows,
+  projectFollows, userFollows,
   projectKanbanTasks,
   projectPersonas,
   projectMilestones,
@@ -332,7 +332,8 @@ export interface IStorage {
 
   // Connections
   getConnectionById(connectionId: string): Promise<Connection | undefined>;
-  sendConnectionRequest(requesterId: string, receiverId: string): Promise<Connection>;
+  sendConnectionRequest(requesterId: string, receiverId: string, note?: string | null): Promise<Connection>;
+  getConnectionsBetween(userId: string, otherIds: string[]): Promise<Connection[]>;
   acceptConnection(connectionId: string): Promise<Connection>;
   rejectConnection(connectionId: string): Promise<Connection>;
   removeConnection(connectionId: string): Promise<void>;
@@ -364,6 +365,11 @@ export interface IStorage {
   followProject(userId: string, projectId: string): Promise<ProjectFollow>;
   unfollowProject(userId: string, projectId: string): Promise<void>;
   isFollowing(userId: string, projectId: string): Promise<boolean>;
+  followUser(followerId: string, followeeId: string): Promise<void>;
+  unfollowUser(followerId: string, followeeId: string): Promise<void>;
+  isFollowingUser(followerId: string, followeeId: string): Promise<boolean>;
+  getUserFollowerCount(userId: string): Promise<number>;
+  getFollowingCount(userId: string): Promise<number>;
   getUserFollowedProjects(userId: string): Promise<(ProjectFollow & { project: Project & { owner: User } })[]>;
   getProjectFollowerCount(projectId: string): Promise<number>;
 
@@ -570,6 +576,19 @@ export interface IStorage {
     contestWins: number;
     bestGameScores: { gameType: string; score: number }[];
   }>;
+}
+
+/**
+ * Which comments a viewer sees. Hidden ones are gone — except a shadow-hidden
+ * comment, to its own author, who sees it as posted. That's what makes a
+ * shadow-hide different from a removal.
+ */
+function commentVisibleTo(viewerId?: string) {
+  if (!viewerId) return isNull(projectComments.hiddenAt);
+  return or(
+    isNull(projectComments.hiddenAt),
+    and(eq(projectComments.hiddenMode, "shadow"), eq(projectComments.authorId, viewerId)),
+  )!;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1309,9 +1328,9 @@ export class DatabaseStorage implements IStorage {
               eq(projectComments.projectId, projectId),
               eq(projectComments.targetType, target.targetType as any),
               eq(projectComments.targetId, target.targetId),
-              isNull(projectComments.hiddenAt)
+              commentVisibleTo(viewerId)
             )
-          : and(eq(projectComments.projectId, projectId), isNull(projectComments.hiddenAt))
+          : and(eq(projectComments.projectId, projectId), commentVisibleTo(viewerId))
       )
       .orderBy(asc(projectComments.createdAt));
 
@@ -1339,7 +1358,8 @@ export class DatabaseStorage implements IStorage {
         count: sql<number>`count(*)::int`,
       })
       .from(projectComments)
-      .where(eq(projectComments.projectId, projectId))
+      // Counts only what everyone can see; a hidden comment isn't part of the conversation.
+      .where(and(eq(projectComments.projectId, projectId), isNull(projectComments.hiddenAt)))
       .groupBy(projectComments.targetType, projectComments.targetId);
 
     return Object.fromEntries(rows.map((r) => [`${r.targetType}:${r.targetId}`, r.count]));
@@ -1395,11 +1415,35 @@ export class DatabaseStorage implements IStorage {
   async getFeedPosts(options: {
     viewerId?: string; limit: number; before?: string;
     authorId?: string; projectId?: string; postType?: string;
+    /** Only posts newer than this instant (epoch ms) — compared inside the database. */
+    sinceMs?: number;
+    /** Only posts by builders, or on projects, this user follows. */
+    followedBy?: string;
   }): Promise<FeedPostWithDetails[]> {
     const conditions = [isNull(feedPosts.hiddenAt)];
     if (options.authorId) conditions.push(eq(feedPosts.authorId, options.authorId));
     if (options.projectId) conditions.push(eq(feedPosts.projectId, options.projectId));
     if (options.postType) conditions.push(eq(feedPosts.postType, options.postType as any));
+    /*
+     * Inside the database, never in JavaScript. `created_at` is stamped by the
+     * database's clock as wall time in its own timezone, and read back into JS
+     * as if it were UTC — so on a server that isn't on UTC, every post looks
+     * hours older than it is, and "new since you looked" finds nothing.
+     * Postgres converting both sides itself is right in any timezone.
+     */
+    if (options.sinceMs !== undefined) conditions.push(sql`${feedPosts.createdAt} > to_timestamp(${options.sinceMs / 1000})`);
+    /*
+     * The Following feed: posts by builders you follow, or on projects you
+     * follow. Subqueries rather than a list handed in, so a follow is in the
+     * feed the moment it's written. Visibility still applies below — following
+     * a builder doesn't show you their private projects.
+     */
+    if (options.followedBy) {
+      conditions.push(or(
+        sql`${feedPosts.authorId} in (select followee_id from user_follows where follower_id = ${options.followedBy})`,
+        sql`${feedPosts.projectId} in (select project_id from project_follows where user_id = ${options.followedBy})`,
+      )!);
+    }
     // Keyset pagination on createdAt — stable as new posts arrive.
     if (options.before) conditions.push(lte(feedPosts.createdAt, new Date(options.before)));
 
@@ -1637,11 +1681,20 @@ export class DatabaseStorage implements IStorage {
   }
 
   // --- Connections ---
-  async sendConnectionRequest(requesterId: string, receiverId: string): Promise<Connection> {
+  async sendConnectionRequest(requesterId: string, receiverId: string, note?: string | null): Promise<Connection> {
     const existing = await this.getConnectionStatus(requesterId, receiverId);
     if (existing) throw new Error("Connection already exists");
-    const [conn] = await db.insert(connections).values({ requesterId, receiverId, status: "pending" }).returning();
+    const [conn] = await db.insert(connections).values({ requesterId, receiverId, status: "pending", note: note ?? null }).returning();
     return conn;
+  }
+
+  /** Every connection between one person and a list of others, in either direction. One query for a grid of cards. */
+  async getConnectionsBetween(userId: string, otherIds: string[]): Promise<Connection[]> {
+    if (!otherIds.length) return [];
+    return db.select().from(connections).where(or(
+      and(eq(connections.requesterId, userId), inArray(connections.receiverId, otherIds)),
+      and(eq(connections.receiverId, userId), inArray(connections.requesterId, otherIds)),
+    ));
   }
 
   async getConnectionById(connectionId: string): Promise<Connection | undefined> {
@@ -1863,6 +1916,32 @@ export class DatabaseStorage implements IStorage {
   async isFollowing(userId: string, projectId: string): Promise<boolean> {
     const [f] = await db.select().from(projectFollows).where(and(eq(projectFollows.userId, userId), eq(projectFollows.projectId, projectId)));
     return !!f;
+  }
+
+  /** Idempotent: following someone twice is following them once. */
+  async followUser(followerId: string, followeeId: string): Promise<void> {
+    await db.insert(userFollows).values({ followerId, followeeId }).onConflictDoNothing();
+  }
+
+  async unfollowUser(followerId: string, followeeId: string): Promise<void> {
+    await db.delete(userFollows).where(and(eq(userFollows.followerId, followerId), eq(userFollows.followeeId, followeeId)));
+  }
+
+  async isFollowingUser(followerId: string, followeeId: string): Promise<boolean> {
+    const [f] = await db.select().from(userFollows).where(and(eq(userFollows.followerId, followerId), eq(userFollows.followeeId, followeeId)));
+    return !!f;
+  }
+
+  async getUserFollowerCount(userId: string): Promise<number> {
+    const [row] = await db.select({ n: sql<number>`count(*)::int` }).from(userFollows).where(eq(userFollows.followeeId, userId));
+    return Number(row?.n ?? 0);
+  }
+
+  /** Builders and projects together — what the Following feed's empty state needs to tell "follows nobody" from "quiet". */
+  async getFollowingCount(userId: string): Promise<number> {
+    const [builders] = await db.select({ n: sql<number>`count(*)::int` }).from(userFollows).where(eq(userFollows.followerId, userId));
+    const [projectsFollowed] = await db.select({ n: sql<number>`count(*)::int` }).from(projectFollows).where(eq(projectFollows.userId, userId));
+    return Number(builders?.n ?? 0) + Number(projectsFollowed?.n ?? 0);
   }
 
   async getUserFollowedProjects(userId: string): Promise<(ProjectFollow & { project: Project & { owner: User } })[]> {

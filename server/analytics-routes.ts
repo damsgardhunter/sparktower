@@ -10,7 +10,7 @@
  * of latency is well inside what "live" means to someone watching.
  */
 import type { Express, Response } from "express";
-import { and, desc, eq, gte, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, gte, sql, type SQL } from "drizzle-orm";
 import { db } from "./db";
 import { activityEvents, users, userProfiles } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
@@ -18,6 +18,9 @@ import { requireOwner } from "./platform-roles";
 import {
   ACTIVITY_EVENTS, ONLINE_WINDOW_MINUTES, actionLabel, pageLabel,
 } from "@shared/analytics";
+import {
+  EXPLORE_ACTIONS, EXPLORE_EVENTS, EXPLORE_EVENT_NAMES, EXPLORE_FUNNEL, EXPLORE_LABEL, countCycles, exploreLabel,
+} from "@shared/explore-events";
 
 /** How often the live stream checks for new rows. */
 const POLL_MS = 2000;
@@ -57,7 +60,7 @@ function describe(row: any) {
       ? `Opened ${pageLabel(row.path)}`
       : row.name === ACTIVITY_EVENTS.sessionStart
         ? "Arrived"
-        : actionLabel(row.method || "", row.pattern),
+        : exploreLabel(row.name) ?? actionLabel(row.method || "", row.pattern),
     path: row.path,
     method: row.method,
     status: row.status,
@@ -94,6 +97,99 @@ const feedQuery = () =>
     .from(activityEvents)
     .leftJoin(users, eq(users.id, activityEvents.userId))
     .leftJoin(userProfiles, eq(userProfiles.userId, activityEvents.userId));
+
+/**
+ * The Explore loop's three success signals, from the stream.
+ *
+ * Counted in sessions for the funnel, because the loop is a visit — someone
+ * who opens Discover twice in one visit has had one session of it, not two.
+ * Time to first action uses the milliseconds the browser measured from opening
+ * Discover in that tab: the server's own timestamps are batch arrival times,
+ * up to four seconds late and identical within a batch, which is too coarse
+ * for a number whose good answer is "a few seconds". Repeat rate is people,
+ * not sessions: the question is whether a person comes back.
+ */
+async function exploreSummary(since: SQL) {
+  const list = (names: readonly string[]) => sql.join(names.map((name) => sql`${name}`), sql`, `);
+
+  const steps = sql.join(EXPLORE_FUNNEL.map((step) =>
+    sql`count(DISTINCT session_id) FILTER (WHERE name IN (${list(step.events)}))::int AS ${sql.raw(`"${step.key}"`)}`), sql`, `);
+  const funnelRows = await db.execute<any>(sql`
+    SELECT ${steps} FROM ${activityEvents}
+    WHERE created_at >= ${since} AND name IN (${list(EXPLORE_EVENT_NAMES)})
+  `);
+
+  const byEvent = await db.execute<any>(sql`
+    SELECT name, count(DISTINCT session_id)::int AS sessions, count(*)::int AS events,
+           count(DISTINCT coalesce(user_id, visitor_id))::int AS people
+    FROM ${activityEvents}
+    WHERE created_at >= ${since} AND name IN (${list(EXPLORE_EVENT_NAMES)})
+    GROUP BY name
+  `);
+
+  const ttfa = await db.execute<any>(sql`
+    WITH first_action AS (
+      SELECT DISTINCT ON (session_id) session_id, (props->>'timeToActionMs')::float8 AS ms
+      FROM ${activityEvents}
+      WHERE created_at >= ${since} AND name IN (${list(EXPLORE_ACTIONS)}) AND props ? 'timeToActionMs'
+      ORDER BY session_id, seq
+    )
+    SELECT count(*)::int AS sessions,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY ms) AS p50,
+           percentile_cont(0.9) WITHIN GROUP (ORDER BY ms) AS p90
+    FROM first_action
+  `);
+
+  const repeat = await db.execute<any>(sql`
+    WITH visits AS (
+      SELECT coalesce(user_id, visitor_id) AS who, count(DISTINCT session_id) AS n
+      FROM ${activityEvents}
+      WHERE created_at >= ${since} AND name = ${EXPLORE_EVENTS.openDiscover}
+      GROUP BY 1
+    )
+    SELECT count(*)::int AS people, count(*) FILTER (WHERE n >= 2)::int AS repeated FROM visits
+  `);
+
+  // Passes round the loop, per session, in the order things happened. Counted
+  // in code rather than SQL: "an action between two opens" is a small state
+  // machine (countCycles, tested on its own) and an unreadable window query.
+  const trail = await db.execute<any>(sql`
+    SELECT session_id, name FROM ${activityEvents}
+    WHERE created_at >= ${since}
+      AND name IN (${list([EXPLORE_EVENTS.openDiscover, EXPLORE_EVENTS.returnToDiscover, ...EXPLORE_ACTIONS])})
+    ORDER BY session_id, seq
+    LIMIT 200000
+  `);
+  const perSession = [...countCycles((trail.rows ?? []).map((row: any) => ({ session: row.session_id, name: row.name }))).values()];
+  const twoPlus = perSession.filter((n) => n >= 2).length;
+
+  const funnel = funnelRows.rows?.[0] ?? {};
+  const opened = Number(funnel.opened ?? 0);
+  const counts = new Map((byEvent.rows ?? []).map((r: any) => [r.name, r]));
+  const t = ttfa.rows?.[0] ?? {};
+  const r = repeat.rows?.[0] ?? {};
+  const people = Number(r.people ?? 0);
+  const ms = (v: unknown) => (v == null ? null : Math.round(Number(v)));
+
+  return {
+    funnel: EXPLORE_FUNNEL.map((step) => {
+      const sessions = Number(funnel[step.key] ?? 0);
+      return { key: step.key, label: step.label, sessions, ofOpened: opened ? sessions / opened : null };
+    }),
+    events: EXPLORE_EVENT_NAMES.map((name) => {
+      const row: any = counts.get(name);
+      return { name, label: EXPLORE_LABEL[name], sessions: Number(row?.sessions ?? 0), events: Number(row?.events ?? 0), people: Number(row?.people ?? 0) };
+    }),
+    timeToFirstAction: { sessions: Number(t.sessions ?? 0), p50Ms: ms(t.p50), p90Ms: ms(t.p90) },
+    repeat: { people, repeated: Number(r.repeated ?? 0), rate: people ? Number(r.repeated ?? 0) / people : null },
+    cycles: {
+      sessions: perSession.length,
+      completedOne: perSession.filter((n) => n >= 1).length,
+      twoPlus,
+      rate: perSession.length ? twoPlus / perSession.length : null,
+    },
+  };
+}
 
 export function registerAnalyticsRoutes(app: Express) {
   /**
@@ -283,8 +379,11 @@ export function registerAnalyticsRoutes(app: Express) {
         .orderBy(desc(sql`count(*)`))
         .limit(20);
 
+      const explore = await exploreSummary(since);
+
       res.json({
         windowDays,
+        explore,
         onlineNow: now?.online ?? 0,
         signupSources: signupSources.map((r) => ({
           source: r.source ?? "unknown",

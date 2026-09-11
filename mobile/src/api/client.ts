@@ -69,6 +69,14 @@ async function getItem(key: string): Promise<string | null> {
   return SecureStore.getItemAsync(key);
 }
 
+/**
+ * Small per-device preferences — not secrets, just things a screen remembers,
+ * like when Discover was last looked at. The same storage as the tokens, so
+ * there's one place that knows how to store on each platform.
+ */
+export const readPref = (key: string) => getItem(key);
+export const writePref = (key: string, value: string | null) => setItem(key, value);
+
 export interface Session {
   accessToken: string;
   refreshToken: string;

@@ -1,3 +1,9 @@
+import { errorText } from "@/lib/api-error";
+import { ReturnBanner } from "@/components/return-banner";
+import { useExploreUpdates } from "@/hooks/use-explore-updates";
+import { useConnectionStates } from "@/components/discover-actions";
+import { useEffect } from "react";
+import { openDiscover } from "@/lib/explore";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { UserCard } from "@/components/user-card";
@@ -15,6 +21,11 @@ export default function Matches() {
     queryKey: ["/api/matches"],
   });
 
+  // Matches is an Explore surface too — see lib/explore.ts.
+  useEffect(() => { openDiscover("matches"); }, []);
+  const { data: connections } = useConnectionStates((matches ?? []).map((m) => m.matchedUserId));
+  const { updates, byKey } = useExploreUpdates();
+
   const generateMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/matches/generate");
@@ -30,7 +41,7 @@ export default function Matches() {
     onError: (error: Error) => {
       toast({
         title: "Failed to generate matches",
-        description: error.message,
+        description: errorText(error),
         variant: "destructive",
       });
     },
@@ -52,6 +63,8 @@ export default function Matches() {
         <div className="mb-8">
           <SprintLauncher />
         </div>
+
+        <div className="mb-6"><ReturnBanner updates={updates} /></div>
 
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
           <div>
@@ -77,13 +90,16 @@ export default function Matches() {
 
         {matches && matches.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {matches.map((match) => (
+            {matches.map((match, i) => (
               <div key={match.id} className="flex flex-col">
                 <UserCard
                   profile={match.matchedProfile}
                   userName={(match.matchedUser.firstName || match.matchedUser.email || "Anonymous") as string}
                   matchScore={match.score}
                   matchReasons={match.reasons || []}
+                  explore={{ source: "matches", rankPosition: i + 1 }}
+                  connection={connections?.[match.matchedUserId]}
+                  update={byKey.get(`builder:${match.matchedUserId}`)}
                 />
                 <Button
                   variant="outline"

@@ -494,6 +494,7 @@ Respond ONLY with valid JSON, no markdown fences:
         .where(and(
           eq(projectComments.targetType, "check_in"),
           eq(projectComments.targetId, row.checkIn.id),
+          isNull(projectComments.hiddenAt),
         ));
 
       void recordLoopEvent({

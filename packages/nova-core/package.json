@@ -1,0 +1,25 @@
+{
+  "name": "@sparktower/nova-core",
+  "version": "0.1.0",
+  "description": "Talking to Nova, and reading a working tree. Bundled into the MCP server and the VS Code extension; not published on its own.",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.9"
+  },
+  "private": true
+}

@@ -1,7 +1,9 @@
 import { View } from "react-native";
 import { useLocalSearchParams, useRouter, Stack } from "expo-router";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { api } from "../../src/api/client";
+import { api, fetchMe } from "../../src/api/client";
+import { ConnectActions, useConnectionStates } from "../../src/components/ConnectActions";
+import { NoticeBanner, useNotice } from "../../src/components/Sheet";
 import { spacing } from "../../src/theme";
 import {
   Avatar, Body, Btn, Card, Chip, Empty, H1, H2, Label, Loading, Meta, Row, Screen,
@@ -18,9 +20,11 @@ export default function UserProfile() {
     enabled: !!id,
   });
 
-  const connect = useMutation({
-    mutationFn: () => api("/api/connections/request", { method: "POST", body: { userId: id } }),
-  });
+  // Where you stand with them decides the buttons: Message only once you're
+  // connected, since the server refuses it before then.
+  const { data: me } = useQuery({ queryKey: ["me"], queryFn: fetchMe });
+  const { data: states } = useConnectionStates(id ? [id] : []);
+  const { notice, show, clear } = useNotice();
 
   if (isLoading) return <Loading />;
   if (!data) return <Screen><Empty title="Profile not found" /></Screen>;
@@ -42,11 +46,9 @@ export default function UserProfile() {
               {p.location && <Meta>{p.location}</Meta>}
             </View>
           </Row>
-          <Row gap={spacing.sm}>
-            <Btn label="Connect" small variant="outline" loading={connect.isPending}
-              onPress={() => connect.mutate()} />
-            <Btn label="Message" small onPress={() => router.push(`/chat/${id}`)} />
-          </Row>
+          {id && me?.user?.id !== id && (
+            <ConnectActions userId={id} name={name} headline={p.headline} connection={states?.[id]} notify={show} />
+          )}
         </Card>
 
         {lf?.isActive && (
@@ -123,6 +125,7 @@ export default function UserProfile() {
           </>
         )}
       </Screen>
+      <NoticeBanner notice={notice} onDismiss={clear} />
     </>
   );
 }
