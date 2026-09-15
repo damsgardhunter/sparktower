@@ -10,6 +10,7 @@ import type { CofounderSprint } from "@shared/schema";
 import OpenAI from "openai";
 import { parseModelJson, ModelResponseError, answerUnreadable, respondToAiError } from "./ai-json";
 import { rateLimit } from "./moderation";
+import { pickFields, WRITABLE } from "./body-fields";
 
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
@@ -817,7 +818,11 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       if (sprint.user1Id !== req.user.id && sprint.user2Id !== req.user.id) {
         return res.status(403).json({ message: "Not a participant" });
       }
-      const task = await storage.createSprintTask({ sprintId: sprint.id, ...req.body });
+      const fields = pickFields(req.body, WRITABLE.sprintTask);
+      if (typeof fields.title !== "string" || !fields.title.trim()) return res.status(400).json({ message: "A task needs a title" });
+      if (fields.assigneeId && fields.assigneeId !== sprint.user1Id && fields.assigneeId !== sprint.user2Id) return res.status(400).json({ message: "Assign tasks to someone in this sprint" });
+      const { status: _status, ...create } = fields;
+      const task = await storage.createSprintTask({ ...create, title: fields.title, sprintId: sprint.id });
       res.json(task);
     } catch (error) {
       res.status(500).json({ message: "Failed to create task" });
@@ -831,7 +836,11 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       if (sprint.user1Id !== req.user.id && sprint.user2Id !== req.user.id) {
         return res.status(403).json({ message: "Not a participant" });
       }
-      const task = await storage.updateSprintTask(req.params.taskId, req.body);
+      const fields = pickFields(req.body, WRITABLE.sprintTask);
+      if (fields.assigneeId && fields.assigneeId !== sprint.user1Id && fields.assigneeId !== sprint.user2Id) return res.status(400).json({ message: "Assign tasks to someone in this sprint" });
+      if (!Object.keys(fields).length) return res.status(400).json({ message: "Nothing to update" });
+      const task = await storage.updateSprintTask(sprint.id, req.params.taskId, fields);
+      if (!task) return res.status(404).json({ message: "Task not found in this sprint" });
       res.json(task);
     } catch (error) {
       res.status(500).json({ message: "Failed to update task" });

@@ -243,7 +243,8 @@ export function scanSecurity(allFiles: SourceFile[], extra: { suspectedSecrets?:
     });
   }
   {
-    const spreadBody = onServer(/\.\.\.req\.body|Object\.assign\([^)]*req\.body/);
+    // Spread in, merged in, or handed to a write whole.
+    const spreadBody = onServer(/\.\.\.\s*req\.body|Object\.assign\([^)]*req\.body|\.(set|values)\(\s*req\.body\s*\)|(storage|repo|repository|model|db)\.\w+\([^;\n]*,\s*req\.body\s*\)|\.(create|update|insert|upsert)\w*\(\s*req\.body\s*\)/);
     add({
       id: "mass-assignment", label: "No raw request bodies written to the database", category: "input", severity: "medium",
       status: !isServer ? "n/a" : spreadBody.length ? "partial" : "pass",
@@ -341,8 +342,10 @@ export function scanSecurity(allFiles: SourceFile[], extra: { suspectedSecrets?:
   }
   {
     const envExample = [...paths].filter((p) => /(^|\/)\.env\.(example|sample|template)$/.test(p));
-    const enforced = onServer(/!\s*process\.env\.[A-Z_]*(SECRET|KEY)\b[^\n]{0,80}\)?\s*\{?\s*\n?\s*throw|process\.env\.[A-Z_]*SECRET\s*\|\|\s*\(\(\)\s*=>\s*\{\s*throw|NODE_ENV\s*===\s*["']production["'][\s\S]{0,200}(SECRET|KEY)[\s\S]{0,80}throw/);
-    const weakDefault = has(/process\.env\.[A-Z_]*SECRET\s*\|\|\s*["'][^"']{0,40}["']/);
+    // A throw near the read, or a helper that requires the secret (requireSecret("SESSION_SECRET"), assertSecretsAtBoot()).
+    const enforced = onServer(/!\s*process\.env\.[A-Z_]*(SECRET|KEY)\b[^\n]{0,80}\)?\s*\{?\s*\n?\s*throw|process\.env\.[A-Z_]*SECRET\s*\|\|\s*\(\(\)\s*=>\s*\{\s*throw|NODE_ENV\s*===\s*["']production["'][\s\S]{0,200}(SECRET|KEY)[\s\S]{0,80}throw|\brequire(Secret|Env)\s*\(\s*["'][A-Z_]*(SECRET|KEY)["']|\bassertSecrets\w*\s*\(\s*\)/);
+    // A literal after || or ?? (empty included), or a named FALLBACK / DEFAULT constant.
+    const weakDefault = has(/process\.env\.[A-Z_]*SECRET\s*(\|\||\?\?)\s*(["'`][^"'`]{0,40}["'`]|[A-Z_]*(FALLBACK|DEFAULT)\b)/);
     add({
       id: "secret-config", label: "Secrets required in production", category: "secrets", severity: "medium",
       status: weakDefault.length ? "missing" : enforced.length ? "pass" : envExample.length ? "partial" : "missing",

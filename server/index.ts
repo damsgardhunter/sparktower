@@ -15,12 +15,16 @@ import { checkMerchFonts } from "./merch-render";
 import { serveStatic } from "./static";
 import { createApp, log } from "./app";
 import { warnIfSharedTokenSecret } from "./mobile-auth";
+import { assertSecretsAtBoot } from "./secrets";
 
 declare module "http" {
   interface IncomingMessage {
     rawBody: unknown;
   }
 }
+
+// Before anything listens or connects: no secrets (or weak ones in production), no server.
+assertSecretsAtBoot();
 
 const httpServer = createServer();
 

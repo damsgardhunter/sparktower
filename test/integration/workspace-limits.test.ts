@@ -37,7 +37,7 @@ const LIMITED: Record<string, [string, string][]> = {
   apply: [["post", "/api/projects/:id/apply"], ["post", "/api/contests/:id/join"], ["post", "/api/contests/:id/submit"]],
   sprint: [["post", "/api/sprints"], ["post", "/api/sprints/queue"], ["post", "/api/sprints/:id/convert"]],
   checkout: [
-    ["post", "/api/checkout"], ["post", "/api/billing-portal"], ["post", "/api/projects/:id/donate"],
+    ["post", "/api/checkout"], ["post", "/api/billing-portal"], 
     ["post", "/api/projects/:id/donate-checkout"], ["post", "/api/stripe/connect-account"], ["post", "/api/stripe/sync-subscription"],
   ],
   external: [

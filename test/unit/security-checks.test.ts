@@ -157,3 +157,36 @@ describe("the repository ingest keeps lockfiles in the tree", () => {
     expect(lockfilesIn(snap.files)).toEqual(["package-lock.json", "mobile/package-lock.json"]);
   });
 });
+
+describe("the secret-config check", () => {
+  const verdict = (files: { path: string; content?: string }[]) => scanSecurity(files as any, {}).checks.find((c) => c.id === "secret-config")!;
+  const server = (content: string) => ({ path: "server/auth.ts", content });
+
+  it("flags a secret that falls back to anything written in the code — a string, an empty one, or a named default", () => {
+    for (const read of [
+      `const s = process.env.SESSION_SECRET || "keyboard cat";`,
+      `const s = process.env.SESSION_SECRET ?? "dev";`,
+      `const k = createHmac("sha256", process.env.MOBILE_TOKEN_SECRET || "");`,
+      `const DEV_FALLBACK = "x"; const s = process.env.SESSION_SECRET || DEV_FALLBACK;`,
+    ]) {
+      const c = verdict([server(read)]);
+      expect(c.status, read).toBe("missing");
+      expect(c.detail).toMatch(/hard-coded default/);
+    }
+  });
+
+  it("passes a required-secret helper with no default", () => {
+    expect(verdict([server(`export const sessionSecret = () => requireSecret("SESSION_SECRET");`)]).status).toBe("pass");
+    expect(verdict([server(`assertSecretsAtBoot();`)]).status).toBe("pass");
+  });
+
+  it("passes this server: no secret read anywhere has a default", async () => {
+    const { readFileSync, readdirSync } = await import("node:fs");
+    const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true })
+      .flatMap((e) => e.isDirectory() ? walk(`${dir}/${e.name}`) : /\.ts$/.test(e.name) ? [`${dir}/${e.name}`] : []);
+    const files = [...walk("server"), ...walk("shared")].map((path) => ({ path, content: readFileSync(path, "utf8") }));
+    const c = verdict(files);
+    expect(c.detail).not.toMatch(/hard-coded default/);
+    expect(c.status).toBe("pass");
+  });
+});

@@ -55,9 +55,11 @@ export PROD_DB="postgresql://…"                   # from Replit → Secrets �
 
 ## 2. Production secrets (Replit → Secrets)
 
-- [ ] `SESSION_SECRET` is a real random value. The server **refuses to boot**
-      on `dev-session-secret`, so a bad value fails loudly — but only after the
-      deploy has started, so check first.
+- [ ] `SESSION_SECRET` is a real random value, at least 32 characters, used
+      nowhere else. There is no default: the server **refuses to boot** when
+      it's unset, short or a published value (`server/secrets.ts`), which fails
+      loudly — but only after the deploy has started, so check first.
+- [ ] `MOBILE_TOKEN_SECRET` is set, to a different value held to the same rules.
 - [ ] `PLATFORM_OWNER_EMAIL` and `PLATFORM_REVIEWER_EMAILS` name the right
       account. Roles are re-derived from these at every boot.
 - [ ] `AI_INTEGRATIONS_OPENAI_API_KEY` is set. The server can't import its

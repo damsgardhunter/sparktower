@@ -48,7 +48,8 @@ import {
   applyProjectOperations, buildOperableProjectState, renderLatestAudit,
   stripIdFragments, collectProjectIds, OPERATION_SCHEMA_INSTRUCTIONS,
 } from "./project-operations";
-import { insertUserProfileSchema, insertProjectSchema, insertProjectBase, insertDonationSchema, insertContestSchema, insertProjectLiveChatMessageSchema, insertWaitlistEntrySchema, insertInterviewSchema, insertExperimentSchema, insertPricingTierSchema, insertAnalyticsEventSchema, insertLegalDocSchema, insertDeployChecklistItemSchema, insertSupportTicketSchema, insertLaunchTaskSchema, type StoryboardScene } from "@shared/schema";
+import { insertUserProfileSchema, insertProjectSchema, insertProjectBase, insertContestSchema, insertProjectLiveChatMessageSchema, insertWaitlistEntrySchema, insertInterviewSchema, insertExperimentSchema, insertPricingTierSchema, insertAnalyticsEventSchema, insertLegalDocSchema, insertDeployChecklistItemSchema, insertSupportTicketSchema, insertLaunchTaskSchema, insertProjectDecisionSchema, insertProjectFileSchema, insertProjectLinkSchema, type StoryboardScene } from "@shared/schema";
+import { pickFields, WRITABLE } from "./body-fields";
 import { z } from "zod";
 import OpenAI from "openai";
 import { eq, ne, and, sql, inArray, desc, isNull } from "drizzle-orm";
@@ -660,9 +661,12 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     return { ...data, rolesNeeded: [], teamSize: 1 };
   }
 
+  /** What a client may set when creating a project: the create schema's fields, minus the owner (the session's). */
+  const PROJECT_CREATE_FIELDS = Object.keys(insertProjectBase.shape).filter((k) => k !== "ownerId");
+
   app.post("/api/projects", isAuthenticated, rateLimit("project"), async (req: any, res) => {
     const ownerId = (req.user as any).id;
-    const validated = normalizeSoloMode(insertProjectSchema.parse({ ...req.body, ownerId }));
+    const validated = normalizeSoloMode(insertProjectSchema.parse({ ...pickFields(req.body, PROJECT_CREATE_FIELDS), ownerId }));
 
     if (validated.isPrivate) {
       const quota = await checkPrivateProjectQuota(ownerId);
@@ -2662,14 +2666,14 @@ RULES:
   app.post("/api/projects/:id/waitlist", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      const data = insertWaitlistEntrySchema.parse({ ...req.body, projectId: req.params.id });
+      const data = insertWaitlistEntrySchema.parse({ ...pickFields(req.body, WRITABLE.waitlist), projectId: req.params.id });
       res.json(await storage.createWaitlistEntry(data));
     } catch (e) { res.status(500).json({ message: "Failed to add to waitlist" }); }
   });
   app.delete("/api/projects/:id/waitlist/:entryId", isAuthenticated, async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      await storage.deleteWaitlistEntry(req.params.entryId);
+      if (!(await storage.deleteWaitlistEntry(req.params.id, req.params.entryId))) return res.status(404).json({ message: "Not found in this project" });
       res.json({ success: true });
     } catch (e) { res.status(500).json({ message: "Failed to delete entry" }); }
   });
@@ -2684,20 +2688,24 @@ RULES:
   app.post("/api/projects/:id/interviews", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      const data = insertInterviewSchema.parse({ ...req.body, projectId: req.params.id, userId: (req.user as any).id });
+      const data = insertInterviewSchema.parse({ ...pickFields(req.body, WRITABLE.interviews), projectId: req.params.id, userId: (req.user as any).id });
       res.json(await storage.createProjectInterview(data));
     } catch (e) { res.status(500).json({ message: "Failed to create interview" }); }
   });
   app.patch("/api/projects/:id/interviews/:itemId", isAuthenticated, async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      res.json(await storage.updateProjectInterview(req.params.itemId, req.body));
+      const fields = pickFields(req.body, WRITABLE.interviews);
+      if (!Object.keys(fields).length) return res.status(400).json({ message: "Nothing to update" });
+      const updated = await storage.updateProjectInterview(req.params.id, req.params.itemId, fields);
+      if (!updated) return res.status(404).json({ message: "Not found in this project" });
+      res.json(updated);
     } catch (e) { res.status(500).json({ message: "Failed to update interview" }); }
   });
   app.delete("/api/projects/:id/interviews/:itemId", isAuthenticated, async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      await storage.deleteProjectInterview(req.params.itemId);
+      if (!(await storage.deleteProjectInterview(req.params.id, req.params.itemId))) return res.status(404).json({ message: "Not found in this project" });
       res.json({ success: true });
     } catch (e) { res.status(500).json({ message: "Failed to delete interview" }); }
   });
@@ -2712,20 +2720,24 @@ RULES:
   app.post("/api/projects/:id/experiments", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      const data = insertExperimentSchema.parse({ ...req.body, projectId: req.params.id, userId: (req.user as any).id });
+      const data = insertExperimentSchema.parse({ ...pickFields(req.body, WRITABLE.experiments), projectId: req.params.id, userId: (req.user as any).id });
       res.json(await storage.createProjectExperiment(data));
     } catch (e) { res.status(500).json({ message: "Failed to create experiment" }); }
   });
   app.patch("/api/projects/:id/experiments/:itemId", isAuthenticated, async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      res.json(await storage.updateProjectExperiment(req.params.itemId, req.body));
+      const fields = pickFields(req.body, WRITABLE.experiments);
+      if (!Object.keys(fields).length) return res.status(400).json({ message: "Nothing to update" });
+      const updated = await storage.updateProjectExperiment(req.params.id, req.params.itemId, fields);
+      if (!updated) return res.status(404).json({ message: "Not found in this project" });
+      res.json(updated);
     } catch (e) { res.status(500).json({ message: "Failed to update experiment" }); }
   });
   app.delete("/api/projects/:id/experiments/:itemId", isAuthenticated, async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      await storage.deleteProjectExperiment(req.params.itemId);
+      if (!(await storage.deleteProjectExperiment(req.params.id, req.params.itemId))) return res.status(404).json({ message: "Not found in this project" });
       res.json({ success: true });
     } catch (e) { res.status(500).json({ message: "Failed to delete experiment" }); }
   });
@@ -2740,20 +2752,24 @@ RULES:
   app.post("/api/projects/:id/pricing", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      const data = insertPricingTierSchema.parse({ ...req.body, projectId: req.params.id });
+      const data = insertPricingTierSchema.parse({ ...pickFields(req.body, WRITABLE.pricing), projectId: req.params.id });
       res.json(await storage.createPricingTier(data));
     } catch (e) { res.status(500).json({ message: "Failed to create pricing tier" }); }
   });
   app.patch("/api/projects/:id/pricing/:itemId", isAuthenticated, async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      res.json(await storage.updatePricingTier(req.params.itemId, req.body));
+      const fields = pickFields(req.body, WRITABLE.pricing);
+      if (!Object.keys(fields).length) return res.status(400).json({ message: "Nothing to update" });
+      const updated = await storage.updatePricingTier(req.params.id, req.params.itemId, fields);
+      if (!updated) return res.status(404).json({ message: "Not found in this project" });
+      res.json(updated);
     } catch (e) { res.status(500).json({ message: "Failed to update pricing tier" }); }
   });
   app.delete("/api/projects/:id/pricing/:itemId", isAuthenticated, async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      await storage.deletePricingTier(req.params.itemId);
+      if (!(await storage.deletePricingTier(req.params.id, req.params.itemId))) return res.status(404).json({ message: "Not found in this project" });
       res.json({ success: true });
     } catch (e) { res.status(500).json({ message: "Failed to delete pricing tier" }); }
   });
@@ -3395,20 +3411,25 @@ RULES:
   app.post("/api/projects/:id/analytics-events", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      const data = insertAnalyticsEventSchema.parse({ ...req.body, track: isProjectGoal(req.body?.track) ? req.body.track : null, projectId: req.params.id });
+      const data = insertAnalyticsEventSchema.parse({ ...pickFields(req.body, WRITABLE.analyticsEvents), track: isProjectGoal(req.body?.track) ? req.body.track : null, projectId: req.params.id });
       res.json(await storage.createAnalyticsEvent(data));
     } catch (e) { res.status(500).json({ message: "Failed to create analytics event" }); }
   });
   app.patch("/api/projects/:id/analytics-events/:itemId", isAuthenticated, async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      res.json(await storage.updateAnalyticsEvent(req.params.itemId, req.body));
+      const fields = pickFields(req.body, WRITABLE.analyticsEvents);
+      if (!Object.keys(fields).length) return res.status(400).json({ message: "Nothing to update" });
+      if ("track" in fields) fields.track = isProjectGoal(fields.track) ? fields.track : null;
+      const updated = await storage.updateAnalyticsEvent(req.params.id, req.params.itemId, fields);
+      if (!updated) return res.status(404).json({ message: "Not found in this project" });
+      res.json(updated);
     } catch (e) { res.status(500).json({ message: "Failed to update analytics event" }); }
   });
   app.delete("/api/projects/:id/analytics-events/:itemId", isAuthenticated, async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      await storage.deleteAnalyticsEvent(req.params.itemId);
+      if (!(await storage.deleteAnalyticsEvent(req.params.id, req.params.itemId))) return res.status(404).json({ message: "Not found in this project" });
       res.json({ success: true });
     } catch (e) { res.status(500).json({ message: "Failed to delete analytics event" }); }
   });
@@ -3423,20 +3444,24 @@ RULES:
   app.post("/api/projects/:id/legal-docs", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      const data = insertLegalDocSchema.parse({ ...req.body, projectId: req.params.id });
+      const data = insertLegalDocSchema.parse({ ...pickFields(req.body, WRITABLE.legalDocs), projectId: req.params.id });
       res.json(await storage.createLegalDoc(data));
     } catch (e) { res.status(500).json({ message: "Failed to create legal doc" }); }
   });
   app.patch("/api/projects/:id/legal-docs/:itemId", isAuthenticated, async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      res.json(await storage.updateLegalDoc(req.params.itemId, req.body));
+      const fields = pickFields(req.body, WRITABLE.legalDocs);
+      if (!Object.keys(fields).length) return res.status(400).json({ message: "Nothing to update" });
+      const updated = await storage.updateLegalDoc(req.params.id, req.params.itemId, fields);
+      if (!updated) return res.status(404).json({ message: "Not found in this project" });
+      res.json(updated);
     } catch (e) { res.status(500).json({ message: "Failed to update legal doc" }); }
   });
   app.delete("/api/projects/:id/legal-docs/:itemId", isAuthenticated, async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      await storage.deleteLegalDoc(req.params.itemId);
+      if (!(await storage.deleteLegalDoc(req.params.id, req.params.itemId))) return res.status(404).json({ message: "Not found in this project" });
       res.json({ success: true });
     } catch (e) { res.status(500).json({ message: "Failed to delete legal doc" }); }
   });
@@ -3451,20 +3476,24 @@ RULES:
   app.post("/api/projects/:id/deploy-checklist", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      const data = insertDeployChecklistItemSchema.parse({ ...req.body, projectId: req.params.id });
+      const data = insertDeployChecklistItemSchema.parse({ ...pickFields(req.body, WRITABLE.deployChecklist), projectId: req.params.id });
       res.json(await storage.createDeployChecklistItem(data));
     } catch (e) { res.status(500).json({ message: "Failed to create checklist item" }); }
   });
   app.patch("/api/projects/:id/deploy-checklist/:itemId", isAuthenticated, async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      res.json(await storage.updateDeployChecklistItem(req.params.itemId, req.body));
+      const fields = pickFields(req.body, WRITABLE.deployChecklist);
+      if (!Object.keys(fields).length) return res.status(400).json({ message: "Nothing to update" });
+      const updated = await storage.updateDeployChecklistItem(req.params.id, req.params.itemId, fields);
+      if (!updated) return res.status(404).json({ message: "Not found in this project" });
+      res.json(updated);
     } catch (e) { res.status(500).json({ message: "Failed to update checklist item" }); }
   });
   app.delete("/api/projects/:id/deploy-checklist/:itemId", isAuthenticated, async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      await storage.deleteDeployChecklistItem(req.params.itemId);
+      if (!(await storage.deleteDeployChecklistItem(req.params.id, req.params.itemId))) return res.status(404).json({ message: "Not found in this project" });
       res.json({ success: true });
     } catch (e) { res.status(500).json({ message: "Failed to delete checklist item" }); }
   });
@@ -3479,20 +3508,24 @@ RULES:
   app.post("/api/projects/:id/support-tickets", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      const data = insertSupportTicketSchema.parse({ ...req.body, projectId: req.params.id });
+      const data = insertSupportTicketSchema.parse({ ...pickFields(req.body, WRITABLE.supportTickets), projectId: req.params.id });
       res.json(await storage.createSupportTicket(data));
     } catch (e) { res.status(500).json({ message: "Failed to create ticket" }); }
   });
   app.patch("/api/projects/:id/support-tickets/:itemId", isAuthenticated, async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      res.json(await storage.updateSupportTicket(req.params.itemId, req.body));
+      const fields = pickFields(req.body, WRITABLE.supportTickets);
+      if (!Object.keys(fields).length) return res.status(400).json({ message: "Nothing to update" });
+      const updated = await storage.updateSupportTicket(req.params.id, req.params.itemId, fields);
+      if (!updated) return res.status(404).json({ message: "Not found in this project" });
+      res.json(updated);
     } catch (e) { res.status(500).json({ message: "Failed to update ticket" }); }
   });
   app.delete("/api/projects/:id/support-tickets/:itemId", isAuthenticated, async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      await storage.deleteSupportTicket(req.params.itemId);
+      if (!(await storage.deleteSupportTicket(req.params.id, req.params.itemId))) return res.status(404).json({ message: "Not found in this project" });
       res.json({ success: true });
     } catch (e) { res.status(500).json({ message: "Failed to delete ticket" }); }
   });
@@ -3507,20 +3540,24 @@ RULES:
   app.post("/api/projects/:id/launch-tasks", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      const data = insertLaunchTaskSchema.parse({ ...req.body, projectId: req.params.id });
+      const data = insertLaunchTaskSchema.parse({ ...pickFields(req.body, WRITABLE.launchTasks), projectId: req.params.id });
       res.json(await storage.createLaunchTask(data));
     } catch (e) { res.status(500).json({ message: "Failed to create launch task" }); }
   });
   app.patch("/api/projects/:id/launch-tasks/:itemId", isAuthenticated, async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      res.json(await storage.updateLaunchTask(req.params.itemId, req.body));
+      const fields = pickFields(req.body, WRITABLE.launchTasks);
+      if (!Object.keys(fields).length) return res.status(400).json({ message: "Nothing to update" });
+      const updated = await storage.updateLaunchTask(req.params.id, req.params.itemId, fields);
+      if (!updated) return res.status(404).json({ message: "Not found in this project" });
+      res.json(updated);
     } catch (e) { res.status(500).json({ message: "Failed to update launch task" }); }
   });
   app.delete("/api/projects/:id/launch-tasks/:itemId", isAuthenticated, async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      await storage.deleteLaunchTask(req.params.itemId);
+      if (!(await storage.deleteLaunchTask(req.params.id, req.params.itemId))) return res.status(404).json({ message: "Not found in this project" });
       res.json({ success: true });
     } catch (e) { res.status(500).json({ message: "Failed to delete launch task" }); }
   });
@@ -3531,13 +3568,12 @@ RULES:
     res.json(donations);
   });
 
-  app.post("/api/projects/:id/donate", isAuthenticated, rateLimit("checkout"), async (req: any, res) => {
-    const donorId = (req.user as any).id;
-    const projectId = req.params.id;
-    const validated = insertDonationSchema.parse({ ...req.body, donorId, projectId });
-    const donation = await storage.createDonation(validated);
-    res.json(donation);
-  });
+  /*
+   * There is no route that records a donation directly: it let any signed-in
+   * account write a donation of any amount, with no payment, and add it to the
+   * project's total. Donations are recorded only when Stripe confirms the
+   * payment made through /donate-checkout.
+   */
 
   // Matches
   app.get("/api/matches", isAuthenticated, async (req: any, res) => {
@@ -5465,7 +5501,9 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   app.post("/api/projects/:id/decisions", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
-      const decision = await storage.createDecision({ ...req.body, projectId: req.params.id, userId: (req.user as any).id });
+      const parsed = insertProjectDecisionSchema.safeParse({ ...pickFields(req.body, WRITABLE.decisions), projectId: req.params.id, userId: (req.user as any).id });
+      if (!parsed.success) return res.status(400).json({ message: parsed.error.issues[0]?.message ?? "Invalid decision" });
+      const decision = await storage.createDecision(parsed.data);
       await storage.logActivity({ projectId: req.params.id, userId: (req.user as any).id, action: "created decision", entityType: "decision", entityId: decision.id, metadata: { title: decision.title } });
       res.json(decision);
     } catch (error) { res.status(500).json({ message: "Failed to create decision" }); }
@@ -5519,7 +5557,9 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
       const track = isProjectGoal(req.body?.track) ? req.body.track : null;
-      const file = await storage.createProjectFile({ ...req.body, track, projectId: req.params.id, uploaderId: (req.user as any).id });
+      const parsed = insertProjectFileSchema.safeParse({ ...pickFields(req.body, WRITABLE.files), track, projectId: req.params.id, uploaderId: (req.user as any).id });
+      if (!parsed.success) return res.status(400).json({ message: parsed.error.issues[0]?.message ?? "Invalid file" });
+      const file = await storage.createProjectFile(parsed.data);
       await storage.logActivity({ projectId: req.params.id, userId: (req.user as any).id, action: "uploaded file", entityType: "file", entityId: file.id, metadata: { name: file.name } });
       res.json(file);
     } catch (error) { res.status(500).json({ message: "Failed to create file" }); }
@@ -5546,7 +5586,9 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   app.post("/api/projects/:id/links", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
-      const link = await storage.createProjectLink({ ...req.body, projectId: req.params.id });
+      const parsed = insertProjectLinkSchema.safeParse({ ...pickFields(req.body, WRITABLE.links), projectId: req.params.id });
+      if (!parsed.success) return res.status(400).json({ message: parsed.error.issues[0]?.message ?? "Invalid link" });
+      const link = await storage.createProjectLink(parsed.data);
       res.json(link);
     } catch (error) { res.status(500).json({ message: "Failed to create link" }); }
   });
@@ -5566,7 +5608,9 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       const project = await storage.getProject(req.params.id);
       if (!project) return res.status(404).json({ message: "Project not found" });
       if (project.ownerId !== (req.user as any).id && req.params.userId !== (req.user as any).id) return res.status(403).json({ message: "Unauthorized" });
-      const member = await storage.updateProjectMember(req.params.id, req.params.userId, req.body);
+      const fields = pickFields(req.body, WRITABLE.member);
+      if (!Object.keys(fields).length) return res.status(400).json({ message: "Nothing to update" });
+      const member = await storage.updateProjectMember(req.params.id, req.params.userId, fields);
       res.json(member);
     } catch (error) { res.status(500).json({ message: "Failed to update member" }); }
   });

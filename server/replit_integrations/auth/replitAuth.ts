@@ -8,38 +8,19 @@ import type { Express, RequestHandler } from "express";
 import connectPg from "connect-pg-simple";
 import { authStorage } from "./storage";
 import bcrypt from "bcryptjs";
+import { sessionSecret } from "../../secrets";
 
 export function getSession() {
   const sessionTtlSeconds = 7 * 24 * 60 * 60;
   const sessionTtlMs = sessionTtlSeconds * 1000;
   const isProduction = process.env.NODE_ENV === "production";
   /*
-   * Refused in production: unset, or set to the development fallback below.
-   *
-   * Checking only for presence isn't enough. The fallback string is committed
-   * to a public repository, so anyone can read it — and a deployment that
-   * copied it out of a local .env would be signing session cookies with a
-   * value the whole internet knows, which is forgeable session cookies for
-   * every account. That is exactly what had happened here, and a guard that
-   * only asked "is it set?" said yes to it.
+   * No fallback, in any environment: unset throws, and so, in production, does
+   * a short or publicly known value (server/secrets.ts). There used to be a
+   * development default here, which any deploy not running with NODE_ENV
+   * exactly "production" would quietly sign cookies with.
    */
-  const DEV_FALLBACK = "dev-session-secret";
-  if (isProduction && !process.env.SESSION_SECRET) {
-    throw new Error("SESSION_SECRET must be set in production");
-  }
-  if (isProduction && process.env.SESSION_SECRET === DEV_FALLBACK) {
-    throw new Error(
-      "SESSION_SECRET is set to the public development fallback. Generate a real one: " +
-      "node -e \"console.log(require('crypto').randomBytes(48).toString('base64url'))\"",
-    );
-  }
-  // Debug: log session secret presence and session import
-  try {
-    // eslint-disable-next-line no-console
-    console.log("getSession() SESSION_SECRET=", Boolean(process.env.SESSION_SECRET));
-    // eslint-disable-next-line no-console
-    console.log("express-session type:", typeof session);
-  } catch (e) {}
+  const secret = sessionSecret();
   const sessionFn: any = (session as any)?.default || session;
   const pgStore = connectPg(sessionFn);
   const sessionStore = new pgStore({
@@ -49,7 +30,7 @@ export function getSession() {
     tableName: "sessions",
   });
   return sessionFn({
-    secret: process.env.SESSION_SECRET || DEV_FALLBACK,
+    secret,
     store: sessionStore,
     resave: false,
     saveUninitialized: false,

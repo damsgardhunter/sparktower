@@ -18,6 +18,7 @@ import { db } from "./db";
 import { users, mobileRefreshTokens } from "@shared/schema";
 import { eq, and, isNull, gt } from "drizzle-orm";
 import { storage } from "./storage";
+import { ACCESS_TOKEN_KEY_LABEL, mobileTokenKey } from "./secrets";
 import { ensureUserProfile } from "./user-provisioning";
 import { stampSignupAttribution } from "./attribution";
 import { enforceRateLimit, ipKey, rateLimit } from "./moderation";
@@ -27,8 +28,7 @@ import { checkSecondFactor, limitMfaAttempts, mfaEnabledFor, mfaRequiredFor, rea
 const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;          // 15 minutes
 const REFRESH_TOKEN_TTL_DAYS = 60;
 
-/** Labels the key derived for access tokens when there's no MOBILE_TOKEN_SECRET. Changing it signs everyone's access tokens out (refresh tokens are unaffected). */
-export const ACCESS_TOKEN_KEY_LABEL = "sparktower/mobile-access-token/v1";
+export { ACCESS_TOKEN_KEY_LABEL };
 
 /**
  * The key access tokens are signed with.
@@ -41,12 +41,7 @@ export const ACCESS_TOKEN_KEY_LABEL = "sparktower/mobile-access-token/v1";
  * signed with the raw secret before this stop verifying; the app refreshes
  * with its refresh token, which is stored by hash and doesn't depend on it.)
  */
-export function tokenSecret(): string {
-  if (process.env.MOBILE_TOKEN_SECRET) return process.env.MOBILE_TOKEN_SECRET;
-  const session = process.env.SESSION_SECRET;
-  if (!session) throw new Error("MOBILE_TOKEN_SECRET or SESSION_SECRET must be set");
-  return crypto.createHmac("sha256", session).update(ACCESS_TOKEN_KEY_LABEL).digest("base64url");
-}
+export const tokenSecret = mobileTokenKey;
 
 /** Said once at boot in production: a dedicated secret is still the better setup. */
 export function warnIfSharedTokenSecret(): void {

@@ -5,13 +5,12 @@
  * which is the right failure: the builder re-enters it.
  */
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "crypto";
+import { sessionSecret } from "./secrets";
 
 let key: Buffer | null = null;
 function derive(): Buffer {
   if (key) return key;
-  const secret = process.env.SESSION_SECRET;
-  if (!secret) throw new Error("SESSION_SECRET is required to seal secrets");
-  key = scryptSync(secret, "sparktower:secret-box:v1", 32);
+  key = scryptSync(sessionSecret(), "sparktower:secret-box:v1", 32);
   return key;
 }
 

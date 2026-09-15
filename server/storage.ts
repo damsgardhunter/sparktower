@@ -249,55 +249,55 @@ export interface IStorage {
   // Waitlist
   getWaitlistEntries(projectId: string): Promise<WaitlistEntry[]>;
   createWaitlistEntry(data: InsertWaitlistEntry): Promise<WaitlistEntry>;
-  deleteWaitlistEntry(id: string): Promise<void>;
+  deleteWaitlistEntry(projectId: string, id: string): Promise<boolean>;
 
   // Interviews
   getProjectInterviews(projectId: string): Promise<ProjectInterview[]>;
   createProjectInterview(data: InsertProjectInterview): Promise<ProjectInterview>;
-  updateProjectInterview(id: string, data: Partial<InsertProjectInterview>): Promise<ProjectInterview>;
-  deleteProjectInterview(id: string): Promise<void>;
+  updateProjectInterview(projectId: string, id: string, data: Partial<InsertProjectInterview>): Promise<ProjectInterview | undefined>;
+  deleteProjectInterview(projectId: string, id: string): Promise<boolean>;
 
   // Experiments
   getProjectExperiments(projectId: string): Promise<ProjectExperiment[]>;
   createProjectExperiment(data: InsertProjectExperiment): Promise<ProjectExperiment>;
-  updateProjectExperiment(id: string, data: Partial<InsertProjectExperiment>): Promise<ProjectExperiment>;
-  deleteProjectExperiment(id: string): Promise<void>;
+  updateProjectExperiment(projectId: string, id: string, data: Partial<InsertProjectExperiment>): Promise<ProjectExperiment | undefined>;
+  deleteProjectExperiment(projectId: string, id: string): Promise<boolean>;
 
   // Pricing Tiers
   getProjectPricingTiers(projectId: string): Promise<PricingTier[]>;
   createPricingTier(data: InsertPricingTier): Promise<PricingTier>;
-  updatePricingTier(id: string, data: Partial<InsertPricingTier>): Promise<PricingTier>;
-  deletePricingTier(id: string): Promise<void>;
+  updatePricingTier(projectId: string, id: string, data: Partial<InsertPricingTier>): Promise<PricingTier | undefined>;
+  deletePricingTier(projectId: string, id: string): Promise<boolean>;
 
   // Analytics Events
   getProjectAnalyticsEvents(projectId: string): Promise<AnalyticsEvent[]>;
   createAnalyticsEvent(data: InsertAnalyticsEvent): Promise<AnalyticsEvent>;
-  updateAnalyticsEvent(id: string, data: Partial<InsertAnalyticsEvent>): Promise<AnalyticsEvent>;
-  deleteAnalyticsEvent(id: string): Promise<void>;
+  updateAnalyticsEvent(projectId: string, id: string, data: Partial<InsertAnalyticsEvent>): Promise<AnalyticsEvent | undefined>;
+  deleteAnalyticsEvent(projectId: string, id: string): Promise<boolean>;
 
   // Legal Docs
   getProjectLegalDocs(projectId: string): Promise<LegalDoc[]>;
   createLegalDoc(data: InsertLegalDoc): Promise<LegalDoc>;
-  updateLegalDoc(id: string, data: Partial<InsertLegalDoc>): Promise<LegalDoc>;
-  deleteLegalDoc(id: string): Promise<void>;
+  updateLegalDoc(projectId: string, id: string, data: Partial<InsertLegalDoc>): Promise<LegalDoc | undefined>;
+  deleteLegalDoc(projectId: string, id: string): Promise<boolean>;
 
   // Deploy Checklist
   getDeployChecklistItems(projectId: string): Promise<DeployChecklistItem[]>;
   createDeployChecklistItem(data: InsertDeployChecklistItem): Promise<DeployChecklistItem>;
-  updateDeployChecklistItem(id: string, data: Partial<InsertDeployChecklistItem>): Promise<DeployChecklistItem>;
-  deleteDeployChecklistItem(id: string): Promise<void>;
+  updateDeployChecklistItem(projectId: string, id: string, data: Partial<InsertDeployChecklistItem>): Promise<DeployChecklistItem | undefined>;
+  deleteDeployChecklistItem(projectId: string, id: string): Promise<boolean>;
 
   // Support Tickets
   getProjectSupportTickets(projectId: string): Promise<SupportTicket[]>;
   createSupportTicket(data: InsertSupportTicket): Promise<SupportTicket>;
-  updateSupportTicket(id: string, data: Partial<InsertSupportTicket>): Promise<SupportTicket>;
-  deleteSupportTicket(id: string): Promise<void>;
+  updateSupportTicket(projectId: string, id: string, data: Partial<InsertSupportTicket>): Promise<SupportTicket | undefined>;
+  deleteSupportTicket(projectId: string, id: string): Promise<boolean>;
 
   // Launch Tasks
   getProjectLaunchTasks(projectId: string): Promise<LaunchTask[]>;
   createLaunchTask(data: InsertLaunchTask): Promise<LaunchTask>;
-  updateLaunchTask(id: string, data: Partial<InsertLaunchTask>): Promise<LaunchTask>;
-  deleteLaunchTask(id: string): Promise<void>;
+  updateLaunchTask(projectId: string, id: string, data: Partial<InsertLaunchTask>): Promise<LaunchTask | undefined>;
+  deleteLaunchTask(projectId: string, id: string): Promise<boolean>;
 
   // Nova Guide Messages
   getNovaGuideMessages(projectId: string): Promise<NovaGuideMessage[]>;
@@ -532,7 +532,7 @@ export interface IStorage {
   getSprintMessages(sprintId: string): Promise<(SprintMessage & { user: User })[]>;
   getSprintTasks(sprintId: string): Promise<SprintKanbanTask[]>;
   createSprintTask(data: { sprintId: string; title: string; description?: string; order?: number; assigneeId?: string }): Promise<SprintKanbanTask>;
-  updateSprintTask(id: string, data: Partial<SprintKanbanTask>): Promise<SprintKanbanTask>;
+  updateSprintTask(sprintId: string, id: string, data: Partial<SprintKanbanTask>): Promise<SprintKanbanTask | undefined>;
   upsertSprintBehavioralMetrics(data: { sprintId: string; userId: string } & Partial<SprintBehavioralMetrics>): Promise<SprintBehavioralMetrics>;
   getSprintBehavioralMetrics(sprintId: string): Promise<SprintBehavioralMetrics[]>;
   saveCompatibilityReport(data: { sprintId: string; overallScore: number; strengths: any; risks: any; recommendation: string }): Promise<SprintCompatibilityReport>;
@@ -742,8 +742,9 @@ export class DatabaseStorage implements IStorage {
     const [entry] = await db.insert(projectWaitlistEntries).values(data).returning();
     return entry;
   }
-  async deleteWaitlistEntry(id: string): Promise<void> {
-    await db.delete(projectWaitlistEntries).where(eq(projectWaitlistEntries.id, id));
+  async deleteWaitlistEntry(projectId: string, id: string): Promise<boolean> {
+    const gone = await db.delete(projectWaitlistEntries).where(and(eq(projectWaitlistEntries.id, id), eq(projectWaitlistEntries.projectId, projectId))).returning({ id: projectWaitlistEntries.id });
+    return gone.length > 0;
   }
 
   async getProjectInterviews(projectId: string): Promise<ProjectInterview[]> {
@@ -753,12 +754,13 @@ export class DatabaseStorage implements IStorage {
     const [entry] = await db.insert(projectInterviews).values(data).returning();
     return entry;
   }
-  async updateProjectInterview(id: string, data: Partial<InsertProjectInterview>): Promise<ProjectInterview> {
-    const [entry] = await db.update(projectInterviews).set(data).where(eq(projectInterviews.id, id)).returning();
+  async updateProjectInterview(projectId: string, id: string, data: Partial<InsertProjectInterview>): Promise<ProjectInterview | undefined> {
+    const [entry] = await db.update(projectInterviews).set(data).where(and(eq(projectInterviews.id, id), eq(projectInterviews.projectId, projectId))).returning();
     return entry;
   }
-  async deleteProjectInterview(id: string): Promise<void> {
-    await db.delete(projectInterviews).where(eq(projectInterviews.id, id));
+  async deleteProjectInterview(projectId: string, id: string): Promise<boolean> {
+    const gone = await db.delete(projectInterviews).where(and(eq(projectInterviews.id, id), eq(projectInterviews.projectId, projectId))).returning({ id: projectInterviews.id });
+    return gone.length > 0;
   }
 
   async getProjectExperiments(projectId: string): Promise<ProjectExperiment[]> {
@@ -768,12 +770,13 @@ export class DatabaseStorage implements IStorage {
     const [entry] = await db.insert(projectExperiments).values(data).returning();
     return entry;
   }
-  async updateProjectExperiment(id: string, data: Partial<InsertProjectExperiment>): Promise<ProjectExperiment> {
-    const [entry] = await db.update(projectExperiments).set(data).where(eq(projectExperiments.id, id)).returning();
+  async updateProjectExperiment(projectId: string, id: string, data: Partial<InsertProjectExperiment>): Promise<ProjectExperiment | undefined> {
+    const [entry] = await db.update(projectExperiments).set(data).where(and(eq(projectExperiments.id, id), eq(projectExperiments.projectId, projectId))).returning();
     return entry;
   }
-  async deleteProjectExperiment(id: string): Promise<void> {
-    await db.delete(projectExperiments).where(eq(projectExperiments.id, id));
+  async deleteProjectExperiment(projectId: string, id: string): Promise<boolean> {
+    const gone = await db.delete(projectExperiments).where(and(eq(projectExperiments.id, id), eq(projectExperiments.projectId, projectId))).returning({ id: projectExperiments.id });
+    return gone.length > 0;
   }
 
   async getProjectPricingTiers(projectId: string): Promise<PricingTier[]> {
@@ -783,12 +786,13 @@ export class DatabaseStorage implements IStorage {
     const [entry] = await db.insert(projectPricingTiers).values(data).returning();
     return entry;
   }
-  async updatePricingTier(id: string, data: Partial<InsertPricingTier>): Promise<PricingTier> {
-    const [entry] = await db.update(projectPricingTiers).set(data).where(eq(projectPricingTiers.id, id)).returning();
+  async updatePricingTier(projectId: string, id: string, data: Partial<InsertPricingTier>): Promise<PricingTier | undefined> {
+    const [entry] = await db.update(projectPricingTiers).set(data).where(and(eq(projectPricingTiers.id, id), eq(projectPricingTiers.projectId, projectId))).returning();
     return entry;
   }
-  async deletePricingTier(id: string): Promise<void> {
-    await db.delete(projectPricingTiers).where(eq(projectPricingTiers.id, id));
+  async deletePricingTier(projectId: string, id: string): Promise<boolean> {
+    const gone = await db.delete(projectPricingTiers).where(and(eq(projectPricingTiers.id, id), eq(projectPricingTiers.projectId, projectId))).returning({ id: projectPricingTiers.id });
+    return gone.length > 0;
   }
 
   async getProjectAnalyticsEvents(projectId: string): Promise<AnalyticsEvent[]> {
@@ -798,12 +802,13 @@ export class DatabaseStorage implements IStorage {
     const [entry] = await db.insert(projectAnalyticsEvents).values(data).returning();
     return entry;
   }
-  async updateAnalyticsEvent(id: string, data: Partial<InsertAnalyticsEvent>): Promise<AnalyticsEvent> {
-    const [entry] = await db.update(projectAnalyticsEvents).set(data).where(eq(projectAnalyticsEvents.id, id)).returning();
+  async updateAnalyticsEvent(projectId: string, id: string, data: Partial<InsertAnalyticsEvent>): Promise<AnalyticsEvent | undefined> {
+    const [entry] = await db.update(projectAnalyticsEvents).set(data).where(and(eq(projectAnalyticsEvents.id, id), eq(projectAnalyticsEvents.projectId, projectId))).returning();
     return entry;
   }
-  async deleteAnalyticsEvent(id: string): Promise<void> {
-    await db.delete(projectAnalyticsEvents).where(eq(projectAnalyticsEvents.id, id));
+  async deleteAnalyticsEvent(projectId: string, id: string): Promise<boolean> {
+    const gone = await db.delete(projectAnalyticsEvents).where(and(eq(projectAnalyticsEvents.id, id), eq(projectAnalyticsEvents.projectId, projectId))).returning({ id: projectAnalyticsEvents.id });
+    return gone.length > 0;
   }
 
   async getProjectLegalDocs(projectId: string): Promise<LegalDoc[]> {
@@ -813,12 +818,13 @@ export class DatabaseStorage implements IStorage {
     const [entry] = await db.insert(projectLegalDocs).values(data).returning();
     return entry;
   }
-  async updateLegalDoc(id: string, data: Partial<InsertLegalDoc>): Promise<LegalDoc> {
-    const [entry] = await db.update(projectLegalDocs).set(data).where(eq(projectLegalDocs.id, id)).returning();
+  async updateLegalDoc(projectId: string, id: string, data: Partial<InsertLegalDoc>): Promise<LegalDoc | undefined> {
+    const [entry] = await db.update(projectLegalDocs).set(data).where(and(eq(projectLegalDocs.id, id), eq(projectLegalDocs.projectId, projectId))).returning();
     return entry;
   }
-  async deleteLegalDoc(id: string): Promise<void> {
-    await db.delete(projectLegalDocs).where(eq(projectLegalDocs.id, id));
+  async deleteLegalDoc(projectId: string, id: string): Promise<boolean> {
+    const gone = await db.delete(projectLegalDocs).where(and(eq(projectLegalDocs.id, id), eq(projectLegalDocs.projectId, projectId))).returning({ id: projectLegalDocs.id });
+    return gone.length > 0;
   }
 
   async getDeployChecklistItems(projectId: string): Promise<DeployChecklistItem[]> {
@@ -828,12 +834,13 @@ export class DatabaseStorage implements IStorage {
     const [entry] = await db.insert(projectDeployChecklistItems).values(data).returning();
     return entry;
   }
-  async updateDeployChecklistItem(id: string, data: Partial<InsertDeployChecklistItem>): Promise<DeployChecklistItem> {
-    const [entry] = await db.update(projectDeployChecklistItems).set(data).where(eq(projectDeployChecklistItems.id, id)).returning();
+  async updateDeployChecklistItem(projectId: string, id: string, data: Partial<InsertDeployChecklistItem>): Promise<DeployChecklistItem | undefined> {
+    const [entry] = await db.update(projectDeployChecklistItems).set(data).where(and(eq(projectDeployChecklistItems.id, id), eq(projectDeployChecklistItems.projectId, projectId))).returning();
     return entry;
   }
-  async deleteDeployChecklistItem(id: string): Promise<void> {
-    await db.delete(projectDeployChecklistItems).where(eq(projectDeployChecklistItems.id, id));
+  async deleteDeployChecklistItem(projectId: string, id: string): Promise<boolean> {
+    const gone = await db.delete(projectDeployChecklistItems).where(and(eq(projectDeployChecklistItems.id, id), eq(projectDeployChecklistItems.projectId, projectId))).returning({ id: projectDeployChecklistItems.id });
+    return gone.length > 0;
   }
 
   async getProjectSupportTickets(projectId: string): Promise<SupportTicket[]> {
@@ -843,12 +850,13 @@ export class DatabaseStorage implements IStorage {
     const [entry] = await db.insert(projectSupportTickets).values(data).returning();
     return entry;
   }
-  async updateSupportTicket(id: string, data: Partial<InsertSupportTicket>): Promise<SupportTicket> {
-    const [entry] = await db.update(projectSupportTickets).set(data).where(eq(projectSupportTickets.id, id)).returning();
+  async updateSupportTicket(projectId: string, id: string, data: Partial<InsertSupportTicket>): Promise<SupportTicket | undefined> {
+    const [entry] = await db.update(projectSupportTickets).set(data).where(and(eq(projectSupportTickets.id, id), eq(projectSupportTickets.projectId, projectId))).returning();
     return entry;
   }
-  async deleteSupportTicket(id: string): Promise<void> {
-    await db.delete(projectSupportTickets).where(eq(projectSupportTickets.id, id));
+  async deleteSupportTicket(projectId: string, id: string): Promise<boolean> {
+    const gone = await db.delete(projectSupportTickets).where(and(eq(projectSupportTickets.id, id), eq(projectSupportTickets.projectId, projectId))).returning({ id: projectSupportTickets.id });
+    return gone.length > 0;
   }
 
   async getProjectLaunchTasks(projectId: string): Promise<LaunchTask[]> {
@@ -858,12 +866,13 @@ export class DatabaseStorage implements IStorage {
     const [entry] = await db.insert(projectLaunchTasks).values(data).returning();
     return entry;
   }
-  async updateLaunchTask(id: string, data: Partial<InsertLaunchTask>): Promise<LaunchTask> {
-    const [entry] = await db.update(projectLaunchTasks).set(data).where(eq(projectLaunchTasks.id, id)).returning();
+  async updateLaunchTask(projectId: string, id: string, data: Partial<InsertLaunchTask>): Promise<LaunchTask | undefined> {
+    const [entry] = await db.update(projectLaunchTasks).set(data).where(and(eq(projectLaunchTasks.id, id), eq(projectLaunchTasks.projectId, projectId))).returning();
     return entry;
   }
-  async deleteLaunchTask(id: string): Promise<void> {
-    await db.delete(projectLaunchTasks).where(eq(projectLaunchTasks.id, id));
+  async deleteLaunchTask(projectId: string, id: string): Promise<boolean> {
+    const gone = await db.delete(projectLaunchTasks).where(and(eq(projectLaunchTasks.id, id), eq(projectLaunchTasks.projectId, projectId))).returning({ id: projectLaunchTasks.id });
+    return gone.length > 0;
   }
 
   async getNovaGuideMessages(projectId: string): Promise<NovaGuideMessage[]> {
@@ -2682,8 +2691,8 @@ export class DatabaseStorage implements IStorage {
     return task;
   }
 
-  async updateSprintTask(id: string, data: Partial<SprintKanbanTask>): Promise<SprintKanbanTask> {
-    const [task] = await db.update(sprintKanbanTasks).set(data).where(eq(sprintKanbanTasks.id, id)).returning();
+  async updateSprintTask(sprintId: string, id: string, data: Partial<SprintKanbanTask>): Promise<SprintKanbanTask | undefined> {
+    const [task] = await db.update(sprintKanbanTasks).set(data).where(and(eq(sprintKanbanTasks.id, id), eq(sprintKanbanTasks.sprintId, sprintId))).returning();
     return task;
   }
 

@@ -67,7 +67,9 @@ describe("following and members", () => {
     expect(Array.isArray(members)).toBe(true);
     expect(members.some((m: any) => m.userId === owner.userId)).toBe(true);
     // A stranger can't edit the owner's membership; the owner can.
-    expect((await fan.agent.patch(`/api/projects/${id}/members/${owner.userId}`).send({ role: "admin" })).status).toBe(403);
-    expect((await owner.agent.patch(`/api/projects/${id}/members/${owner.userId}`).send({ role: "owner" })).status).toBe(200);
+    expect((await fan.agent.patch(`/api/projects/${id}/members/${owner.userId}`).send({ timezone: "UTC" })).status).toBe(403);
+    expect((await owner.agent.patch(`/api/projects/${id}/members/${owner.userId}`).send({ timezone: "UTC" })).status).toBe(200);
+    // Roles aren't edited here (test/integration/request-body-writes.test.ts): a body with only a role changes nothing.
+    expect((await owner.agent.patch(`/api/projects/${id}/members/${owner.userId}`).send({ role: "admin" })).status).toBe(400);
   });
 });

@@ -24,6 +24,7 @@ import { and, eq, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "./db";
 import { users } from "@shared/schema";
 import { seal, open } from "./secret-box";
+import { deriveKey, mobileTokenKey } from "./secrets";
 import { newTotpSecret, otpauthUrl, verifyTotp } from "./totp";
 import { atLeast, isOwner } from "./platform-roles";
 import { enforceRateLimit, rateLimit } from "./moderation";
@@ -91,7 +92,8 @@ export async function checkSecondFactor(userId: string, code: string): Promise<"
 
 // --- Mobile: a signed, short-lived challenge instead of a server session ---------
 
-const challengeKey = () => crypto.createHmac("sha256", process.env.MOBILE_TOKEN_SECRET || process.env.SESSION_SECRET || "").update("sparktower:mfa-challenge:v1").digest();
+/** Derived from the mobile token key, which throws when no secret is set: never an empty or default key. */
+const challengeKey = () => deriveKey(mobileTokenKey(), "sparktower:mfa-challenge:v1");
 
 export function signMfaChallenge(userId: string, now = Date.now()): string {
   const payload = Buffer.from(JSON.stringify({ sub: userId, exp: now + MFA_CHALLENGE_TTL_MS, p: "mfa" })).toString("base64url");
