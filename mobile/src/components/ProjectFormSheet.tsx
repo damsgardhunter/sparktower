@@ -42,7 +42,7 @@ export function ProjectFormSheet({
               <Icon name="close" size={20} color={colors.textSecondary} />
             </Pressable>
           </View>
-          <ScrollView style={{ flexGrow: 0 }} contentContainerStyle={s.body} keyboardShouldPersistTaps="handled">
+          <ScrollView style={{ flexGrow: 0, flexShrink: 1 }} contentContainerStyle={s.body} keyboardShouldPersistTaps="handled">
             {children}
           </ScrollView>
           {action && (

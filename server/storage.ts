@@ -231,6 +231,8 @@ export interface FeedPostWithDetails extends FeedPost {
   credits: { commentId: string; authorId: string; name: string }[];
   /** The path step this post shares, when it shares one. */
   pathStep: { taskId: string; title: string } | null;
+  /** The steps a weekly progress update shares. */
+  pathWeek: { steps: { taskId: string; title: string }[] } | null;
 }
 
 export interface IStorage {
@@ -1540,11 +1542,17 @@ export class DatabaseStorage implements IStorage {
       ? await db.select({ id: projectKanbanTasks.id, title: projectKanbanTasks.title }).from(projectKanbanTasks).where(eq(projectKanbanTasks.id, post.entityId))
       : [];
 
+    const weekSteps = post.entityType === "path_week"
+      ? await db.select({ id: projectKanbanTasks.id, title: projectKanbanTasks.title }).from(projectKanbanTasks)
+        .where(sql`${`posted:${post.id}`} = ANY(${projectKanbanTasks.tags})`)
+      : [];
+
     return {
       ...post,
       author,
       profile,
       pathStep: stepTask ? { taskId: stepTask.id, title: stepTask.title } : null,
+      pathWeek: post.entityType === "path_week" ? { steps: weekSteps.map((t) => ({ taskId: t.id, title: t.title })) } : null,
       project: project ? { id: project.id, title: project.title, isPrivate: project.isPrivate } : null,
       viewerReaction,
       reactionBreakdown: breakdownRows.map((r) => ({ reaction: r.reaction, count: r.count })),

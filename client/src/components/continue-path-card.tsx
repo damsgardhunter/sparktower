@@ -21,6 +21,7 @@ export interface NextStepItem {
   daysSinceActivity: number;
   projectedAt: string | null;
   lastDone: { taskId: string; title: string; completedAt: string; sharedPostId: string | null } | null;
+  weekly?: { due: boolean; steps: { taskId: string; title: string; completedAt: string }[] };
 }
 
 const ACTOR_SHORT: Record<string, string> = {
@@ -95,6 +96,66 @@ export function ShareStepDialog({ projectId, projectTitle, step, open, onClose }
 }
 
 /**
+ * The weekly progress update — what replaced the check-in. Everything finished
+ * on the path this week that nobody has shared yet, listed and ticked, with a
+ * question or two. Posted, those steps leave the list; comments on it come back
+ * as notifications, and the post links the team back to the next step.
+ */
+export function WeeklyUpdateDialog({ projectId, projectTitle, steps, open, onClose }: {
+  projectId: string; projectTitle: string; steps: { taskId: string; title: string }[]; open: boolean; onClose: () => void;
+}) {
+  const { toast } = useToast();
+  const [picked, setPicked] = useState<string[]>(steps.map((s) => s.taskId));
+  const [content, setContent] = useState(`This week on ${projectTitle}:\n${steps.map((s) => `- ${s.title}`).join("\n")}\n\n`);
+  const [ask, setAsk] = useState("");
+  const post = useMutation({
+    mutationFn: async () => (await apiRequest("POST", "/api/feed", {
+      postType: "project_update", projectId, content: content.trim(), asks: ask.trim() ? [ask.trim()] : [], pathStepIds: picked,
+    })).json(),
+    onSuccess: () => {
+      toast({ title: "Weekly update posted", description: "Replies land in your notifications and your project's feedback inbox." });
+      refreshNextSteps(projectId);
+      onClose();
+    },
+    onError: (e) => toast({ title: "Couldn't post that", description: errorText(e), variant: "destructive" }),
+  });
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md" data-testid="weekly-update-dialog">
+        <DialogHeader>
+          <DialogTitle>This week's progress</DialogTitle>
+          <DialogDescription>What you finished on the path, ready to post. Ask something specific and the feedback comes back to you.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2">
+          <ul className="space-y-1 text-sm" data-testid="weekly-update-steps">
+            {steps.map((s) => (
+              <li key={s.taskId}>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={picked.includes(s.taskId)} onChange={(e) => setPicked((p) => e.target.checked ? [...p, s.taskId] : p.filter((x) => x !== s.taskId))} data-testid={`weekly-step-${s.taskId}`} />
+                  {s.title}
+                </label>
+              </li>
+            ))}
+          </ul>
+          <Textarea rows={5} value={content} onChange={(e) => setContent(e.target.value)} data-testid="input-weekly-content" />
+          <input
+            className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+            placeholder="What do you want feedback on this week?"
+            value={ask} onChange={(e) => setAsk(e.target.value)} data-testid="input-weekly-ask"
+          />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Not now</Button>
+          <Button disabled={!content.trim() || !picked.length || post.isPending} onClick={() => post.mutate()} data-testid="button-post-weekly">
+            {post.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Share2 className="h-4 w-4 mr-1.5" />}Post update
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
  * The top of the home feed: where each of your paths is and the one step
  * waiting on it. The retention loop's front door — opening the app lands you
  * one click from the next thing to do, not in the feed with your project three
@@ -103,6 +164,7 @@ export function ShareStepDialog({ projectId, projectTitle, step, open, onClose }
 export function ContinuePathCard() {
   const { data } = useQuery<{ items: NextStepItem[] }>({ queryKey: ["/api/me/next-steps"] });
   const [sharing, setSharing] = useState<NextStepItem | null>(null);
+  const [weekly, setWeekly] = useState<NextStepItem | null>(null);
   const items = data?.items ?? [];
   if (!items.length) return null;
 
@@ -142,7 +204,13 @@ export function ContinuePathCard() {
                   ) : (
                     <p className="text-muted-foreground">The main line is done — pick what's next on the project.</p>
                   )}
-                  {item.lastDone && !item.lastDone.sharedPostId && (
+                  {/* Several steps this week: the weekly update. One: share that step. */}
+                  {item.weekly?.due && item.weekly.steps.length > 1 && (
+                    <button className="text-xs text-primary hover:underline flex items-center gap-1" onClick={() => setWeekly(item)} data-testid={`button-weekly-update-${item.project.id}`}>
+                      <Share2 className="h-3 w-3" /> {item.weekly.steps.length} steps finished this week — post your weekly update
+                    </button>
+                  )}
+                  {item.lastDone && !item.lastDone.sharedPostId && !(item.weekly?.due && item.weekly.steps.length > 1) && (
                     <button className="text-xs text-primary hover:underline flex items-center gap-1" onClick={() => setSharing(item)} data-testid={`button-share-last-step-${item.project.id}`}>
                       <Share2 className="h-3 w-3" /> You finished "{item.lastDone.title}" — share it for feedback
                     </button>
@@ -153,6 +221,9 @@ export function ContinuePathCard() {
           </ul>
         </CardContent>
       </Card>
+      {weekly?.weekly && (
+        <WeeklyUpdateDialog projectId={weekly.project.id} projectTitle={weekly.project.title} steps={weekly.weekly.steps} open onClose={() => setWeekly(null)} />
+      )}
       {sharing?.lastDone && (
         <ShareStepDialog
           projectId={sharing.project.id} projectTitle={sharing.project.title}

@@ -9,7 +9,7 @@ import { UserAvatar } from "@/components/user-avatar";
 import { FeedPostCard, type FeedPostWithDetails } from "@/components/feed-post-card";
 import { REACTIONS, REACTIONS_BY_KEY } from "@shared/feed";
 import type { FeedReaction } from "@shared/schema";
-import { ArrowLeft, Newspaper } from "lucide-react";
+import { ArrowLeft, ArrowRight, Compass, Newspaper } from "lucide-react";
 
 interface Reactor { userId: string; reaction: FeedReaction; name: string; headline: string | null; avatarUrl: string | null }
 
@@ -18,6 +18,25 @@ interface Reactor { userId: string; reaction: FeedReaction; name: string; headli
  * What a shared link or "your feedback was used" lands on, and where a
  * conversation on an update is easiest to follow.
  */
+/** The project's next step, for someone on its team reading feedback on a shared step. */
+function NextStepLink({ projectId }: { projectId: string }) {
+  const { data } = useQuery<{ adopted?: boolean; next?: { title: string; step?: { title: string } | null } | null }>({ queryKey: ["/api/projects", projectId, "path"] });
+  if (!data?.adopted) return null;
+  return (
+    <Link
+      href={`/projects/${projectId}/manage`}
+      className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-[13px] hover:bg-primary/10"
+      data-testid="post-next-step"
+    >
+      <Compass className="h-4 w-4 text-primary shrink-0" />
+      <span className="min-w-0 flex-1 truncate">
+        {data.next ? <>Your next step: <span className="font-medium">{data.next.step?.title ?? data.next.title}</span></> : "Back to your path"}
+      </span>
+      <span className="text-xs text-primary shrink-0 flex items-center gap-1">Continue <ArrowRight className="h-3 w-3" /></span>
+    </Link>
+  );
+}
+
 export default function PostDetail() {
   const { id } = useParams<{ id: string }>();
   const [tab, setTab] = useState<FeedReaction | "all">("all");
@@ -66,6 +85,9 @@ export default function PostDetail() {
           </Card>
         ) : (
           <>
+            {/* A step shared from the path: feedback read, back to the next one. Team only. */}
+            {post.project && post.viewerIsTeam && (post.pathStep || post.pathWeek) && <NextStepLink projectId={post.project.id} />}
+
             <FeedPostCard post={post} standalone />
 
             {/* The interactions: everyone who reacted, by reaction. */}

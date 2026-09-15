@@ -1089,6 +1089,8 @@ export const NOTIFICATION_KINDS = [
   "feedback_used",
   // The retention loop: a step on a project's path was finished, and the next one is ready.
   "path_step_done", "next_step",
+  // The weekly progress update: steps finished this week that haven't been shared yet.
+  "weekly_update",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 

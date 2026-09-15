@@ -47,6 +47,17 @@ describe("the close read of an open loop", () => {
     expect(paths).toEqual(expect.arrayContaining(["server/feedback-loop-routes.ts", "client/src/components/feedback-inbox.tsx", "e2e/feedback-loop.spec.ts"]));
   });
 
+  it("finds the goal-path loop through its doc, check-in wording and all", () => {
+    const { paths, docs } = pickLoopEvidence({
+      title: "Build: follow a goal path (Ship/Systemize/Fund) → do the next milestone task → post weekly check-in",
+      description: "Choose/enter active project goal path → see “next step” for the path → complete task/artifact → post weekly check-in → receive comments/feedback → return to next step",
+    }, files);
+    expect(docs[0]).toBe("docs/path-loop.md");
+    expect(paths).toEqual(expect.arrayContaining([
+      "server/path-return.ts", "server/feed-routes.ts", "server/notifications.ts", "client/src/pages/post-detail.tsx", "e2e/path-loop.spec.ts",
+    ]));
+  });
+
   it("keeps the first pass's own evidence, and stays within its budget", () => {
     const { paths } = pickLoopEvidence({ title: "Something unrelated entirely", description: "" }, files, ["server/app.ts"], 3);
     expect(paths[0]).toBe("server/app.ts");

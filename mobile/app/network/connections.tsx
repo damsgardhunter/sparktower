@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Stack, useRouter } from "expo-router";
-import { Pressable, Text, TextInput, View } from "react-native";
+import { Pressable, Text, TextInput, View, Platform } from "react-native";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
@@ -72,7 +72,7 @@ export default function Connections() {
                 onChangeText={setQ}
                 placeholder="Search connections"
                 placeholderTextColor={colors.textTertiary}
-                style={{ flex: 1, color: colors.text, fontSize: font.sm, fontFamily: fontFamily.regular }}
+                style={[{ flex: 1, color: colors.text, fontSize: font.sm, fontFamily: fontFamily.regular }, Platform.OS === "web" && ({ outlineWidth: 0, outlineStyle: "none" } as object)]}
                 autoCapitalize="none"
               />
             </View>

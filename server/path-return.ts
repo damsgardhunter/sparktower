@@ -20,6 +20,7 @@ import { projects, projectMembers, feedPosts, projectKanbanTasks } from "@shared
 import { pathStatus } from "./phase-trees";
 import { mainLineMilestones, resolveTree } from "@shared/phase-trees";
 import type { ProjectGoal } from "@shared/goals";
+import { weekStartOf } from "@shared/check-in";
 import { notify } from "./notifications";
 
 /** Away this many days with a step waiting, and the path sends one nudge for that step. */
@@ -36,6 +37,61 @@ export interface NextStepItem {
   projectedAt: string | null;
   /** The step finished most recently, if it can still be shared for feedback. */
   lastDone: { taskId: string; title: string; completedAt: string; sharedPostId: string | null } | null;
+  /** This week's progress update: finished steps nobody has shared yet. Due when there's at least one. */
+  weekly: WeeklyUpdate;
+}
+
+export interface WeeklyUpdate { due: boolean; steps: { taskId: string; title: string; completedAt: string }[] }
+
+/** Steps count toward this week's update for this long after they're finished. */
+export const WEEKLY_WINDOW_DAYS = 7;
+/**
+ * A task carries this tag once a post has shared it, so the weekly update never
+ * offers it twice. Not "shared:" — path tasks already use that prefix for the
+ * milestones shared between paths (shared:SH-01).
+ */
+export const postedTag = (postId: string) => `posted:${postId}`;
+const isPathTask = (tags: string[] | null) => (tags ?? []).some((t) => t.startsWith("backbone:") || t.startsWith("parent:") || t.startsWith("injected:"))
+  && !(tags ?? []).some((t) => t.startsWith("archived:") || t === "kind:loop");
+
+/**
+ * The weekly progress update, replacing the retired check-in: the steps
+ * finished on the path in the last week that no post has shared yet. Tracked
+ * by a tag on each task rather than by comparing a post's time to a task's —
+ * the two are written by different clocks — so a step is offered until it's
+ * shared, and never again after.
+ */
+export async function weeklyUpdateFor(projectId: string): Promise<WeeklyUpdate> {
+  const tasks = await db.select({ id: projectKanbanTasks.id, title: projectKanbanTasks.title, status: projectKanbanTasks.status, tags: projectKanbanTasks.tags, completedAt: projectKanbanTasks.completedAt })
+    .from(projectKanbanTasks).where(and(eq(projectKanbanTasks.projectId, projectId), eq(projectKanbanTasks.status, "done")));
+  const cutoff = Date.now() - WEEKLY_WINDOW_DAYS * 86_400_000;
+  const steps = tasks
+    .filter((t) => isPathTask(t.tags) && t.completedAt && new Date(t.completedAt).getTime() >= cutoff && !(t.tags ?? []).some((x) => x.startsWith("posted:")))
+    .sort((a, b) => new Date(a.completedAt!).getTime() - new Date(b.completedAt!).getTime())
+    .slice(0, 12)
+    .map((t) => ({ taskId: t.id, title: t.title, completedAt: new Date(t.completedAt!).toISOString() }));
+  return { due: steps.length > 0, steps };
+}
+
+/** Marks tasks as shared by a post, so they drop out of the weekly update. */
+export async function markStepsShared(postId: string, taskIds: string[]): Promise<void> {
+  for (const id of taskIds) {
+    const [task] = await db.select({ tags: projectKanbanTasks.tags }).from(projectKanbanTasks).where(eq(projectKanbanTasks.id, id));
+    if (!task) continue;
+    await db.update(projectKanbanTasks).set({ tags: [...(task.tags ?? []).filter((t) => t !== postedTag(postId)), postedTag(postId)] }).where(eq(projectKanbanTasks.id, id));
+  }
+}
+
+/** Validates steps offered for a weekly update: finished, on this project's path, not shared already. */
+export async function shareableSteps(projectId: string, raw: unknown): Promise<{ ids: string[] } | { error: string }> {
+  if (!Array.isArray(raw)) return { error: "pathStepIds must be a list." };
+  const ids = [...new Set(raw.map(String).filter(Boolean))].slice(0, 12);
+  if (!ids.length) return { error: "Pick at least one finished step." };
+  const rows = await db.select({ id: projectKanbanTasks.id, projectId: projectKanbanTasks.projectId, status: projectKanbanTasks.status, tags: projectKanbanTasks.tags })
+    .from(projectKanbanTasks).where(inArray(projectKanbanTasks.id, ids));
+  if (rows.length !== ids.length || rows.some((r) => r.projectId !== projectId || !isPathTask(r.tags))) return { error: "Those aren't all steps on this project's path." };
+  if (rows.some((r) => r.status !== "done")) return { error: "Share steps once they're done." };
+  return { ids };
 }
 
 async function teamOf(projectId: string): Promise<{ ownerId: string; members: string[] } | null> {
@@ -77,11 +133,14 @@ export async function afterPathStepDone(task: { id: string; projectId: string; t
 export async function lastDoneStep(projectId: string, events: { taskId: string | null; title: string; createdAt: Date | string }[]): Promise<NextStepItem["lastDone"]> {
   for (const e of events) {
     if (!e.taskId || Date.now() - new Date(e.createdAt).getTime() > 7 * 86_400_000) continue;
-    const [task] = await db.select({ id: projectKanbanTasks.id, title: projectKanbanTasks.title, status: projectKanbanTasks.status, completedAt: projectKanbanTasks.completedAt })
+    const [task] = await db.select({ id: projectKanbanTasks.id, title: projectKanbanTasks.title, status: projectKanbanTasks.status, completedAt: projectKanbanTasks.completedAt, tags: projectKanbanTasks.tags })
       .from(projectKanbanTasks).where(and(eq(projectKanbanTasks.id, e.taskId), eq(projectKanbanTasks.projectId, projectId)));
     if (!task || task.status !== "done") continue;
-    const [shared] = await db.select({ id: feedPosts.id }).from(feedPosts)
-      .where(and(eq(feedPosts.entityType, "path_step"), eq(feedPosts.entityId, task.id), isNull(feedPosts.hiddenAt))).limit(1);
+    // Shared on its own or in a weekly update: either way the task carries the post that shared it.
+    const sharedBy = [...(task.tags ?? [])].reverse().find((t) => t.startsWith("posted:"))?.slice("posted:".length) ?? null;
+    const [shared] = sharedBy
+      ? await db.select({ id: feedPosts.id }).from(feedPosts).where(and(eq(feedPosts.id, sharedBy), isNull(feedPosts.hiddenAt))).limit(1)
+      : [];
     return { taskId: task.id, title: task.title, completedAt: new Date(task.completedAt ?? e.createdAt).toISOString(), sharedPostId: shared?.id ?? null };
   }
   return null;
@@ -120,6 +179,7 @@ export async function nextStepsFor(userId: string): Promise<NextStepItem[]> {
     const status = await pathStatus(p.id).catch(() => null);
     if (!status?.adopted) continue;
     const lastDone = await lastDoneStep(p.id, status.events);
+    const weekly = await weeklyUpdateFor(p.id);
     items.push({
       project: { id: p.id, title: p.title, logoUrl: p.logoUrl },
       phase: status.current.title,
@@ -131,6 +191,7 @@ export async function nextStepsFor(userId: string): Promise<NextStepItem[]> {
       daysSinceActivity: Math.floor(status.pace?.daysSinceActivity ?? 0),
       projectedAt: status.pace?.projectedAt ? new Date(status.pace.projectedAt).toISOString() : null,
       lastDone,
+      weekly,
     });
   }
   // Most recently worked first: the path someone is in the middle of leads.
@@ -143,6 +204,16 @@ export async function nextStepsFor(userId: string): Promise<NextStepItem[]> {
  * they open the app.
  */
 export async function nudgeIfAway(userId: string, items: NextStepItem[]): Promise<void> {
+  // The weekly update: one reminder per project per week, while there are finished steps nobody has shared.
+  const week = weekStartOf().toISOString().slice(0, 10);
+  for (const item of items) {
+    if (!item.weekly.due) continue;
+    await notify({
+      recipients: [userId], actorId: userId, allowSelf: true, once: true,
+      kind: "weekly_update", targetId: `${item.project.id}:${week}`, projectId: item.project.id,
+      excerpt: `${item.weekly.steps.length} step${item.weekly.steps.length === 1 ? "" : "s"} finished: ${item.weekly.steps.map((s) => s.title).join(", ")}`,
+    });
+  }
   for (const item of items) {
     if (!item.next || item.daysSinceActivity < NUDGE_AFTER_DAYS) continue;
     await notify({

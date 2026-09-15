@@ -1,14 +1,14 @@
 # The Explore loop
 
-Open Discover → see a match → open their profile or project → follow, connect
-or message → come back later and do it again.
+Open Discover → see a match → open their profile or project → follow, connect,
+message, or comment on their progress → come back later and do it again.
 
 ## Events
 
-Nine, in `shared/explore-events.ts`, stored in `activity_events` and separate
+Ten, in `shared/explore-events.ts`, stored in `activity_events` and separate
 from the check-in loop's events in `shared/loop-events.ts`, which stay a small
 fixed set on purpose. Six are sent by the client through `/api/track` — only it
-sees a page open, a card on screen, a tap, or the app being left. The three
+sees a page open, a card on screen, a tap, or the app being left. The four
 actions are recorded by the endpoints that perform them (below), and
 `/api/track` refuses them, so an action can't be missed or claimed twice.
 
@@ -20,6 +20,7 @@ actions are recorded by the endpoints that perform them (below), and
 | `explore.follow` | a builder or project is newly followed — not a repeat, not an unfollow (recorded by the server) |
 | `explore.connect_request` | a connection request succeeds (recorded by the server) |
 | `explore.message_sent` | a message sends (recorded by the server) |
+| `explore.comment` | a comment posts on someone else's progress update — not your own, not your own project's (recorded by the server) |
 | `explore.return_to_discover` | Discover opens again in a tab that already opened it |
 | `explore.session_end` | the tab is left after anything happened in the loop |
 
@@ -32,7 +33,7 @@ tab). The server drops unknown keys and out-of-range values.
 
 ## The action step: endpoints
 
-Follow, connect and message are the loop's success path. Each endpoint records
+Follow, connect, message and comment are the loop's success path. Each endpoint records
 its event when the write succeeds, in the requester's visit, via
 `recordExploreAction` in `server/explore-actions.ts`:
 
@@ -42,6 +43,7 @@ its event when the write succeeds, in the requester's visit, via
 | Follow a builder | `POST /api/users/:id/follow` `{ following: true, explore? }` | `explore.follow` (builder) | web profile |
 | Connect | `POST /api/connections/request` `{ userId, note?, explore? }` | `explore.connect_request` | web cards and profile; app Discover cards and builder screen |
 | Message | `POST /api/messages/:userId` `{ content, explore? }` — connected people only | `explore.message_sent` | web cards and messages; app cards and chat |
+| Comment on their progress | `POST /api/feed/:id/comments` `{ content, parentCommentId?, explore? }` in `server/feed-routes.ts` — on a post by someone else, or a project you're not on | `explore.comment` (project when the post is on one, builder otherwise) | web feed, Following feed and post page (`client/src/components/feed-comments.tsx`); app post screen |
 
 Around them: `GET /api/connections/statuses` (where you stand with everyone on
 a page), `POST /api/connections/:id/accept`, `GET /api/users/:id/follow-status`,
@@ -94,6 +96,7 @@ is measured.
 | Remember what you looked at | `explore_seen` rows per person — builder or project, epoch-ms — written by `POST /api/discover/seen` when you open a profile or project (web and app), and by the follow, connect and message endpoints themselves when you act | `server/discover-routes.ts` (`rememberSeen`), `server/explore-actions.ts`, `client/src/lib/seen.ts`, `mobile/src/explore.ts` | `test/integration/discover-return.test.ts` |
 | Tell you there's news | **Discover badge** — "N new" on Discover in the web sidebar and on the app's Discover tab — and **"N new since you last looked"** at the top of the home feed, linking to Discover. Both from `GET /api/discover/new-count`: new posts from what you've looked at since the later of when you looked and your last Discover visit | `client/src/components/app-sidebar.tsx`, `client/src/components/discover-news.tsx`, `mobile/app/(tabs)/_layout.tsx` | `test/integration/discover-return.test.ts`, `e2e/return-loop.spec.ts` |
 | Show the news on return | Card badges ("2 new posts") and the welcome-back banner, from `GET /api/discover/updates` | `client/src/hooks/use-explore-updates.ts`, `client/src/components/return-banner.tsx` | `e2e/return-loop.spec.ts` |
+| Hear back from what you did | A **reply** to your comment, a **reaction** to it, a **comment** or **mention** on your own post, a **follow**, a **connection request** or **acceptance** is a notification (`server/notifications.ts`), shown in the bell (`client/src/components/notification-bell.tsx`, `mobile/app/(tabs)/notifications.tsx`) and opening the post or person. A **message** counts as unread until read: the Messages badge in the web sidebar and the app's Inbox tab (`GET /api/messages/unread-count`). New progress from who you follow is "N new updates from people you follow" on the home feed and the Following tab (`followedPosts` in `GET /api/notifications/unread-count`) | `server/notifications.ts`, `server/feed-routes.ts`, `client/src/components/notification-bell.tsx`, `client/src/components/founder-feed.tsx`, `client/src/components/app-sidebar.tsx` | `test/integration/notifications.test.ts`, `test/integration/explore-comment.test.ts`, `e2e/explore-conversation.spec.ts` |
 | Repeat | Opening Discover (`POST /api/discover/visit`) moves the badge's "since" to now, so the badge clears and the next post brings it back; cards keep their news until the thing itself is opened | `client/src/lib/explore.ts`, `mobile/app/(tabs)/discover.tsx` | both of the above |
 
 - **Only what you interacted with** is remembered — opening, following,
@@ -111,8 +114,8 @@ is measured.
   category (`?q=` and `?category=` in the URL).
 - Remembering and visiting aren't logged as actions in the behaviour stream.
 
-**Repeat measure:** a *cycle* is open Discover → follow, connect or message →
-come back. The Explore card shows the share of sessions with two or more, from
+**Repeat measure:** a *cycle* is open Discover → follow, connect, message or
+comment → come back. The Explore card shows the share of sessions with two or more, from
 `countCycles` in `shared/explore-events.ts`.
 
 ## Following

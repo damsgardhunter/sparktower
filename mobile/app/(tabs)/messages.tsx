@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { FlatList, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from "react-native";
+import { FlatList, Pressable, RefreshControl, StyleSheet, Text, TextInput, View, Platform } from "react-native";
 import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { api, fetchMe } from "../../src/api/client";
@@ -53,7 +53,7 @@ export default function Messages() {
             onChangeText={setQ}
             placeholder="Search messages"
             placeholderTextColor={colors.textTertiary}
-            style={s.searchInput}
+            style={[s.searchInput, Platform.OS === "web" && ({ outlineWidth: 0, outlineStyle: "none" } as object)]}
             autoCapitalize="none"
             accessibilityLabel="Search conversations"
           />

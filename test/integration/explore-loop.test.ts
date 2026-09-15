@@ -3,7 +3,7 @@
  *
  * The first thing worth proving is the boundary: `/api/track` is open to
  * anyone, so an Explore event must arrive with its five properties and nothing
- * more, and a name that isn't one of the nine must be dropped. The second is
+ * more, and a name that isn't one of the ten must be dropped. The second is
  * the action step: follow, connect and message are recorded by the endpoints
  * that perform them — web or mobile, in the visit they happened in — and a
  * client can no longer claim one through the tracker. The third is the
@@ -225,8 +225,9 @@ describe("the owner's Explore numbers", () => {
     expect(explore.cycles.completedOne).toBe(1);
 
     // Every event is listed, even at zero, so the dashboard never has a hole.
-    expect(explore.events).toHaveLength(9);
+    expect(explore.events).toHaveLength(10);
     expect(explore.events.find((e: any) => e.name === "explore.session_end").events).toBe(0);
+    expect(explore.events.find((e: any) => e.name === "explore.comment").events).toBe(0);
     expect(explore.events.find((e: any) => e.name === "explore.message_sent").events).toBe(1);
   });
 });

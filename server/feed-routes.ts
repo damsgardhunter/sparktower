@@ -15,6 +15,9 @@ import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { recordLoopEvent } from "./loop-metrics";
 import { rateLimit } from "./moderation";
 import { LOOP_EVENTS } from "@shared/loop-events";
+import { EXPLORE_EVENTS } from "@shared/explore-events";
+import { recordExploreAction } from "./explore-actions";
+import { markStepsShared, shareableSteps } from "./path-return";
 import { validateAsks } from "@shared/feedback-loop";
 import { closableComments, markClosed, markClosureAnswered, projectTeam } from "./feedback-loop-routes";
 import { notify, unnotify, notifyFollowersOfPost, notifyComment } from "./notifications";
@@ -151,7 +154,7 @@ export function registerFeedRoutes(app: Express) {
   app.post("/api/feed", isAuthenticated, rateLimit("feedPost"), async (req: any, res) => {
     try {
       const userId = req.user.id;
-      const { postType, content, projectId, mediaUrls, mentions, asks: rawAsks, closesCommentIds, pathTaskId } = req.body as {
+      const { postType, content, projectId, mediaUrls, mentions, asks: rawAsks, closesCommentIds, pathTaskId, pathStepIds } = req.body as {
         postType?: string; content?: string; projectId?: string;
         mediaUrls?: string[]; mentions?: unknown;
         /** Specific questions for readers (a project's progress post). */
@@ -160,6 +163,8 @@ export function registerFeedRoutes(app: Express) {
         closesCommentIds?: unknown;
         /** A finished step on the project's path this post shares, so feedback on it is feedback on that step. */
         pathTaskId?: unknown;
+        /** The week's finished steps this post shares — the weekly progress update. */
+        pathStepIds?: unknown;
       };
 
       if (!FEED_POST_TYPES.includes(postType as any)) {
@@ -195,6 +200,13 @@ export function registerFeedRoutes(app: Express) {
         if (task.status !== "done") return res.status(400).json({ message: "Share a step once it's done.", code: "invalid_input", field: "pathTaskId" });
         pathStep = task.id;
       }
+      let weekSteps: string[] = [];
+      if (pathStepIds != null) {
+        if (!projectId) return res.status(400).json({ message: "A weekly update goes on one of your projects.", code: "invalid_input", field: "projectId" });
+        const checked = await shareableSteps(projectId, pathStepIds);
+        if ("error" in checked) return res.status(400).json({ message: checked.error, code: "invalid_input", field: "pathStepIds" });
+        weekSteps = checked.ids;
+      }
 
       const post = await storage.createFeedPost({
         authorId: userId,
@@ -205,8 +217,10 @@ export function registerFeedRoutes(app: Express) {
         mentions: await resolveMentions(mentions),
         asks: asked.asks,
         isSystemGenerated: false,
-        ...(pathStep ? { entityType: "path_step", entityId: pathStep } : {}),
+        ...(pathStep ? { entityType: "path_step", entityId: pathStep } : weekSteps.length ? { entityType: "path_week", entityId: projectId } : {}),
       });
+      // Shared steps leave the weekly update: offered until they're posted, never twice.
+      if (pathStep || weekSteps.length) await markStepsShared(post.id, pathStep ? [pathStep] : weekSteps);
       await markClosed(post, closes.ids);
       // The Explore loop's way back: people following this builder or project hear there's progress.
       void notifyFollowersOfPost(post);
@@ -336,6 +350,17 @@ export function registerFeedRoutes(app: Express) {
         mentions: await resolveMentions(mentions),
         parentCommentId: parentCommentId || null,
       });
+      /*
+       * The Explore loop's message/comment step: answering someone else's
+       * progress in public. Your own post, or your own project's, is talking
+       * to yourself — not exploring.
+       */
+      const team = post.projectId ? await projectTeam(post.projectId) : null;
+      if (post.authorId !== userId && !team?.has(userId)) {
+        recordExploreAction(req, EXPLORE_EVENTS.comment, post.projectId
+          ? { matchType: "project", targetId: post.projectId }
+          : { matchType: "builder", targetId: post.authorId });
+      }
       // Answering the update that used your feedback: the loop has come round again.
       void markClosureAnswered(userId, post.id).catch(() => {});
       void notifyComment({

@@ -4,7 +4,7 @@
  *   Open Discover → see a match → open their profile or project →
  *   follow / connect / message → come back later and do it again.
  *
- * Nine events and five properties, deliberately. The step that asked for this
+ * Ten events and five properties, deliberately. The step that asked for this
  * named the risk itself — instrumenting everything slows shipping and buries
  * the few numbers that matter — so this is the smallest set that answers the
  * three questions the loop is judged on: how far people get (the funnel), how
@@ -36,6 +36,8 @@ export const EXPLORE_EVENTS = {
   connectRequest: "explore.connect_request",
   /** A message sent. */
   messageSent: "explore.message_sent",
+  /** A comment on someone else's progress update — replying to what they shipped, in public. */
+  comment: "explore.comment",
   /** Discover opened again in a tab that had already opened it. */
   returnToDiscover: "explore.return_to_discover",
   /** The tab was left after doing something in the loop. */
@@ -51,7 +53,7 @@ export const isExploreEvent = (name: string): name is ExploreEventName =>
 
 /** What the loop is for. Time to first action is measured to the first of these. */
 export const EXPLORE_ACTIONS: readonly ExploreEventName[] = [
-  EXPLORE_EVENTS.follow, EXPLORE_EVENTS.connectRequest, EXPLORE_EVENTS.messageSent,
+  EXPLORE_EVENTS.follow, EXPLORE_EVENTS.connectRequest, EXPLORE_EVENTS.messageSent, EXPLORE_EVENTS.comment,
 ];
 
 /**
@@ -88,7 +90,7 @@ export const EXPLORE_FUNNEL = [
   { key: "opened", label: "Opened Discover", events: [EXPLORE_EVENTS.openDiscover] },
   { key: "viewed", label: "Saw a match", events: [EXPLORE_EVENTS.viewMatchCard] },
   { key: "lookedCloser", label: "Opened a profile or project", events: [EXPLORE_EVENTS.openProfile, EXPLORE_EVENTS.openProject] },
-  { key: "acted", label: "Followed, connected or messaged", events: [...EXPLORE_ACTIONS] },
+  { key: "acted", label: "Followed, connected, messaged or commented", events: [...EXPLORE_ACTIONS] },
   { key: "returned", label: "Came back to Discover", events: [EXPLORE_EVENTS.returnToDiscover] },
 ] as const;
 
@@ -100,6 +102,7 @@ export const EXPLORE_LABEL: Record<ExploreEventName, string> = {
   "explore.follow": "Followed a builder or project",
   "explore.connect_request": "Sent a connection request",
   "explore.message_sent": "Sent a message",
+  "explore.comment": "Commented on someone's update",
   "explore.return_to_discover": "Came back to Discover",
   "explore.session_end": "Left after exploring",
 };
@@ -108,7 +111,7 @@ export const EXPLORE_LABEL: Record<ExploreEventName, string> = {
 export const exploreLabel = (name: string): string | null => (isExploreEvent(name) ? EXPLORE_LABEL[name] : null);
 
 export const EXPLORE_MATCH_TYPES = ["builder", "project"] as const;
-export const EXPLORE_SOURCES = ["discover", "matches", "projects", "profile_page", "project_page", "messages"] as const;
+export const EXPLORE_SOURCES = ["discover", "matches", "projects", "profile_page", "project_page", "messages", "feed", "post_page"] as const;
 
 export type ExploreMatchType = (typeof EXPLORE_MATCH_TYPES)[number];
 export type ExploreSource = (typeof EXPLORE_SOURCES)[number];

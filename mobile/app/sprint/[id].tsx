@@ -150,7 +150,8 @@ export default function SprintDashboard() {
               <Text style={meta}>{sprint.isPractice ? "Nova (AI)" : partner?.firstName || "Partner"}</Text>
             </View>
           </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: spacing.lg, gap: 6, alignItems: "center" }}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: spacing.lg, gap: 6, alignItems: "center" }}
+            ref={(r) => { if (r && currentIdx > 2) setTimeout(() => r.scrollTo({ x: (currentIdx - 2) * 110, animated: false }), 0); }}>
             {visiblePhases.map((p, i) => {
               const idx = SPRINT_PHASES.indexOf(p);
               const on = status === p;

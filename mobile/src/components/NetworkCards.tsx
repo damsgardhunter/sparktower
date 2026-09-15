@@ -147,14 +147,14 @@ export function ProjectRowItem({ title, owner, category, blurb, reason, roles, i
   action?: ReactNode;
 }) {
   return (
-    <Pressable onPress={onOpen} style={({ pressed }) => [n.row, pressed && { backgroundColor: colors.surfaceRaised }]} accessibilityRole="button">
+    <Pressable onPress={onOpen} style={({ pressed }) => [n.row, { alignItems: "flex-start" }, pressed && { backgroundColor: colors.surfaceRaised }]} accessibilityRole="button">
       <ProjectTile title={title} />
       <View style={{ flex: 1, gap: 2 }}>
         <Text style={n.rowTitle} numberOfLines={1}>{title}</Text>
         <Text style={n.rowSub} numberOfLines={1}>{[owner && `by ${owner}`, category].filter(Boolean).join(" · ")}</Text>
         {blurb ? <Text style={n.rowBody} numberOfLines={2}>{blurb}</Text> : null}
         {reason ? (
-          <View style={[n.reasonRow, { marginTop: 2 }]}>
+          <View style={[n.reasonRow, { marginTop: 2, minHeight: 0 }]}>
             <Icon name="sparkles" size={12} color={colors.primary} />
             <Text style={n.reasonText} numberOfLines={1}>{reason}</Text>
           </View>

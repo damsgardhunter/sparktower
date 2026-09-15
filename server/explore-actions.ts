@@ -1,7 +1,7 @@
 /**
  * The Explore loop's action step, recorded where it happens.
  *
- * Follow, connect and message are writes, so the endpoint that performs one is
+ * Follow, connect, message and comment are writes, so the endpoint that performs one is
  * the only witness that can't miss it: web, mobile, a retry, a blocked tracker
  * — the row exists exactly when the follow does. The client contributes what
  * only it can see (the page, the card's position, time since opening
@@ -18,7 +18,7 @@ import {
   EXPLORE_EVENTS, sanitizeExploreProps, type ExploreMatchType,
 } from "@shared/explore-events";
 
-type ActionName = typeof EXPLORE_EVENTS.follow | typeof EXPLORE_EVENTS.connectRequest | typeof EXPLORE_EVENTS.messageSent;
+type ActionName = typeof EXPLORE_EVENTS.follow | typeof EXPLORE_EVENTS.connectRequest | typeof EXPLORE_EVENTS.messageSent | typeof EXPLORE_EVENTS.comment;
 
 /** Records one action. Fire-and-forget, like all analytics: never fails the request. */
 export function recordExploreAction(

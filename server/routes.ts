@@ -16,7 +16,7 @@ import { registerInvestorRoutes } from "./investor-routes";
 import { registerNovaBriefingRoutes } from "./nova-briefing";
 import { registerFeedbackLoopRoutes } from "./feedback-loop-routes";
 import { registerNotificationRoutes, notify, unnotify } from "./notifications";
-import { registerPathReturnRoutes, lastDoneStep } from "./path-return";
+import { registerPathReturnRoutes, lastDoneStep, weeklyUpdateFor } from "./path-return";
 import { ensureCreatorBadges } from "./backer-badges";
 import { registerFeedRoutes, registerProjectDiscussionRoutes, publishSystemPost, SYSTEM_POST_COPY, SYSTEM_POST_TYPES } from "./feed-routes";
 import { registerProfileRoutes } from "./profile-routes";
@@ -2720,7 +2720,11 @@ RULES:
       const status = await pathStatus(req.params.id);
       if (!status) return res.status(404).json({ message: "Project not found" });
       // The step just finished, for "share it for feedback" on the path.
-      res.json(status.adopted ? { ...status, lastDone: await lastDoneStep(req.params.id, status.events).catch(() => null) } : status);
+      res.json(status.adopted ? {
+        ...status,
+        lastDone: await lastDoneStep(req.params.id, status.events).catch(() => null),
+        weekly: await weeklyUpdateFor(req.params.id).catch(() => ({ due: false, steps: [] })),
+      } : status);
     } catch (error) {
       console.error("Path status error:", error);
       res.status(500).json({ message: "Couldn't read the path" });

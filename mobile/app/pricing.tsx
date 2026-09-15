@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ScrollView, Text, View } from "react-native";
+import { ScrollView, Text, View, Platform } from "react-native";
 import { Stack } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as WebBrowser from "expo-web-browser";
@@ -19,8 +19,14 @@ const STAGE_ICONS: Record<string, IconName> = { Explore: "compass", Start: "spar
  * Checkout and the billing portal are Stripe pages, so they open in an in-app
  * browser; when it closes, the subscription is re-synced so a new plan shows
  * straight away. (App Store review can require in-app purchase for digital
- * subscriptions on iOS — see the report that shipped with this screen.)
+ * subscriptions on iOS.)
+ *
+ * On iOS the plans are shown but upgrading and managing happen on the web:
+ * Apple requires in-app purchase for digital subscriptions sold inside an iOS
+ * app (Guideline 3.1.1), and StoreKit isn't wired up. Android and the web
+ * preview open Stripe in the in-app browser.
  */
+const IOS_NO_WEB_CHECKOUT = Platform.OS === "ios";
 export default function Pricing() {
   const qc = useQueryClient();
   const { notice, show, clear } = useNotice();
@@ -154,7 +160,11 @@ export default function Pricing() {
                   ))}
                 </View>
 
-                {isCurrent ? (
+                {IOS_NO_WEB_CHECKOUT && plan.tier !== "free" && !isCurrent ? (
+                  <Text style={[small, { textAlign: "center" }]}>Upgrade on the web at sparktower.app/pricing</Text>
+                ) : IOS_NO_WEB_CHECKOUT && isCurrent && plan.tier !== "free" ? (
+                  <Text style={[small, { textAlign: "center" }]}>Manage your plan on the web at sparktower.app/pricing</Text>
+                ) : isCurrent ? (
                   plan.tier === "free"
                     ? <Btn label="Your current plan" variant="outline" disabled />
                     : <Btn label="Manage plan" icon="open-outline" variant="outline" loading={portal.isPending} onPress={() => portal.mutate()} />

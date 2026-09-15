@@ -104,4 +104,52 @@ describe("coming back to the next step", () => {
     expect(rows.filter((r) => r.projectId === project.id)).toHaveLength(1);
     expect(rows.find((r) => r.projectId === project.id)?.readAt).not.toBeNull();
   });
+
+  it("offers the week's unshared steps as a weekly update, posts them once, and reminds once a week", async () => {
+    const app = await getTestApp();
+    const owner = await person(app, "Weekly");
+    const other = (await (await person(app, "Elsewhere")).agent.post("/api/projects").send({ title: "Not Mine", description: "Someone else's project, for a step that isn't yours to share.", category: "saas", goal: "ship_mvp", subcategory: "saas" })).body;
+    const project = (await owner.agent.post("/api/projects").send({ title: "Weekly Path", description: "A project that finishes a few steps in a week and posts about them.", category: "saas", goal: "ship_mvp", subcategory: "saas" })).body;
+    const tasks = (await owner.agent.get(`/api/projects/${project.id}/kanban`)).body;
+    const byId = (b: string) => tasks.find((t: any) => (t.tags ?? []).includes(`backbone:${b}`));
+    const [m11, m13, m14] = [byId("SHIP.M1.1"), byId("SHIP.M1.3"), byId("SHIP.M1.4")];
+
+    expect((await owner.agent.get("/api/me/next-steps")).body.items.find((i: any) => i.project.id === project.id).weekly).toEqual({ due: false, steps: [] });
+    await owner.agent.patch(`/api/kanban/${m11.id}`).send({ status: "done" }).expect(200);
+    await owner.agent.patch(`/api/kanban/${m13.id}`).send({ status: "done" }).expect(200);
+    await settle();
+
+    const item = (await owner.agent.get("/api/me/next-steps")).body.items.find((i: any) => i.project.id === project.id);
+    expect(item.weekly.due).toBe(true);
+    expect(item.weekly.steps.map((s: any) => s.title)).toEqual(["Product statement", m13.title]);
+    expect((await owner.agent.get(`/api/projects/${project.id}/path`)).body.weekly.steps).toHaveLength(2);
+
+    // One reminder this week, however often the home screen loads.
+    await settle();
+    await owner.agent.get("/api/me/next-steps").expect(200);
+    await settle();
+    const reminders = (await bell(owner)).filter((x) => x.kind === "weekly_update");
+    expect(reminders).toEqual([expect.objectContaining({ text: "Share this week's progress on Weekly Path", href: `/projects/${project.id}/manage`, excerpt: expect.stringMatching(/^2 steps finished: Product statement/) })]);
+
+    // Only finished steps on this project's path.
+    const refuse = (ids: string[]) => owner.agent.post("/api/feed").send({ postType: "project_update", projectId: project.id, content: "x", pathStepIds: ids });
+    expect((await refuse([m14.id])).body.message).toMatch(/once they're done/);
+    const otherTask = (await db.execute(sql`select id from project_kanban_tasks where project_id = ${other.id} limit 1`)).rows[0] as any;
+    expect((await refuse([otherTask.id])).body.field).toBe("pathStepIds");
+    expect((await refuse([])).body.field).toBe("pathStepIds");
+
+    const posted = await owner.agent.post("/api/feed").send({
+      postType: "project_update", projectId: project.id, content: "This week: a product statement and a scope cut.",
+      asks: ["Is the scope too small?"], pathStepIds: [m11.id, m13.id],
+    });
+    expect(posted.status, JSON.stringify(posted.body).slice(0, 200)).toBe(200);
+    expect(posted.body).toMatchObject({ entityType: "path_week", entityId: project.id });
+    expect(posted.body.pathWeek.steps.map((s: any) => s.taskId).sort()).toEqual([m11.id, m13.id].sort());
+
+    // Shared: they leave the weekly update, and the path knows the post that shared them.
+    const after = (await owner.agent.get("/api/me/next-steps")).body.items.find((i: any) => i.project.id === project.id);
+    expect(after.weekly).toEqual({ due: false, steps: [] });
+    expect(after.lastDone.sharedPostId).toBe(posted.body.id);
+    expect((await refuse([m11.id])).status).toBe(200); // re-sharing a step on purpose is allowed; the weekly list just won't offer it
+  });
 });

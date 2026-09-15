@@ -31,6 +31,7 @@ export interface FeedPostWithDetails extends FeedPost {
   viewerIsTeam?: boolean;
   credits?: { commentId: string; authorId: string; name: string }[];
   pathStep?: { taskId: string; title: string } | null;
+  pathWeek?: { steps: { taskId: string; title: string }[] } | null;
 }
 
 
@@ -195,6 +196,15 @@ export function FeedPostCard({ post, standalone = false }: { post: FeedPostWithD
           >
             <Compass className="h-3 w-3" /> From the path: {post.pathStep.title}
           </Link>
+        )}
+
+        {post.pathWeek && post.project && (
+          <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 space-y-1" data-testid={`post-path-week-${post.id}`}>
+            <Link href={post.viewerIsTeam ? `/projects/${post.project.id}/manage` : `/projects/${post.project.id}`} className="text-xs text-primary hover:underline inline-flex items-center gap-1.5">
+              <Compass className="h-3 w-3" /> This week on the path: {post.pathWeek.steps.length} step{post.pathWeek.steps.length === 1 ? "" : "s"}
+            </Link>
+            <ul className="text-xs text-muted-foreground list-disc pl-5">{post.pathWeek.steps.map((s) => <li key={s.taskId}>{s.title}</li>)}</ul>
+          </div>
         )}
 
         {/* This update closes the loop on earlier feedback, and says whose. */}

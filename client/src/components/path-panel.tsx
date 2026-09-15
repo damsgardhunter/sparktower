@@ -3,7 +3,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { WorkView, refreshPath, useFail, type WorkRow } from "@/components/path-work";
 import { MilestoneDetail } from "@/components/path-milestone";
 import { LoopTree, addableLoopTypes, type LoopTreeData } from "@/components/loop-tree";
-import { ShareStepDialog } from "@/components/continue-path-card";
+import { ShareStepDialog, WeeklyUpdateDialog } from "@/components/continue-path-card";
 import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -58,6 +58,7 @@ interface PathStatus {
   auditUpdate?: { auditId: string; at: string; applied: string[]; appliedCount: number; pendingCount: number; pendingLoops: string[] } | null;
   /** The step finished most recently, and the post that shared it, if one did. */
   lastDone?: { taskId: string; title: string; completedAt: string; sharedPostId: string | null } | null;
+  weekly?: { due: boolean; steps: { taskId: string; title: string; completedAt: string }[] };
   pace: { state: PaceState; multiplier: number | null; mode: ProjectionMode; projectedAt: string | null; projectedLow: string | null; projectedHigh: string | null; note: string; daysSinceActivity: number } | null;
   events: { id: string; title: string; estimateMinutes: number | null; actualMinutes: number | null; projectedBefore: string | null; projectedAfter: string | null; createdAt: string }[];
   proposal: { goal: ProjectGoal; why: string }[] | null;
@@ -94,6 +95,7 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
   const [showMap, setShowMap] = useState(false);
   const [showSwitch, setShowSwitch] = useState(false);
   const [sharingStep, setSharingStep] = useState(false);
+  const [postingWeek, setPostingWeek] = useState(false);
   const { data: projectInfo } = useQuery<{ title?: string }>({ queryKey: ["/api/projects", projectId], enabled: !!projectId });
   const [open, setOpen] = useState<string | null>(null);
   const { toast } = useToast();
@@ -334,6 +336,15 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
               <button className="ml-auto text-primary hover:underline" onClick={() => setSharingStep(true)} data-testid="button-share-finished-step">Share it for feedback</button>
             )}
           </div>
+        )}
+        {data.weekly?.due && data.weekly.steps.length > 1 && (
+          <div className="flex items-center gap-2 text-xs rounded-md border border-primary/30 bg-primary/5 px-3 py-2 flex-wrap" data-testid="path-weekly-update">
+            <span><span className="font-medium">{data.weekly.steps.length} steps</span> finished this week and not shared yet</span>
+            <button className="ml-auto text-primary hover:underline" onClick={() => setPostingWeek(true)} data-testid="button-path-weekly-update">Post your weekly update</button>
+          </div>
+        )}
+        {postingWeek && data.weekly && (
+          <WeeklyUpdateDialog projectId={projectId} projectTitle={projectInfo?.title ?? "your project"} steps={data.weekly.steps} open onClose={() => setPostingWeek(false)} />
         )}
         {sharingStep && data.lastDone && (
           <ShareStepDialog projectId={projectId} projectTitle={projectInfo?.title ?? "your project"} step={data.lastDone} open onClose={() => setSharingStep(false)} />

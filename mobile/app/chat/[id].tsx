@@ -245,7 +245,7 @@ export default function Chat() {
                 onChangeText={setText}
                 placeholder="Write a message…"
                 placeholderTextColor={colors.textTertiary}
-                style={s.input}
+                style={[s.input, Platform.OS === "web" && ({ outlineWidth: 0, outlineStyle: "none" } as object)]}
                 multiline
                 maxLength={4000}
                 accessibilityLabel="Message"

@@ -10,6 +10,7 @@ interface NextStepItem {
   progress: { done: number; total: number };
   next: { title: string; actor: string; step: string | null } | null;
   daysSinceActivity: number;
+  weekly?: { due: boolean; steps: { title: string }[] };
 }
 
 const ACTOR_SHORT: Record<string, string> = {
@@ -47,6 +48,11 @@ export function ContinuePath() {
           <Text style={{ fontSize: font.sm, color: colors.text, marginTop: 2 }} numberOfLines={2}>
             {item.next ? `Next: ${item.next.step ?? item.next.title} · ${ACTOR_SHORT[item.next.actor] ?? item.next.actor}` : "The main line is done — pick what's next."}
           </Text>
+          {item.weekly?.due ? (
+            <Text style={{ fontSize: font.xs, color: colors.primary, marginTop: 2 }}>
+              {item.weekly.steps.length} step{item.weekly.steps.length === 1 ? "" : "s"} finished this week — share your progress
+            </Text>
+          ) : null}
         </Pressable>
       ))}
     </View>

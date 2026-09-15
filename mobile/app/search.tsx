@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Pressable, ScrollView, Text, TextInput, View, Platform } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -195,7 +195,7 @@ export default function Search() {
                 returnKeyType="search"
                 autoCapitalize="none"
                 autoCorrect={false}
-                style={{ flex: 1, color: colors.text, fontSize: font.base, fontFamily: fontFamily.regular, paddingVertical: 0 }}
+                style={[{ flex: 1, color: colors.text, fontSize: font.base, fontFamily: fontFamily.regular, paddingVertical: 0 }, Platform.OS === "web" && ({ outlineWidth: 0, outlineStyle: "none" } as object)]}
                 accessibilityLabel="Search"
               />
               {q.length > 0 && (
