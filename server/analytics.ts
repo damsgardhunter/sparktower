@@ -14,6 +14,7 @@
 import type { Express, RequestHandler } from "express";
 import { randomUUID } from "crypto";
 import { and, eq, gte, isNotNull, sql } from "drizzle-orm";
+import { ago } from "./sql-interval";
 import { db } from "./db";
 import { activityEvents, codeAuditRuns } from "@shared/schema";
 import { readCookies, setCookie, isDocumentRequest } from "./http-cookies";
@@ -288,13 +289,13 @@ export function registerAnalyticsIngest(app: Express) {
  */
 export async function sweepExpiredEvents(): Promise<{ activity: number; auditRuns: number }> {
   const result = await db.delete(activityEvents).where(
-    sql`${activityEvents.createdAt} < now() - interval '${sql.raw(String(RETENTION_DAYS))} days'`,
+    sql`${activityEvents.createdAt} < ${ago(RETENTION_DAYS, "days")}`,
   );
   const activity = (result as any)?.rowCount ?? 0;
   // Finished audit runs are only the "is one running?" signal; the audits themselves are kept.
   const runs = await db.delete(codeAuditRuns).where(and(
     isNotNull(codeAuditRuns.finishedAt),
-    sql`${codeAuditRuns.startedAt} < now() - interval '${sql.raw(String(RETENTION_DAYS))} days'`,
+    sql`${codeAuditRuns.startedAt} < ${ago(RETENTION_DAYS, "days")}`,
   ));
   return { activity, auditRuns: (runs as any)?.rowCount ?? 0 };
 }

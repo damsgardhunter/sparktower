@@ -13,12 +13,14 @@ import { syncAllPromotions, syncPromotion } from "./promotion-sync";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
 import { atLeast } from "./platform-roles";
+import { mfaGate } from "./mfa";
 import { PROMOTION_CATALOG, validatePromotionSettings, type FeedPromotion } from "@shared/promotions";
 
 /** Admins only: what every signed-in person sees in their feed, and where its links go. 404 for anyone else. */
 const requireAdmin: RequestHandler = (req: any, res, next) => {
   if (!req.user) return res.status(401).json({ message: "Not signed in" });
   if (!atLeast(req.user.platformRole, "admin")) return res.status(404).json({ message: "Not found" });
+  if (!mfaGate(req, res)) return;
   next();
 };
 

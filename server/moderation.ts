@@ -10,6 +10,7 @@
  */
 import type { Express, RequestHandler } from "express";
 import { and, desc, eq, gte, inArray, sql, type SQL } from "drizzle-orm";
+import { ago, interval } from "./sql-interval";
 import type { PgTable, PgColumn } from "drizzle-orm/pg-core";
 import { db } from "./db";
 import {
@@ -142,7 +143,7 @@ export function ipKey(req: any): string {
  * everything through. `now() - interval` keeps both sides in one frame.
  */
 const withinMinutes = (col: PgColumn, minutes: number) =>
-  gte(col, sql`now() - interval '${sql.raw(String(minutes))} minutes'`);
+  gte(col, ago(minutes, "minutes"));
 
 /**
  * What two pieces of text have to share to count as the same posting.
@@ -239,7 +240,7 @@ export async function withinRateLimit(key: string, action: RateLimitAction): Pro
     const rows = await Promise.all(COUNTED[action].map(async (src) => {
       const [row] = await db.select({
         n: sql<number>`count(*)::int`,
-        frees: sql<number | null>`ceil(extract(epoch from (min(${src.created}) + interval '${sql.raw(String(limit.windowMinutes))} minutes' - now())))::int`,
+        frees: sql<number | null>`ceil(extract(epoch from (min(${src.created}) + ${interval(limit.windowMinutes, "minutes")} - now())))::int`,
       })
         .from(src.table as any)
         .where(and(

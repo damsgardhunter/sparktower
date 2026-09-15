@@ -17,6 +17,7 @@ import { and, eq, like } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { db } from "../../server/db";
 import { activityEvents } from "@shared/schema";
+import { passMfa } from "../helpers/mfa";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -203,6 +204,8 @@ describe("the owner's Explore numbers", () => {
     const owner = request.agent(app);
     await owner.get("/").set("Accept", "text/html");
     await owner.post("/api/auth/register").send({ email: "owner@test.local", password: "Testpass123!", firstName: "O", lastName: "W" });
+    // The owner's console needs a second factor on the session (server/mfa.ts).
+    await passMfa(owner);
     const summary = await owner.get("/api/admin/analytics/summary?days=7");
     expect(summary.status).toBe(200);
     const explore = summary.body.explore;

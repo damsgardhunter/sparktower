@@ -16,6 +16,7 @@ import { getTestApp, closeTestApp } from "../helpers/app";
 import { db } from "../../server/db";
 import { users, moderationLog, contentReports } from "@shared/schema";
 import { RATE_LIMITS } from "@shared/moderation";
+import { passMfa } from "../helpers/mfa";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -34,6 +35,8 @@ async function signedIn(app: any, first: string) {
 async function reviewer(app: any) {
   const r = await signedIn(app, "Reviewer");
   await db.update(users).set({ platformRole: "reviewer" }).where(eq(users.id, r.userId));
+  // Review tools need a second factor on the session (server/mfa.ts).
+  await passMfa(r.agent);
   return r;
 }
 

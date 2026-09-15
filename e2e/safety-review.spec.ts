@@ -12,6 +12,7 @@ import { test, expect, type Browser } from "@playwright/test";
 import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
+import { passMfa } from "./mfa-helper";
 
 loadEnvFile();
 const password = "Testpass123!";
@@ -44,6 +45,8 @@ test("a reviewer acts on a report, sees what it did, and records the daily revie
   const reporter = await personIn(browser, "203.0.113.52", "Reporter");
   const reviewer = await personIn(browser, "203.0.113.53", "Reviewer");
   await makeReviewer(reviewer.id);
+  // Review tools need 2FA on the session.
+  await passMfa(reviewer.api);
 
   // A reported comment, set up through the API.
   const project = await author.api.post("/api/projects", {

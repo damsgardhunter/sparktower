@@ -8,6 +8,7 @@ import { stampSignupAttribution } from "../../attribution";
 import { enforceRateLimit, ipKey } from "../../moderation";
 import { db } from "../../db";
 import { mobileRefreshTokens, users } from "@shared/models/auth";
+import { mfaEnabledFor, mfaRequiredFor } from "../../mfa";
 import { and, eq, isNull, sql } from "drizzle-orm";
 /** The session cookie's name, as express-session is configured. */
 const SESSION_COOKIE = "connect.sid";
@@ -81,12 +82,23 @@ export function registerAuthRoutes(app: Express): void {
       if (!user) {
         return res.status(401).json({ message: info?.message || "Invalid credentials" });
       }
+      // Two-factor accounts: the password alone doesn't sign in. The session holds a pending sign-in for
+      // /api/auth/mfa/verify to finish with a code (server/mfa.ts).
+      if (mfaEnabledFor(user)) {
+        req.session.regenerate((err: any) => {
+          if (err) return next(err);
+          (req.session as any).mfaPending = { userId: user.id, at: Date.now() };
+          req.session.save(() => res.json({ mfaRequired: true }));
+        });
+        return;
+      }
       req.login(user, async (err: any) => {
         if (err) return next(err);
         // Heals accounts created before profiles were provisioned at sign-up.
         await ensureUserProfile(user);
         const { passwordHash, ...safeUser } = user;
-        res.json(safeUser);
+        // Signed in; but a role that needs 2FA can't use what it allows until it's set up.
+        res.json({ ...safeUser, mfaEnrollmentRequired: mfaRequiredFor(user) });
       });
     })(req, res, next);
   });
@@ -97,7 +109,19 @@ export function registerAuthRoutes(app: Express): void {
 
   app.get("/api/auth/google/callback",
     passport.authenticate("google", { failureRedirect: "/?auth=failed" }),
-    (_req, res) => {
+    (req: any, res, next) => {
+      // Google proved who you are; a two-factor account still needs its code. Undo the sign-in, keep it pending.
+      if (mfaEnabledFor(req.user)) {
+        const userId = req.user.id;
+        return req.logout((err: any) => {
+          if (err) return next(err);
+          req.session.regenerate((err2: any) => {
+            if (err2) return next(err2);
+            req.session.mfaPending = { userId, at: Date.now() };
+            req.session.save(() => res.redirect("/mfa"));
+          });
+        });
+      }
       res.redirect("/");
     }
   );

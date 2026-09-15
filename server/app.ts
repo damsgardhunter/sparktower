@@ -17,6 +17,8 @@ import express, { type Express, type Request, type Response, type NextFunction }
 import type { Server } from "http";
 import { ZodError } from "zod";
 import { registerRoutes } from "./routes";
+import { sameOriginWrites } from "./csrf";
+import { registerSecurityTxt } from "./security-txt";
 import { WebhookHandlers, WebhookVerificationError } from "./webhookHandlers";
 import { ModelResponseError } from "./ai-json";
 import { enforceRejectionLimit, countRejection, ipKey } from "./moderation";
@@ -67,13 +69,16 @@ export function stripOthersAccountFields(obj: any, viewer: { id?: string; platfo
   return result;
 }
 
+/** Credentials that never leave the server, whoever's account and whatever route built the payload. */
+const NEVER_SENT = new Set(["passwordHash", "mfaSecret", "mfaPendingSecret", "mfaRecoveryCodes", "mfaLastStep"]);
+
 function stripPasswordHash(obj: any): any {
   if (obj === null || obj === undefined || typeof obj !== "object") return obj;
   if (Array.isArray(obj)) return obj.map(stripPasswordHash);
   if (obj instanceof Date) return obj;
   const result: any = {};
   for (const key of Object.keys(obj)) {
-    if (key === "passwordHash") continue;
+    if (NEVER_SENT.has(key)) continue;
     result[key] = typeof obj[key] === "object" ? stripPasswordHash(obj[key]) : obj[key];
   }
   return result;
@@ -112,6 +117,8 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
     res.json = ((body: unknown) => json(stripOthersAccountFields(stripPasswordHash(stripSealedFields(body)), req.user))) as typeof res.json;
     next();
   });
+
+  registerSecurityTxt(app);
 
   app.get("/_health", (_req, res) => {
     res.sendStatus(200);
@@ -170,6 +177,9 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
     }),
   );
   app.use(express.urlencoded({ extended: false }));
+
+  // Every cookie-carrying write must come from this site's own pages (server/csrf.ts).
+  app.use(sameOriginWrites());
 
   /*
    * Express 5 leaves `req.body` as `undefined` when a request carries no body,

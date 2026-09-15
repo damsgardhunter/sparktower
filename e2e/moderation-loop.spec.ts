@@ -18,6 +18,7 @@ import { test, expect, type Browser } from "@playwright/test";
 import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
+import { passMfa } from "./mfa-helper";
 
 loadEnvFile();
 const password = "Testpass123!";
@@ -51,6 +52,8 @@ test("a reported comment is removed from the queue with a reason code, and the l
   const reporter = await personIn(browser, "203.0.113.42", "Reporter");
   const reviewer = await personIn(browser, "203.0.113.43", "Reviewer");
   await makeReviewer(reviewer.id);
+  // Review tools need 2FA on the session.
+  await passMfa(reviewer.api);
 
   // 1. Content: a comment on the author's own public project.
   const project = await author.api.post("/api/projects", {

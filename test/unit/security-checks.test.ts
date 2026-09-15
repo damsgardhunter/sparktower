@@ -52,7 +52,7 @@ app.post("/api/login", rateLimit({ max: 8 }), async (req, res) => { await bcrypt
 app.post("/api/projects/:id", requireOwner, async (req, res) => { const body = z.object({ title: z.string() }).parse(req.body); });
 app.delete("/api/projects/:id", isProjectMember(req.user.id, id));
 app.post("/api/stripe/webhook", (req, res) => { stripe.webhooks.constructEvent(req.body, req.headers["stripe-signature"], secret); });
-app.post("/api/admin/roles", requireAdmin, (req, res) => { logActivity({ action: "role changed" }); totp.verify({ token, secret }); });
+app.post("/api/admin/roles", requireAdmin, requireMfa, (req, res) => { logActivity({ action: "role changed" }); totp.verify({ token, secret }); });
 app.use((err, req, res, next) => { console.error(err); res.status(500).json({ message: "Something went wrong" }); });` },
   { path: "client/src/Chat.tsx", content: `const escapeHtml = (s) => s.replace(/</g, "&lt;"); export const Msg = ({ t }) => <p dangerouslySetInnerHTML={{ __html: escapeHtml(t) }} />;` },
   // Not the app's code: these must not satisfy or fail anything.
@@ -90,6 +90,17 @@ describe("security before release", () => {
     expect(v.cors).toBe("n/a");
     // sameSite=lax with no token or Origin check: most of the way, not all.
     expect(v.csrf).toBe("partial");
+    // Two-factor that exists but guards nothing privileged is only partway; hand-written TOTP counts.
+    const offeredOnly = hardened.map((f) => ({ ...f, content: (f.content ?? "").replace("requireMfa, ", "") }));
+    expect(verdicts(scanSecurity(offeredOnly)).mfa).toBe("partial");
+    const handRolled = [...bare, { path: "server/totp.ts", content: "export function verifyTotp(secret, code) { return otpauth(); } const url = `otpauth://totp/x`;" }, { path: "server/guard.ts", content: "export const requireAdmin = (req, res, next) => { if (!mfaGate(req, res)) return; next(); };" }];
+    expect(verdicts(scanSecurity(handRolled)).mfa).toBe("pass");
+    // ...and with a same-origin guard over every unsafe method, it's covered.
+    const guard = { path: "server/csrf.ts", content: `const UNSAFE = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+export const check = (req) => { const site = req.headers["sec-fetch-site"]; const origin = req.headers.origin; return site || origin; };` };
+    const withGuard = scanSecurity([...hardened, guard]).checks.find((c) => c.id === "csrf")!;
+    expect(withGuard.status).toBe("pass");
+    expect(withGuard.evidence[0]).toBe("server/csrf.ts");
     expect(r.blockers).toBe(0);
     expect(r.score).toBeGreaterThanOrEqual(95);
     expect(r.checks.find((c) => c.id === "security-headers")!.evidence).toEqual(["server/index.ts", "server/index.ts"]);

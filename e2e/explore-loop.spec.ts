@@ -13,6 +13,7 @@
  * page, so every check polls the owner's numbers rather than sleeping.
  */
 import { test, expect, type Page } from "@playwright/test";
+import { passMfa } from "./mfa-helper";
 
 const password = "Testpass123!";
 
@@ -44,6 +45,8 @@ test("a real browser walks the Explore loop, and the owner's dashboard counts it
   expect((await page.request.post("/api/profile/complete-onboarding", {
     data: { displayName: "Olive Owner", headline: "Shipping weekly", bio: "Here for the loop." },
   })).ok()).toBeTruthy();
+  // The owner's dashboard needs 2FA on the session.
+  await passMfa(page.request);
   const created = await pat.post("/api/projects", {
     data: {
       title: "Explore Target", description: "A project for the Explore loop to find, see and open in a real browser.",

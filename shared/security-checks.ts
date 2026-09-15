@@ -153,13 +153,17 @@ export function scanSecurity(allFiles: SourceFile[], extra: { suspectedSecrets?:
     const strictSite = has(/sameSite:\s*["']strict["']/i);
     const laxSite = has(/sameSite:\s*[^,}\n]{0,60}["']lax["']/i);
     const originCheck = has(/req\.headers\.origin|req\.get\(["']origin["']\)|sec-fetch-site/i);
+    // An Origin / Sec-Fetch-Site check that covers every unsafe method (not one route) is enforcement, not a hint.
+    const originGuard = server.filter((f) => /sec-fetch-site/i.test(f.content ?? "") && /headers\.origin|["']origin["']/i.test(f.content ?? "")
+      && /["']PATCH["']/.test(f.content ?? "") && /["']DELETE["']/.test(f.content ?? "")).map((f) => f.path);
+    const guarded = originGuard.length > 0 && (laxSite.length > 0 || strictSite.length > 0);
     add({
       id: "csrf", label: "CSRF protection", category: "sessions", severity: "medium",
-      status: !cookieSessions.length ? "n/a" : csrf.length || strictSite.length ? "pass" : laxSite.length || originCheck.length ? "partial" : "missing",
-      detail: !cookieSessions.length ? "No cookie sessions (token auth isn't sent automatically, so CSRF doesn't apply)." : csrf.length ? "CSRF tokens are checked." : strictSite.length ? "sameSite=strict cookies block cross-site requests." : laxSite.length || originCheck.length ? "sameSite=lax or an Origin check covers most cases, but no CSRF token for state changes." : "Cookie sessions with no CSRF defence.",
+      status: !cookieSessions.length ? "n/a" : csrf.length || strictSite.length || guarded ? "pass" : laxSite.length || originCheck.length ? "partial" : "missing",
+      detail: !cookieSessions.length ? "No cookie sessions (token auth isn't sent automatically, so CSRF doesn't apply)." : csrf.length ? "CSRF tokens are checked." : guarded ? "sameSite cookies plus an Origin / Sec-Fetch-Site check on every state-changing request." : strictSite.length ? "sameSite=strict cookies block cross-site requests." : laxSite.length || originCheck.length ? "sameSite=lax or an Origin check covers most cases, but no CSRF token for state changes." : "Cookie sessions with no CSRF defence.",
       why: "With cookie sessions, another site can submit a form to your API as the signed-in visitor.",
       fix: "Keep sameSite=lax and accept writes only as JSON, and also reject state-changing requests whose Origin header isn't yours (or add a CSRF token).",
-      evidence: [...csrf, ...strictSite, ...laxSite, ...originCheck].slice(0, 4),
+      evidence: [...csrf, ...originGuard, ...strictSite, ...laxSite, ...originCheck].slice(0, 4),
     });
   }
 
@@ -191,14 +195,23 @@ export function scanSecurity(allFiles: SourceFile[], extra: { suspectedSecrets?:
   }
   {
     const admin = onServer(/\badmin\b|role\s*===|isAdmin|requireAdmin|requireOwner|requireReviewer/i);
-    const mfa = has(/from ["'](otplib|speakeasy|@simplewebauthn\/server|@otplib\/[\w-]+)["']|require\(["'](otplib|speakeasy)["']\)|verifyRegistrationResponse|totp\.verify|authenticator\.(verify|check)\(/i);
+    // A library, a passkey flow, or TOTP written out by hand (an otpauth:// URL, a verifyTotp over HMAC).
+    const mfa = has(/from ["'](otplib|speakeasy|@simplewebauthn\/server|@otplib\/[\w-]+)["']|require\(["'](otplib|speakeasy)["']\)|verifyRegistrationResponse|verifyAuthenticationResponse|totp\.verify|authenticator\.(verify|check)\(|otpauth:\/\/|\b(verify|check)Totp\s*\(/i);
+    // Offering it isn't the fix for admins: something has to refuse a privileged request without it.
+    const enforced = onServer(/\bmfaGate\b|requireMfa|require2fa|requireTwoFactor|mfa_required|mfaRequiredFor|mfa_enrollment_required/i);
+    const adminGap = admin.length > 0 && !enforced.length;
     add({
       id: "mfa", label: "Two-factor sign-in (at least for admins)", category: "accounts", severity: admin.length ? "medium" : "low",
-      status: mfa.length ? "pass" : "missing",
-      detail: mfa.length ? "Two-factor or passkey sign-in exists." : admin.length ? "Admin or owner powers exist, and no second factor protects them." : "No two-factor or passkey sign-in.",
+      status: !mfa.length ? "missing" : adminGap ? "partial" : "pass",
+      detail: !mfa.length
+        ? admin.length ? "Admin or owner powers exist, and no second factor protects them." : "No two-factor or passkey sign-in."
+        : adminGap ? "Two-factor sign-in exists, but nothing requires it for admin, owner or reviewer accounts."
+        : admin.length ? "Two-factor sign-in exists and privileged accounts must use it." : "Two-factor or passkey sign-in exists.",
       why: "One phished or reused password is enough to take an account — and for an admin, the whole site.",
-      fix: "Offer TOTP (otplib) or passkeys (WebAuthn), and require it for admin, owner and reviewer accounts before release.",
-      evidence: [...mfa, ...admin].slice(0, 3),
+      fix: adminGap
+        ? "Refuse admin, owner and reviewer routes until the session has passed a second factor (and block them for accounts that haven't enrolled)."
+        : "Offer TOTP (otplib) or passkeys (WebAuthn), and require it for admin, owner and reviewer accounts before release.",
+      evidence: [...enforced, ...mfa, ...admin].filter((f, i, all) => all.indexOf(f) === i).slice(0, 3),
     });
   }
   {

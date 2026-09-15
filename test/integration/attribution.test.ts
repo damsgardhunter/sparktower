@@ -12,6 +12,7 @@ import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { db } from "../../server/db";
 import { users } from "@shared/schema";
+import { passMfa } from "../helpers/mfa";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -55,6 +56,8 @@ describe("signup attribution, end to end", () => {
     // a script) has no cookie to read and is stored as null: "unknown", which
     // is the truth, and deliberately not folded into "direct".
     const owner = (await signUpVia(app, "/", undefined, "owner@test.local")).agent;
+    // The owner's console needs a second factor on the session (server/mfa.ts).
+    await passMfa(owner);
     const summary = await owner.get("/api/admin/analytics/summary?days=7");
     expect(summary.status).toBe(200);
     const bySource = Object.fromEntries(summary.body.signupSources.map((r: any) => [r.source, r]));

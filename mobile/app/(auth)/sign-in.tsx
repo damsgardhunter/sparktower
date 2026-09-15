@@ -29,7 +29,8 @@ export default function SignIn() {
   const params = useLocalSearchParams<{ signup?: string }>();
   // Arriving with ?signup=1 opens straight onto sign up, as on the web.
   const arrivedToSignUp = params.signup === "1";
-  const { signIn, signUp, signInWithGoogle, googleAvailable } = useAuth();
+  const { signIn, signUp, signInWithGoogle, googleAvailable, mfaPending, verifyMfa, cancelMfa } = useAuth();
+  const [code, setCode] = useState("");
   const [tab, setTab] = useState<Tab>(arrivedToSignUp ? "signup" : "login");
   const [showAuth, setShowAuth] = useState(arrivedToSignUp);
   const [email, setEmail] = useState("");
@@ -75,6 +76,21 @@ export default function SignIn() {
       // AuthGate moves a signed-in person on: onboarding first for a new account.
     } catch (err: any) {
       setError(err?.message || (tab === "login" ? "Login failed" : "Registration failed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // 2FA on: the password was right; the account's code finishes signing in.
+  const submitCode = async () => {
+    setError(null);
+    if (!code.trim()) { setError("Enter the code from your authenticator app."); return; }
+    setBusy(true);
+    try {
+      await verifyMfa(code);
+    } catch (err: any) {
+      setError(err?.message || "That code isn't right.");
+      setCode("");
     } finally {
       setBusy(false);
     }
@@ -130,7 +146,29 @@ export default function SignIn() {
             </View>
           </View>
 
-          {showAuth && (
+          {mfaPending && (
+            <View style={styles.cardWrap} onLayout={(e) => { cardY.current = e.nativeEvent.layout.y; }}>
+              <View style={styles.card} testID="mfa-card">
+                <Text style={[styles.tabText, styles.tabTextActive, { textAlign: "center" }]}>Two-factor authentication</Text>
+                <Text style={styles.cardSub}>Enter the 6-digit code from your authenticator app, or one of your recovery codes.</Text>
+                {error && (
+                  <View style={styles.errorBox} testID="text-mfa-error"><Text style={styles.error}>{error}</Text></View>
+                )}
+                <LabeledInput label="Code" value={code} onChangeText={setCode} placeholder="123456"
+                  autoCapitalize="none" autoComplete="one-time-code" textContentType="oneTimeCode"
+                  onSubmitEditing={submitCode} returnKeyType="go" autoFocus testID="input-mfa-code" />
+                <Pressable onPress={submitCode} disabled={busy} testID="button-mfa-verify"
+                  style={({ pressed }) => [styles.primaryButton, (pressed || busy) && styles.pressed]}>
+                  {busy ? <ActivityIndicator color={colors.primaryText} /> : <Text style={styles.primaryButtonText}>Verify</Text>}
+                </Pressable>
+                <Pressable onPress={() => { cancelMfa(); setCode(""); setError(null); setPassword(""); }} testID="button-mfa-cancel">
+                  <Text style={styles.switch}>Start over</Text>
+                </Pressable>
+              </View>
+            </View>
+          )}
+
+          {showAuth && !mfaPending && (
             <View style={styles.cardWrap} onLayout={(e) => { cardY.current = e.nativeEvent.layout.y; }}>
               <View style={styles.card}>
                 <View style={styles.tabs} accessibilityRole="tablist">

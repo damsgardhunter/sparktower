@@ -9,6 +9,7 @@ import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { db } from "../../server/db";
 import { users } from "@shared/schema";
+import { passMfa } from "../helpers/mfa";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -71,6 +72,8 @@ describe("comment threads on posts", () => {
     const reader = await person(app, "Reader");
     const mod = await person(app, "Mod");
     await db.update(users).set({ platformRole: "reviewer" }).where(eq(users.id, mod.id));
+    // Review tools need a second factor on the session (server/mfa.ts).
+    await passMfa(mod.agent);
 
     const post = (await author.agent.post("/api/feed").send({ postType: "project_update", content: "Launched today." })).body;
     const bad = byContent((await troll.agent.post(`/api/feed/${post.id}/comments`).send({ content: "This is garbage, like you" })).body, "This is garbage, like you");

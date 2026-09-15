@@ -43,7 +43,7 @@ export async function introspectDataShape(connectionString: string, source: Data
       if (!IDENT.test(t.name)) continue;
       let rows = Math.max(0, Number(t.est) || 0), exact = false;
       if (rows < exactUnder) {
-        try { rows = Number((await client.query(`SELECT count(*)::bigint AS n FROM "${t.name}"`)).rows[0].n); exact = true; } catch { /* keep the estimate */ }
+        try { rows = Number((await client.query("SELECT count(*)::bigint AS n FROM " + client.escapeIdentifier(t.name))).rows[0].n); exact = true; } catch { /* keep the estimate */ }
       }
       const pk = new Set(keys.filter((k) => k.table === t.name && k.kind === "PRIMARY KEY").map((k) => k.column));
       out.push({

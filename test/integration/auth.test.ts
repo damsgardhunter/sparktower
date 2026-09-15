@@ -17,6 +17,7 @@ import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { db } from "../../server/db";
 import { mobileRefreshTokens, users } from "@shared/schema";
+import { codeFor, passMfa } from "../helpers/mfa";
 
 afterAll(async () => {
   await closeTestApp();
@@ -259,4 +260,62 @@ describe("mobile: tokens", () => {
       .send({ refreshToken: tablet.body.refreshToken });
     expect(tabletAgain.status).toBe(200);
   });
+});
+
+// --- Two-factor, by role -----------------------------------------------------
+// The full flows (wrong, reused and recovery codes; mobile challenges) are in
+// mfa.test.ts. This is the rule itself: which sign-ins need a second factor.
+
+describe("sign-in: who needs a second factor", () => {
+  const ownerEmail = `auth-owner-${Date.now()}@example.test`;
+  const cases = [
+    { who: "a builder", role: "user", required: false },
+    { who: "a reviewer", role: "reviewer", required: true },
+    { who: "an admin", role: "admin", required: true },
+    { who: "the platform owner", role: "user", owner: true, required: true },
+  ] as const;
+
+  for (const c of cases) {
+    it(`${c.who}: ${c.required ? "code required at sign-in once set up, privileged routes refused until then" : "signs in with a password alone"}`, async () => {
+      const app = await getTestApp();
+      const previousOwner = process.env.PLATFORM_OWNER_EMAIL;
+      const email = "owner" in c ? ownerEmail : newEmail();
+      if ("owner" in c) process.env.PLATFORM_OWNER_EMAIL = email;
+      try {
+        const agent = request.agent(app);
+        const reg = await agent.post("/api/auth/register").set("x-forwarded-for", "198.51.107.1").send({ email, password, firstName: "A" });
+        expect(reg.status).toBe(201);
+        await db.update(users).set({ platformRole: c.role }).where(eq(users.id, reg.body.id));
+        const privileged = "owner" in c ? "/api/admin/analytics/summary" : "/api/admin/reports";
+
+        const first = await request.agent(app).post("/api/auth/login").set("x-forwarded-for", "198.51.107.2").send({ email, password });
+        expect(first.status).toBe(200);
+        expect(first.body.mfaEnrollmentRequired).toBe(c.required);
+
+        if (!c.required) {
+          // Nothing to set up, and a password is all sign-in ever asks for.
+          expect((await agent.get("/api/auth/mfa/status")).body).toMatchObject({ required: false });
+          const again = await request.agent(app).post("/api/auth/login").set("x-forwarded-for", "198.51.107.3").send({ email, password });
+          expect(again.body.mfaRequired).toBeUndefined();
+          expect(again.body.id).toBe(reg.body.id);
+          return;
+        }
+
+        expect((await agent.get(privileged)).body.code).toBe("mfa_enrollment_required");
+        const { secret } = await passMfa(agent);
+        expect((await agent.get(privileged)).status).toBe(200);
+
+        const signIn = request.agent(app);
+        expect((await signIn.post("/api/auth/login").set("x-forwarded-for", "198.51.107.4").send({ email, password })).body).toEqual({ mfaRequired: true });
+        expect((await signIn.get("/api/auth/user")).status).toBe(401);
+        const verified = await signIn.post("/api/auth/mfa/verify").set("x-forwarded-for", "198.51.107.4").send({ code: codeFor(secret, 1) });
+        expect(verified.status, JSON.stringify(verified.body)).toBe(200);
+        expect((await signIn.get(privileged)).status).toBe(200);
+      } finally {
+        // One process runs every file: put it back exactly, unset included.
+        if (previousOwner === undefined) delete process.env.PLATFORM_OWNER_EMAIL;
+        else process.env.PLATFORM_OWNER_EMAIL = previousOwner;
+      }
+    });
+  }
 });

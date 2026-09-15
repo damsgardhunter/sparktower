@@ -9,6 +9,7 @@ import { test, expect, type Page } from "@playwright/test";
 import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
+import { passMfa } from "./mfa-helper";
 
 loadEnvFile();
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -55,6 +56,8 @@ test("security headers are set, the app can't be framed, and the pages load noth
   const db = new pg.Client({ connectionString: testDatabaseUrl("_e2e") });
   await db.connect();
   try { await db.query("UPDATE users SET platform_role = 'admin' WHERE id = $1", [me.id]); } finally { await db.end(); }
+  // Admin tools need 2FA on the session.
+  await passMfa(api);
   const all = (await (await api.get("/api/admin/promotions")).json()).promotions as any[];
   for (const r of all) await api.put(`/api/admin/promotions/${r.promotion.id}`, { data: r.promotion.id === "webflow" ? { videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" } : { active: false } });
 

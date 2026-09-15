@@ -13,6 +13,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { PENDING_PATH_KEY, type PendingPath } from "@shared/path-artifacts";
 import { PENDING_INVITE_KEY } from "@shared/invites";
 import heroVideo from "@assets/Brooklyn_Tower_Tesla_Coil_Animation_1772567582595.mp4";
+import { MfaCodeForm } from "@/components/mfa";
 
 /** The artifact a visitor chose "start" or "explore" on before signing up, so the signup is credited to it. */
 function pendingArtifactId(): string | undefined {
@@ -353,6 +354,7 @@ function AuthCard({ activeTab, onTabChange }: { activeTab: string; onTabChange: 
 }
 
 function LoginForm() {
+  const [mfaStep, setMfaStep] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -377,6 +379,11 @@ function LoginForm() {
         setError(data.message || "Login failed");
         return;
       }
+      // 2FA on: the password was right, but there's no session until a code (server/mfa.ts).
+      if (data.mfaRequired) {
+        setMfaStep(true);
+        return;
+      }
       await queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
       window.location.href = afterAuthPath();
     } catch {
@@ -385,6 +392,18 @@ function LoginForm() {
       setLoading(false);
     }
   };
+
+  if (mfaStep) {
+    return (
+      <MfaCodeForm
+        onVerified={async () => {
+          await queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+          window.location.href = afterAuthPath();
+        }}
+        onRestart={() => { setMfaStep(false); setPassword(""); }}
+      />
+    );
+  }
 
   return (
     <div className="space-y-4">

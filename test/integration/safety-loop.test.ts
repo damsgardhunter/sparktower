@@ -18,6 +18,7 @@ import { activityEvents, contentReports, moderationLog, rateLimitHits, users } f
 import { RATE_LIMITS } from "@shared/moderation";
 import { SAFETY_CHECKLIST_IDS, SAFETY_EVENTS } from "@shared/safety";
 import { flushRefusalCounts } from "../../server/moderation";
+import { passMfa } from "../helpers/mfa";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -33,6 +34,8 @@ async function person(app: any, name: string, email?: string) {
 async function reviewer(app: any) {
   const who = await person(app, "Rev");
   await db.update(users).set({ platformRole: "reviewer" }).where(eq(users.id, who.id));
+  // Review tools need a second factor on the session (server/mfa.ts).
+  await passMfa(who.agent);
   return who;
 }
 

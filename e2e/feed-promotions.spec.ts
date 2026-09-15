@@ -8,6 +8,7 @@ import { test, expect } from "@playwright/test";
 import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
+import { passMfa } from "./mfa-helper";
 
 loadEnvFile();
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -56,6 +57,8 @@ test("featured tools rotate through the feed, can be hidden, and play an admin's
   const db = new pg.Client({ connectionString: testDatabaseUrl("_e2e") });
   await db.connect();
   try { await db.query("UPDATE users SET platform_role = 'admin' WHERE id = $1", [me.id]); } finally { await db.end(); }
+  // Admin tools need 2FA on the session.
+  await passMfa(api);
   await page.goto("/admin/promotions");
   await page.getByTestId("promo-admin-row-replit").click();
   await page.getByTestId("promo-admin-headline").fill("Agent builds, tests and deploys your app");
@@ -113,6 +116,8 @@ test("scrolling fast past loading videos doesn't throw", async ({ browser }) => 
   const db = new pg.Client({ connectionString: testDatabaseUrl("_e2e") });
   await db.connect();
   try { await db.query("UPDATE users SET platform_role = 'admin' WHERE id = $1", [me.id]); } finally { await db.end(); }
+  // Admin tools need 2FA on the session.
+  await passMfa(api);
   for (let i = 0; i < 20; i++) await api.post("/api/feed", { data: { postType: "project_update", content: `Scroll filler ${i} ${stamp()}` } });
 
   // Every promotion has a video, so every slot in the feed builds a player.

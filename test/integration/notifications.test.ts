@@ -10,6 +10,7 @@ import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { db } from "../../server/db";
 import { users } from "@shared/schema";
+import { passMfa } from "../helpers/mfa";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -79,6 +80,8 @@ describe("notifications", () => {
     // A taken-down post drops out of the bell rather than linking to nothing.
     const mod = await person(app, "Mod");
     await db.update(users).set({ platformRole: "reviewer" }).where(eq(users.id, mod.id));
+    // Review tools need a second factor on the session (server/mfa.ts).
+    await passMfa(mod.agent);
     await mod.agent.post(`/api/admin/content/feed_post/${post.id}/hide`).send({ reason: "Test takedown" }).expect(200);
     expect((await bell(ben)).some((x) => x.kind === "followed_post")).toBe(false);
   });

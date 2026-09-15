@@ -11,6 +11,7 @@ import { getTestApp, closeTestApp } from "../helpers/app";
 import { db } from "../../server/db";
 import { activityEvents, users } from "@shared/schema";
 import { PROMOTION_CATALOG } from "@shared/promotions";
+import { passMfa } from "../helpers/mfa";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -20,7 +21,11 @@ async function person(app: any, role?: "admin") {
   n += 1;
   const res = await agent.post("/api/auth/register").set("x-forwarded-for", `198.51.104.${10 + n}`).send({ email: `promo-${Date.now()}-${n}@example.test`, password: "Testpass123!" });
   expect(res.status).toBe(201);
-  if (role) await db.update(users).set({ platformRole: role }).where(eq(users.id, res.body.id));
+  if (role) {
+    await db.update(users).set({ platformRole: role }).where(eq(users.id, res.body.id));
+    // Admin tools need a second factor on the session (server/mfa.ts).
+    await passMfa(agent);
+  }
   return { agent, id: res.body.id as string };
 }
 

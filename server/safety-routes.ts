@@ -14,6 +14,7 @@
  */
 import type { Express } from "express";
 import { sql, type SQL } from "drizzle-orm";
+import { interval } from "./sql-interval";
 import { db } from "./db";
 import { activityEvents, contentReports, moderationLog, rateLimitHits } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
@@ -111,7 +112,7 @@ export async function actionImpact(logId: string): Promise<ActionImpact | null> 
   if (!entry) return null;
 
   const at = sql`(SELECT created_at FROM ${moderationLog} WHERE id = ${logId})`;
-  const hours = sql.raw(`interval '${IMPACT_WINDOW_HOURS} hours'`);
+  const hours = interval(IMPACT_WINDOW_HOURS, "hours");
   const before: Window = { from: sql`${at} - ${hours}`, to: at };
   const after: Window = { from: at, to: sql`LEAST(now(), ${at} + ${hours})` };
   const hoursSince = Number(entry.hours_since);
@@ -184,7 +185,7 @@ export async function safetyReview({ withImpact = true }: { withImpact?: boolean
 
   // Since the last review, at least a day and at most a week; compared with the same span before it.
   const windowHours = Math.round(Math.min(MAX_REVIEW_WINDOW_HOURS, Math.max(REVIEW_DUE_HOURS, hoursSinceReview ?? REVIEW_DUE_HOURS)));
-  const span = sql.raw(`interval '${windowHours} hours'`);
+  const span = interval(windowHours, "hours");
   const current: Window = { from: sql`now() - ${span}`, to: sql`now() + interval '1 second'` };
   const previous: Window = { from: sql`now() - ${span} - ${span}`, to: sql`now() - ${span}` };
 

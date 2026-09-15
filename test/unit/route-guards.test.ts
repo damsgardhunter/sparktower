@@ -136,6 +136,8 @@ describe("authentication on the write surface", () => {
     "POST /api/auth/mobile/login": "signing in; limited per address",
     "POST /api/auth/mobile/register": "signing up; limited per address",
     "POST /api/auth/mobile/google": "signing in with a Google ID token the server verifies",
+    "POST /api/auth/mfa/verify": "finishes a sign-in a correct password started in this session, with a one-time code; limited per address and account",
+    "POST /api/auth/mobile/mfa/verify": "a signed five-minute challenge from a correct password, plus a one-time code; limited per address and account",
     "POST /api/auth/mobile/refresh": "the refresh token is the credential; single-use (claimed atomically), hashed, reuse ends every mobile session, limited",
     "POST /api/auth/mobile/logout": "revokes the refresh token it's given; nothing else; limited per address",
     "POST /api/logout": "must work with an expired session; refuses cross-site requests",

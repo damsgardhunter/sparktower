@@ -15,6 +15,7 @@ import { db } from "./db";
 import { users } from "@shared/schema";
 import { eq, and, inArray, notInArray, sql } from "drizzle-orm";
 import type { RequestHandler } from "express";
+import { mfaGate } from "./mfa";
 
 export type PlatformRole = "user" | "reviewer" | "admin";
 
@@ -123,6 +124,8 @@ export const requireOwner: RequestHandler = (req: any, res, next) => {
     // who found the URL.
     return res.status(404).json({ message: "Not found" });
   }
+  // The role is right; the sign-in has to be too (server/mfa.ts).
+  if (!mfaGate(req, res)) return;
   next();
 };
 
@@ -134,5 +137,7 @@ export const requireReviewer: RequestHandler = (req: any, res, next) => {
     // the permission system to someone probing for it.
     return res.status(404).json({ message: "Not found" });
   }
+  // The role is right; the sign-in has to be too (server/mfa.ts).
+  if (!mfaGate(req, res)) return;
   next();
 };

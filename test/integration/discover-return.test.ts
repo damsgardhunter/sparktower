@@ -20,6 +20,7 @@ import { getTestApp, closeTestApp } from "../helpers/app";
 import { recordActivity } from "../../server/analytics";
 import { db } from "../../server/db";
 import { activityEvents, exploreSeen, feedPosts, projects } from "@shared/schema";
+import { passMfa } from "../helpers/mfa";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -112,6 +113,8 @@ describe("the repeat measure", () => {
     const owner = request.agent(app);
     await owner.get("/").set("Accept", "text/html");
     await owner.post("/api/auth/register").send({ email: "owner@test.local", password: "Testpass123!", firstName: "O", lastName: "W" });
+    // The owner's console needs a second factor on the session (server/mfa.ts).
+    await passMfa(owner);
     const summary = await owner.get("/api/admin/analytics/summary?days=7");
     expect(summary.status).toBe(200);
     expect(summary.body.explore.cycles).toEqual({ sessions: 2, completedOne: 1, twoPlus: 1, rate: 0.5 });

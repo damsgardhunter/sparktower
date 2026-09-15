@@ -3,8 +3,9 @@ import { Platform } from "react-native";
 import * as Google from "expo-auth-session/providers/google";
 import * as WebBrowser from "expo-web-browser";
 import {
-  clearSession, fetchMe, getAccessToken, login as apiLogin, loginWithGoogle,
-  logout as apiLogout, register as apiRegister, setSessionExpiredHandler,
+  clearSession, fetchMe, getAccessToken, isMfaChallenge, login as apiLogin, loginWithGoogle,
+  logout as apiLogout, register as apiRegister, setSessionExpiredHandler, verifyMfa as apiVerifyMfa,
+  type MfaChallenge, type Session,
 } from "../api/client";
 import { captureAttribution } from "../api/attribution";
 
@@ -46,6 +47,12 @@ interface AuthState {
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (input: { email: string; password: string; firstName?: string; lastName?: string }) => Promise<void>;
   signInWithGoogle: () => Promise<void>;
+  /** True between a right password (or Google) and the code, for an account with 2FA on. */
+  mfaPending: boolean;
+  /** Finishes that sign-in with an authenticator or recovery code. */
+  verifyMfa: (code: string) => Promise<void>;
+  /** Abandons it, back to the password. */
+  cancelMfa: () => void;
   signOut: () => Promise<void>;
   refreshUser: () => Promise<void>;
   /**
@@ -97,6 +104,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<any | null>(null);
   const [profile, setProfile] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
+  const [challenge, setChallenge] = useState<string | null>(null);
+
+  /** A session signs the person in; a challenge waits for their code. */
+  const accept = useCallback((result: Session | MfaChallenge) => {
+    if (isMfaChallenge(result)) { setChallenge(result.challengeToken); return; }
+    setChallenge(null);
+    setUser(result.user);
+    setProfile(result.profile);
+  }, []);
 
   // Held in a ref rather than state: the bridge hands this over on mount, and
   // storing it in state would re-render the whole tree for no reason.
@@ -145,19 +161,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Exchange Google's id_token for one of our own sessions.
   const handleIdToken = useCallback(async (idToken: string) => {
     try {
-      const session = await loginWithGoogle(idToken);
-      setUser(session.user);
-      setProfile(session.profile);
+      accept(await loginWithGoogle(idToken));
     } catch (err) {
       console.error("Google sign-in exchange failed:", err);
     }
-  }, []);
+  }, [accept]);
 
   const signIn = useCallback(async (email: string, password: string) => {
-    const session = await apiLogin(email, password);
-    setUser(session.user);
-    setProfile(session.profile);
-  }, []);
+    accept(await apiLogin(email, password));
+  }, [accept]);
+
+  const verifyMfa = useCallback(async (code: string) => {
+    if (!challenge) throw new Error("That sign-in has expired. Enter your password again.");
+    accept(await apiVerifyMfa(challenge, code));
+  }, [challenge, accept]);
+
+  const cancelMfa = useCallback(() => setChallenge(null), []);
 
   const signUp = useCallback(async (input: {
     email: string; password: string; firstName?: string; lastName?: string;
@@ -198,6 +217,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     <AuthContext.Provider
       value={{
         user, profile, loading, signIn, signUp, signInWithGoogle, signOut,
+        mfaPending: challenge != null, verifyMfa, cancelMfa,
         refreshUser, markOnboarded, googleAvailable: GOOGLE_CONFIGURED,
       }}
     >

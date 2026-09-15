@@ -231,6 +231,14 @@ export function AppSidebar() {
             <PinnedBadges userId={user?.id} size="xs" max={5} className="pl-[3.25rem] -mt-1 pb-1" />
           </SidebarMenuItem>
           <SidebarMenuItem>
+            <SidebarMenuButton asChild>
+              <Link href="/settings/security" data-testid="link-security-settings">
+                <ShieldCheck className="h-4 w-4" />
+                <span>Security</span>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
             <SidebarMenuButton
               onClick={() => logout()}
               className="text-destructive hover:text-destructive"

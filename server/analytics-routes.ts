@@ -11,6 +11,7 @@
  */
 import type { Express, Response } from "express";
 import { and, desc, eq, gte, inArray, sql, type SQL } from "drizzle-orm";
+import { ago } from "./sql-interval";
 import { rateLimit } from "./moderation";
 import { db } from "./db";
 import { activityEvents, users, userProfiles } from "@shared/schema";
@@ -33,8 +34,8 @@ const POLL_LIMIT = 200;
 /** Keeps proxies from closing an idle stream. */
 const HEARTBEAT_MS = 25_000;
 
-const minutes = (n: number) => sql`now() - interval '${sql.raw(String(n))} minutes'`;
-const days = (n: number) => sql`now() - interval '${sql.raw(String(n))} days'`;
+const minutes = (n: number) => ago(n, "minutes");
+const days = (n: number) => ago(n, "days");
 
 /**
  * What counts as one person.
@@ -117,7 +118,7 @@ async function exploreSummary(since: SQL) {
   const list = (names: readonly string[]) => sql.join(names.map((name) => sql`${name}`), sql`, `);
 
   const steps = sql.join(EXPLORE_FUNNEL.map((step) =>
-    sql`count(DISTINCT session_id) FILTER (WHERE name IN (${list(step.events)}))::int AS ${sql.raw(`"${step.key}"`)}`), sql`, `);
+    sql`count(DISTINCT session_id) FILTER (WHERE name IN (${list(step.events)}))::int AS ${sql.identifier(step.key)}`), sql`, `);
   const funnelRows = await db.execute<any>(sql`
     SELECT ${steps} FROM ${activityEvents}
     WHERE created_at >= ${since} AND name IN (${list(EXPLORE_EVENT_NAMES)})

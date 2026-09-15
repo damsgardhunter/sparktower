@@ -15,6 +15,7 @@ import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { db } from "../../server/db";
 import { moderationLog, users } from "@shared/schema";
+import { passMfa } from "../helpers/mfa";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -34,6 +35,8 @@ async function scene(app: any, content = "You're an idiot and this project is a 
   const stranger = await person(app, "Stranger");
   const mod = await person(app, "Reviewer");
   await db.update(users).set({ platformRole: "reviewer" }).where(eq(users.id, mod.id));
+  // Review tools need a second factor on the session (server/mfa.ts).
+  await passMfa(mod.agent);
 
   const project = await author.agent.post("/api/projects").send({ title: "Loop", description: "A project with a comment that gets reported and moderated.", category: "saas", goal: "ship_mvp", subcategory: "saas" });
   const projectId = project.body.id as string;

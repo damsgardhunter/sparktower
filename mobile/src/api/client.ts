@@ -85,6 +85,14 @@ export interface Session {
   profile: any;
 }
 
+/**
+ * What sign-in returns instead of a session for an account with 2FA on: the
+ * password (or Google) step passed, and a code is still needed. The token is
+ * good for five minutes and only for /api/auth/mobile/mfa/verify.
+ */
+export interface MfaChallenge { mfaRequired: true; challengeToken: string }
+export const isMfaChallenge = (r: Session | MfaChallenge): r is MfaChallenge => (r as MfaChallenge).mfaRequired === true;
+
 export async function saveSession(session: Pick<Session, "accessToken" | "refreshToken">): Promise<void> {
   await setItem(ACCESS_KEY, session.accessToken);
   await setItem(REFRESH_KEY, session.refreshToken);
@@ -305,10 +313,20 @@ function rewriteToApiHost(url: string): string {
 
 // --- Auth calls ----------------------------------------------------------
 
-export async function login(email: string, password: string): Promise<Session> {
-  const session = await api<Session>("/api/auth/mobile/login", {
+export async function login(email: string, password: string): Promise<Session | MfaChallenge> {
+  const session = await api<Session | MfaChallenge>("/api/auth/mobile/login", {
     method: "POST",
     body: { email, password, device: deviceLabel() },
+  });
+  if (!isMfaChallenge(session)) await saveSession(session);
+  return session;
+}
+
+/** The second step for an account with 2FA on: an authenticator or recovery code against the challenge. */
+export async function verifyMfa(challengeToken: string, code: string): Promise<Session> {
+  const session = await api<Session>("/api/auth/mobile/mfa/verify", {
+    method: "POST",
+    body: { challengeToken, code: code.trim(), device: deviceLabel() },
   });
   await saveSession(session);
   return session;
@@ -329,16 +347,16 @@ export async function register(input: {
   return session;
 }
 
-export async function loginWithGoogle(idToken: string): Promise<Session> {
+export async function loginWithGoogle(idToken: string): Promise<Session | MfaChallenge> {
   // Sent on every Google call, not just new accounts: the app can't tell a
   // first sign-in from a returning one, and the server ignores it for anyone
   // who already has a row.
   const attribution = await pendingAttribution();
-  const session = await api<Session>("/api/auth/mobile/google", {
+  const session = await api<Session | MfaChallenge>("/api/auth/mobile/google", {
     method: "POST",
     body: { idToken, device: deviceLabel(), attribution },
   });
-  await saveSession(session);
+  if (!isMfaChallenge(session)) await saveSession(session);
   await clearAttribution();
   return session;
 }

@@ -17,6 +17,7 @@ import { rateLimitHits, surfaceFlags, users } from "@shared/schema";
 import { RATE_LIMITS, type RateLimitAction } from "@shared/moderation";
 import { limitWrites, blockSuspended } from "../../server/moderation";
 import { loadSurfaceFlags } from "../../server/surfaces";
+import { passMfa } from "../helpers/mfa";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -53,6 +54,8 @@ describe("limits on reviewer actions", () => {
       .send({ email: `wf-${Date.now()}@example.test`, password: "Testpass123!" });
     const id = res.body.id as string;
     await db.update(users).set({ platformRole: "reviewer" }).where(eq(users.id, id));
+    // Review tools need a second factor on the session (server/mfa.ts).
+    await passMfa(agent);
 
     await seedHits(id, "review", RATE_LIMITS.review.max);
     const hide = await agent.post("/api/admin/content/comment/any-comment/hide").send({ reason: "Spam" });

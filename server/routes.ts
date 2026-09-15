@@ -21,6 +21,7 @@ import { registerPathReturnRoutes, lastDoneStep, weeklyUpdateFor } from "./path-
 import { registerArtifactRoutes } from "./artifact-routes";
 import { registerPromotionRoutes } from "./promotion-routes";
 import { registerInviteRoutes } from "./invite-routes";
+import { registerMfaRoutes } from "./mfa";
 import { ensureCreatorBadges } from "./backer-badges";
 import { registerFeedRoutes, registerProjectDiscussionRoutes, publishSystemPost, SYSTEM_POST_COPY, SYSTEM_POST_TYPES } from "./feed-routes";
 import { registerProfileRoutes } from "./profile-routes";
@@ -374,6 +375,7 @@ export async function registerRoutes(
   registerArtifactRoutes(app);
   registerPromotionRoutes(app);
   registerInviteRoutes(app);
+  registerMfaRoutes(app);
   registerProfileRoutes(app);
   registerDocumentRoutes(app);
   registerCodeAuditRoutes(app);

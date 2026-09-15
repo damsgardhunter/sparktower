@@ -7,6 +7,7 @@ import request from "supertest";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { db } from "../../server/db";
 import { stripeEvents } from "@shared/schema";
+import { passMfa } from "../helpers/mfa";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -15,6 +16,8 @@ describe("Stripe health", () => {
     const app = await getTestApp();
     const owner = request.agent(app);
     expect((await owner.post("/api/auth/register").set("x-forwarded-for", "198.51.100.61").send({ email: "owner@test.local", password: "Testpass123!" })).status).toBe(201);
+    // The owner's console needs a second factor on the session (server/mfa.ts).
+    await passMfa(owner);
     const someone = request.agent(app);
     expect((await someone.post("/api/auth/register").set("x-forwarded-for", "198.51.100.62").send({ email: `sh-${Date.now()}@example.test`, password: "Testpass123!" })).status).toBe(201);
 

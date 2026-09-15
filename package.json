@@ -11,6 +11,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:baseline": "tsx script/baseline-migrations.ts",
+    "mfa:reset": "tsx script/reset-mfa.ts",
     "stripe:seed": "tsx --env-file=.env server/seed-stripe.ts",
     "test": "vitest run",
     "test:watch": "vitest",

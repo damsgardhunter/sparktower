@@ -29,6 +29,9 @@ import BackingReview from "@/pages/backing-review";
 import PublicArtifactPage from "@/pages/public-artifact";
 import InviteAcceptPage from "@/pages/invite-accept";
 import AdminPromotions from "@/pages/admin-promotions";
+import MfaVerifyPage from "@/pages/mfa-verify";
+import SecuritySettings from "@/pages/security-settings";
+import { MfaNotice } from "@/components/mfa";
 import { NOVA_GRADIENT, NOVA_GRADIENT_CSS } from "@shared/backing";
 import { AnimatedTowerLogo } from "@/components/animated-tower-logo";
 import { UpgradeToKeepGenerating, CheckoutReturn, BillingIssueNotice } from "@/components/upgrade-to-keep-generating";
@@ -112,6 +115,8 @@ function Router() {
     return (
       <Switch>
         <Route path="/" component={LandingPage} />
+        {/* Google sign-in, for an account with 2FA on, lands here for the code (server/mfa.ts). */}
+        <Route path="/mfa" component={MfaVerifyPage} />
         <Route>
           <Redirect to="/" />
         </Route>
@@ -191,6 +196,8 @@ function Router() {
           </div>
         </header>
         {/* The revenue loop: out of credits anywhere → plans → checkout → back here. */}
+        {/* Reviewers, admins and the owner: their tools are locked until this session passes 2FA. */}
+        <MfaNotice />
         <BillingIssueNotice />
         <UpgradeToKeepGenerating />
         <CheckoutReturn />
@@ -207,6 +214,7 @@ function Router() {
             <Route path="/projects/:id/manage" component={ProjectManager} />
             <Route path="/projects/:id" component={ProjectDashboard} />
             <Route path="/profile" component={Profile} />
+            <Route path="/settings/security" component={SecuritySettings} />
             <Route path="/profile/:id" component={Profile} />
             <Route path="/matches" component={Matches} />
             <Route path="/leaderboard" component={Leaderboard} />

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, jsonb, pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
+import { boolean, index, integer, jsonb, pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
 
 export const sessions = pgTable(
   "sessions",
@@ -57,6 +57,19 @@ export const users = pgTable("users", {
    * a copied access token dies with the sessions instead of living out its 15 minutes.
    */
   accessTokensRevokedAt: timestamp("access_tokens_revoked_at"),
+  /**
+   * Two-factor sign-in (server/mfa.ts). The authenticator secret, sealed
+   * (server/secret-box.ts) — never plaintext. Required for reviewers, admins
+   * and the platform owner; once enabled, every sign-in asks for a code.
+   */
+  mfaSecret: text("mfa_secret"),
+  /** A secret being set up, sealed, until the first code from it proves the app has it. */
+  mfaPendingSecret: text("mfa_pending_secret"),
+  mfaEnabledAt: timestamp("mfa_enabled_at"),
+  /** The last time step a code was accepted from: a code works once. */
+  mfaLastStep: integer("mfa_last_step"),
+  /** One-time recovery codes, SHA-256 hashed; a used one is removed. */
+  mfaRecoveryCodes: text("mfa_recovery_codes").array(),
   suspendedReason: text("suspended_reason"),
   /*
    * Where this account came from, captured on the visitor's first page and
@@ -99,6 +112,8 @@ export const mobileRefreshTokens = pgTable(
     expiresAt: timestamp("expires_at").notNull(),
     /** Set when rotated or explicitly signed out. */
     revokedAt: timestamp("revoked_at"),
+    /** This session passed a second factor at sign-in; its access tokens carry it, and rotation keeps it. */
+    mfa: boolean("mfa").default(false).notNull(),
     lastUsedAt: timestamp("last_used_at").defaultNow(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },

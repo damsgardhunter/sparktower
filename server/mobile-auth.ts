@@ -20,8 +20,9 @@ import { eq, and, isNull, gt } from "drizzle-orm";
 import { storage } from "./storage";
 import { ensureUserProfile } from "./user-provisioning";
 import { stampSignupAttribution } from "./attribution";
-import { enforceRateLimit, ipKey } from "./moderation";
+import { enforceRateLimit, ipKey, rateLimit } from "./moderation";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
+import { checkSecondFactor, limitMfaAttempts, mfaEnabledFor, mfaRequiredFor, readMfaChallenge, signMfaChallenge } from "./mfa";
 
 const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;          // 15 minutes
 const REFRESH_TOKEN_TTL_DAYS = 60;
@@ -61,7 +62,7 @@ const b64url = (input: Buffer | string): string =>
  * Minimal HS256 JWT. Implemented here rather than adding a dependency —
  * it's ~20 lines and the payload is a user id plus an expiry.
  */
-function signAccessToken(userId: string): { token: string; expiresIn: number } {
+function signAccessToken(userId: string, mfa = false): { token: string; expiresIn: number } {
   const header = b64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
   const now = Math.floor(Date.now() / 1000);
   const payload = b64url(JSON.stringify({
@@ -70,6 +71,8 @@ function signAccessToken(userId: string): { token: string; expiresIn: number } {
     // Milliseconds, because revocation is: a token issued in the same second as "sign out everywhere" must still die.
     iat_ms: Date.now(),
     exp: now + ACCESS_TOKEN_TTL_SECONDS,
+    // Passed a second factor at sign-in (server/mfa.ts); privileged routes need it.
+    ...(mfa ? { mfa: true } : {}),
   }));
   const body = `${header}.${payload}`;
   const signature = crypto.createHmac("sha256", tokenSecret()).update(body).digest("base64url");
@@ -77,7 +80,7 @@ function signAccessToken(userId: string): { token: string; expiresIn: number } {
 }
 
 /** Returns the user id and when the token was issued, or null when it's invalid, tampered, or expired. */
-export function verifyAccessToken(token: string): { userId: string; issuedAtMs: number } | null {
+export function verifyAccessToken(token: string): { userId: string; issuedAtMs: number; mfa: boolean } | null {
   const parts = token.split(".");
   if (parts.length !== 3) return null;
   const [header, payload, signature] = parts;
@@ -94,7 +97,7 @@ export function verifyAccessToken(token: string): { userId: string; issuedAtMs: 
     if (typeof claims.exp !== "number" || claims.exp < Math.floor(Date.now() / 1000)) return null;
     if (typeof claims.iat !== "number") return null;
     // Tokens from before iat_ms existed count from the start of their second — revoked when in doubt.
-    return { userId: claims.sub, issuedAtMs: typeof claims.iat_ms === "number" ? claims.iat_ms : claims.iat * 1000 };
+    return { userId: claims.sub, issuedAtMs: typeof claims.iat_ms === "number" ? claims.iat_ms : claims.iat * 1000, mfa: claims.mfa === true };
   } catch {
     return null;
   }
@@ -104,7 +107,7 @@ const hashToken = (token: string): string =>
   crypto.createHash("sha256").update(token).digest("hex");
 
 /** Issues a refresh token, storing only its hash. */
-async function issueRefreshToken(userId: string, device?: string): Promise<string> {
+async function issueRefreshToken(userId: string, device?: string, mfa = false): Promise<string> {
   const raw = crypto.randomBytes(48).toString("base64url");
   const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_DAYS * 86_400_000);
   await db.insert(mobileRefreshTokens).values({
@@ -112,6 +115,7 @@ async function issueRefreshToken(userId: string, device?: string): Promise<strin
     tokenHash: hashToken(raw),
     device: device?.slice(0, 200) || null,
     expiresAt,
+    mfa,
   });
   return raw;
 }
@@ -138,9 +142,9 @@ async function revokeOnReuse(tokenHash: string): Promise<void> {
 }
 
 /** The payload every auth endpoint returns. */
-async function buildSession(userId: string, device?: string) {
-  const { token, expiresIn } = signAccessToken(userId);
-  const refreshToken = await issueRefreshToken(userId, device);
+async function buildSession(userId: string, device?: string, opts: { mfa?: boolean } = {}) {
+  const { token, expiresIn } = signAccessToken(userId, !!opts.mfa);
+  const refreshToken = await issueRefreshToken(userId, device, !!opts.mfa);
   const user = await storage.getUser(userId);
   const safeUser = user ? { ...user, passwordHash: undefined } : null;
 
@@ -183,6 +187,8 @@ export const attachBearerUser: RequestHandler = async (req: any, _res, next) => 
     if (user.accessTokensRevokedAt && verified.issuedAtMs <= user.accessTokensRevokedAt.getTime()) return next();
 
     req.user = user;
+    // Whether this token's sign-in passed a second factor (server/mfa.ts).
+    req.mfaVerified = verified.mfa;
     // Passport's isAuthenticated() checks this; make it true for token auth so
     // every existing guarded route accepts a mobile caller.
     req.isAuthenticated = () => true;
@@ -214,7 +220,9 @@ export function registerMobileAuthRoutes(app: Express) {
       const ok = await bcrypt.compare(password, user.passwordHash);
       if (!ok) return res.status(401).json(invalid);
 
-      res.json(await buildSession(user.id, device));
+      // Two-factor accounts get a challenge, not tokens; /api/auth/mobile/mfa/verify finishes with a code.
+      if (mfaEnabledFor(user)) return res.json({ mfaRequired: true, challengeToken: signMfaChallenge(user.id) });
+      res.json({ ...(await buildSession(user.id, device)), mfaEnrollmentRequired: mfaRequiredFor(user) });
     } catch (error) {
       console.error("Mobile login error:", error);
       res.status(500).json({ message: "Sign-in failed" });
@@ -325,7 +333,8 @@ export function registerMobileAuthRoutes(app: Express) {
         }
       }
 
-      res.json(await buildSession(user.id, device));
+      if (mfaEnabledFor(user)) return res.json({ mfaRequired: true, challengeToken: signMfaChallenge(user.id) });
+      res.json({ ...(await buildSession(user.id, device)), mfaEnrollmentRequired: mfaRequiredFor(user) });
     } catch (error) {
       console.error("Mobile Google auth error:", error);
       res.status(500).json({ message: "Google sign-in failed" });
@@ -360,10 +369,27 @@ export function registerMobileAuthRoutes(app: Express) {
         return res.status(401).json({ message: "Your session expired. Please sign in again.", code: "refresh_invalid" });
       }
 
-      res.json(await buildSession(row.userId, device || row.device || undefined));
+      // A session that passed a second factor keeps that through rotation.
+      res.json(await buildSession(row.userId, device || row.device || undefined, { mfa: row.mfa }));
     } catch (error) {
       console.error("Mobile refresh error:", error);
       res.status(500).json({ message: "Could not refresh your session" });
+    }
+  });
+
+  /** Finishing a mobile sign-in that stopped at the second factor: the challenge from login, and a code. */
+  app.post("/api/auth/mobile/mfa/verify", rateLimit("login"), async (req, res) => {
+    // public-write: a signed five-minute challenge that only a correct password produced, plus a one-time code; limited per address and per account
+    try {
+      const userId = readMfaChallenge(req.body?.challengeToken);
+      if (!userId) return res.status(401).json({ message: "That sign-in has expired. Enter your password again.", code: "mfa_challenge_expired" });
+      if (!(await limitMfaAttempts(req, res, userId))) return;
+      const method = await checkSecondFactor(userId, String(req.body?.code ?? ""));
+      if (!method) return res.status(401).json({ message: "That code isn't right. Check your authenticator app and try again.", code: "mfa_invalid_code" });
+      res.json({ ...(await buildSession(userId, typeof req.body?.device === "string" ? req.body.device : undefined, { mfa: true })), mfaMethod: method });
+    } catch (error) {
+      console.error("Mobile MFA verify error:", error);
+      res.status(500).json({ message: "Sign-in failed" });
     }
   });
 

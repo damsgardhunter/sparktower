@@ -14,6 +14,7 @@ import { db } from "../../server/db";
 import { activityEvents, codeAuditRuns, rateLimitHits, projects } from "@shared/schema";
 import { sweepExpiredEvents } from "../../server/analytics";
 import { sweepRateLimitHits, RATE_LIMIT_HIT_RETENTION_HOURS } from "../../server/moderation";
+import { passMfa } from "../helpers/mfa";
 
 const savedOwner = process.env.PLATFORM_OWNER_EMAIL;
 afterEach(() => { process.env.PLATFORM_OWNER_EMAIL = savedOwner; });
@@ -35,6 +36,8 @@ describe("analytics data", () => {
     const subject = await person(app, "subject", "203.0.113.161");
     const bystander = await person(app, "bystander", "203.0.113.162");
     process.env.PLATFORM_OWNER_EMAIL = owner.email;
+    // The owner's console needs a second factor on the session (server/mfa.ts).
+    await passMfa(owner.agent);
 
     await db.insert(activityEvents).values([
       event({ userId: subject.id, visitorId: "v-subject", path: "/api/feed", referrer: "=HYPERLINK(\"http://evil\")" }),
