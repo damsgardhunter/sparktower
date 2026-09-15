@@ -8,6 +8,7 @@ import { colors, font, fontFamily, spacing } from "../../src/theme";
 import { Avatar, Btn, Card, Empty, Icon, Loading, Screen, timeAgo } from "../../src/components/ui";
 import { Callout, PageIntro, Pill, Stat, humanize, isSwitchedOff, tintSoft } from "../../src/components/MoreKit";
 import { PHASE_COLORS, PHASE_LABELS, formatWait, styleLabel } from "../../src/components/SprintKit";
+import { NoticeBanner, useNotice } from "../../src/components/Sheet";
 
 /**
  * Co-founder sprints: the matchmaking waiting room, your active and finished
@@ -17,6 +18,7 @@ export default function Sprints() {
   const router = useRouter();
   const qc = useQueryClient();
   const { user } = useAuth();
+  const { notice, show, clear } = useNotice();
 
   const { data: sprints, isLoading, isRefetching, refetch, error } = useQuery({
     queryKey: ["sprints"],
@@ -32,7 +34,11 @@ export default function Sprints() {
 
   const leave = useMutation({
     mutationFn: () => api("/api/sprints/queue", { method: "DELETE" }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["sprint-queue"] }),
+    onSuccess: () => {
+      show({ tone: "info", text: "Left the queue. You've been removed from matchmaking." });
+      qc.invalidateQueries({ queryKey: ["sprint-queue"] });
+    },
+    onError: (e: any) => show({ tone: "error", text: e?.message || "Couldn't leave the queue." }),
   });
 
   // A match made by the other side arrives on our next poll — follow it once.
@@ -55,68 +61,71 @@ export default function Sprints() {
   const waiting = queue?.inQueue && queue.entry;
 
   return (
-    <Screen canvas onRefresh={refetch} refreshing={isRefetching}>
-      <Card>
-        <PageIntro icon="people" title="Co-Founder Sprints" body="Trial collaborations to find your co-founder — 24 or 72 hours, with a stranger or with Nova." />
-        <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.xs }}>
-          <Btn label="New sprint" icon="add" style={{ flex: 1 }} onPress={() => router.push("/sprint/new")} />
-          <Btn label="Practice" icon="school-outline" variant="outline" style={{ flex: 1 }} onPress={() => router.push("/sprint/practice")} />
-        </View>
-      </Card>
-
-      {waiting && (
-        <Card style={{ borderColor: tintSoft(colors.primary, 0.4), backgroundColor: "#FCF8FE" }}>
-          <View style={{ flexDirection: "row", gap: spacing.md, alignItems: "center" }}>
-            <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: colors.primarySoft, alignItems: "center", justifyContent: "center" }}>
-              <ActivityIndicator color={colors.primary} />
-            </View>
-            <View style={{ flex: 1, gap: 2 }}>
-              <Text style={{ color: colors.text, fontSize: font.base, fontFamily: fontFamily.bold }}>Looking for a partner…</Text>
-              <Text style={{ color: colors.textSecondary, fontSize: font.sm, lineHeight: 18, fontFamily: fontFamily.regular }}>
-                You'll be paired with the next builder who picks a {queue.entry.duration} sprint. Keep the app open — we check every few seconds.
-              </Text>
-            </View>
+    <View style={{ flex: 1 }}>
+      <Screen canvas onRefresh={refetch} refreshing={isRefetching}>
+        <Card>
+          <PageIntro icon="people" title="Co-Founder Sprints" body="Trial collaborations to find your co-founder — 24 or 72 hours, with a stranger or with Nova." />
+          <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.xs }}>
+            <Btn label="New sprint" icon="add" style={{ flex: 1 }} onPress={() => router.push("/sprint/new")} />
+            <Btn label="Practice" icon="school-outline" variant="outline" style={{ flex: 1 }} onPress={() => router.push("/sprint/practice")} />
           </View>
-          <View style={{ flexDirection: "row", gap: spacing.xs, flexWrap: "wrap" }}>
-            <Pill label={queue.entry.duration} icon="time-outline" />
-            {queue.entry.productStyle ? <Pill label={styleLabel(queue.entry.productStyle)} color={colors.info} /> : null}
-          </View>
-          <View style={{ flexDirection: "row", borderTopWidth: 1, borderColor: tintSoft(colors.primary, 0.25), marginTop: spacing.xs }}>
-            <Stat value={queue.position ? `#${queue.position}` : "—"} label="Your place" />
-            <Stat value={queue.waiting ?? 0} label="Builders waiting" />
-            <Stat value={formatWait(queue.waitingSeconds ?? 0)} label="Waiting for" />
-          </View>
-          {(queue.waiting ?? 0) <= 1 && (queue.waitingSeconds ?? 0) > 30 && (
-            <Callout icon="chatbubble-ellipses-outline" body="Quiet in here right now. Practise with Nova instead — your place in line is kept.">
-              <Btn label="Practice with Nova" icon="sparkles" small variant="outline" style={{ alignSelf: "flex-start", marginTop: 6 }} onPress={() => router.push("/sprint/practice")} />
-            </Callout>
-          )}
-          <Btn label="Leave queue" icon="close-circle-outline" variant="ghost" small loading={leave.isPending} onPress={() => leave.mutate()} />
         </Card>
-      )}
 
-      {active.length > 0 && (
-        <View style={{ gap: spacing.sm }}>
-          <SectionTitle icon="time" title={`Active sprints (${active.length})`} />
-          {active.map((s) => <SprintCard key={s.id} sprint={s} userId={user?.id} onPress={() => router.push(`/sprint/${s.id}`)} />)}
-        </View>
-      )}
+        {waiting && (
+          <Card style={{ borderColor: tintSoft(colors.primary, 0.4), backgroundColor: "#FCF8FE" }}>
+            <View style={{ flexDirection: "row", gap: spacing.md, alignItems: "center" }}>
+              <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: colors.primarySoft, alignItems: "center", justifyContent: "center" }}>
+                <ActivityIndicator color={colors.primary} />
+              </View>
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text style={{ color: colors.text, fontSize: font.base, fontFamily: fontFamily.bold }}>Looking for a partner…</Text>
+                <Text style={{ color: colors.textSecondary, fontSize: font.sm, lineHeight: 18, fontFamily: fontFamily.regular }}>
+                  You'll be paired with the next builder who picks a {queue.entry.duration} sprint. Keep the app open — we check every few seconds.
+                </Text>
+              </View>
+            </View>
+            <View style={{ flexDirection: "row", gap: spacing.xs, flexWrap: "wrap" }}>
+              <Pill label={queue.entry.duration} icon="time-outline" />
+              {queue.entry.productStyle ? <Pill label={styleLabel(queue.entry.productStyle)} color={colors.info} /> : null}
+            </View>
+            <View style={{ flexDirection: "row", borderTopWidth: 1, borderColor: tintSoft(colors.primary, 0.25), marginTop: spacing.xs }}>
+              <Stat value={queue.position ? `#${queue.position}` : "—"} label="Your place" />
+              <Stat value={queue.waiting ?? 0} label="Builders waiting" />
+              <Stat value={formatWait(queue.waitingSeconds ?? 0)} label="Waiting for" />
+            </View>
+            {(queue.waiting ?? 0) <= 1 && (queue.waitingSeconds ?? 0) > 30 && (
+              <Callout icon="chatbubble-ellipses-outline" body="Quiet in here right now. Practise with Nova instead — your place in line is kept.">
+                <Btn label="Practice with Nova" icon="sparkles" small variant="outline" style={{ alignSelf: "flex-start", marginTop: 6 }} onPress={() => router.push("/sprint/practice")} />
+              </Callout>
+            )}
+            <Btn label="Leave queue" icon="close-circle-outline" variant="ghost" small loading={leave.isPending} onPress={() => leave.mutate()} />
+          </Card>
+        )}
 
-      {done.length > 0 && (
-        <View style={{ gap: spacing.sm }}>
-          <SectionTitle icon="checkmark-circle" title={`Completed (${done.length})`} color={colors.textTertiary} />
-          {done.map((s) => <SprintCard key={s.id} sprint={s} userId={user?.id} onPress={() => router.push(`/sprint/${s.id}`)} />)}
-        </View>
-      )}
+        {active.length > 0 && (
+          <View style={{ gap: spacing.sm }}>
+            <SectionTitle icon="time" title={`Active sprints (${active.length})`} />
+            {active.map((s) => <SprintCard key={s.id} sprint={s} userId={user?.id} onPress={() => router.push(`/sprint/${s.id}`)} />)}
+          </View>
+        )}
 
-      {!active.length && !done.length && !waiting && (
-        <Card style={{ borderStyle: "dashed" }}>
-          <Empty icon="people-outline" title="No sprints yet"
-            body="Start a trial collaboration with a potential co-founder. Get randomly paired, or practise the whole thing with Nova first."
-            action="Start your first sprint" onAction={() => router.push("/sprint/new")} />
-        </Card>
-      )}
-    </Screen>
+        {done.length > 0 && (
+          <View style={{ gap: spacing.sm }}>
+            <SectionTitle icon="checkmark-circle" title={`Completed (${done.length})`} color={colors.textTertiary} />
+            {done.map((s) => <SprintCard key={s.id} sprint={s} userId={user?.id} onPress={() => router.push(`/sprint/${s.id}`)} />)}
+          </View>
+        )}
+
+        {!active.length && !done.length && !waiting && (
+          <Card style={{ borderStyle: "dashed" }}>
+            <Empty icon="people-outline" title="No sprints yet"
+              body="Start a trial collaboration with a potential co-founder. Get randomly paired, or practise the whole thing with Nova first."
+              action="Start your first sprint" onAction={() => router.push("/sprint/new")} />
+          </Card>
+        )}
+      </Screen>
+      <NoticeBanner notice={notice} onDismiss={clear} />
+    </View>
   );
 }
 

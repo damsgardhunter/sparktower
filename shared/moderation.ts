@@ -116,6 +116,55 @@ export const RATE_LIMITS = {
     max: 120, windowMinutes: 10,
     message: "That's a lot of moderation in a few minutes. Give it a moment.",
   },
+  /**
+   * Webhook deliveries that fail signature verification, per address. Only
+   * rejections count, so Stripe's own retries and bursts are never slowed; an
+   * address that keeps sending forgeries is refused before they're checked.
+   */
+  webhookReject: {
+    max: 30, windowMinutes: 10,
+    message: "Too many rejected deliveries from this address.",
+  },
+  /** Unauthenticated session endpoints that aren't sign-in (mobile sign-out), per address. */
+  session: {
+    max: 60, windowMinutes: 10,
+    message: "Too many requests from this address. Try again shortly.",
+  },
+  /**
+   * New items in a project's workspace — tasks, milestones, decisions, files,
+   * links, personas, research, pricing, legal, launch and support rows — and
+   * the owner's decisions on applications. A team planning hard for an hour
+   * stays under it; a script filling someone's board doesn't.
+   */
+  workspace: {
+    max: 120, windowMinutes: 10,
+    message: "That's a lot of new items at once. Give it a few minutes.",
+  },
+  /** Following projects. Each follow can notify an owner, so a burst is a way to spam them. */
+  follow: {
+    max: 60, windowMinutes: 10,
+    message: "You're following a lot of projects very quickly. Give it a minute.",
+  },
+  /** Applying to a project or entering a contest: each lands in someone else's queue. */
+  apply: {
+    max: 20, windowMinutes: 60,
+    message: "You've sent a lot of applications this hour. Try again later.",
+  },
+  /** Starting or queueing co-founder sprints, and turning one into a project. */
+  sprint: {
+    max: 10, windowMinutes: 60,
+    message: "That's a lot of sprints for one hour. Try again later.",
+  },
+  /** Starting a Stripe session: checkout, donations, the billing portal, payouts onboarding, plan sync. Each call is a request to Stripe. */
+  checkout: {
+    max: 20, windowMinutes: 60,
+    message: "That's a lot of payment attempts in an hour. Try again later.",
+  },
+  /** Calls that reach outside services on the caller's behalf: GitHub repo checks, reading a project's database, applying an audit. */
+  external: {
+    max: 30, windowMinutes: 10,
+    message: "That's a lot of checks in a few minutes. Give it a moment.",
+  },
   /** Backing decisions and releases — the routes that move money. Rare by nature, so tight. */
   payout: {
     max: 20, windowMinutes: 60,
@@ -332,4 +381,30 @@ export const reasonCodesFor = (action: ModerationAction) =>
   MODERATION_REASON_CODES.filter((r) => r.kind === (action === "dismiss" ? "dismissal" : "violation"));
 export const isReasonCode = (id: string): boolean => MODERATION_REASON_CODES.some((r) => r.id === id);
 export const moderationReasonLabel = (id: string | null | undefined): string =>
-  MODERATION_REASON_CODES.find((r) => r.id === id)?.label ?? (id || "No reason code");
+  [...MODERATION_REASON_CODES, ...UNDO_REASON_CODES].find((r) => r.id === id)?.label ?? (id || "No reason code");
+
+/**
+ * Undoing a queue decision needs its own reason, so a reversal is as findable
+ * as the call it reverses ("every removal overturned on appeal this month").
+ */
+export const UNDO_REASON_CODES = [
+  { id: "reviewer_error", label: "Reviewer's mistake", kind: "undo" },
+  { id: "appeal_upheld", label: "Appeal upheld", kind: "undo" },
+  { id: "new_context", label: "New context changed the call", kind: "undo" },
+] as const;
+export const isUndoReasonCode = (id: string): boolean => UNDO_REASON_CODES.some((r) => r.id === id);
+
+/** The queue decisions an undo can reverse, and the entry the reversal appends. */
+export const UNDOABLE_ACTIONS: Record<string, string> = {
+  comment_remove: "comment_restore",
+  comment_shadow_hide: "comment_restore",
+  comment_ban: "comment_restore",
+  comment_dismiss: "report_reopened",
+};
+
+/** A saved state compared with a live one: timestamps by instant, everything else exactly. */
+export function sameModeratedState(saved: Record<string, unknown> | null | undefined, live: Record<string, unknown> | null | undefined): boolean {
+  if (!saved || !live) return !saved && !live;
+  const norm = (v: unknown) => (v instanceof Date ? v.getTime() : typeof v === "string" && /^\d{4}-\d{2}-\d{2}T/.test(v) ? new Date(v).getTime() : v ?? null);
+  return Object.keys(saved).every((k) => norm(saved[k]) === norm(live[k]));
+}

@@ -1,7 +1,8 @@
 import type { Express } from "express";
 import { storage } from "./storage";
 import { db } from "./db";
-import { projectMembers } from "@shared/schema";
+import { projectMembers, projects } from "@shared/schema";
+import { and, eq, inArray } from "drizzle-orm";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { requireFeature, requireCredits, reserveOptionalAi, getUserEntitlements, modelFor, coachingDirectiveFor, memoryLimitFor } from "./entitlements";
 import { CREDIT_COSTS } from "@shared/plans";
@@ -258,7 +259,7 @@ async function generatePracticeNovaContent(sprintId: string, phase: string, spri
 }
 
 export function registerSprintRoutes(app: Express) {
-  app.post("/api/sprints", isAuthenticated, async (req: any, res) => {
+  app.post("/api/sprints", isAuthenticated, rateLimit("sprint"), async (req: any, res) => {
     try {
       const { partnerId, duration, productStyle } = req.body;
       if (!partnerId || !duration) {
@@ -862,12 +863,22 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       if (sprint.user1Id !== req.user.id && sprint.user2Id !== req.user.id) {
         return res.status(403).json({ message: "Not a participant" });
       }
+      if (sprint.status !== "review" && sprint.status !== "completed") {
+        return res.status(400).json({ message: "Rate your partner once the sprint reaches review." });
+      }
+      // One rating each, and only the scores: who rated whom comes from the session, never the body.
+      if ((await storage.getSprintRatings(sprint.id)).some((r) => r.raterId === req.user.id)) {
+        return res.status(409).json({ message: "You've already rated this sprint." });
+      }
+      const score = (v: unknown) => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 5;
+      const { communicationClarity, reliability, wouldBuildLongTerm, stressLevel } = req.body ?? {};
+      if (!score(communicationClarity) || !score(reliability) || !score(stressLevel) || typeof wouldBuildLongTerm !== "boolean") {
+        return res.status(400).json({ message: "Scores are whole numbers from 1 to 5.", code: "invalid_input" });
+      }
       const partnerId = sprint.user1Id === req.user.id ? sprint.user2Id : sprint.user1Id;
       const rating = await storage.addSprintRating({
-        sprintId: sprint.id,
-        raterId: req.user.id,
-        rateeId: partnerId,
-        ...req.body,
+        sprintId: sprint.id, raterId: req.user.id, rateeId: partnerId,
+        communicationClarity, reliability, wouldBuildLongTerm, stressLevel,
       });
       res.json(rating);
     } catch (error) {
@@ -1051,7 +1062,7 @@ ${metrics.map(m => {
     }
   });
 
-  app.post("/api/sprints/:id/convert", isAuthenticated, async (req: any, res) => {
+  app.post("/api/sprints/:id/convert", isAuthenticated, rateLimit("sprint"), async (req: any, res) => {
     try {
       const sprint = await storage.getSprint(req.params.id);
       if (!sprint) return res.status(404).json({ message: "Sprint not found" });
@@ -1059,6 +1070,17 @@ ${metrics.map(m => {
         return res.status(403).json({ message: "Not a participant" });
       }
       if (!sprint.productName) return res.status(400).json({ message: "No product defined" });
+
+      // Converting twice opens the project the first conversion made, rather than a duplicate.
+      const [existing] = await db.select().from(projects).where(and(
+        eq(projects.title, sprint.productName),
+        inArray(projects.ownerId, [sprint.user1Id, sprint.user2Id].filter(Boolean) as string[]),
+      ));
+      if (existing) {
+        const members = await storage.getProjectMembers(existing.id).catch(() => []);
+        const both = [sprint.user1Id, sprint.user2Id].filter(Boolean).every((u) => u === existing.ownerId || members.some((m) => m.userId === u));
+        if (both) return res.json(existing);
+      }
 
       const project = await storage.createProject({
         ownerId: req.user.id,
@@ -1093,7 +1115,7 @@ ${metrics.map(m => {
   });
 
   /** Join the matchmaking queue, attempting an immediate pairing. */
-  app.post("/api/sprints/queue", isAuthenticated, async (req: any, res) => {
+  app.post("/api/sprints/queue", isAuthenticated, rateLimit("sprint"), async (req: any, res) => {
     try {
       const { duration, productStyle, projectId } = req.body;
       if (!isDuration(duration)) {
@@ -1243,14 +1265,15 @@ ${metrics.map(m => {
     try {
       const sprint = await storage.getSprint(req.params.id);
       if (!sprint) return res.status(404).json({ message: "Sprint not found" });
-      if (sprint.status !== "completed") {
-        return res.status(400).json({ message: "Ratings only visible after sprint completion" });
-      }
       if (sprint.user1Id !== req.user.id && sprint.user2Id !== req.user.id) {
         return res.status(403).json({ message: "Not a participant" });
       }
+      if (sprint.status !== "review" && sprint.status !== "completed") {
+        return res.status(400).json({ message: "Ratings open at review" });
+      }
+      // In review, only your own rating — so the page knows you've rated — never your partner's until it's over.
       const ratings = await storage.getSprintRatings(sprint.id);
-      res.json(ratings);
+      res.json(sprint.status === "completed" ? ratings : ratings.filter((r) => r.raterId === req.user.id));
     } catch (error) {
       res.status(500).json({ message: "Failed to get ratings" });
     }

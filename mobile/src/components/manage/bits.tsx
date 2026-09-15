@@ -13,14 +13,14 @@ import { webUrl } from "./shared";
 
 // --- Notices ----------------------------------------------------------------
 
-type Notify = (text: string, tone?: Notice["tone"]) => void;
+type Notify = (text: string, tone?: Notice["tone"], action?: Notice["action"]) => void;
 const NoticeContext = createContext<{ notify: Notify; fail: (e: unknown, fallback?: string) => void }>({
   notify: () => {}, fail: () => {},
 });
 
 export function NoticeProvider({ children }: { children: React.ReactNode }) {
   const { notice, show, clear } = useNotice();
-  const notify: Notify = (text, tone = "success") => show({ text, tone });
+  const notify: Notify = (text, tone = "success", action) => show({ text, tone, action });
   const fail = (e: unknown, fallback = "Something went wrong.") => show({ text: errText(e, fallback), tone: "error" });
   return (
     <NoticeContext.Provider value={{ notify, fail }}>

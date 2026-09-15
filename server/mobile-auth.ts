@@ -94,6 +94,25 @@ async function issueRefreshToken(userId: string, device?: string): Promise<strin
   return raw;
 }
 
+/** How long after rotation a spent token can come back without it meaning theft: a response lost to a dropped connection. */
+export const REFRESH_REUSE_GRACE_MS = 30_000;
+
+/**
+ * A refresh token that was already rotated, presented again later, means two
+ * holders — the device and whoever copied it. Which one is the thief can't be
+ * told, so every live session for that account on mobile ends; the real user
+ * signs in again, the copy is worthless. Within the grace window it's only a
+ * refused retry.
+ */
+async function revokeOnReuse(tokenHash: string): Promise<void> {
+  const [spent] = await db.select().from(mobileRefreshTokens).where(eq(mobileRefreshTokens.tokenHash, tokenHash));
+  if (!spent?.revokedAt || Date.now() - spent.revokedAt.getTime() < REFRESH_REUSE_GRACE_MS) return;
+  const ended = await db.update(mobileRefreshTokens).set({ revokedAt: new Date() })
+    .where(and(eq(mobileRefreshTokens.userId, spent.userId), isNull(mobileRefreshTokens.revokedAt)))
+    .returning({ id: mobileRefreshTokens.id });
+  console.warn(`[auth] refresh token reused for user ${spent.userId}; ended ${ended.length} mobile session(s)`);
+}
+
 /** The payload every auth endpoint returns. */
 async function buildSession(userId: string, device?: string) {
   const { token, expiresIn } = signAccessToken(userId);
@@ -151,6 +170,7 @@ export const attachBearerUser: RequestHandler = async (req: any, _res, next) => 
 export function registerMobileAuthRoutes(app: Express) {
   /** Email + password sign-in for mobile. */
   app.post("/api/auth/mobile/login", async (req, res) => {
+    // public-write: the password it checks; limited per address (login)
     if (!(await enforceRateLimit(res, ipKey(req), "login"))) return;
     try {
       const { email, password, device } = req.body as {
@@ -177,6 +197,7 @@ export function registerMobileAuthRoutes(app: Express) {
 
   /** Registration, so someone can create an account from the app. */
   app.post("/api/auth/mobile/register", async (req, res) => {
+    // public-write: nothing — it creates an account; limited per address (login)
     if (!(await enforceRateLimit(res, ipKey(req), "login"))) return;
     try {
       const { email, password, firstName, lastName, device } = req.body as Record<string, string>;
@@ -219,6 +240,7 @@ export function registerMobileAuthRoutes(app: Express) {
    * resulting ID token here for verification.
    */
   app.post("/api/auth/mobile/google", async (req, res) => {
+    // public-write: a Google ID token verified server-side against our client ids; limited per address
     if (!(await enforceRateLimit(res, ipKey(req), "login"))) return;
     try {
       const { idToken, device } = req.body as { idToken?: string; device?: string };
@@ -291,27 +313,26 @@ export function registerMobileAuthRoutes(app: Express) {
    * only good until the real device next refreshes.
    */
   app.post("/api/auth/mobile/refresh", async (req, res) => {
+    // public-write: the refresh token, looked up by SHA-256 hash, unexpired, claimed atomically once; a spent token reused ends every mobile session (test/integration/auth-hardening.test.ts)
     if (!(await enforceRateLimit(res, ipKey(req), "login"))) return;
     try {
       const { refreshToken, device } = req.body as { refreshToken?: string; device?: string };
       if (!refreshToken) return res.status(400).json({ message: "refreshToken is required" });
 
-      const [row] = await db
-        .select()
-        .from(mobileRefreshTokens)
+      // Claimed atomically: of two requests racing with one token, only one gets a session.
+      const [row] = await db.update(mobileRefreshTokens)
+        .set({ revokedAt: new Date(), lastUsedAt: new Date() })
         .where(and(
           eq(mobileRefreshTokens.tokenHash, hashToken(refreshToken)),
           isNull(mobileRefreshTokens.revokedAt),
           gt(mobileRefreshTokens.expiresAt, new Date()),
-        ));
+        ))
+        .returning();
 
       if (!row) {
+        await revokeOnReuse(hashToken(refreshToken));
         return res.status(401).json({ message: "Your session expired. Please sign in again.", code: "refresh_invalid" });
       }
-
-      await db.update(mobileRefreshTokens)
-        .set({ revokedAt: new Date(), lastUsedAt: new Date() })
-        .where(eq(mobileRefreshTokens.id, row.id));
 
       res.json(await buildSession(row.userId, device || row.device || undefined));
     } catch (error) {
@@ -322,6 +343,8 @@ export function registerMobileAuthRoutes(app: Express) {
 
   /** Signs this device out. Other devices keep their sessions. */
   app.post("/api/auth/mobile/logout", async (req, res) => {
+    // public-write: the refresh token it revokes, by hash; it can only end the session it names
+    if (!(await enforceRateLimit(res, ipKey(req), "session"))) return;
     try {
       const { refreshToken } = req.body as { refreshToken?: string };
       if (refreshToken) {

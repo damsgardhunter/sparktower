@@ -14,7 +14,7 @@
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { db } from "./db";
 import { storage } from "./storage";
-import { projects, projectKanbanTasks, projectCheckIns, projectRoadmaps, pathPace, pathPaceEvents, pathWork, projectCodeAudits } from "@shared/schema";
+import { projects, projectKanbanTasks, projectCheckIns, projectRoadmaps, pathPace, pathPaceEvents, pathWork, projectCodeAudits, projectTracks } from "@shared/schema";
 import {
   resolveTree, treeFor, mainLineMilestones, computePace, admitInjections, NEXT_PATHS, loopsAlike, splitMergedPaths,
   type ResolvedMilestone, type Artifact, type InjectionProposal, type PaceState, type WorkPayload, type Actor,
@@ -24,7 +24,7 @@ import {
 import { withRunGroups } from "@shared/phase-trees/run-steps";
 import { describeOp } from "@shared/audit-catchup";
 import { afterPathStepDone } from "./path-return";
-import { PROJECT_GOALS } from "@shared/goals";
+import { PROJECT_GOALS, GOAL_BACKBONE_PREFIX, goalOfBackboneId, isProjectGoal } from "@shared/goals";
 import { capitalProfile, renderCapitalProfile, businessHistoryFromResume, CAPITAL_MILESTONES, CAPITAL_ROUTES, type CapitalAnswers } from "@shared/capital";
 import type { ProfileExperience } from "@shared/schema";
 import type { ProjectGoal } from "@shared/goals";
@@ -32,6 +32,7 @@ import type { ProjectGoal } from "@shared/goals";
 /** Tags let the actor and tier ride on the existing task row. */
 export const tagsFor = (m: ResolvedMilestone) => [
   `actor:${m.actor}`, `tier:${m.tier}`, `backbone:${m.id}`,
+  ...(goalOfBackboneId(m.id) ? [`track:${goalOfBackboneId(m.id)}`] : []),
   ...(m.sharedId ? [`shared:${m.sharedId}`] : []),
   ...(m.expandsFrom ? [`expands:${m.expandsFrom}`] : []),
 ];
@@ -49,11 +50,123 @@ export const loopOf = (tags: string[] | null | undefined) => tagValue(tags, "loo
 export const isArchivedPath = (tags: string[] | null | undefined) => !!tags?.some((t) => t.startsWith("archived:"));
 const minutesOf = (t: { estimateHours: number | null }) => (t.estimateHours ?? 1) * 60;
 
+// --- Sections: the three paths side by side ----------------------------------
+
+/**
+ * Which section a path task belongs to: its `track:` tag; otherwise its
+ * milestone's prefix (its own backbone id, or its parent's for steps and
+ * loops); otherwise — an injected task from before sections — the primary.
+ */
+export function trackOfTask(tags: string[] | null | undefined, primary: ProjectGoal): ProjectGoal {
+  const tagged = tagValue(tags, "track:");
+  if (isProjectGoal(tagged)) return tagged;
+  return goalOfBackboneId(backboneIdOf(tags) ?? parentOf(tags)) ?? primary;
+}
+
+export interface TrackState {
+  goal: ProjectGoal;
+  subcategory: string;
+  capitalRoute: string | null;
+  activeBranch: string | null;
+  /** The project's primary path: its state lives on `projects` and its pace in `path_pace`. */
+  primary: boolean;
+  primaryGoal: ProjectGoal;
+  createdAt: Date;
+  pace: Record<string, unknown> | null;
+}
+
+/**
+ * A section's state. The primary path's comes from the project row; any other
+ * section's from `project_tracks`. Null when the project doesn't exist or
+ * hasn't started that section.
+ */
+export async function trackState(projectId: string, goal?: ProjectGoal | null): Promise<TrackState | null> {
+  const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory, capitalRoute: projects.capitalRoute, activeBranch: projects.activeBranch, createdAt: projects.createdAt })
+    .from(projects).where(eq(projects.id, projectId));
+  if (!project) return null;
+  const primaryGoal = project.goal as ProjectGoal;
+  const want = goal ?? primaryGoal;
+  if (want === primaryGoal) {
+    return { goal: primaryGoal, subcategory: project.subcategory, capitalRoute: project.capitalRoute, activeBranch: project.activeBranch, primary: true, primaryGoal, createdAt: project.createdAt, pace: null };
+  }
+  const [row] = await db.select().from(projectTracks).where(and(eq(projectTracks.projectId, projectId), eq(projectTracks.goal, want)));
+  if (!row) return null;
+  return { goal: want, subcategory: row.subcategory, capitalRoute: row.capitalRoute, activeBranch: row.activeBranch, primary: false, primaryGoal, createdAt: row.createdAt, pace: (row.pace as Record<string, unknown> | null) ?? null };
+}
+
+/** Writes a section's route or branch where that section keeps them. */
+async function setTrackFields(projectId: string, goal: ProjectGoal, patch: { capitalRoute?: string | null; activeBranch?: string | null }) {
+  const state = await trackState(projectId, goal);
+  if (!state) throw Object.assign(new Error("That section hasn't been started on this project."), { status: 400, code: "track_not_started" });
+  if (state.primary) await db.update(projects).set(patch).where(eq(projects.id, projectId));
+  else await db.update(projectTracks).set({ ...patch, updatedAt: new Date() }).where(and(eq(projectTracks.projectId, projectId), eq(projectTracks.goal, goal)));
+}
+
+/** The goal a milestone or phase request is about: the id's prefix, else the one asked for, else the primary. */
+async function goalFor(projectId: string, opts: { backboneId?: string | null; goal?: unknown }): Promise<ProjectGoal | null> {
+  const fromId = goalOfBackboneId(opts.backboneId);
+  if (fromId) return fromId;
+  if (isProjectGoal(opts.goal)) return opts.goal;
+  const [project] = await db.select({ goal: projects.goal }).from(projects).where(eq(projects.id, projectId));
+  return (project?.goal as ProjectGoal | undefined) ?? null;
+}
+
+/**
+ * Every section, started or not: for the manager's three section buttons.
+ * Progress is read without syncing anything, so it's cheap to poll.
+ */
+export async function listTracks(projectId: string) {
+  const [project] = await db.select({ goal: projects.goal }).from(projects).where(eq(projects.id, projectId));
+  if (!project) return null;
+  const primaryGoal = project.goal as ProjectGoal;
+  const rows = await db.select({ status: projectKanbanTasks.status, tags: projectKanbanTasks.tags }).from(projectKanbanTasks).where(eq(projectKanbanTasks.projectId, projectId));
+  const out = [];
+  for (const g of PROJECT_GOALS) {
+    const state = await trackState(projectId, g.id);
+    if (!state) { out.push({ goal: g.id, label: g.label, short: g.short, started: false as const, primary: false }); continue; }
+    const main = mainLineMilestones(resolveTree(g.id, state.subcategory, state.capitalRoute));
+    const live = rows.filter((r) => !isArchivedPath(r.tags) && backboneIdOf(r.tags) && trackOfTask(r.tags, primaryGoal) === g.id);
+    const done = new Set(live.filter((r) => r.status === "done").map((r) => backboneIdOf(r.tags)));
+    const present = new Set(live.map((r) => backboneIdOf(r.tags)));
+    out.push({
+      goal: g.id, label: g.label, short: g.short, started: true as const, primary: state.primary, subcategory: state.subcategory,
+      done: main.filter((m) => done.has(m.id)).length, total: main.length,
+      next: main.find((m) => present.has(m.id) && !done.has(m.id))?.title ?? null,
+    });
+  }
+  return { primary: primaryGoal, tracks: out };
+}
+
+/**
+ * Starting a section: its state row and its path on the board. A section the
+ * project left through an old path switch comes back as it was, rather than
+ * being built a second time.
+ */
+export async function startTrack(projectId: string, goal: ProjectGoal, subcategory: string) {
+  const existing = await trackState(projectId, goal);
+  if (existing) return { started: false, goal, subcategory: existing.subcategory };
+  await db.insert(projectTracks).values({ projectId, goal, subcategory }).onConflictDoNothing();
+  const prefix = `${GOAL_BACKBONE_PREFIX[goal]}.`;
+  const all = await db.select({ id: projectKanbanTasks.id, tags: projectKanbanTasks.tags }).from(projectKanbanTasks).where(eq(projectKanbanTasks.projectId, projectId));
+  let restored = 0;
+  for (const row of all) {
+    if (!row.tags?.includes(`archived:${goal}`)) continue;
+    const id = backboneIdOf(row.tags) ?? parentOf(row.tags);
+    if (!id?.startsWith(prefix)) continue;
+    await storage.updateKanbanTask(row.id, { tags: row.tags.filter((x) => x !== `archived:${goal}`) } as any);
+    restored++;
+  }
+  const built = restored ? { created: false, phases: 0, milestones: 0 } : await instantiatePathTree(projectId, goal, subcategory, { keepRoadmap: true });
+  if (restored) await syncPathTree(projectId, goal, subcategory, null);
+  await refreshPace(projectId, undefined, goal);
+  return { started: true, goal, subcategory, restored, ...built };
+}
+
 export async function instantiatePathTree(projectId: string, goal: ProjectGoal, subcategory: string, opts: { keepRoadmap?: boolean } = {}) {
   // The path already exists when its backbone tasks do. A roadmap alone is
   // not the path: projects made before paths existed have an AI roadmap and
   // no tree, and adoption must get past that.
-  if ((await pathTasks(projectId)).length) return { created: false, phases: 0, milestones: 0 };
+  if ((await pathTasks(projectId, goal)).length) return { created: false, phases: 0, milestones: 0 };
 
   const tree = treeFor(goal);
   const phases = resolveTree(goal, subcategory);
@@ -129,7 +242,11 @@ const loopSourcesOf = (phases: { optional?: boolean; milestones: ResolvedMilesto
  * A project with no path yet is left for adoption.
  */
 export async function syncPathTree(projectId: string, goal: ProjectGoal, subcategory: string, route?: string | null) {
-  const all = await db.select().from(projectKanbanTasks).where(eq(projectKanbanTasks.projectId, projectId));
+  // One section's tasks only: the other sections' milestones aren't on this tree, and must never read as retired.
+  const [owner] = await db.select({ goal: projects.goal }).from(projects).where(eq(projects.id, projectId));
+  const primary = (owner?.goal ?? goal) as ProjectGoal;
+  const all = (await db.select().from(projectKanbanTasks).where(eq(projectKanbanTasks.projectId, projectId)))
+    .filter((t) => trackOfTask(t.tags, primary) === goal);
   const live = all.filter((t) => !isArchivedPath(t.tags) && (backboneIdOf(t.tags) || parentOf(t.tags) || injectedPhaseOf(t.tags)));
   if (!live.length) return { added: [] as string[], archived: [] as string[], restored: [] as string[] };
 
@@ -202,7 +319,7 @@ export async function saveIntake(projectId: string, taskId: string, raw: unknown
   let route: string | null = null;
   if (ctx.milestone?.routeQuestion) {
     route = checked.answers[ctx.milestone.routeQuestion]?.[0] ?? null;
-    await db.update(projects).set({ capitalRoute: route }).where(eq(projects.id, projectId));
+    await setTrackFields(projectId, ctx.project.goal as ProjectGoal, { capitalRoute: route });
     await syncPathTree(projectId, ctx.project.goal as ProjectGoal, ctx.project.subcategory, route);
   }
   const wasDone = ctx.task.status === "done";
@@ -248,10 +365,14 @@ export async function capitalProfileFor(projectId: string) {
   return capitalProfile(await capitalAnswersFor(projectId));
 }
 
-/** Every live task with a backbone, parent or injected tag, i.e. everything on the current path. */
-async function pathTasks(projectId: string) {
+/** Every live task with a backbone, parent or injected tag — on every section, or on one when `goal` is given. */
+async function pathTasks(projectId: string, goal?: ProjectGoal) {
   const rows = await db.select().from(projectKanbanTasks).where(eq(projectKanbanTasks.projectId, projectId));
-  return rows.filter((t) => !isArchivedPath(t.tags) && (backboneIdOf(t.tags) || parentOf(t.tags) || injectedPhaseOf(t.tags)));
+  const live = rows.filter((t) => !isArchivedPath(t.tags) && (backboneIdOf(t.tags) || parentOf(t.tags) || injectedPhaseOf(t.tags)));
+  if (!goal) return live;
+  const [project] = await db.select({ goal: projects.goal }).from(projects).where(eq(projects.id, projectId));
+  const primary = (project?.goal ?? goal) as ProjectGoal;
+  return live.filter((t) => trackOfTask(t.tags, primary) === goal);
 }
 
 /**
@@ -262,15 +383,15 @@ async function pathTasks(projectId: string) {
  */
 export async function refreshPace(projectId: string, effort?: {
   taskId: string; backboneId: string | null; title: string; estimateMinutes: number | null; actualMinutes: number | null;
-}) {
-  const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory, capitalRoute: projects.capitalRoute, createdAt: projects.createdAt })
-    .from(projects).where(eq(projects.id, projectId));
+}, goalArg?: ProjectGoal | null) {
+  // The section the effort was on (from the milestone id), else the one asked for, else the primary.
+  const project = await trackState(projectId, goalOfBackboneId(effort?.backboneId) ?? goalArg ?? null);
   if (!project) return null;
-  const goal = project.goal as ProjectGoal;
+  const goal = project.goal;
   const tree = treeFor(goal);
   const main = mainLineMilestones(resolveTree(goal, project.subcategory, project.capitalRoute));
   const mainIds = new Set(main.map((m) => m.id));
-  const tasks = await pathTasks(projectId);
+  const tasks = await pathTasks(projectId, goal);
   const plan = planShape(main, tasks);
 
   // Work carried across from another path counts toward progress, not pace:
@@ -287,7 +408,9 @@ export async function refreshPace(projectId: string, effort?: {
 
   const totalMinutes = plan.totalMinutes;
   const doneMinutes = plan.doneMinutes;
-  const [prev] = await db.select().from(pathPace).where(eq(pathPace.projectId, projectId));
+  const [primaryPrev] = project.primary ? await db.select().from(pathPace).where(eq(pathPace.projectId, projectId)) : [];
+  const trackPrev = !project.primary && project.pace ? project.pace as { projectedAt?: string | null; state?: string } : null;
+  const prev = primaryPrev ?? (trackPrev ? { projectedAt: trackPrev.projectedAt ? new Date(trackPrev.projectedAt) : null, state: trackPrev.state } as any : undefined);
 
   // In market is a pipeline: once a milestone that puts the builder in front of funders is done.
   const inMarket = main.some((m) => m.inMarket && tasks.some((t) => t.status === "done" && backboneIdOf(t.tags) === m.id));
@@ -306,7 +429,8 @@ export async function refreshPace(projectId: string, effort?: {
     projectedLow: result.projectedLow, projectedHigh: result.projectedHigh,
     lastActivityAt: new Date(Date.now() - result.daysSinceActivity * 86_400_000), updatedAt: new Date(),
   };
-  await db.insert(pathPace).values({ projectId, ...row }).onConflictDoUpdate({ target: pathPace.projectId, set: row });
+  if (project.primary) await db.insert(pathPace).values({ projectId, ...row }).onConflictDoUpdate({ target: pathPace.projectId, set: row });
+  else await db.update(projectTracks).set({ pace: row, updatedAt: new Date() }).where(and(eq(projectTracks.projectId, projectId), eq(projectTracks.goal, goal)));
   if (effort) {
     await db.insert(pathPaceEvents).values({
       projectId, taskId: effort.taskId, backboneId: effort.backboneId, title: effort.title,
@@ -372,10 +496,11 @@ export async function onPathTaskDone(task: { id: string; projectId: string; titl
   const started = task.startedAt ? new Date(task.startedAt).getTime() : null;
   const finished = task.completedAt ? new Date(task.completedAt).getTime() : Date.now();
   const actual = started && finished - started > 60_000 ? Math.round((finished - started) / 60_000) : null;
+  const [owner] = await db.select({ goal: projects.goal }).from(projects).where(eq(projects.id, task.projectId));
   await refreshPace(task.projectId, {
     taskId: task.id, backboneId, title: task.title,
     estimateMinutes: task.estimateHours ? task.estimateHours * 60 : null, actualMinutes: actual,
-  });
+  }, owner ? trackOfTask(task.tags, owner.goal as ProjectGoal) : null);
 }
 
 /**
@@ -406,7 +531,7 @@ export async function createExpansion(
     created.push(await storage.createKanbanTask({
       projectId, milestoneId: parent.milestoneId, title, description: String(step.description ?? "").trim(),
       status: "todo", priority: "medium", order: ++order,
-      tags: [`parent:${backboneId}`, ...(loopTaskId ? [`loop:${loopTaskId}`] : []), ...(parent.tags ?? []).filter((t) => t.startsWith("actor:") || t.startsWith("tier:"))],
+      tags: [`parent:${backboneId}`, ...(loopTaskId ? [`loop:${loopTaskId}`] : []), ...(parent.tags ?? []).filter((t) => t.startsWith("actor:") || t.startsWith("tier:") || t.startsWith("track:"))],
       estimateHours: Math.min(3, Math.max(1, Math.ceil(Number(step.estimateHours) || 1))),
     } as any));
   }
@@ -431,10 +556,10 @@ export async function expansionSource(
   backboneId: string,
   opts: { loopTaskId?: string | null; artifact?: string } = {},
 ) {
-  const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory, capitalRoute: projects.capitalRoute }).from(projects).where(eq(projects.id, projectId));
-  if (!project) throw Object.assign(new Error("Project not found"), { status: 404 });
+  const project = await trackState(projectId, await goalFor(projectId, { backboneId }));
+  if (!project) throw Object.assign(new Error("That milestone isn't on this project's path."), { code: "not_on_path", status: 400 });
 
-  const all = resolveTree(project.goal as ProjectGoal, project.subcategory, project.capitalRoute).flatMap((p) => p.milestones);
+  const all = resolveTree(project.goal, project.subcategory, project.capitalRoute).flatMap((p) => p.milestones);
   const milestone = all.find((m) => m.id === backboneId);
   if (!milestone?.expandsFrom) {
     throw Object.assign(new Error("That milestone doesn't break into steps."), { code: "not_expandable", status: 400 });
@@ -494,7 +619,7 @@ export async function createLoop(projectId: string, sourceBackboneId: string, lo
   return storage.createKanbanTask({
     projectId, milestoneId: source.milestoneId, title, description: String(loop.description ?? "").trim(),
     status: "todo", priority: "medium", order: (source.order ?? 0) + siblings.length + 1,
-    tags: [`parent:${sourceBackboneId}`, "kind:loop", loopTypeTag(type), ...(source.tags ?? []).filter((t) => t.startsWith("actor:") || t.startsWith("tier:"))],
+    tags: [`parent:${sourceBackboneId}`, "kind:loop", loopTypeTag(type), ...(source.tags ?? []).filter((t) => t.startsWith("actor:") || t.startsWith("tier:") || t.startsWith("track:"))],
     estimateHours: 1,
   } as any);
 }
@@ -586,9 +711,10 @@ export interface LoopDraft { type?: unknown; title?: unknown; steps?: unknown; c
  * like anything else.
  */
 export async function applyLoopDrafts(projectId: string, drafts: LoopDraft[], opts: { only?: string[] | null } = {}) {
-  const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory, capitalRoute: projects.capitalRoute }).from(projects).where(eq(projects.id, projectId));
+  // Loops are the Ship section's; a project without one works its primary path's.
+  const project = (await trackState(projectId, "ship_mvp")) ?? (await trackState(projectId));
   if (!project) throw Object.assign(new Error("Project not found"), { status: 404 });
-  const sourceId = loopSourcesOf(resolveTree(project.goal as ProjectGoal, project.subcategory, project.capitalRoute))[0];
+  const sourceId = loopSourcesOf(resolveTree(project.goal, project.subcategory, project.capitalRoute))[0];
   if (!sourceId) throw Object.assign(new Error("This path doesn't work in loops."), { code: "not_expandable", status: 400 });
   const tasks = await pathTasks(projectId);
   const loops = tasks.filter((t) => isLoop(t.tags) && parentOf(t.tags) === sourceId);
@@ -652,7 +778,7 @@ export async function deleteLoop(projectId: string, loopTaskId: string) {
   await storage.deleteKanbanTask(loop.id);
   // Removing a loop is the builder saying "not this one" — remembered, so the next read doesn't propose it again.
   await db.update(projects).set({ rejectedLoops: sql`array_append(array_remove(${projects.rejectedLoops}, ${loop.title}), ${loop.title})` }).where(eq(projects.id, projectId));
-  await refreshPace(projectId);
+  await refreshPace(projectId, undefined, goalOfBackboneId(parentOf(loop.tags)));
   return { removedSteps: removed, keptSteps: kept };
 }
 
@@ -661,24 +787,24 @@ export async function deleteLoop(projectId: string, loopTaskId: string) {
  * building after week 2; choosing it is what makes Nova work the extension
  * instead of asking week-3 questions. Leaving is the same explicit act.
  */
-export async function setBranch(projectId: string, phaseId: string | null) {
-  const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory, capitalRoute: projects.capitalRoute }).from(projects).where(eq(projects.id, projectId));
+export async function setBranch(projectId: string, phaseId: string | null, goal?: ProjectGoal | null) {
+  const project = await trackState(projectId, goal);
   if (!project) throw Object.assign(new Error("Project not found"), { status: 404 });
   if (phaseId) {
-    const phase = resolveTree(project.goal as ProjectGoal, project.subcategory, project.capitalRoute).find((p) => p.id === phaseId);
+    const phase = resolveTree(project.goal, project.subcategory, project.capitalRoute).find((p) => p.id === phaseId);
     if (!phase?.optional) throw Object.assign(new Error("That isn't an optional phase on this path."), { code: "not_on_path", status: 400 });
   }
-  await db.update(projects).set({ activeBranch: phaseId }).where(eq(projects.id, projectId));
+  await setTrackFields(projectId, project.goal, { activeBranch: phaseId });
   return { activeBranch: phaseId };
 }
 
 /** Extending again: the branch's own tasks reopen for another round, with the round recorded. */
-export async function extendBranch(projectId: string, phaseId: string) {
-  const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory, capitalRoute: projects.capitalRoute }).from(projects).where(eq(projects.id, projectId));
+export async function extendBranch(projectId: string, phaseId: string, goal?: ProjectGoal | null) {
+  const project = await trackState(projectId, goal);
   if (!project) throw Object.assign(new Error("Project not found"), { status: 404 });
-  const phase = resolveTree(project.goal as ProjectGoal, project.subcategory, project.capitalRoute).find((p) => p.id === phaseId);
+  const phase = resolveTree(project.goal, project.subcategory, project.capitalRoute).find((p) => p.id === phaseId);
   if (!phase?.optional) throw Object.assign(new Error("That isn't an optional phase on this path."), { code: "not_on_path", status: 400 });
-  const tasks = await pathTasks(projectId);
+  const tasks = await pathTasks(projectId, project.goal);
   const ids = new Set(phase.milestones.map((m) => m.id));
   let round = 1;
   for (const t of tasks.filter((t) => ids.has(backboneIdOf(t.tags) ?? ""))) {
@@ -687,7 +813,7 @@ export async function extendBranch(projectId: string, phaseId: string) {
   for (const t of tasks.filter((t) => ids.has(backboneIdOf(t.tags) ?? "") && t.status === "done")) {
     await storage.updateKanbanTask(t.id, { status: "todo", tags: [...(t.tags ?? []).filter((x) => !x.startsWith("round:")), `round:${round}`] } as any);
   }
-  await db.update(projects).set({ activeBranch: phaseId }).where(eq(projects.id, projectId));
+  await setTrackFields(projectId, project.goal, { activeBranch: phaseId });
   return { activeBranch: phaseId, round };
 }
 
@@ -698,8 +824,12 @@ export async function extendBranch(projectId: string, phaseId: string) {
  * before the path was watching.
  */
 export async function reconcileMilestones(projectId: string, done: { id: string; evidence: string; answer?: string }[], source: "nova" | "builder") {
-  const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory, capitalRoute: projects.capitalRoute }).from(projects).where(eq(projects.id, projectId));
-  const milestones = new Map(project ? resolveTree(project.goal as ProjectGoal, project.subcategory, project.capitalRoute).flatMap((p) => p.milestones).map((m) => [m.id, m]) : []);
+  // Milestone ids name their section, so one call can mark across sections.
+  const milestones = new Map<string, ResolvedMilestone>();
+  for (const g of new Set(done.map((d) => goalOfBackboneId(d.id)).filter(Boolean) as ProjectGoal[])) {
+    const state = await trackState(projectId, g);
+    if (state) for (const m of resolveTree(g, state.subcategory, state.capitalRoute).flatMap((p) => p.milestones)) milestones.set(m.id, m);
+  }
   const tasks = await pathTasks(projectId);
   const marked: string[] = [];
   const filled: string[] = [];
@@ -727,7 +857,7 @@ export async function reconcileMilestones(projectId: string, done: { id: string;
     marked.push(d.id);
     if (answer && !hasAnswer) filled.push(d.id);
   }
-  if (marked.length) await refreshPace(projectId);
+  for (const g of new Set(marked.map((id) => goalOfBackboneId(id)).filter(Boolean) as ProjectGoal[])) await refreshPace(projectId, undefined, g);
   return { marked, filled };
 }
 
@@ -735,9 +865,12 @@ export async function reconcileMilestones(projectId: string, done: { id: string;
 export async function pathTaskContext(projectId: string, taskId: string) {
   const task = (await pathTasks(projectId)).find((t) => t.id === taskId);
   if (!task) return null;
-  const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory, capitalRoute: projects.capitalRoute }).from(projects).where(eq(projects.id, projectId));
+  const [owner] = await db.select({ goal: projects.goal }).from(projects).where(eq(projects.id, projectId));
+  if (!owner) return null;
+  // The task's own section: its tree, kind and route, whichever section is primary.
+  const project = await trackState(projectId, trackOfTask(task.tags, owner.goal as ProjectGoal));
   if (!project) return null;
-  const backbone = resolveTree(project.goal as ProjectGoal, project.subcategory, project.capitalRoute).flatMap((p) => p.milestones);
+  const backbone = resolveTree(project.goal, project.subcategory, project.capitalRoute).flatMap((p) => p.milestones);
   const milestone = backbone.find((m) => m.id === (backboneIdOf(task.tags) ?? parentOf(task.tags)));
   const actor = (tagValue(task.tags, "actor:") ?? milestone?.actor ?? "nova-builds") as Actor;
   const tier = tagValue(task.tags, "tier:") ?? milestone?.tier ?? "artifact";
@@ -769,9 +902,10 @@ export async function saveLoopAudit(projectId: string, sourceTaskId: string, aud
  * attach a verdict to the wrong loop.
  */
 export async function loopsForAudit(projectId: string) {
-  const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory, capitalRoute: projects.capitalRoute }).from(projects).where(eq(projects.id, projectId));
+  // The product's loops live on the Ship section; a project without one reads its primary path's.
+  const project = (await trackState(projectId, "ship_mvp")) ?? (await trackState(projectId));
   if (!project) return null;
-  const phases = resolveTree(project.goal as ProjectGoal, project.subcategory, project.capitalRoute);
+  const phases = resolveTree(project.goal, project.subcategory, project.capitalRoute);
   const sourceId = loopSourcesOf(phases)[0];
   if (!sourceId) return null;
   const fanOutId = phases.flatMap((p) => p.milestones).find((m) => m.expandsFrom === sourceId)?.id;
@@ -902,9 +1036,9 @@ export function howDone(t: { status: string; tags: string[] | null }): "not-done
  * same. This is what opens when a step in the map is clicked.
  */
 export async function milestoneDetail(projectId: string, backboneId: string) {
-  const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory, capitalRoute: projects.capitalRoute }).from(projects).where(eq(projects.id, projectId));
+  const project = await trackState(projectId, await goalFor(projectId, { backboneId }));
   if (!project) return null;
-  const phases = resolveTree(project.goal as ProjectGoal, project.subcategory, project.capitalRoute);
+  const phases = resolveTree(project.goal, project.subcategory, project.capitalRoute);
   const phase = phases.find((p) => p.milestones.some((m) => m.id === backboneId));
   const milestone = phase?.milestones.find((m) => m.id === backboneId);
   if (!phase || !milestone) return null;
@@ -946,9 +1080,13 @@ export async function milestoneDetail(projectId: string, backboneId: string) {
 
 /** The artifacts Nova may ground an injected task in: written answers, check-ins, decisions. */
 export async function collectArtifacts(projectId: string): Promise<Artifact[]> {
-  const goal = (await db.select({ goal: projects.goal, subcategory: projects.subcategory, capitalRoute: projects.capitalRoute }).from(projects).where(eq(projects.id, projectId)))[0];
+  const goal = await trackState(projectId);
   if (!goal) return [];
-  const backbone = new Map(resolveTree(goal.goal as ProjectGoal, goal.subcategory, goal.capitalRoute).flatMap((p) => p.milestones).map((m) => [m.id, m]));
+  const backbone = new Map<string, ResolvedMilestone>();
+  for (const g of PROJECT_GOALS) {
+    const state = await trackState(projectId, g.id);
+    if (state) for (const m of resolveTree(g.id, state.subcategory, state.capitalRoute).flatMap((p) => p.milestones)) backbone.set(m.id, m);
+  }
   const out: Artifact[] = [];
   for (const t of await pathTasks(projectId)) {
     const id = backboneIdOf(t.tags);
@@ -959,10 +1097,11 @@ export async function collectArtifacts(projectId: string): Promise<Artifact[]> {
     }
   }
   // On the funding path, the scored profile and chosen route: what every funding plan is built on.
-  if (goal.goal === "raise_funding") {
+  const funding = await trackState(projectId, "raise_funding");
+  if (funding) {
     const profile = await capitalProfileFor(projectId);
     if (profile.answered > 0) out.push({ label: "capital-profile", kind: "milestone", text: renderCapitalProfile(profile).slice(0, 2000) });
-    if (goal.capitalRoute) out.push({ label: "capital-route", kind: "milestone", text: `Chosen route: ${CAPITAL_ROUTES.find((r) => r.id === goal.capitalRoute)?.label ?? goal.capitalRoute}` });
+    if (funding.capitalRoute) out.push({ label: "capital-route", kind: "milestone", text: `Chosen route: ${CAPITAL_ROUTES.find((r) => r.id === funding.capitalRoute)?.label ?? funding.capitalRoute}` });
   }
   const checkIns = await storage.getProjectCheckIns(projectId).catch(() => []);
   for (const c of checkIns.slice(0, 4)) out.push({ label: `check-in:${c.id}`, kind: "check-in", text: `Goal: ${c.goal}. Proof: ${c.proof}. Next: ${c.nextStep ?? ""}`.slice(0, 600) });
@@ -972,12 +1111,12 @@ export async function collectArtifacts(projectId: string): Promise<Artifact[]> {
 }
 
 /** Layer 3b: injected tasks for a phase, capped and grounded. Admission is the pure rule; this writes what passed. */
-export async function createInjections(projectId: string, phaseId: string, proposals: InjectionProposal[], artifacts: Artifact[]) {
-  const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory, capitalRoute: projects.capitalRoute }).from(projects).where(eq(projects.id, projectId));
+export async function createInjections(projectId: string, phaseId: string, proposals: InjectionProposal[], artifacts: Artifact[], goal?: ProjectGoal | null) {
+  const project = await trackState(projectId, goal);
   if (!project) throw Object.assign(new Error("Project not found"), { status: 404 });
-  const phase = resolveTree(project.goal as ProjectGoal, project.subcategory, project.capitalRoute).find((p) => p.id === phaseId);
+  const phase = resolveTree(project.goal, project.subcategory, project.capitalRoute).find((p) => p.id === phaseId);
   if (!phase) throw Object.assign(new Error("That phase isn't on this path."), { code: "not_on_path", status: 400 });
-  const tasks = await pathTasks(projectId);
+  const tasks = await pathTasks(projectId, project.goal);
   const existing = tasks.filter((t) => injectedPhaseOf(t.tags) === phaseId).length;
   const { admitted, dropped } = admitInjections(proposals, artifacts, existing);
   const anchor = tasks.find((t) => backboneIdOf(t.tags) === phase.milestones[phase.milestones.length - 1]?.id);
@@ -987,7 +1126,7 @@ export async function createInjections(projectId: string, phaseId: string, propo
       projectId, milestoneId: anchor?.milestoneId ?? null, title: a.title,
       description: `${a.description}\n\nNova added this from: ${a.artifact}`,
       status: "todo", priority: "medium", order: (anchor?.order ?? 0) + 1,
-      tags: [`injected:${phaseId}`, `artifact:${a.artifact}`, "actor:nova-builds", "tier:artifact"],
+      tags: [`injected:${phaseId}`, `track:${project.goal}`, `artifact:${a.artifact}`, "actor:nova-builds", "tier:artifact"],
       estimateHours: a.estimateHours,
     } as any));
   }
@@ -1005,7 +1144,7 @@ export async function switchPath(projectId: string, goal: ProjectGoal, subcatego
   if (!project) throw Object.assign(new Error("Project not found"), { status: 404 });
   const from = { goal: project.goal as ProjectGoal, subcategory: project.subcategory };
 
-  const old = await pathTasks(projectId);
+  const old = await pathTasks(projectId, from.goal);
   const carried = new Map<string, typeof old[number]>();
   for (const t of old) {
     const shared = tagValue(t.tags, "shared:");
@@ -1018,13 +1157,21 @@ export async function switchPath(projectId: string, goal: ProjectGoal, subcatego
   }
   await db.update(projectRoadmaps).set({ status: "archived" })
     .where(and(eq(projectRoadmaps.projectId, projectId), eq(projectRoadmaps.status, "active")));
-  await db.update(projects).set({ goal, subcategory, capitalRoute: null }).where(eq(projects.id, projectId));
+  // A section already started becomes the primary: its route and branch move onto the project row, and its row goes.
+  const [asTrack] = goal !== from.goal ? await db.select().from(projectTracks).where(and(eq(projectTracks.projectId, projectId), eq(projectTracks.goal, goal))) : [];
+  if (asTrack) await db.delete(projectTracks).where(eq(projectTracks.id, asTrack.id));
+  const keepsTrack = !!asTrack && asTrack.subcategory === subcategory;
+  await db.update(projects).set({ goal, subcategory, capitalRoute: keepsTrack ? asTrack.capitalRoute : null, activeBranch: keepsTrack ? asTrack.activeBranch : null }).where(eq(projects.id, projectId));
+  if (asTrack && !keepsTrack) {
+    const stale = await pathTasks(projectId, goal);
+    if (stale.length) await db.update(projectKanbanTasks).set({ tags: sql`array_append(${projectKanbanTasks.tags}, ${"archived:" + goal})` }).where(inArray(projectKanbanTasks.id, stale.map((t) => t.id)));
+  }
 
   const result = await instantiatePathTree(projectId, goal, subcategory);
 
   let carriedCount = 0;
   const fromLabel = PROJECT_GOALS.find((g) => g.id === from.goal)?.label ?? from.goal;
-  for (const t of await pathTasks(projectId)) {
+  for (const t of await pathTasks(projectId, goal)) {
     const shared = tagValue(t.tags, "shared:");
     const source = shared ? carried.get(shared) : null;
     if (!source) continue;
@@ -1045,21 +1192,27 @@ export async function switchPath(projectId: string, goal: ProjectGoal, subcatego
  * progress within it as "step 4 of 7", the one next action with who acts,
  * pace, the recalculation log, and — at the end — Nova's case for what's next.
  */
-export async function pathStatus(projectId: string) {
-  const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory, capitalRoute: projects.capitalRoute, activeBranch: projects.activeBranch, novaNotes: projects.novaNotes, rejectedLoops: projects.rejectedLoops })
-    .from(projects).where(eq(projects.id, projectId));
-  if (!project) return null;
+export async function pathStatus(projectId: string, goalArg?: ProjectGoal | null) {
+  const [row] = await db.select({ novaNotes: projects.novaNotes, rejectedLoops: projects.rejectedLoops }).from(projects).where(eq(projects.id, projectId));
+  if (!row) return null;
+  const state = await trackState(projectId, goalArg);
+  if (!state) {
+    // A section the project hasn't started: what it would be, so the manager can offer to start it.
+    const g = goalArg as ProjectGoal;
+    return { adopted: false as const, started: false as const, goal: g, subcategory: null, promise: treeFor(g).promise, existingTasks: 0, existingDone: 0 };
+  }
+  const project = { ...state, novaNotes: row.novaNotes, rejectedLoops: row.rejectedLoops };
 
-  const goal = project.goal as ProjectGoal;
+  const goal = project.goal;
   const phases = resolveTree(goal, project.subcategory, project.capitalRoute);
   const tree = treeFor(goal);
   await syncPathTree(projectId, goal, project.subcategory, project.capitalRoute);
-  const tasks = await pathTasks(projectId);
+  const tasks = await pathTasks(projectId, goal);
   if (tasks.length === 0) {
     // Made before paths existed. The dashboard offers adoption rather than
     // pretending a project with fifty finished tasks is on week 1, step 1.
     const all = await storage.getProjectKanbanTasks(projectId).catch(() => []);
-    return { adopted: false as const, goal, subcategory: project.subcategory, promise: tree.promise, existingTasks: all.length, existingDone: all.filter((t) => t.status === "done").length };
+    return { adopted: false as const, started: true as const, goal, subcategory: project.subcategory, promise: tree.promise, existingTasks: all.length, existingDone: all.filter((t) => t.status === "done").length };
   }
 
   const taskByBackbone = new Map<string, typeof tasks[number]>();
@@ -1169,13 +1322,26 @@ export async function pathStatus(projectId: string) {
       closureAuditAt: latestAudit?.createdAt ?? null,
     };
   })();
-  const pace = await refreshPace(projectId);
-  const events = await db.select().from(pathPaceEvents).where(eq(pathPaceEvents.projectId, projectId))
-    .orderBy(desc(pathPaceEvents.createdAt)).limit(10);
+  const pace = await refreshPace(projectId, undefined, goal);
+  // This section's events: its milestone ids share its prefix. Events with none, or from a
+  // section the project isn't working (a path it switched away from), are the primary's history.
+  const recent = await db.select().from(pathPaceEvents).where(eq(pathPaceEvents.projectId, projectId))
+    .orderBy(desc(pathPaceEvents.createdAt)).limit(40);
+  const startedGoals = new Set<ProjectGoal>([state.primaryGoal]);
+  for (const g of new Set(recent.map((e) => goalOfBackboneId(e.backboneId)).filter(Boolean) as ProjectGoal[])) {
+    if (g !== state.primaryGoal && await trackState(projectId, g)) startedGoals.add(g);
+  }
+  const sectionOfEvent = (backboneId: string | null) => {
+    const g = goalOfBackboneId(backboneId);
+    return g && startedGoals.has(g) ? g : state.primaryGoal;
+  };
+  const events = recent.filter((e) => sectionOfEvent(e.backboneId) === goal).slice(0, 10);
   const complete = doneCount === main.length;
 
   return {
     adopted: true as const,
+    started: true as const,
+    primary: project.primary,
     goal, subcategory: project.subcategory, promise: tree.promise, target: tree.target, tier: tree.defaultTier,
     phases: phases.map((p) => ({
       id: p.id, title: p.title, optional: !!p.optional, checkpoint: p.checkpoint ?? null,

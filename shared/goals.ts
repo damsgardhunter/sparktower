@@ -31,6 +31,27 @@ export const PROJECT_GOALS = [
 
 export type ProjectGoal = (typeof PROJECT_GOALS)[number]["id"];
 
+export const isProjectGoal = (v: unknown): v is ProjectGoal => PROJECT_GOALS.some((g) => g.id === v);
+
+/**
+ * A project works all three paths side by side, one section each — Ship,
+ * Systemize, Raise. Every path's milestone ids carry their tree's prefix
+ * (SHIP.M1.1, SYS.F1.1, FUND.C1.1), which is how a task on the board is
+ * known to belong to one section without a lookup.
+ */
+export const GOAL_BACKBONE_PREFIX: Record<ProjectGoal, string> = {
+  ship_mvp: "SHIP",
+  systemize_business: "SYS",
+  raise_funding: "FUND",
+};
+
+/** The path a milestone id belongs to, from its prefix; null for anything else. */
+export function goalOfBackboneId(id: string | null | undefined): ProjectGoal | null {
+  if (!id) return null;
+  const prefix = id.split(".")[0];
+  return (Object.entries(GOAL_BACKBONE_PREFIX).find(([, p]) => p === prefix)?.[0] as ProjectGoal | undefined) ?? null;
+}
+
 /**
  * What kind of thing it is, within its path.
  *

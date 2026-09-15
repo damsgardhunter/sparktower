@@ -497,7 +497,7 @@ export function registerCodeAuditRoutes(app: Express) {
    * A typo'd URL or a private repo without a token should cost nothing and say
    * so plainly, rather than failing halfway through a paid audit.
    */
-  app.post("/api/projects/:id/code-audit/check-repo", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/code-audit/check-repo", isAuthenticated, rateLimit("external"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       if (!(await isMember(userId, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
@@ -525,6 +525,7 @@ export function registerCodeAuditRoutes(app: Express) {
    * used for this request and never stored.
    */
   app.post("/api/projects/:id/code-audit", isAuthenticated, async (req: any, res) => {
+    // metering: checked here; charged in runCodeAudit only after the audit is parsed and saved (test/unit/ai-metering.test.ts holds the helper to the same order)
     try {
       const userId = (req.user as any).id;
       const projectId = req.params.id;
@@ -591,7 +592,7 @@ export function registerCodeAuditRoutes(app: Express) {
    * (all pending ones when none are named). Pending edits outside a named
    * choice are declined, and the next audit won't propose them again.
    */
-  app.post("/api/code-audits/:auditId/apply", isAuthenticated, async (req: any, res) => {
+  app.post("/api/code-audits/:auditId/apply", isAuthenticated, rateLimit("external"), async (req: any, res) => {
     try {
       const audit = await storage.getCodeAudit(req.params.auditId);
       if (!audit) return res.status(404).json({ message: "Audit not found" });

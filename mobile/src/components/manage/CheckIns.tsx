@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Platform, Pressable, Switch, Text, View } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "expo-router";
 import { api } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
 import { colors, font, fontFamily, radius, spacing } from "../../theme";
@@ -20,6 +21,7 @@ interface CheckIn {
 
 export function CheckIns({ projectId, projectTitle }: { projectId: string; projectTitle: string }) {
   const { user } = useAuth();
+  const router = useRouter();
   const qc = useQueryClient();
   const { notify, fail } = useNotify();
   const [composing, setComposing] = useState<CheckIn | "new" | null>(null);
@@ -94,6 +96,7 @@ export function CheckIns({ projectId, projectTitle }: { projectId: string; proje
             </Row>
             <View style={{ flexDirection: "row", alignItems: "center", borderTopWidth: 1, borderColor: colors.borderSubtle, paddingTop: spacing.sm, gap: spacing.lg, flexWrap: "wrap" }}>
               <Action icon="share-outline" label="Share" onPress={() => share(c)} />
+              <Action icon="open-outline" label="Open page" onPress={() => router.push(`/c/${c.id}` as any)} />
               {mine && <Action icon="create-outline" label="Edit" onPress={() => setComposing(c)} />}
               {mine && <Action icon={c.visibility === "public" ? "link-outline" : "globe-outline"} label={c.visibility === "public" ? "Make unlisted" : "Make public"} onPress={() => setVisibility.mutate({ id: c.id, visibility: c.visibility === "public" ? "unlisted" : "public" })} />}
               {mine && (
@@ -161,16 +164,19 @@ function CheckInComposer({ projectId, open, editing, onClose }: { projectId: str
   const ready = Object.keys(errors).length === 0;
   const set = (patch: Partial<CheckInDraft>) => { setTouched(true); setForm((f) => ({ ...f, ...patch })); };
 
+  const router = useRouter();
   const publish = useMutation({
     mutationFn: () => {
       const body = { ...form, blocker: form.blocker || null, visibility, needsFeedback };
       return editing
         ? api(`/api/check-ins/${editing.id}`, { method: "PATCH", body })
-        : api(`/api/projects/${projectId}/check-ins`, { method: "POST", body });
+        : api<any>(`/api/projects/${projectId}/check-ins`, { method: "POST", body });
     },
-    onSuccess: () => {
+    onSuccess: (c: any) => {
       qc.invalidateQueries({ queryKey: mkey(projectId, "check-ins") });
-      notify(editing ? "Check-in updated" : "Check-in published — share it from the card");
+      if (c?.id) qc.invalidateQueries({ queryKey: ["check-in", c.id] });
+      notify(editing ? "Check-in updated" : "Check-in published — share the link so people can give feedback", "success",
+        c?.id ? { label: "Open", onPress: () => router.push(`/c/${c.id}` as any) } : undefined);
       onClose();
     },
     onError: (e) => fail(e, "Couldn't publish"),

@@ -15,6 +15,7 @@ import { Body, Btn, Card, Cost, Icon, Loading, Meta, NovaGradient, Progress, Row
 import { useNotify } from "./bits";
 import { PathPanel, usePath } from "./PathPanel";
 import { IntakeView } from "./WorkView";
+import { NovaWelcomeCard } from "./path/NovaGuide";
 import { mkey } from "./shared";
 
 interface Briefing {
@@ -46,7 +47,11 @@ function greeting() {
 
 const FIRST_STEP: Record<string, string> = { systemize_business: "SYS.F1.1", raise_funding: "FUND.C1.1" };
 
-export function Dashboard({ projectId, project, onNavigate }: { projectId: string; project: any; onNavigate: (tab: string) => void }) {
+export function Dashboard({ projectId, project, onNavigate, onOpenNova }: {
+  projectId: string; project: any; onNavigate: (tab: string) => void;
+  /** Opens Nova's conversation, optionally sending a quick reply. */
+  onOpenNova?: (message?: string) => void;
+}) {
   const { user } = useAuth();
   const { creditsRemaining, isUnlimited } = useEntitlementsQuery();
   const qc = useQueryClient();
@@ -56,7 +61,7 @@ export function Dashboard({ projectId, project, onNavigate }: { projectId: strin
     queryKey: mkey(projectId, "briefing"),
     queryFn: () => api<Briefing>(`/api/projects/${projectId}/nova-briefing`),
   });
-  const { data: path } = usePath(projectId);
+  const { data: path, isLoading: pathLoading } = usePath(projectId);
 
   const completeOnboarding = useMutation({
     mutationFn: () => api(`/api/projects/${projectId}/nova-guide/complete-onboarding`, { method: "POST" }),
@@ -72,6 +77,9 @@ export function Dashboard({ projectId, project, onNavigate }: { projectId: strin
   const moneyStep = !project?.novaOnboardingComplete && firstStep && path?.adopted && path.next?.id === firstStep && path.next.workTaskId && path.next.intake?.length
     ? { taskId: path.next.workTaskId, questions: path.next.intake }
     : null;
+
+  // Every other project opens on Nova's welcome until setup is done or skipped (nova-guide.tsx's overlay).
+  const welcome = !project?.novaOnboardingComplete && !moneyStep && !pathLoading && !!onOpenNova;
 
   const stats = data?.stats;
   const tiles: { icon: IconName; label: string; value: string; tab: string }[] = stats ? [
@@ -129,6 +137,8 @@ export function Dashboard({ projectId, project, onNavigate }: { projectId: strin
           </View>
         </View>
       )}
+
+      {welcome && <NovaWelcomeCard onOpen={(m) => onOpenNova!(m)} onSkip={() => completeOnboarding.mutate()} skipping={completeOnboarding.isPending} />}
 
       {!moneyStep && <PathPanel projectId={projectId} onNavigate={onNavigate} />}
 

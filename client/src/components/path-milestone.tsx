@@ -3,9 +3,11 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { ACTOR_LABEL, type Actor, type VerificationTier, type IntakeQuestion, type WorkKind } from "@shared/phase-trees";
+import { type Actor, type VerificationTier, type IntakeQuestion, type WorkKind } from "@shared/phase-trees";
 import { WorkView, refreshPath, useFail, type WorkRow } from "@/components/path-work";
-import { CheckCircle2, Circle, Loader2, RotateCcw, Sparkles, User, Plus } from "lucide-react";
+import { Clamp } from "@/components/section/block";
+import { ACTOR_SHORT, TIER_SHORT, estimate } from "@/components/section/path-types";
+import { CheckCircle2, Circle, Clock, Loader2, RotateCcw, ShieldCheck, Sparkles, User, Plus } from "lucide-react";
 
 type How = "not-done" | "verified" | "nova-recognised" | "you-marked" | "carried" | "done";
 interface TaskView { taskId: string; title: string; status: string; completedAt: string | null; how: How; actor: Actor; answer: string | null; work: WorkRow | null }
@@ -20,11 +22,11 @@ interface Detail {
 }
 
 const HOW: Record<How, string> = {
-  "not-done": "Not done yet",
-  "verified": "Verified by the codebase audit",
-  "nova-recognised": "Nova recognised this as already done when the project joined its path",
-  "you-marked": "You marked this done",
-  "carried": "Carried over from another path",
+  "not-done": "Not done",
+  "verified": "Done · verified in code",
+  "nova-recognised": "Done · Nova recognised it",
+  "you-marked": "Done · marked by you",
+  "carried": "Done · carried over",
   "done": "Done",
 };
 const day = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "");
@@ -67,19 +69,19 @@ export function MilestoneDetail({ projectId, backboneId }: { projectId: string; 
   const TaskBlock = ({ t, authored, label, own }: { t: TaskView; authored?: string; label?: string; own?: boolean }) => (
     <div className="space-y-2" data-testid={`milestone-task-${t.taskId}`}>
       {label && <p className="text-sm font-medium flex items-center gap-2">{t.status === "done" ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <Circle className="h-3.5 w-3.5 text-muted-foreground/40" />}{label}</p>}
-      {authored && <p className="text-sm text-muted-foreground leading-relaxed">{authored}</p>}
-      <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+      {authored && <Clamp text={authored} />}
+      <p className="text-xs text-muted-foreground flex items-center gap-1.5 flex-wrap">
         {t.actor === "user-does" ? <User className="h-3 w-3" /> : <Sparkles className="h-3 w-3 text-primary" />}
-        {ACTOR_LABEL[t.actor]} · {HOW[t.how]}{t.completedAt && t.status === "done" ? ` · ${day(t.completedAt)}` : ""}
+        {ACTOR_SHORT[t.actor]} · <span className={t.status === "done" ? "text-emerald-600" : ""}>{HOW[t.how]}</span>{t.completedAt && t.status === "done" ? ` · ${day(t.completedAt)}` : ""}
       </p>
       {t.answer && (
         <div className="rounded-md bg-muted/50 p-3" data-testid="milestone-answer">
-          <p className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">What's written</p>
-          <p className="text-sm whitespace-pre-wrap">{t.answer}</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">What's written</p>
+          <AnswerText text={t.answer} />
         </div>
       )}
       {!t.answer && t.status === "done" && !t.work && (
-        <p className="text-xs text-muted-foreground" data-testid="milestone-empty">Nothing written here yet. "Re-evaluate where I'm at" fills this in from your brief, setup and audit where they have it; otherwise have Nova draft it.</p>
+        <p className="text-xs text-muted-foreground" data-testid="milestone-empty">Nothing written yet — Re-evaluate fills it in, or have Nova draft it.</p>
       )}
       <WorkView projectId={projectId} taskId={t.taskId} actor={t.actor} work={t.work} done={t.status === "done"} compact
         intake={own ? milestone.intake : undefined} workKind={own ? milestone.work : undefined} prefill={own ? milestone.prefill : undefined} />
@@ -93,10 +95,15 @@ export function MilestoneDetail({ projectId, backboneId }: { projectId: string; 
 
   return (
     <div className="rounded-lg border border-border p-4 space-y-4 bg-background" data-testid="milestone-detail">
-      {task ? <TaskBlock t={task} authored={milestone.description} own /> : <p className="text-sm text-muted-foreground">{milestone.description}</p>}
+      <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-[11px] text-muted-foreground">
+        <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{estimate(milestone.estimateMinutes)}</span>
+        <span className="flex items-center gap-1"><ShieldCheck className="h-3 w-3" />{TIER_SHORT[milestone.tier]}</span>
+        <span className="truncate">{data.phase.title}</span>
+      </div>
+      {task ? <TaskBlock t={task} authored={milestone.description} own /> : <Clamp text={milestone.description} />}
       {(loops.length > 0 || isSource) && (
         <div className="space-y-3 border-t border-border pt-3" data-testid="milestone-loops">
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">Loops · {loops.filter((l) => l.status === "done").length}/{loops.length}</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Loops · {loops.filter((l) => l.status === "done").length}/{loops.length}</p>
           {loops.map((l) => <div key={l.taskId} className="pl-3 border-l-2 border-border"><TaskBlock t={l} label={l.title} /></div>)}
           {form?.kind === "loop" ? <AddForm /> : (
             <Button size="sm" variant="ghost" className="text-xs" onClick={() => setForm({ kind: "loop", loopTaskId: null, title: "", description: "" })} data-testid="button-detail-add-loop"><Plus className="h-3 w-3 mr-1" />Add another loop</Button>
@@ -105,7 +112,7 @@ export function MilestoneDetail({ projectId, backboneId }: { projectId: string; 
       )}
       {(steps.length > 0 || milestone.expandsFrom) && (
         <div className="space-y-3 border-t border-border pt-3">
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">Steps · {steps.filter((s) => s.status === "done").length}/{steps.length}</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Steps · {steps.filter((s) => s.status === "done").length}/{steps.length}</p>
           {sourceLoops.length > 0 ? sourceLoops.map((l) => {
             const own = steps.filter((s) => s.loopTaskId === l.taskId);
             return (
@@ -128,5 +135,17 @@ export function MilestoneDetail({ projectId, backboneId }: { projectId: string; 
         </div>
       )}
     </div>
+  );
+}
+
+/** A long written answer: the first few lines, the rest on request. */
+function AnswerText({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const long = text.length > 280 || text.split("\n").length > 5;
+  return (
+    <>
+      <p className={`text-sm whitespace-pre-wrap ${long && !open ? "line-clamp-5" : ""}`}>{text}</p>
+      {long && <button className="text-xs text-primary hover:underline mt-1" onClick={() => setOpen(!open)}>{open ? "Show less" : "Show more"}</button>}
+    </>
   );
 }

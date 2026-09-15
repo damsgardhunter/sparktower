@@ -3,6 +3,7 @@ import { db } from './db';
 import { users, donations, projects, projectBackings, projectMerchOrders, stripeEvents } from '@shared/schema';
 import { isPaidSubscriptionStatus } from '@shared/subscriptions';
 import { and, eq, inArray, or, sql } from 'drizzle-orm';
+import { applyTier, onInvoicePaid, onSubscriptionPaymentFailed, onSubscriptionChargeRefunded } from "./billing-credits";
 import { recordBacking } from './backing-routes';
 
 /** Thrown only when the signature check fails: the caller answers 400, and Stripe does not retry. */
@@ -69,6 +70,10 @@ export class WebhookHandlers {
       await WebhookHandlers.handleCheckoutCompleted(event);
       await WebhookHandlers.handleRefund(event);
       await WebhookHandlers.handlePaymentFailure(event);
+      await onInvoicePaid(event, async (subscriptionId) => {
+        const stripe = await getUncachableStripeClient();
+        return WebhookHandlers.tierForSubscription(await stripe.subscriptions.retrieve(subscriptionId));
+      });
       if (eventId) await db.update(stripeEvents).set({ status: "processed", processedAt: new Date(), error: null }).where(eq(stripeEvents.id, eventId));
       return { eventId, duplicate: false };
     } catch (err) {
@@ -116,7 +121,7 @@ export class WebhookHandlers {
         return;
       }
       const tier = await WebhookHandlers.tierForSubscription(subscription);
-      await db.update(users).set({ subscriptionTier: tier, stripeSubscriptionId: subscription.id }).where(eq(users.id, user.id));
+      await applyTier(user.id, tier, subscription.id);
       console.log(`Subscription updated for user ${user.id}: tier=${tier}`);
     }
   }
@@ -158,7 +163,7 @@ export class WebhookHandlers {
       const stripe = await getUncachableStripeClient();
       const subscription = await stripe.subscriptions.retrieve(typeof session.subscription === "string" ? session.subscription : session.subscription.id);
       const tier = isPaidSubscriptionStatus(subscription.status) ? await WebhookHandlers.tierForSubscription(subscription) : 'free';
-      await db.update(users).set({ subscriptionTier: tier, stripeSubscriptionId: subscription.id }).where(eq(users.id, user.id));
+      await applyTier(user.id, tier, subscription.id);
       console.log(`Checkout subscription for user ${user.id}: tier=${tier}`);
     }
   }
@@ -195,7 +200,7 @@ export class WebhookHandlers {
     const inFull = charge.refunded === true || refundedSoFar === Number.POSITIVE_INFINITY;
     const latestRefundId: string | null = charge.refunds?.data?.[0]?.id ?? null;
 
-    await db.transaction(async (tx) => {
+    const matched = await db.transaction(async (tx) => {
       const [donation] = await tx.select().from(donations).where(match(donations.stripePaymentIntentId, donations.stripeChargeId)).for("update");
       if (donation) {
         const nowRefunded = Math.min(donation.amount, inFull ? donation.amount : refundedSoFar);
@@ -219,7 +224,7 @@ export class WebhookHandlers {
           // each. A partial refund is someone acting in the Stripe dashboard,
           // and it needs a person to decide what the backing now is.
           console.warn(`[stripe] partial refund on backing ${backing.id}: ${refundedSoFar}/${backing.amountCents} cents — left ${backing.status} for a reviewer`);
-          return;
+          return true;
         }
         await tx.update(projectBackings).set({ status: 'refunded', stripeRefundId: latestRefundId, resolvedAt: new Date() }).where(eq(projectBackings.id, backing.id));
         // Refunded outside the platform's own sweep — the dashboard, a dispute.
@@ -230,21 +235,36 @@ export class WebhookHandlers {
           .where(and(eq(projectMerchOrders.backingId, backing.id), inArray(projectMerchOrders.status, ['queued', 'failed'])));
         console.log(`Backing ${backing.id} refunded from Stripe; project ${backing.projectId} total reduced by ${backing.amountCents}`);
       }
+      return !!donation || !!backing;
+    });
+    if (matched) return;
+
+    // Not a donation or a backing: a subscription payment, refunded in full, takes the plan with it.
+    await onSubscriptionChargeRefunded(charge, async (c) => {
+      if (c.invoice) return true;
+      if (!paymentIntent) return false;
+      // Newer API versions don't put the invoice on the charge; ask which invoice this payment paid. Throws → retried.
+      const stripe = await getUncachableStripeClient();
+      const payments = await (stripe as any).invoicePayments.list({ payment: { type: "payment_intent", payment_intent: paymentIntent }, limit: 1 });
+      return (payments?.data?.length ?? 0) > 0;
     });
   }
 
   /**
-   * A failed payment is acknowledged and recorded; entitlements follow the
-   * subscription's status, which Stripe sends as its own event (past_due,
-   * unpaid → free tier above). Recording here means the ledger shows the
-   * failure even when that status event is late.
+   * A failed payment is acknowledged and recorded. A subscription invoice's
+   * failure is kept on the account (paymentFailedAt, cleared by the next paid
+   * invoice) so the app asks the user to update their card; entitlements still
+   * follow the subscription's status, which Stripe sends as its own event
+   * (past_due, unpaid → free tier above).
    */
   static async handlePaymentFailure(event: any): Promise<void> {
     if (event.type !== 'invoice.payment_failed' && event.type !== 'payment_intent.payment_failed') return;
     const obj = event.data?.object;
     const customer = typeof obj?.customer === "string" ? obj.customer : obj?.customer?.id;
     if (!customer) return;
+    const recorded = await onSubscriptionPaymentFailed(event);
     const [user] = await db.select({ id: users.id }).from(users).where(eq(users.stripeCustomerId, customer));
+    if (recorded) console.warn(`[stripe] recorded a failed subscription payment on user ${user?.id}`);
     console.warn(`[stripe] ${event.type} for customer ${customer}${user ? ` (user ${user.id})` : " (no user)"}: ${obj?.last_payment_error?.message ?? obj?.failure_message ?? "no message"}`);
   }
 }

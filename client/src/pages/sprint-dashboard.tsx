@@ -285,7 +285,7 @@ export default function SprintDashboard() {
     },
     onSuccess: (data: any) => {
       toast({ title: "Sprint converted to project!" });
-      setLocation(`/projects/${data.project?.id || ""}`);
+      setLocation(`/projects/${data.id}`);
     },
     onError: () => { toast({ title: "Failed to convert to project", variant: "destructive" }); },
   });
@@ -1731,7 +1731,7 @@ function CompletedPhase({ sprint, report, decisions, ratings, userId, currentUse
                 <p className="text-sm text-muted-foreground mb-3">Generate an AI compatibility report based on your sprint data</p>
                 <Button onClick={onGenerateReport} disabled={reportPending} data-testid="button-generate-report">
                   {reportPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Sparkles className="h-4 w-4 mr-2" />}
-                  Generate Report (1 Credit)
+                  Generate Report ({CREDIT_COSTS.sprintReport} Credits)
                 </Button>
               </div>
             )}

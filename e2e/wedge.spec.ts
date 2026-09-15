@@ -106,7 +106,7 @@ test("a new builder signs up, creates a project, and posts the first check-in", 
   await expect(page.getByTestId("milestone-detail")).toContainText("Done");
   await expect(page.getByTestId("milestone-detail")).toContainText("Nova drafts it");
   // The Codebase tab renders before any audit exists — it once crashed on that.
-  await page.getByTestId("tab-codebase").click();
+  await page.getByTestId("rail-codebase").click();
   await expect(page.getByTestId("input-repo-url")).toBeVisible();
 
   /*

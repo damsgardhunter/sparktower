@@ -171,4 +171,59 @@ describe("the log", () => {
     const suspension = ((await s.mod.agent.get(`/api/admin/moderation-log?action=suspend&targetId=${s.author.id}`)).body as any[])[0];
     expect(suspension).toMatchObject({ previousState: { suspendedAt: null }, resultingState: { suspendedReason: "Repeated abuse" } });
   });
+
+  it("undo: puts the state before back with its own reason code, reopens the report, and appends — once", async () => {
+    const s = await scene(await getTestApp());
+    const report = await s.report();
+    await s.mod.agent.post(`/api/admin/reports/${report.id}/act`).send({ action: "remove", reasonCode: "harassment" }).expect(200);
+    expect(await s.sees(s.stranger)).toBe(false);
+    const [removal] = await s.audit();
+    const undo = (id: string, body: object, who = s.mod) => who.agent.post(`/api/admin/moderation-log/${id}/undo`).send(body);
+
+    expect((await undo(removal.id, {})).body).toMatchObject({ code: "invalid_input", field: "reasonCode" });
+    expect((await undo(removal.id, { reasonCode: "spam" })).body).toMatchObject({ field: "reasonCode" });
+    expect((await undo(removal.id, { reasonCode: "reviewer_error" }, s.stranger)).status).toBe(404);
+
+    const done = await undo(removal.id, { reasonCode: "reviewer_error", note: "Read it wrong" });
+    expect(done.status, JSON.stringify(done.body)).toBe(200);
+    expect(done.body).toMatchObject({ ok: true, undoes: removal.id, reportStatus: "open" });
+
+    // Back for everyone, and the report is in Open again to be decided afresh.
+    expect(await s.sees(s.stranger)).toBe(true);
+    expect(await s.sees(s.author)).toBe(true);
+    expect(((await s.mod.agent.get("/api/admin/reports?status=open&type=comment")).body as any[]).find((r) => r.id === report.id)).toMatchObject({ status: "open", targetHiddenMode: null });
+
+    // Appended, pointing at the original, which is untouched.
+    const [restore, original] = await s.audit();
+    expect(restore).toMatchObject({ action: "comment_restore", reasonCode: "reviewer_error", reason: "Read it wrong", details: { undoes: removal.id, undoneAction: "comment_remove" }, previousState: { comment: { hiddenMode: "removed" } }, resultingState: { report: { status: "open" }, comment: { hiddenAt: null, hiddenMode: null } } });
+    expect(original).toEqual(removal);
+
+    // Once: a second undo, or two at the same time, change nothing more.
+    expect((await undo(removal.id, { reasonCode: "appeal_upheld" })).body.code).toBe("already_undone");
+    expect(await s.audit()).toHaveLength(2);
+    // Undoes can't be undone; the report is decided again instead.
+    expect((await undo(restore.id, { reasonCode: "reviewer_error" })).body.code).toBe("not_undoable");
+  });
+
+  it("undo of a ban reinstates the author; an undo is refused when the thing changed since the decision", async () => {
+    const s = await scene(await getTestApp());
+    const report = await s.report();
+    await s.mod.agent.post(`/api/admin/reports/${report.id}/act`).send({ action: "ban", reasonCode: "hate" }).expect(200);
+    const [ban] = await s.audit();
+    const blocked = () => s.author.agent.post("/api/projects").send({ title: "Again", description: "Posting again after the ban is lifted.", category: "saas", goal: "ship_mvp", subcategory: "saas" });
+    expect((await blocked()).body.code).toBe("account_suspended");
+    const racing = await Promise.all([1, 2].map(() => s.mod.agent.post(`/api/admin/moderation-log/${ban.id}/undo`).send({ reasonCode: "appeal_upheld" })));
+    expect(racing.map((r) => r.status).sort()).toEqual([200, 409]);
+    expect((await blocked()).status).toBeLessThan(300);
+    expect(await s.sees(s.stranger)).toBe(true);
+
+    // Another comment removed from the queue, then restored by hand: undoing the removal would overwrite that.
+    const t = await scene(await getTestApp(), "Another rude one");
+    const r2 = await t.report();
+    await t.mod.agent.post(`/api/admin/reports/${r2.id}/act`).send({ action: "remove", reasonCode: "spam" }).expect(200);
+    const [removal] = await t.audit();
+    await t.mod.agent.post(`/api/admin/content/comment/${t.commentId}/restore`).send({}).expect(200);
+    const refused = await t.mod.agent.post(`/api/admin/moderation-log/${removal.id}/undo`).send({ reasonCode: "reviewer_error" });
+    expect(refused.body).toMatchObject({ code: "state_changed", field: "comment" });
+  });
 });

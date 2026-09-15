@@ -73,7 +73,8 @@ export function registerObjectStorageRoutes(app: Express): void {
 
   // Internal development-only upload endpoint used when PRIVATE_OBJECT_DIR is not configured.
   // Accepts PUT /internal-local-upload/:id and writes the body to local disk under local_objects/uploads/:id
-  app.put("/internal-local-upload/:id", async (req: any, res) => {
+  app.put("/internal-local-upload/:id", rateLimit("upload"), async (req: any, res) => {
+    // public-write: a single-use upload id this server issued (a presigned URL); development only (404 in production), size-capped
     try {
       // Development only, twice over: never when real storage is configured,
       // and never in production even if it isn't. It writes to local disk.

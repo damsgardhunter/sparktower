@@ -33,7 +33,7 @@ import {
 } from "@shared/check-in";
 import { recordLoopEvent, loopMetrics } from "./loop-metrics";
 import { requireReviewer } from "./platform-roles";
-import { LOOP_EVENTS } from "@shared/loop-events";
+import { LOOP_EVENTS, LOOP_METRICS_MAX_DAYS } from "@shared/loop-events";
 
 /** The only events a browser may report. Everything else is server-side. */
 const CLIENT_EVENTS = [LOOP_EVENTS.checkInStarted, LOOP_EVENTS.shareInitiated] as const;
@@ -598,6 +598,7 @@ Respond ONLY with valid JSON, no markdown fences:
    * with whatever they like.
    */
   app.post("/api/loop-events", rateLimit("track"), async (req: any, res) => {
+    // public-write: nothing — anonymous loop beacons; limited per address
     try {
       const name = String(req.body?.name || "");
       if (!CLIENT_EVENTS.includes(name as any)) {
@@ -620,7 +621,7 @@ Respond ONLY with valid JSON, no markdown fences:
   /** Phase 4's gate, computed from the stream. Reviewer-only. */
   app.get("/api/admin/loop-metrics", isAuthenticated, requireReviewer, async (req, res) => {
     try {
-      const days = Math.min(365, Math.max(1, Number(req.query.days) || 30));
+      const days = Math.min(LOOP_METRICS_MAX_DAYS, Math.max(1, Number(req.query.days) || 30));
       res.json(await loopMetrics(days));
     } catch (error) {
       console.error("Loop metrics error:", error);

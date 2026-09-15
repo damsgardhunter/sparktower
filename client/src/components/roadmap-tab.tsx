@@ -15,13 +15,16 @@ import { useToast } from "@/hooks/use-toast";
 import { useEntitlements } from "@/hooks/use-entitlements";
 import { UpgradePrompt } from "@/components/upgrade-prompt";
 import { NovaActionButton } from "@/components/nova-action-button";
-import { useNovaHandoff } from "@/components/nova-handoff";
+import { useNovaHandoff, useNovaHandoffPending } from "@/components/nova-handoff";
+import { SectionRoadmap } from "@/components/section/section-roadmap";
+import { useSections } from "@/lib/sections";
+import type { ProjectGoal } from "@shared/goals";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
 import {
   Loader2, Map, Sparkles, RefreshCw, Flag, CheckCircle2, Circle,
-  CircleDot, Clock, Users2, Target, Compass, Hammer, X, Pencil,
+  CircleDot, Clock, Users2, Target, Compass, Hammer, X, Pencil, ChevronDown, ChevronUp,
 } from "lucide-react";
 import { CREDIT_COSTS } from "@shared/plans";
 import type { ProjectRoadmap, RoadmapPhase } from "@shared/schema";
@@ -58,7 +61,36 @@ const PHASE_STATUS = {
   upcoming: { label: "Upcoming", icon: Circle, className: "text-muted-foreground" },
 } as const;
 
-export function RoadmapTab({ projectId, isOwner }: { projectId: string; isOwner: boolean }) {
+/**
+ * The Roadmap tab. With a section, it is that section's path as a roadmap;
+ * the project-wide AI roadmap stays reachable underneath on the primary
+ * section only (and opens itself when a Nova suggestion hands it a job).
+ * Without a section, it is the AI roadmap as before.
+ */
+export function RoadmapTab({ projectId, isOwner, goal }: { projectId: string; isOwner: boolean; goal?: ProjectGoal }) {
+  const { data: sections } = useSections(goal ? projectId : undefined);
+  const pending = useNovaHandoffPending();
+  const [showAi, setShowAi] = useState(false);
+  if (!goal) return <AiRoadmap projectId={projectId} isOwner={isOwner} />;
+  const isPrimary = sections?.primary === goal;
+  const aiOpen = showAi || (!!pending && pending.startsWith("roadmap."));
+  return (
+    <div className="space-y-6">
+      <SectionRoadmap projectId={projectId} goal={goal} />
+      {isPrimary && (
+        <div className="border-t border-border pt-5 space-y-4" data-testid="ai-roadmap-section">
+          <button className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground" onClick={() => setShowAi(!aiOpen)} data-testid="button-toggle-ai-roadmap">
+            <Map className="h-3.5 w-3.5" />Project roadmap (AI)
+            {aiOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+          </button>
+          {aiOpen && <AiRoadmap projectId={projectId} isOwner={isOwner} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AiRoadmap({ projectId, isOwner }: { projectId: string; isOwner: boolean }) {
   const { toast } = useToast();
   const { can, creditsRemaining, isUnlimited } = useEntitlements();
 
@@ -347,7 +379,7 @@ export function RoadmapTab({ projectId, isOwner }: { projectId: string; isOwner:
                 <span className="text-xs text-muted-foreground">v{roadmap.version}</span>
               </div>
               <p className="text-lg font-semibold leading-snug" data-testid="text-roadmap-goal">{roadmap.goal}</p>
-              {roadmap.summary && <p className="text-sm text-secondary leading-relaxed">{roadmap.summary}</p>}
+              {roadmap.summary && <p className="text-sm text-secondary leading-relaxed line-clamp-2" title={roadmap.summary}>{roadmap.summary}</p>}
             </div>
             <div className="text-right shrink-0">
               <p className="text-2xl font-bold" data-testid="text-roadmap-progress">{progress}%</p>
@@ -394,10 +426,8 @@ export function RoadmapTab({ projectId, isOwner }: { projectId: string; isOwner:
               </div>
               <div className="flex items-center justify-between gap-3 rounded-md bg-muted/40 border border-border/60 p-3">
                 <div className="min-w-0">
-                  <p className="text-sm font-medium">Project changed direction?</p>
-                  <p className="text-xs text-muted-foreground">
-                    A rebuild re-plans phases, resequences milestones, and re-prioritises tasks from scratch.
-                  </p>
+                  <p className="text-sm font-medium">Changed direction?</p>
+                  <p className="text-xs text-muted-foreground">Re-plans phases, milestones and task priorities.</p>
                 </div>
                 <Button
                   variant="outline"
@@ -652,7 +682,7 @@ export function RoadmapTab({ projectId, isOwner }: { projectId: string; isOwner:
                       )}
                     </div>
                     {phase.description && (
-                      <p className="text-sm text-secondary leading-relaxed">{phase.description}</p>
+                      <p className="text-sm text-secondary leading-relaxed line-clamp-2" title={phase.description}>{phase.description}</p>
                     )}
 
                     {outcomes.length > 0 && (

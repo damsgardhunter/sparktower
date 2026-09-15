@@ -71,8 +71,8 @@ function ClosureBadge({ closure }: { closure: LoopClosureRead }) {
         {closure.closure === "open" ? <CircleAlert className="h-3 w-3 mt-0.5 shrink-0" /> : <CircleDashed className="h-3 w-3 mt-0.5 shrink-0" />}
         <span>{closure.closure === "open" ? "Open in code" : "Not built yet"}{closure.breaksAt ? ` — breaks at: ${closure.breaksAt}` : ""}</span>
       </p>
-      {closure.fix && <p className="text-muted-foreground pl-4">Fix: {closure.fix}</p>}
-      {closure.note && <p className="text-muted-foreground pl-4 italic">{closure.note}</p>}
+      {closure.fix && <p className="text-muted-foreground pl-4 line-clamp-2" title={closure.fix}>Fix: {closure.fix}</p>}
+      {closure.note && <p className="text-muted-foreground pl-4 italic line-clamp-1" title={closure.note}>{closure.note}</p>}
     </div>
   );
 }
@@ -171,10 +171,10 @@ export function LoopTree({ projectId, tree: raw }: { projectId: string; tree: Lo
       {/* Root */}
       <div className="flex flex-col items-center">
         <div className="rounded-lg border border-primary/40 bg-primary/5 px-4 py-2 text-center">
-          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{tree.sourceTitle}</p>
-          <p className="text-sm font-semibold">{tree.loops.length} loop{tree.loops.length === 1 ? "" : "s"} · {written} written · {built} built</p>
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{tree.sourceTitle}</p>
+          <p className="text-sm font-semibold tabular-nums">{tree.loops.length} loop{tree.loops.length === 1 ? "" : "s"} · {written} written · {built} built</p>
           <p className="text-[11px] text-muted-foreground" data-testid="loop-coverage">
-            {tree.coverage.complete ? "All five kinds written" : `Still to write: ${[...missing, ...tree.coverage.unwritten].map((t) => LOOP_TYPE_INFO[t].label.toLowerCase()).join(", ")}`}
+            {tree.coverage.complete ? "All five kinds written" : `To write: ${[...missing, ...tree.coverage.unwritten].map((t) => LOOP_TYPE_INFO[t].label.toLowerCase()).join(", ")}`}
           </p>
           {(!tree.coverage.complete || tree.loops.some((l) => !l.written)) && (
             <Button size="sm" variant="outline" className="h-7 text-xs mt-1.5" disabled={write.isPending} onClick={() => write.mutate(undefined)} data-testid="button-nova-write-loops">
@@ -225,11 +225,9 @@ export function LoopTree({ projectId, tree: raw }: { projectId: string; tree: Lo
                       {loop.description
                         ? <p className={`text-xs text-muted-foreground whitespace-pre-wrap ${isOpen ? "" : "line-clamp-3"}`}>{loop.description}</p>
                         : (
-                          <div className="text-xs text-muted-foreground space-y-1">
-                            <p>{LOOP_TYPE_INFO[loop.type].asks} It closes when: {LOOP_TYPE_INFO[loop.type].closes.charAt(0).toLowerCase() + LOOP_TYPE_INFO[loop.type].closes.slice(1)}</p>
-                            <p className="italic">e.g. {LOOP_TYPE_INFO[loop.type].example}</p>
-                            <p className="italic">Write its 3–5 steps, or have Nova draft them from your project.</p>
-                          </div>
+                          <p className="text-xs text-muted-foreground line-clamp-2" title={`${LOOP_TYPE_INFO[loop.type].asks} Closes when: ${LOOP_TYPE_INFO[loop.type].closes} e.g. ${LOOP_TYPE_INFO[loop.type].example}`}>
+                            Not written yet. {LOOP_TYPE_INFO[loop.type].asks}
+                          </p>
                         )}
                       {loop.closure && <ClosureBadge closure={loop.closure} />}
                     </>
@@ -289,7 +287,7 @@ export function LoopTree({ projectId, tree: raw }: { projectId: string; tree: Lo
                   )}
                   {draft?.loopTaskId === loop.taskId && (
                     <div className="space-y-1.5 border-t border-border pt-2" data-testid="loop-draft">
-                      <p className="text-xs text-muted-foreground">Nothing written for <span className="font-medium text-foreground">{draft.title}</span> yet, so Nova drafted it. Edit, then build the steps.</p>
+                      <p className="text-xs text-muted-foreground">Nova drafted <span className="font-medium text-foreground">{draft.title}</span>. Edit, then build.</p>
                       <Textarea rows={5} className="text-sm" value={draft.text} onChange={(e) => setDraft({ ...draft, text: e.target.value })} data-testid="input-loop-draft" />
                       <div className="flex gap-1.5">
                         <Button size="sm" className="h-7 text-xs" disabled={expand.isPending || !draft.text.trim()} onClick={() => expand.mutate({ loopTaskId: loop.taskId, artifact: draft.text })} data-testid="button-loop-draft-confirm"><ListTree className="h-3 w-3 mr-1" />Looks right — build the steps</Button>
@@ -300,7 +298,7 @@ export function LoopTree({ projectId, tree: raw }: { projectId: string; tree: Lo
                   {/* The loop node itself: Nova writing it, or the write-up already chosen. */}
                   {isOpen && (
                     <div className="border-t border-border pt-2 space-y-2" data-testid={`loop-detail-${loop.taskId}`}>
-                      <p className="text-[11px] uppercase tracking-wide text-muted-foreground flex items-center gap-1"><Sparkles className="h-3 w-3 text-primary" />The loop itself</p>
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1"><Sparkles className="h-3 w-3 text-primary" />The loop itself</p>
                       <NodeWork projectId={projectId} taskId={loop.taskId} actor={loop.actor} done={loop.status === "done"} />
                       {loop.status === "done"
                         ? <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => setStatus.mutate({ taskId: loop.taskId, status: "todo" })}><RotateCcw className="h-3 w-3 mr-1" />Reopen</Button>
@@ -318,7 +316,7 @@ export function LoopTree({ projectId, tree: raw }: { projectId: string; tree: Lo
               <div className="absolute -top-4 left-1/2 h-4 w-px bg-border" />
               <button className="w-full min-h-[5rem] rounded-lg border border-dashed border-amber-500/60 p-3 text-left space-y-1 hover:border-primary/50" onClick={() => setForm({ kind: "loop", loopTaskId: null, title: LOOP_TYPE_INFO[t].label, description: "", type: t })} data-testid={`button-add-missing-${t}`}>
                 <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${TYPE_CLS[t]}`}>{LOOP_TYPE_INFO[t].label}</span>
-                <p className="text-xs text-muted-foreground">Missing. {LOOP_TYPE_INFO[t].asks}</p>
+                <p className="text-xs text-muted-foreground line-clamp-2">Missing. {LOOP_TYPE_INFO[t].asks}</p>
                 <p className="text-xs flex items-center gap-1"><Plus className="h-3 w-3" />Add it</p>
               </button>
             </div>
@@ -348,7 +346,7 @@ export function LoopTree({ projectId, tree: raw }: { projectId: string; tree: Lo
       </div>
       <CompetitionPanel tree={tree} running={audit.isPending} onRun={() => audit.mutate()} />
       {tree.unassigned.length > 0 && (
-        <p className="text-xs text-muted-foreground">{tree.unassigned.length} step{tree.unassigned.length === 1 ? "" : "s"} not under any loop: {tree.unassigned.map((u) => u.title).join(", ")}</p>
+        <p className="text-xs text-muted-foreground truncate" title={tree.unassigned.map((u) => u.title).join(", ")}>{tree.unassigned.length} step{tree.unassigned.length === 1 ? "" : "s"} not under a loop: {tree.unassigned.map((u) => u.title).join(", ")}</p>
       )}
     </div>
   );
@@ -367,14 +365,13 @@ function CompetitionPanel({ tree, running, onRun }: { tree: LoopTreeData; runnin
   );
   if (!c) {
     return (
-      <div className={`rounded-lg border p-3 space-y-1.5 ${tree.competitionDue ? "border-primary/40 bg-primary/5" : "border-dashed border-border"}`} data-testid="loop-competition-empty">
-        <p className="text-sm font-medium flex items-center gap-1.5"><Swords className="h-4 w-4 text-primary" />Audit the loops against the competition</p>
-        <p className="text-xs text-muted-foreground">
-          {tree.coverage.complete
-            ? "Nova names who your customers use today, how their version of each loop works, and scores how likely each of yours is to keep turning."
-            : "Once all five loops are written, Nova compares each with what your competitors run and scores how effective it will be."}
-        </p>
-        {button("Run the competitive audit", <Swords className="h-3 w-3 mr-1" />)}
+      <div className={`rounded-lg border px-3 py-2 flex items-center gap-3 flex-wrap ${tree.competitionDue ? "border-primary/40 bg-primary/5" : "border-dashed border-border"}`} data-testid="loop-competition-empty">
+        <Swords className="h-4 w-4 text-primary shrink-0" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium">Loops vs. the competition</p>
+          <p className="text-xs text-muted-foreground">{tree.coverage.complete ? "Scores each loop against what competitors run" : "Unlocks when all five loops are written"}</p>
+        </div>
+        {button("Run audit", <Swords className="h-3 w-3 mr-1" />)}
       </div>
     );
   }
@@ -392,11 +389,11 @@ function CompetitionPanel({ tree, running, onRun }: { tree: LoopTreeData; runnin
           {button(c.stale ? "Audit again" : "Re-run", <RefreshCw className="h-3 w-3 mr-1" />)}
         </div>
       </div>
-      {a.summary && <p className="text-sm text-muted-foreground">{a.summary}</p>}
+      {a.summary && <p className="text-sm text-muted-foreground line-clamp-2" title={a.summary}>{a.summary}</p>}
       {a.competitors.length > 0 && (
         <div className="space-y-1">
-          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Who customers use today</p>
-          <ul className="text-xs space-y-0.5">{a.competitors.map((x) => <li key={x.name}><span className="font-medium">{x.name}</span>{x.why ? <span className="text-muted-foreground"> — {x.why}</span> : null}</li>)}</ul>
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Who customers use today</p>
+          <div className="flex flex-wrap gap-1">{a.competitors.map((x) => <span key={x.name} className="text-[11px] rounded-full bg-muted px-2 py-0.5" title={x.why}>{x.name}</span>)}</div>
         </div>
       )}
       <ul className="space-y-2">
@@ -408,15 +405,22 @@ function CompetitionPanel({ tree, running, onRun }: { tree: LoopTreeData; runnin
               <span className={`ml-auto text-[10px] px-1.5 py-0.5 rounded-full ${VERDICT_CLS[r.verdict]}`}>{r.score}/100 · {r.verdict}</span>
               {r.loopTaskId === a.weakestLoopTaskId && <span className="text-[10px] text-destructive">fix first</span>}
             </div>
-            {r.competitors.length > 0 && <p className="text-muted-foreground">{r.competitors.map((x) => `${x.name}: ${x.howTheirLoopWorks}`).join(" · ")}</p>}
-            {r.advantage && <p><span className="font-medium">Edge:</span> {r.advantage}</p>}
-            {r.gap && <p><span className="font-medium">Gap:</span> {r.gap}</p>}
-            {r.breakRisk && <p><span className="font-medium">Likely to break at:</span> {r.breakRisk}</p>}
-            {r.recommendation && <p><span className="font-medium">Do this:</span> {r.recommendation}</p>}
+            {r.recommendation && <p className="line-clamp-2"><span className="font-medium">Do this:</span> {r.recommendation}</p>}
+            {(r.competitors.length > 0 || r.advantage || r.gap || r.breakRisk) && (
+              <details className="text-muted-foreground">
+                <summary className="cursor-pointer text-primary text-[11px]">Details</summary>
+                <div className="space-y-1 pt-1">
+                  {r.competitors.length > 0 && <p>{r.competitors.map((x) => `${x.name}: ${x.howTheirLoopWorks}`).join(" · ")}</p>}
+                  {r.advantage && <p><span className="font-medium text-foreground">Edge:</span> {r.advantage}</p>}
+                  {r.gap && <p><span className="font-medium text-foreground">Gap:</span> {r.gap}</p>}
+                  {r.breakRisk && <p><span className="font-medium text-foreground">Likely to break at:</span> {r.breakRisk}</p>}
+                </div>
+              </details>
+            )}
           </li>
         ))}
       </ul>
-      <p className="text-[11px] text-muted-foreground italic">{a.caveat}</p>
+      {a.caveat && <p className="text-[11px] text-muted-foreground italic line-clamp-1" title={a.caveat}>{a.caveat}</p>}
     </div>
   );
 }

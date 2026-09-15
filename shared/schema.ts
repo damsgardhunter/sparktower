@@ -1510,6 +1510,33 @@ export type InvestmentApplication = typeof investmentApplications.$inferSelect;
  * server's clock, compared inside the database — never a timestamp read back
  * into JS, which shifts by the server's timezone.
  */
+/**
+ * The paths a project works besides its primary one.
+ *
+ * A project runs all three sections side by side — Ship an MVP, Systemize the
+ * business, Raise funds — each its own path on the same board. The primary
+ * path's state stays on `projects` (goal, subcategory, capital_route,
+ * active_branch), where everything that predates sections reads it; each
+ * other section the project has started keeps the same fields here, plus its
+ * own pace, which the primary keeps in `path_pace`.
+ */
+export const projectTracks = pgTable("project_tracks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  goal: text("goal", { enum: PROJECT_GOAL_IDS }).notNull(),
+  subcategory: text("subcategory").notNull(),
+  capitalRoute: text("capital_route"),
+  activeBranch: text("active_branch"),
+  /** Pace for this section: the same shape as a `path_pace` row, without its keys. */
+  pace: jsonb("pace"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [
+  unique("project_tracks_project_goal").on(t.projectId, t.goal),
+]);
+
+export type ProjectTrack = typeof projectTracks.$inferSelect;
+
 export const exploreSeen = pgTable("explore_seen", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
@@ -1561,6 +1588,8 @@ export const surfaceFlags = pgTable("surface_flags", {
 export const projectFiles = pgTable("project_files", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   projectId: varchar("project_id").notNull().references(() => projects.id),
+  /** The section it was added in, or null when it's shared across all three. */
+  track: text("track"),
   uploaderId: varchar("uploader_id").notNull().references(() => users.id),
   name: text("name").notNull(),
   url: text("url").notNull(),
@@ -1652,9 +1681,19 @@ export const projectPricingTiers = pgTable("project_pricing_tiers", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+/**
+ * A creator's list of the metrics they plan to track (name, category, status:
+ * planned → tracking), edited on the project's Analytics tab
+ * (client/src/components/analytics/analytics-tab.tsx →
+ * GET/POST/PATCH/DELETE /api/projects/:id/analytics-events). Definitions, not
+ * telemetry: nothing is emitted into it, and it's empty until a creator adds
+ * one. The event streams are `activity_events` and `loop_events`, both swept.
+ */
 export const projectAnalyticsEvents = pgTable("project_analytics_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   projectId: varchar("project_id").notNull().references(() => projects.id),
+  /** The section it belongs to (ship_mvp, systemize_business, raise_funding), or null when it's project-wide. */
+  track: text("track"),
   eventName: text("event_name").notNull(),
   category: text("category").default("activation"),
   description: text("description"),

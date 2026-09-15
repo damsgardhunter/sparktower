@@ -688,6 +688,7 @@ export function registerMcpRoutes(app: Express) {
    * builder may have moved a long way past.
    */
   app.post("/api/mcp/projects/:projectId/audit", async (req: any, res) => {
+    // metering: checked here; charged in runCodeAudit only after the audit is parsed and saved
     try {
       const ctx = await member(req, res); if (!ctx) return;
       const files = takeFiles(res, req.body?.files); if (!files) return;
@@ -711,6 +712,7 @@ export function registerMcpRoutes(app: Express) {
   });
 
   app.post("/api/mcp/projects/:projectId/ask", async (req: any, res) => {
+    // metering: checked here; charged in novaSuggest only after the answer is parsed
     try {
       const ctx = await member(req, res); if (!ctx) return;
       const input = {

@@ -15,14 +15,12 @@ import {
 } from "@/components/ui/select";
 import {
   Loader2, Plus, Trash2, CheckSquare, Square, FileText,
-  DollarSign, BarChart3, Shield, Rocket, Headphones, Beaker,
+  DollarSign, Shield, Rocket, Headphones, Beaker,
   MessageSquare, Users, Star, Clock, AlertTriangle, CheckCircle2,
   X, Edit, Eye, Search, Briefcase,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useEntitlements } from "@/hooks/use-entitlements";
-import { UpgradePrompt } from "@/components/upgrade-prompt";
-import { HealthCheckPanel } from "@/components/health-check-panel";
 import { NovaActionButton } from "@/components/nova-action-button";
 import { useNovaHandoff, useNovaHandoffPending } from "@/components/nova-handoff";
 import { InvestorTools } from "@/components/investor-tools";
@@ -922,120 +920,8 @@ function LaunchPlanSection({ projectId }: { projectId: string }) {
   );
 }
 
-export function AnalyticsTab({ projectId }: { projectId: string }) {
-  const { entitlements } = useEntitlements();
-  const analyticsLevel = entitlements.projectAnalytics;
-  const { data: events, isLoading } = useCrudQuery<any>(projectId, "analytics-events");
-  const { createMutation, updateMutation, deleteMutation } = useCrudMutations(projectId, "analytics-events");
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [form, setForm] = useState({ eventName: "", category: "activation", description: "" });
-
-  const handleCreate = () => {
-    createMutation.mutate(form, { onSuccess: () => { setDialogOpen(false); setForm({ eventName: "", category: "activation", description: "" }); } });
-  };
-
-  const categories = ["activation", "retention", "revenue", "referral"];
-  const grouped = events?.reduce((acc: any, e: any) => {
-    const cat = e.category || "activation";
-    if (!acc[cat]) acc[cat] = [];
-    acc[cat].push(e);
-    return acc;
-  }, {} as Record<string, any[]>) || {};
-
-  const catColors: Record<string, string> = {
-    activation: "border-l-blue-500",
-    retention: "border-l-green-500",
-    revenue: "border-l-yellow-500",
-    referral: "border-l-purple-500",
-  };
-
-  // Analytics is a paid entitlement; the server 402s this endpoint on Free.
-  if (analyticsLevel === "none") {
-    return (
-      <div className="max-w-2xl mx-auto py-8" data-testid="analytics-tab">
-        <UpgradePrompt
-          requiredTier="starter"
-          title="See how your project is actually doing"
-          description="Track activation, retention, revenue, and referral events so you know what's working — instead of guessing."
-        />
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-4" data-testid="analytics-tab">
-      {/* Pro's project health check lives above the event tracker. */}
-      <HealthCheckPanel projectId={projectId} />
-
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <h3 className="text-lg font-semibold">Analytics Events</h3>
-          <Badge variant="secondary" className="text-[10px] capitalize">{analyticsLevel}</Badge>
-        </div>
-        <div className="flex items-center gap-2">
-          <NovaActionButton projectId={projectId} surface="analytics" variant="outline" />
-          <Button size="sm" onClick={() => setDialogOpen(true)} data-testid="btn-add-event"><Plus className="h-4 w-4 mr-1" /> Add Event</Button>
-        </div>
-      </div>
-      <p className="text-sm text-muted-foreground">Track activation, retention, revenue, and referral events for your product.</p>
-
-      {analyticsLevel === "basic" && (
-        <UpgradePrompt
-          variant="inline"
-          requiredTier="builder"
-          title="Advanced analytics on Builder"
-          description="Get roadmap-linked progress tracking and deeper breakdowns."
-        />
-      )}
-      {isLoading ? <Loader2 className="h-6 w-6 animate-spin mx-auto" /> : !events?.length ? (
-        <Card><CardContent className="py-8 text-center text-muted-foreground"><BarChart3 className="h-10 w-10 mx-auto mb-2 opacity-30" /><p>No analytics events defined yet.</p></CardContent></Card>
-      ) : (
-        <div className="space-y-4">
-          {categories.filter(c => grouped[c]?.length).map(cat => (
-            <div key={cat}>
-              <h4 className="text-sm font-medium uppercase tracking-wider mb-2 capitalize">{cat}</h4>
-              <div className="space-y-2">
-                {grouped[cat].map((ev: any) => (
-                  <Card key={ev.id} className={`border-l-4 ${catColors[cat] || ""}`} data-testid={`analytics-event-${ev.id}`}>
-                    <CardContent className="p-3 flex items-center justify-between">
-                      <div className="flex-1">
-                        <span className="font-medium text-sm">{ev.eventName}</span>
-                        {ev.description && <p className="text-xs text-muted-foreground">{ev.description}</p>}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Select value={ev.trackingStatus} onValueChange={v => updateMutation.mutate({ id: ev.id, data: { trackingStatus: v } })}>
-                          <SelectTrigger className="h-7 w-28 text-xs"><SelectValue /></SelectTrigger>
-                          <SelectContent><SelectItem value="planned">Planned</SelectItem><SelectItem value="implemented">Implemented</SelectItem><SelectItem value="verified">Verified</SelectItem></SelectContent>
-                        </Select>
-                        <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" onClick={() => deleteMutation.mutate(ev.id)}><X className="h-3 w-3" /></Button>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>New Analytics Event</DialogTitle></DialogHeader>
-          <div className="space-y-3">
-            <div><Label>Event Name</Label><Input value={form.eventName} onChange={e => setForm({ ...form, eventName: e.target.value })} placeholder="e.g. user_signed_up" data-testid="input-event-name" /></div>
-            <div><Label>Category</Label>
-              <Select value={form.category} onValueChange={v => setForm({ ...form, category: v })}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{categories.map(c => <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div><Label>Description</Label><Textarea value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="What does this event track?" data-testid="input-event-desc" /></div>
-          </div>
-          <DialogFooter><Button onClick={handleCreate} disabled={!form.eventName || createMutation.isPending} data-testid="btn-save-event">{createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}</Button></DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
-}
+/** Analytics lives in its own module now: per-section numbers, metrics, and the health check. */
+export { AnalyticsTab } from "@/components/analytics/analytics-tab";
 
 export function SupportTab({ projectId }: { projectId: string }) {
   const { data: tickets, isLoading } = useCrudQuery<any>(projectId, "support-tickets");

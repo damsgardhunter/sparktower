@@ -10,7 +10,13 @@ import { SiGoogle } from "react-icons/si";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
+import { PENDING_PATH_KEY, type PendingPath } from "@shared/path-artifacts";
 import heroVideo from "@assets/Brooklyn_Tower_Tesla_Coil_Animation_1772567582595.mp4";
+
+/** The artifact a visitor chose "start" or "explore" on before signing up, so the signup is credited to it. */
+function pendingArtifactId(): string | undefined {
+  try { return (JSON.parse(localStorage.getItem(PENDING_PATH_KEY) ?? "null") as PendingPath | null)?.fromArtifact; } catch { return undefined; }
+}
 
 export default function LandingPage() {
   // Arriving from a public page's "start your own path" opens straight onto sign up.
@@ -460,7 +466,7 @@ function SignupForm({ onSuccess }: { onSuccess: () => void }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ email, password, firstName, lastName }),
+        body: JSON.stringify({ email, password, firstName, lastName, fromArtifact: pendingArtifactId() }),
       });
       const data = await res.json();
       if (!res.ok) {

@@ -17,7 +17,7 @@ import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "./db";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { projects, projectMembers, feedPosts, projectKanbanTasks } from "@shared/schema";
-import { pathStatus } from "./phase-trees";
+import { pathStatus, listTracks } from "./phase-trees";
 import { mainLineMilestones, resolveTree } from "@shared/phase-trees";
 import type { ProjectGoal } from "@shared/goals";
 import { weekStartOf } from "@shared/check-in";
@@ -25,11 +25,13 @@ import { notify } from "./notifications";
 
 /** Away this many days with a step waiting, and the path sends one nudge for that step. */
 export const NUDGE_AFTER_DAYS = 2;
-/** The home card shows at most this many projects. */
-const MAX_PROJECTS = 3;
+/** The home card shows at most this many sections, across projects. */
+const MAX_ITEMS = 5;
 
 export interface NextStepItem {
   project: { id: string; title: string; logoUrl: string | null };
+  /** The section this step is on: each started section of a project is its own item. */
+  track: { goal: ProjectGoal; label: string; short: string; primary: boolean };
   phase: string;
   progress: { done: number; total: number };
   next: { id: string; title: string; actor: string; estimateMinutes: number | null; step: string | null } | null;
@@ -55,6 +57,17 @@ const isPathTask = (tags: string[] | null) => (tags ?? []).some((t) => t.startsW
   && !(tags ?? []).some((t) => t.startsWith("archived:") || t === "kind:loop");
 
 /**
+ * A milestone with steps or loops under it is finished when they are, as the
+ * path counts it — ticking the milestone's own card doesn't finish it. Given a
+ * project's tasks, says whether a task is such a milestone with work still open.
+ */
+function unfinishedParentCheck(all: { status: string; tags: string[] | null }[]) {
+  const openChildren = new Set(all.filter((t) => t.status !== "done" && !(t.tags ?? []).some((x) => x.startsWith("archived:")))
+    .flatMap((t) => (t.tags ?? []).filter((x) => x.startsWith("parent:")).map((x) => x.slice("parent:".length))));
+  return (tags: string[] | null) => (tags ?? []).some((x) => x.startsWith("backbone:") && openChildren.has(x.slice("backbone:".length)));
+}
+
+/**
  * The weekly progress update, replacing the retired check-in: the steps
  * finished on the path in the last week that no post has shared yet. Tracked
  * by a tag on each task rather than by comparing a post's time to a task's —
@@ -62,11 +75,13 @@ const isPathTask = (tags: string[] | null) => (tags ?? []).some((t) => t.startsW
  * shared, and never again after.
  */
 export async function weeklyUpdateFor(projectId: string): Promise<WeeklyUpdate> {
-  const tasks = await db.select({ id: projectKanbanTasks.id, title: projectKanbanTasks.title, status: projectKanbanTasks.status, tags: projectKanbanTasks.tags, completedAt: projectKanbanTasks.completedAt })
-    .from(projectKanbanTasks).where(and(eq(projectKanbanTasks.projectId, projectId), eq(projectKanbanTasks.status, "done")));
+  const all = await db.select({ id: projectKanbanTasks.id, title: projectKanbanTasks.title, status: projectKanbanTasks.status, tags: projectKanbanTasks.tags, completedAt: projectKanbanTasks.completedAt })
+    .from(projectKanbanTasks).where(eq(projectKanbanTasks.projectId, projectId));
+  const unfinishedParent = unfinishedParentCheck(all);
+  const tasks = all.filter((t) => t.status === "done");
   const cutoff = Date.now() - WEEKLY_WINDOW_DAYS * 86_400_000;
   const steps = tasks
-    .filter((t) => isPathTask(t.tags) && t.completedAt && new Date(t.completedAt).getTime() >= cutoff && !(t.tags ?? []).some((x) => x.startsWith("posted:")))
+    .filter((t) => isPathTask(t.tags) && !unfinishedParent(t.tags) && t.completedAt && new Date(t.completedAt).getTime() >= cutoff && !(t.tags ?? []).some((x) => x.startsWith("posted:")))
     .sort((a, b) => new Date(a.completedAt!).getTime() - new Date(b.completedAt!).getTime())
     .slice(0, 12)
     .map((t) => ({ taskId: t.id, title: t.title, completedAt: new Date(t.completedAt!).toISOString() }));
@@ -91,6 +106,8 @@ export async function shareableSteps(projectId: string, raw: unknown): Promise<{
     .from(projectKanbanTasks).where(inArray(projectKanbanTasks.id, ids));
   if (rows.length !== ids.length || rows.some((r) => r.projectId !== projectId || !isPathTask(r.tags))) return { error: "Those aren't all steps on this project's path." };
   if (rows.some((r) => r.status !== "done")) return { error: "Share steps once they're done." };
+  const siblings = await db.select({ status: projectKanbanTasks.status, tags: projectKanbanTasks.tags }).from(projectKanbanTasks).where(eq(projectKanbanTasks.projectId, projectId));
+  if (rows.some((r) => unfinishedParentCheck(siblings)(r.tags))) return { error: "Share steps once they're done." };
   return { ids };
 }
 
@@ -186,12 +203,17 @@ export async function nextStepsFor(userId: string): Promise<NextStepItem[]> {
 
   const items: NextStepItem[] = [];
   for (const p of candidates) {
-    const status = await pathStatus(p.id).catch(() => null);
+    const sections = (await listTracks(p.id).catch(() => null))?.tracks.filter((s) => s.started) ?? [];
+    // The weekly update is the project's, not a section's: offered once, on its first item.
+    const weekly = await weeklyUpdateFor(p.id);
+    let first = true;
+    for (const section of sections) {
+    const status = await pathStatus(p.id, section.goal).catch(() => null);
     if (!status?.adopted) continue;
     const lastDone = await lastDoneStep(p.id, status.events);
-    const weekly = await weeklyUpdateFor(p.id);
     items.push({
       project: { id: p.id, title: p.title, logoUrl: p.logoUrl },
+      track: { goal: section.goal, label: section.label, short: section.short, primary: section.primary },
       phase: status.current.title,
       progress: status.mainLine,
       next: status.next ? {
@@ -201,11 +223,13 @@ export async function nextStepsFor(userId: string): Promise<NextStepItem[]> {
       daysSinceActivity: Math.floor(status.pace?.daysSinceActivity ?? 0),
       projectedAt: status.pace?.projectedAt ? new Date(status.pace.projectedAt).toISOString() : null,
       lastDone,
-      weekly,
+      weekly: first ? weekly : { due: false, steps: [] },
     });
+    first = false;
+    }
   }
   // Most recently worked first: the path someone is in the middle of leads.
-  return items.sort((a, b) => a.daysSinceActivity - b.daysSinceActivity).slice(0, MAX_PROJECTS);
+  return items.sort((a, b) => a.daysSinceActivity - b.daysSinceActivity).slice(0, MAX_ITEMS);
 }
 
 /**

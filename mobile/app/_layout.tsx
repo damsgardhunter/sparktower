@@ -23,22 +23,37 @@ const queryClient = new QueryClient({
   },
 });
 
-/** Sends signed-out users to the auth screens and signed-in users past them. */
+/**
+ * The website's routing rules (client/src/App.tsx), applied to the app:
+ *
+ *   signed out            → the landing / sign-in screen, and nowhere else
+ *   signed in, onboarding
+ *   not finished          → the profile wizard (/welcome), and nowhere else —
+ *                           including an account with no profile row at all,
+ *                           which the web also sends to onboarding
+ *   signed in, onboarded  → past the auth screens to the feed
+ */
 function AuthGate() {
-  const { user, loading } = useAuth();
+  const { user, profile, loading } = useAuth();
   const segments = useSegments();
   const router = useRouter();
+  const onboarded = Boolean(profile?.isOnboarded);
 
   useEffect(() => {
     if (loading) return;
     const inAuthGroup = segments[0] === "(auth)";
+    const inOnboarding = (segments[0] as string) === "welcome";
+    // Shared links the web shows signed out: a check-in permalink and a published artifact.
+    const onPublicPage = ["a", "c", "check-in"].includes(segments[0] as string);
 
-    if (!user && !inAuthGroup) {
-      router.replace("/(auth)/sign-in");
-    } else if (user && inAuthGroup) {
+    if (!user) {
+      if (!inAuthGroup && !onPublicPage) router.replace("/(auth)/sign-in");
+    } else if (!onboarded) {
+      if (!inOnboarding) router.replace("/welcome");
+    } else if (inAuthGroup) {
       router.replace("/(tabs)/feed");
     }
-  }, [user, loading, segments]);
+  }, [user, onboarded, loading, segments]);
 
   if (loading) return <Loading />;
 

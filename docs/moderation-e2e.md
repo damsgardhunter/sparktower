@@ -105,9 +105,29 @@ npx vitest run test/integration/moderation-loop.test.ts
 npx playwright test e2e/moderation-loop.spec.ts
 ```
 
-## Next: undo
+## Undo
 
-Undo is `POST /api/admin/moderation-log/:id/undo`, reviewer only, with its own
-reason code. It writes `previousState` back in one transaction and appends a
-new entry (`comment_restore`, pointing at the original), leaving the old
-entry untouched.
+`POST /api/admin/moderation-log/:id/undo` (`server/moderation.ts`), reviewer only, rate-limited (`review`), from the **Undo** link beside a decision in the report's **History** (`client/src/pages/admin-reports.tsx`).
+
+- **Its own reason code** (`UNDO_REASON_CODES` in `shared/moderation.ts`): `reviewer_error`, `appeal_upheld`, `new_context`. Missing or wrong is a 400, and nothing changes.
+- **The state before, exactly**: the comment's `hiddenAt / hiddenMode / hiddenById / hiddenReason`, the author's suspension for a ban, and the report's status. The report goes back to **Open**, to be decided again.
+- **One transaction, appended**: a new `comment_restore` entry (or `report_reopened` for a dismissal), with `details.undoes` pointing at the original. The original entry isn't touched, and the database wouldn't allow it.
+- **Once, and never over a later change**: `409 already_undone` if it was undone (two at once serialize on the report row), and `409 state_changed` if the comment, author or report has changed since the decision (for example, restored by hand). An undo can't itself be undone (`not_undoable`); decide the reopened report instead.
+
+Proof: `test/integration/moderation-loop.test.ts` (undo, ban undo, concurrent undo, state changed) and `e2e/moderation-loop.spec.ts` step 7.
+
+## Where decisions are enforced on read
+
+Hidden content is filtered where it is read, not only flagged:
+
+| Content | Read path | Filter |
+|---|---|---|
+| Project and check-in comments | `server/storage.ts` (`commentVisibleTo`, the project comments list), `GET /api/projects/:id/comments` | `hiddenAt IS NULL`, or the author for a shadow-hide |
+| Feed posts | `server/storage.ts` (`getFeedPosts`: `isNull(feedPosts.hiddenAt)`; `getFeedPost`: 404 unless author) | same |
+| Feed comments | `server/storage.ts` (`getFeedComments`: hidden kept only for its author) and `server/feed-routes.ts` (no replies or reactions on hidden) | same |
+| Check-ins | `server/check-in-routes.ts` (`GET /api/check-ins/:id` 404 unless author; lists `isNull(projectCheckIns.hiddenAt)`) | same |
+| Suspended accounts | `blockSuspended` in `server/moderation.ts` (writes refused with `account_suspended`) | — |
+
+## Reviewer console routes
+
+`/admin/reports` uses `server/moderation.ts` (`/api/admin/reports*`, `/api/admin/moderation-log*`, `/api/admin/content/:type/:id/hide|restore`, `/api/admin/users/:id/suspend`). `/admin/safety` uses `server/safety-routes.ts` (`GET/POST /api/admin/safety/review`, `GET /api/admin/safety/status`, `GET /api/admin/safety/impact/:logId`). `/admin/surfaces` uses `server/surfaces.ts` (`GET /api/admin/surfaces`, `PATCH /api/admin/surfaces/:id`). All three are registered in `server/routes.ts` behind `isAuthenticated` + `requireReviewer`.

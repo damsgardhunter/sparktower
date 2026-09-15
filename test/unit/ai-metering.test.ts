@@ -100,4 +100,10 @@ describe("metering every AI route", () => {
     expect(differ.filter((l) => !(l in AMOUNT_EXCEPTIONS))).toEqual([]);
     for (const l of Object.keys(AMOUNT_EXCEPTIONS)) expect(differ, `${l} now charges what it checks — remove it from AMOUNT_EXCEPTIONS`).toContain(l);
   });
+
+  it("every costly route that doesn't charge in its own body says why in its source, where the audit reads it", () => {
+    const silent = costly.filter((r) => !r.metering?.charges.length && !r.meteringNote).map(label);
+    expect(silent, `add a "// metering: <why>" comment inside:\n  ${silent.join("\n  ")}`).toEqual([]);
+    for (const l of [...Object.keys(FREE_AI), ...Object.keys(CHARGED_IN_HELPER)]) expect(costly.find((r) => label(r) === l)?.meteringNote, l).toBeTruthy();
+  });
 });

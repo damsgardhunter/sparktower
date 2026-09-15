@@ -13,6 +13,7 @@
  */
 import type { Request, RequestHandler } from "express";
 import { creditArtifactSignup } from "./artifact-routes";
+import { artifactIdFromPath, artifactPath } from "@shared/path-artifacts";
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "./db";
 import { users } from "@shared/schema";
@@ -119,7 +120,13 @@ export async function stampSignupAttribution(userId: string, req: Request): Prom
      * nothing.
      */
     const a = attributionFor(req) ?? attributionFromBody(req.body);
-    if (!a || !userId) return;
+    if (!userId) return;
+    // The growth loop: a signup that came from a published artifact is credited
+    // to it — by the first page they landed on, or, when they'd been here
+    // before, by the artifact they signed up from (carried in the request).
+    const fromArtifact = typeof req.body?.fromArtifact === "string" ? req.body.fromArtifact.slice(0, 64) : null;
+    await creditArtifactSignup(userId, artifactIdFromPath(a?.landingPath) ? a!.landingPath : fromArtifact ? artifactPath(fromArtifact) : null);
+    if (!a) return;
 
     await db.update(users).set({
       signupSource: a.source,
@@ -129,8 +136,6 @@ export async function stampSignupAttribution(userId: string, req: Request): Prom
       signupLandingPath: a.landingPath,
       signupParams: a.params,
     }).where(and(eq(users.id, userId), isNull(users.signupSource)));
-    // The growth loop: a signup whose first page was a published artifact is credited to it.
-    await creditArtifactSignup(userId, a.landingPath);
   } catch (err) {
     console.error("[attribution] Failed to stamp signup:", err);
   }

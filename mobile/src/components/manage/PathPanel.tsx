@@ -15,6 +15,7 @@ import { CapitalProfileCard } from "./CapitalProfileCard";
 import { LoopTree } from "./LoopTree";
 import { MilestoneSheet } from "./MilestoneDetail";
 import { WorkView } from "./WorkView";
+import { PublishArtifactSheet, ShareStepSheet, WeeklyUpdateSheet } from "./path/ShareSheets";
 import {
   ACTOR_LABEL, LOOP_TYPE_COLOR, LOOP_TYPE_INFO, PROJECT_GOALS, TIER_LABEL, addableLoopTypes, estimate, goalLabel, mkey, shortDay, useRefreshPath,
   type LoopType, type NoPath, type PathStatus, type ProjectGoal,
@@ -46,6 +47,9 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
   const [notes, setNotes] = useState<string | null>(null);
   const [loopForm, setLoopForm] = useState<{ title: string; description: string; type: LoopType } | null>(null);
   const [draft, setDraft] = useState<{ backboneId: string; loopTaskId: string | null; sourceTitle: string; text: string } | null>(null);
+  const [sharing, setSharing] = useState<"step" | "artifact" | "week" | null>(null);
+  const { data: project } = useQuery({ queryKey: mkey(projectId, "project"), queryFn: () => api<any>(`/api/projects/${projectId}`), enabled: !!projectId });
+  const projectTitle: string = project?.title ?? "your project";
 
   const markDone = useMutation({ mutationFn: (taskId: string) => api(`/api/kanban/${taskId}`, { method: "PATCH", body: { status: "done" } }), onSuccess: refresh, onError: (e) => fail(e) });
   const adopt = useMutation({
@@ -141,7 +145,13 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
           </Row>
           {data.auditUpdate.applied.length > 0 && <Meta>{data.auditUpdate.applied.slice(0, 3).join(" · ")}</Meta>}
           {data.auditUpdate.pendingLoops.length > 0 && <Meta style={{ color: colors.warning }}>Your loops may have changed: {data.auditUpdate.pendingLoops.join("; ")}.</Meta>}
-          {data.auditUpdate.pendingCount > 0 && <Meta style={{ color: colors.primary }}>{data.auditUpdate.pendingCount} waiting change{data.auditUpdate.pendingCount === 1 ? "" : "s"} to review in Codebase on the web.</Meta>}
+          {data.auditUpdate.pendingCount > 0 && (
+            <Pressable onPress={() => onNavigate("codebase")} hitSlop={6} testID="button-review-audit-changes">
+              <Text style={{ color: colors.primary, fontSize: font.xs + 1, fontFamily: fontFamily.semibold }}>
+                Review {data.auditUpdate.pendingCount} waiting change{data.auditUpdate.pendingCount === 1 ? "" : "s"}
+              </Text>
+            </Pressable>
+          )}
         </Well>
       )}
 
@@ -221,18 +231,41 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
         </Row>
       )}
 
+      {/* The step you just finished: share its output for feedback, which comes back as notifications. */}
       {data.lastDone && next && (
         <Card style={{ paddingVertical: spacing.sm }}>
           <Row center gap={spacing.sm}>
             <Icon name="checkmark-circle" size={16} color={colors.success} />
             <Body style={{ flex: 1 }} numberOfLines={2}>Finished <Text style={{ fontFamily: fontFamily.semibold }}>{data.lastDone.title}</Text></Body>
-            {data.lastDone.sharedPostId && (
-              <Pressable onPress={() => router.push(`/post/${data.lastDone!.sharedPostId}` as any)} hitSlop={6}>
-                <Text style={{ color: colors.primary, fontFamily: fontFamily.semibold, fontSize: font.xs + 1 }}>See feedback</Text>
-              </Pressable>
+          </Row>
+          <Row gap={spacing.lg} wrap style={{ paddingLeft: 24 }}>
+            {data.lastDone.sharedPostId ? (
+              <LinkText label="See the feedback" icon="chatbubbles-outline" onPress={() => router.push(`/post/${data.lastDone!.sharedPostId}` as any)} testID="link-shared-step" />
+            ) : (
+              <>
+                <LinkText label="Share it for feedback" icon="share-social-outline" onPress={() => setSharing("step")} testID="button-share-finished-step" />
+                <LinkText label="Publish as artifact" icon="globe-outline" onPress={() => setSharing("artifact")} testID="button-publish-finished-step" />
+              </>
             )}
           </Row>
         </Card>
+      )}
+      {next && data.weekly?.due && data.weekly.steps.length > 1 && (
+        <Well tone="primary">
+          <Row center gap={spacing.sm} wrap>
+            <Body style={{ flex: 1 }}><Text style={{ fontFamily: fontFamily.semibold }}>{data.weekly.steps.length} steps</Text> finished this week and not shared yet</Body>
+            <LinkText label="Post your weekly update" icon="megaphone-outline" onPress={() => setSharing("week")} testID="button-path-weekly-update" />
+          </Row>
+        </Well>
+      )}
+      {sharing === "step" && data.lastDone && (
+        <ShareStepSheet projectId={projectId} projectTitle={projectTitle} step={data.lastDone} onClose={() => setSharing(null)} />
+      )}
+      {sharing === "artifact" && data.lastDone && (
+        <PublishArtifactSheet projectId={projectId} step={data.lastDone} onClose={() => setSharing(null)} />
+      )}
+      {sharing === "week" && data.weekly && (
+        <WeeklyUpdateSheet projectId={projectId} projectTitle={projectTitle} steps={data.weekly.steps} onClose={() => setSharing(null)} />
       )}
 
       {/* The one next action */}
@@ -301,7 +334,7 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
                 <Btn small variant="outline" icon="checkmark-circle-outline" label={next.tier === "claimed" ? "I did this" : "Done"} loading={markDone.isPending}
                   onPress={() => markDone.mutate(next.step?.taskId ?? next.taskId!)} />
               )}
-              <Btn small variant="ghost" label="Open in tasks" onPress={() => onNavigate("tasks")} />
+              <Btn small variant="ghost" label="Open in tasks" onPress={() => onNavigate("kanban")} />
             </Row>
 
             {loopForm && (
@@ -419,6 +452,15 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
 
       <MilestoneSheet projectId={projectId} backboneId={openMilestone?.id ?? null} title={openMilestone?.title ?? ""} onClose={() => setOpenMilestone(null)} />
     </View>
+  );
+}
+
+function LinkText({ label, icon, onPress, testID }: { label: string; icon: React.ComponentProps<typeof Icon>["name"]; onPress: () => void; testID?: string }) {
+  return (
+    <Pressable onPress={onPress} hitSlop={6} testID={testID} style={({ pressed }) => [{ flexDirection: "row", alignItems: "center", gap: 4 }, pressed && { opacity: 0.6 }]}>
+      <Icon name={icon} size={13} color={colors.primary} />
+      <Text style={{ color: colors.primary, fontFamily: fontFamily.semibold, fontSize: font.xs + 1 }}>{label}</Text>
+    </Pressable>
   );
 }
 

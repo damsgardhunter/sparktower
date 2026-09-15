@@ -306,7 +306,7 @@ export function NovaGuide({ projectId, currentTab, project, onProjectUpdate }: N
     },
     onError: (error: any) => {
       const errMsg = error?.message || "Failed to get Nova's response";
-      if (errMsg.includes("Insufficient credits")) {
+      if (errMsg.includes("insufficient_credits")) {
         toast({ title: "Out of AI credits", description: "Upgrade your plan for more credits", variant: "destructive" });
       } else {
         toast({ title: "Nova couldn't respond", description: errMsg, variant: "destructive" });

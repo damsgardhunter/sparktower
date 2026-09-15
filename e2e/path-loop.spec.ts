@@ -64,6 +64,6 @@ test("a week of path steps becomes an update, its feedback comes back, and the p
   await expect(next).toContainText("Your next step:");
   const nextTitle = (await next.locator("span.font-medium").textContent())?.trim();
   await next.click();
-  await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/manage$`));
+  await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/manage(\\?.*)?$`));
   await expect(page.getByTestId("next-action")).toContainText(nextTitle!);
 });

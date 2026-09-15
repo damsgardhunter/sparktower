@@ -13,6 +13,16 @@
  * thing to keep true for nothing.
  */
 
+/** The longest window the loop metrics page can ask for. */
+export const LOOP_METRICS_MAX_DAYS = 365;
+
+/**
+ * Loop events older than this are swept (startAnalyticsJobs). Longer than the
+ * widest metrics window plus the D30 cohort that looks back from it, so every
+ * figure the page can show is still computed from rows that exist.
+ */
+export const LOOP_EVENTS_RETENTION_DAYS = LOOP_METRICS_MAX_DAYS + 35;
+
 export const LOOP_EVENTS = {
   /** Composer opened. Paired with `checkInSubmitted` by `sessionId`. */
   checkInStarted: "check_in.started",

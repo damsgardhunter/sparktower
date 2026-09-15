@@ -23,7 +23,7 @@ import { requireReviewer } from "./platform-roles";
 import {
   RATE_LIMITS, DUPLICATE_RULES, REPORT_TARGETS, REPORT_REASON_IDS, reportDetailLabel, REPORT_NOTE_MAX,
   REPORT_STATUSES, RATE_LIMITED, MODERATION_ACTION_IDS, isActionableTarget, isReasonCode,
-  reasonCodesFor, moderationReasonLabel,
+  reasonCodesFor, moderationReasonLabel, isUndoReasonCode, UNDOABLE_ACTIONS, sameModeratedState,
   type RateLimitAction, type ReportTarget, type DuplicateRule, type RateLimitedBody, type ModerationAction,
 } from "@shared/moderation";
 
@@ -51,7 +51,7 @@ interface CountSource {
  * un-reacting deletes the row; a presign writes nothing; an AI call writes to
  * a dozen places.
  */
-const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai", "login", "write", "track", "post", "connect", "review", "payout"]);
+const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai", "login", "write", "track", "post", "connect", "review", "payout", "webhookReject", "session", "workspace", "follow", "apply", "sprint", "checkout", "external"]);
 
 const hitSource = (action: RateLimitAction): CountSource => ({
   table: rateLimitHits, author: rateLimitHits.userId, created: rateLimitHits.createdAt,
@@ -121,6 +121,14 @@ const COUNTED: Record<RateLimitAction, CountSource[]> = {
   // Reviewer actions change state elsewhere (a hidden flag, a suspension), so they're counted as hits.
   review: [hitSource("review")],
   payout: [hitSource("payout")],
+  webhookReject: [hitSource("webhookReject")],
+  session: [hitSource("session")],
+  workspace: [hitSource("workspace")],
+  follow: [hitSource("follow")],
+  apply: [hitSource("apply")],
+  sprint: [hitSource("sprint")],
+  checkout: [hitSource("checkout")],
+  external: [hitSource("external")],
 };
 
 /**
@@ -370,6 +378,22 @@ export async function enforceRateLimit(res: any, userId: string, action: RateLim
   if (!check.ok) { refuse(res, userId, action, check); return false; }
   await recordHit(userId, action);
   return true;
+}
+
+/**
+ * A limit on failures only: refuses a key that has failed too often, without
+ * counting this attempt — `countRejection` counts it once it has failed. For
+ * routes whose legitimate caller must never be slowed (Stripe's webhook), but
+ * whose forgeries should be.
+ */
+export async function enforceRejectionLimit(res: any, key: string, action: RateLimitAction): Promise<boolean> {
+  const check = await withinRateLimit(key, action);
+  if (!check.ok) { refuse(res, key, action, check); return false; }
+  return true;
+}
+
+export async function countRejection(key: string, action: RateLimitAction): Promise<void> {
+  await recordHit(key, action);
 }
 
 /**
@@ -875,6 +899,93 @@ export function registerModerationRoutes(app: Express) {
     } catch (error) {
       console.error("Moderation action error:", error);
       res.status(500).json({ message: "Couldn't apply that. Nothing was changed." });
+    }
+  });
+
+  /**
+   * Undoing a queue decision. The entry's `previousState` goes back exactly —
+   * the comment's visibility, the author's suspension for a ban, the report's
+   * status (open again, to be decided afresh) — in one transaction, and a new
+   * entry is appended pointing at the original, which stays as it was: the
+   * log is append-only (moderation-log-rules.ts). Refused when it was already
+   * undone, or when the thing has changed since (someone restored or acted on
+   * it another way): an undo restores one decision, never overwrites a later one.
+   */
+  app.post("/api/admin/moderation-log/:id/undo", isAuthenticated, requireReviewer, rateLimit("review"), async (req: any, res) => {
+    try {
+      const reasonCode = String(req.body?.reasonCode ?? "");
+      const note = String(req.body?.note ?? "").trim().slice(0, REPORT_NOTE_MAX) || null;
+      if (!isUndoReasonCode(reasonCode)) {
+        return res.status(400).json({ message: "Pick why it's being undone.", code: "invalid_input", field: "reasonCode" });
+      }
+      const [entry] = await db.select().from(moderationLog).where(eq(moderationLog.id, String(req.params.id)));
+      if (!entry) return res.status(404).json({ message: "Log entry not found" });
+      const undoAction = UNDOABLE_ACTIONS[entry.action];
+      const reportId = (entry.details as any)?.reportId as string | undefined;
+      if (!undoAction || entry.targetType !== "comment" || !reportId) {
+        return res.status(400).json({ message: "Only decisions made from the report queue can be undone here.", code: "not_undoable" });
+      }
+      const before = (entry.previousState ?? {}) as { report?: { status: string }; comment?: Record<string, any> | null; author?: Record<string, any> };
+      const after = (entry.resultingState ?? {}) as typeof before;
+
+      const outcome = await db.transaction(async (tx) => {
+        // The report row is the lock: two undos of one decision queue up here, and the second sees the first.
+        const [report] = await tx.select().from(contentReports).where(eq(contentReports.id, reportId)).for("update");
+        if (!report) return { status: 404, body: { message: "The report behind this decision is gone.", code: "target_gone" } };
+        const [undone] = await tx.select({ id: moderationLog.id }).from(moderationLog)
+          .where(sql`${moderationLog.details}->>'undoes' = ${entry.id}`).limit(1);
+        if (undone) return { status: 409, body: { message: "This decision has already been undone.", code: "already_undone", logId: undone.id } };
+        if (report.status !== after.report?.status) {
+          return { status: 409, body: { message: "The report has changed since this decision, so it can't be undone as it was.", code: "state_changed", field: "report" } };
+        }
+
+        const [comment] = await tx.select().from(projectComments).where(eq(projectComments.id, entry.targetId!)).for("update");
+        const commentNow = comment ? { hiddenAt: comment.hiddenAt, hiddenMode: comment.hiddenMode, hiddenById: comment.hiddenById, hiddenReason: comment.hiddenReason } : null;
+        if (entry.action !== "comment_dismiss") {
+          if (!comment) return { status: 404, body: { message: "That comment no longer exists.", code: "target_gone" } };
+          if (!sameModeratedState(after.comment, commentNow)) {
+            return { status: 409, body: { message: "The comment has changed since this decision, so it can't be undone as it was.", code: "state_changed", field: "comment" } };
+          }
+        }
+        const [author] = entry.action === "comment_ban" && entry.targetUserId
+          ? await tx.select({ suspendedAt: users.suspendedAt, suspendedReason: users.suspendedReason }).from(users).where(eq(users.id, entry.targetUserId)).for("update")
+          : [];
+        if (entry.action === "comment_ban" && (!author || !sameModeratedState(after.author, author))) {
+          return { status: 409, body: { message: "The author's account has changed since the ban, so it can't be undone from here.", code: "state_changed", field: "author" } };
+        }
+
+        const date = (v: unknown) => (v ? new Date(String(v)) : null);
+        let commentRestored = commentNow;
+        if (entry.action !== "comment_dismiss" && before.comment !== undefined) {
+          const [c] = await tx.update(projectComments).set({
+            hiddenAt: date(before.comment?.hiddenAt), hiddenMode: before.comment?.hiddenMode ?? null,
+            hiddenById: before.comment?.hiddenById ?? null, hiddenReason: before.comment?.hiddenReason ?? null,
+          } as any).where(eq(projectComments.id, comment!.id)).returning();
+          commentRestored = { hiddenAt: c.hiddenAt, hiddenMode: c.hiddenMode, hiddenById: c.hiddenById, hiddenReason: c.hiddenReason };
+        }
+        let authorRestored: Record<string, unknown> | null = null;
+        if (author && before.author) {
+          const [u] = await tx.update(users).set({ suspendedAt: date(before.author.suspendedAt), suspendedReason: before.author.suspendedReason ?? null })
+            .where(eq(users.id, entry.targetUserId!)).returning({ suspendedAt: users.suspendedAt, suspendedReason: users.suspendedReason });
+          authorRestored = u;
+        }
+        const reportStatus = before.report?.status ?? "open";
+        await tx.update(contentReports).set({ status: reportStatus as any, reviewedById: null, reviewedAt: null })
+          .where(eq(contentReports.id, report.id));
+
+        const [logged] = await tx.insert(moderationLog).values({
+          action: undoAction, actorId: req.user.id, targetUserId: entry.targetUserId,
+          targetType: "comment", targetId: entry.targetId, reason: note, reasonCode,
+          previousState: { report: { status: report.status }, comment: commentNow, ...(author ? { author } : {}) },
+          resultingState: { report: { status: reportStatus }, comment: commentRestored, ...(authorRestored ? { author: authorRestored } : {}) },
+          details: { undoes: entry.id, undoneAction: entry.action, reportId: report.id },
+        }).returning();
+        return { status: 200, body: { ok: true, logId: logged.id, undoes: entry.id, reportStatus } };
+      });
+      res.status(outcome.status).json(outcome.body);
+    } catch (error) {
+      console.error("Moderation undo error:", error);
+      res.status(500).json({ message: "Couldn't undo that. Nothing was changed." });
     }
   });
 

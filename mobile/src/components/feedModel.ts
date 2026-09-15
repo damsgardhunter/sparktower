@@ -181,7 +181,7 @@ export function creditLine(names: string[]): string {
 
 // --- Reports (shared/moderation.ts) --------------------------------------
 
-export type ReportTarget = "feed_post" | "feed_comment" | "comment";
+export type ReportTarget = "feed_post" | "feed_comment" | "comment" | "check_in";
 export const REPORT_NOTE_MAX = 500;
 export const REPORT_REASONS = [
   { id: "spam", label: "Spam or advertising" },

@@ -31,17 +31,14 @@ const label = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
  * a line here. Removing a line here when the route gains its own limit.
  */
 const FLOOR_ONLY_ALLOWED: Record<string, string> = {
-  "POST /api/auth/mobile/logout": "ends a session; nothing to abuse",
   "POST /api/auth/logout-all": "ends every session; signed-in only",
   "PATCH /api/check-ins/:id": "author-only edit of an existing row",
   "DELETE /api/check-ins/:id": "author-only delete",
   "PATCH /api/documents/:docId": "member-only edit of an existing row",
-  "POST /api/documents/:docId/publish": "member-only flag flip",
   "DELETE /api/documents/:docId": "member-only delete",
   "DELETE /api/feed/:id": "author-only delete",
   "DELETE /api/feed/comments/:commentId": "author-only delete",
   "DELETE /api/project-comments/:commentId": "author-only delete",
-  "PUT /internal-local-upload/:id": "development only; the issued id is the credential",
   "POST /api/projects/:id/nova-guide/complete-onboarding": "flag flip",
   "DELETE /api/projects/:id/waitlist/:entryId": "member-only delete",
   "PATCH /api/projects/:id/interviews/:itemId": "member-only edit",
@@ -50,16 +47,9 @@ const FLOOR_ONLY_ALLOWED: Record<string, string> = {
   "DELETE /api/storyboards/:id": "owner-only delete",
   "DELETE /api/health-findings/feedback/:feedbackId": "author-only delete",
   "POST /api/messages/:userId/read": "marks read; no content",
-  "POST /api/sprints": "creates a sprint; project-scoped and rare",
   "PATCH /api/sprints/:id/tasks/:taskId": "member-only edit",
-  "POST /api/sprints/:id/convert": "one-off conversion",
-  "POST /api/sprints/queue": "joins a queue; one entry per user",
   "DELETE /api/sprints/queue": "leaves the queue",
   "PATCH /api/projects/:id/backing": "owner-only settings edit",
-  "POST /api/projects/:id/path/mark": "member-only flag on the project's own milestones",
-  "POST /api/projects/:id/path/work/:workId/choose": "member-only pick of an existing answer",
-  "POST /api/projects/:id/path/branch": "member-only phase choice",
-  "POST /api/projects/:id/path/switch": "owner-only, one per project at a time",
   "DELETE /api/projects/:id/path/loops/:taskId": "member-only delete",
   "DELETE /api/mcp-tokens/:id": "owner-only revoke of one's own token; refusing it is the harm",
 };
@@ -123,8 +113,9 @@ describe("authentication on the write surface", () => {
     expect(cov.writeFloor.exempt).toEqual(["/api/stripe/webhook"]);
     expect(live.find((r) => label(r) === "POST /api/logout")!.floor).toBe(true);
     expect(live.find((r) => label(r) === "POST /api/stripe/webhook")!.floor).toBe(false);
-    // Under /api, the only write with no limit at all is the signed webhook.
-    expect(cov.unlimitedWrites.filter((l) => l.includes(" /api/"))).toEqual(["POST /api/stripe/webhook"]);
+    // Under /api, no write is unlimited — not even the signed webhook, whose failed deliveries are limited per address.
+    expect(cov.unlimitedWrites.filter((l) => l.includes(" /api/"))).toEqual([]);
+    expect(live.find((r) => label(r) === "POST /api/stripe/webhook")!.rateLimited).toBe(true);
   });
 
   it("the only inbound webhook is Stripe's (its signature is checked in stripe-webhook.test.ts)", () => {
@@ -147,10 +138,10 @@ describe("authentication on the write surface", () => {
     "POST /api/auth/mobile/login": "signing in; limited per address",
     "POST /api/auth/mobile/register": "signing up; limited per address",
     "POST /api/auth/mobile/google": "signing in with a Google ID token the server verifies",
-    "POST /api/auth/mobile/refresh": "the refresh token is the credential; single-use, hashed, limited",
-    "POST /api/auth/mobile/logout": "revokes the refresh token it's given; nothing else",
+    "POST /api/auth/mobile/refresh": "the refresh token is the credential; single-use (claimed atomically), hashed, reuse ends every mobile session, limited",
+    "POST /api/auth/mobile/logout": "revokes the refresh token it's given; nothing else; limited per address",
     "POST /api/logout": "must work with an expired session; refuses cross-site requests",
-    "POST /api/stripe/webhook": "Stripe's signature is the credential",
+    "POST /api/stripe/webhook": "Stripe's signature is the credential; failed deliveries limited per address",
     "POST /api/track": "anonymous analytics beacons; limited per address",
     "POST /api/loop-events": "anonymous loop beacons; limited per address",
     "PUT /internal-local-upload/:id": "development only; the issued, single-use id is the credential, size-capped",
@@ -160,6 +151,9 @@ describe("authentication on the write surface", () => {
     const open = live.filter((r) => r.write && !r.auth).map(label);
     const unexplained = open.filter((l) => !(l in PUBLIC_WRITES));
     expect(unexplained, `writes reachable without sign-in — guard them, or say why in PUBLIC_WRITES:\n  ${unexplained.join("\n  ")}`).toEqual([]);
+    // And each says so in its own source, where the audit reads it.
+    const unexplainedInSource = live.filter((r) => r.write && !r.auth && !r.publicReason).map(label);
+    expect(unexplainedInSource, `add a "// public-write: <what it trusts>" comment inside:\n  ${unexplainedInSource.join("\n  ")}`).toEqual([]);
     const stale = Object.keys(PUBLIC_WRITES).filter((l) => !open.includes(l));
     expect(stale, `in PUBLIC_WRITES but now guarded or gone — remove the line:\n  ${stale.join("\n  ")}`).toEqual([]);
   });

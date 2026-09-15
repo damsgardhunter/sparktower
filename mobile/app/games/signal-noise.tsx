@@ -4,8 +4,10 @@ import { Stack } from "expo-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
 import { colors, font, fontFamily, radius, shadow, spacing } from "../../src/theme";
-import { Btn, Empty, ErrorNote, Icon, Loading, NovaGradient, Progress, errText } from "../../src/components/ui";
-import { PageIntro, Pill, Stat, humanize, isSwitchedOff, tintSoft } from "../../src/components/MoreKit";
+import { Btn, Empty, ErrorNote, Icon, Loading, NovaGradient, Progress, TabStrip, errText } from "../../src/components/ui";
+import { PageIntro, Pill, Stat, TitledCard, humanize, isSwitchedOff, tintSoft } from "../../src/components/MoreKit";
+import { GamesPaused, Leaderboard, useGamesOff } from "../../src/components/more/GameKit";
+import { useAuth } from "../../src/auth/AuthContext";
 
 /**
  * Signal vs. Noise — one card at a time, keep or drop.
@@ -24,10 +26,11 @@ const DIFFICULTY_COLORS: Record<string, string> = {
 interface SNCard { id: string; text: string; isSignal: boolean }
 interface Decision { cardId: string; text: string; choice: "keep" | "discard"; correct: boolean; timeMs: number }
 
-const nameOf = (u: any, fallback = "Builder") => [u?.firstName, u?.lastName].filter(Boolean).join(" ") || u?.username || fallback;
-
 export default function SignalNoise() {
   const qc = useQueryClient();
+  const { user } = useAuth();
+  const off = useGamesOff();
+  const [tab, setTab] = useState<"play" | "leaderboard">("play");
   const [game, setGame] = useState<any>(null);
   const [index, setIndex] = useState(0);
   const [flash, setFlash] = useState<boolean | null>(null);
@@ -42,10 +45,12 @@ export default function SignalNoise() {
   const { data: scenarios, isLoading, error: loadError } = useQuery({
     queryKey: ["sn-scenarios"],
     queryFn: () => api<any[]>("/api/games/signal-noise/scenarios"),
+    enabled: !off,
   });
-  const { data: leaderboard } = useQuery({
+  const board = useQuery({
     queryKey: ["game-leaderboard", "signal"],
     queryFn: () => api<any[]>("/api/games/leaderboard/signal"),
+    enabled: !off && tab === "leaderboard",
   });
 
   const cards: SNCard[] = useMemo(() => (game?.cards as SNCard[]) || [], [game]);
@@ -112,27 +117,31 @@ export default function SignalNoise() {
           <View style={[card_, { flexDirection: "row", padding: spacing.sm }]}>
             <Stat value={`${result.accuracy}%`} label="Accuracy" />
             <Stat value={result.streak} label="Best streak" />
-            <Stat value={`${((result.avgReactionMs || 0) / 1000).toFixed(1)}s`} label="Avg call" />
+            <Stat value={`${Math.round(result.avgReactionMs || 0)}ms`} label="Avg reaction" />
           </View>
-          <View style={card_}>
-            <Text style={h3}>What you missed</Text>
-            {missed.length === 0 ? (
-              <View style={{ flexDirection: "row", gap: 6, alignItems: "center" }}>
-                <Icon name="checkmark-circle" size={16} color={colors.success} />
-                <Text style={body}>Nothing — you called every card correctly.</Text>
-              </View>
-            ) : missed.map((d) => {
+          <TitledCard icon="list" title="Decision breakdown" action={<Text style={small}>{decisions.length - missed.length}/{decisions.length} right</Text>} style={{ gap: 0 }}>
+            {decisions.map((d, i) => {
               const c = cards.find((x) => x.id === d.cardId);
               return (
-                <View key={d.cardId} style={{ gap: 2, paddingTop: spacing.sm, borderTopWidth: 1, borderColor: colors.borderSubtle }}>
-                  <Text style={body}>{d.text}</Text>
-                  <Text style={{ color: colors.warning, fontSize: font.xs, fontFamily: fontFamily.medium }}>
-                    {c?.isSignal ? "That was signal — worth keeping." : "That was noise — safe to drop."}
-                  </Text>
+                <View key={d.cardId} style={{ flexDirection: "row", gap: spacing.sm, paddingVertical: spacing.sm, borderTopWidth: i > 0 ? 1 : 0, borderColor: colors.borderSubtle }}>
+                  <Text style={[small, { width: 18, paddingTop: 2 }]}>{i + 1}</Text>
+                  <View style={{ flex: 1, gap: 4 }}>
+                    <Text style={body}>{d.text}</Text>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                      <Pill label={d.choice === "keep" ? "Keep" : "Discard"} color={d.choice === "keep" ? colors.success : colors.danger} />
+                      <Text style={small}>{d.timeMs}ms</Text>
+                      {!d.correct && (
+                        <Text style={{ color: colors.warning, fontSize: font.xs, fontFamily: fontFamily.medium }}>
+                          {c?.isSignal ? "That was signal." : "That was noise."}
+                        </Text>
+                      )}
+                    </View>
+                  </View>
+                  <Icon name={d.correct ? "checkmark-circle" : "close-circle"} size={20} color={d.correct ? colors.success : colors.danger} />
                 </View>
               );
             })}
-          </View>
+          </TitledCard>
           <Btn label="Play again" icon="refresh" onPress={() => start.mutate(game.scenario)} loading={start.isPending} />
           <Btn label="Pick a different scenario" variant="outline" onPress={() => { setGame(null); setResult(null); }} />
         </ScrollView>
@@ -151,14 +160,14 @@ export default function SignalNoise() {
           <View style={[card_, { gap: spacing.sm }]}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
               <Text style={[meta, { flex: 1 }]}>Card {index + 1} of {cards.length}</Text>
-              <Pill label={`${correctCount * 10} pts`} icon="star" />
-              {streak >= 2 && <Pill label={`${streak} streak`} icon="flame" color={colors.warning} />}
+              <Pill label={`${correctCount * 10}`} icon="trophy" color="#CA8A04" />
+              <Pill label={`${streak}`} icon="flash" color="#EA580C" />
               <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
                 <Icon name="timer-outline" size={14} color={colors.textTertiary} />
                 <Text style={[meta, { fontVariant: ["tabular-nums"] }]}>{(elapsed / 1000).toFixed(1)}s</Text>
               </View>
             </View>
-            <Progress value={(index / cards.length) * 100} />
+            <Progress value={((index + 1) / cards.length) * 100} />
           </View>
 
           <View style={[card_, {
@@ -186,55 +195,58 @@ export default function SignalNoise() {
     );
   }
 
-  // --- Scenario picker ---
+  // --- Scenario picker, with the web's Play / Leaderboard tabs ---
+  const paused = off || (loadError && isSwitchedOff(loadError)) || (board.error && isSwitchedOff(board.error));
   return (
     <>
       {title}
-      <ScrollView style={page} contentContainerStyle={content}>
-        <View style={card_}>
-          <PageIntro icon="radio" tint={colors.novaPurple} title="Signal vs. Noise"
-            body="A stack of things competing for your attention. Keep the ones that move the needle, drop the rest. Scored on accuracy, streak, and speed." />
-          <Btn label="Surprise me" icon="shuffle" onPress={() => start.mutate(undefined)} loading={start.isPending && start.variables === undefined} />
-        </View>
-        {error && <ErrorNote message={error} />}
-
-        <Text style={[h3, { paddingHorizontal: 2 }]}>Or pick a scenario</Text>
-        {isLoading ? <View style={{ height: 160 }}><Loading /></View>
-          : loadError && isSwitchedOff(loadError) ? <Empty icon="pause-circle-outline" title="Games are switched off" body="Check back soon." />
-          : !scenarios?.length ? <Empty icon="albums-outline" title="No scenarios" body="The server didn't return any scenarios." />
-          : scenarios.map((s) => (
-            <Pressable key={s.scenario} onPress={() => start.mutate(s.scenario)} style={({ pressed }) => [card_, pressed && { opacity: 0.85 }]}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
-                <Text style={[h3, { flex: 1, fontSize: font.base }]}>{s.scenario}</Text>
-                <Pill label={humanize(s.difficulty)} color={DIFFICULTY_COLORS[s.difficulty] ?? colors.textSecondary} />
-              </View>
-              <Text style={[meta, { lineHeight: 19 }]}>{s.description}</Text>
-              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                <Text style={small}>{s.cardCount} cards</Text>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
-                  <Text style={{ color: colors.primary, fontSize: font.sm, fontFamily: fontFamily.semibold }}>{start.isPending && start.variables === s.scenario ? "Dealing…" : "Play"}</Text>
-                  <Icon name="play" size={13} color={colors.primary} />
-                </View>
-              </View>
-            </Pressable>
-          ))}
-
-        {!!leaderboard?.length && (
+      <View style={page}>
+        <TabStrip options={[{ value: "play", label: "Play" }, { value: "leaderboard", label: "Leaderboard" }]} value={tab} onChange={setTab} />
+        <ScrollView style={page} contentContainerStyle={content}>
           <View style={card_}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-              <Icon name="trophy" size={16} color="#CA8A04" /><Text style={h3}>Top scores</Text>
-            </View>
-            {leaderboard.slice(0, 5).map((e, i) => (
-              <View key={e.id ?? i} style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: 4 }}>
-                <Text style={[small, { width: 18, fontFamily: fontFamily.bold }]}>{i + 1}</Text>
-                <Text style={[body, { flex: 1 }]} numberOfLines={1}>{nameOf(e.user, e.username)}</Text>
-                {e.accuracy != null && <Text style={small}>{e.accuracy}%</Text>}
-                <Text style={[body, { fontFamily: fontFamily.bold }]}>{e.score}</Text>
-              </View>
-            ))}
+            <PageIntro icon="radio" tint={colors.novaPurple} title="Signal vs. Noise"
+              body="Sort cards into signal or noise under time pressure. Scored on accuracy, streak, and reaction speed." />
+            {tab === "play" && !paused && <Btn label="Surprise me" icon="shuffle" onPress={() => start.mutate(undefined)} loading={start.isPending && start.variables === undefined} />}
           </View>
-        )}
-      </ScrollView>
+          {error && <ErrorNote message={error} />}
+
+          {paused ? <GamesPaused /> : tab === "leaderboard" ? (
+            <Leaderboard
+              entries={board.data}
+              loading={board.isLoading}
+              meId={user?.id}
+              emptyTitle="No leaderboard entries yet."
+              row={(e) => ({
+                subtitle: e.metadata?.scenario || "-",
+                stats: [
+                  { label: "Score", value: e.score },
+                  { label: "Accuracy", value: `${e.metadata?.accuracy ?? 0}%` },
+                  { label: "Streak", value: e.metadata?.streak ?? 0 },
+                ],
+              })}
+            />
+          ) : (
+            <>
+              <Text style={[h3, { paddingHorizontal: 2 }]}>Pick a scenario</Text>
+              {isLoading ? <View style={{ height: 160 }}><Loading /></View>
+                : loadError ? <Empty icon="cloud-offline-outline" title="Couldn't load scenarios" />
+                : !scenarios?.length ? <Empty icon="albums-outline" title="No scenarios" body="The server didn't return any scenarios." />
+                : scenarios.map((s) => (
+                  <View key={s.scenario} style={card_}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+                      <Text style={[h3, { flex: 1, fontSize: font.base }]}>{s.scenario}</Text>
+                      <Pill label={humanize(s.difficulty)} color={DIFFICULTY_COLORS[s.difficulty] ?? colors.textSecondary} />
+                    </View>
+                    <Text style={[meta, { lineHeight: 19 }]}>{s.description}</Text>
+                    <Text style={small}>{s.cardCount} cards</Text>
+                    <Btn label={start.isPending && start.variables === s.scenario ? "Starting..." : "Play"} icon="play" small
+                      disabled={start.isPending} onPress={() => start.mutate(s.scenario)} />
+                  </View>
+                ))}
+            </>
+          )}
+        </ScrollView>
+      </View>
     </>
   );
 }

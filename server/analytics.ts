@@ -22,6 +22,8 @@ import {
   routePattern,
 } from "@shared/analytics";
 import { rateLimit } from "./moderation";
+import { sweepLoopEvents } from "./loop-metrics";
+import { LOOP_EVENTS_RETENTION_DAYS } from "@shared/loop-events";
 import { CLIENT_EXPLORE_EVENT_NAMES, isExploreEvent, sanitizeExploreProps } from "@shared/explore-events";
 
 /** Cookie holding the visitor id. Not httpOnly: the client stamps events too. */
@@ -234,6 +236,7 @@ export function registerAnalyticsIngest(app: Express) {
    * claims.
    */
   app.post("/api/track", rateLimit("track"), async (req: any, res) => {
+    // public-write: nothing — anonymous analytics beacons; limited per address
     // Answer immediately. The client has nothing to do with the outcome, and
     // this endpoint is on the path of every page change.
     res.status(202).json({ ok: true });
@@ -273,20 +276,30 @@ export function registerAnalyticsIngest(app: Express) {
 }
 
 /**
- * Sweeps rows past the retention window.
+ * Sweeps rows past their retention windows.
  *
- * The stream is the one table here that grows without a natural ceiling — every
- * page anyone opens is a row — so it gets an expiry rather than an assumption
- * that someone will notice.
+ * Both event streams grow without a natural ceiling — every page anyone opens,
+ * every loop beacon, signed in or not — so each gets an expiry rather than an
+ * assumption that someone will notice: activity events after RETENTION_DAYS,
+ * loop events after LOOP_EVENTS_RETENTION_DAYS (longer, because the loop
+ * metrics page reads a year back). `project_analytics_events` isn't a stream —
+ * it's a creator's list of metric definitions — so it has no expiry.
  */
+export async function sweepExpiredEvents(): Promise<{ activity: number; loop: number }> {
+  const result = await db.delete(activityEvents).where(
+    sql`${activityEvents.createdAt} < now() - interval '${sql.raw(String(RETENTION_DAYS))} days'`,
+  );
+  const activity = (result as any)?.rowCount ?? 0;
+  const loop = await sweepLoopEvents();
+  return { activity, loop };
+}
+
 export function startAnalyticsJobs(): void {
   const sweep = async () => {
     try {
-      const result = await db.delete(activityEvents).where(
-        sql`${activityEvents.createdAt} < now() - interval '${sql.raw(String(RETENTION_DAYS))} days'`,
-      );
-      const n = (result as any)?.rowCount ?? 0;
-      if (n > 0) console.log(`[analytics] Swept ${n} event(s) past ${RETENTION_DAYS} days.`);
+      const n = await sweepExpiredEvents();
+      if (n.activity > 0) console.log(`[analytics] Swept ${n.activity} activity event(s) past ${RETENTION_DAYS} days.`);
+      if (n.loop > 0) console.log(`[analytics] Swept ${n.loop} loop event(s) past ${LOOP_EVENTS_RETENTION_DAYS} days.`);
     } catch (err) {
       console.error("[analytics] Retention sweep failed:", err);
     }

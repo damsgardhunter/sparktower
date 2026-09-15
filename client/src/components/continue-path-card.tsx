@@ -23,6 +23,8 @@ export interface NextStepItem {
   projectedAt: string | null;
   lastDone: { taskId: string; title: string; completedAt: string; sharedPostId: string | null } | null;
   weekly?: { due: boolean; steps: { taskId: string; title: string; completedAt: string }[] };
+  /** The section this item is for — one item per started section. Absent from an older server. */
+  track?: { goal: string; label: string; short: string; primary: boolean };
 }
 
 const ACTOR_SHORT: Record<string, string> = {
@@ -265,40 +267,46 @@ export function ContinuePathCard() {
             {items.map((item) => {
               const pct = item.progress.total ? Math.round((item.progress.done / item.progress.total) * 100) : 0;
               const novaActs = item.next?.actor.startsWith("nova");
+              // The primary section keeps the plain ids; the others add their goal, so each is addressable.
+              const idSuffix = item.track && !item.track.primary ? `${item.project.id}-${item.track.goal}` : item.project.id;
+              const href = item.track ? `/projects/${item.project.id}/manage?section=${item.track.goal}` : `/projects/${item.project.id}/manage`;
               return (
-                <li key={item.project.id} className="px-4 py-3 space-y-2" data-testid={`continue-path-${item.project.id}`}>
+                <li key={`${item.project.id}:${item.track?.goal ?? ""}`} className="px-4 py-3 space-y-2" data-testid={`continue-path-${idSuffix}`}>
                   <div className="flex items-center gap-2.5">
                     {item.project.logoUrl
                       ? <img src={item.project.logoUrl} alt="" className="h-8 w-8 object-contain shrink-0" />
                       : <span className="h-8 w-8 rounded-md bg-muted flex items-center justify-center text-[11px] font-semibold text-muted-foreground shrink-0">{item.project.title.slice(0, 2).toUpperCase()}</span>}
                     <div className="min-w-0 flex-1">
-                      <p className="font-semibold truncate">{item.project.title}</p>
+                      <p className="font-semibold truncate flex items-center gap-1.5">
+                        <span className="truncate">{item.project.title}</span>
+                        {item.track && <span className="shrink-0 rounded-full bg-primary/10 text-primary px-1.5 py-px text-[10px] font-medium" title={item.track.label} data-testid={`continue-path-section-${idSuffix}`}>{item.track.short}</span>}
+                      </p>
                       <p className="text-[11px] text-muted-foreground truncate">{item.phase} · {item.progress.done}/{item.progress.total} steps{item.daysSinceActivity >= 2 ? ` · away ${item.daysSinceActivity} days` : ""}</p>
                     </div>
-                    <Button asChild size="sm" className="h-8 gap-1" data-testid={`button-continue-path-${item.project.id}`}>
-                      <Link href={`/projects/${item.project.id}/manage`}>Continue <ArrowRight className="h-3.5 w-3.5" /></Link>
+                    <Button asChild size="sm" className="h-8 gap-1" data-testid={`button-continue-path-${idSuffix}`}>
+                      <Link href={href}>Continue <ArrowRight className="h-3.5 w-3.5" /></Link>
                     </Button>
                   </div>
                   <div className="h-1 rounded-full bg-muted overflow-hidden"><div className="h-full bg-primary" style={{ width: `${pct}%` }} /></div>
                   {item.next ? (
-                    <p className="flex items-center gap-1.5 flex-wrap" data-testid={`continue-path-next-${item.project.id}`}>
+                    <p className="flex items-center gap-1.5 flex-wrap" data-testid={`continue-path-next-${idSuffix}`}>
                       {novaActs ? <Sparkles className="h-3.5 w-3.5 text-primary shrink-0" /> : <User className="h-3.5 w-3.5 shrink-0" />}
                       <span className="text-muted-foreground">Next:</span>
                       <span className="font-medium">{item.next.step ?? item.next.title}</span>
                       <span className="text-[11px] text-muted-foreground">· {ACTOR_SHORT[item.next.actor] ?? item.next.actor}{estimate(item.next.estimateMinutes) ? ` · ${estimate(item.next.estimateMinutes)}` : ""}</span>
                     </p>
                   ) : (
-                    <p className="text-muted-foreground">The main line is done — pick what's next on the project.</p>
+                    <p className="text-muted-foreground">Main line done — pick what's next.</p>
                   )}
                   {/* Several steps this week: the weekly update. One: share that step. */}
                   {item.weekly?.due && item.weekly.steps.length > 1 && (
-                    <button className="text-xs text-primary hover:underline flex items-center gap-1" onClick={() => setWeekly(item)} data-testid={`button-weekly-update-${item.project.id}`}>
-                      <Share2 className="h-3 w-3" /> {item.weekly.steps.length} steps finished this week — post your weekly update
+                    <button className="text-xs text-primary hover:underline flex items-center gap-1" onClick={() => setWeekly(item)} data-testid={`button-weekly-update-${idSuffix}`}>
+                      <Share2 className="h-3 w-3" /> {item.weekly.steps.length} steps this week — post an update
                     </button>
                   )}
                   {item.lastDone && !item.lastDone.sharedPostId && !(item.weekly?.due && item.weekly.steps.length > 1) && (
-                    <button className="text-xs text-primary hover:underline flex items-center gap-1" onClick={() => setSharing(item)} data-testid={`button-share-last-step-${item.project.id}`}>
-                      <Share2 className="h-3 w-3" /> You finished "{item.lastDone.title}" — share it for feedback
+                    <button className="text-xs text-primary hover:underline flex items-center gap-1" onClick={() => setSharing(item)} data-testid={`button-share-last-step-${idSuffix}`}>
+                      <Share2 className="h-3 w-3" /> Share "{item.lastDone.title}" for feedback
                     </button>
                   )}
                 </li>

@@ -1,6 +1,7 @@
 /**
  * Profile build-out: Nova résumé evaluation and the public "looking for" call.
  */
+import { rateLimit } from "./moderation";
 import { parseModelJson } from "./ai-json";
 import type { Express } from "express";
 import OpenAI from "openai";
@@ -174,7 +175,7 @@ export function registerProfileRoutes(app: Express) {
    * can actually read it, so the client can tell the user immediately rather
    * than failing later at evaluation time.
    */
-  app.post("/api/profile/attach-resume", isAuthenticated, async (req: any, res) => {
+  app.post("/api/profile/attach-resume", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       const userId = req.user.id;
       const { resumeUrl } = req.body as { resumeUrl?: string };
@@ -379,7 +380,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
    * Saves a reviewed draft. Used when the client asked for a preview and the
    * user then edited it — no second AI call, no second charge.
    */
-  app.post("/api/profile/apply-resume-draft", isAuthenticated, async (req: any, res) => {
+  app.post("/api/profile/apply-resume-draft", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       const userId = req.user.id;
       const { draft } = req.body as { draft?: any };
@@ -407,7 +408,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   });
 
   /** Sets or clears the public "looking for" call. */
-  app.post("/api/profile/looking-for", isAuthenticated, async (req: any, res) => {
+  app.post("/api/profile/looking-for", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       const userId = req.user.id;
       const body = req.body as Partial<ProfileLookingFor> & { clear?: boolean };

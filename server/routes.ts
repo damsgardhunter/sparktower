@@ -6,7 +6,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage, isTaskOnTime } from "./storage";
 import { db } from "./db";
-import { users, projectMembers, projects, userProfiles, projectDataShapes, pathWork, projectDecisions, projectFiles, projectLinks } from "@shared/schema";
+import { users, projectMembers, projects, userProfiles, projectDataShapes, pathWork, projectDecisions, projectFiles, projectLinks, projectKanbanTasks } from "@shared/schema";
 import { setupAuth, isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { registerAuthRoutes } from "./replit_integrations/auth/routes";
 import { attachBearerUser, registerMobileAuthRoutes } from "./mobile-auth";
@@ -46,7 +46,7 @@ import {
 import { insertUserProfileSchema, insertProjectSchema, insertProjectBase, insertDonationSchema, insertContestSchema, insertProjectLiveChatMessageSchema, insertWaitlistEntrySchema, insertInterviewSchema, insertExperimentSchema, insertPricingTierSchema, insertAnalyticsEventSchema, insertLegalDocSchema, insertDeployChecklistItemSchema, insertSupportTicketSchema, insertLaunchTaskSchema, type StoryboardScene } from "@shared/schema";
 import { z } from "zod";
 import OpenAI from "openai";
-import { eq, ne, and, sql } from "drizzle-orm";
+import { eq, ne, and, sql, inArray } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { calculateUserReputation } from "./reputation";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
@@ -62,7 +62,7 @@ import {
   checkPrivateProjectQuota, modelFor, memoryLimitFor, taskLimitFor,
   coachingDirectiveFor, reserveOptionalAi,
 } from "./entitlements";
-import { isValidSubcategory, PROJECT_GOALS } from "@shared/goals";
+import { isValidSubcategory, PROJECT_GOALS, isProjectGoal } from "@shared/goals";
 import { SURFACE_API_PREFIXES } from "@shared/surfaces";
 import { recordActivity } from "./analytics";
 import { seal } from "./secret-box";
@@ -71,11 +71,13 @@ import { isOwner as isPlatformOwner } from "./platform-roles";
 import {
   instantiatePathTree, pathStatus, onPathTaskDone, createExpansion, createInjections,
   collectArtifacts, saveIntake, prefillFor, switchPath, backboneIdOf, reconcileMilestones, pathTaskContext, saveWork, chooseWork, milestoneDetail, createLoop, setBranch, extendBranch, reconcileLoops, latestWork, deleteLoop, expansionSource,
-  setLoopType, loopsForAudit, renderLoopsForPrompt, saveLoopAudit, applyLoopDrafts,
+  setLoopType, loopsForAudit, renderLoopsForPrompt, saveLoopAudit, applyLoopDrafts, listTracks, startTrack, trackState,
 } from "./phase-trees";
 import { draftExpansionSteps, proposeInjections, readExistingProgress, draftArtifact, produceWork, auditLoopsAgainstCompetition, draftLoops } from "./phase-trees-nova";
 import { workKindFor, sanitizeLoopAudit, loopTypeOf, LOOP_TYPE_INFO, type WorkPayload } from "@shared/phase-trees";
 import { resolveTree, treeFor } from "@shared/phase-trees";
+import { creditState, lowCreditsAt, checkoutReturnUrls, safeReturnPath } from "@shared/credits";
+import { applyTier, billingIssueFor } from "./billing-credits";
 import { parseModelJson, answerUnreadable, ModelResponseError } from "./ai-json";
 
 async function isProjectMember(userId: string, projectId: string): Promise<boolean> {
@@ -724,7 +726,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
   });
 
   // --- Project Applications ---
-  app.post("/api/projects/:id/apply", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/apply", isAuthenticated, rateLimit("apply"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       const projectId = req.params.id;
@@ -767,7 +769,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     }
   });
 
-  app.post("/api/applications/:id/accept", isAuthenticated, async (req: any, res) => {
+  app.post("/api/applications/:id/accept", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       const application = await storage.getApplication(req.params.id);
       if (!application) return res.status(404).json({ message: "Application not found" });
@@ -784,7 +786,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     }
   });
 
-  app.post("/api/applications/:id/reject", isAuthenticated, async (req: any, res) => {
+  app.post("/api/applications/:id/reject", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       const application = await storage.getApplication(req.params.id);
       if (!application) return res.status(404).json({ message: "Application not found" });
@@ -801,7 +803,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
   });
 
   // --- Project Follows ---
-  app.post("/api/projects/:id/follow", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/follow", isAuthenticated, rateLimit("follow"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       const projectId = req.params.id;
@@ -904,7 +906,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     }
   });
 
-  app.post("/api/projects/:id/kanban", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/kanban", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
@@ -1670,7 +1672,22 @@ If the ask has nothing to do with planning tasks, say so in "summary", return an
         await storage.bankExecutionCredit(id).catch(() => {});
       }
 
-      const removed = await storage.clearProjectKanbanTasks(projectId, onlyStatus);
+      /*
+       * `?track=` clears one section's cards and nothing else: not another
+       * section's, not the shared cards every section shows, and never the
+       * section's own path milestones, steps and loops — clearing a board
+       * shouldn't take the path with it.
+       */
+      const track = req.query.track;
+      if (track != null && !isProjectGoal(track)) return res.status(400).json({ message: "Unknown section", code: "invalid_input", field: "track" });
+      let removed: number;
+      if (isProjectGoal(track)) {
+        const onPath = (tags: string[] | null) => (tags ?? []).some((x) => x.startsWith("backbone:") || x.startsWith("parent:") || x.startsWith("injected:") || x === "kind:loop");
+        const ids = (tasks as any[]).filter((t) => (t.tags ?? []).includes(`track:${track}`) && !onPath(t.tags) && (!onlyStatus || t.status === onlyStatus)).map((t) => t.id as string);
+        removed = ids.length ? (await db.delete(projectKanbanTasks).where(and(eq(projectKanbanTasks.projectId, projectId), inArray(projectKanbanTasks.id, ids))).returning({ id: projectKanbanTasks.id })).length : 0;
+      } else {
+        removed = await storage.clearProjectKanbanTasks(projectId, onlyStatus);
+      }
       await storage.logActivity({
         projectId, userId,
         action: onlyStatus ? `cleared ${removed} ${onlyStatus} tasks` : `cleared all ${removed} tasks`,
@@ -1906,7 +1923,8 @@ ${PLAIN_LANGUAGE_RULES}`;
           assigneeId: null,
           dueDate: null,
           // Keep the roadmap link visible on the card; there's no phase FK.
-          tags: t.phase ? [String(t.phase).slice(0, 100)] : [],
+          // Generated from inside a section, the tasks belong to it.
+          tags: [...(t.phase ? [String(t.phase).slice(0, 100)] : []), ...(isProjectGoal(req.body?.goal) ? [`track:${req.body.goal}`] : [])],
           order: startOrder + created.length,
         });
         created.push(task);
@@ -1933,7 +1951,7 @@ ${PLAIN_LANGUAGE_RULES}`;
     }
   });
 
-  app.post("/api/projects/:id/personas", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/personas", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
@@ -2059,7 +2077,7 @@ ${PLAIN_LANGUAGE_RULES}`;
   });
 
   // --- Business Plan ---
-  app.post("/api/projects/:id/business-plan", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/business-plan", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       const project = await storage.getProject(req.params.id);
       if (!project) return res.status(404).json({ message: "Project not found" });
@@ -2073,7 +2091,7 @@ ${PLAIN_LANGUAGE_RULES}`;
   });
 
   // --- Application Questions ---
-  app.post("/api/projects/:id/application-questions", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/application-questions", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       const project = await storage.getProject(req.params.id);
       if (!project) return res.status(404).json({ message: "Project not found" });
@@ -2666,7 +2684,7 @@ RULES:
       res.json(await storage.getProjectExperiments(req.params.id));
     } catch (e) { res.status(500).json({ message: "Failed to get experiments" }); }
   });
-  app.post("/api/projects/:id/experiments", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/experiments", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       const data = insertExperimentSchema.parse({ ...req.body, projectId: req.params.id, userId: (req.user as any).id });
@@ -2694,7 +2712,7 @@ RULES:
       res.json(await storage.getProjectPricingTiers(req.params.id));
     } catch (e) { res.status(500).json({ message: "Failed to get pricing tiers" }); }
   });
-  app.post("/api/projects/:id/pricing", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/pricing", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       const data = insertPricingTierSchema.parse({ ...req.body, projectId: req.params.id });
@@ -2717,9 +2735,57 @@ RULES:
 
   // Analytics Events
   /** Where this project is on its path: the phase, the step, and the one next action. */
+  /** `?goal=` (or `goal` in the body) picks a section; absent, the primary path. Anything else is refused, not guessed. */
+  const sectionOf = (req: any, res: any): { ok: true; goal: any } | { ok: false } => {
+    const raw = req.query?.goal ?? req.body?.goal;
+    if (raw == null || raw === "") return { ok: true, goal: null };
+    if (!isProjectGoal(raw)) { res.status(400).json({ message: "Pick one of the three sections.", code: "invalid_input", field: "goal" }); return { ok: false }; }
+    return { ok: true, goal: raw };
+  };
+
+  /**
+   * The three sections — Ship, Systemize, Raise — each with whether it's
+   * started and how far along it is. Cheap: nothing is synced, so the
+   * manager can poll it to keep the section buttons live.
+   */
+  app.get("/api/projects/:id/tracks", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const tracks = await listTracks(req.params.id);
+      if (!tracks) return res.status(404).json({ message: "Project not found" });
+      res.json(tracks);
+    } catch (error) {
+      console.error("Tracks error:", error);
+      res.status(500).json({ message: "Couldn't read the sections" });
+    }
+  });
+
+  /** Starting a section: its kind, then its path on the board. The rest of the project is untouched. */
+  app.post("/api/projects/:id/tracks", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
+    try {
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const goal = req.body?.goal;
+      const subcategory = String(req.body?.subcategory ?? "");
+      if (!isProjectGoal(goal)) return res.status(400).json({ message: "Pick one of the three sections.", code: "invalid_input", field: "goal" });
+      if (!isValidSubcategory(goal, subcategory)) return res.status(400).json({ message: `"${subcategory}" is not a kind of "${goal}" project.`, code: "subcategory_mismatch", field: "subcategory" });
+      const result = await startTrack(req.params.id, goal, subcategory);
+      void recordActivity({
+        name: "track.started", userId: (req.user as any).id, visitorId: req.visitorId ?? "unknown", sessionId: req.sessionId ?? "unknown",
+        path: req.originalUrl, projectId: req.params.id, props: { goal, subcategory, restored: (result as any).restored ?? 0 },
+      });
+      res.json(result);
+    } catch (error: any) {
+      if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
+      console.error("Track start error:", error);
+      res.status(500).json({ message: "Couldn't start that section" });
+    }
+  });
+
   app.get("/api/projects/:id/path", isAuthenticated, async (req: any, res) => {
     try {
-      const status = await pathStatus(req.params.id);
+      const section = sectionOf(req, res);
+      if (!section.ok) return;
+      const status = await pathStatus(req.params.id, section.goal);
       if (!status) return res.status(404).json({ message: "Project not found" });
       // The step just finished, for "share it for feedback" on the path.
       res.json(status.adopted ? {
@@ -2744,8 +2810,13 @@ RULES:
       const userId = (req.user as any).id;
       const projectId = req.params.id;
       if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
-      const project = await storage.getProject(projectId);
-      if (!project) return res.status(404).json({ message: "Project not found" });
+      const full = await storage.getProject(projectId);
+      if (!full) return res.status(404).json({ message: "Project not found" });
+      const section = sectionOf(req, res);
+      if (!section.ok) return;
+      const track = await trackState(projectId, section.goal);
+      if (!track) return res.status(400).json({ message: "Start that section first.", code: "track_not_started" });
+      const project = { ...full, goal: track.goal, subcategory: track.subcategory, capitalRoute: track.capitalRoute };
 
       const built = await instantiatePathTree(projectId, project.goal as any, project.subcategory, { keepRoadmap: true });
       const backbone = resolveTree(project.goal as any, project.subcategory, (project as any).capitalRoute).filter((p) => !p.optional).flatMap((p) => p.milestones)
@@ -2769,7 +2840,7 @@ RULES:
         await storage.deductCredits(userId, CREDIT_COSTS.taskAssist);
       }
       const { marked, filled } = await reconcileMilestones(projectId, recognised, "nova");
-      const status = await pathStatus(projectId);
+      const status = await pathStatus(projectId, track.goal);
       res.json({ built: built.created, recognised: recognised.filter((r) => marked.includes(r.id)), filled, loops, plan: status?.adopted ? status.plan : null, read });
     } catch (error: any) {
       if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
@@ -2792,7 +2863,7 @@ RULES:
   });
 
   /** The builder marking a milestone done from the map — quick catch-up, no AI. */
-  app.post("/api/projects/:id/path/mark", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/path/mark", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
@@ -2921,7 +2992,7 @@ RULES:
     }
   });
 
-  app.post("/api/projects/:id/path/work/:workId/choose", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/path/work/:workId/choose", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
@@ -3133,7 +3204,7 @@ RULES:
     if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Only the owner can see this" });
     res.json({ configured: !!project.dataSource, kind: project.dataSource === "self" ? "self" : project.dataSource ? "connection" : null });
   });
-  app.put("/api/projects/:id/data-source", isAuthenticated, async (req: any, res) => {
+  app.put("/api/projects/:id/data-source", isAuthenticated, rateLimit("external"), async (req: any, res) => {
     const project = await storage.getProject(req.params.id);
     if (!project) return res.status(404).json({ message: "Project not found" });
     if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Only the owner can set this" });
@@ -3159,7 +3230,7 @@ RULES:
     res.json({ shape: await getDataShape(req.params.id) });
   });
   /** Re-read the database now. Owner. */
-  app.post("/api/projects/:id/data-shape/refresh", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/data-shape/refresh", isAuthenticated, rateLimit("external"), async (req: any, res) => {
     const project = await storage.getProject(req.params.id);
     if (!project) return res.status(404).json({ message: "Project not found" });
     if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Only the owner can do this" });
@@ -3192,11 +3263,13 @@ RULES:
   });
 
   /** Entering, extending or leaving an optional phase — the keep-building branch. */
-  app.post("/api/projects/:id/path/branch", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/path/branch", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       const phaseId = req.body?.phaseId == null ? null : String(req.body.phaseId);
-      const result = req.body?.extend === true && phaseId ? await extendBranch(req.params.id, phaseId) : await setBranch(req.params.id, phaseId);
+      const section = sectionOf(req, res);
+      if (!section.ok) return;
+      const result = req.body?.extend === true && phaseId ? await extendBranch(req.params.id, phaseId, section.goal) : await setBranch(req.params.id, phaseId, section.goal);
       res.json(result);
     } catch (error: any) {
       if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
@@ -3215,7 +3288,9 @@ RULES:
       const projectId = req.params.id;
       if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
       const phaseId = String(req.body?.phaseId ?? "");
-      const status = await pathStatus(projectId);
+      const section = sectionOf(req, res);
+      if (!section.ok) return;
+      const status = await pathStatus(projectId, section.goal);
       if (!status) return res.status(404).json({ message: "Project not found" });
       if (!status.adopted) return res.status(400).json({ message: "Put the project on its path first.", code: "no_path" });
       const phase = status.phases.find((p) => p.id === phaseId);
@@ -3228,7 +3303,7 @@ RULES:
       const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova path additions");
       if (!ent) return;
       const proposals = await proposeInjections(ent, phase.title, phase.milestones.map((m) => m.title), artifacts, phase.injectRoom);
-      const result = await createInjections(projectId, phaseId, proposals, artifacts);
+      const result = await createInjections(projectId, phaseId, proposals, artifacts, status.goal);
       await storage.deductCredits(userId, CREDIT_COSTS.taskAssist);
       res.json(result);
     } catch (error: any) {
@@ -3239,7 +3314,7 @@ RULES:
   });
 
   /** Moving to another path, visibly. Shared milestones already done carry across. */
-  app.post("/api/projects/:id/path/switch", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/path/switch", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       const project = await storage.getProject(req.params.id);
       if (!project) return res.status(404).json({ message: "Project not found" });
@@ -3276,13 +3351,15 @@ RULES:
 
       // Kept as a plain array for the shared CRUD helper on the client; the
       // client reads the analytics level from useEntitlements().
-      res.json(await storage.getProjectAnalyticsEvents(req.params.id));
+      const events = await storage.getProjectAnalyticsEvents(req.params.id);
+      const track = req.query.track;
+      res.json(isProjectGoal(track) ? events.filter((e) => !e.track || e.track === track) : events);
     } catch (e) { res.status(500).json({ message: "Failed to get analytics events" }); }
   });
-  app.post("/api/projects/:id/analytics-events", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/analytics-events", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      const data = insertAnalyticsEventSchema.parse({ ...req.body, projectId: req.params.id });
+      const data = insertAnalyticsEventSchema.parse({ ...req.body, track: isProjectGoal(req.body?.track) ? req.body.track : null, projectId: req.params.id });
       res.json(await storage.createAnalyticsEvent(data));
     } catch (e) { res.status(500).json({ message: "Failed to create analytics event" }); }
   });
@@ -3307,7 +3384,7 @@ RULES:
       res.json(await storage.getProjectLegalDocs(req.params.id));
     } catch (e) { res.status(500).json({ message: "Failed to get legal docs" }); }
   });
-  app.post("/api/projects/:id/legal-docs", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/legal-docs", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       const data = insertLegalDocSchema.parse({ ...req.body, projectId: req.params.id });
@@ -3335,7 +3412,7 @@ RULES:
       res.json(await storage.getDeployChecklistItems(req.params.id));
     } catch (e) { res.status(500).json({ message: "Failed to get checklist" }); }
   });
-  app.post("/api/projects/:id/deploy-checklist", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/deploy-checklist", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       const data = insertDeployChecklistItemSchema.parse({ ...req.body, projectId: req.params.id });
@@ -3363,7 +3440,7 @@ RULES:
       res.json(await storage.getProjectSupportTickets(req.params.id));
     } catch (e) { res.status(500).json({ message: "Failed to get tickets" }); }
   });
-  app.post("/api/projects/:id/support-tickets", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/support-tickets", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       const data = insertSupportTicketSchema.parse({ ...req.body, projectId: req.params.id });
@@ -3391,7 +3468,7 @@ RULES:
       res.json(await storage.getProjectLaunchTasks(req.params.id));
     } catch (e) { res.status(500).json({ message: "Failed to get launch tasks" }); }
   });
-  app.post("/api/projects/:id/launch-tasks", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/launch-tasks", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       const data = insertLaunchTaskSchema.parse({ ...req.body, projectId: req.params.id });
@@ -3418,7 +3495,7 @@ RULES:
     res.json(donations);
   });
 
-  app.post("/api/projects/:id/donate", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/donate", isAuthenticated, rateLimit("checkout"), async (req: any, res) => {
     const donorId = (req.user as any).id;
     const projectId = req.params.id;
     const validated = insertDonationSchema.parse({ ...req.body, donorId, projectId });
@@ -3703,9 +3780,16 @@ RULES:
 
   // Users
   app.get("/api/users/search", async (req, res) => {
-    const query = (req.query.q as string) || "";
-    const users = await storage.searchUsers(query);
-    res.json(users);
+    try {
+      const query = String(req.query.q ?? "").slice(0, 100);
+      const limit = req.query.limit !== undefined ? Number(req.query.limit) || undefined : undefined;
+      const offset = req.query.offset !== undefined ? Number(req.query.offset) || 0 : undefined;
+      const users = await storage.searchUsers(query, { limit, offset });
+      res.json(users);
+    } catch (error) {
+      console.error("User search error:", error);
+      res.status(500).json({ message: "Search failed" });
+    }
   });
 
   /**
@@ -3731,7 +3815,7 @@ RULES:
     });
   });
 
-  app.post("/api/projects/:id/media", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/media", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       const project = await storage.getProject(req.params.id);
       if (!project) return res.status(404).json({ message: "Project not found" });
@@ -4879,7 +4963,7 @@ Additionally include:
   });
 
   /** Turn a roadmap phase into a real project milestone (Builder and above). */
-  app.post("/api/roadmap-phases/:phaseId/create-milestone", isAuthenticated, async (req: any, res) => {
+  app.post("/api/roadmap-phases/:phaseId/create-milestone", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       const ent = await requireFeature(res, userId, "aiMilestones", "AI milestone creation");
@@ -5209,15 +5293,20 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   });
 
   // --- Milestones ---
-  app.get("/api/projects/:id/milestones", isAuthenticated, async (req: any, res) => {
+  // Readable by anyone who can see the project: the public page has a Milestones tab.
+  app.get("/api/projects/:id/milestones", async (req: any, res) => {
     try {
-      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
+      const project = await storage.getProject(req.params.id);
+      const viewerId = req.user?.id as string | undefined;
+      if (!project || (project.isPrivate && !(viewerId && await isProjectMember(viewerId, project.id)))) {
+        return res.status(404).json({ message: "Project not found" });
+      }
       const milestones = await storage.getProjectMilestones(req.params.id);
       res.json(milestones);
     } catch (error) { res.status(500).json({ message: "Failed to get milestones" }); }
   });
 
-  app.post("/api/projects/:id/milestones", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/milestones", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
       const { id: _id, projectId: _p, createdAt: _c, targetDate, ...body } = req.body ?? {};
@@ -5334,7 +5423,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     } catch (error) { res.status(500).json({ message: "Failed to get decisions" }); }
   });
 
-  app.post("/api/projects/:id/decisions", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/decisions", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
       const decision = await storage.createDecision({ ...req.body, projectId: req.params.id, userId: (req.user as any).id });
@@ -5385,14 +5474,17 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
       const files = await storage.getProjectFiles(req.params.id);
-      res.json(files);
+      // `?track=` shows that section's files and the shared ones (no section); absent, everything.
+      const track = req.query.track;
+      res.json(isProjectGoal(track) ? files.filter((f) => !f.track || f.track === track) : files);
     } catch (error) { res.status(500).json({ message: "Failed to get files" }); }
   });
 
-  app.post("/api/projects/:id/files", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/files", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
-      const file = await storage.createProjectFile({ ...req.body, projectId: req.params.id, uploaderId: (req.user as any).id });
+      const track = isProjectGoal(req.body?.track) ? req.body.track : null;
+      const file = await storage.createProjectFile({ ...req.body, track, projectId: req.params.id, uploaderId: (req.user as any).id });
       await storage.logActivity({ projectId: req.params.id, userId: (req.user as any).id, action: "uploaded file", entityType: "file", entityId: file.id, metadata: { name: file.name } });
       res.json(file);
     } catch (error) { res.status(500).json({ message: "Failed to create file" }); }
@@ -5416,7 +5508,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     } catch (error) { res.status(500).json({ message: "Failed to get links" }); }
   });
 
-  app.post("/api/projects/:id/links", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/links", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
       const link = await storage.createProjectLink({ ...req.body, projectId: req.params.id });
@@ -5539,7 +5631,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   app.get("/api/contests", async (req: any, res) => {
     const { status } = req.query;
     const allContests = await storage.getContests(status ? { status: status as string } : undefined);
-    const userId = req.user?.claims?.sub;
+    const userId = req.user?.id as string | undefined;
     if (userId) {
       const enriched = await Promise.all(
         allContests.map(async (c) => ({
@@ -5555,7 +5647,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   app.get("/api/contests/:id", async (req: any, res) => {
     const contest = await storage.getContest(req.params.id);
     if (!contest) return res.status(404).json({ message: "Contest not found" });
-    const userId = req.user?.claims?.sub;
+    const userId = req.user?.id as string | undefined;
     const isParticipant = userId ? await storage.isContestParticipant(contest.id, userId) : false;
     res.json({ ...contest, isParticipant });
   });
@@ -5565,7 +5657,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     res.json(participants);
   });
 
-  app.post("/api/contests/:id/join", isAuthenticated, async (req: any, res) => {
+  app.post("/api/contests/:id/join", isAuthenticated, rateLimit("apply"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       const contestId = req.params.id;
@@ -5587,7 +5679,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     }
   });
 
-  app.post("/api/contests/:id/submit", isAuthenticated, async (req: any, res) => {
+  app.post("/api/contests/:id/submit", isAuthenticated, rateLimit("apply"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       const contestId = req.params.id;
@@ -5684,6 +5776,16 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     } catch (error) {
       console.error("Get connections error:", error);
       res.status(500).json({ message: "Failed to get connections" });
+    }
+  });
+
+  /** Requests you've sent that haven't been answered — the Sent tab on Invitations. */
+  app.get("/api/connections/sent", isAuthenticated, async (req: any, res) => {
+    try {
+      res.json(await storage.getSentConnectionRequests((req.user as any).id));
+    } catch (error) {
+      console.error("Get sent connection requests error:", error);
+      res.status(500).json({ message: "Failed to get sent requests" });
     }
   });
 
@@ -5808,7 +5910,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   });
 
   // Stripe Connect for donation payouts
-  app.post("/api/stripe/connect-account", isAuthenticated, async (req: any, res) => {
+  app.post("/api/stripe/connect-account", isAuthenticated, rateLimit("checkout"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       const user = await storage.getUser(userId);
@@ -5905,7 +6007,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
    * Historic `donations` rows are untouched; they still count toward the
    * public totals and reputation.
    */
-  app.post("/api/projects/:id/donate-checkout", isAuthenticated, async (req: any, res) => {
+  app.post("/api/projects/:id/donate-checkout", isAuthenticated, rateLimit("checkout"), async (req: any, res) => {
     res.status(410).json({
       message: "Direct donations have moved to backing, where funds are held until the project is reviewed.",
       replacement: `/api/projects/${req.params.id}/backing/checkout`,
@@ -5949,6 +6051,11 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         },
         privateProjectsUsed,
         creditCosts: CREDIT_COSTS,
+        // The revenue loop's trigger: "low" offers "Upgrade to keep generating" before a generate fails.
+        creditState: creditState({ creditsRemaining: sub.creditsRemaining === Infinity ? -1 : sub.creditsRemaining, creditsLimit: sub.creditsLimit === Infinity ? -1 : sub.creditsLimit, unlimited: sub.creditsLimit === Infinity }),
+        lowCreditsAt: sub.creditsLimit === Infinity ? null : lowCreditsAt(sub.creditsLimit),
+        // A subscription payment that failed (until one goes through), or was refunded in full.
+        billingIssue: await billingIssueFor(userId),
       });
     } catch (error) {
       console.error("Error fetching subscription:", error);
@@ -5998,10 +6105,10 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     });
   });
 
-  app.post("/api/checkout", isAuthenticated, async (req: any, res) => {
+  app.post("/api/checkout", isAuthenticated, rateLimit("checkout"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
-      const { priceId } = req.body;
+      const { priceId, returnTo } = req.body;
       if (!priceId) return res.status(400).json({ message: "priceId is required" });
 
       // Only allow prices belonging to one of our own tiers, so an arbitrary
@@ -6030,8 +6137,9 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         payment_method_types: ["card"],
         line_items: [{ price: priceId, quantity: 1 }],
         mode: "subscription",
-        success_url: `${req.protocol}://${req.get("host")}/pricing?success=true`,
-        cancel_url: `${req.protocol}://${req.get("host")}/pricing?canceled=true`,
+        // Back to the page they upgraded from (a path step mid-generate), or the pricing page.
+        success_url: checkoutReturnUrls(`${req.protocol}://${req.get("host")}`, returnTo).success,
+        cancel_url: checkoutReturnUrls(`${req.protocol}://${req.get("host")}`, returnTo).cancel,
         metadata: { userId },
       });
 
@@ -6042,7 +6150,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     }
   });
 
-  app.post("/api/billing-portal", isAuthenticated, async (req: any, res) => {
+  app.post("/api/billing-portal", isAuthenticated, rateLimit("checkout"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       const user = await storage.getUser(userId);
@@ -6053,7 +6161,8 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       const stripe = await getUncachableStripeClient();
       const session = await stripe.billingPortal.sessions.create({
         customer: user.stripeCustomerId,
-        return_url: `${req.protocol}://${req.get("host")}/pricing`,
+        // Back to where "update your card" was clicked, or the pricing page.
+        return_url: `${req.protocol}://${req.get("host")}${safeReturnPath(req.body?.returnTo) ?? "/pricing"}`,
       });
 
       res.json({ url: session.url });
@@ -6123,7 +6232,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     }
   });
 
-  app.post("/api/stripe/sync-subscription", isAuthenticated, async (req: any, res) => {
+  app.post("/api/stripe/sync-subscription", isAuthenticated, rateLimit("checkout"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       const user = await storage.getUser(userId);
@@ -6150,11 +6259,8 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         const price = await stripe.prices.retrieve(priceId);
         const metadata = price.metadata || {};
         const tier = metadata.tier || "free";
-        await storage.updateUserStripeInfo(userId, {
-          subscriptionTier: tier,
-          stripeSubscriptionId: sub.id,
-        });
-        return res.json({ tier });
+        const { refilled } = await applyTier(userId, tier, sub.id);
+        return res.json({ tier, refilled });
       }
 
       res.json({ tier: user.subscriptionTier || "free" });

@@ -19,6 +19,7 @@ import { ZodError } from "zod";
 import { registerRoutes } from "./routes";
 import { WebhookHandlers, WebhookVerificationError } from "./webhookHandlers";
 import { ModelResponseError } from "./ai-json";
+import { enforceRejectionLimit, countRejection, ipKey } from "./moderation";
 import { stripSealedFields } from "@shared/strip-sealed";
 
 export interface CreateAppOptions {
@@ -127,8 +128,13 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
     "/api/stripe/webhook",
     express.raw({ type: "application/json" }),
     async (req, res) => {
+      // public-write: Stripe's signature over the raw body (WebhookHandlers.processWebhook, test/integration/stripe-webhook.test.ts); failed deliveries limited per address
+      // An address whose deliveries keep failing it is refused before the next check.
+      const sender = ipKey(req);
+      if (!(await enforceRejectionLimit(res, sender, "webhookReject"))) return;
       const signature = req.headers["stripe-signature"];
       if (!signature) {
+        await countRejection(sender, "webhookReject");
         return res.status(400).json({ error: "Missing stripe-signature" });
       }
       try {
@@ -142,6 +148,7 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
         // A bad signature is the sender's problem: 400, no retry. Anything
         // after verification is ours: 500, so Stripe retries the delivery.
         if (error instanceof WebhookVerificationError) {
+          await countRejection(sender, "webhookReject");
           console.error("Webhook rejected:", error.message);
           return res.status(400).json({ error: "Webhook signature verification failed" });
         }

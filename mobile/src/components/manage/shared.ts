@@ -74,12 +74,12 @@ export const workActionLabel = (actor: Actor, kind?: WorkKind | null) =>
   kind === "plan" ? "Have Nova build this plan" : WORK_ACTION_LABEL[actor] ?? "Have Nova work on this";
 
 export const LOOP_TYPES: LoopType[] = ["product", "growth", "retention", "revenue", "referral"];
-export const LOOP_TYPE_INFO: Record<LoopType, { label: string; asks: string; example: string }> = {
-  product: { label: "Product loop", asks: "The core thing one kind of user does over and over and gets value from each time.", example: "Open the path → do the next step → see the date move → come back for the next step." },
-  growth: { label: "Growth loop", asks: "How new people find the product without you finding each of them.", example: "Builder publishes a check-in → it's indexed and shared → a stranger lands on it → signs up → publishes their own." },
-  retention: { label: "Retention loop", asks: "Why someone who used it once comes back next week.", example: "Post an update → get a comment → notified → come back to reply → post the next update." },
-  revenue: { label: "Revenue loop", asks: "How using the product turns into money, and money into more use.", example: "Hit the free limit → upgrade → get more done → need more capacity → stay subscribed or upgrade." },
-  referral: { label: "Referral loop", asks: "How a user deliberately brings another user in.", example: "Invite a teammate → they join and get value → they get their own invite link and credit → invite theirs." },
+export const LOOP_TYPE_INFO: Record<LoopType, { label: string; asks: string; closes: string; example: string }> = {
+  product: { label: "Product loop", asks: "The core thing one kind of user does over and over and gets value from each time.", closes: "Finishing the cycle gives the user the input for starting it again.", example: "Open the path → do the next step → see the date move → come back for the next step." },
+  growth: { label: "Growth loop", asks: "How new people find the product without you finding each of them.", closes: "Something a user makes or does becomes the thing the next stranger discovers.", example: "Builder publishes a finished step as a public page → it's indexed and shared → a stranger lands on it → signs up → publishes their own." },
+  retention: { label: "Retention loop", asks: "Why someone who used it once comes back next week.", closes: "Each visit leaves a reason for the next one — a reply, a streak, new state waiting.", example: "Post an update → get a comment → notified → come back to reply → post the next update." },
+  revenue: { label: "Revenue loop", asks: "How using the product turns into money, and money into more use.", closes: "Paying unlocks value that makes paying again (or paying more) the obvious next step.", example: "Hit the free limit → upgrade → get more done → need more capacity → stay subscribed or upgrade." },
+  referral: { label: "Referral loop", asks: "How a user deliberately brings another user in.", closes: "The invited person gets their own reason and means to invite the next one.", example: "Invite a teammate → they join and get value → they get their own invite link and credit → invite theirs." },
 };
 export const LOOP_TYPE_COLOR: Record<LoopType, string> = {
   product: "#9745B5", growth: "#0284C7", retention: "#7C3AED", revenue: "#059669", referral: "#EA580C",
@@ -125,13 +125,28 @@ export interface LoopNode {
   taskId: string; title: string; description: string; written: boolean; status: string; actor: Actor; type: LoopType;
   state: "unwritten" | "written" | "planned" | "building" | "built";
   steps: LoopStep[]; done: number; total: number;
-  closure: { closure: "closed" | "open" | "unbuilt"; breaksAt?: string | null; fix?: string | null; note?: string | null } | null;
+  closure: { closure: "closed" | "open" | "unbuilt"; breaksAt?: string | null; fix?: string | null; note?: string | null; returnPath?: { mechanism: string } | null } | null;
+}
+export type LoopVerdict = "strong" | "competitive" | "weak";
+export interface LoopCompetitiveAudit {
+  competitors: { name: string; why: string }[];
+  summary: string;
+  overallScore: number;
+  loops: {
+    loopTaskId: string; title: string; type: LoopType; score: number; verdict: LoopVerdict;
+    competitors: { name: string; howTheirLoopWorks: string }[];
+    advantage: string; gap: string; breakRisk: string; recommendation: string;
+  }[];
+  weakestLoopTaskId: string | null;
+  caveat: string;
 }
 export interface LoopTreeData {
   sourceId: string; sourceTitle: string; fanOutId: string; fanOutTitle: string; loops: LoopNode[];
   unassigned: { taskId: string; title: string; status: string }[];
   coverage?: { missing: LoopType[]; unwritten: LoopType[]; productLoops: number; complete: boolean };
-  competition?: { id: string; createdAt: string; stale: boolean; audit: { overallScore: number; summary: string; caveat: string; loops: { loopTaskId: string; title: string; type: LoopType; score: number; verdict: string; recommendation?: string; gap?: string }[] } } | null;
+  competition?: { id: string; createdAt: string; stale: boolean; audit: LoopCompetitiveAudit } | null;
+  competitionDue?: boolean;
+  closureAuditAt?: string | null;
 }
 export interface CapitalProfile {
   score: number;
@@ -157,6 +172,8 @@ export interface PathStatus {
   rejectedLoops: string[];
   auditUpdate?: { auditId: string; at: string; applied: string[]; appliedCount: number; pendingCount: number; pendingLoops: string[] } | null;
   lastDone?: { taskId: string; title: string; completedAt: string; sharedPostId: string | null } | null;
+  /** This week's progress update: finished steps nobody has shared yet. */
+  weekly?: { due: boolean; steps: { taskId: string; title: string; completedAt: string }[] };
   pace: { state: PaceState; multiplier: number | null; mode: "date" | "range" | "none" | "pipeline"; projectedAt: string | null; projectedLow: string | null; projectedHigh: string | null; note: string; daysSinceActivity: number } | null;
   proposal: { goal: ProjectGoal; why: string }[] | null;
   capital?: CapitalProfile | null;
@@ -238,6 +255,13 @@ export const weekLabel = (weekStart: string | null | undefined) => {
   return `Week of ${d.toLocaleDateString("en-GB", { day: "numeric", month: "long", timeZone: "UTC" })}`;
 };
 
+// --- Sharing what the path produced (shared/feedback-loop.ts, shared/path-artifacts.ts) ---
+
+export const MAX_ASKS = 4;
+export const ARTIFACT_TITLE_MIN = 5;
+export const ARTIFACT_TITLE_MAX = 120;
+export const ARTIFACT_MAX_TAGS = 5;
+
 // --- Misc -------------------------------------------------------------------
 
 /** The website serves from the API host; big web-only tools link there. */
@@ -247,10 +271,11 @@ export const webUrl = (path: string) => `${API_URL}${path}`;
 export function useRefreshPath(projectId: string) {
   const qc = useQueryClient();
   return () => {
-    for (const key of ["path", "kanban", "briefing", "milestones", "project"]) {
+    for (const key of ["path", "kanban", "briefing", "milestones", "project", "roadmap"]) {
       qc.invalidateQueries({ queryKey: ["manage", projectId, key] });
     }
     qc.invalidateQueries({ queryKey: ["subscription"] });
+    qc.invalidateQueries({ queryKey: ["next-steps"] });
   };
 }
 

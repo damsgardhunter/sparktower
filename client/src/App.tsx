@@ -27,6 +27,7 @@ import Pricing from "@/pages/pricing";
 import BackingReview from "@/pages/backing-review";
 import CheckInDetail from "@/pages/check-in-detail";
 import PublicArtifactPage from "@/pages/public-artifact";
+import { UpgradeToKeepGenerating, CheckoutReturn, BillingIssueNotice } from "@/components/upgrade-to-keep-generating";
 import { useSurfaces } from "@/hooks/use-surfaces";
 import { isPathDisabled } from "@shared/surfaces";
 import FeedbackQueue from "@/pages/feedback-queue";
@@ -159,6 +160,10 @@ function Router() {
             <ThemeToggle />
           </div>
         </header>
+        {/* The revenue loop: out of credits anywhere → plans → checkout → back here. */}
+        <BillingIssueNotice />
+        <UpgradeToKeepGenerating />
+        <CheckoutReturn />
         <main className="flex-1 overflow-y-auto">
           <Switch>
             <Route path="/" component={Home} />

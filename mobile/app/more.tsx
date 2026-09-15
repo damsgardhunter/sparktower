@@ -32,6 +32,14 @@ export default function More() {
     refetchInterval: 5 * 60_000,
   });
 
+  // Analytics is the platform owner's alone; the server answers { owner } (and 404s every analytics route otherwise).
+  const { data: access } = useQuery({
+    queryKey: ["analytics-access"],
+    queryFn: () => api<{ owner: boolean }>("/api/admin/analytics/access"),
+    enabled: isReviewer,
+    retry: false,
+  });
+
   const { data: queue } = useQuery({
     queryKey: ["needs-feedback"],
     queryFn: () => api<any[]>("/api/check-ins/queue/needs-feedback"),
@@ -118,6 +126,7 @@ export default function More() {
         </Group>
 
         <Group title="Community">
+          {on("matches") && <MenuRow icon="people-circle" title="Matches" subtitle="Builders who fit what you're looking for" tint={colors.primary} onPress={() => go("/matches")} testID="more-matches" />}
           {on("leaderboard") && <MenuRow icon="trophy" title="Leaderboard" subtitle="Builder Index and top projects" tint="#CA8A04" onPress={() => go("/(tabs)/leaderboard")} testID="more-leaderboard" />}
           {on("contests") && <MenuRow icon="ribbon" title="Contests" subtitle="Compete, build and earn badges" tint="#E11D48" onPress={() => go("/contests")} />}
           {on("games") && <MenuRow icon="game-controller" title="Games" subtitle="Typing Arena and Signal vs. Noise" tint={colors.novaPurple} onPress={() => go("/games")} />}
@@ -129,6 +138,11 @@ export default function More() {
             <MenuRow icon="shield-checkmark" title="Safety review" subtitle="Reports, limits and the daily checklist" tint={colors.success}
               badge={safety ? (safety.alerts > 0 ? safety.alerts : safety.reviewDue ? "Due" : null) : null}
               onPress={() => go("/admin/safety")} testID="more-safety" />
+            <MenuRow icon="flag" title="Reports" subtitle="What people reported, and what was done" tint={colors.danger} onPress={() => go("/admin/reports")} testID="more-reports" />
+            <MenuRow icon="cash" title="Backing review" subtitle="Campaigns waiting on a decision and payouts" tint={colors.warning} onPress={() => go("/admin/backing")} />
+            <MenuRow icon="pulse" title="Loop metrics" subtitle="Whether the weekly loops are closing" tint={colors.info} onPress={() => go("/admin/loop-metrics")} />
+            <MenuRow icon="toggle" title="Surfaces" subtitle="Kill switches for each feature area" tint={colors.textSecondary} onPress={() => go("/admin/surfaces")} />
+            {access?.owner && <MenuRow icon="analytics" title="Analytics" subtitle="Visits, signups and what people do" tint={colors.novaPurple} onPress={() => go("/admin/analytics")} />}
           </Group>
         )}
 

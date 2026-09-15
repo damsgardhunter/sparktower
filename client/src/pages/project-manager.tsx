@@ -29,6 +29,16 @@ import {
   Image as ImageIcon, HandCoins,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
+import { SectionPathStrip, requestOpenMilestone } from "@/components/section-path-strip";
+import { SectionBar } from "@/components/manager/section-bar";
+import { SectionTabRow } from "@/components/manager/more-menu";
+import { ManagerRail, useLatestAudit } from "@/components/manager/manager-rail";
+import { StartSectionDialog } from "@/components/manager/start-section-dialog";
+import { isTabId, tabDef, type TabId } from "@/components/manager/tabs";
+import {
+  useSections, sectionDef, sectionFromUrl, taskInSection, sectionTag, LIVE_INTERVAL_MS,
+} from "@/lib/sections";
+import { DEFAULT_PROJECT_GOAL, isProjectGoal, type ProjectGoal } from "@shared/goals";
 import { RoadmapTab } from "@/components/roadmap-tab";
 import { NovaDashboard } from "@/components/nova-dashboard";
 import { HealthCheckPanel } from "@/components/health-check-panel";
@@ -67,7 +77,13 @@ import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { useUpload } from "@/hooks/use-upload";
 
-type TabId = "nova" | "setup" | "public" | "roadmap" | "kanban" | "milestones" | "team" | "files" | "activity" | "personas" | "chat" | "research" | "strategy" | "launch" | "analytics" | "support" | "codebase" | "investors";
+const sectionStoreKey = (projectId: string | undefined) => `manager-section:${projectId}`;
+function storedSection(projectId: string | undefined): ProjectGoal | null {
+  try {
+    const v = window.localStorage.getItem(sectionStoreKey(projectId));
+    return isProjectGoal(v) ? v : null;
+  } catch { return null; }
+}
 
 const KANBAN_COLUMNS = [
   { id: "todo" as const, label: "To Do", icon: Circle, color: "text-muted-foreground" },
@@ -114,11 +130,22 @@ export default function ProjectManager() {
   const { toast } = useToast();
   const projectId = params?.id;
 
-  // `?tab=investors` opens straight onto a tab — the public page's "Set up applications" links there.
+  // `?tab=` opens straight onto a tab (the public page's "Set up applications" links to investors).
   const [activeTab, setActiveTab] = useState<TabId>(() => {
     const t = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("tab") : null;
-    return (t === "investors" ? t : "nova") as TabId;
+    return isTabId(t) ? t : "nova";
   });
+  /**
+   * The open section: ?section= in the URL, else the one last opened here,
+   * else (once the tracks load) the project's primary. Only ever chosen by
+   * the user — the three are parallel, so this is just which one you view.
+   */
+  const [chosenSection, setChosenSection] = useState<ProjectGoal | null>(() => sectionFromUrl() ?? storedSection(projectId));
+  const { data: sectionsData } = useSections(projectId);
+  const primary: ProjectGoal = sectionsData?.primary ?? DEFAULT_PROJECT_GOAL;
+  const section: ProjectGoal = chosenSection ?? primary;
+  const sectionSummary = sectionsData?.tracks.find((t) => t.goal === section);
+  const [startFor, setStartFor] = useState<ProjectGoal | null>(null);
   /**
    * The job a Nova recommendation handed to a tab, held here because
    * navigating and handing over are one decision. The destination tab claims
@@ -145,11 +172,16 @@ export default function ProjectManager() {
 
   const { uploadFile: uploadProjectFile, isUploading: isUploadingFile } = useUpload({
     onSuccess: (response) => {
-      createFileMutation.mutate({ name: response.metadata.name, url: response.objectPath, fileType: response.metadata.contentType, size: response.metadata.size, folder: uploadFolder });
+      createFileMutation.mutate({
+        name: response.metadata.name, url: response.objectPath, fileType: response.metadata.contentType,
+        size: response.metadata.size, folder: uploadFolder, track: uploadShared ? null : section,
+      });
     },
     onError: () => { toast({ title: "Upload failed", variant: "destructive" }); },
   });
   const [uploadFolder, setUploadFolder] = useState("general");
+  /** Add the next upload to every section instead of just the open one. */
+  const [uploadShared, setUploadShared] = useState(false);
 
   const { data: project, isLoading: projectLoading } = useQuery<Project>({
     queryKey: ["/api/projects", projectId],
@@ -163,8 +195,16 @@ export default function ProjectManager() {
 
   const { data: kanbanTasks, isLoading: tasksLoading } = useQuery<ProjectKanbanTask[]>({
     queryKey: ["/api/projects", projectId, "kanban"],
-    enabled: !!projectId && activeTab === "kanban",
+    // Milestones and Team read the board too: which section a milestone is in, and who's doing what.
+    enabled: !!projectId && (activeTab === "kanban" || activeTab === "milestones" || activeTab === "team"),
+    refetchInterval: activeTab === "kanban" ? LIVE_INTERVAL_MS : false,
   });
+
+  /** The board as the open section sees it: its own cards and the ones on no path. */
+  const sectionTasks = useMemo(
+    () => (kanbanTasks || []).filter((t) => taskInSection(t.tags as string[] | null, section, primary)),
+    [kanbanTasks, section, primary],
+  );
 
   /**
    * Completion history, which outlives the board. Without it a cleared board
@@ -216,8 +256,14 @@ export default function ProjectManager() {
     enabled: !!projectId && activeTab === "activity",
   });
 
+  // The open section's files plus the shared ones. The key keeps the "files" prefix so existing invalidations reach it.
   const { data: projectFiles } = useQuery<(ProjectFile & { uploader: User })[]>({
-    queryKey: ["/api/projects", projectId, "files"],
+    queryKey: ["/api/projects", projectId, "files", "section", section],
+    queryFn: async () => {
+      const res = await fetch(`/api/projects/${projectId}/files?track=${section}`, { credentials: "include" });
+      if (!res.ok) throw new Error(`${res.status}: ${(await res.text()) || res.statusText}`);
+      return res.json();
+    },
     enabled: !!projectId && activeTab === "files",
   });
 
@@ -254,12 +300,21 @@ export default function ProjectManager() {
     queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "kanban"] });
     queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "calendar"] });
     queryClient.invalidateQueries({ queryKey: ["/api/reputation"] });
+    // A task moving can move the path: refresh the sections' progress and the strip.
+    queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "tracks"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "path"] });
   }
 
+  /*
+   * Clearing works on the open section's cards only. The board-wide endpoint
+   * would take the other sections' cards with it, so each card goes on its
+   * own; completions were archived when they moved to Done.
+   */
   const clearTasksMutation = useMutation({
     mutationFn: async (onlyDone: boolean) => {
-      const res = await apiRequest("DELETE", `/api/projects/${projectId}/kanban${onlyDone ? "?status=done" : ""}`);
-      return res.json();
+      // The server clears this section's own cards in one go (keeping stats, the path's milestones and shared cards).
+      const res = await apiRequest("DELETE", `/api/projects/${projectId}/kanban?track=${section}${onlyDone ? "&status=done" : ""}`);
+      return res.json() as Promise<{ removed: number }>;
     },
     onSuccess: (data) => {
       toast({
@@ -288,11 +343,11 @@ export default function ProjectManager() {
   });
 
   const aiGenerateTasksMutation = useMutation({
-    mutationFn: async () => { const res = await apiRequest("POST", `/api/projects/${projectId}/kanban/ai-generate`); return res.json(); },
+    mutationFn: async () => { const res = await apiRequest("POST", `/api/projects/${projectId}/kanban/ai-generate`, { goal: section }); return res.json(); },
     onSuccess: (data) => { toast({ title: "Tasks generated", description: `Nova created ${data.length} tasks.` }); invalidateTaskViews(); },
     onError: (error: any) => {
       const msg = error.message || "";
-      if (msg.includes("403") || msg.includes("Insufficient")) toast({ title: "Insufficient credits", variant: "destructive" });
+      if (msg.includes("403") || msg.includes("insufficient_credits")) toast({ title: "Insufficient credits", variant: "destructive" });
       else toast({ title: "Generation failed", variant: "destructive" });
     },
   });
@@ -315,7 +370,7 @@ export default function ProjectManager() {
     onSuccess: () => { toast({ title: "Persona generated by Nova AI" }); queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "personas"] }); },
     onError: (error: any) => {
       const msg = error.message || "";
-      if (msg.includes("403") || msg.includes("Insufficient")) toast({ title: "Insufficient credits", variant: "destructive" });
+      if (msg.includes("403") || msg.includes("insufficient_credits")) toast({ title: "Insufficient credits", variant: "destructive" });
       else toast({ title: "Generation failed", variant: "destructive" });
     },
   });
@@ -325,7 +380,7 @@ export default function ProjectManager() {
     onSuccess: (data) => { toast({ title: "Recommendations ready", description: `Found ${data.recommendations?.length || 0} potential members.` }); },
     onError: (error: any) => {
       const msg = error.message || "";
-      if (msg.includes("403") || msg.includes("Insufficient")) toast({ title: "Insufficient credits", variant: "destructive" });
+      if (msg.includes("403") || msg.includes("insufficient_credits")) toast({ title: "Insufficient credits", variant: "destructive" });
       else toast({ title: "Recommendation failed", variant: "destructive" });
     },
   });
@@ -469,12 +524,71 @@ export default function ProjectManager() {
       blockedByTaskId: taskForm.blockedByTaskId || null, subtasks: taskForm.subtasks,
       milestoneId: taskForm.milestoneId || null,
     };
+    // A card made inside a section belongs to it.
+    if (!editingTask && !data.tags.some((t) => t.startsWith("track:"))) data.tags = [...data.tags, sectionTag(section)];
     if (editingTask) { updateTaskMutation.mutate({ taskId: editingTask.id, data }); closeTaskDialog(); }
     else createTaskMutation.mutate(data);
   }
 
   function handleStatusChange(taskId: string, newStatus: string) {
     updateTaskMutation.mutate({ taskId, data: { status: newStatus } });
+  }
+
+  /** The section's milestones: ones whose linked cards are in it, and ones linked to nothing. */
+  const sectionMilestones = useMemo(() => (milestones || []).filter((m) => {
+    const linked = (kanbanTasks || []).filter((t) => (t as any).milestoneId === m.id);
+    return linked.length === 0 || linked.some((t) => taskInSection(t.tags as string[] | null, section, primary));
+  }), [milestones, kanbanTasks, section, primary]);
+
+  // Keep place: the URL carries section + tab (other params left alone), and the section is remembered per project.
+  useEffect(() => {
+    if (!projectId) return;
+    const params = new URLSearchParams(window.location.search);
+    params.set("section", section);
+    params.set("tab", activeTab);
+    const next = `${window.location.pathname}?${params.toString()}${window.location.hash}`;
+    if (next !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+      window.history.replaceState(window.history.state, "", next);
+    }
+  }, [projectId, section, activeTab]);
+  useEffect(() => {
+    if (!projectId || !chosenSection) return;
+    try { window.localStorage.setItem(sectionStoreKey(projectId), chosenSection); } catch { /* private mode */ }
+  }, [projectId, chosenSection]);
+
+  // Coming back to the tab: pick up whatever changed elsewhere (a teammate, the editor bridge, another tab).
+  useEffect(() => {
+    if (!projectId) return;
+    const refresh = () => {
+      if (document.visibilityState !== "visible") return;
+      for (const key of ["kanban", "files", "milestones", "tracks", "path"]) {
+        queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, key] });
+      }
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
+  }, [projectId]);
+
+  // The codebase moved (a new audit, or one applied): the board, milestones and path follow it without a reload.
+  const latestAudit = useLatestAudit(projectId);
+  const auditSignal = latestAudit ? `${latestAudit.id}:${latestAudit.appliedAt ?? ""}` : "";
+  const [seenAudit, setSeenAudit] = useState<string | null>(null);
+  useEffect(() => {
+    if (!auditSignal) return;
+    if (seenAudit !== null && seenAudit !== auditSignal) {
+      for (const key of ["kanban", "milestones", "tracks", "path"]) {
+        queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, key] });
+      }
+    }
+    setSeenAudit(auditSignal);
+  }, [auditSignal]);
+
+  /** Opening a section: an unstarted one asks what kind of project it is first. */
+  function selectSection(goal: ProjectGoal) {
+    setChosenSection(goal);
+    const summary = sectionsData?.tracks.find((t) => t.goal === goal);
+    if (summary && !summary.started) setStartFor(goal);
   }
 
   if (projectLoading) {
@@ -502,61 +616,63 @@ export default function ProjectManager() {
     );
   }
 
-  const tabs: { id: TabId; label: string; icon: any }[] = [
-    { id: "nova", label: "Dashboard", icon: Sparkles },
-    { id: "setup", label: "Setup", icon: LayoutDashboard },
-    { id: "public", label: "Public Page", icon: Eye },
-    { id: "roadmap", label: "Roadmap", icon: Map },
-    { id: "kanban", label: "Tasks", icon: ListChecks },
-    { id: "milestones", label: "Milestones", icon: Flag },
-    { id: "team", label: "Team", icon: Users },
-    { id: "files", label: "Files", icon: FolderOpen },
-    { id: "codebase", label: "Codebase", icon: ScanSearch },
-    { id: "activity", label: "Activity", icon: Activity },
-    { id: "personas", label: "Personas", icon: Target },
-    { id: "research", label: "Research", icon: Beaker },
-    { id: "strategy", label: "Strategy", icon: Crosshair },
-    { id: "investors", label: "Investors", icon: HandCoins },
-    { id: "launch", label: "Launch", icon: Rocket },
-    { id: "analytics", label: "Analytics", icon: BarChart3 },
-    { id: "support", label: "Support", icon: Headphones },
-    { id: "chat", label: "Chat", icon: MessageSquare },
-  ];
+  const currentTab = tabDef(activeTab);
+  const openStart = () => setStartFor(section);
 
   return (
     <div className="h-full overflow-y-auto pb-20">
-      <div className="border-b border-border bg-background/50 backdrop-blur-sm sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-6 py-3 flex items-center gap-4">
+      <div className="border-b border-border bg-background/80 backdrop-blur-sm sticky top-0 z-20">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2.5 flex items-center gap-3">
           <Button variant="ghost" size="icon" onClick={() => setLocation(`/projects/${projectId}`)} data-testid="button-back">
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div className="flex-1 min-w-0">
-            <h1 className="text-xl font-bold truncate" data-testid="text-manager-title">{project.title}</h1>
-            <p className="text-sm text-secondary">{tabs.find((t) => t.id === activeTab)?.label ?? "Project Manager"}</p>
+            <h1 className="text-lg sm:text-xl font-bold truncate leading-tight" data-testid="text-manager-title">{project.title}</h1>
+            <p className="text-xs sm:text-sm text-muted-foreground truncate" data-testid="text-manager-breadcrumb">
+              {sectionDef(section).label} <span className="mx-1 text-muted-foreground/50">·</span> <span className="text-foreground/80">{currentTab.label}</span>
+            </p>
           </div>
         </div>
       </div>
 
       {/*
-       * Nova guides the main screen; the structure sits in a static rail on
-       * the right and stays put while the content changes, so switching is
-       * a glance sideways rather than a scan across the top. Narrow screens
-       * fall back to a wrapped row above the content.
-       */}
-      <div className="max-w-7xl mx-auto px-6 py-6 flex flex-col lg:flex-row gap-6 items-start">
-        <nav className="w-full lg:w-48 lg:order-2 lg:sticky lg:top-24 shrink-0 flex flex-wrap lg:flex-col gap-1" aria-label="Project sections" data-testid="manager-rail">
-          {tabs.filter((tab) => tab.id !== "investors" || isOwner).map((tab) => (
-            <Button key={tab.id} variant={activeTab === tab.id ? "default" : "ghost"} size="sm" className="gap-2 lg:justify-start" onClick={() => setActiveTab(tab.id)} data-testid={`tab-${tab.id}`}>
-              <tab.icon className="h-4 w-4" />
-              {tab.label}
-            </Button>
-          ))}
-        </nav>
+        * One column on phones: sections, tabs, path, the project rail, then
+        * the content. On desktop the rail moves to its own column on the right
+        * and stays put while everything else changes.
+        */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-5 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_14rem] lg:grid-rows-[auto_1fr] gap-x-6 gap-y-3 sm:gap-y-4">
+        <div className="min-w-0 space-y-3 sm:space-y-4 lg:col-start-1 lg:row-start-1">
+          <SectionBar tracks={sectionsData?.tracks} selected={section} onSelect={selectSection} />
 
-        <div className="flex-1 min-w-0 w-full lg:order-1">
+          <SectionTabRow active={activeTab} onSelect={setActiveTab} isOwner={isOwner} />
+
+          {/* The whole path for the open section, whatever tab is showing. */}
+          <SectionPathStrip
+            projectId={projectId!}
+            goal={section}
+            onOpenMilestone={(id) => { setActiveTab("nova"); requestOpenMilestone(id); }}
+            onStart={openStart}
+          />
+        </div>
+
+        <aside className="min-w-0 lg:col-start-2 lg:row-start-1 lg:row-span-2 lg:self-start lg:sticky lg:top-20">
+          <ManagerRail projectId={projectId!} active={activeTab} onSelect={setActiveTab} />
+        </aside>
+
+        <div className="min-w-0 lg:col-start-1 lg:row-start-2 border-t border-border pt-4 sm:pt-5" data-testid={`manager-content-${activeTab}`}>
+        {/* Until we know the primary section, don't mount a section's content only to swap it. */}
+        {!chosenSection && !sectionsData ? (
+          <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
+        ) : (
         <NovaHandoffProvider value={novaHandoffValue}>
         {activeTab === "nova" && projectId && (
-          <NovaDashboard projectId={projectId} onNavigate={(tab) => setActiveTab(tab as TabId)} />
+          <NovaDashboard
+            key={section}
+            projectId={projectId}
+            goal={section}
+            onStartSection={openStart}
+            onNavigate={(tab) => { if (isTabId(tab)) setActiveTab(tab); }}
+          />
         )}
         {activeTab === "setup" && (
           <SetupTab
@@ -578,11 +694,11 @@ export default function ProjectManager() {
           />
         )}
         {activeTab === "roadmap" && projectId && (
-          <RoadmapTab projectId={projectId} isOwner={isOwner} />
+          <RoadmapTab key={section} {...({ goal: section } as Record<string, unknown>)} projectId={projectId} isOwner={isOwner} />
         )}
         {activeTab === "kanban" && (
           <KanbanTab
-            tasks={kanbanTasks || []} members={members || []} isLoading={tasksLoading}
+            tasks={sectionTasks} members={members || []} isLoading={tasksLoading}
             onNewTask={openNewTaskDialog} onEditTask={openEditTaskDialog}
             onDeleteTask={(id) => deleteTaskMutation.mutate(id)}
             onStatusChange={handleStatusChange}
@@ -598,7 +714,7 @@ export default function ProjectManager() {
         )}
         {activeTab === "milestones" && (
           <MilestonesTab
-            milestones={milestones || []} isLoading={milestonesLoading}
+            milestones={sectionMilestones} isLoading={milestonesLoading}
             onCreate={(data) => createMilestoneMutation.mutate(data)}
             onUpdate={(id, data) => updateMilestoneMutation.mutate({ id, data })}
             onDelete={(id) => deleteMilestoneMutation.mutate(id)}
@@ -622,6 +738,8 @@ export default function ProjectManager() {
           <FilesTab
             files={projectFiles || []} isUploading={isUploadingFile}
             uploadFolder={uploadFolder} setUploadFolder={setUploadFolder}
+            uploadShared={uploadShared} setUploadShared={setUploadShared}
+            sectionLabel={sectionDef(section).short}
             onUpload={(file) => uploadProjectFile(file)}
             onDelete={(id) => deleteFileMutation.mutate(id)}
             projectId={projectId!}
@@ -658,7 +776,7 @@ export default function ProjectManager() {
           <LaunchTab projectId={projectId} project={project} />
         )}
         {activeTab === "analytics" && projectId && (
-          <AnalyticsTab projectId={projectId} />
+          <AnalyticsTab key={section} projectId={projectId} goal={section} />
         )}
         {activeTab === "support" && projectId && (
           <SupportTab projectId={projectId} />
@@ -667,8 +785,17 @@ export default function ProjectManager() {
           <LiveChatTab projectId={projectId} />
         )}
         </NovaHandoffProvider>
+        )}
         </div>
       </div>
+
+      <StartSectionDialog
+        projectId={projectId!}
+        goal={startFor}
+        open={!!startFor}
+        onOpenChange={(open) => { if (!open) setStartFor(null); }}
+        onStarted={(goal) => setChosenSection(goal)}
+      />
 
       <Dialog open={taskDialogOpen} onOpenChange={setTaskDialogOpen}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
@@ -869,9 +996,7 @@ function PrivacyCard({ project, isOwner, onUpdateProject }: {
           {isPrivate ? <Lock className="h-4 w-4" /> : <Globe className="h-4 w-4" />} Project visibility
         </CardTitle>
         <p className="text-sm text-muted-foreground">
-          {isPrivate
-            ? "Only you and your team can see this project. It's hidden from Discover and search."
-            : "Anyone can find this project in Discover and view its public page."}
+          {isPrivate ? "Only your team can see it." : "Anyone can find it in Discover."}
         </p>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -952,9 +1077,7 @@ function PublicPageTab({ project, isOwner, onUpdateProject, onViewPublicPage, on
         <CardHeader className="flex flex-row items-start justify-between space-y-0 gap-4">
           <div className="space-y-1">
             <CardTitle className="text-lg flex items-center gap-2"><Eye className="h-4 w-4" /> What visitors see</CardTitle>
-            <p className="text-sm text-muted-foreground">
-              Sections appear automatically once they have content. Turn any of them off to keep them private.
-            </p>
+            <p className="text-sm text-muted-foreground">Sections show once they have content.</p>
           </div>
           <Button variant="outline" size="sm" className="gap-2 shrink-0" onClick={onViewPublicPage} data-testid="button-view-public-page">
             <ExternalLink className="h-3.5 w-3.5" /> View page
@@ -1106,10 +1229,7 @@ function SetupTab({ project, isOwner, links, isUploadingPlan, onUploadPlan, onUp
           <CardTitle className="text-lg flex items-center gap-2">
             <ImageIcon className="h-4 w-4" /> Logo &amp; cover
           </CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Your logo also goes on backer merch and the badges backers display, so a square
-            transparent PNG travels furthest.
-          </p>
+          <p className="text-sm text-muted-foreground">Square, transparent PNG works best.</p>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
           <ImageUploadField
@@ -1614,9 +1734,9 @@ function KanbanTab({
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3">
           <div>
-            <h2 className="text-lg font-semibold">{view === "board" ? "Task Board" : "Task Calendar"}</h2>
+            <h2 className="text-lg font-semibold">{view === "board" ? "Tasks" : "Calendar"}</h2>
             <p className="text-sm text-secondary" data-testid="text-task-counts">
-              {tasks.length} on the board{doneCount > 0 && ` · ${doneCount} done`}
+              {tasks.length} in this section{doneCount > 0 && ` · ${doneCount} done`}
               {completedAllTime > 0 && (
                 <>
                   {" · "}
@@ -1656,7 +1776,7 @@ function KanbanTab({
             </button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button
             className="gap-2"
             onClick={() => setPlannerFor("board")}
@@ -1665,7 +1785,7 @@ function KanbanTab({
             <Sparkles className="h-4 w-4" /> Nova, help me
           </Button>
           <Button variant="outline" className="gap-2" onClick={onAiGenerate} disabled={aiPending} data-testid="button-ai-generate-tasks">
-            {aiPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} AI Generate Tasks
+            {aiPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Generate
           </Button>
           {tasks.filter((t) => t.status !== "done").length > 1 && (
             <Button
@@ -1677,7 +1797,7 @@ function KanbanTab({
               data-testid="button-sequence-tasks"
             >
               {sequenceMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListOrdered className="h-4 w-4" />}
-              {sequenceMutation.isPending ? "Nova is sequencing…" : `Order my tasks (${CREDIT_COSTS.taskSequencing})`}
+              {sequenceMutation.isPending ? "Ordering…" : `Order (${CREDIT_COSTS.taskSequencing})`}
             </Button>
           )}
           {isOwner && tasks.length > 0 && (
@@ -1764,19 +1884,9 @@ function KanbanTab({
       <AlertDialog open={clearOpen} onOpenChange={setClearOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Clear tasks from this board?</AlertDialogTitle>
-            <AlertDialogDescription asChild>
-              <div className="space-y-2">
-                <p>
-                  This permanently deletes the task cards. It <strong>won't</strong> affect your builder
-                  reputation — execution credit for every finished task is banked first, so your
-                  completed count keeps going up.
-                </p>
-                <p className="text-xs">
-                  Tasks removed here also disappear from the calendar, since the calendar is built
-                  from the tasks themselves. This can't be undone.
-                </p>
-              </div>
+            <AlertDialogTitle>Clear this section's tasks?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Deletes the cards here and on the calendar. Your completed count and reputation stay. Can't be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="flex-col sm:flex-row gap-2">
@@ -1799,6 +1909,8 @@ function KanbanTab({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <div className="border-t border-border" />
 
       {view === "calendar" ? (
         <ProjectCalendar
@@ -2020,10 +2132,7 @@ function KanbanTab({
             <DialogTitle className="flex items-center gap-2">
               <CheckCircle2 className="h-4 w-4 text-emerald-500" /> Completed work
             </DialogTitle>
-            <DialogDescription>
-              Everything finished on this project, including cards you've since cleared off the
-              board. Nova reads this too, so clearing up doesn't cost you credit for shipping.
-            </DialogDescription>
+            <DialogDescription>Everything finished here, including cleared cards.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-1">
             <div className="grid grid-cols-3 gap-3">
@@ -2053,15 +2162,10 @@ function KanbanTab({
                 ))}
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">
-                Nothing recorded yet. Completions are archived from the moment a task moves to Done.
-              </p>
+              <p className="text-sm text-muted-foreground">Nothing finished yet.</p>
             )}
             {(history?.builderCompletedAllTime ?? 0) > completedAllTime && (
-              <p className="text-xs text-muted-foreground">
-                Your all-time total is higher than this project's list — it includes other projects,
-                and work finished before per-project history was kept.
-              </p>
+              <p className="text-xs text-muted-foreground">Your total includes other projects.</p>
             )}
           </div>
         </DialogContent>
@@ -2288,9 +2392,9 @@ function MilestonesTab({ milestones, isLoading, onCreate, onUpdate, onDelete, pr
   });
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div><h2 className="text-lg font-semibold">Milestones & Roadmap</h2><p className="text-sm text-secondary">{milestones.length} milestones</p></div>
+    <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-3 pb-4 border-b border-border">
+        <div><h2 className="text-lg font-semibold">Milestones</h2><p className="text-sm text-muted-foreground">{milestones.length} in this section</p></div>
         <div className="flex items-center gap-2">
           <NovaActionButton projectId={projectId} surface="milestones" />
           <Button className="gap-2" onClick={() => setShowForm(true)} data-testid="button-new-milestone"><Plus className="h-4 w-4" /> New Milestone</Button>
@@ -2411,7 +2515,7 @@ function MilestonesTab({ milestones, isLoading, onCreate, onUpdate, onDelete, pr
         <div className="border-2 border-dashed border-border rounded-lg p-12 text-center">
           <Flag className="h-12 w-12 mx-auto mb-4 text-muted-foreground opacity-50" />
           <h3 className="text-lg font-medium mb-2">No milestones yet</h3>
-          <p className="text-sm text-muted-foreground mb-4">Create milestones to track your project's progress toward key goals.</p>
+          <p className="text-sm text-muted-foreground mb-4">Nothing in this section yet.</p>
           <Button onClick={() => setShowForm(true)} data-testid="button-new-milestone-empty"><Plus className="h-4 w-4 mr-2" /> Create First Milestone</Button>
         </div>
       )}
@@ -2453,14 +2557,14 @@ function TeamTab({ project, members, applications, isOwner, tasks, onUpdateMembe
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-5">
+      <div className="flex items-center justify-between pb-4 border-b border-border">
         <div>
           <h2 className="text-lg font-semibold flex items-center gap-2">
             Team
             {soloMode && <Badge variant="outline" className="text-xs border-primary/30 text-primary">Solo Builder</Badge>}
           </h2>
-          <p className="text-sm text-secondary">{members.length} members</p>
+          <p className="text-sm text-muted-foreground">{members.length} member{members.length === 1 ? "" : "s"}</p>
         </div>
       </div>
 
@@ -2468,16 +2572,9 @@ function TeamTab({ project, members, applications, isOwner, tasks, onUpdateMembe
         <Card className="border-primary/20 bg-primary/5" data-testid="card-solo-mode-notice">
           <CardContent className="p-4 flex items-start gap-3">
             <Rocket className="h-5 w-5 text-primary shrink-0 mt-0.5" />
-            <div className="space-y-1">
-              <p className="text-sm font-medium">You're building this one solo</p>
-              <p className="text-sm text-muted-foreground">
-                This project was created in Solo Builder Mode, so teammates can't be
-                invited and applications are turned off. It's just you and Nova.
-              </p>
-              <p className="text-sm text-muted-foreground">
-                Solo Builder Mode is locked in at creation. To build with a team,
-                create a new project with Solo Builder Mode off and delete this one.
-              </p>
+            <div className="space-y-0.5">
+              <p className="text-sm font-medium">Solo build</p>
+              <p className="text-sm text-muted-foreground">No invites or applications. Set at creation.</p>
             </div>
           </CardContent>
         </Card>
@@ -2573,9 +2670,8 @@ function TeamTab({ project, members, applications, isOwner, tasks, onUpdateMembe
 
       {!soloMode && (
       <Card>
-        <CardHeader><CardTitle className="text-lg flex items-center gap-2"><UserPlus className="h-4 w-4" /> AI People Recommendations</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="text-lg flex items-center gap-2"><UserPlus className="h-4 w-4" /> Find people</CardTitle></CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-secondary">Let Nova AI recommend ideal team members from the community.</p>
           <Button onClick={onRecommendPeople} disabled={recommendPending} className="gap-2" data-testid="button-recommend-people">
             {recommendPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
             {recommendPending ? "Finding matches..." : "Find Team Members"}
@@ -2598,9 +2694,10 @@ function TeamTab({ project, members, applications, isOwner, tasks, onUpdateMembe
   );
 }
 
-function FilesTab({ files, isUploading, uploadFolder, setUploadFolder, onUpload, onDelete, projectId }: {
+function FilesTab({ files, isUploading, uploadFolder, setUploadFolder, uploadShared, setUploadShared, sectionLabel, onUpload, onDelete, projectId }: {
   files: (ProjectFile & { uploader: User })[]; isUploading: boolean;
   uploadFolder: string; setUploadFolder: (f: string) => void;
+  uploadShared: boolean; setUploadShared: (v: boolean) => void; sectionLabel: string;
   onUpload: (file: File) => void; onDelete: (id: string) => void;
   projectId: string;
 }) {
@@ -2622,19 +2719,23 @@ function FilesTab({ files, isUploading, uploadFolder, setUploadFolder, onUpload,
   const filtered = filterFolder === "all" ? files : files.filter(f => f.folder === filterFolder);
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-4">
+    <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-lg font-semibold">Files & Assets</h2>
-          <p className="text-sm text-secondary">
+          <h2 className="text-lg font-semibold">Files</h2>
+          <p className="text-sm text-muted-foreground">
             {files.length} file{files.length === 1 ? "" : "s"}
-            {(documents?.length || 0) > 0 && ` · ${documents!.length} Nova document${documents!.length === 1 ? "" : "s"}`}
+            {(documents?.length || 0) > 0 && ` · ${documents!.length} Nova doc${documents!.length === 1 ? "" : "s"}`}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button className="gap-2" onClick={() => setDocStartOpen(true)} data-testid="button-new-document">
-            <FileText className="h-4 w-4" /> New document with Nova
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button variant="outline" className="gap-2" onClick={() => setDocStartOpen(true)} data-testid="button-new-document">
+            <FileText className="h-4 w-4" /> New doc with Nova
           </Button>
+          <label className="flex items-center gap-2 text-xs text-muted-foreground px-1" title="Shared files show in all three sections">
+            <Switch checked={uploadShared} onCheckedChange={setUploadShared} data-testid="switch-upload-shared" />
+            {uploadShared ? "Shared" : `${sectionLabel} only`}
+          </label>
           <Select value={uploadFolder} onValueChange={setUploadFolder}>
             <SelectTrigger className="w-[120px]"><SelectValue /></SelectTrigger>
             <SelectContent>{folders.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
@@ -2646,7 +2747,7 @@ function FilesTab({ files, isUploading, uploadFolder, setUploadFolder, onUpload,
         </div>
       </div>
 
-      <div className="flex gap-1 flex-wrap">
+      <div className="flex gap-1 flex-wrap border-t border-border pt-4">
         <Button variant={filterFolder === "all" ? "default" : "ghost"} size="sm" onClick={() => setFilterFolder("all")} data-testid="filter-all">All</Button>
         {folders.map(f => (
           <Button key={f} variant={filterFolder === f ? "default" : "ghost"} size="sm" onClick={() => setFilterFolder(f)} data-testid={`filter-${f}`}>{f}</Button>
@@ -2700,8 +2801,11 @@ function FilesTab({ files, isUploading, uploadFolder, setUploadFolder, onUpload,
             <div key={file.id} className="flex items-center gap-3 p-3 rounded-md bg-muted/30 group" data-testid={`file-${file.id}`}>
               <FileText className="h-5 w-5 text-muted-foreground shrink-0" />
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate">{file.name}</p>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <div className="flex items-center gap-2 min-w-0">
+                  <p className="text-sm font-medium truncate">{file.name}</p>
+                  {!file.track && <Badge variant="outline" className="text-[10px] px-1.5 py-0 shrink-0" data-testid={`badge-shared-${file.id}`}>Shared</Badge>}
+                </div>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
                   <span>{file.folder}</span>
                   <span>·</span>
                   <span>{file.uploader?.firstName || file.uploader?.email || "Unknown"}</span>
@@ -2719,9 +2823,7 @@ function FilesTab({ files, isUploading, uploadFolder, setUploadFolder, onUpload,
         <div className="border-2 border-dashed border-border rounded-lg p-12 text-center">
           <FolderOpen className="h-12 w-12 mx-auto mb-4 text-muted-foreground opacity-50" />
           <h3 className="text-lg font-medium mb-2">No files yet</h3>
-          <p className="text-sm text-muted-foreground mb-4">
-            Upload files to share with your team, or have Nova build a document from scratch.
-          </p>
+          <p className="text-sm text-muted-foreground mb-4">Upload one, or have Nova write one.</p>
           <Button variant="outline" className="gap-2" onClick={() => setDocStartOpen(true)} data-testid="button-new-document-empty">
             <FileText className="h-4 w-4" /> New document with Nova
           </Button>
@@ -2766,7 +2868,7 @@ function ActivityTab({ activity, decisions, projectId, projectTitle, onCreateDec
 
   return (
     <div className="space-y-6">
-      <div className="flex gap-1 flex-wrap">
+      <div className="flex gap-1 flex-wrap pb-4 border-b border-border">
         {([
           { id: "feed" as const, label: "Activity Feed", icon: Activity },
           { id: "decisions" as const, label: "Decision Log", icon: MessageSquare },
@@ -2782,7 +2884,6 @@ function ActivityTab({ activity, decisions, projectId, projectTitle, onCreateDec
 
       {activeSection === "feed" && (
         <div className="space-y-3">
-          <h2 className="text-lg font-semibold">Activity Feed</h2>
           {activity.length > 0 ? activity.map(entry => (
             <div key={entry.id} className="flex items-start gap-3 p-3 rounded-md bg-muted/30" data-testid={`activity-${entry.id}`}>
               <UserAvatar src={null} name={entry.user?.firstName || entry.user?.email || "System"} className="h-7 w-7" />
@@ -2791,7 +2892,7 @@ function ActivityTab({ activity, decisions, projectId, projectTitle, onCreateDec
                 <p className="text-xs text-muted-foreground">{new Date(entry.createdAt).toLocaleString()}</p>
               </div>
             </div>
-          )) : <p className="text-sm text-muted-foreground">No activity yet. Actions like creating tasks, milestones, and decisions will appear here.</p>}
+          )) : <p className="text-sm text-muted-foreground">No activity yet.</p>}
         </div>
       )}
 
@@ -2839,7 +2940,7 @@ function ActivityTab({ activity, decisions, projectId, projectTitle, onCreateDec
                 </div>
               </CardContent>
             </Card>
-          )) : !showDecisionForm && <p className="text-sm text-muted-foreground">No decisions logged yet. Document important choices so the team doesn't re-argue old decisions.</p>}
+          )) : !showDecisionForm && <p className="text-sm text-muted-foreground">No decisions logged yet.</p>}
         </div>
       )}
 
@@ -2862,9 +2963,9 @@ function PersonasTab({ personas, isLoading, onCreateManual, onAiGenerate, onDele
   onAiGenerate: () => void; onDelete: (id: string) => void; aiPending: boolean;
 }) {
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div><h2 className="text-lg font-bold">Customer Personas</h2><p className="text-sm text-muted-foreground">Define your target audience with AI-generated or manual personas.</p></div>
+    <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-3 pb-4 border-b border-border">
+        <h2 className="text-lg font-semibold">Personas</h2>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" className="gap-2" onClick={onAiGenerate} disabled={aiPending} data-testid="button-ai-generate-persona">
             {aiPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} AI Generate
@@ -2877,7 +2978,7 @@ function PersonasTab({ personas, isLoading, onCreateManual, onAiGenerate, onDele
         <div className="border-2 border-dashed border-border rounded-lg p-12 text-center">
           <Users className="h-12 w-12 mx-auto mb-4 text-muted-foreground opacity-50" />
           <h3 className="text-lg font-medium mb-2">No personas yet</h3>
-          <p className="text-sm text-muted-foreground mb-4">Create customer personas to better understand your target audience.</p>
+          <p className="text-sm text-muted-foreground mb-4">Who is this for?</p>
           <div className="flex items-center justify-center gap-3">
             <Button variant="outline" onClick={onAiGenerate} disabled={aiPending} data-testid="button-ai-generate-persona-empty"><Sparkles className="h-4 w-4 mr-2" /> Generate with Nova AI</Button>
             <Button onClick={onCreateManual}><Plus className="h-4 w-4 mr-2" /> Create Manually</Button>
@@ -2959,7 +3060,7 @@ function LiveChatTab({ projectId }: { projectId: string }) {
           ) : !messages?.length ? (
             <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
               <MessageSquare className="h-12 w-12 mb-3 opacity-30" />
-              <p className="text-sm">No messages yet. Start the conversation!</p>
+              <p className="text-sm">No messages yet.</p>
             </div>
           ) : (
             messages.map((msg: any) => {

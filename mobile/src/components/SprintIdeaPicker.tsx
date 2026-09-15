@@ -1,28 +1,34 @@
 import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "expo-router";
 import { api } from "../api/client";
 import { colors, font, fontFamily, radius, spacing } from "../theme";
 import { Btn, ErrorNote, Icon, NovaGradient, errText } from "./ui";
 import { Pill } from "./MoreKit";
-import type { SprintIdea } from "./SprintKit";
+import { SPRINT_CREDIT_COSTS, credits, planBlock, type SprintIdea } from "./SprintKit";
 
 /**
  * Three sprint ideas from Nova to pick from — the web's SprintIdeaPicker.
  * Name and hook first, then the pitch, then twist and audience as labelled
  * rows, so each card can be judged at a glance.
  */
-export function SprintIdeaPicker({ productStyle, partnerId, onChoose, isSubmitting, chooseLabel = "Build this one" }: {
+export function SprintIdeaPicker({ productStyle, partnerId, onChoose, isSubmitting, chooseLabel = "Build this one", chosenName }: {
   productStyle: string;
   partnerId?: string;
   onChoose: (idea: SprintIdea) => void;
   isSubmitting?: boolean;
   chooseLabel?: string;
+  /** The idea already locked onto the sprint, marked as chosen. */
+  chosenName?: string | null;
 }) {
   const qc = useQueryClient();
+  const router = useRouter();
   const [ideas, setIdeas] = useState<SprintIdea[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [blocked, setBlocked] = useState(false);
+  const cost = SPRINT_CREDIT_COSTS.sprintIdeaSuggestion;
 
   const generate = useMutation({
     mutationFn: () => api<{ ideas: SprintIdea[] }>("/api/sprints/idea-options", { method: "POST", body: { productStyle, partnerId } }),
@@ -30,9 +36,13 @@ export function SprintIdeaPicker({ productStyle, partnerId, onChoose, isSubmitti
       setIdeas(r.ideas || []);
       setSelected(null);
       setError(null);
+      setBlocked(false);
       qc.invalidateQueries({ queryKey: ["subscription"] });
     },
-    onError: (e) => setError(errText(e, "Nova couldn't come up with ideas right now.")),
+    onError: (e) => {
+      setBlocked(!!planBlock(e));
+      setError(errText(e, "Nova couldn't come up with ideas right now."));
+    },
   });
 
   if (ideas.length === 0) {
@@ -46,8 +56,9 @@ export function SprintIdeaPicker({ productStyle, partnerId, onChoose, isSubmitti
           Nova will pitch three ideas for this style. Pick whichever sounds most fun — you can reshuffle if none land.
         </Text>
         <Btn label={generate.isPending ? "Nova is thinking…" : "Show me 3 ideas"} icon="sparkles" loading={generate.isPending} onPress={() => generate.mutate()} />
-        <Text style={{ color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.regular }}>1 credit for all three</Text>
+        <Text style={{ color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.regular }}>{credits(cost)} for all three</Text>
         {error && <ErrorNote message={error} />}
+        {blocked && <Btn label="See plans" icon="card-outline" small variant="outline" onPress={() => router.push("/pricing")} />}
       </View>
     );
   }
@@ -57,10 +68,10 @@ export function SprintIdeaPicker({ productStyle, partnerId, onChoose, isSubmitti
     <View style={{ gap: spacing.sm }}>
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
         <Text style={{ color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>Pick the one you'd enjoy building</Text>
-        <Btn label="Reshuffle (1)" icon="refresh" small variant="ghost" loading={generate.isPending} disabled={isSubmitting} onPress={() => generate.mutate()} />
+        <Btn label={`Reshuffle (${cost})`} icon="refresh" small variant="ghost" loading={generate.isPending} disabled={isSubmitting} onPress={() => generate.mutate()} />
       </View>
       {ideas.map((idea) => {
-        const on = selected === idea.name;
+        const on = selected === idea.name || chosenName === idea.name;
         return (
           <Pressable key={idea.name} onPress={() => !isSubmitting && setSelected(idea.name)}
             style={({ pressed }) => [{
@@ -83,8 +94,9 @@ export function SprintIdeaPicker({ productStyle, partnerId, onChoose, isSubmitti
           </Pressable>
         );
       })}
-      <Btn label={picked ? `${chooseLabel}: ${picked.name}` : "Pick an idea above"} icon="rocket" disabled={!picked} loading={isSubmitting} onPress={() => picked && onChoose(picked)} />
+      <Btn label={picked ? `${chooseLabel}: ${picked.name}` : "Pick an idea above"} icon="rocket" disabled={!picked || generate.isPending} loading={isSubmitting} onPress={() => picked && onChoose(picked)} />
       {error && <ErrorNote message={error} />}
+      {blocked && <Btn label="See plans" icon="card-outline" small variant="outline" style={{ alignSelf: "flex-start" }} onPress={() => router.push("/pricing")} />}
     </View>
   );
 }

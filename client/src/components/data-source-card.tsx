@@ -39,46 +39,53 @@ export function DataSourceCard({ projectId, isOwner }: { projectId: string; isOw
   const shape = shapeQ.data?.shape ?? null;
   const configured = status.data?.configured ?? !!shape;
 
+  const statusText = status.data?.configured
+    ? (status.data.kind === "self" ? "This app's own database" : "Connected database")
+    : shape ? "Connected database" : "Not connected";
+
   return (
     <div className="space-y-3" data-testid="data-source-card">
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div>
-          <p className="font-medium text-sm flex items-center gap-2"><Database className="h-4 w-4" /> Your data</p>
-          <p className="text-xs text-muted-foreground max-w-xl">
-            The live database as a map: tables, keys and row counts, so Nova can tell "built" from "built but nobody uses it". Use a read-only user; the connection is sealed and never shown again.
-          </p>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2 text-sm min-w-0">
+          <span className={`h-2 w-2 rounded-full shrink-0 ${configured ? "bg-emerald-500" : "bg-muted-foreground/40"}`} />
+          <span className="font-medium" data-testid="data-source-status">{statusText}</span>
+          {shape && !shape.error && (
+            <span className="text-xs text-muted-foreground tabular-nums">{shape.totals.tables} tables · {shape.totals.rows.toLocaleString()} rows</span>
+          )}
         </div>
-        {isOwner && configured && (
-          <Button size="sm" variant="outline" disabled={busy} onClick={() => refresh.mutate()} data-testid="button-refresh-data-shape">
-            {refresh.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}Re-read
-          </Button>
+        {isOwner && (
+          <div className="flex items-center gap-1.5">
+            {configured && (
+              <Button size="sm" variant="outline" className="h-8" disabled={busy} onClick={() => refresh.mutate()} data-testid="button-refresh-data-shape">
+                {refresh.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}Re-read
+              </Button>
+            )}
+            {status.data?.configured && <Button size="sm" variant="ghost" className="h-8" disabled={busy} onClick={() => save.mutate(null)} data-testid="button-remove-data-source">Remove</Button>}
+          </div>
         )}
       </div>
 
-      {isOwner && (
+      {isOwner && !status.data?.configured && (
         <div className="space-y-2">
-          <p className="text-xs text-muted-foreground" data-testid="data-source-status">
-            {status.data?.configured ? (status.data.kind === "self" ? "Reading this application's own database." : "A connection is configured.") : "No data source yet."}
-          </p>
           <div className="flex gap-2 flex-wrap">
-            <Button size="sm" disabled={busy} onClick={() => save.mutate("self")} data-testid="button-data-source-self">
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => save.mutate("self")} data-testid="button-data-source-self">
               {save.isPending && save.variables === "self" ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Database className="h-3.5 w-3.5 mr-1.5" />}
-              {save.isPending && save.variables === "self" ? "Reading your database…" : "Use my application's database"}
+              {save.isPending && save.variables === "self" ? "Reading…" : "Use this app's database"}
             </Button>
-            {status.data?.configured && <Button size="sm" variant="ghost" disabled={busy} onClick={() => save.mutate(null)} data-testid="button-remove-data-source">Remove</Button>}
           </div>
           <div className="flex gap-2">
-            <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="or a read-only postgres URL to your database (its own user and password)" className="h-8 text-sm" data-testid="input-data-source" />
-            <Button size="sm" disabled={busy || !url.trim()} onClick={() => save.mutate(url.trim())} data-testid="button-save-data-source">
+            <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Read-only postgres URL" className="h-8 text-sm" data-testid="input-data-source" />
+            <Button size="sm" className="h-8" disabled={busy || !url.trim()} onClick={() => save.mutate(url.trim())} data-testid="button-save-data-source">
               {save.isPending && save.variables !== "self" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Connect"}
             </Button>
           </div>
+          <p className="text-[11px] text-muted-foreground">Use a read-only user. The URL is sealed and never shown again.</p>
         </div>
       )}
 
-      {busy && !shape && <div className="flex items-center gap-2 text-sm text-muted-foreground py-4"><Loader2 className="h-4 w-4 animate-spin text-primary" />Reading tables and row counts…</div>}
+      {busy && !shape && <div className="flex items-center gap-2 text-sm text-muted-foreground py-3"><Loader2 className="h-4 w-4 animate-spin text-primary" />Reading tables…</div>}
       {shape && <DataMap shape={shape} />}
-      {!shape && !busy && !isOwner && <p className="text-xs text-muted-foreground">The owner hasn't connected a database yet.</p>}
+      {!shape && !busy && !isOwner && <p className="text-xs text-muted-foreground">The owner hasn't connected a database.</p>}
     </div>
   );
 }

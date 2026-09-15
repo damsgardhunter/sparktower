@@ -50,3 +50,26 @@ export function formatWait(totalSeconds: number): string {
   if (minutes < 60) return `${minutes}m ${String(totalSeconds % 60).padStart(2, "0")}s`;
   return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
 }
+
+/** Sprint credit costs, restated from shared/plans.ts CREDIT_COSTS. */
+export const SPRINT_CREDIT_COSTS = {
+  sprintIdeaSuggestion: 1,
+  practiceSprint: 1,
+  novaPartnerReply: 1,
+  novaPartnerAnswers: 2,
+  sprintReport: 3,
+} as const;
+
+export const credits = (n: number) => `${n} credit${n === 1 ? "" : "s"}`;
+
+/**
+ * Whether a failed call was the plan saying no rather than something breaking:
+ * a 402 `upgrade_required` (the feature needs a higher plan) or a 403
+ * `insufficient_credits`. Either way the way on is the pricing screen.
+ */
+export function planBlock(err: any): "upgrade" | "credits" | null {
+  const code = err?.body?.code;
+  if (err?.status === 402 || code === "upgrade_required") return "upgrade";
+  if (code === "insufficient_credits" || code === "fair_use_limit") return "credits";
+  return null;
+}

@@ -35,9 +35,18 @@ export default function Pricing() {
 
   const { data, isLoading } = useQuery({ queryKey: ["plans"], queryFn: () => api<any>("/api/plans") });
 
-  const afterBrowser = async () => {
-    try { await api("/api/stripe/sync-subscription", { method: "POST" }); } catch { /* the webhook will catch up */ }
-    qc.invalidateQueries({ queryKey: ["subscription"] });
+  // The web lands back on /pricing?success=true and syncs; the phone syncs when
+  // the in-app browser closes, and says so when the plan actually changed.
+  const afterBrowser = async (before: string) => {
+    let tier: string | undefined;
+    try { tier = (await api<{ tier?: string }>("/api/stripe/sync-subscription", { method: "POST" })).tier; } catch { /* the webhook will catch up */ }
+    // Entitlements shape nearly every screen, so refresh everything, as the web's tier switch does.
+    await qc.invalidateQueries();
+    if (tier && tier !== before) {
+      show(tier === "free"
+        ? { tone: "info", text: "You're on the Free plan now." }
+        : { tone: "success", text: "You're all set! Your plan is active. Nova just leveled up." });
+    }
   };
 
   const checkout = useMutation({
@@ -46,7 +55,7 @@ export default function Pricing() {
       setPendingTier(null);
       if (!r.url) { show({ tone: "error", text: "Couldn't start checkout: no checkout link came back." }); return; }
       await WebBrowser.openBrowserAsync(r.url);
-      await afterBrowser();
+      await afterBrowser(ent.tier);
     },
     onError: (e: any) => { setPendingTier(null); show({ tone: "error", text: e?.message || "Couldn't start checkout. Please try again." }); },
   });
@@ -54,9 +63,9 @@ export default function Pricing() {
   const portal = useMutation({
     mutationFn: () => api<{ url?: string }>("/api/billing-portal", { method: "POST" }),
     onSuccess: async (r) => {
-      if (!r.url) return;
+      if (!r.url) { show({ tone: "error", text: "Couldn't open the billing portal." }); return; }
       await WebBrowser.openBrowserAsync(r.url);
-      await afterBrowser();
+      await afterBrowser(ent.tier);
     },
     onError: (e: any) => show({ tone: "error", text: e?.message === "No active subscription" ? "You don't have a paid subscription to manage." : "Couldn't open the billing portal." }),
   });
@@ -164,6 +173,9 @@ export default function Pricing() {
                   <Text style={[small, { textAlign: "center" }]}>Upgrade on the web at sparktower.app/pricing</Text>
                 ) : IOS_NO_WEB_CHECKOUT && isCurrent && plan.tier !== "free" ? (
                   <Text style={[small, { textAlign: "center" }]}>Manage your plan on the web at sparktower.app/pricing</Text>
+                ) : IOS_NO_WEB_CHECKOUT && plan.tier === "free" && !isCurrent ? (
+                  // Switching to Free is the Stripe billing portal on the web — also a web-only step on iOS.
+                  <Text style={[small, { textAlign: "center" }]}>Switch plans on the web at sparktower.app/pricing</Text>
                 ) : isCurrent ? (
                   plan.tier === "free"
                     ? <Btn label="Your current plan" variant="outline" disabled />

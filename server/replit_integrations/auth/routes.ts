@@ -26,6 +26,7 @@ export function registerAuthRoutes(app: Express): void {
   });
 
   app.post("/api/auth/register", async (req, res, next) => {
+    // public-write: nothing — it creates an account; limited per address (login)
     // Registration attempts count with sign-in attempts: same address, same budget.
     if (!(await enforceRateLimit(res, ipKey(req), "login"))) return;
     try {
@@ -67,6 +68,7 @@ export function registerAuthRoutes(app: Express): void {
   });
 
   app.post("/api/auth/login", async (req, res, next) => {
+    // public-write: the password it checks; limited per address (login)
     /*
      * Durable and IP-keyed. This replaced an in-memory map, which was one
      * counter per instance and forgot everything on restart — on autoscale
@@ -131,6 +133,7 @@ export function registerAuthRoutes(app: Express): void {
     return site !== "" && site !== "same-origin" && site !== "none";
   };
   app.post("/api/logout", (req: any, res) => {
+    // public-write: the session cookie it destroys; refuses cross-site requests
     if (fromElsewhere(req)) return res.status(403).json({ message: "Sign out from SparkTower itself.", code: "cross_site" });
     endSession(req, res, () => res.json({ ok: true }));
   });

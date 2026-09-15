@@ -4,11 +4,12 @@
  *
  * Nobody writes code on a phone, but this is where you look to see what has
  * access to your account and take it away, and a token made here can be sent
- * to your laptop with the share sheet. The token is shown once, as on the web:
+ * to your laptop by copying it. The token is shown once, as on the web:
  * the server keeps only a hash.
  */
 import { useState } from "react";
-import { Platform, Pressable, ScrollView, Share, Text, TextInput, View } from "react-native";
+import { Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import * as Clipboard from "expo-clipboard";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, API_URL } from "../../api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../theme";
@@ -32,15 +33,9 @@ const mcpConfig = (token: string) => JSON.stringify({
   mcpServers: { nova: { command: "npx", args: ["-y", "@sparktower/nova-mcp"], env: { NOVA_TOKEN: token, NOVA_BASE_URL: API_URL } } },
 }, null, 2);
 
-/** Copies on the web preview; on a phone, hands the text to the share sheet (which offers Copy). */
-async function copyOrShare(text: string): Promise<"copied" | "shared"> {
-  const nav: any = Platform.OS === "web" ? (globalThis as any).navigator : null;
-  if (nav?.clipboard?.writeText) {
-    await nav.clipboard.writeText(text);
-    return "copied";
-  }
-  await Share.share({ message: text });
-  return "shared";
+/** A real clipboard copy, on the phone and the web preview alike. */
+async function copyText(text: string): Promise<void> {
+  await Clipboard.setStringAsync(text);
 }
 
 export function EditorAccess({ notify }: { notify: (n: Notice) => void }) {
@@ -114,8 +109,8 @@ function TokenSheet({ projects, onClose, notify }: { projects: any[]; onClose: (
     onError: (e: any) => notify({ text: e?.message || "Couldn't create that token", tone: "error" }),
   });
 
-  const copy = (text: string) => copyOrShare(text)
-    .then((how) => { if (how === "copied") notify({ text: "Copied", tone: "success" }); })
+  const copy = (text: string) => copyText(text)
+    .then(() => notify({ text: "Copied", tone: "success" }))
     .catch(() => notify({ text: "Couldn't copy. Select the text and copy it by hand.", tone: "error" }));
 
   const mono = { fontSize: font.xs, fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }), color: colors.text } as const;

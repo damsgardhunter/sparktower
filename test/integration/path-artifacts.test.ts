@@ -100,6 +100,13 @@ describe("publishing a path artifact", () => {
     expect((await stranger.post(`/api/artifacts/${a2.id}/publish`).send({ title: "My first product statement" })).status).toBe(200);
     expect((await request(app).get(`/api/public/artifacts/${a2.id}`)).status).toBe(200);
 
+    // Someone who'd been here before (first page wasn't the artifact) is still credited by the artifact they signed up from.
+    const returning = request.agent(app);
+    await returning.get("/").set("accept", "text/html").set("x-forwarded-for", "198.51.101.251");
+    await returning.post("/api/auth/register").set("x-forwarded-for", "198.51.101.251")
+      .send({ email: `artifact-returning-${Date.now()}@example.test`, password: "Testpass123!", firstName: "Returning", fromArtifact: made.body.id }).expect(201);
+    expect((await db.select().from(pathArtifacts).where(eq(pathArtifacts.id, made.body.id)))[0].signups).toBe(2);
+
     // Unpublishing takes the page down.
     await author.agent.post(`/api/artifacts/${made.body.id}/unpublish`).expect(200);
     expect((await request(app).get(`/api/public/artifacts/${made.body.id}`)).status).toBe(404);

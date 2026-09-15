@@ -20,6 +20,10 @@ export interface SubscriptionResponse {
   };
   privateProjectsUsed: number;
   creditCosts: Record<string, number>;
+  /** "low" and "out" offer "Upgrade to keep generating". */
+  creditState?: "ok" | "low" | "out";
+  lowCreditsAt?: number | null;
+  billingIssue?: { kind: "payment_failed" | "refunded"; at: string; message: string } | null;
 }
 
 /**

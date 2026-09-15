@@ -334,7 +334,7 @@ export interface IStorage {
   removeProjectMedia(projectId: string, index: number): Promise<Project>;
 
   // User Search
-  searchUsers(query: string): Promise<(User & { profile?: UserProfile })[]>;
+  searchUsers(query: string, opts?: { limit?: number; offset?: number }): Promise<(User & { profile?: UserProfile })[]>;
   getUser(id: string): Promise<User | undefined>;
 
   // Badges
@@ -363,6 +363,7 @@ export interface IStorage {
   removeConnection(connectionId: string): Promise<void>;
   getConnections(userId: string): Promise<(Connection & { user: User; profile?: UserProfile })[]>;
   getConnectionRequests(userId: string): Promise<(Connection & { user: User; profile?: UserProfile })[]>;
+  getSentConnectionRequests(userId: string): Promise<(Connection & { user: User; profile?: UserProfile })[]>;
   getConnectionStatus(userId1: string, userId2: string): Promise<Connection | undefined>;
   getMutualConnections(userId1: string, userId2: string): Promise<string[]>;
 
@@ -1015,26 +1016,38 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
-  async searchUsers(query: string): Promise<(User & { profile?: UserProfile })[]> {
-    const matchingUsers = await db
-      .select()
+  /**
+   * People by name, display name, username, headline, skill or interest —
+   * what the search boxes promise. Never by email: a search that matches
+   * emails tells a stranger whose address is whose. Suspended accounts aren't
+   * found. An empty query lists everyone, newest first, a page at a time.
+   */
+  async searchUsers(query: string, opts: { limit?: number; offset?: number } = {}): Promise<(User & { profile?: UserProfile })[]> {
+    const q = query.trim();
+    const pattern = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    const limit = Math.min(Math.max(1, Math.floor(opts.limit ?? 500)), 500);
+    const offset = Math.max(0, Math.floor(opts.offset ?? 0));
+    const rows = await db
+      .select({ user: users, profile: userProfiles })
       .from(users)
-      .where(
-        or(
-          ilike(users.firstName, `%${query}%`),
-          ilike(users.lastName, `%${query}%`),
-          ilike(users.email, `%${query}%`)
-        )
-      );
-
-    const results = await Promise.all(
-      matchingUsers.map(async (user) => {
-        const profile = await this.getUserProfile(user.id);
-        return { ...user, profile };
-      })
-    );
-
-    return results;
+      .leftJoin(userProfiles, eq(userProfiles.userId, users.id))
+      .where(and(
+        isNull(users.suspendedAt),
+        q ? or(
+          ilike(users.firstName, pattern),
+          ilike(users.lastName, pattern),
+          sql`coalesce(${users.firstName}, '') || ' ' || coalesce(${users.lastName}, '') ILIKE ${pattern}`,
+          ilike(userProfiles.displayName, pattern),
+          ilike(userProfiles.username, pattern),
+          ilike(userProfiles.headline, pattern),
+          sql`array_to_string(${userProfiles.skills}, ' ') ILIKE ${pattern}`,
+          sql`array_to_string(${userProfiles.interests}, ' ') ILIKE ${pattern}`,
+        ) : undefined,
+      ))
+      .orderBy(desc(users.createdAt))
+      .limit(limit)
+      .offset(offset);
+    return rows.map((r) => ({ ...r.user, profile: r.profile ?? undefined }));
   }
 
   async getBadges(): Promise<Badge[]> {
@@ -1832,6 +1845,19 @@ export class DatabaseStorage implements IStorage {
       const otherId = conn.requesterId === userId ? conn.receiverId : conn.requesterId;
       const [user] = await db.select().from(users).where(eq(users.id, otherId));
       const profile = await this.getUserProfile(otherId);
+      return { ...conn, user, profile };
+    }));
+  }
+
+  /** Requests you've sent that are still waiting, with who they went to — the latest 200. */
+  async getSentConnectionRequests(userId: string): Promise<(Connection & { user: User; profile?: UserProfile })[]> {
+    const conns = await db.select().from(connections).where(
+      and(eq(connections.requesterId, userId), eq(connections.status, "pending"))
+    ).orderBy(desc(connections.createdAt)).limit(200);
+
+    return await Promise.all(conns.map(async (conn) => {
+      const [user] = await db.select().from(users).where(eq(users.id, conn.receiverId));
+      const profile = await this.getUserProfile(conn.receiverId);
       return { ...conn, user, profile };
     }));
   }

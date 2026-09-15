@@ -25,6 +25,16 @@ export const users = pgTable("users", {
   subscriptionTier: varchar("subscription_tier").default("free"),
   creditsUsed: integer("credits_used").default(0).notNull(),
   creditsResetAt: timestamp("credits_reset_at"),
+  /**
+   * The last subscription payment that failed and hasn't been fixed since —
+   * set by invoice.payment_failed, cleared by the next paid invoice. What the
+   * app shows as "update your card"; the tier itself still follows the
+   * subscription's status events.
+   */
+  paymentFailedAt: timestamp("payment_failed_at"),
+  paymentFailureMessage: text("payment_failure_message"),
+  /** A subscription payment refunded in full, which took the paid plan away until the next one is paid. */
+  subscriptionRefundedAt: timestamp("subscription_refunded_at"),
   stripeConnectAccountId: varchar("stripe_connect_account_id"),
   /**
    * Platform-side authority, distinct from a user's role on any one project.

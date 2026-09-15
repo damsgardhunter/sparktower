@@ -63,4 +63,14 @@ describe("the close read of an open loop", () => {
     expect(paths[0]).toBe("server/app.ts");
     expect(paths.length).toBeLessThanOrEqual(3);
   });
+
+  it("reads a loop's own doc over a long plan that mentions every loop's words", () => {
+    const growth = pickLoopEvidence({ title: "Publish path artifact", type: "growth", description: "Finish a Path Step and click Generate Artifact → Publish to Feed with public title + tags + link back to Project/Path → public indexable URL → stranger signs up → publishes their own" }, files);
+    expect(growth.docs[0]).toBe("docs/growth-loop.md");
+    expect(growth.paths).toEqual(expect.arrayContaining(["server/artifact-routes.ts", "client/src/pages/public-artifact.tsx", "e2e/growth-loop.spec.ts"]));
+
+    const revenue = pickLoopEvidence({ title: "Hit AI credits limit", type: "revenue", description: "Use Path tools and click Generate on an AI-backed Artifact → spend through free AI credits → Upgrade to keep generating with plan options → subscribe via Stripe → renewal/top-up" }, files);
+    expect(revenue.docs[0]).toBe("docs/revenue-loop.md");
+    expect(revenue.paths).toEqual(expect.arrayContaining(["server/entitlements.ts", "client/src/components/upgrade-to-keep-generating.tsx", "server/billing-credits.ts", "e2e/revenue-loop.spec.ts"]));
+  });
 });

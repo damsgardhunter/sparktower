@@ -86,7 +86,7 @@ export default function SprintPractice() {
     },
     onError: (error: any) => {
       const msg = error?.message || "";
-      if (msg.includes("403") || msg.includes("Insufficient credits")) {
+      if (msg.includes("403") || msg.includes("insufficient_credits")) {
         toast({ title: "Not enough AI credits", description: "Practice sprints use 1 AI credit for Nova's product suggestion.", variant: "destructive" });
       } else {
         toast({ title: "Failed to create practice sprint", variant: "destructive" });

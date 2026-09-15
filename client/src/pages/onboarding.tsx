@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { X, Plus, Github, Linkedin, Globe, MapPin, Loader2, Upload, FileText, CheckCircle, Clock, Zap, Shield, Users, Handshake } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { PENDING_PATH_KEY, afterOnboardingPath, type PendingPath } from "@shared/path-artifacts";
 import { useUpload } from "@/hooks/use-upload";
 
 const STEPS = [
@@ -167,8 +168,11 @@ export default function Onboarding() {
         description: "Your profile has been set up successfully.",
       });
 
-      // A new account has no projects; the next thing to do is make one.
-      setLocation("/projects/new");
+      // A new account has no projects; the next thing to do is make one — unless
+      // it came from a published artifact to look at that project first.
+      let pending: PendingPath | null = null;
+      try { pending = JSON.parse(localStorage.getItem(PENDING_PATH_KEY) ?? "null"); } catch { /* no pending choice */ }
+      setLocation(afterOnboardingPath(pending));
     } catch (error) {
       toast({
         title: "Error",

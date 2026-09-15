@@ -9,7 +9,7 @@ import request from "supertest";
 import { eq, sql } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { db } from "../../server/db";
-import { projectMembers, projects, notifications, pathPace } from "@shared/schema";
+import { projectMembers, projects, notifications, pathPace, projectKanbanTasks } from "@shared/schema";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -151,5 +151,26 @@ describe("coming back to the next step", () => {
     expect(after.weekly).toEqual({ due: false, steps: [] });
     expect(after.lastDone.sharedPostId).toBe(posted.body.id);
     expect((await refuse([m11.id])).status).toBe(200); // re-sharing a step on purpose is allowed; the weekly list just won't offer it
+  });
+
+  it("doesn't offer a milestone whose steps are still open, even if its own card is ticked", async () => {
+    const app = await getTestApp();
+    const owner = await person(app, "Parent");
+    const project = (await owner.agent.post("/api/projects").send({ title: "Parent Path", description: "A project whose milestone card is ticked before its steps are done.", category: "saas", goal: "ship_mvp", subcategory: "saas" })).body;
+    const tasks = (await owner.agent.get(`/api/projects/${project.id}/kanban`)).body;
+    const m14 = tasks.find((t: any) => (t.tags ?? []).includes("backbone:SHIP.M1.4"));
+    const [step] = await db.insert(projectKanbanTasks).values({ projectId: project.id, title: "An open step under M1.4", tags: ["parent:SHIP.M1.4"] } as any).returning();
+
+    await owner.agent.patch(`/api/kanban/${m14.id}`).send({ status: "done" }).expect(200);
+    await settle();
+    expect((await owner.agent.get(`/api/projects/${project.id}/path`)).body.weekly).toEqual({ due: false, steps: [] });
+    const refused = await owner.agent.post("/api/feed").send({ postType: "project_update", projectId: project.id, content: "x", pathStepIds: [m14.id] });
+    expect(refused.body.message).toMatch(/once they're done/);
+
+    // Once its step is done too, the milestone is offered.
+    await owner.agent.patch(`/api/kanban/${step.id}`).send({ status: "done" }).expect(200);
+    await settle();
+    const weekly = (await owner.agent.get(`/api/projects/${project.id}/path`)).body.weekly;
+    expect(weekly.steps.map((s: any) => s.taskId)).toContain(m14.id);
   });
 });

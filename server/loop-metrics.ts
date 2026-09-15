@@ -13,7 +13,7 @@
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { db } from "./db";
 import { loopEvents, projectCheckIns, users } from "@shared/schema";
-import { LOOP_EVENTS, LOOP_TARGETS, type LoopEventName } from "@shared/loop-events";
+import { LOOP_EVENTS_RETENTION_DAYS, LOOP_EVENTS, LOOP_TARGETS, type LoopEventName } from "@shared/loop-events";
 
 /**
  * How long someone gets to post their first update before they count as not
@@ -69,6 +69,14 @@ const pct = (numerator: number, denominator: number): number | null =>
  * deliberately ignores it — a D30 figure computed over the last 7 days would
  * be meaningless.
  */
+/** Deletes loop events past LOOP_EVENTS_RETENTION_DAYS. Returns how many went. */
+export async function sweepLoopEvents(): Promise<number> {
+  const result = await db.delete(loopEvents).where(
+    sql`${loopEvents.createdAt} < now() - interval '${sql.raw(String(LOOP_EVENTS_RETENTION_DAYS))} days'`,
+  );
+  return (result as any)?.rowCount ?? 0;
+}
+
 export async function loopMetrics(days = 30) {
   /*
    * Expressed as SQL, not a JS Date: `created_at` columns are `timestamp

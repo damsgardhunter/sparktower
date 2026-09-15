@@ -28,6 +28,10 @@ export interface RouteCoverageRow {
   privileged: boolean;
   /** Middleware names as written, for the reader. */
   guards: string[];
+  /** For a write reachable without sign-in: what it trusts instead, from a `// public-write: …` comment in the route. */
+  publicReason: string | null;
+  /** Why a costly route is metered differently (free, charged in a helper…), from a `// metering: …` comment in the route. */
+  meteringNote: string | null;
   /** For a route that checks or charges credits, or calls a model: in what order. Null otherwise. */
   metering: MeteringFacts | null;
 }
@@ -63,6 +67,14 @@ export interface RouteCoverage {
   unlimitedWrites: string[];
   /** Costly routes with no credit check or rate limit. */
   unmeteredCost: string[];
+  /**
+   * The credit check every AI route calls, when it also applies a burst limit
+   * — so "is there a per-user AI limit?" is answered from the source, not
+   * from a comment. Null when no such chokepoint is found.
+   */
+  creditChokepoint: { fn: string; file: string; burstAction: string; max: number | null; windowMinutes: number | null } | null;
+  /** Test files about metering, credits or AI failures: where "what does a failure cost" is proven. */
+  meteringTests: string[];
   /** Surface prefixes found, so a reader knows what a kill switch covers. */
   surfacePrefixes: { prefix: string; surface: string }[];
   /** Route files nothing imports: their routes exist in code and nowhere else. */
@@ -270,11 +282,13 @@ export function buildRouteCoverage(files: RepoFile[]): RouteCoverage {
         // A guard counts wherever it sits in the chain: after an inline
         // middleware, or as an explicit check at the top of the handler.
         auth: AUTH_GUARD.test(chunk) || !!prefixGuard || /\brequireOwner\b|\brequireReviewer\b|\brequireAdmin\b/.test(middleware) || /if\s*\(\s*!req\.user(?:\?\.id)?\s*\)[^\n]*\b401\b/.test(chunk),
-        rateLimited: /\brateLimit\s*\(/.test(chunk) || /\benforceRateLimit\s*\(/.test(body) || credits,
+        rateLimited: /\brateLimit\s*\(/.test(chunk) || /\benforce(?:Rate|Rejection)Limit\s*\(/.test(body) || credits,
         floor: write && underFloor(path),
         surface, credits,
         privileged: /\b(requireOwner|requireReviewer|requireAdmin|isAdmin)\b/.test(middleware + body.slice(0, 600)),
         guards,
+        publicReason: /\/\/\s*public-write:\s*([^\n]+)/.exec(chunk)?.[1].trim().slice(0, 200) ?? null,
+        meteringNote: /\/\/\s*metering:\s*([^\n]+)/.exec(chunk)?.[1].trim().slice(0, 200) ?? null,
         metering: analyzeMetering(body),
       });
       // A ceiling against a pathological repo, not a budget: at 400 a real app
@@ -302,9 +316,51 @@ export function buildRouteCoverage(files: RepoFile[]): RouteCoverage {
     unguardedWrites: writes.filter((r) => !r.auth).map(label),
     unlimitedWrites: writes.filter((r) => !r.rateLimited && !r.floor).map(label),
     unmeteredCost: costly.filter((r) => !r.credits && !r.rateLimited).map(label),
+    creditChokepoint: detectCreditChokepoint(files),
+    meteringTests: files.map((f) => f.path).filter((p) => isTestPath(p) && /meter|credit|ai-fail|revenue/i.test(p)).sort(),
     surfacePrefixes: prefixes,
     unmountedFiles: [...new Set(rows.filter((r) => !r.mounted).map((r) => r.file))].sort(),
   };
+}
+
+/**
+ * The credit check that doubles as the AI burst limit: a `requireCredits`-style
+ * function whose body calls `enforceRateLimit(…, "<action>")`, with that
+ * action's max and window read from its config when they're in the source.
+ */
+function detectCreditChokepoint(files: RepoFile[]): RouteCoverage["creditChokepoint"] {
+  for (const f of files) {
+    if (!f.content || isTestPath(f.path)) continue;
+    const def = /export\s+async\s+function\s+(require\w*Credits?)\s*\(/.exec(f.content);
+    if (!def) continue;
+    const open = f.content.indexOf("{", f.content.indexOf(")", def.index));
+    const body = f.content.slice(open, matchBracket(f.content, open) + 1);
+    const burst = /\benforceRateLimit\s*\([^)]*?["'`](\w+)["'`]\s*\)/.exec(body);
+    if (!burst) continue;
+    let max: number | null = null, windowMinutes: number | null = null;
+    for (const g of files) {
+      const m = g.content && new RegExp(`\\b${burst[1]}\\s*:\\s*\\{\\s*max\\s*:\\s*(\\d+)\\s*,\\s*windowMinutes\\s*:\\s*(\\d+)`).exec(g.content);
+      if (m) { max = Number(m[1]); windowMinutes = Number(m[2]); break; }
+    }
+    return { fn: def[1], file: f.path, burstAction: burst[1], max, windowMinutes };
+  }
+  return null;
+}
+
+/** When costly routes check and charge, as read from each route's own body — and where a failure's cost is tested. */
+function meteringLines(c: RouteCoverage, lst: (xs: string[]) => string, maxList: number): string[] {
+  const live = c.rows.filter((r) => r.mounted && r.cost);
+  const charging = live.filter((r) => r.metering?.charges.length);
+  const bad = (k: "chargeBeforeModel" | "chargeBeforeParse" | "chargeInCatch" | "checkAfterModel") => live.filter((r) => r.metering?.[k]).map((r) => `${r.method} ${r.path}`);
+  const clean = charging.filter((r) => !r.metering!.chargeBeforeModel && !r.metering!.chargeBeforeParse && !r.metering!.chargeInCatch);
+  const cp = c.creditChokepoint;
+  const noted = live.filter((r) => r.meteringNote || !r.metering?.charges.length);
+  return [
+    cp ? `- AI burst limit: ${cp.fn} (${cp.file}) calls enforceRateLimit("${cp.burstAction}") before every credit check${cp.max != null ? ` — ${cp.max} per ${cp.windowMinutes} minutes per user` : ""}; every credit-metered route above is under it.` : "- AI burst limit: no credit check that also applies a rate limit was found.",
+    `- Charge order, read from each route's body: charged only after the model answered and its answer was read: ${clean.length}/${charging.length} routes that charge in their own body. Charged before the model: ${lst(bad("chargeBeforeModel"))}. Charged before its answer is read (an unreadable answer billed): ${lst(bad("chargeBeforeParse"))}. Charged in a catch: ${lst(bad("chargeInCatch"))}. Checked only after the model: ${lst(bad("checkAfterModel"))}.`,
+    ...noted.slice(0, maxList).map((r) => `  - ${r.method} ${r.path}: ${r.meteringNote ?? (r.credits ? "checks credits here; the charge is in a helper it calls" : "NO METERING REASON GIVEN")} [${r.file}]`),
+    c.meteringTests.length ? `- Tests of metering and what a failure costs: ${c.meteringTests.join(", ")}` : null,
+  ].filter((x): x is string => !!x);
 }
 
 /** The matrix as prompt text: the summary and the gaps, never four hundred rows. */
@@ -314,9 +370,12 @@ export function renderRouteCoverage(c: RouteCoverage | null | undefined, maxList
   const lst = (xs: string[]) => xs.length ? `${xs.slice(0, maxList).join(", ")}${xs.length > maxList ? ` … and ${xs.length - maxList} more` : ""}` : "none";
   return [
     `ROUTE COVERAGE (read from the source; exact): ${s.routes} routes, ${s.writes} writes, ${s.costly} costly.`,
-    `- Writes behind auth: ${s.writesWithAuth}/${s.writes}. Unguarded writes: ${lst(c.unguardedWrites)}`,
+    `- Writes behind auth: ${s.writesWithAuth}/${s.writes}. Writes without sign-in: ${lst(c.unguardedWrites)}`,
+    // What each one trusts instead, as its own route says — so a public write isn't read as an unguarded one.
+    ...c.rows.filter((r) => r.mounted && r.write && !r.auth).slice(0, maxList).map((r) => `  - ${r.method} ${r.path}: ${r.publicReason ? `trusts ${r.publicReason}` : "NO REASON GIVEN"}${r.rateLimited ? "; rate-limited" : r.floor ? "; under the write floor" : "; no rate limit"} [${r.file}]`),
     `- Writes with their own rate limit or credit metering: ${s.writesRateLimited}/${s.writes}; limited by the global write floor alone: ${s.writesFloorOnly ?? 0}${c.writeFloor?.mounted ? ` (limitWrites, every write under /api except ${c.writeFloor.exempt.join(", ") || "nothing"})` : " (no write floor found)"}. No limit at all: ${lst(c.unlimitedWrites)}`,
     `- Costly routes credit-metered: ${s.costlyMetered}/${s.costly}. Unmetered costly: ${lst(c.unmeteredCost)}`,
+    ...meteringLines(c, lst, maxList),
     `- Behind a surface kill switch: ${s.surfaceGated}/${s.routes}${c.surfacePrefixes.length ? ` (prefixes: ${c.surfacePrefixes.map((p) => `${p.prefix}→${p.surface}`).join(", ")})` : ""}`,
     c.unmountedFiles.length ? `- Not counted: routes in files nothing imports (dead code, not live endpoints): ${c.unmountedFiles.join(", ")}` : null,
   ].filter(Boolean).join("\n");

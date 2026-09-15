@@ -31,7 +31,8 @@ describe("milestones", () => {
     // The path gave the project its own milestones; ours is among them.
     const list = (await owner.agent.get(`/api/projects/${id}/milestones`)).body;
     expect(list.some((m: any) => m.id === created.body.id)).toBe(true);
-    expect((await stranger.agent.get(`/api/projects/${id}/milestones`)).status).toBe(403);
+    // Reading is open on a public project: its page has a Milestones tab. Writing isn't.
+    expect((await stranger.agent.get(`/api/projects/${id}/milestones`)).status).toBe(200);
 
     expect((await stranger.agent.patch(`/api/milestones/${created.body.id}`).send({ title: "Hijacked" })).status).toBe(403);
     const edited = await owner.agent.patch(`/api/milestones/${created.body.id}`).send({ status: "in-progress" });

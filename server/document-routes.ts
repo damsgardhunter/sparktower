@@ -13,6 +13,7 @@
  * and only then discovering the structure was wrong wastes the builder's
  * credits and their time; approving a layout costs neither.
  */
+import { rateLimit } from "./moderation";
 import type { Express } from "express";
 import OpenAI from "openai";
 import { randomUUID } from "crypto";
@@ -889,7 +890,7 @@ Respond ONLY with valid JSON:
    * ordinary uploads; the document stays editable, and re-publishing replaces
    * the PDF rather than piling up copies.
    */
-  app.post("/api/documents/:docId/publish", isAuthenticated, async (req: any, res) => {
+  app.post("/api/documents/:docId/publish", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       const doc = await loadDocument(req, res);
       if (!doc) return;

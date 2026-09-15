@@ -1,23 +1,37 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   ActivityIndicator, Image, KeyboardAvoidingView, Platform, Pressable,
   ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../../src/auth/AuthContext";
 import { colors, font, fontFamily, radius, shadow, spacing } from "../../src/theme";
-import { Icon, NovaGradient, type IconName } from "../../src/components/ui";
+import { Icon, type IconName } from "../../src/components/ui";
+import { LandingSections } from "../../src/components/onboarding/LandingSections";
+
+type Tab = "login" | "signup";
 
 /**
- * Sign in and sign up, in the website's light landing look: the SparkTower
- * mark, the Tesla line with its purple ending, and one white card holding
- * both forms — the same fields and checks as the web's AuthCard.
+ * The signed-out front door — the website's landing page
+ * (client/src/pages/landing.tsx) on a phone.
+ *
+ * Same order as the web: the header with Log In / Sign Up, the Tesla hero with
+ * Get Started and Learn More, the auth card that opens from any of those, and
+ * the landing sections below. The card is the web's AuthCard: Log In and Sign
+ * Up tabs, Google first, then email, with the same fields, checks and copy.
+ *
+ * On success nothing navigates from here: AuthGate sees the new session and
+ * sends a fresh account to onboarding (as the web's "/" redirect does) and a
+ * returning, onboarded one to the feed.
  */
 export default function SignIn() {
-  const router = useRouter();
+  const params = useLocalSearchParams<{ signup?: string }>();
+  // Arriving with ?signup=1 opens straight onto sign up, as on the web.
+  const arrivedToSignUp = params.signup === "1";
   const { signIn, signUp, signInWithGoogle, googleAvailable } = useAuth();
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [tab, setTab] = useState<Tab>(arrivedToSignUp ? "signup" : "login");
+  const [showAuth, setShowAuth] = useState(arrivedToSignUp);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -27,7 +41,18 @@ export default function SignIn() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const switchMode = (m: "signin" | "signup") => { setMode(m); setError(null); };
+  const scrollRef = useRef<ScrollView>(null);
+  const cardY = useRef(0);
+  const featuresY = useRef(0);
+
+  const openAuth = (t: Tab) => {
+    setTab(t);
+    setError(null);
+    setShowAuth(true);
+    // Bring the card into view once it has laid out.
+    setTimeout(() => scrollRef.current?.scrollTo({ y: Math.max(cardY.current - spacing.lg, 0), animated: true }), 60);
+  };
+  const switchTab = (t: Tab) => { setTab(t); setError(null); };
 
   const submit = async () => {
     setError(null);
@@ -35,22 +60,21 @@ export default function SignIn() {
       setError("Enter your email and password.");
       return;
     }
-    if (mode === "signup") {
-      if (password.length < 6) { setError("Password must be at least 6 characters."); return; }
-      if (password !== confirm) { setError("Passwords do not match."); return; }
+    if (tab === "signup") {
+      // The web checks these in this order.
+      if (password !== confirm) { setError("Passwords do not match"); return; }
+      if (password.length < 6) { setError("Password must be at least 6 characters"); return; }
     }
     setBusy(true);
     try {
-      if (mode === "signin") {
+      if (tab === "login") {
         await signIn(email.trim(), password);
-        // AuthGate moves a signed-in person on.
       } else {
         await signUp({ email: email.trim(), password, firstName: firstName.trim(), lastName: lastName.trim() || undefined });
-        // A new account starts with its profile, as on the website.
-        router.replace("/welcome");
       }
+      // AuthGate moves a signed-in person on: onboarding first for a new account.
     } catch (err: any) {
-      setError(err?.message || "Something went wrong. Try again.");
+      setError(err?.message || (tab === "login" ? "Login failed" : "Registration failed"));
     } finally {
       setBusy(false);
     }
@@ -70,120 +94,125 @@ export default function SignIn() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
-      <NovaGradient style={{ height: 4 }} />
+      {/* The web's fixed header: the stacked mark, Log In and Sign Up. */}
+      <View style={styles.topBar}>
+        <View style={{ alignItems: "center" }}>
+          <Image source={require("../../assets/sparktower-logo.png")} style={styles.logoMark} resizeMode="contain" accessibilityLabel="SparkTower" />
+          <Text style={styles.wordmark}>SPARKTOWER</Text>
+        </View>
+        <View style={styles.topActions}>
+          <Pressable onPress={() => openAuth("login")} style={({ pressed }) => [styles.topBtn, styles.topBtnPrimary, pressed && styles.pressed]} testID="button-login">
+            <Text style={[styles.topBtnText, { color: colors.primaryText }]}>Log In</Text>
+          </Pressable>
+          <Pressable onPress={() => openAuth("signup")} style={({ pressed }) => [styles.topBtn, styles.topBtnOutline, pressed && styles.pressed]} testID="button-signup-nav">
+            <Text style={styles.topBtnText}>Sign Up</Text>
+          </Pressable>
+        </View>
+      </View>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-          <View style={styles.header}>
-            {/* The web header's stacked mark and wordmark. */}
-            <Image source={require("../../assets/sparktower-logo.png")} style={styles.logoMark} resizeMode="contain" accessibilityLabel="SparkTower" />
-            <Text style={styles.wordmark}>SPARKTOWER</Text>
-            <Text style={styles.quote}>
+        <ScrollView ref={scrollRef} contentContainerStyle={{ flexGrow: 1 }} keyboardShouldPersistTaps="handled">
+          <View style={styles.hero}>
+            <Text style={styles.quote} testID="text-hero-headline">
               "The present is theirs; the future, for which I really worked, <Text style={{ color: colors.primary }}>is mine.</Text>"
             </Text>
             <View style={styles.attribution}><Text style={styles.attributionText}>— Nikola Tesla</Text></View>
             <Text style={styles.tagline}>
-              Tell Nova where you want to go. Nova helps you figure out how to get there.
+              SparkTower is built for the builders who think ahead. Like Tesla, we believe the future belongs to those who create it — connect with visionary entrepreneurs, collaborate with AI, and launch the projects that shape tomorrow.
             </Text>
+            <View style={styles.heroButtons}>
+              <Pressable onPress={() => openAuth("signup")} style={({ pressed }) => [styles.primaryButton, styles.heroBtn, pressed && styles.pressed]} testID="button-get-started">
+                <Text style={styles.primaryButtonText}>Get Started</Text>
+              </Pressable>
+              <Pressable onPress={() => scrollRef.current?.scrollTo({ y: featuresY.current, animated: true })}
+                style={({ pressed }) => [styles.secondaryButton, styles.heroBtn, pressed && styles.pressed]} testID="link-learn-more">
+                <Text style={styles.secondaryButtonText}>Learn More</Text>
+              </Pressable>
+            </View>
           </View>
 
-          <View style={styles.card}>
-            <View style={styles.tabs} accessibilityRole="tablist">
-              {(["signin", "signup"] as const).map((m) => (
-                <Pressable key={m} onPress={() => switchMode(m)} style={[styles.tab, mode === m && styles.tabActive]}
-                  accessibilityRole="tab" accessibilityState={{ selected: mode === m }} testID={`tab-${m}`}>
-                  <Text style={[styles.tabText, mode === m && styles.tabTextActive]}>{m === "signin" ? "Log in" : "Sign up"}</Text>
+          {showAuth && (
+            <View style={styles.cardWrap} onLayout={(e) => { cardY.current = e.nativeEvent.layout.y; }}>
+              <View style={styles.card}>
+                <View style={styles.tabs} accessibilityRole="tablist">
+                  {(["login", "signup"] as const).map((t) => (
+                    <Pressable key={t} onPress={() => switchTab(t)} style={[styles.tab, tab === t && styles.tabActive]}
+                      accessibilityRole="tab" accessibilityState={{ selected: tab === t }} testID={`tab-${t}`}>
+                      <Text style={[styles.tabText, tab === t && styles.tabTextActive]}>{t === "login" ? "Log In" : "Sign Up"}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+
+                <Text style={styles.cardSub}>
+                  {tab === "login" ? "Welcome back! Log in to your account." : "Create your SparkTower account."}
+                </Text>
+
+                <Pressable onPress={google} disabled={busy || !googleAvailable} testID="button-google-auth"
+                  style={({ pressed }) => [styles.secondaryButton, (pressed || !googleAvailable) && styles.pressed]}>
+                  <Icon name="logo-google" size={18} color={colors.text} />
+                  <Text style={styles.secondaryButtonText}>Continue with Google</Text>
                 </Pressable>
-              ))}
-            </View>
+                {!googleAvailable && (
+                  <Text style={styles.hint}>Google sign-in needs client IDs in this build. Email works now.</Text>
+                )}
 
-            <View style={{ gap: 2 }}>
-              <Text style={styles.cardTitle}>{mode === "signin" ? "Welcome back" : "Create your account"}</Text>
-              <Text style={styles.cardSub}>
-                {mode === "signin" ? "Log in to pick up where you left off." : "Start building with Nova and the builders around you."}
-              </Text>
-            </View>
+                <View style={styles.dividerRow}>
+                  <View style={styles.divider} />
+                  <Text style={styles.dividerText}>OR</Text>
+                  <View style={styles.divider} />
+                </View>
 
-            {mode === "signup" && (
-              <View style={{ flexDirection: "row", gap: spacing.sm }}>
-                <LabeledInput style={{ flex: 1 }} label="First name" value={firstName} onChangeText={setFirstName} placeholder="Jane" autoCapitalize="words" autoComplete="given-name" />
-                <LabeledInput style={{ flex: 1 }} label="Last name" value={lastName} onChangeText={setLastName} placeholder="Doe" autoCapitalize="words" autoComplete="family-name" />
-              </View>
-            )}
+                {error && (
+                  <View style={styles.errorBox} testID={tab === "login" ? "text-login-error" : "text-signup-error"}>
+                    <Text style={styles.error}>{error}</Text>
+                  </View>
+                )}
 
-            <LabeledInput label="Email" icon="mail-outline" value={email} onChangeText={setEmail} placeholder="you@example.com"
-              autoCapitalize="none" keyboardType="email-address" autoComplete="email" testID="input-email" />
+                {tab === "signup" && (
+                  <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                    <LabeledInput style={{ flex: 1 }} label="First Name" value={firstName} onChangeText={setFirstName} placeholder="Jane" autoCapitalize="words" autoComplete="given-name" testID="input-signup-firstname" />
+                    <LabeledInput style={{ flex: 1 }} label="Last Name" value={lastName} onChangeText={setLastName} placeholder="Doe" autoCapitalize="words" autoComplete="family-name" testID="input-signup-lastname" />
+                  </View>
+                )}
 
-            <LabeledInput label="Password" icon="lock-closed-outline" value={password} onChangeText={setPassword}
-              placeholder={mode === "signup" ? "At least 6 characters" : "Your password"}
-              secureTextEntry={!showPassword} autoComplete={mode === "signup" ? "new-password" : "current-password"}
-              onSubmitEditing={mode === "signin" ? submit : undefined} returnKeyType={mode === "signin" ? "go" : "next"} testID="input-password"
-              trailing={
-                <Pressable onPress={() => setShowPassword((v) => !v)} hitSlop={10} accessibilityLabel={showPassword ? "Hide password" : "Show password"}>
-                  <Icon name={showPassword ? "eye-off-outline" : "eye-outline"} size={19} color={colors.textTertiary} />
+                <LabeledInput label="Email" value={email} onChangeText={setEmail} placeholder="you@example.com"
+                  autoCapitalize="none" keyboardType="email-address" autoComplete="email" testID={tab === "login" ? "input-login-email" : "input-signup-email"} />
+
+                <LabeledInput label="Password" value={password} onChangeText={setPassword}
+                  placeholder={tab === "signup" ? "At least 6 characters" : "Your password"}
+                  secureTextEntry={!showPassword} autoComplete={tab === "signup" ? "new-password" : "current-password"}
+                  onSubmitEditing={tab === "login" ? submit : undefined} returnKeyType={tab === "login" ? "go" : "next"}
+                  testID={tab === "login" ? "input-login-password" : "input-signup-password"}
+                  trailing={
+                    <Pressable onPress={() => setShowPassword((v) => !v)} hitSlop={10} accessibilityLabel={showPassword ? "Hide password" : "Show password"} testID="button-toggle-password">
+                      <Icon name={showPassword ? "eye-off-outline" : "eye-outline"} size={19} color={colors.textTertiary} />
+                    </Pressable>
+                  }
+                />
+
+                {tab === "signup" && (
+                  <LabeledInput label="Confirm Password" value={confirm} onChangeText={setConfirm}
+                    placeholder="Confirm your password" secureTextEntry={!showPassword} autoComplete="new-password"
+                    onSubmitEditing={submit} returnKeyType="go" testID="input-signup-confirm" />
+                )}
+
+                <Pressable onPress={submit} disabled={busy} testID={tab === "login" ? "button-submit-login" : "button-submit-signup"}
+                  style={({ pressed }) => [styles.primaryButton, (pressed || busy) && styles.pressed]}>
+                  {busy ? <ActivityIndicator color={colors.primaryText} /> : (
+                    <Text style={styles.primaryButtonText}>{tab === "login" ? "Log In" : "Create Account"}</Text>
+                  )}
                 </Pressable>
-              }
-            />
-
-            {mode === "signup" && (
-              <LabeledInput label="Confirm password" icon="lock-closed-outline" value={confirm} onChangeText={setConfirm}
-                placeholder="Type it again" secureTextEntry={!showPassword} autoComplete="new-password" onSubmitEditing={submit} returnKeyType="go" />
-            )}
-
-            {error && (
-              <View style={styles.errorRow}>
-                <Icon name="alert-circle" size={16} color={colors.danger} />
-                <Text style={styles.error}>{error}</Text>
               </View>
-            )}
-
-            <Pressable onPress={submit} disabled={busy} testID="button-submit"
-              style={({ pressed }) => [styles.primaryButton, (pressed || busy) && styles.pressed]}>
-              {busy ? <ActivityIndicator color={colors.primaryText} /> : (
-                <Text style={styles.primaryButtonText}>{mode === "signin" ? "Log in" : "Get started"}</Text>
-              )}
-            </Pressable>
-
-            <View style={styles.dividerRow}>
-              <View style={styles.divider} />
-              <Text style={styles.dividerText}>or</Text>
-              <View style={styles.divider} />
             </View>
-            <Pressable onPress={google} disabled={busy || !googleAvailable}
-              style={({ pressed }) => [styles.secondaryButton, (pressed || !googleAvailable) && styles.pressed]}>
-              <Icon name="logo-google" size={18} color={colors.text} />
-              <Text style={styles.secondaryButtonText}>Continue with Google</Text>
-            </Pressable>
-            {!googleAvailable && (
-              <Text style={styles.hint}>Google sign-in needs client IDs in this build. Email works now.</Text>
-            )}
+          )}
 
-            <Text style={styles.switch}>
-              {mode === "signin" ? "New to SparkTower? " : "Already have an account? "}
-              <Text style={styles.switchLink} onPress={() => switchMode(mode === "signin" ? "signup" : "signin")}>
-                {mode === "signin" ? "Create an account" : "Log in"}
-              </Text>
-            </Text>
-          </View>
-
-          <View style={styles.features}>
-            {FEATURES.map((f) => (
-              <View key={f.label} style={styles.feature}>
-                <View style={styles.featureIcon}><Icon name={f.icon} size={16} color={colors.primary} /></View>
-                <Text style={styles.featureText}>{f.label}</Text>
-              </View>
-            ))}
+          <View onLayout={(e) => { featuresY.current = e.nativeEvent.layout.y; }}>
+            <LandingSections onJoin={() => openAuth("signup")} />
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
-
-const FEATURES: { icon: IconName; label: string }[] = [
-  { icon: "sparkles", label: "Nova plans it" },
-  { icon: "people", label: "Find co-founders" },
-  { icon: "rocket", label: "Ship and show" },
-];
 
 function LabeledInput({ label, icon, trailing, style, ...input }: React.ComponentProps<typeof TextInput> & {
   label: string;
@@ -212,19 +241,36 @@ function LabeledInput({ label, icon, trailing, style, ...input }: React.Componen
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
-  scroll: { flexGrow: 1, justifyContent: "center", paddingHorizontal: spacing.lg, paddingVertical: spacing.xl },
-  header: { marginBottom: spacing.xl, alignItems: "center" },
-  logoMark: { width: 64, height: 64 },
-  wordmark: { color: colors.text, fontSize: font.xs, fontFamily: fontFamily.bold, letterSpacing: 3, marginTop: 2 },
-  quote: {
-    color: colors.text, fontSize: 21, lineHeight: 28, fontFamily: fontFamily.bold, fontStyle: "italic",
-    textAlign: "center", marginTop: spacing.lg, letterSpacing: -0.3, maxWidth: 340,
+  topBar: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center",
+    paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
+    borderBottomWidth: 1, borderColor: "rgba(0,0,0,0.05)", backgroundColor: colors.background,
   },
-  attribution: { backgroundColor: colors.text, paddingHorizontal: spacing.md, paddingVertical: 4, marginTop: spacing.md },
-  attributionText: { color: "#FFFFFF", fontSize: font.xs, fontFamily: fontFamily.semibold, letterSpacing: 0.5 },
+  // Pinned right, so the mark stays centred as on the web.
+  topActions: { position: "absolute", right: spacing.md, top: 0, bottom: 0, flexDirection: "row", alignItems: "center", gap: 6 },
+  topBtn: { paddingHorizontal: 9, paddingVertical: 6, borderRadius: radius.sm },
+  topBtnPrimary: { backgroundColor: colors.primary },
+  topBtnOutline: { borderWidth: 1, borderColor: colors.border },
+  topBtnText: { color: colors.text, fontSize: font.xs + 1, fontFamily: fontFamily.semibold },
+  logoMark: { width: 40, height: 40 },
+  wordmark: { color: colors.text, fontSize: 10, fontFamily: fontFamily.bold, letterSpacing: 2.5, marginTop: -1 },
+  hero: { alignItems: "center", paddingHorizontal: spacing.lg, paddingTop: spacing.xxl, paddingBottom: spacing.xl },
+  quote: {
+    color: colors.text, fontSize: 28, lineHeight: 35, fontFamily: fontFamily.bold, fontStyle: "italic",
+    textAlign: "center", letterSpacing: -0.5, maxWidth: 360,
+  },
+  attribution: { backgroundColor: colors.text, paddingHorizontal: spacing.lg, paddingVertical: 6, marginTop: spacing.lg },
+  attributionText: { color: "#FFFFFF", fontSize: font.sm, fontFamily: fontFamily.semibold, letterSpacing: 0.5 },
   tagline: {
-    color: colors.textSecondary, fontSize: font.sm, textAlign: "center",
-    marginTop: spacing.md, lineHeight: 20, maxWidth: 300, fontFamily: fontFamily.regular,
+    color: colors.textSecondary, fontSize: font.base + 1, textAlign: "center",
+    marginTop: spacing.lg, lineHeight: 25, maxWidth: 360, fontFamily: fontFamily.regular,
+  },
+  heroButtons: { alignSelf: "stretch", gap: spacing.sm, marginTop: spacing.xl },
+  heroBtn: { marginTop: 0 },
+  cardWrap: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xl },
+  errorBox: {
+    backgroundColor: "rgba(230,91,85,0.1)", borderWidth: 1, borderColor: "rgba(230,91,85,0.2)",
+    borderRadius: radius.sm, padding: spacing.md,
   },
   card: {
     backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border,
@@ -236,8 +282,7 @@ const styles = StyleSheet.create({
   // Each weight is its own loaded face, so `fontFamily` carries the weight.
   tabText: { color: colors.textTertiary, fontSize: font.sm, fontFamily: fontFamily.semibold },
   tabTextActive: { color: colors.text },
-  cardTitle: { color: colors.text, fontSize: font.lg, fontFamily: fontFamily.bold },
-  cardSub: { color: colors.textSecondary, fontSize: font.sm, fontFamily: fontFamily.regular },
+  cardSub: { color: colors.textSecondary, fontSize: font.sm, fontFamily: fontFamily.regular, textAlign: "center" },
   inputLabel: { color: colors.text, fontSize: font.sm, fontFamily: fontFamily.medium },
   inputWrap: {
     flexDirection: "row", alignItems: "center", gap: spacing.sm,
@@ -246,8 +291,7 @@ const styles = StyleSheet.create({
   },
   inputFocused: { borderColor: colors.primary },
   input: { flex: 1, paddingVertical: 12, color: colors.text, fontSize: font.base, fontFamily: fontFamily.regular, minWidth: 0 },
-  errorRow: { flexDirection: "row", gap: 6, alignItems: "center" },
-  error: { flex: 1, color: colors.danger, fontSize: font.sm, fontFamily: fontFamily.medium },
+  error: { color: colors.danger, fontSize: font.sm, fontFamily: fontFamily.medium },
   primaryButton: {
     backgroundColor: colors.primary, borderRadius: radius.pill,
     paddingVertical: 14, alignItems: "center", marginTop: spacing.xs,
@@ -266,8 +310,4 @@ const styles = StyleSheet.create({
   hint: { color: colors.textTertiary, fontSize: font.xs, textAlign: "center", fontFamily: fontFamily.regular },
   switch: { color: colors.textSecondary, fontSize: font.sm, textAlign: "center", fontFamily: fontFamily.regular },
   switchLink: { color: colors.primary, fontFamily: fontFamily.semibold },
-  features: { flexDirection: "row", justifyContent: "center", gap: spacing.md, marginTop: spacing.xl, flexWrap: "wrap" },
-  feature: { flexDirection: "row", alignItems: "center", gap: 6 },
-  featureIcon: { width: 26, height: 26, borderRadius: 13, backgroundColor: colors.primarySoft, alignItems: "center", justifyContent: "center" },
-  featureText: { color: colors.textSecondary, fontSize: font.xs, fontFamily: fontFamily.medium },
 });

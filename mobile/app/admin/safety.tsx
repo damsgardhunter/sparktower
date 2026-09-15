@@ -1,12 +1,13 @@
 import { useState } from "react";
-import { Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import { Stack } from "expo-router";
+import { Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
+import { Stack, useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { API_URL, api, fetchMe } from "../../src/api/client";
+import { api } from "../../src/api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
 import { Btn, Empty, Icon, Loading, errText, type IconName } from "../../src/components/ui";
 import { Callout, Pill, TitledCard, humanize } from "../../src/components/MoreKit";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
+import { LinkPill, NotFoundScreen, gateView, isNotFound, useReviewer } from "../../src/components/more/AdminKit";
 
 /** shared/safety.ts SAFETY_CHECKLIST — restated; the server rejects a review missing any id. */
 const CHECKLIST = [
@@ -17,6 +18,17 @@ const CHECKLIST = [
   { id: "surfaces", label: "Switched-off surfaces reconsidered", detail: "Anything off still needs to be off." },
 ];
 const IMPACT_WINDOW_HOURS = 24;
+
+/** shared/moderation.ts reportReasonLabel and moderationReasonLabel, restated. */
+const REPORT_REASONS: Record<string, string> = {
+  spam: "Spam or advertising", abuse: "Harassment or abuse", misleading: "Misleading or fake",
+  inappropriate: "Sexual or graphic content", other: "Something else",
+};
+const MODERATION_REASONS: Record<string, string> = {
+  spam: "Spam or advertising", harassment: "Harassment or abuse", hate: "Hate or slurs", sexual: "Sexual or graphic content",
+  misleading: "Misleading or a scam", off_topic: "Off-topic or disruptive", no_violation: "No rule broken",
+  duplicate: "Already handled", insufficient_context: "Not enough to act on",
+};
 
 const ACTION_WORDS: Record<string, string> = {
   comment_remove: "Removed a comment", comment_shadow_hide: "Shadow-hid a comment", comment_ban: "Banned an author",
@@ -42,15 +54,22 @@ export default function AdminSafety() {
   const { notice, show, clear } = useNotice();
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [note, setNote] = useState("");
+  const router = useRouter();
+  const { loading: meLoading, isReviewer } = useReviewer();
 
-  const { data: me, isLoading: meLoading } = useQuery({ queryKey: ["me"], queryFn: fetchMe });
-  const isReviewer = ["reviewer", "admin"].includes(me?.user?.platformRole);
-
-  const { data, isLoading, isError, refetch } = useQuery({
+  const { data, isLoading, isError, error, refetch, isRefetching } = useQuery({
     queryKey: ["safety-review"],
     queryFn: () => api<any>("/api/admin/safety/review"),
     enabled: isReviewer,
     refetchOnMount: "always",
+    retry: false,
+  });
+  // The owner console is gated separately; only link to it for the owner.
+  const { data: access } = useQuery({
+    queryKey: ["admin-analytics-access"],
+    queryFn: () => api<{ owner: boolean }>("/api/admin/analytics/access").catch(() => ({ owner: false })),
+    enabled: isReviewer,
+    retry: false,
   });
 
   const complete = useMutation({
@@ -64,40 +83,34 @@ export default function AdminSafety() {
     onError: (e) => show({ tone: "error", text: errText(e, "Couldn't record the review.") }),
   });
 
-  if (meLoading) return <Loading />;
-  if (!isReviewer) {
-    return (
-      <View style={{ flex: 1, backgroundColor: colors.canvas, justifyContent: "center" }}>
-        <Stack.Screen options={{ title: "Safety review" }} />
-        <Empty icon="lock-closed-outline" title="Reviewers only" body="This page is for SparkTower's reviewers and admins." />
-      </View>
-    );
-  }
+  const gate = gateView("Safety review", meLoading, isReviewer);
+  if (gate) return gate;
+  if (isNotFound(error)) return <NotFoundScreen title="Safety review" />;
 
-  const web = (path: string) => Linking.openURL(`${API_URL}${path}`);
+  const go = (path: string) => router.push(path as any);
+  const links: [string, string][] = [["Reports queue", "/admin/reports"], ["Surfaces", "/admin/surfaces"], ["Loop metrics", "/admin/loop-metrics"]];
+  if (access?.owner) links.push(["Analytics", "/admin/analytics"]);
 
   return (
     <>
       <Stack.Screen options={{ title: "Safety review" }} />
-      <ScrollView style={{ flex: 1, backgroundColor: colors.canvas }} contentContainerStyle={{ padding: spacing.md, gap: spacing.md, paddingBottom: spacing.xxl * 2 }}>
+      <ScrollView
+        style={{ flex: 1, backgroundColor: colors.canvas }}
+        refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={() => refetch()} tintColor={colors.primary} />}
+        contentContainerStyle={{ padding: spacing.md, gap: spacing.md, paddingBottom: spacing.xxl * 2 }}>
         <View style={{ gap: 4, paddingHorizontal: 2 }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
             <Icon name="shield-checkmark" size={22} color={colors.primary} />
             <Text style={{ color: colors.text, fontSize: font.xl, fontFamily: fontFamily.bold }}>Daily safety review</Text>
           </View>
           <Text style={meta}>
-            Reports, rate limits and loop health together, what recent actions did, and a checklist that records the pass.
+            Reports, rate limits and loop health together, what your recent actions did, and a checklist that records the pass.
             {data ? (data.lastReview
               ? ` Covering the last ${hoursLabel(data.windowHours)} — since ${data.lastReview.by ?? "someone"}'s review ${hoursLabel(data.lastReview.hoursAgo)} ago.`
               : ` Covering the last ${hoursLabel(data.windowHours)}. No review has been recorded yet.`) : ""}
           </Text>
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
-            {[["Reports queue", "/admin/reports"], ["Surfaces", "/admin/surfaces"], ["Loop metrics", "/admin/loop-metrics"], ["Analytics", "/admin/analytics"]].map(([l, p]) => (
-              <Pressable key={p} onPress={() => web(p)} style={{ flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 10, paddingVertical: 5, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface }}>
-                <Text style={{ color: colors.primary, fontSize: font.xs, fontFamily: fontFamily.semibold }}>{l}</Text>
-                <Icon name="open-outline" size={11} color={colors.primary} />
-              </Pressable>
-            ))}
+            {links.map(([l, p]) => <LinkPill key={p} label={l} onPress={() => go(p)} />)}
           </View>
         </View>
 
@@ -109,18 +122,18 @@ export default function AdminSafety() {
                 ? <Callout tone="success" title="Nothing needs attention." />
                 : data.alerts.map((a: any) => <Callout key={a.id} icon={ALERT[a.level]?.icon} tone={ALERT[a.level]?.tone ?? "info"} title={a.title} body={a.detail} />)}
 
-              <TitledCard icon="flag" title="Reports" action={<Btn label="Open queue" small variant="ghost" onPress={() => web("/admin/reports")} />}>
+              <TitledCard icon="flag" title="Reports" action={<Btn label="Open queue" small variant="ghost" onPress={() => go("/admin/reports")} />}>
                 <View style={{ flexDirection: "row", gap: spacing.sm }}>
                   <StatBox label="Open" value={data.reports.open} />
                   <StatBox label="Oldest open" value={hoursLabel(data.reports.oldestOpenHours)} />
                   <StatBox label="New" value={data.reports.newInWindow} delta={<Delta now={data.reports.newInWindow} before={data.reports.newBefore} />} />
                 </View>
                 {data.reports.byReason.length > 0 && (
-                  <Text style={small}>Open by reason: {data.reports.byReason.map((r: any) => `${humanize(r.reason)} ${r.count}`).join(" · ")}</Text>
+                  <Text style={small}>Open by reason: {data.reports.byReason.map((r: any) => `${REPORT_REASONS[r.reason] ?? r.reason} ${r.count}`).join(" · ")}</Text>
                 )}
               </TitledCard>
 
-              <TitledCard icon="pulse" title="Loop health (7 days)">
+              <TitledCard icon="pulse" title="Loop health (7 days)" action={<Btn label="Details" small variant="ghost" onPress={() => go("/admin/loop-metrics")} />}>
                 <View style={{ flexDirection: "row", gap: spacing.sm }}>
                   <StatBox label="Posts, comments, messages" value={data.content.inWindow} delta={<Delta now={data.content.inWindow} before={data.content.before} goodWhen="up" />} />
                   <StatBox label="Check-ins posted" value={data.loops?.submitted ?? "—"} />
@@ -138,7 +151,7 @@ export default function AdminSafety() {
                       <View style={{ flex: 1 }}>
                         <Text style={[body, { fontFamily: fontFamily.semibold }]}>{l.action}</Text>
                         {l.rule ? <Text style={small}>{l.rule}</Text> : null}
-                        <Text style={small}>Before: {l.refusedBefore} · Allowed (24h): {l.allowedLast24h ?? "—"}</Text>
+                        <Text style={small}>Window before: {l.refusedBefore} · Allowed (24h): {l.allowedLast24h ?? "—"}</Text>
                       </View>
                       <Text style={[body, { fontFamily: fontFamily.bold }]}>{l.refused}</Text>
                       {l.spike && <Pill label="Spike" color={colors.danger} solid />}
@@ -153,7 +166,7 @@ export default function AdminSafety() {
                       <View style={{ flexDirection: "row", gap: spacing.sm, alignItems: "flex-start" }}>
                         <View style={{ flex: 1 }}>
                           <Text style={[body, { fontFamily: fontFamily.semibold }]}>{ACTION_WORDS[a.action] ?? humanize(a.action)}{a.targetType === "surface" && a.targetId ? ` · ${a.targetId}` : ""}</Text>
-                          <Text style={small}>{a.actorName ?? "Someone"} · {hoursLabel(a.hoursSince)} ago{a.reasonCode ? ` · ${humanize(a.reasonCode)}` : ""}</Text>
+                          <Text style={small}>{a.actorName ?? "Someone"} · {hoursLabel(a.hoursSince)} ago{a.reasonCode ? ` · ${MODERATION_REASONS[a.reasonCode] ?? a.reasonCode}` : ""}</Text>
                         </View>
                         <Pill label={a.status === "early" ? "Too early" : a.status === "watching" ? `Watching · ${hoursLabel(a.hoursSince)} in` : "Settled"} color={a.status === "settled" ? colors.textSecondary : colors.info} />
                       </View>
@@ -161,7 +174,7 @@ export default function AdminSafety() {
                       {a.status !== "early" && a.metrics.map((m: any) => (
                         <View key={m.key} style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                           <Text style={[small, { flex: 1, color: colors.textSecondary }]}>{m.label}</Text>
-                          <Text style={small}>{m.before} → {m.afterPace}{m.afterHours < IMPACT_WINDOW_HOURS ? ` (${m.after} so far)` : ""}</Text>
+                          <Text style={small}>{m.before} → {m.afterPace}/{IMPACT_WINDOW_HOURS}h{m.afterHours < IMPACT_WINDOW_HOURS ? ` (${m.after} so far)` : ""}</Text>
                           <Delta now={m.afterPace} before={m.before} goodWhen={m.goodWhen} />
                         </View>
                       ))}
@@ -170,7 +183,7 @@ export default function AdminSafety() {
               </TitledCard>
 
               {data.surfacesOff.length > 0 && (
-                <TitledCard icon="toggle" title="Switched off" action={<Btn label="Surfaces" small variant="ghost" onPress={() => web("/admin/surfaces")} />}>
+                <TitledCard icon="toggle" title="Switched off" action={<Btn label="Surfaces" small variant="ghost" onPress={() => go("/admin/surfaces")} />}>
                   <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
                     {data.surfacesOff.map((s: any) => <Pill key={s.id} label={s.label} color={colors.textSecondary} />)}
                   </View>

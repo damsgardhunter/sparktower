@@ -64,3 +64,67 @@ describe("the development upload endpoint", () => {
     finally { process.env.NODE_ENV = prev; }
   });
 });
+
+describe("public writes that trust a credential in the request", () => {
+  it("a mobile refresh token works once; reused after rotation it ends every mobile session on the account", async () => {
+    const app = await getTestApp();
+    const { db } = await import("../../server/db");
+    const { mobileRefreshTokens } = await import("@shared/schema");
+    const { eq, sql } = await import("drizzle-orm");
+    const { email } = await signedIn(app, "reuse");
+    const login = () => request(app).post("/api/auth/mobile/login").set("x-forwarded-for", "203.0.113.240").send({ email, password });
+    const phone = (await login()).body;
+    const tablet = (await login()).body;
+    const refresh = (refreshToken: string) => request(app).post("/api/auth/mobile/refresh").set("x-forwarded-for", "203.0.113.241").send({ refreshToken });
+
+    // Rotation: the new token works, the old one doesn't. A retry right away (a lost response) ends nothing else.
+    const rotated = await refresh(phone.refreshToken);
+    expect(rotated.status).toBe(200);
+    expect((await refresh(phone.refreshToken)).body.code).toBe("refresh_invalid");
+    expect((await refresh(tablet.refreshToken)).status).toBe(200);
+
+    // Later, the spent token shows up again: someone else has it. Every live mobile session on the account ends.
+    await db.update(mobileRefreshTokens).set({ revokedAt: sql`now() - interval '5 minutes'` }).where(eq(mobileRefreshTokens.tokenHash, (await import("crypto")).createHash("sha256").update(phone.refreshToken).digest("hex")));
+    expect((await refresh(phone.refreshToken)).status).toBe(401);
+    expect((await refresh(rotated.body.refreshToken)).status).toBe(401);
+  });
+
+  it("two refreshes racing with one token get one session between them", async () => {
+    const app = await getTestApp();
+    const { email } = await signedIn(app, "race");
+    const phone = (await request(app).post("/api/auth/mobile/login").set("x-forwarded-for", "203.0.113.242").send({ email, password })).body;
+    const both = await Promise.all([1, 2].map(() => request(app).post("/api/auth/mobile/refresh").set("x-forwarded-for", "203.0.113.243").send({ refreshToken: phone.refreshToken })));
+    expect(both.map((r) => r.status).sort()).toEqual([200, 401]);
+  });
+
+  it("a Stripe webhook address that keeps failing the signature check is refused; the count is of failures only", async () => {
+    const app = await getTestApp();
+    const { db } = await import("../../server/db");
+    const { rateLimitHits } = await import("@shared/schema");
+    const { RATE_LIMITS } = await import("@shared/moderation");
+    const ip = "203.0.113.244";
+    const forge = () => request(app).post("/api/stripe/webhook").set("x-forwarded-for", ip).set("Content-Type", "application/json").send(JSON.stringify({ id: "evt_forged", type: "customer.subscription.deleted" }));
+    expect((await forge()).status).toBe(400);
+    await db.insert(rateLimitHits).values(Array.from({ length: RATE_LIMITS.webhookReject.max }, () => ({ userId: `ip:${ip}`, action: "webhookReject" })) as any);
+    const refused = await forge();
+    expect(refused.status).toBe(429);
+    expect(refused.body.action).toBe("webhookReject");
+    // Another address is unaffected.
+    expect((await request(app).post("/api/stripe/webhook").set("x-forwarded-for", "203.0.113.245").set("Content-Type", "application/json").send("{}")).status).toBe(400);
+  });
+
+  it("mobile sign-out and the development upload endpoint are limited per address", async () => {
+    const app = await getTestApp();
+    const { db } = await import("../../server/db");
+    const { rateLimitHits } = await import("@shared/schema");
+    const { RATE_LIMITS } = await import("@shared/moderation");
+    const ip = "203.0.113.246";
+    expect((await request(app).post("/api/auth/mobile/logout").set("x-forwarded-for", ip).send({})).status).toBe(200);
+    await db.insert(rateLimitHits).values(Array.from({ length: RATE_LIMITS.session.max }, () => ({ userId: `ip:${ip}`, action: "session" })) as any);
+    expect((await request(app).post("/api/auth/mobile/logout").set("x-forwarded-for", ip).send({})).status).toBe(429);
+
+    const uploader = "203.0.113.247";
+    await db.insert(rateLimitHits).values(Array.from({ length: RATE_LIMITS.upload.max }, () => ({ userId: `ip:${uploader}`, action: "upload" })) as any);
+    expect((await request(app).put("/internal-local-upload/abc123").set("x-forwarded-for", uploader).send("data")).status).toBe(429);
+  });
+});

@@ -29,7 +29,7 @@ test("the home screen brings you back to the next step, and a finished step can 
 
   // 2. Continue lands on that step, on the project's path.
   await page.getByTestId(`button-continue-path-${project.id}`).click();
-  await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/manage$`));
+  await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/manage(\\?.*)?$`));
   await expect(page.getByTestId("next-action-title")).toHaveText("Product statement");
 
   // 3. Finish it (its answer is the step's artifact); the path moves on.
@@ -51,5 +51,5 @@ test("the home screen brings you back to the next step, and a finished step can 
   await expect(chip).toContainText("From the path: Product statement");
   await expect(page.getByTestId(`button-share-last-step-${project.id}`)).toHaveCount(0);
   await chip.click();
-  await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/manage$`));
+  await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/manage(\\?.*)?$`));
 });

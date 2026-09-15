@@ -48,6 +48,11 @@ interface AuthState {
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
   refreshUser: () => Promise<void>;
+  /**
+   * Records locally that onboarding just finished, so AuthGate lets the person
+   * on even if the follow-up refresh of /me is slow or fails.
+   */
+  markOnboarded: () => void;
   /** False when this platform has no Google client id configured. */
   googleAvailable: boolean;
 }
@@ -185,11 +190,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const markOnboarded = useCallback(() => {
+    setProfile((p: any) => ({ ...(p ?? {}), isOnboarded: true }));
+  }, []);
+
   return (
     <AuthContext.Provider
       value={{
         user, profile, loading, signIn, signUp, signInWithGoogle, signOut,
-        refreshUser, googleAvailable: GOOGLE_CONFIGURED,
+        refreshUser, markOnboarded, googleAvailable: GOOGLE_CONFIGURED,
       }}
     >
       {GOOGLE_CONFIGURED && (

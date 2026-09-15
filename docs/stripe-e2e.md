@@ -10,15 +10,22 @@ So the first check is always the webhook.
 |---|---|---|
 | `checkout.session.completed` (metadata `type: donation`) | Donation recorded once per session; project total goes up | `server/webhookHandlers.ts` |
 | `checkout.session.completed` (metadata `type: backing`) | Backing held in escrow, believer number, merch queued | `recordBacking` in `server/backing-routes.ts` |
-| `checkout.session.completed` (mode `subscription`) | Tier set from the price's `metadata.tier` | `server/webhookHandlers.ts` |
-| `customer.subscription.created/updated/deleted` | Tier follows the status; `active` and `trialing` are paid | `shared/subscriptions.ts` |
-| `charge.refunded` | Donation: the running refunded amount is recorded and the total moves by the difference. Backing: refunded in full → marked refunded, total given back, queued merch canceled; partial → left for a reviewer | `server/webhookHandlers.ts` |
-| `invoice.payment_failed`, `payment_intent.payment_failed` | Logged; the tier follows the subscription status event | `server/webhookHandlers.ts` |
+| `checkout.session.completed` (mode `subscription`) | Tier set from the price's `metadata.tier`; an upgrade refills the month's credits | `server/webhookHandlers.ts`, `applyTier` in `server/billing-credits.ts` |
+| `customer.subscription.created/updated/deleted` | Tier follows the status; `active` and `trialing` are paid. Held at free while a refund hold is on (below) | `shared/subscriptions.ts`, `applyTier` |
+| `invoice.paid` (subscription) | Clears a failed payment; a renewal (`subscription_cycle` / `subscription_create`) refills credits; lifts a refund hold and re-reads the tier from the subscription | `onInvoicePaid` in `server/billing-credits.ts` |
+| `charge.refunded` | Donation: the running refunded amount is recorded and the total moves by the difference. Backing: refunded in full → marked refunded, total given back, queued merch canceled; partial → left for a reviewer. Neither, and it paid a subscription invoice, in full → plan back to free with `subscriptionRefundedAt` set until an invoice is paid again; partial → no change | `server/webhookHandlers.ts`, `onSubscriptionChargeRefunded` |
+| `invoice.payment_failed` (subscription) | Kept on the account (`paymentFailedAt`, message) → "Your last payment failed · Update your card" across the app, opening the billing portal and returning to the same page; the tier still follows the subscription status event | `onSubscriptionPaymentFailed`, `BillingIssueNotice` in `client/src/components/upgrade-to-keep-generating.tsx` |
+| `payment_intent.payment_failed` | Logged (a checkout the payer is watching); the ledger records it | `server/webhookHandlers.ts` |
 
 Entitlements (credits, features) are computed from `users.subscriptionTier`
 each time they're read (`server/entitlements.ts`); there's nothing else to
-keep in sync. `GET /api/subscription` returns them; `POST /api/stripe/sync-subscription`
+keep in sync. `GET /api/subscription` returns them, with `billingIssue`
+(`payment_failed` or `refunded`, or null); `POST /api/stripe/sync-subscription`
 re-reads the tier from Stripe for the signed-in user's own customer id.
+
+Tested with signed events in `test/integration/revenue-loop.test.ts` (failed payment kept and cleared, full vs partial refund, refund hold through a subscription event, lifted by a paid invoice) and `test/integration/stripe-webhook.test.ts`.
+
+An empty `stripe_events` table means no deliveries have reached this database — locally that's the default until `stripe listen` forwards them (below). `GET /api/admin/stripe/health` says which.
 
 ## Guarantees
 

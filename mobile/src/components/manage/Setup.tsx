@@ -1,7 +1,8 @@
 /**
  * Setup essentials: logo and cover, the AI profile visuals (draw, redraw one,
- * swap in your own, hide), the brief, and scope. The rest of the web's setup
- * (links hub, application questions, business plan upload) is on the web.
+ * swap in your own, hide), the brief, scope, and the whole backing setup —
+ * campaign, tiers, merch, payouts and badges. The links hub, application
+ * questions and business plan upload are still on the web.
  */
 import { useEffect, useState } from "react";
 import { Image, Pressable, Text, View } from "react-native";
@@ -174,7 +175,7 @@ export function Setup({ projectId, project, isOwner }: { projectId: string; proj
       </Card>
 
       {/* Backing sits at the foot of Setup on the web too; owner-only. */}
-      {isOwner && <BackingSummary projectId={projectId} />}
+      {isOwner && <BackingSummary projectId={projectId} projectTitle={project?.title} />}
     </View>
   );
 }

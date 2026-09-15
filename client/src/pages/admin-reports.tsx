@@ -15,7 +15,7 @@ import {
   Loader2, Flag, ShieldAlert, Check, X, UserX, UserCheck, ExternalLink,
 } from "lucide-react";
 import {
-  REPORT_TARGET_LABEL, reportReasonLabel, MODERATION_ACTIONS, reasonCodesFor, moderationReasonLabel,
+  REPORT_TARGET_LABEL, reportReasonLabel, MODERATION_ACTIONS, reasonCodesFor, moderationReasonLabel, UNDO_REASON_CODES, UNDOABLE_ACTIONS,
   type ReportTarget, type ReportStatus, type ModerationAction,
 } from "@shared/moderation";
 
@@ -47,6 +47,7 @@ interface Report {
 interface LogEntry {
   id: string;
   action: string;
+  details?: { undoes?: string } | null;
   actorName: string | null;
   reason: string | null;
   reasonCode: string | null;
@@ -61,6 +62,8 @@ const ACTION_WORDS: Record<string, string> = {
   comment_shadow_hide: "Shadow-hidden",
   comment_ban: "Author banned, comment removed",
   comment_dismiss: "Dismissed",
+  comment_restore: "Undone — comment put back",
+  report_reopened: "Undone — report reopened",
   content_hidden: "Taken down",
   content_restored: "Restored",
 };
@@ -149,7 +152,21 @@ function History({ targetType, targetId }: { targetType: string; targetId: strin
       return res.ok ? res.json() : [];
     },
   });
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [undoing, setUndoing] = useState<string | null>(null);
+  const [undoCode, setUndoCode] = useState("");
+  const undo = useMutation({
+    mutationFn: async (id: string) => (await apiRequest("POST", `/api/admin/moderation-log/${id}/undo`, { reasonCode: undoCode })).json(),
+    onSuccess: () => {
+      toast({ title: "Undone", description: "The state before that decision is back, and the report is open again." });
+      setUndoing(null); setUndoCode("");
+      for (const key of ["/api/admin/moderation-log", "/api/admin/reports", "/api/admin/reports/count"]) qc.invalidateQueries({ queryKey: [key] });
+    },
+    onError: (e) => toast({ title: "Couldn't undo that", description: errorText(e), variant: "destructive" }),
+  });
   if (!data?.length) return null;
+  const undoneIds = new Set(data.map((e) => e.details?.undoes).filter(Boolean));
   return (
     <div className="rounded-md border border-border/60 p-2.5 space-y-1" data-testid={`history-${targetId}`}>
       <p className="text-[10px] uppercase tracking-wide text-muted-foreground">History</p>
@@ -161,6 +178,19 @@ function History({ targetType, targetId }: { targetType: string; targetId: strin
             {" · "}{e.actorName ?? "a reviewer"}
             {" · "}{new Date(e.createdAt).toLocaleString()}
             {e.reason && <span className="text-muted-foreground"> — “{e.reason}”</span>}
+            {UNDOABLE_ACTIONS[e.action] && !undoneIds.has(e.id) && undoing !== e.id && (
+              <button className="ml-2 text-primary hover:underline" onClick={() => { setUndoing(e.id); setUndoCode(""); }} data-testid={`button-undo-${e.id}`}>Undo</button>
+            )}
+            {undoing === e.id && (
+              <span className="mt-1 flex items-center gap-2">
+                <select className={SELECT + " max-w-[14rem]"} value={undoCode} onChange={(ev) => setUndoCode(ev.target.value)} data-testid={`select-undo-reason-${e.id}`}>
+                  <option value="">Why undo it?</option>
+                  {UNDO_REASON_CODES.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+                </select>
+                <Button size="sm" disabled={!undoCode || undo.isPending} onClick={() => undo.mutate(e.id)} data-testid={`button-confirm-undo-${e.id}`}>Undo</Button>
+                <button className="text-muted-foreground hover:underline" onClick={() => setUndoing(null)}>Cancel</button>
+              </span>
+            )}
           </li>
         ))}
       </ul>

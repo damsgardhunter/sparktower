@@ -56,8 +56,9 @@ test("a published step brings a stranger in, and they publish their own", async 
   await stranger.goto(path);
   await expect(stranger.getByTestId("text-artifact-title")).toHaveText("Our one-line product statement");
   await expect(stranger.getByTestId("artifact-project")).toContainText(project.title);
+  await expect(stranger.getByTestId("button-explore-project-path")).toBeVisible();
   await stranger.getByTestId("button-start-own-path").click();
-  await expect(stranger).toHaveURL(/\?signup=1$/);
+  await expect(stranger).toHaveURL(/\?signup=1&artifact=[0-9a-f-]{36}$/);
   expect(await stranger.evaluate(() => localStorage.getItem("st_pending_path"))).toContain("ship_mvp");
   await stranger.getByTestId("input-signup-firstname").fill("Newcomer");
   await stranger.getByTestId("input-signup-lastname").fill("Growth");

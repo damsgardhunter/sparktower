@@ -624,6 +624,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
 
   /** Ends the session and produces a closing verdict. */
   app.post("/api/mock-interviews/:id/finish", isAuthenticated, rateLimit("ai"), async (req: any, res) => {
+    // metering: free by design — the verdict for questions already paid for, generated once (a repeat returns it), on the AI burst limit; a failed call stores a plain verdict and charges nothing
     try {
       const userId = req.user.id;
       const interview = await storage.getMockInterview(req.params.id);

@@ -344,7 +344,7 @@ export default function ProjectCreate() {
     },
     onError: (error: any) => {
       const errorMsg = error.message || "";
-      if (errorMsg.includes("403") || errorMsg.includes("Insufficient credits")) {
+      if (errorMsg.includes("403") || errorMsg.includes("insufficient_credits")) {
         toast({
           title: "Out of AI credits",
           description: "You've used all your AI credits for this month. Upgrade your plan for more!",

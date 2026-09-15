@@ -84,6 +84,17 @@ export const CONNECTIONS_KEY = ["connections"];
 export const useConnectionRequests = () =>
   useQuery({ queryKey: CONNECTION_REQUESTS_KEY, queryFn: () => api<ConnectionRow[]>("/api/connections/requests") });
 
+export const SENT_REQUESTS_KEY = ["connection-requests", "sent"];
+
+/** Requests you've sent that are still waiting; `user` is who they went to. */
+export const useSentRequests = (enabled = true) =>
+  useQuery({
+    queryKey: SENT_REQUESTS_KEY,
+    // An older server has no such route and answers with the web app's HTML; that's "none", not 2,759 requests.
+    queryFn: async () => { const rows = await api<ConnectionRow[]>("/api/connections/sent"); return Array.isArray(rows) ? rows : []; },
+    enabled,
+  });
+
 export const useConnections = (enabled = true) =>
   useQuery({ queryKey: CONNECTIONS_KEY, queryFn: () => api<ConnectionRow[]>("/api/connections"), enabled });
 
@@ -135,6 +146,9 @@ export function appHref(webHref: string | null | undefined, actorId: string): st
   const href = webHref || "";
   let m: RegExpExecArray | null;
   if ((m = /^\/posts\/([^/?#]+)/.exec(href))) return `/post/${m[1]}`;
+  if ((m = /^\/c\/([^/?#]+)/.exec(href))) return `/c/${m[1]}`;
+  if ((m = /^\/a\/([^/?#]+)/.exec(href))) return `/a/${m[1]}`;
+  if ((m = /^\/projects\/([^/?#]+)\/documents\/([^/?#]+)/.exec(href))) return `/project/${m[1]}/documents/${m[2]}`;
   if ((m = /^\/projects\/([^/?#]+)\/manage/.exec(href))) return `/manage/${m[1]}`;
   if ((m = /^\/projects\/([^/?#]+)/.exec(href))) return `/project/${m[1]}`;
   if (href === "/profile") return "/network/invitations";

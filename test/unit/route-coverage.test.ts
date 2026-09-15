@@ -45,9 +45,13 @@ describe("buildRouteCoverage", () => {
     expect(c.unguardedWrites).toEqual(["POST /api/open"]);
     expect(c.unlimitedWrites).toEqual(["POST /api/feed", "POST /api/open", "POST /api/projects/:id/free-ai"]);
     expect(c.unmeteredCost).toEqual(["POST /api/projects/:id/free-ai"]);
+    // An unmetered costly route with no stated reason is named as such in the audit's text.
+    expect(renderRouteCoverage(c)).toMatch(/POST \/api\/projects\/:id\/free-ai: NO METERING REASON GIVEN/);
     expect(c.summary).toMatchObject({ routes: 7, writes: 5, costly: 2, writesWithAuth: 4, writesRateLimited: 2, costlyMetered: 1 });
     expect(detectSurfacePrefixes([app, registry])).toEqual([{ prefix: "/api/feed", surface: "feed" }, { prefix: "/api/projects", surface: "projects" }]);
-    expect(renderRouteCoverage(c)).toMatch(/Unguarded writes: POST \/api\/open/);
+    expect(renderRouteCoverage(c)).toMatch(/Writes without sign-in: POST \/api\/open/);
+    // A public write with no stated reason is called out, so the audit reads it as unexplained, not as trusted.
+    expect(renderRouteCoverage(c)).toMatch(/POST \/api\/open: NO REASON GIVEN; no rate limit/);
     expect(renderRouteCoverage(null)).toBeNull();
   });
 

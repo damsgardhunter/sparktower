@@ -36,7 +36,7 @@ export default function Leaderboard() {
 
   const projects = useQuery({
     queryKey: ["leaderboard", board, filter],
-    queryFn: () => api<any[]>(`/api/leaderboard?sortBy=${board}&filter=${filter}&limit=25`),
+    queryFn: () => api<any[]>(`/api/leaderboard?sortBy=${board}&filter=${filter}`),
     enabled: board !== "builder",
   });
   const builders = useQuery({

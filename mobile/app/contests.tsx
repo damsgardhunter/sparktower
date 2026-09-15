@@ -32,6 +32,12 @@ export default function Contests() {
   const [url, setUrl] = useState("");
   const [note, setNote] = useState("");
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // Contests you joined this session. GET /api/contests reads the user from
+  // req.user.claims.sub, which the token auth never sets, so isParticipant
+  // comes back false for everyone — without this, Join would never turn into
+  // Submit. The server's "Already joined" answer is folded in the same way.
+  const [joinedIds, setJoinedIds] = useState<Set<string>>(new Set());
+  const markJoined = (id: string) => setJoinedIds((prev) => new Set(prev).add(id));
 
   const { data, isLoading, refetch, error } = useQuery({
     queryKey: ["contests", status],
@@ -40,20 +46,32 @@ export default function Contests() {
 
   const join = useMutation({
     mutationFn: (id: string) => api(`/api/contests/${id}/join`, { method: "POST" }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["contests"] }); show({ tone: "success", text: "You're in. Good luck!" }); },
-    onError: (e) => show({ tone: "error", text: errText(e, "Couldn't join that contest.") }),
+    onSuccess: (_r, id) => { markJoined(id); qc.invalidateQueries({ queryKey: ["contests"] }); show({ tone: "success", text: "Joined contest! You're now a participant." }); },
+    onError: (e: any, id) => {
+      if (e?.status === 400 && /already joined/i.test(e?.message ?? "")) {
+        markJoined(id);
+        show({ tone: "info", text: "You've already joined this contest." });
+        return;
+      }
+      show({ tone: "error", text: `Could not join. ${errText(e, "Something went wrong.")}` });
+    },
   });
   const submit = useMutation({
     mutationFn: () => api(`/api/contests/${submitting.id}/submit`, { method: "POST", body: { submissionUrl: url.trim(), submissionNote: note.trim() } }),
     onSuccess: () => {
       setSubmitting(null); setUrl(""); setNote("");
       qc.invalidateQueries({ queryKey: ["contests"] });
-      show({ tone: "success", text: "Submission received." });
+      show({ tone: "success", text: "Submission received! Your entry has been submitted." });
     },
-    onError: (e) => setSubmitError(errText(e, "Submission failed.")),
+    onError: (e: any) => {
+      if (e?.status === 400 && /join the contest first/i.test(e?.message ?? "")) {
+        setJoinedIds((prev) => { const n = new Set(prev); n.delete(submitting?.id); return n; });
+      }
+      setSubmitError(errText(e, "Submission failed."));
+    },
   });
 
-  const list = data ?? [];
+  const list = (data ?? []).map((c) => (joinedIds.has(c.id) && !c.isParticipant ? { ...c, isParticipant: true } : c));
   const promoted = list.filter((c) => c.promoted && c.status !== "completed");
   const regular = list.filter((c) => !c.promoted || c.status === "completed");
   const openSubmit = (c: any) => { setSubmitError(null); setSubmitting(c); };
@@ -194,6 +212,7 @@ function ContestCard({ contest: c, featured, joining, onJoin, onSubmit }: { cont
         {c.prize ? <MetaRow icon="trophy-outline" text={c.prize} color="#CA8A04" /> : null}
         {c.badge ? <MetaRow icon="ribbon-outline" text={`${c.badge.name} badge (${c.badge.rarity})`} color={RARITY[c.badge.rarity] ?? colors.textSecondary} /> : null}
       </View>
+      {!open && c.isParticipant && <Pill label="Joined" icon="checkmark" color={colors.success} />}
       {open && (
         <View style={{ flexDirection: "row", gap: spacing.sm, alignItems: "center" }}>
           {c.isParticipant ? (

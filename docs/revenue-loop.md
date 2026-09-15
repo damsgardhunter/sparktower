@@ -1,0 +1,11 @@
+# Revenue loop: hit AI credits limit
+
+Generating with Nova on the path spends AI credits; running low is what leads to upgrading, and renewing refills them.
+
+| Step | Where it lives | Proof |
+| --- | --- | --- |
+| Generate on the path with Nova (work packets, loop writing, expansion) — each is metered: credits checked before the model, charged after | `server/routes.ts` (`POST /api/projects/:id/path/work`, `/path/loops/write`, `/path/expand`), `server/entitlements.ts` (`requireCredits`), `server/storage.ts` (`deductCredits`), `shared/plans.ts` (`CREDIT_COSTS`, allowances) | `test/integration/revenue-loop.test.ts`, `test/unit/ai-metering.test.ts`, `test/integration/ai-metering-sweep.test.ts` |
+| Spend through the free allowance; the count follows every generate | `GET /api/subscription` (`creditState`, `lowCreditsAt`), `shared/credits.ts` (`creditState`), `client/src/lib/queryClient.ts` (re-reads credits after writes), `client/src/components/app-sidebar.tsx` | `test/unit/credits.test.ts`, `test/integration/revenue-loop.test.ts` |
+| Credits low or out → **"Upgrade to keep generating"** with the plans above yours | `client/src/components/upgrade-to-keep-generating.tsx` (`LowCreditsNotice` on the path, `UpgradeToKeepGenerating` opened by any `insufficient_credits` refusal via `apiRequest`), mounted in `client/src/App.tsx`, `server/entitlements.ts` (refusal carries `creditState`, `upgradeUrl`), `shared/credits.ts` (`upgradeOptions`) | `e2e/revenue-loop.spec.ts` |
+| Subscribe through Stripe → back on the page you left, with the new allowance | `POST /api/checkout` (`returnTo` → `checkoutReturnUrls`), `CheckoutReturn` (`?checkout=success` → sync, refresh credits), `server/webhookHandlers.ts` + `server/billing-credits.ts` (`applyTier` refills on an upgrade), `POST /api/stripe/sync-subscription` | `test/integration/revenue-loop.test.ts` (upgrade refills, generate goes through), `test/unit/credits.test.ts` (safe return), `e2e/revenue-loop.spec.ts` (return) |
+| **The way back**: generate more; each paid renewal (`invoice.paid`, `subscription_cycle`) refills the allowance, and the next month's spending leads to the next renewal | `server/billing-credits.ts` (`refillOnInvoicePaid`), `server/webhookHandlers.ts` | `test/integration/revenue-loop.test.ts` (signed renewal webhook refills; other invoices don't) |

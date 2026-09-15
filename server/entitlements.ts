@@ -135,6 +135,9 @@ export async function requireCredits(
       creditsRemaining: sub.creditsRemaining,
       creditsLimit: sub.creditsLimit,
       tier: ent.tier,
+      // What the client needs to offer the way on: "Upgrade to keep generating".
+      creditState: "out",
+      upgradeUrl: "/pricing",
     });
     return null;
   }

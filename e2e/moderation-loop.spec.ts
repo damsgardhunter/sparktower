@@ -112,5 +112,19 @@ test("a reported comment is removed from the queue with a reason code, and the l
     resultingState: { report: { status: "actioned" }, comment: { hiddenMode: "removed" } },
   });
 
+  // 7. Undo, from the same history: its own reason code, the comment back for the reporter, the report open again.
+  await history.getByTestId(`button-undo-${entry.id}`).click();
+  const confirm = history.getByTestId(`button-confirm-undo-${entry.id}`);
+  await expect(confirm).toBeDisabled();
+  await history.getByTestId(`select-undo-reason-${entry.id}`).selectOption("reviewer_error");
+  await confirm.click();
+  await expect(admin.getByText("Undone").first()).toBeVisible();
+  await reporterPage.reload();
+  await expect(reporterPage.getByText(text)).toBeVisible();
+  await admin.getByTestId("tab-open").click();
+  await expect(admin.getByTestId(/^report-/).filter({ hasText: text })).toBeVisible();
+  const [restore] = (await (await reviewer.api.get(`/api/admin/moderation-log?targetType=comment&targetId=${commentId}`)).json()) as any[];
+  expect(restore).toMatchObject({ action: "comment_restore", reasonCode: "reviewer_error", details: { undoes: entry.id } });
+
   await Promise.all([author.context.close(), reporter.context.close(), reviewer.context.close()]);
 });

@@ -3,6 +3,9 @@ import { KeyboardAvoidingView, Platform, Text, View } from "react-native";
 import { useLocalSearchParams, Stack } from "expo-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
+import { useEntitlementsQuery } from "../../src/hooks/useEntitlements";
+import { UpgradeCard } from "../../src/components/more/UpgradeCard";
+import { Pill } from "../../src/components/MoreKit";
 import { colors, fontFamily, spacing } from "../../src/theme";
 import {
   Body, Btn, Card, Chip, Cost, ErrorNote, Field, H2, Label,
@@ -10,6 +13,15 @@ import {
 } from "../../src/components/ui";
 
 const MAX_QUESTIONS = 8;
+/** Restated from shared/plans.ts CREDIT_COSTS. */
+const QUESTION_COST = 1;
+const GRADING_COST = 2;
+
+const DIFFICULTIES = [
+  { value: "friendly", label: "Friendly", brief: "Encouraging" },
+  { value: "skeptical", label: "Skeptical", brief: "Probes weak answers" },
+  { value: "brutal", label: "Brutal", brief: "No mercy" },
+];
 
 /**
  * Mock investor interview.
@@ -27,6 +39,7 @@ export default function MockInterview() {
   const [difficulty, setDifficulty] = useState("skeptical");
   const [answer, setAnswer] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const ent = useEntitlementsQuery();
 
   const { data: personas } = useQuery({
     queryKey: ["investor-personas"],
@@ -36,8 +49,12 @@ export default function MockInterview() {
   const { data: past } = useQuery({
     queryKey: ["project", projectId, "investor"],
     queryFn: () => api<any>(`/api/projects/${projectId}/investor-artifacts`),
-    enabled: !!projectId && !interviewId,
+    enabled: !!projectId,
   });
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ["project", projectId, "investor"] });
+    qc.invalidateQueries({ queryKey: ["subscription"] });
+  };
 
   const { data: session, isLoading } = useQuery({
     queryKey: ["mock-interview", interviewId],
@@ -49,7 +66,7 @@ export default function MockInterview() {
     mutationFn: () => api<any>(`/api/projects/${projectId}/mock-interview`, {
       method: "POST", body: { persona, difficulty },
     }),
-    onSuccess: (r) => { setInterviewId(r.interview.id); setError(null); },
+    onSuccess: (r) => { setInterviewId(r.interview.id); setError(null); refresh(); },
     onError: (e) => setError(errText(e, "Couldn't start the interview.")),
   });
 
@@ -67,8 +84,26 @@ export default function MockInterview() {
 
   const finish = useMutation({
     mutationFn: () => api(`/api/mock-interviews/${interviewId}/finish`, { method: "POST" }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["mock-interview", interviewId] }),
+    onSuccess: () => { setError(null); qc.invalidateQueries({ queryKey: ["mock-interview", interviewId] }); refresh(); },
+    onError: (e) => setError(errText(e, "Couldn't get their verdict.")),
   });
+
+  const open = (next: string | null) => { setError(null); setAnswer(""); setInterviewId(next); };
+
+  if (ent.isLoading) return <Loading />;
+  // Same gate as the web's investor tools: the Builder plan's aiRoadmap feature.
+  if (!ent.can("aiRoadmap")) {
+    return (
+      <>
+        <Stack.Screen options={{ title: "Mock Interview" }} />
+        <Screen canvas>
+          <UpgradeCard tier="builder" title="Get investor-ready"
+            description="Score your readiness, outline a deck, have your pitch pulled apart, and sit a mock investor interview that grades every answer." />
+        </Screen>
+      </>
+    );
+  }
+  const cantAfford = (n: number) => !ent.isUnlimited && ent.creditsRemaining < n;
 
   // --- Setup ---
   if (!interviewId) {
@@ -80,7 +115,7 @@ export default function MockInterview() {
             <H2>Mock investor interview</H2>
             <Meta>
               Nova plays an investor, asks progressively harder questions, and grades
-              each answer out of 100. 1 credit per question, 2 to grade your answer.
+              each answer out of 100. {QUESTION_COST} credit per question, {GRADING_COST} to grade your answer.
             </Meta>
           </Card>
 
@@ -95,28 +130,22 @@ export default function MockInterview() {
           )}
 
           <Label>How hard should they push?</Label>
-          <Segments
-            options={[
-              { value: "friendly", label: "Friendly" },
-              { value: "skeptical", label: "Skeptical" },
-              { value: "brutal", label: "Brutal" },
-            ]}
-            value={difficulty}
-            onChange={setDifficulty}
-          />
+          <Segments options={DIFFICULTIES.map(({ value, label }) => ({ value, label }))} value={difficulty} onChange={setDifficulty} />
+          <Meta>{DIFFICULTIES.find((d) => d.value === difficulty)?.brief}</Meta>
 
+          {cantAfford(QUESTION_COST) && <ErrorNote message={`This costs ${QUESTION_COST} credit and you have ${ent.creditsRemaining}.`} />}
           {error && <ErrorNote message={error} />}
           <Row center gap={spacing.sm}>
-            <Btn label="Start the interview" loading={start.isPending}
+            <Btn label="Start the interview" icon="mic" loading={start.isPending} disabled={cantAfford(QUESTION_COST)}
               onPress={() => start.mutate()} style={{ flex: 1 }} />
-            <Cost credits={1} />
+            <Cost credits={QUESTION_COST} />
           </Row>
 
           {(past?.interviews?.length ?? 0) > 0 && (
             <>
               <Label>Past sessions</Label>
               {past.interviews.map((iv: any) => (
-                <Card key={iv.id} onPress={() => setInterviewId(iv.id)}>
+                <Card key={iv.id} onPress={() => open(iv.id)}>
                   <Row between>
                     <View style={{ flex: 1 }}>
                       <Body style={{ fontFamily: fontFamily.bold, textTransform: "capitalize" }}>
@@ -124,7 +153,10 @@ export default function MockInterview() {
                       </Body>
                       <Meta>{new Date(iv.createdAt).toLocaleString()}</Meta>
                     </View>
-                    {iv.averageScore != null && <Chip label={`${iv.averageScore}/100`} small active />}
+                    <View style={{ alignItems: "flex-end", gap: 4 }}>
+                      {iv.averageScore != null && <Chip label={`${iv.averageScore}/100`} small active />}
+                      <Pill label={iv.status} color={iv.status === "completed" ? colors.success : colors.textSecondary} />
+                    </View>
                   </Row>
                 </Card>
               ))}
@@ -153,8 +185,9 @@ export default function MockInterview() {
         <Screen canvas>
           <Card>
             <Row between>
-              <Body style={{ fontFamily: fontFamily.bold }}>{session?.persona?.label}</Body>
+              <Body style={{ fontFamily: fontFamily.bold, flex: 1 }}>{session?.persona?.label || "Investor"}</Body>
               {iv?.averageScore != null && <Chip label={`avg ${iv.averageScore}`} small active />}
+              <Btn label="Close" small variant="ghost" onPress={() => open(null)} />
             </Row>
             <Meta style={{ textTransform: "capitalize" }}>
               {iv?.difficulty} · {graded.length} of {MAX_QUESTIONS} answered
@@ -198,7 +231,7 @@ export default function MockInterview() {
               {iv.averageScore != null && (
                 <Meta>Averaged {iv.averageScore}/100 across {graded.length} answers.</Meta>
               )}
-              <Btn label="New interview" variant="outline" small onPress={() => setInterviewId(null)} />
+              <Btn label="New interview" variant="outline" small onPress={() => open(null)} />
             </Card>
           ) : pending ? (
             <Card accent={colors.warning}>
@@ -207,15 +240,15 @@ export default function MockInterview() {
               <Field value={answer} onChangeText={setAnswer} multiline
                 placeholder="Answer like you're in the room…" />
               <Row center gap={spacing.sm}>
-                <Btn label="Answer" disabled={!answer.trim()} loading={submit.isPending}
+                <Btn label="Answer" icon="send" disabled={!answer.trim() || cantAfford(GRADING_COST + QUESTION_COST)} loading={submit.isPending}
                   onPress={() => submit.mutate()} style={{ flex: 1 }} />
-                <Cost credits={3} />
+                <Cost credits={GRADING_COST + QUESTION_COST} />
               </Row>
               <Btn label="End & get verdict" variant="ghost" small
                 loading={finish.isPending} onPress={() => finish.mutate()} />
             </Card>
           ) : (
-            <Btn label="Get their verdict" loading={finish.isPending} onPress={() => finish.mutate()} />
+            <Btn label="Get their verdict" icon="trophy" variant="outline" loading={finish.isPending} onPress={() => finish.mutate()} />
           )}
         </Screen>
       </KeyboardAvoidingView>

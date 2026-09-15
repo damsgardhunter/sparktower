@@ -9,7 +9,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import NotFound from "@/pages/not-found";
 import { ArrowRight, Check, Compass, Copy, FileCode2, Loader2, MessageSquare } from "lucide-react";
-import { PENDING_PATH_KEY, artifactPath, type PendingPath } from "@shared/path-artifacts";
+import { PENDING_PATH_KEY, afterOnboardingPath, artifactPath, type PendingPath } from "@shared/path-artifacts";
 
 interface PublicArtifact {
   id: string;
@@ -34,7 +34,9 @@ interface PublicArtifact {
  * where that project is on its path, and one clear way in: start your own
  * path on the same goal. That choice waits through sign up and onboarding
  * (PENDING_PATH_KEY) and project create opens on it; the signup is credited
- * to this artifact server-side from the first page the visitor landed on.
+ * to this artifact server-side (first landing page, or the artifact carried
+ * through sign up). "Explore this project and its path" does the same, but
+ * lands the new account on the project first.
  */
 export default function PublicArtifactPage() {
   const [, params] = useRoute("/a/:id");
@@ -60,10 +62,11 @@ export default function PublicArtifactPage() {
   }
   if (isError || !data) return <NotFound />;
 
-  const startPath = () => {
-    try { localStorage.setItem(PENDING_PATH_KEY, JSON.stringify({ goal: data.path.goal, fromArtifact: data.id } satisfies PendingPath)); } catch { /* the goal just isn't preselected */ }
+  const go = (intent: "start" | "explore") => {
+    const pending: PendingPath = { goal: data.path.goal, fromArtifact: data.id, intent, projectId: data.project.id };
+    try { localStorage.setItem(PENDING_PATH_KEY, JSON.stringify(pending)); } catch { /* the choice just isn't remembered */ }
     // A full load: the app decides between sign up, onboarding and create from a fresh start.
-    window.location.href = user ? "/projects/new" : "/?signup=1";
+    window.location.href = user ? afterOnboardingPath(pending) : `/?signup=1&artifact=${encodeURIComponent(data.id)}`;
   };
   const copy = async () => {
     try {
@@ -130,12 +133,10 @@ export default function PublicArtifactPage() {
                 <p className="text-xs text-muted-foreground">{progress.done} of {progress.total} milestones{data.path.next ? ` · next: ${data.path.next}` : ""}</p>
               </div>
             )}
-            {user && (
-              <div className="flex gap-3 text-xs pt-1">
-                <Link href={`/projects/${data.project.id}`} className="text-primary hover:underline" data-testid="link-artifact-project">Explore this project</Link>
-                {data.postId && <Link href={`/posts/${data.postId}`} className="text-primary hover:underline inline-flex items-center gap-1" data-testid="link-artifact-discussion"><MessageSquare className="h-3 w-3" />See the discussion</Link>}
-              </div>
-            )}
+            <div className="flex gap-3 text-xs pt-1 flex-wrap items-center">
+              <button className="text-primary hover:underline" onClick={() => go("explore")} data-testid="button-explore-project-path">Explore this project and its path</button>
+              {user && data.postId && <Link href={`/posts/${data.postId}`} className="text-primary hover:underline inline-flex items-center gap-1" data-testid="link-artifact-discussion"><MessageSquare className="h-3 w-3" />See the discussion</Link>}
+            </div>
           </CardContent>
         </Card>
 
@@ -146,7 +147,7 @@ export default function PublicArtifactPage() {
             <p className="text-sm text-muted-foreground">
               SparkTower breaks the goal into steps, Nova helps with each one, and what you finish becomes something you can publish — like this.
             </p>
-            <Button className="gap-1.5" onClick={startPath} data-testid="button-start-own-path">
+            <Button className="gap-1.5" onClick={() => go("start")} data-testid="button-start-own-path">
               {user ? "Start a project on this path" : "Sign up and start your path"}<ArrowRight className="h-4 w-4" />
             </Button>
           </CardContent>

@@ -221,6 +221,7 @@ export function registerNovaAssistRoutes(app: Express) {
    * Nova proposes changes for one surface. Writes nothing.
    */
   app.post("/api/projects/:id/nova/suggest", isAuthenticated, async (req: any, res) => {
+    // metering: checked here; charged in novaSuggest only after the answer is parsed
     try {
       const userId = (req.user as any).id;
       const projectId = req.params.id;

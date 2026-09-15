@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ScrollView, RefreshControl, Text, View } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -23,6 +23,10 @@ import { Personas } from "../../src/components/manage/Personas";
 import { Chat } from "../../src/components/manage/Chat";
 import { WebTools, type WebOnlyTab } from "../../src/components/manage/WebTools";
 import { goalLabel, mkey } from "../../src/components/manage/shared";
+import { NovaFab, NovaGuideSheet, useNovaMessages } from "../../src/components/manage/path/NovaGuide";
+
+/** Paths whose first screen is the money step's bubbles on the dashboard, not the chat (nova-guide.tsx). */
+const MONEY_FIRST = new Set(["systemize_business", "raise_funding"]);
 
 type Tab =
   | "dashboard" | "setup" | "public" | "roadmap" | "tasks" | "milestones" | "team" | "files" | "codebase" | "activity"
@@ -87,6 +91,19 @@ export default function Manage() {
     enabled: !!id,
   });
 
+  const [nova, setNova] = useState<{ open: boolean; message: string | null }>({ open: false, message: null });
+  const { data: novaMessages } = useNovaMessages(id!);
+  const autoOpened = useRef(false);
+  // A new project lands on Nova, the way the web's onboarding overlay opens over the manager.
+  useEffect(() => {
+    if (autoOpened.current || !project || !novaMessages || !members) return;
+    autoOpened.current = true;
+    const member = project.ownerId === user?.id || members.some((m) => m.userId === user?.id);
+    if (member && !project.novaOnboardingComplete && novaMessages.length === 0 && !MONEY_FIRST.has(project.goal) && tab === "dashboard") {
+      setNova({ open: true, message: null });
+    }
+  }, [project, novaMessages, members]);
+
   const isOwner = !!project && project.ownerId === user?.id;
   const isMember = isOwner || !!members?.some((m) => m.userId === user?.id);
   const tabs = useMemo(() => TABS.filter((t) => !t.ownerOnly || isOwner), [isOwner]);
@@ -149,7 +166,7 @@ export default function Manage() {
         <ScrollingTabs options={tabs} value={tab} onChange={setTab} />
 
         <View style={{ padding: spacing.md, gap: spacing.md }}>
-          {tab === "dashboard" && <Dashboard projectId={id!} project={project} onNavigate={go} />}
+          {tab === "dashboard" && <Dashboard projectId={id!} project={project} onNavigate={go} onOpenNova={(message) => setNova({ open: true, message: message ?? null })} />}
           {tab === "setup" && <Setup projectId={id!} project={project} isOwner={isOwner} />}
           {tab === "public" && <PublicPage projectId={id!} project={project} isOwner={isOwner} onEditBrief={() => setTab("setup")} />}
           {tab === "roadmap" && <Roadmap projectId={id!} />}
@@ -166,6 +183,12 @@ export default function Manage() {
           )}
         </View>
       </ScrollView>
+      <NovaFab onPress={() => setNova({ open: true, message: null })} />
+      <NovaGuideSheet
+        projectId={id!} visible={nova.open} initialMessage={nova.message} currentTab={tab}
+        onboarding={!project.novaOnboardingComplete}
+        onClose={() => setNova({ open: false, message: null })}
+      />
     </NoticeProvider>
   );
 }

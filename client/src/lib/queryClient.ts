@@ -1,9 +1,30 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import { toApiError } from "./api-error";
+import { OUT_OF_CREDITS } from "@shared/credits";
+
+/** Mirrors CREDITS_EVENT in components/upgrade-to-keep-generating (kept here so this file imports no UI). */
+const CREDITS_EVENT = "sparktower:credits";
 
 async function throwIfResNotOk(res: Response) {
   // An ApiError, so screens can say what the server said (see errorText).
-  if (!res.ok) throw await toApiError(res);
+  if (!res.ok) {
+    const error = await toApiError(res);
+    // Out of AI credits, anywhere: offer the upgrade, whatever the screen does with the error.
+    if (error.code === OUT_OF_CREDITS && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(CREDITS_EVENT, {
+        detail: { state: "out", message: error.body?.message, cost: error.body?.cost, creditsRemaining: error.body?.creditsRemaining },
+      }));
+    }
+    throw error;
+  }
+}
+
+/** The credit count follows spending: after a write goes through, the sidebar and low-credits notice re-read it. */
+let refreshCredits: ReturnType<typeof setTimeout> | null = null;
+function creditsMayHaveChanged(url: string) {
+  if (url.startsWith("/api/subscription") || typeof window === "undefined") return;
+  if (refreshCredits) clearTimeout(refreshCredits);
+  refreshCredits = setTimeout(() => queryClient.invalidateQueries({ queryKey: ["/api/subscription"] }), 400);
 }
 
 export async function apiRequest(
@@ -19,6 +40,7 @@ export async function apiRequest(
   });
 
   await throwIfResNotOk(res);
+  if (method !== "GET") creditsMayHaveChanged(url);
   return res;
 }
 

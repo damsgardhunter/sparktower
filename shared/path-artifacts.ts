@@ -72,7 +72,19 @@ export function validatePublish(raw: { title?: unknown; tags?: unknown }): { tit
 
 /** Where a visitor's "start my own path" choice waits through signup and onboarding, until project create reads it. */
 export const PENDING_PATH_KEY = "st_pending_path";
-export interface PendingPath { goal: string; fromArtifact: string }
+export interface PendingPath {
+  goal: string;
+  fromArtifact: string;
+  /** "start": open project create on this goal. "explore": see the artifact's project first. */
+  intent?: "start" | "explore";
+  projectId?: string;
+}
+
+/** Where a new account goes once onboarding is done, given what it chose on an artifact page. */
+export function afterOnboardingPath(pending: PendingPath | null): string {
+  if (pending?.intent === "explore" && pending.projectId && /^[A-Za-z0-9-]{8,64}$/.test(pending.projectId)) return `/projects/${pending.projectId}`;
+  return "/projects/new";
+}
 
 /** The public URL of an artifact, relative to the site. */
 export const artifactPath = (id: string) => `/a/${id}`;

@@ -1,18 +1,20 @@
 /**
  * Files & Assets — the native counterpart of FilesTab in
  * client/src/pages/project-manager.tsx: Nova documents first, then uploads,
- * a folder filter, and upload / open / delete. New Nova documents are built
- * page by page on the website.
+ * a folder filter, and upload / open / delete. "New document with Nova" plans
+ * one and opens the native document builder; tapping a document reopens it.
  */
 import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import * as WebBrowser from "expo-web-browser";
+import { useRouter } from "expo-router";
 import * as DocumentPicker from "expo-document-picker";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { API_URL, api, uploadFile } from "../../api/client";
+import { api, uploadFile } from "../../api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../theme";
 import { Btn, Card, Icon, IconButton, Loading, Meta, Row, Segments, assetUri } from "../ui";
-import { Overline, Tag, openWeb, useNotify } from "./bits";
+import { Overline, Tag, useNotify } from "./bits";
+import { DocumentStartSheet } from "./tools/Documents";
 import { mkey } from "./shared";
 
 const FILE_FOLDERS = ["general", "design", "docs", "data"];
@@ -23,6 +25,10 @@ export function Files({ projectId }: { projectId: string }) {
   const [filter, setFilter] = useState("all");
   const [folder, setFolder] = useState("general");
   const [uploading, setUploading] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const router = useRouter();
+  // Documents open in their own screen, /project/:id/documents/:docId — the same path the web and notifications use.
+  const openDoc = (docId: string) => router.push(`/project/${projectId}/documents/${docId}` as any);
 
   const { data: files = [], isLoading } = useQuery({
     queryKey: mkey(projectId, "files"),
@@ -72,7 +78,7 @@ export function Files({ projectId }: { projectId: string }) {
           {documents.length > 0 ? ` · ${documents.length} Nova document${documents.length === 1 ? "" : "s"}` : ""}
         </Meta>
         <Row wrap gap={spacing.sm}>
-          <Btn small icon="document-text-outline" label="New document with Nova" onPress={() => openWeb(`/projects/${projectId}/manage?tab=files`)} />
+          <Btn small icon="document-text-outline" label="New document with Nova" onPress={() => setStarting(true)} />
           <Btn small variant="outline" icon="cloud-upload-outline" label={`Upload to ${folder}`} loading={uploading} onPress={upload} />
         </Row>
         <Row wrap gap={6} center>
@@ -91,15 +97,18 @@ export function Files({ projectId }: { projectId: string }) {
         <View style={{ gap: spacing.sm }}>
           <Overline>Nova documents</Overline>
           {documents.map((d) => (
-            <Pressable key={d.id} onPress={() => openWeb(`/projects/${projectId}/documents/${d.id}`)}
+            <Pressable key={d.id} onPress={() => openDoc(d.id)}
               style={({ pressed }) => [{ flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md, borderRadius: radius.md, backgroundColor: colors.primarySoft, borderWidth: 1, borderColor: `${colors.primary}33` }, pressed && { opacity: 0.7 }]}>
               <Icon name="document-text" size={20} color={colors.primary} />
               <View style={{ flex: 1, gap: 2 }}>
                 <Text numberOfLines={1} style={{ fontSize: font.sm, fontFamily: fontFamily.medium, color: colors.text }}>{d.title}</Text>
                 <Meta>{d.status} · {d.pageCount} page{d.pageCount === 1 ? "" : "s"} · edited {new Date(d.updatedAt).toLocaleDateString()}</Meta>
               </View>
-              <IconButton name="open-outline" size={17} label="Open the PDF" color={colors.textTertiary}
-                onPress={() => { void WebBrowser.openBrowserAsync(`${API_URL}/api/documents/${d.id}/pdf`).catch(() => {}); }} />
+              {/* The live render (/api/documents/:id/pdf) needs a session a browser tab doesn't carry; the saved PDF doesn't. */}
+              {d.pdfUrl ? (
+                <IconButton name="open-outline" size={17} label="Open the saved PDF" color={colors.textTertiary}
+                  onPress={() => { const u = assetUri(d.pdfUrl); if (u) void WebBrowser.openBrowserAsync(u).catch(() => {}); }} />
+              ) : <Icon name="chevron-forward" size={17} color={colors.textTertiary} />}
             </Pressable>
           ))}
         </View>
@@ -128,6 +137,9 @@ export function Files({ projectId }: { projectId: string }) {
           <Meta style={{ textAlign: "center", fontSize: font.sm }}>Upload files to share with your team, or have Nova build a document from scratch.</Meta>
         </View>
       )}
+
+      <DocumentStartSheet projectId={projectId} visible={starting} onClose={() => setStarting(false)}
+        onCreated={(id) => { setStarting(false); void qc.invalidateQueries({ queryKey: mkey(projectId, "documents") }); setTimeout(() => openDoc(id), 450); }} />
     </View>
   );
 }

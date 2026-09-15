@@ -39,7 +39,7 @@ const isTest = (p: string) => /(^|\/)(test|tests|e2e|__tests__)\/|\.(test|spec)\
  * a loop is judged on is tested without a model.
  */
 export function pickLoopEvidence(
-  loop: Pick<AuditLoop, "title" | "description">,
+  loop: Pick<AuditLoop, "title" | "description"> & { type?: LoopType },
   files: RepoFile[],
   firstPassEvidence: string[] = [],
   max = 16,
@@ -51,20 +51,28 @@ export function pickLoopEvidence(
   const add = (p: string) => { if (byPath.has(p) && !out.includes(p) && out.length < max) out.push(p); };
 
   // The builder's doc for this loop: a markdown file that talks about it, whose
-  // cited paths are the builder's own map of where the loop lives.
+  // cited paths are the builder's own map of where the loop lives. A long plan
+  // mentions every word of every loop, so a doc that is *about* this loop — its
+  // title in the doc's heading, or named for the loop's kind ("growth-loop.md")
+  // — outranks one that merely contains the words.
   const docs = files
     .filter((f) => /\.md$/i.test(f.path) && typeof f.content === "string")
     .map((f) => {
       const text = f.content!.toLowerCase();
       const hitsTitle = titleWords.filter((w) => text.includes(w)).length;
       const hitsSteps = stepWords.filter((w) => text.includes(w)).length;
-      return { f, score: (titleWords.length ? hitsTitle / titleWords.length : 0) * 2 + (stepWords.length ? hitsSteps / stepWords.length : 0) };
+      const heading = (/^#\s+(.+)$/m.exec(f.content!)?.[1] ?? "").toLowerCase();
+      const headingHits = titleWords.length ? titleWords.filter((w) => heading.includes(w)).length / titleWords.length : 0;
+      const name = f.path.toLowerCase().split("/").pop()!;
+      const namedForKind = !!loop.type && name === `${loop.type}-loop.md`;
+      const about = (headingHits >= 0.99 ? 1.5 : headingHits >= 0.5 ? 0.5 : 0) + (namedForKind && hitsTitle ? 1 : 0);
+      return { f, about, score: (titleWords.length ? hitsTitle / titleWords.length : 0) * 2 + (stepWords.length ? hitsSteps / stepWords.length : 0) + about };
     })
     .filter((d) => d.score >= 1.2)
     .sort((a, b) => b.score - a.score);
   // A second doc only when it's about this loop nearly as much as the first; a
   // plan that mentions every loop in passing crowds out the one that maps this one.
-  const kept = docs.filter((d, i) => i === 0 || (i === 1 && d.score >= docs[0].score * 0.85));
+  const kept = docs.filter((d, i) => i === 0 || (i === 1 && d.score >= docs[0].score * 0.85 && !(docs[0].about >= 1.5 && d.about < 1)));
   const citedBy = kept.map((d) => [...new Set([...d.f.content!.matchAll(PATH_RE)].map((m) => m[1]).filter((p) => byPath.has(p)))]);
   // The best doc's code, then what the first pass cited, then the best doc's
   // tests (the proof), then anything a second doc adds.
@@ -75,11 +83,17 @@ export function pickLoopEvidence(
   for (const p of firstPassEvidence) add(p);
   for (const p of tests) add(p);
   for (const p of citedBy.slice(1).flat()) add(p);
-  // Files named after the loop ("safety" → safety-routes.ts, admin-safety.tsx).
-  for (const f of files) {
+  // Files named after the loop ("safety" → safety-routes.ts, admin-safety.tsx),
+  // the most specific names first: "artifact" says more than "path".
+  const named = files
+    .filter((f) => !/\.md$/i.test(f.path))
+    .map((f) => { const name = f.path.toLowerCase().split("/").pop()!; return { f, hits: titleWords.filter((w) => name.includes(w)) }; })
+    .filter((x) => x.hits.length);
+  const commonness = (w: string) => named.filter((x) => x.hits.includes(w)).length;
+  named.sort((a, b) => Math.min(...a.hits.map(commonness)) - Math.min(...b.hits.map(commonness)) || b.hits.length - a.hits.length);
+  for (const { f } of named) {
     if (out.length >= max) break;
-    const name = f.path.toLowerCase();
-    if (titleWords.some((w) => name.includes(w)) && !/\.md$/i.test(f.path)) add(f.path);
+    add(f.path);
   }
   return { paths: out, docs: kept.map((d) => d.f.path) };
 }

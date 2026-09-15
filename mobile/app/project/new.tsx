@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Animated, Easing, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
-import { Stack, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api, readPref, writePref } from "../../src/api/client";
@@ -93,6 +93,16 @@ export default function NewProject() {
    */
   const draftKey = user?.id ? `new-project-draft.${user.id}` : null;
   const [restored, setRestored] = useState(false);
+  // "Start a project on this path" (a published artifact) arrives with its goal and kind.
+  const params = useLocalSearchParams<{ goal?: string; subcategory?: string }>();
+  useEffect(() => {
+    if (!restored || !params.goal || !PROJECT_GOALS.some((g) => g.id === params.goal)) return;
+    const goal = params.goal as ProjectGoal;
+    const subcategory = isValidSubcategory(goal, params.subcategory) ? String(params.subcategory) : "";
+    setDraft((d) => ({ ...d, goal, subcategory: d.goal === goal && d.subcategory ? d.subcategory : subcategory }));
+    setEdited((e) => [...new Set([...e, "goal", ...(subcategory ? ["subcategory"] : [])])]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restored, params.goal, params.subcategory]);
   useEffect(() => {
     if (!draftKey || restored) return;
     readPref(draftKey).then((raw) => {

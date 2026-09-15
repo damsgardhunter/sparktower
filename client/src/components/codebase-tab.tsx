@@ -1,35 +1,28 @@
 import { areaLabel, type CapabilityEntry } from "@shared/capabilities";
 import type { AuditDelta } from "@shared/audit-delta";
 import { DataSourceCard } from "@/components/data-source-card";
-import { useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Progress } from "@/components/ui/progress";
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
-} from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useEntitlements } from "@/hooks/use-entitlements";
 import { useUpload } from "@/hooks/use-upload";
 import {
   Loader2, Github, Upload, ScanSearch, CheckCircle2, AlertTriangle, XCircle,
   CircleDot, FileCode, Lock, ChevronDown, ChevronRight, Wand2, ShieldAlert,
-  Boxes, Route as RouteIcon, Database, FlaskConical, Check, Repeat,
+  Route as RouteIcon, Database, FlaskConical, Check, Terminal, ArrowRight, History,
 } from "lucide-react";
 import { CREDIT_COSTS } from "@shared/plans";
 import { LOOP_TYPE_INFO, type LoopClosureRead } from "@shared/phase-trees";
-import { AuditCatchUp, refreshAfterCatchUp } from "@/components/audit-catchup";
+import { AuditCatchUp, PathChanges, refreshAfterCatchUp } from "@/components/audit-catchup";
 import type { ProjectCodeAudit } from "@shared/schema";
 
 interface AuditListItem {
   id: string;
   source: string;
-  sourceKind: "github" | "upload";
+  sourceKind: "github" | "upload" | "worktree";
   stage: string | null;
   completionPercent: number | null;
   summary: string | null;
@@ -49,53 +42,175 @@ interface RepoCheck {
   ref: string;
 }
 
+/** How often the tab re-reads the audit list while it's open, so reads from the editor bridge or a teammate show up. */
+const IDLE_POLL_MS = 30_000;
+/** …and while a read is running. */
+const RUNNING_POLL_MS = 4_000;
+const NOVA_GRADIENT = "bg-gradient-to-r from-green-400 via-emerald-500 to-purple-500";
+
 const STAGE_STYLE: Record<string, { label: string; className: string }> = {
-  empty: { label: "Empty", className: "bg-slate-500/15 text-slate-600 dark:text-slate-400 border-slate-500/30" },
-  scaffold: { label: "Scaffold", className: "bg-slate-500/15 text-slate-600 dark:text-slate-400 border-slate-500/30" },
-  prototype: { label: "Prototype", className: "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30" },
-  mvp: { label: "MVP", className: "bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30" },
-  beta: { label: "Beta", className: "bg-violet-500/15 text-violet-600 dark:text-violet-400 border-violet-500/30" },
-  production: { label: "Production", className: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30" },
+  empty: { label: "Empty", className: "bg-slate-500/10 text-slate-600 border-slate-500/30" },
+  scaffold: { label: "Scaffold", className: "bg-slate-500/10 text-slate-600 border-slate-500/30" },
+  prototype: { label: "Prototype", className: "bg-amber-500/10 text-amber-700 border-amber-500/30" },
+  mvp: { label: "MVP", className: "bg-blue-500/10 text-blue-700 border-blue-500/30" },
+  beta: { label: "Beta", className: "bg-violet-500/10 text-violet-700 border-violet-500/30" },
+  production: { label: "Production", className: "bg-emerald-500/10 text-emerald-700 border-emerald-500/30" },
 };
 
-const SEVERITY_STYLE: Record<string, { icon: any; className: string }> = {
-  high: { icon: AlertTriangle, className: "text-rose-500" },
-  medium: { icon: CircleDot, className: "text-amber-500" },
-  low: { icon: CircleDot, className: "text-muted-foreground" },
+const SEVERITY_BADGE: Record<string, string> = {
+  high: "bg-rose-500/10 text-rose-700 border-rose-500/30",
+  medium: "bg-amber-500/10 text-amber-700 border-amber-500/30",
+  low: "bg-muted text-muted-foreground border-black/[0.08] dark:border-white/10",
 };
 
-const VERDICT_STYLE: Record<string, { icon: any; className: string; label: string }> = {
-  complete: { icon: CheckCircle2, className: "text-emerald-500", label: "Complete" },
-  "in-progress": { icon: CircleDot, className: "text-blue-500", label: "In progress" },
-  "not-started": { icon: XCircle, className: "text-muted-foreground", label: "Not started" },
+const STATUS_BADGE: Record<string, string> = {
+  built: "bg-emerald-500/10 text-emerald-700 border-emerald-500/30",
+  complete: "bg-emerald-500/10 text-emerald-700 border-emerald-500/30",
+  closed: "bg-emerald-500/10 text-emerald-700 border-emerald-500/30",
+  partial: "bg-amber-500/10 text-amber-700 border-amber-500/30",
+  "in-progress": "bg-blue-500/10 text-blue-700 border-blue-500/30",
+  open: "bg-amber-500/10 text-amber-700 border-amber-500/30",
+  missing: "bg-rose-500/10 text-rose-700 border-rose-500/30",
+  "not-started": "bg-muted text-muted-foreground border-black/[0.08] dark:border-white/10",
+  "not built": "bg-muted text-muted-foreground border-black/[0.08] dark:border-white/10",
 };
 
-function Section({ title, count, icon: Icon, children, defaultOpen = false }: {
-  title: string; count?: number; icon: any; children: React.ReactNode; defaultOpen?: boolean;
+// --- Small pieces ------------------------------------------------------------
+
+/** Re-renders every `ms`, for relative times that stay true while the tab is open. */
+function useNow(ms: number) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), ms);
+    return () => clearInterval(t);
+  }, [ms]);
+  return now;
+}
+
+function ago(when: string | number | Date | null | undefined, now: number): string {
+  if (!when) return "Never";
+  const s = Math.max(0, Math.round((now - new Date(when).getTime()) / 1000));
+  if (s < 45) return "just now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  if (d < 30) return `${d}d ago`;
+  return new Date(when).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/** "github:owner/repo@main" → { kind, name }. */
+function parseSource(source: string | null | undefined, kind?: string | null) {
+  const raw = String(source ?? "");
+  const body = raw.includes(":") ? raw.slice(raw.indexOf(":") + 1) : raw;
+  const k = kind ?? raw.split(":")[0];
+  if (k === "github") return { kind: "github" as const, label: "GitHub", name: body.split("@")[0] || body, ref: body.split("@")[1] ?? null };
+  if (k === "worktree") return { kind: "worktree" as const, label: "Editor bridge", name: body, ref: null };
+  return { kind: "upload" as const, label: "Zip upload", name: body, ref: null };
+}
+
+const Pill = ({ className = "", children, ...rest }: { className?: string; children: ReactNode } & React.HTMLAttributes<HTMLSpanElement>) => (
+  <span className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium ${className}`} {...rest}>{children}</span>
+);
+
+function LiveDot({ active = true }: { active?: boolean }) {
+  return (
+    <span className="relative flex h-2 w-2 shrink-0">
+      {active && <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />}
+      <span className={`relative inline-flex h-2 w-2 rounded-full ${active ? NOVA_GRADIENT : "bg-muted-foreground/40"}`} />
+    </span>
+  );
+}
+
+/** A block of the tab, separated from the next by a line. */
+function Block({ title, count, action, children, testId, innerRef }: {
+  title: string; count?: ReactNode; action?: ReactNode; children: ReactNode; testId?: string; innerRef?: React.Ref<HTMLElement>;
+}) {
+  return (
+    <section ref={innerRef} className="px-4 sm:px-6 py-5 space-y-3 scroll-mt-4" data-testid={testId}>
+      <div className="flex items-center gap-2 min-h-[1.75rem]">
+        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{title}</h3>
+        {count !== undefined && <span className="text-[11px] tabular-nums text-muted-foreground/80">{count}</span>}
+        {action && <div className="ml-auto flex items-center gap-1.5">{action}</div>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/** One line; the rest behind a chevron. */
+function Row({ lead, title, meta, children, testId, defaultOpen = false }: {
+  lead?: ReactNode; title: ReactNode; meta?: ReactNode; children?: ReactNode; testId?: string; defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const expandable = !!children;
+  return (
+    <li className="py-2" data-testid={testId}>
+      <button
+        type="button"
+        className={`w-full flex items-center gap-2 text-left text-sm ${expandable ? "cursor-pointer" : "cursor-default"}`}
+        onClick={() => expandable && setOpen((o) => !o)}
+        aria-expanded={expandable ? open : undefined}
+      >
+        {lead}
+        <span className="min-w-0 flex-1 truncate">{title}</span>
+        {meta}
+        {expandable ? (open ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />) : <span className="w-3.5" />}
+      </button>
+      {expandable && open && <div className="mt-1.5 ml-1 pl-3 border-l border-black/[0.08] dark:border-white/10 space-y-1 text-xs text-muted-foreground">{children}</div>}
+    </li>
+  );
+}
+
+/** A group of findings: a header with its count, closed until asked for. */
+function Group({ title, icon: Icon, count, tone, children, defaultOpen = false, testId }: {
+  title: string; icon: any; count: ReactNode; tone?: string; children: ReactNode; defaultOpen?: boolean; testId?: string;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="border-t border-border/50 pt-3">
+    <div data-testid={testId}>
       <button
         type="button"
-        className="flex items-center gap-2 w-full text-left"
+        className="w-full flex items-center gap-2 py-2.5 text-left"
         onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
         data-testid={`section-${title.toLowerCase().replace(/\s+/g, "-")}`}
       >
-        {open ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />}
-        <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <Icon className={`h-4 w-4 shrink-0 ${tone ?? "text-muted-foreground"}`} />
         <span className="text-sm font-medium">{title}</span>
-        {count !== undefined && <Badge variant="secondary" className="text-[10px]">{count}</Badge>}
+        <span className="text-xs tabular-nums text-muted-foreground">{count}</span>
+        {open ? <ChevronDown className="h-3.5 w-3.5 ml-auto text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 ml-auto text-muted-foreground" />}
       </button>
-      {open && <div className="pt-2 pl-6 space-y-2">{children}</div>}
+      {open && <ul className="pb-2 pl-6 divide-y divide-black/[0.08] dark:divide-white/10">{children}</ul>}
     </div>
   );
 }
 
 const Evidence = ({ paths }: { paths?: string[] }) =>
-  paths?.length ? (
-    <span className="text-[10px] text-muted-foreground font-mono break-all">{paths.slice(0, 3).join(" · ")}</span>
-  ) : null;
+  paths?.length ? <p className="font-mono text-[10px] break-all">{paths.slice(0, 3).join(" · ")}</p> : null;
+
+const Stat = ({ icon: Icon, label, value, testId }: { icon: any; label: string; value: ReactNode; testId?: string }) => (
+  <div className="min-w-0">
+    <p className="text-lg font-semibold tabular-nums leading-tight" data-testid={testId}>{value}</p>
+    <p className="text-[11px] text-muted-foreground flex items-center gap-1"><Icon className="h-3 w-3" />{label}</p>
+  </div>
+);
+
+const change = (before: number | null | undefined, after: number | null | undefined) => {
+  const d = (after ?? 0) - (before ?? 0);
+  return d === 0 ? null : <span className={d > 0 ? "text-emerald-600" : "text-rose-600"}>{d > 0 ? `+${d.toLocaleString()}` : d.toLocaleString()}</span>;
+};
+
+/** Staged words for a read that runs a minute or so on the server with no progress of its own. */
+function runningStage(seconds: number) {
+  if (seconds < 8) return "Fetching the code";
+  if (seconds < 25) return "Scanning routes, models and tests";
+  if (seconds < 60) return "Nova is reading it";
+  return "Matching it to your path";
+}
+
+// --- The tab -----------------------------------------------------------------
 
 export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId: string; repoUrl?: string | null; isOwner?: boolean }) {
   const { toast } = useToast();
@@ -107,6 +222,16 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
   const [tokenOpen, setTokenOpen] = useState(false);
   const [check, setCheck] = useState<RepoCheck | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editingSource, setEditingSource] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+
+  /** The newest audit id this tab has seen; a different one on a poll is a read from elsewhere. */
+  const seenNewest = useRef<string | null | undefined>(undefined);
+  const connectionRef = useRef<HTMLElement>(null);
+  const pathRef = useRef<HTMLElement>(null);
+  const zipInput = useRef<HTMLInputElement>(null);
+  const repoInput = useRef<HTMLInputElement>(null);
 
   const isBuilder = can("aiMilestones");
   const notEnoughCredits = !isUnlimited && creditsRemaining < CREDIT_COSTS.codeAudit;
@@ -123,12 +248,46 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
     return { message: fallback, upgrade: false };
   };
 
-  const { data: audits } = useQuery<AuditListItem[]>({
+  const auditMutation = useMutation({
+    mutationFn: async (payload: { repoUrl?: string; token?: string; objectPath?: string; fileName?: string }) => {
+      const res = await apiRequest("POST", `/api/projects/${projectId}/code-audit`, payload);
+      return res.json() as Promise<{ audit: ProjectCodeAudit; creditsCharged: number; autoApplied: { changes: string[]; skipped: string[] } | null }>;
+    },
+    onMutate: () => setStartedAt(Date.now()),
+    onSuccess: (result) => {
+      seenNewest.current = result.audit.id;
+      setSelectedId(null);
+      setEditingSource(false);
+      queryClient.setQueryData(["/api/code-audits", result.audit.id], result.audit);
+      queryClient.invalidateQueries({ queryKey: ["/api/subscription"] });
+      // The read moves the path even when nothing was auto-applied: path status reads the audit's waiting changes.
+      refreshAfterCatchUp(projectId, result.audit.id);
+      const n = result.autoApplied?.changes.length ?? 0;
+      toast({
+        title: "Code read",
+        description: `${result.audit.completionPercent}% built · ${result.creditsCharged} credits${n ? ` · Nova updated ${n}` : ""}`,
+      });
+    },
+    onError: (err: any) => {
+      const { message, upgrade } = describeError(err, "The audit failed.");
+      toast({ title: upgrade ? "Builder plan needed" : "Audit failed", description: message, variant: upgrade ? "default" : "destructive" });
+    },
+    onSettled: () => setStartedAt(null),
+  });
+  const running = auditMutation.isPending || isUploading;
+
+  // Live: fast while a read runs, a slow heartbeat otherwise, and on focus.
+  const auditsQuery = useQuery<AuditListItem[]>({
     queryKey: ["/api/projects", projectId, "code-audits"],
     enabled: !!projectId,
+    refetchInterval: running ? RUNNING_POLL_MS : IDLE_POLL_MS,
+    refetchOnWindowFocus: true,
+    staleTime: 5_000,
   });
-
-  const latestId = selectedId || audits?.[0]?.id || null;
+  const audits = auditsQuery.data;
+  const newest = audits?.[0] ?? null;
+  const latestId = selectedId || newest?.id || null;
+  const viewingOlder = !!selectedId && selectedId !== newest?.id;
 
   const { data: audit, isLoading: auditLoading } = useQuery<ProjectCodeAudit>({
     queryKey: ["/api/code-audits", latestId],
@@ -138,46 +297,62 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
       return res.json();
     },
     enabled: !!latestId,
+    refetchOnWindowFocus: true,
+    staleTime: 10_000,
   });
+
+  const { data: tokenData } = useQuery<{ tokens: { projectId: string | null }[] }>({ queryKey: ["/api/mcp-tokens"], staleTime: 60_000 });
+  const editorTokens = (tokenData?.tokens ?? []).filter((t) => !t.projectId || t.projectId === projectId).length;
+
+  /*
+   * A read that lands from somewhere else — the editor bridge, MCP, a
+   * teammate — shows up on the next poll. Jump to it and move the path.
+   */
+  useEffect(() => {
+    if (audits === undefined) return;
+    const id = newest?.id ?? null;
+    if (seenNewest.current === undefined) { seenNewest.current = id; return; }
+    if (id && id !== seenNewest.current) {
+      seenNewest.current = id;
+      setSelectedId(null);
+      refreshAfterCatchUp(projectId, id);
+      if (!auditMutation.isPending) {
+        const src = parseSource(newest?.source, newest?.sourceKind);
+        toast({ title: "New code read", description: `${src.label} · ${newest?.completionPercent ?? "?"}% built. Your path is updated.` });
+      }
+    }
+  }, [newest?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Changes applied elsewhere (a teammate, auto-apply) re-read the open audit and the path.
+  const appliedSig = audits?.find((a) => a.id === latestId)?.appliedAt ?? null;
+  const lastApplied = useRef(appliedSig);
+  useEffect(() => {
+    if (appliedSig !== lastApplied.current) {
+      lastApplied.current = appliedSig;
+      if (latestId) refreshAfterCatchUp(projectId, latestId);
+    }
+  }, [appliedSig]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A repo read before is the one to read again.
+  useEffect(() => {
+    if (url || !audits) return;
+    const gh = audits.find((a) => a.sourceKind === "github");
+    const name = gh ? parseSource(gh.source, gh.sourceKind).name : null;
+    if (name) setUrl(`https://github.com/${name}`);
+  }, [audits]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const now = useNow(running ? 1_000 : 20_000);
 
   /** Validates the repo before any credits are spent on it. */
   const checkMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", `/api/projects/${projectId}/code-audit/check-repo`, {
-        repoUrl: url, token: token.trim() || undefined,
-      });
+      const res = await apiRequest("POST", `/api/projects/${projectId}/code-audit/check-repo`, { repoUrl: url, token: token.trim() || undefined });
       return res.json() as Promise<RepoCheck>;
     },
     onSuccess: (result) => setCheck(result),
     onError: (err: any) => {
       setCheck(null);
       toast({ title: "Can't reach that repository", description: describeError(err, "Check the URL.").message, variant: "destructive" });
-    },
-  });
-
-  const auditMutation = useMutation({
-    mutationFn: async (payload: { repoUrl?: string; token?: string; objectPath?: string; fileName?: string }) => {
-      const res = await apiRequest("POST", `/api/projects/${projectId}/code-audit`, payload);
-      return res.json() as Promise<{ audit: ProjectCodeAudit; creditsCharged: number; autoApplied: { changes: string[]; skipped: string[] } | null }>;
-    },
-    onSuccess: (result) => {
-      setSelectedId(result.audit.id);
-      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "code-audits"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/subscription"] });
-      queryClient.setQueryData(["/api/code-audits", result.audit.id], result.audit);
-      if (result.autoApplied?.changes.length) refreshAfterCatchUp(projectId, result.audit.id);
-      toast({
-        title: "Audit complete",
-        description: `${result.audit.stage} · ${result.audit.completionPercent}% built · ${result.creditsCharged} credits${result.autoApplied?.changes.length ? ` · Nova updated ${result.autoApplied.changes.length} thing${result.autoApplied.changes.length === 1 ? "" : "s"}` : ""}`,
-      });
-    },
-    onError: (err: any) => {
-      const { message, upgrade } = describeError(err, "The audit failed.");
-      toast({
-        title: upgrade ? "Builder plan needed" : "Audit failed",
-        description: message,
-        variant: upgrade ? "default" : "destructive",
-      });
     },
   });
 
@@ -189,13 +364,9 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
     onSuccess: (result) => {
       toast({
         title: `Board updated — ${result.changes.length} change${result.changes.length === 1 ? "" : "s"}`,
-        description: result.skipped.length ? `${result.skipped.length} skipped.` : "Your tasks and milestones now match the code.",
+        description: result.skipped.length ? `${result.skipped.length} skipped.` : undefined,
       });
-      for (const key of ["kanban", "milestones", "code-audits", "task-history", "activity"]) {
-        queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, key] });
-      }
-      queryClient.invalidateQueries({ queryKey: ["/api/code-audits", latestId] });
-      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
+      refreshAfterCatchUp(projectId, latestId);
     },
     onError: (err: any) => toast({ title: "Couldn't apply that", description: describeError(err, "Try again.").message, variant: "destructive" }),
   });
@@ -215,515 +386,559 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
     }
   };
 
+  const runRepo = () => auditMutation.mutate({ repoUrl: url, token: token.trim() || undefined });
+  const openConnection = () => {
+    setEditingSource(true);
+    requestAnimationFrame(() => {
+      connectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      repoInput.current?.focus();
+    });
+  };
+
   const findings = (audit?.findings as any) || {};
   const scan = findings.scan || {};
   type Probe = { url: string; ok: boolean; status: number | null; ms: number; error?: string } | null;
   const runtime = ((audit as any)?.runtime ?? null) as { liveUrl: Probe; health: Probe; surfaces: { loaded: boolean; enabled: number; off: string[] } | null; env: { referenced: number; setHere: string[]; missingHere: string[]; instance: string } } | null;
   const delta = ((audit as any)?.delta ?? null) as AuditDelta | null;
-  const running = auditMutation.isPending || isUploading;
+  const ops = (Array.isArray(audit?.operations) ? audit!.operations : []) as any[];
+  const waiting = !viewingOlder ? ops.filter((o) => !o?._status || o._status === "pending").length : 0;
+
+  const source = newest ? parseSource(newest.source, newest.sourceKind) : null;
+  const connected = !!newest || !!check;
+  const showForm = !connected || editingSource;
+
+  // --- The one thing to do now ---
+  let primary: ReactNode;
+  if (running) {
+    primary = <Button className="w-full sm:w-auto gap-2" disabled><Loader2 className="h-4 w-4 animate-spin" />Reading…</Button>;
+  } else if (!connected && !url.trim()) {
+    primary = <Button className="w-full sm:w-auto gap-2" onClick={openConnection} data-testid="button-primary-connect"><Github className="h-4 w-4" />Connect repo</Button>;
+  } else if (waiting > 0) {
+    primary = (
+      <Button className="w-full sm:w-auto gap-2" onClick={() => pathRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })} data-testid="button-primary-review">
+        <Wand2 className="h-4 w-4" />Review {waiting} waiting change{waiting === 1 ? "" : "s"}
+      </Button>
+    );
+  } else if (url.trim()) {
+    primary = (
+      <Button className="w-full sm:w-auto gap-2" disabled={notEnoughCredits} onClick={runRepo} data-testid="button-primary-audit">
+        <ScanSearch className="h-4 w-4" />{newest ? "Read the code again" : "Run an audit"}
+        <span className="text-[11px] opacity-80">· {CREDIT_COSTS.codeAudit} cr</span>
+      </Button>
+    );
+  } else {
+    primary = (
+      <Button className="w-full sm:w-auto gap-2" disabled={notEnoughCredits} onClick={() => zipInput.current?.click()} data-testid="button-primary-zip">
+        <Upload className="h-4 w-4" />Upload a new zip
+        <span className="text-[11px] opacity-80">· {CREDIT_COSTS.codeAudit} cr</span>
+      </Button>
+    );
+  }
+
+  const elapsed = startedAt ? Math.max(0, Math.round((now - startedAt) / 1000)) : 0;
+  const progress = Math.min(95, Math.round(100 * (1 - Math.exp(-elapsed / 40))));
+
+  const loops = (findings.loops ?? []) as LoopClosureRead[];
+  const closedLoops = loops.filter((l) => l.closure === "closed").length;
+  const capabilities = (findings.capabilities ?? []) as CapabilityEntry[];
+  const risks = (findings.risks ?? []) as any[];
+  const highRisks = risks.filter((r) => r.severity === "high").length;
+  const looksDone = findings.taskReconciliation?.looksDone ?? [];
+  const notStarted = findings.taskReconciliation?.notStarted ?? [];
+  const milestoneVerdicts = findings.milestones ?? [];
+  const hasFindings = risks.length || loops.length || capabilities.length || looksDone.length || milestoneVerdicts.length
+    || findings.built?.length || findings.partial?.length || findings.missing?.length || findings.undocumented?.length
+    || scan.routes?.length || scan.dataModels?.length || findings.nextThreeThings?.length;
 
   return (
-    <div className="space-y-5 max-w-4xl">
-      {/* --- Source --- */}
-      <Card>
-        <CardHeader className="space-y-1">
-          <CardTitle className="text-lg flex items-center gap-2">
-            <ScanSearch className="h-4 w-4 text-primary" /> Codebase audit
-          </CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Nova reads your actual code and reconciles it with your plan — what's really built,
-            what's missing, and which tasks are further along than your board says.
-          </p>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {!isBuilder && (
-            <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3">
-              <Lock className="h-4 w-4 mt-0.5 shrink-0 text-amber-500" />
-              <div className="text-sm">
-                <p className="font-medium">Codebase audits are on the Builder plan</p>
-                <p className="text-muted-foreground text-xs">Running one will tell you what to upgrade to.</p>
-              </div>
-            </div>
-          )}
+    <div className="max-w-4xl rounded-xl border border-black/10 dark:border-white/10 bg-background shadow-sm divide-y divide-black/[0.08] dark:divide-white/10" data-testid="codebase-tab">
+      {/* hidden file input shared by every zip button */}
+      <input
+        ref={zipInput} type="file" accept=".zip" className="hidden"
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) handleZip(f); e.target.value = ""; }}
+        data-testid="input-audit-zip"
+      />
 
-          <div className="space-y-2">
-            <Label className="text-xs flex items-center gap-1.5"><Github className="h-3.5 w-3.5" /> GitHub repository</Label>
+      {/* --- At a glance: connected? last read? what now? --- */}
+      <div className="px-4 sm:px-6 py-5 space-y-4" data-testid="codebase-glance">
+        <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-4 sm:gap-0 sm:divide-x divide-black/[0.08] dark:divide-white/10">
+          <div className="min-w-0 sm:pr-5">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Code</p>
+            <div className="mt-1 flex items-center gap-2 min-w-0" data-testid="glance-connection">
+              {source ? (
+                <>
+                  {source.kind === "github" ? <Github className="h-4 w-4 shrink-0" /> : source.kind === "worktree" ? <Terminal className="h-4 w-4 shrink-0" /> : <Upload className="h-4 w-4 shrink-0" />}
+                  <span className="text-sm font-medium truncate" title={newest?.source}>{source.name || source.label}</span>
+                </>
+              ) : check ? (
+                <><Github className="h-4 w-4 shrink-0" /><span className="text-sm font-medium truncate">{check.fullName}</span></>
+              ) : (
+                <><span className="h-2 w-2 rounded-full bg-muted-foreground/40" /><span className="text-sm font-medium">Not connected</span></>
+              )}
+            </div>
+            <p className="mt-0.5 text-xs text-muted-foreground truncate">
+              {source ? source.label : check ? "Checked, not read yet" : "Repo, zip or editor"}
+              {editorTokens > 0 && " · editor linked"}
+            </p>
+          </div>
+
+          <div className="min-w-0 sm:px-5">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Last read</p>
+            <p className="mt-1 text-sm font-medium" data-testid="glance-last-read">{running ? "Reading now" : newest ? ago(newest.createdAt, now) : "Never"}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground flex items-center gap-1.5" title="Checks for new reads every 30 seconds and when you come back to this tab">
+              <LiveDot active={!auditsQuery.isError} />
+              {auditsQuery.isError ? "Offline" : `Live · synced ${ago(auditsQuery.dataUpdatedAt, now)}`}
+            </p>
+          </div>
+
+          <div className="sm:pl-5 flex flex-col justify-center gap-1">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground sm:hidden">Do now</p>
+            {primary}
+            {notEnoughCredits && !running && <p className="text-[11px] text-destructive">Needs {CREDIT_COSTS.codeAudit} credits · you have {creditsRemaining}</p>}
+          </div>
+        </div>
+
+        {running && (
+          <div className="space-y-1.5" data-testid="audit-running">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+              <div className={`h-full rounded-full ${NOVA_GRADIENT} transition-all duration-1000`} style={{ width: `${isUploading ? 8 : Math.max(4, progress)}%` }} />
+            </div>
+            <p className="text-xs text-muted-foreground flex items-center justify-between gap-2">
+              <span>{isUploading ? "Uploading the zip" : runningStage(elapsed)}…</span>
+              <span className="tabular-nums">{elapsed}s · usually about a minute</span>
+            </p>
+          </div>
+        )}
+
+        {!isBuilder && (
+          <p className="flex items-center gap-1.5 text-xs text-amber-700"><Lock className="h-3.5 w-3.5" />Audits are on the Builder plan.</p>
+        )}
+      </div>
+
+      {/* --- Connection --- */}
+      <Block
+        title="Connection" testId="codebase-connection" innerRef={connectionRef}
+        action={connected && (
+          <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setEditingSource((v) => !v)} data-testid="button-change-source">
+            {editingSource ? "Done" : "Change"}
+          </Button>
+        )}
+      >
+        {!showForm ? (
+          <ul className="divide-y divide-black/[0.08] dark:divide-white/10 text-sm">
+            <li className="flex items-center gap-2 py-2">
+              {source?.kind === "worktree" ? <Terminal className="h-4 w-4 text-muted-foreground" /> : source?.kind === "upload" ? <Upload className="h-4 w-4 text-muted-foreground" /> : <Github className="h-4 w-4 text-muted-foreground" />}
+              <span className="font-medium truncate">{source?.name || check?.fullName}</span>
+              {source?.ref && <span className="text-xs text-muted-foreground">@ {source.ref}</span>}
+              <Pill className="ml-auto border-emerald-500/30 bg-emerald-500/10 text-emerald-700"><Check className="h-3 w-3" />{source?.label ?? "GitHub"}</Pill>
+            </li>
+            <EditorRow count={editorTokens} />
+          </ul>
+        ) : (
+          <div className="space-y-3">
             <div className="flex flex-col sm:flex-row gap-2">
-              <Input
-                value={url}
-                onChange={(e) => { setUrl(e.target.value); setCheck(null); }}
-                placeholder="https://github.com/you/your-repo"
-                className="flex-1"
-                data-testid="input-repo-url"
-              />
-              <Button
-                variant="outline" className="gap-1.5 shrink-0"
-                disabled={!url.trim() || checkMutation.isPending}
-                onClick={() => checkMutation.mutate()}
-                data-testid="button-check-repo"
-              >
-                {checkMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                Check
-              </Button>
+              <div className="relative flex-1">
+                <Github className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  ref={repoInput}
+                  value={url}
+                  onChange={(e) => { setUrl(e.target.value); setCheck(null); }}
+                  placeholder="https://github.com/you/your-repo"
+                  className="pl-8"
+                  data-testid="input-repo-url"
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button variant="outline" className="gap-1.5 flex-1 sm:flex-none" disabled={!url.trim() || checkMutation.isPending} onClick={() => checkMutation.mutate()} data-testid="button-check-repo">
+                  {checkMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}Check
+                </Button>
+                <Button className="gap-1.5 flex-1 sm:flex-none" disabled={!url.trim() || running || notEnoughCredits} onClick={runRepo} data-testid="button-audit-repo">
+                  {auditMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanSearch className="h-4 w-4" />}
+                  Audit <span className="text-[11px] opacity-80">· {CREDIT_COSTS.codeAudit} cr</span>
+                </Button>
+              </div>
             </div>
 
             {check && (
-              <div className="flex items-center gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 p-2.5 text-sm" data-testid="repo-check-ok">
+              <div className="flex items-center gap-2 text-sm" data-testid="repo-check-ok">
                 <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium truncate">{check.fullName} <span className="text-muted-foreground font-normal">@ {check.ref}</span></p>
-                  <p className="text-xs text-muted-foreground truncate">
-                    {[check.language, check.isPrivate ? "private" : "public", `${check.stars} stars`].filter(Boolean).join(" · ")}
-                  </p>
-                </div>
+                <span className="font-medium truncate">{check.fullName}</span>
+                <span className="text-xs text-muted-foreground truncate">@ {check.ref} · {[check.language, check.isPrivate ? "private" : "public", `${check.stars}★`].filter(Boolean).join(" · ")}</span>
               </div>
             )}
 
-            {/* Private repos need a token. It's used for the request and never
-                stored, so it has to be re-entered each time — deliberately. */}
-            <button
-              type="button"
-              className="text-xs text-muted-foreground hover:text-foreground underline decoration-dotted underline-offset-2"
-              onClick={() => setTokenOpen((o) => !o)}
-              data-testid="button-toggle-token"
-            >
-              {tokenOpen ? "Hide" : "Private repository?"}
-            </button>
+            <div className="flex items-center gap-x-4 gap-y-1 flex-wrap text-xs">
+              {/* Private repos need a token. It's used for the request and never stored, so it's re-entered each time — deliberately. */}
+              <button type="button" className="text-muted-foreground hover:text-foreground underline decoration-dotted underline-offset-2" onClick={() => setTokenOpen((o) => !o)} data-testid="button-toggle-token">
+                {tokenOpen ? "Hide token" : "Private repo?"}
+              </button>
+              <button type="button" className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1" disabled={running || notEnoughCredits} onClick={() => zipInput.current?.click()} data-testid="button-upload-zip">
+                {isUploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />}Upload a .zip instead
+              </button>
+            </div>
+
             {tokenOpen && (
-              <div className="space-y-1.5 rounded-md border border-border/60 bg-muted/30 p-3">
-                <Label className="text-xs">GitHub personal access token (read-only)</Label>
-                <Input
-                  type="password"
-                  value={token}
-                  onChange={(e) => { setToken(e.target.value); setCheck(null); }}
-                  placeholder="ghp_…"
-                  data-testid="input-github-token"
-                />
-                <p className="text-[10px] text-muted-foreground">
-                  Used for this audit and never saved — you'll re-enter it next time. Create one with
-                  read-only <code>Contents</code> access, and revoke it when you're done.
-                </p>
+              <div className="space-y-1.5">
+                <Input type="password" value={token} onChange={(e) => { setToken(e.target.value); setCheck(null); }} placeholder="GitHub token (read-only Contents) · ghp_…" data-testid="input-github-token" />
+                <p className="text-[11px] text-muted-foreground">Used once, never saved. Revoke it when you're done.</p>
               </div>
             )}
 
-            <Button
-              className="w-full gap-2"
-              disabled={!url.trim() || running || notEnoughCredits}
-              onClick={() => auditMutation.mutate({ repoUrl: url, token: token.trim() || undefined })}
-              data-testid="button-audit-repo"
-            >
-              {auditMutation.isPending
-                ? <><Loader2 className="h-4 w-4 animate-spin" /> Nova is reading your code…</>
-                : <><ScanSearch className="h-4 w-4" /> Audit this repository ({CREDIT_COSTS.codeAudit})</>}
-            </Button>
+            <ul className="divide-y divide-black/[0.08] dark:divide-white/10 border-t border-black/[0.08] dark:border-white/10 text-sm"><EditorRow count={editorTokens} /></ul>
           </div>
+        )}
+      </Block>
 
-          <div className="flex items-center gap-3">
-            <div className="h-px flex-1 bg-border" />
-            <span className="text-[10px] uppercase tracking-wide text-muted-foreground">or</span>
-            <div className="h-px flex-1 bg-border" />
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="block">
-              <input
-                type="file" accept=".zip" className="hidden"
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) handleZip(f); }}
-                data-testid="input-audit-zip"
-              />
-              <Button asChild variant="outline" className="w-full gap-2" disabled={running || notEnoughCredits}>
-                <span>
-                  {isUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-                  Upload a .zip of your project ({CREDIT_COSTS.codeAudit})
-                </span>
-              </Button>
-            </label>
-            <p className="text-[10px] text-muted-foreground">
-              node_modules, build output and lockfiles are ignored, so you can zip the whole folder.
-            </p>
-          </div>
-
-          {notEnoughCredits && (
-            <p className="text-xs text-destructive">
-              An audit costs {CREDIT_COSTS.codeAudit} credits and you have {creditsRemaining}.
-            </p>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* --- Result --- */}
+      {/* --- Latest read --- */}
       {auditLoading ? (
         <div className="flex justify-center py-10"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
       ) : !audit ? (
-        <Card>
-          <CardContent className="p-8 text-center">
-            <FileCode className="h-10 w-10 mx-auto mb-3 text-muted-foreground opacity-40" />
-            <p className="text-sm font-medium">No audit yet</p>
-            <p className="text-sm text-muted-foreground mt-1">
-              Point Nova at your repository and it'll tell you where the project actually is —
-              not where the board says it is.
-            </p>
-          </CardContent>
-        </Card>
+        <div className="px-4 sm:px-6 py-8 text-center" data-testid="audit-empty">
+          <FileCode className="h-8 w-8 mx-auto mb-2 text-muted-foreground/40" />
+          <p className="text-sm font-medium">No read yet</p>
+          <p className="text-xs text-muted-foreground mt-0.5">Connect your code to see what's really built.</p>
+        </div>
       ) : (
-        <Card data-testid="card-audit-result">
-          <CardContent className="p-5 space-y-4">
-            <div className="flex items-start gap-4 flex-wrap">
-              <div className="shrink-0">
-                <p className="text-3xl font-bold" data-testid="text-audit-completion">{audit.completionPercent}%</p>
-                <p className="text-xs text-muted-foreground">built</p>
-              </div>
-              <div className="flex-1 min-w-[14rem] space-y-2">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Badge variant="outline" className={STAGE_STYLE[audit.stage || ""]?.className || ""} data-testid="badge-audit-stage">
-                    {STAGE_STYLE[audit.stage || ""]?.label || audit.stage}
-                  </Badge>
-                  <span className="text-[10px] text-muted-foreground font-mono truncate">{audit.source}</span>
+        <>
+          <Block
+            title={viewingOlder ? "Earlier read" : "Latest read"}
+            count={new Date(audit.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+            testId="card-audit-result"
+            action={viewingOlder ? (
+              <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setSelectedId(null)} data-testid="button-back-to-latest">Back to latest</Button>
+            ) : audit.appliedAt ? (
+              <Pill className="border-black/[0.08] dark:border-white/10 text-muted-foreground"><Check className="h-3 w-3" />Applied {new Date(audit.appliedAt).toLocaleDateString()}</Pill>
+            ) : null}
+          >
+            <div className="grid grid-cols-4 sm:grid-cols-[auto_repeat(4,minmax(0,1fr))] gap-x-4 gap-y-3 items-end">
+              <div className="col-span-4 sm:col-span-1 flex items-end gap-3 sm:pr-4">
+                <div>
+                  <p className="text-3xl font-bold leading-none tabular-nums" data-testid="text-audit-completion">{audit.completionPercent}%</p>
+                  <p className="text-[11px] text-muted-foreground mt-1">built</p>
                 </div>
-                <Progress value={audit.completionPercent || 0} className="h-2" />
-                {findings.stackSummary && (
-                  <p className="text-xs text-muted-foreground">{findings.stackSummary}</p>
+                <Pill className={`mb-4 ${STAGE_STYLE[audit.stage || ""]?.className || "border-black/[0.08] dark:border-white/10"}`} data-testid="badge-audit-stage">
+                  {STAGE_STYLE[audit.stage || ""]?.label || audit.stage}
+                </Pill>
+              </div>
+              <Stat icon={FileCode} label="lines" value={(scan.linesOfCode || 0).toLocaleString()} />
+              <Stat icon={RouteIcon} label="routes" value={scan.routeCount ?? 0} />
+              <Stat icon={Database} label="models" value={scan.dataModels?.length ?? 0} />
+              <Stat icon={FlaskConical} label="test files" value={scan.testFiles ?? 0} />
+            </div>
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+              <div className="h-full rounded-full bg-primary" style={{ width: `${audit.completionPercent || 0}%` }} />
+            </div>
+
+            {audit.summary && (
+              <div>
+                <p className={`text-sm text-foreground/80 ${summaryOpen ? "" : "line-clamp-2"}`} data-testid="text-audit-summary">{audit.summary}</p>
+                <button type="button" className="mt-0.5 text-xs text-muted-foreground hover:text-foreground" onClick={() => setSummaryOpen((v) => !v)} data-testid="button-summary-details">
+                  {summaryOpen ? "Less" : "Details"}
+                </button>
+                {summaryOpen && (
+                  <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+                    {findings.stackSummary && <p>{findings.stackSummary}</p>}
+                    <p className="font-mono text-[10px] break-all">{audit.source}{scan.truncated ? " · partial scan (over the size budget)" : ""}</p>
+                  </div>
                 )}
               </div>
-            </div>
-
-            <p className="text-sm text-secondary leading-relaxed" data-testid="text-audit-summary">{audit.summary}</p>
-
-            {/* Runtime: is it running, not just written. */}
-            {runtime && (
-              <div className="rounded-md border border-border/60 p-2.5 text-xs space-y-1" data-testid="audit-runtime">
-                <p className="font-medium text-sm">Running?</p>
-                {[
-                  ["Live URL", runtime.liveUrl], ["Health", runtime.health],
-                ].map(([label, r]: any) => (
-                  <p key={label} className="flex items-center gap-2">
-                    <span className={`h-2 w-2 rounded-full ${!r ? "bg-muted-foreground/40" : r.ok ? "bg-emerald-500" : "bg-rose-500"}`} />
-                    <span className="font-medium">{label}:</span>
-                    <span className="text-muted-foreground">{!r ? "no public URL to probe" : r.ok ? `${r.status} in ${r.ms}ms` : `not answering (${r.status ?? r.error ?? "no response"})`}</span>
-                  </p>
-                ))}
-                {runtime.surfaces && <p className="text-muted-foreground">Kill switches: {runtime.surfaces.loaded ? "loaded" : "not loaded"}, {runtime.surfaces.enabled} on{runtime.surfaces.off?.length ? `, off: ${runtime.surfaces.off.join(", ")}` : ""}</p>}
-                <p className="text-muted-foreground">Env: {runtime.env.setHere.length}/{runtime.env.referenced} referenced variables set on the {runtime.env.instance} instance{runtime.env.missingHere?.length ? ` · not set: ${runtime.env.missingHere.slice(0, 8).join(", ")}${runtime.env.missingHere.length > 8 ? " …" : ""}` : ""}</p>
-              </div>
             )}
-
-            {/* Velocity: what moved since the last audit. */}
-            {delta && (
-              <div className="rounded-md border border-border/60 p-2.5 text-xs space-y-1" data-testid="audit-delta">
-                <p className="font-medium text-sm">{delta.previousAuditId ? `Since the last audit (${delta.daysSince} days ago)` : "First audit"}</p>
-                {delta.previousAuditId ? (
-                  <>
-                    <p className="text-muted-foreground">{delta.changed ? "The code moved." : "No meaningful change in the code."}</p>
-                    <p>Routes {delta.routes.before}→{delta.routes.after}{delta.routes.added.length ? ` · added ${delta.routes.added.slice(0, 6).join(", ")}${delta.routes.added.length > 6 ? ` +${delta.routes.added.length - 6}` : ""}` : ""}</p>
-                    <p>Tables {delta.tables.before}→{delta.tables.after}{delta.tables.added.length ? ` · added ${delta.tables.added.join(", ")}` : ""}</p>
-                    <p>Tests {delta.tests.before}→{delta.tests.after} files · lines {delta.linesOfCode.before.toLocaleString()}→{delta.linesOfCode.after.toLocaleString()} · completion {delta.completionPercent.before ?? "?"}%→{delta.completionPercent.after ?? "?"}%</p>
-                    {delta.areas.length > 0 && <p>Areas moved: {delta.areas.map((a: any) => `${areaLabel(a.area)} ${a.from}→${a.to}`).join("; ")}</p>}
-                    {delta.coverage && <p>Writes rate-limited {delta.coverage.writesRateLimited[0]}→{delta.coverage.writesRateLimited[1]} of {delta.coverage.writes[1]} · costly metered {delta.coverage.costlyMetered[0]}→{delta.coverage.costlyMetered[1]}</p>}
-                  </>
-                ) : <p className="text-muted-foreground">Run another audit later and this shows what moved.</p>}
-              </div>
-            )}
-
-            {/* Deterministic scan facts — measured, not inferred. */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {[
-                { icon: FileCode, label: "lines of code", value: (scan.linesOfCode || 0).toLocaleString() },
-                { icon: RouteIcon, label: "routes found", value: scan.routeCount ?? 0 },
-                { icon: Database, label: "data models", value: scan.dataModels?.length ?? 0 },
-                { icon: FlaskConical, label: "test files", value: scan.testFiles ?? 0 },
-              ].map((stat) => (
-                <div key={stat.label} className="rounded-md border border-border/60 bg-muted/30 p-2.5">
-                  <div className="flex items-center gap-1.5 text-muted-foreground">
-                    <stat.icon className="h-3 w-3" />
-                    <span className="text-[10px]">{stat.label}</span>
-                  </div>
-                  <p className="text-lg font-semibold tabular-nums">{stat.value}</p>
-                </div>
-              ))}
-            </div>
 
             {/* A committed credential is the one finding that can't wait. */}
             {scan.suspectedSecrets?.length > 0 && (
-              <div className="flex items-start gap-2 rounded-md border border-rose-500/50 bg-rose-500/10 p-3" data-testid="alert-secrets">
-                <ShieldAlert className="h-4 w-4 text-rose-500 mt-0.5 shrink-0" />
-                <div className="text-sm min-w-0">
-                  <p className="font-medium">Possible credentials committed to the repository</p>
-                  <ul className="text-xs text-muted-foreground mt-0.5 space-y-0.5">
-                    {scan.suspectedSecrets.slice(0, 5).map((s: any, i: number) => (
-                      <li key={i}><span className="font-mono break-all">{s.file}</span> — {s.hint}</li>
+              <details className="rounded-lg border border-rose-500/40 bg-rose-500/5 px-3 py-2" data-testid="alert-secrets">
+                <summary className="cursor-pointer text-sm font-medium flex items-center gap-2 text-rose-700">
+                  <ShieldAlert className="h-4 w-4 shrink-0" />{scan.suspectedSecrets.length} possible credential{scan.suspectedSecrets.length === 1 ? "" : "s"} in the repo — rotate them
+                </summary>
+                <ul className="mt-1.5 text-xs text-muted-foreground space-y-0.5">
+                  {scan.suspectedSecrets.slice(0, 5).map((s: any, i: number) => <li key={i}><span className="font-mono break-all">{s.file}</span> — {s.hint}</li>)}
+                  <li>Remove them from the file and from git history.</li>
+                </ul>
+              </details>
+            )}
+
+            {(runtime || delta) && (
+              <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                {runtime && (
+                  <span className="contents" data-testid="audit-runtime">
+                    {([["Live URL", runtime.liveUrl], ["Health", runtime.health]] as [string, Probe][]).map(([label, r]) => (
+                      <Pill key={label} className="border-black/[0.08] dark:border-white/10 text-foreground/80" title={!r ? "No public URL to probe" : r.ok ? `${r.status} in ${r.ms}ms` : `Not answering (${r.status ?? r.error ?? "no response"})`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${!r ? "bg-muted-foreground/40" : r.ok ? "bg-emerald-500" : "bg-rose-500"}`} />
+                        {label} {!r ? "—" : r.ok ? `${r.ms}ms` : "down"}
+                      </Pill>
                     ))}
-                  </ul>
-                  <p className="text-xs mt-1">Rotate them, then remove them from the file and from git history.</p>
+                    <Pill className="border-black/[0.08] dark:border-white/10 text-foreground/80" title={runtime.env.missingHere?.length ? `Not set: ${runtime.env.missingHere.join(", ")}` : `On the ${runtime.env.instance} instance`}>
+                      Env {runtime.env.setHere.length}/{runtime.env.referenced}
+                    </Pill>
+                    {runtime.surfaces && (
+                      <Pill className="border-black/[0.08] dark:border-white/10 text-foreground/80" title={runtime.surfaces.off?.length ? `Off: ${runtime.surfaces.off.join(", ")}` : undefined}>
+                        Switches {runtime.surfaces.loaded ? `${runtime.surfaces.enabled} on` : "not loaded"}
+                      </Pill>
+                    )}
+                  </span>
+                )}
+                {delta && (
+                  <span className="contents" data-testid="audit-delta">
+                    {delta.previousAuditId ? (
+                      <>
+                        <span className="text-muted-foreground ml-1">Since {delta.daysSince}d ago:</span>
+                        {!delta.changed && <Pill className="border-black/[0.08] dark:border-white/10 text-muted-foreground">No change</Pill>}
+                        {delta.changed && (
+                          <>
+                            <Pill className="border-black/[0.08] dark:border-white/10" title={delta.routes.added.join(", ")}>Routes {delta.routes.after} {change(delta.routes.before, delta.routes.after)}</Pill>
+                            <Pill className="border-black/[0.08] dark:border-white/10" title={delta.tables.added.join(", ")}>Tables {delta.tables.after} {change(delta.tables.before, delta.tables.after)}</Pill>
+                            <Pill className="border-black/[0.08] dark:border-white/10">Tests {delta.tests.after} {change(delta.tests.before, delta.tests.after)}</Pill>
+                            <Pill className="border-black/[0.08] dark:border-white/10">Built {delta.completionPercent.after ?? "?"}% {change(delta.completionPercent.before, delta.completionPercent.after)}</Pill>
+                            {delta.areas.length > 0 && <Pill className="border-black/[0.08] dark:border-white/10" title={delta.areas.map((a) => `${areaLabel(a.area)} ${a.from}→${a.to}`).join("; ")}>{delta.areas.length} area{delta.areas.length === 1 ? "" : "s"} moved</Pill>}
+                            {delta.coverage && <Pill className="border-black/[0.08] dark:border-white/10" title={`Costly metered ${delta.coverage.costlyMetered[0]}→${delta.coverage.costlyMetered[1]}`}>Rate-limited {delta.coverage.writesRateLimited[1]}/{delta.coverage.writes[1]}</Pill>}
+                          </>
+                        )}
+                      </>
+                    ) : <span className="text-muted-foreground ml-1">First read — the next one shows what moved.</span>}
+                  </span>
+                )}
+              </div>
+            )}
+          </Block>
+
+          {/* --- What changed on your path --- */}
+          <Block title="What changed on your path" count={waiting ? `${waiting} waiting` : undefined} testId="codebase-path-changes" innerRef={pathRef}>
+            <PathChanges projectId={projectId} audit={audit} />
+            {findings.catchUp ? (
+              <AuditCatchUp projectId={projectId} audit={audit as any} />
+            ) : ops.length > 0 && !audit.appliedAt ? (
+              <Button size="sm" className="gap-1.5" disabled={applyMutation.isPending} onClick={() => applyMutation.mutate()} data-testid="button-apply-audit">
+                {applyMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
+                Make my board match the code ({ops.length})
+              </Button>
+            ) : (
+              <p className="text-sm text-muted-foreground flex items-center gap-1.5"><Check className="h-3.5 w-3.5 text-emerald-600" />Your path matches the code.</p>
+            )}
+          </Block>
+
+          {/* --- Findings --- */}
+          {hasFindings ? (
+            <Block
+              title="Findings"
+              testId="codebase-findings"
+              action={
+                <div className="flex items-center gap-1.5">
+                  {highRisks > 0 && <Pill className={SEVERITY_BADGE.high}>{highRisks} high</Pill>}
+                  {findings.missing?.length > 0 && <Pill className={STATUS_BADGE.missing}>{findings.missing.length} missing</Pill>}
+                  {loops.length > 0 && <Pill className="border-black/[0.08] dark:border-white/10 text-muted-foreground">{closedLoops}/{loops.length} loops</Pill>}
                 </div>
-              </div>
-            )}
-
-            <AuditCatchUp projectId={projectId} audit={audit as any} />
-
-            {findings.nextThreeThings?.length > 0 && (
-              <div className="rounded-md border border-primary/40 bg-primary/5 p-3 space-y-1.5">
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-primary">Do these next</p>
-                {findings.nextThreeThings.map((thing: string, i: number) => (
-                  <p key={i} className="text-sm flex items-start gap-2">
-                    <span className="h-4 w-4 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-[9px] font-bold shrink-0 mt-0.5">{i + 1}</span>
-                    <span>{thing}</span>
-                  </p>
-                ))}
-              </div>
-            )}
-
-            {/* --- Loops: does each one bring someone back to its first step? --- */}
-            {findings.loops?.length > 0 && (
-              <Section title="Do your loops close?" count={(findings.loops as LoopClosureRead[]).filter((l) => l.closure === "closed").length} icon={Repeat} defaultOpen>
-                <div className="space-y-2" data-testid="audit-loops">
-                  <p className="text-xs text-muted-foreground">
-                    {(findings.loops as LoopClosureRead[]).filter((l) => l.closure === "closed").length} of {findings.loops.length} close in the code. A loop is closed only when every step is built and something brings the user back to the first step.
-                  </p>
-                  {(findings.loops as LoopClosureRead[]).map((l) => (
-                    <div key={l.loopTaskId} className="rounded-md border border-border p-2.5 space-y-1.5" data-testid={`audit-loop-${l.loopTaskId}`}>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {l.closure === "closed" ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : l.closure === "open" ? <AlertTriangle className="h-3.5 w-3.5 text-amber-500" /> : <XCircle className="h-3.5 w-3.5 text-muted-foreground" />}
-                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{LOOP_TYPE_INFO[l.type]?.label ?? l.type}</span>
-                        <span className="text-sm font-medium">{l.title}</span>
-                        <Badge variant="outline" className="ml-auto text-[10px]">{l.closure === "closed" ? "closed" : l.closure === "open" ? "open" : "not built"}</Badge>
-                      </div>
-                      {l.stages.length > 0 && (
-                        <ol className="text-xs space-y-0.5 pl-5 list-decimal">
-                          {l.stages.map((st, i) => (
-                            <li key={i} className={st.status === "built" ? "" : st.status === "partial" ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground"}>
-                              {st.step} <span className="text-muted-foreground">— {st.status}{st.evidence.length ? ` · ${st.evidence.join(", ")}` : ""}</span>
-                            </li>
-                          ))}
-                        </ol>
-                      )}
-                      {l.returnPath && <p className="text-xs"><span className="font-medium">Back to step one via:</span> {l.returnPath.mechanism}{l.returnPath.evidence.length ? <span className="text-muted-foreground"> · {l.returnPath.evidence.join(", ")}</span> : null}</p>}
-                      {l.breaksAt && <p className="text-xs"><span className="font-medium">Breaks at:</span> {l.breaksAt}</p>}
-                      {l.fix && <p className="text-xs"><span className="font-medium">To close it:</span> {l.fix}</p>}
-                      {l.note && <p className="text-xs text-muted-foreground italic">{l.note}</p>}
-                    </div>
+              }
+            >
+              {findings.nextThreeThings?.length > 0 && (
+                <ol className="space-y-1.5" data-testid="audit-next">
+                  {findings.nextThreeThings.map((thing: string, i: number) => (
+                    <li key={i} className="flex items-start gap-2 text-sm">
+                      <span className={`h-5 w-5 rounded-full ${i === 0 ? NOVA_GRADIENT + " text-white" : "bg-muted text-muted-foreground"} flex items-center justify-center text-[10px] font-bold shrink-0`}>{i + 1}</span>
+                      <span className="line-clamp-2" title={thing}>{thing}</span>
+                    </li>
                   ))}
-                </div>
-              </Section>
-            )}
+                </ol>
+              )}
 
-            {/* --- Reconciliation: the reason this exists --- */}
-            {(findings.taskReconciliation?.looksDone?.length > 0 || findings.milestones?.length > 0) && (
-              <Section title="Plan vs code" icon={Boxes} defaultOpen
-                count={(findings.taskReconciliation?.looksDone?.length || 0) + (findings.milestones?.length || 0)}>
-                {findings.taskReconciliation?.looksDone?.length > 0 && (
-                  <div className="space-y-1">
-                    <p className="text-xs font-medium">Open tasks the code says are finished</p>
-                    {findings.taskReconciliation.looksDone.map((t: any, i: number) => (
-                      <div key={i} className="flex items-start gap-1.5 text-xs">
-                        <CheckCircle2 className="h-3 w-3 mt-0.5 shrink-0 text-emerald-500" />
-                        <span className="min-w-0"><span>{t.title}</span> <Evidence paths={t.evidence} /></span>
-                      </div>
+              <div className="divide-y divide-black/[0.08] dark:divide-white/10 border-t border-black/[0.08] dark:border-white/10">
+                {risks.length > 0 && (
+                  <Group title="Risks" icon={AlertTriangle} tone={highRisks ? "text-rose-500" : "text-amber-500"} count={risks.length} defaultOpen={highRisks > 0}>
+                    {risks.map((r, i) => (
+                      <Row key={i} testId={`audit-risk-${i}`} title={<><span className="font-medium">{r.area}</span> <span className="text-muted-foreground">· {r.finding}</span></>}
+                        lead={<Pill className={`uppercase text-[9px] ${SEVERITY_BADGE[r.severity] ?? SEVERITY_BADGE.medium}`}>{r.severity}</Pill>}>
+                        <p className="text-foreground/80">{r.finding}</p>
+                        {r.recommendation && <p><span className="font-medium text-foreground/80">Fix:</span> {r.recommendation}</p>}
+                        <Evidence paths={r.evidence} />
+                      </Row>
                     ))}
-                  </div>
+                  </Group>
                 )}
-                {findings.taskReconciliation?.notStarted?.length > 0 && (
-                  <div className="space-y-1">
-                    <p className="text-xs font-medium">No supporting code found</p>
-                    {findings.taskReconciliation.notStarted.map((t: any, i: number) => (
-                      <div key={i} className="flex items-start gap-1.5 text-xs">
-                        <XCircle className="h-3 w-3 mt-0.5 shrink-0 text-muted-foreground" />
-                        <span className="min-w-0">{t.title}{t.why ? <span className="text-muted-foreground"> — {t.why}</span> : null}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {findings.milestones?.length > 0 && (
-                  <div className="space-y-1 pt-1">
-                    <p className="text-xs font-medium">Milestones, judged from the code</p>
-                    {findings.milestones.map((m: any, i: number) => {
-                      const v = VERDICT_STYLE[m.verdict] || VERDICT_STYLE["not-started"];
+
+                {loops.length > 0 && (
+                  <Group title="Loops" icon={CircleDot} count={`${closedLoops}/${loops.length} closed`} testId="audit-loops">
+                    {loops.map((l) => {
+                      const state = l.closure === "closed" ? "closed" : l.closure === "open" ? "open" : "not built";
                       return (
-                        <div key={i} className="flex items-start gap-1.5 text-xs">
-                          <v.icon className={`h-3 w-3 mt-0.5 shrink-0 ${v.className}`} />
-                          <span className="min-w-0"><strong>{m.title}</strong> — {v.label}. <span className="text-muted-foreground">{m.why}</span></span>
-                        </div>
+                        <Row key={l.loopTaskId} testId={`audit-loop-${l.loopTaskId}`}
+                          lead={l.closure === "closed" ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" /> : l.closure === "open" ? <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" /> : <XCircle className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
+                          title={<><span className="font-medium">{l.title}</span> <span className="text-muted-foreground text-xs">· {LOOP_TYPE_INFO[l.type]?.label ?? l.type}</span></>}
+                          meta={<Pill className={STATUS_BADGE[state]}>{state}</Pill>}>
+                          {l.stages.length > 0 && (
+                            <ol className="space-y-0.5 pl-4 list-decimal">
+                              {l.stages.map((st, i) => (
+                                <li key={i} className={st.status === "built" ? "text-foreground/80" : st.status === "partial" ? "text-amber-700" : ""}>
+                                  {st.step} <span className="text-muted-foreground">— {st.status}</span>
+                                </li>
+                              ))}
+                            </ol>
+                          )}
+                          {l.returnPath && <p><span className="font-medium text-foreground/80">Back to step one:</span> {l.returnPath.mechanism}</p>}
+                          {l.breaksAt && <p><span className="font-medium text-foreground/80">Breaks at:</span> {l.breaksAt}</p>}
+                          {l.fix && <p><span className="font-medium text-foreground/80">To close it:</span> {l.fix}</p>}
+                          {l.note && <p className="italic">{l.note}</p>}
+                        </Row>
                       );
                     })}
-                  </div>
+                  </Group>
                 )}
-              </Section>
-            )}
 
-            {findings.capabilities?.length > 0 && (
-              <Section title="What the code already has" count={findings.capabilities.filter((c: CapabilityEntry) => c.status === "built").length} icon={CheckCircle2} defaultOpen>
-                <div className="space-y-1.5" data-testid="capability-inventory">
-                  {(findings.capabilities as CapabilityEntry[]).map((c) => (
-                    <div key={c.area} className="flex items-start gap-2 text-sm" data-testid={`capability-${c.area}`}>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 mt-0.5 ${
-                        c.status === "built" ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
-                        : c.status === "partial" ? "bg-amber-500/15 text-amber-700 dark:text-amber-400"
-                        : c.status === "missing" ? "bg-rose-500/15 text-rose-700 dark:text-rose-400"
-                        : "bg-muted text-muted-foreground"}`}>{c.status}</span>
-                      <div className="min-w-0">
-                        <p className="font-medium">{areaLabel(c.area)}</p>
-                        {c.summary && <p className="text-muted-foreground">{c.summary}</p>}
-                        {c.missing && <p className="text-muted-foreground">Missing: {c.missing}</p>}
-                        {c.detail?.coverage && <p className="text-sm" data-testid={`coverage-${c.area}`}>{c.detail.coverage}</p>}
+                {(looksDone.length > 0 || notStarted.length > 0 || milestoneVerdicts.length > 0) && (
+                  <Group title="Plan vs code" icon={RouteIcon} count={looksDone.length + notStarted.length + milestoneVerdicts.length}>
+                    {looksDone.map((t: any, i: number) => (
+                      <Row key={`d${i}`} lead={<CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />} title={t.title} meta={<Pill className={STATUS_BADGE.built}>looks done</Pill>}>
+                        {t.evidence?.length ? <Evidence paths={t.evidence} /> : null}
+                      </Row>
+                    ))}
+                    {notStarted.map((t: any, i: number) => (
+                      <Row key={`n${i}`} lead={<XCircle className="h-3.5 w-3.5 text-muted-foreground shrink-0" />} title={t.title} meta={<Pill className={STATUS_BADGE["not-started"]}>no code</Pill>}>
+                        {t.why ? <p>{t.why}</p> : null}
+                      </Row>
+                    ))}
+                    {milestoneVerdicts.map((m: any, i: number) => (
+                      <Row key={`m${i}`} title={<span className="font-medium">{m.title}</span>} meta={<Pill className={STATUS_BADGE[m.verdict] ?? STATUS_BADGE["not-started"]}>{m.verdict}</Pill>}>
+                        {m.why ? <p>{m.why}</p> : null}
+                      </Row>
+                    ))}
+                  </Group>
+                )}
+
+                {capabilities.length > 0 && (
+                  <Group title="What the code has" icon={CheckCircle2} tone="text-emerald-500" count={`${capabilities.filter((c) => c.status === "built").length}/${capabilities.length} built`} testId="capability-inventory">
+                    {capabilities.map((c) => (
+                      <Row key={c.area} testId={`capability-${c.area}`}
+                        title={<><span className="font-medium">{areaLabel(c.area)}</span>{c.summary && <span className="text-muted-foreground"> · {c.summary}</span>}</>}
+                        meta={<>
+                          {c.detail?.gaps?.length ? <span className="text-[11px] text-muted-foreground tabular-nums">{c.detail.gaps.length} gap{c.detail.gaps.length === 1 ? "" : "s"}</span> : null}
+                          <Pill className={STATUS_BADGE[c.status] ?? "border-black/[0.08] dark:border-white/10 text-muted-foreground"}>{c.status}</Pill>
+                        </>}>
+                        {c.summary && <p className="text-foreground/80">{c.summary}</p>}
+                        {c.missing && <p>Missing: {c.missing}</p>}
+                        {c.detail?.coverage && <p data-testid={`coverage-${c.area}`}>{c.detail.coverage}</p>}
                         {c.detail?.gaps?.length ? (
-                          <ul className="text-xs space-y-0.5 mt-1" data-testid={`gaps-${c.area}`}>
+                          <ul className="space-y-0.5" data-testid={`gaps-${c.area}`}>
                             {c.detail.gaps.map((g, i) => (
                               <li key={i} className="flex items-start gap-1.5">
                                 <span className={`shrink-0 mt-1 h-1.5 w-1.5 rounded-full ${g.severity === "high" ? "bg-rose-500" : g.severity === "medium" ? "bg-amber-500" : "bg-muted-foreground/50"}`} />
-                                <span>{g.item}{g.file && <code className="ml-1 text-[10px] text-muted-foreground">{g.file}</code>}</span>
+                                <span>{g.item}{g.file && <code className="ml-1 text-[10px]">{g.file}</code>}</span>
                               </li>
                             ))}
                           </ul>
                         ) : null}
-                        {c.evidence.length > 0 && <p className="text-xs text-muted-foreground truncate">{c.evidence.map((e) => e.route ? `${e.route} · ${e.file}` : e.file).join(" · ")}</p>}
-                        {c.note && <p className="text-xs text-amber-700 dark:text-amber-400">{c.note}</p>}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </Section>
-            )}
-            {findings.risks?.length > 0 && (
-              <Section title="Risks" count={findings.risks.length} icon={AlertTriangle} defaultOpen>
-                {findings.risks.map((r: any, i: number) => {
-                  const sev = SEVERITY_STYLE[r.severity] || SEVERITY_STYLE.medium;
-                  return (
-                    <div key={i} className="space-y-0.5" data-testid={`audit-risk-${i}`}>
-                      <p className="text-xs font-medium flex items-center gap-1.5">
-                        <sev.icon className={`h-3 w-3 shrink-0 ${sev.className}`} />
-                        {r.area}
-                        <span className="text-[9px] uppercase tracking-wide text-muted-foreground">{r.severity}</span>
-                      </p>
-                      <p className="text-xs text-muted-foreground pl-4.5">{r.finding}</p>
-                      {r.recommendation && <p className="text-xs pl-4.5"><span className="text-muted-foreground">Fix:</span> {r.recommendation}</p>}
-                      <div className="pl-4.5"><Evidence paths={r.evidence} /></div>
-                    </div>
-                  );
-                })}
-              </Section>
-            )}
+                        {c.evidence.length > 0 && <p className="font-mono text-[10px] break-all">{c.evidence.map((e) => e.route ? `${e.route} · ${e.file}` : e.file).join(" · ")}</p>}
+                        {c.note && <p className="text-amber-700">{c.note}</p>}
+                      </Row>
+                    ))}
+                  </Group>
+                )}
 
-            {findings.built?.length > 0 && (
-              <Section title="Built" count={findings.built.length} icon={CheckCircle2}>
-                {findings.built.map((b: any, i: number) => (
-                  <div key={i} className="text-xs">
-                    <span className="text-emerald-600 dark:text-emerald-400">✓</span> {b.item} <Evidence paths={b.evidence} />
-                  </div>
-                ))}
-              </Section>
-            )}
+                {findings.partial?.length > 0 && (
+                  <Group title="Partly built" icon={CircleDot} tone="text-amber-500" count={findings.partial.length}>
+                    {findings.partial.map((b: any, i: number) => (
+                      <Row key={i} title={<><span className="font-medium">{b.item}</span>{b.missing && <span className="text-muted-foreground"> · needs {b.missing}</span>}</>}>
+                        <p>Has: {b.exists}</p>
+                        <p>Needs: {b.missing}</p>
+                        <Evidence paths={b.evidence} />
+                      </Row>
+                    ))}
+                  </Group>
+                )}
 
-            {findings.partial?.length > 0 && (
-              <Section title="Partly built" count={findings.partial.length} icon={CircleDot}>
-                {findings.partial.map((b: any, i: number) => (
-                  <div key={i} className="text-xs space-y-0.5">
-                    <p className="font-medium">{b.item}</p>
-                    <p className="text-muted-foreground">Has: {b.exists}</p>
-                    <p>Needs: {b.missing}</p>
-                    <Evidence paths={b.evidence} />
-                  </div>
-                ))}
-              </Section>
-            )}
+                {findings.missing?.length > 0 && (
+                  <Group title="Missing" icon={XCircle} tone="text-rose-500" count={findings.missing.length}>
+                    {findings.missing.map((b: any, i: number) => (
+                      <Row key={i} title={<span className="font-medium">{b.item}</span>}>{b.matters ? <p>{b.matters}</p> : null}</Row>
+                    ))}
+                  </Group>
+                )}
 
-            {findings.missing?.length > 0 && (
-              <Section title="Missing" count={findings.missing.length} icon={XCircle}>
-                {findings.missing.map((b: any, i: number) => (
-                  <div key={i} className="text-xs">
-                    <p className="font-medium">{b.item}</p>
-                    <p className="text-muted-foreground">{b.matters}</p>
-                  </div>
-                ))}
-              </Section>
-            )}
+                {findings.built?.length > 0 && (
+                  <Group title="Built" icon={Check} tone="text-emerald-500" count={findings.built.length}>
+                    {findings.built.map((b: any, i: number) => (
+                      <Row key={i} title={b.item}>{b.evidence?.length ? <Evidence paths={b.evidence} /> : null}</Row>
+                    ))}
+                  </Group>
+                )}
 
-            {findings.undocumented?.length > 0 && (
-              <Section title="In the code but not in the plan" count={findings.undocumented.length} icon={Boxes}>
-                {findings.undocumented.map((b: any, i: number) => (
-                  <div key={i} className="text-xs">{b.item} <Evidence paths={b.evidence} /></div>
-                ))}
-              </Section>
-            )}
+                {findings.undocumented?.length > 0 && (
+                  <Group title="Not in the plan" icon={FileCode} count={findings.undocumented.length}>
+                    {findings.undocumented.map((b: any, i: number) => (
+                      <Row key={i} title={b.item}>{b.evidence?.length ? <Evidence paths={b.evidence} /> : null}</Row>
+                    ))}
+                  </Group>
+                )}
 
-            {scan.routes?.length > 0 && (
-              <Section title="Routes found in the code" count={scan.routeCount} icon={RouteIcon}>
-                <div className="flex flex-wrap gap-1">
-                  {scan.routes.slice(0, 60).map((r: any, i: number) => (
-                    <Badge key={i} variant="outline" className="text-[9px] font-mono font-normal">{r.label}</Badge>
-                  ))}
-                </div>
-              </Section>
-            )}
+                {scan.routes?.length > 0 && (
+                  <Group title="Routes" icon={RouteIcon} count={scan.routeCount}>
+                    <li className="py-2 flex flex-wrap gap-1">
+                      {scan.routes.slice(0, 60).map((r: any, i: number) => <Pill key={i} className="border-black/[0.08] dark:border-white/10 font-mono font-normal text-[10px]">{r.label}</Pill>)}
+                    </li>
+                  </Group>
+                )}
 
-            {scan.dataModels?.length > 0 && (
-              <Section title="Data models" count={scan.dataModels.length} icon={Database}>
-                <div className="flex flex-wrap gap-1">
-                  {scan.dataModels.map((m: any, i: number) => (
-                    <Badge key={i} variant="outline" className="text-[9px] font-mono font-normal">{m.name}</Badge>
-                  ))}
-                </div>
-              </Section>
-            )}
-
-            {/* --- Apply --- */}
-            <div className="border-t border-border/50 pt-3 flex items-center justify-between gap-3 flex-wrap">
-              <p className="text-xs text-muted-foreground">
-                Audited {new Date(audit.createdAt).toLocaleString()}
-                {scan.truncated && " · partial scan (repository over the size budget)"}
-              </p>
-              {audit.appliedAt ? (
-                <Badge variant="secondary" className="gap-1 text-[10px]">
-                  <Check className="h-3 w-3" /> Applied {new Date(audit.appliedAt).toLocaleDateString()}
-                </Badge>
-              ) : (!findings.catchUp && Array.isArray(audit.operations) && audit.operations.length > 0) ? (
-                <Button
-                  size="sm" className="gap-1.5"
-                  disabled={applyMutation.isPending}
-                  onClick={() => applyMutation.mutate()}
-                  data-testid="button-apply-audit"
-                >
-                  {applyMutation.isPending
-                    ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Updating…</>
-                    : <><Wand2 className="h-3.5 w-3.5" /> Make my board match the code ({(audit.operations as unknown[]).length})</>}
-                </Button>
-              ) : null}
-            </div>
-          </CardContent>
-        </Card>
+                {scan.dataModels?.length > 0 && (
+                  <Group title="Data models" icon={Database} count={scan.dataModels.length}>
+                    <li className="py-2 flex flex-wrap gap-1">
+                      {scan.dataModels.map((m: any, i: number) => <Pill key={i} className="border-black/[0.08] dark:border-white/10 font-mono font-normal text-[10px]">{m.name}</Pill>)}
+                    </li>
+                  </Group>
+                )}
+              </div>
+            </Block>
+          ) : null}
+        </>
       )}
+
+      {/* --- Data: the live database, read on demand. --- */}
+      <Block title="Data" testId="card-your-data">
+        <DataSourceCard projectId={projectId} isOwner={isOwner} />
+      </Block>
 
       {/* --- History --- */}
       {(audits?.length || 0) > 1 && (
-        <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm">Earlier audits</CardTitle></CardHeader>
-          <CardContent className="space-y-1.5">
-            {audits!.map((a) => (
-              <button
-                key={a.id}
-                type="button"
-                className={`w-full text-left rounded-md p-2 text-xs transition-colors ${
-                  a.id === latestId ? "bg-primary/10 border border-primary/40" : "hover:bg-muted border border-transparent"
-                }`}
-                onClick={() => setSelectedId(a.id)}
-                data-testid={`audit-history-${a.id}`}
-              >
-                <div className="flex items-center gap-2 flex-wrap">
-                  {a.sourceKind === "github" ? <Github className="h-3 w-3 shrink-0" /> : <Upload className="h-3 w-3 shrink-0" />}
-                  <span className="font-medium">{a.completionPercent}% · {a.stage}</span>
-                  <span className="text-muted-foreground truncate">{a.source}</span>
-                  <span className="text-muted-foreground ml-auto shrink-0">{new Date(a.createdAt).toLocaleDateString()}</span>
-                </div>
-              </button>
-            ))}
-          </CardContent>
-        </Card>
+        <Block title="History" count={audits!.length} testId="codebase-history">
+          <ul className="divide-y divide-black/[0.08] dark:divide-white/10">
+            {audits!.map((a) => {
+              const s = parseSource(a.source, a.sourceKind);
+              const active = a.id === latestId;
+              return (
+                <li key={a.id}>
+                  <button
+                    type="button"
+                    className={`w-full flex items-center gap-2.5 py-2 text-left text-sm rounded-md transition-colors ${active ? "text-primary" : "hover:text-primary"}`}
+                    onClick={() => setSelectedId(a.id === newest?.id ? null : a.id)}
+                    data-testid={`audit-history-${a.id}`}
+                  >
+                    {s.kind === "github" ? <Github className="h-3.5 w-3.5 shrink-0" /> : s.kind === "worktree" ? <Terminal className="h-3.5 w-3.5 shrink-0" /> : <Upload className="h-3.5 w-3.5 shrink-0" />}
+                    <span className="font-medium tabular-nums w-10 shrink-0">{a.completionPercent}%</span>
+                    <span className="text-muted-foreground truncate flex-1">{STAGE_STYLE[a.stage || ""]?.label ?? a.stage} · {s.name}</span>
+                    {a.id === newest?.id && <Pill className="border-primary/30 bg-primary/5 text-primary">latest</Pill>}
+                    <span className="text-xs text-muted-foreground shrink-0 tabular-nums">{ago(a.createdAt, now)}</span>
+                    {active ? <History className="h-3.5 w-3.5 shrink-0" /> : <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </Block>
       )}
-
-      {/* --- Your data: the live database, read on demand, drawn as a star. --- */}
-      <Card data-testid="card-your-data">
-        <CardContent className="pt-5">
-          <DataSourceCard projectId={projectId} isOwner={isOwner} />
-        </CardContent>
-      </Card>
     </div>
+  );
+}
+
+/** Whether an editor is linked (VS Code, Claude Code, Cursor) — reads from there land in this tab on their own. */
+function EditorRow({ count }: { count: number }) {
+  return (
+    <li className="flex items-center gap-2 py-2" data-testid="codebase-editor-row">
+      <Terminal className="h-4 w-4 text-muted-foreground shrink-0" />
+      <span className="font-medium">Editor bridge</span>
+      <span className="text-xs text-muted-foreground truncate hidden sm:inline">VS Code · Claude Code · Cursor</span>
+      {count > 0 ? (
+        <a href="/profile#editor" className="ml-auto text-xs text-muted-foreground hover:text-primary inline-flex items-center gap-1.5" data-testid="link-editor-manage">
+          <LiveDot />{count} linked · Manage
+        </a>
+      ) : (
+        <a href="/profile#editor" className="ml-auto text-xs font-medium text-primary hover:underline" data-testid="link-editor-connect">Connect</a>
+      )}
+    </li>
   );
 }

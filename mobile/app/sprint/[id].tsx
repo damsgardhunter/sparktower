@@ -1,18 +1,20 @@
 import { useEffect, useRef, useState } from "react";
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useLocalSearchParams, useRouter, Stack } from "expo-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { api } from "../../src/api/client";
+import { api, readPref, writePref } from "../../src/api/client";
 import { useAuth } from "../../src/auth/AuthContext";
 import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
 import {
-  Avatar, Btn, Chip, Empty, Field, Icon, IconButton, Loading, Progress, TabStrip, errText, type IconName,
+  Avatar, Btn, Chip, Empty, Field, Icon, IconButton, Loading, Progress, TabStrip, errText, plain, type IconName,
 } from "../../src/components/ui";
 import { Callout, OptionCard, Pill, TitledCard, tintSoft } from "../../src/components/MoreKit";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
 import { SprintIdeaPicker } from "../../src/components/SprintIdeaPicker";
-import { PHASE_ICONS, PHASE_LABELS, SPRINT_PHASES, styleLabel, type SprintIdea } from "../../src/components/SprintKit";
+import {
+  PHASE_ICONS, PHASE_LABELS, SPRINT_CREDIT_COSTS, SPRINT_PHASES, credits, planBlock, styleLabel, type SprintIdea,
+} from "../../src/components/SprintKit";
 
 const IDEATION_QUESTIONS = [
   { key: "real_problem", label: "What real problem does this product solve?", placeholder: "Describe the core problem you see..." },
@@ -28,6 +30,14 @@ const KANBAN: { id: "todo" | "in-progress" | "done"; label: string; icon: IconNa
 ];
 
 const NOVA_PREFIX = "[Nova AI Practice Partner]";
+/** How long after ideation opens Nova's background answers get before we offer to ask again. */
+const NOVA_ANSWER_GRACE_MS = 90_000;
+/**
+ * The server only lets ratings be read once a sprint is completed, so during
+ * review there's no way to ask whether you've already rated. Remember it on
+ * the device instead, so the form doesn't come back and "Complete sprint" can.
+ */
+const ratedKey = (sprintId: string) => `sparktower.sprintRated.${sprintId}`;
 const DECISION_LABEL: Record<string, string> = { proceed: "Proceed", pivot: "Pivot", kill: "Kill" };
 const DECISION_COLOR: Record<string, string> = { proceed: colors.success, pivot: colors.warning, kill: colors.danger };
 
@@ -69,7 +79,9 @@ export default function SprintDashboard() {
     enabled: from(["building", "validation", "review", "completed"]), refetchInterval: 5000,
   });
   const { data: ratings } = useQuery({
-    queryKey: ["sprint", id, "ratings"], queryFn: () => api<any[]>(`/api/sprints/${id}/ratings`),
+    queryKey: ["sprint", id, "ratings"],
+    // A 400 before completion is the server hiding ratings, not a failure.
+    queryFn: () => api<any[]>(`/api/sprints/${id}/ratings`).catch((e) => { if (e?.status === 400) return []; throw e; }),
     enabled: from(["review", "completed"]),
   });
   const { data: decisions } = useQuery({
@@ -86,12 +98,28 @@ export default function SprintDashboard() {
   });
 
   const refresh = (...keys: string[]) => keys.forEach((k) => qc.invalidateQueries({ queryKey: k ? ["sprint", id, k] : ["sprint", id] }));
-  const fail = (fallback: string) => (e: unknown) => show({ tone: "error", text: errText(e, fallback) });
+  /** The web's destructive toast; a plan or credit block also offers the way to pricing. */
+  const fail = (e: unknown, fallback: string, retry?: () => void) => {
+    const block = planBlock(e);
+    show({
+      tone: "error", text: errText(e, fallback),
+      action: block ? { label: "See plans", onPress: () => router.push("/pricing") } : retry ? { label: "Retry", onPress: retry } : undefined,
+    });
+  };
 
   const advance = useMutation({
-    mutationFn: () => api(`/api/sprints/${id}/advance`, { method: "POST" }),
-    onSuccess: () => { refresh("", "tasks"); qc.invalidateQueries({ queryKey: ["sprints"] }); show({ tone: "success", text: "Sprint advanced to the next phase." }); },
-    onError: fail("Couldn't advance the sprint."),
+    mutationFn: () => api<any>(`/api/sprints/${id}/advance`, { method: "POST" }),
+    onSuccess: (r) => {
+      refresh("", "tasks", "responses");
+      qc.invalidateQueries({ queryKey: ["sprints"] });
+      show({
+        tone: "success",
+        text: r?.novaCreditsOnSuccess > 0
+          ? `On to ${PHASE_LABELS[r.status]?.toLowerCase() ?? "the next phase"}. Nova is writing its answers (${credits(r.novaCreditsOnSuccess)} once they land).`
+          : "Sprint advanced to the next phase.",
+      });
+    },
+    onError: (e) => fail(e, "Couldn't advance the sprint."),
   });
 
   if (isLoading) return <Loading />;
@@ -125,7 +153,7 @@ export default function SprintDashboard() {
   const partnerResponses = sprint.isPractice ? all.filter((r) => r.questionKey.startsWith("nova_")) : all.filter((r) => r.userId === partnerId);
 
   const ctx: PhaseCtx = {
-    sprint, id: id!, userId: user?.id ?? "", partnerId, partner, me, show, refresh,
+    sprint, id: id!, userId: user?.id ?? "", partnerId, partner, me, show, fail, refresh,
     advance: () => advance.mutate(), advancing: advance.isPending,
   };
 
@@ -181,7 +209,7 @@ export default function SprintDashboard() {
               <Text style={[meta, { lineHeight: 19, paddingHorizontal: 2 }]}>{sprint.productDescription}</Text>
             ) : null}
             {status === "setup" && <SetupPhase ctx={ctx} />}
-            {status === "ideation" && <IdeationPhase ctx={ctx} myResponses={myResponses} partnerResponded={partnerResponses.length > 0} />}
+            {status === "ideation" && <IdeationPhase ctx={ctx} myResponses={myResponses} partnerResponded={partnerResponses.length > 0} responsesLoaded={!!responses} />}
             {status === "alignment" && <AlignmentPhase ctx={ctx} myResponses={myResponses} partnerResponses={partnerResponses} />}
             {(status === "building" || status === "validation") && <WorkPhase ctx={ctx} tasks={tasks ?? []} deliverables={deliverables ?? []} />}
             {status === "review" && <ReviewPhase ctx={ctx} decisions={decisions ?? []} ratings={ratings ?? []} />}
@@ -197,6 +225,7 @@ export default function SprintDashboard() {
 interface PhaseCtx {
   sprint: any; id: string; userId: string; partnerId: string; partner: any; me: any;
   show: ReturnType<typeof useNotice>["show"];
+  fail: (e: unknown, fallback: string, retry?: () => void) => void;
   refresh: (...keys: string[]) => void;
   advance: () => void; advancing: boolean;
 }
@@ -204,7 +233,7 @@ interface PhaseCtx {
 // ---------------------------------------------------------------- setup
 
 function SetupPhase({ ctx }: { ctx: PhaseCtx }) {
-  const { sprint, userId, partner, show, refresh } = ctx;
+  const { sprint, userId, partner, show, fail, refresh } = ctx;
   const isUser1 = sprint.user1Id === userId;
   const myProposal = isUser1 ? sprint.user1ProposedName : sprint.user2ProposedName;
   const partnerProposal = isUser1 ? sprint.user2ProposedName : sprint.user1ProposedName;
@@ -214,12 +243,13 @@ function SetupPhase({ ctx }: { ctx: PhaseCtx }) {
   const propose = useMutation({
     mutationFn: () => api(`/api/sprints/${sprint.id}/propose-name`, { method: "POST", body: { name: name.trim() } }),
     onSuccess: () => { refresh(""); show({ tone: "success", text: "Name proposed." }); },
-    onError: (e) => show({ tone: "error", text: errText(e, "Couldn't propose that name.") }),
+    onError: (e) => { refresh(""); fail(e, "Couldn't propose that name."); },
   });
   const choose = useMutation({
     mutationFn: (idea: SprintIdea) => api<any>(`/api/sprints/${sprint.id}/choose-idea`, { method: "POST", body: { idea } }),
     onSuccess: (u) => { refresh(""); show({ tone: "success", text: `Locked in: you're building "${u.productName}".` }); },
-    onError: (e) => show({ tone: "error", text: errText(e, "Couldn't lock in that idea.") }),
+    // A 409 means your partner locked one in first; the refresh shows theirs.
+    onError: (e) => { refresh(""); fail(e, "Couldn't lock in that idea."); },
   });
 
   const chosen = !!sprint.productName;
@@ -271,7 +301,10 @@ function SetupPhase({ ctx }: { ctx: PhaseCtx }) {
                 <Btn label="Nova pitches" icon="sparkles" small variant={useNova ? "primary" : "outline"} style={{ flex: 1 }} onPress={() => setUseNova(true)} />
               </View>
               {useNova ? (
-                <SprintIdeaPicker productStyle={sprint.productStyle || "modern"} partnerId={partner?.id} onChoose={(idea) => choose.mutate(idea)} isSubmitting={choose.isPending} chooseLabel="Lock in" />
+                <View style={{ gap: spacing.sm }}>
+                  <Text style={meta}>Picking an idea here settles the product for both of you — no name coin-flip needed.</Text>
+                  <SprintIdeaPicker productStyle={sprint.productStyle || "modern"} partnerId={partner?.id} onChoose={(idea) => choose.mutate(idea)} isSubmitting={choose.isPending} chooseLabel="Lock in" chosenName={sprint.productName} />
+                </View>
               ) : (
                 <View style={{ flexDirection: "row", gap: spacing.sm, alignItems: "flex-end" }}>
                   <View style={{ flex: 1 }}><Field value={name} onChangeText={setName} placeholder="Enter a product name" /></View>
@@ -283,19 +316,20 @@ function SetupPhase({ ctx }: { ctx: PhaseCtx }) {
         </TitledCard>
       ) : (
         <ProductCard name={sprint.productName} description={sprint.productDescription} icon={agreed ? "sparkles" : "dice"}
-          footnote={agreed ? "Chosen from Nova's pitches. This is your sprint project!" : `Randomly selected from both proposals${sprint.user1ProposedName && sprint.user2ProposedName ? ` (${sprint.user1ProposedName} vs ${sprint.user2ProposedName})` : ""}. This is your sprint project!`} />
+          footnote={agreed ? "Chosen from Nova's pitches. This is your sprint project!" : `Randomly selected from both proposals. This is your sprint project!${sprint.user1ProposedName && sprint.user2ProposedName
+            ? `\n${isUser1 ? "You" : partner?.firstName || "Partner"}: ${sprint.user1ProposedName}  vs  ${isUser1 ? partner?.firstName || "Partner" : "You"}: ${sprint.user2ProposedName}` : ""}`} />
       )}
 
       <Btn label="Start sprint" icon="arrow-forward" disabled={!chosen} loading={ctx.advancing} onPress={ctx.advance} />
-      {!chosen && <Text style={[meta, { textAlign: "center" }]}>Both partners must agree on a product before you can start.</Text>}
+      {!chosen && <Text style={[meta, { textAlign: "center" }]}>Both partners must propose a name (or lock in one of Nova's ideas) before you can start.</Text>}
     </>
   );
 }
 
 // ------------------------------------------------------------- ideation
 
-function IdeationPhase({ ctx, myResponses, partnerResponded }: { ctx: PhaseCtx; myResponses: any[]; partnerResponded: boolean }) {
-  const { sprint, show, refresh } = ctx;
+function IdeationPhase({ ctx, myResponses, partnerResponded, responsesLoaded }: { ctx: PhaseCtx; myResponses: any[]; partnerResponded: boolean; responsesLoaded: boolean }) {
+  const { sprint, fail, refresh } = ctx;
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const answered = (k: string) => myResponses.find((r) => r.questionKey === k);
   const allDone = IDEATION_QUESTIONS.every((q) => answered(q.key));
@@ -308,19 +342,22 @@ function IdeationPhase({ ctx, myResponses, partnerResponded }: { ctx: PhaseCtx; 
       }
     },
     onSuccess: () => refresh("responses"),
-    onError: (e) => { refresh("responses"); show({ tone: "error", text: errText(e, "Couldn't submit your responses.") }); },
+    onError: (e) => { refresh("responses"); fail(e, "Couldn't submit your responses."); },
   });
 
   return (
     <>
       <PhaseHeading title={sprint.isPractice ? "Practice ideation" : "Private ideation"}
         body={sprint.isPractice
-          ? "Answer on your own. Nova has already submitted its answers — you'll compare them in alignment."
+          ? partnerResponded || !responsesLoaded
+            ? "Answer on your own. Nova has already submitted its answers — you'll compare them in alignment."
+            : "Answer on your own. You'll compare your answers with Nova's in the alignment phase."
           : "Answer independently. Your partner won't see your answers until the alignment phase."} />
+      {sprint.isPractice && responsesLoaded && !partnerResponded && <NovaAnswersStatus ctx={ctx} />}
       {allDone ? (
         <TitledCard icon="checkmark-circle" tint={colors.success} title="Responses submitted">
           <Text style={[body, { color: colors.textSecondary }]}>
-            {sprint.isPractice ? "Your responses are in, and so are Nova's. Advance to compare them."
+            {sprint.isPractice ? (partnerResponded ? "Your responses are in, and so are Nova's. Advance to compare them." : "Your responses are in. Advance to compare them with Nova's.")
               : partnerResponded ? "You and your partner have both submitted. You can move on to alignment."
               : "Waiting for your partner to submit their responses..."}
           </Text>
@@ -355,7 +392,7 @@ function IdeationPhase({ ctx, myResponses, partnerResponded }: { ctx: PhaseCtx; 
 // ------------------------------------------------------------ alignment
 
 function AlignmentPhase({ ctx, myResponses, partnerResponses }: { ctx: PhaseCtx; myResponses: any[]; partnerResponses: any[] }) {
-  const { sprint, me, partner, show, refresh } = ctx;
+  const { sprint, me, partner, show, fail, refresh } = ctx;
   const [form, setForm] = useState({ agreedProblem: "", agreedIcp: "", agreedValueProp: "", validationQuestions: ["", "", ""] });
   useEffect(() => {
     setForm({
@@ -367,7 +404,7 @@ function AlignmentPhase({ ctx, myResponses, partnerResponses }: { ctx: PhaseCtx;
   const save = useMutation({
     mutationFn: () => api(`/api/sprints/${sprint.id}/update-alignment`, { method: "POST", body: form }),
     onSuccess: () => { refresh(""); show({ tone: "success", text: "Alignment saved." }); },
-    onError: (e) => show({ tone: "error", text: errText(e, "Couldn't save the alignment.") }),
+    onError: (e) => fail(e, "Couldn't save the alignment."),
   });
 
   return (
@@ -420,7 +457,7 @@ const VALIDATION_DELIVERABLES: { type: string; title: string; icon: IconName; pl
 ];
 
 function WorkPhase({ ctx, tasks, deliverables }: { ctx: PhaseCtx; tasks: any[]; deliverables: any[] }) {
-  const { sprint, userId, me, partner, show, refresh } = ctx;
+  const { sprint, userId, me, partner, show, fail, refresh } = ctx;
   const validation = sprint.status === "validation";
   const done = tasks.filter((t) => t.status === "done").length;
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -428,12 +465,12 @@ function WorkPhase({ ctx, tasks, deliverables }: { ctx: PhaseCtx; tasks: any[]; 
   const updateTask = useMutation({
     mutationFn: ({ taskId, data }: { taskId: string; data: any }) => api(`/api/sprints/${sprint.id}/tasks/${taskId}`, { method: "PATCH", body: data }),
     onSuccess: () => refresh("tasks"),
-    onError: (e) => show({ tone: "error", text: errText(e, "Couldn't update that task.") }),
+    onError: (e) => fail(e, "Couldn't update that task."),
   });
   const submit = useMutation({
     mutationFn: ({ type, text }: { type: string; text: string }) => api(`/api/sprints/${sprint.id}/deliverables`, { method: "POST", body: { type, content: { text } } }),
     onSuccess: (_r, v) => { setDrafts((d) => ({ ...d, [v.type]: "" })); refresh("deliverables"); show({ tone: "success", text: "Deliverable submitted." }); },
-    onError: (e) => show({ tone: "error", text: errText(e, "Couldn't submit that.") }),
+    onError: (e) => fail(e, "Couldn't submit that deliverable."),
   });
 
   const forms = validation ? VALIDATION_DELIVERABLES : [{ type: "brief", title: "Submit brief", icon: "document-text-outline" as IconName, placeholder: "Compile your product brief — problem statement, ICP, value proposition, validation questions, and any other findings..." }];
@@ -502,8 +539,12 @@ function WorkPhase({ ctx, tasks, deliverables }: { ctx: PhaseCtx; tasks: any[]; 
 // --------------------------------------------------------------- review
 
 function ReviewPhase({ ctx, decisions, ratings }: { ctx: PhaseCtx; decisions: any[]; ratings: any[] }) {
-  const { sprint, userId, partnerId, show, refresh } = ctx;
+  const { sprint, userId, partnerId, show, fail, refresh } = ctx;
   const isPractice = sprint.isPractice;
+  const [ratedHere, setRatedHere] = useState(false);
+  useEffect(() => {
+    readPref(ratedKey(sprint.id)).then((v) => { if (v) setRatedHere(true); }).catch(() => {});
+  }, [sprint.id]);
   const [decision, setDecision] = useState("");
   const [reason, setReason] = useState("");
   const [rating, setRating] = useState({ communicationClarity: 3, reliability: 3, wouldBuildLongTerm: false, stressLevel: 3 });
@@ -511,18 +552,23 @@ function ReviewPhase({ ctx, decisions, ratings }: { ctx: PhaseCtx; decisions: an
   const novaDecision = isPractice ? decisions.find((d) => d.reason?.startsWith(NOVA_PREFIX)) : null;
   const myDecision = isPractice ? decisions.find((d) => d.userId === userId && !d.reason?.startsWith(NOVA_PREFIX)) : decisions.find((d) => d.userId === userId);
   const partnerDecision = isPractice ? novaDecision : decisions.find((d) => d.userId !== userId);
-  const myRating = ratings.find((r) => r.raterId === userId);
+  const myRating = ratings.find((r) => r.raterId === userId) ?? (ratedHere ? { raterId: userId } : undefined);
   const bothSubmitted = isPractice ? !!myDecision && !!myRating : !!myDecision && !!myRating && !!partnerDecision;
 
   const sendDecision = useMutation({
     mutationFn: () => api(`/api/sprints/${sprint.id}/decisions`, { method: "POST", body: { decision, reason } }),
     onSuccess: () => { refresh("decisions"); show({ tone: "success", text: "Decision submitted." }); },
-    onError: (e) => show({ tone: "error", text: errText(e, "Couldn't submit your decision.") }),
+    onError: (e) => fail(e, "Couldn't submit your decision."),
   });
   const sendRating = useMutation({
     mutationFn: () => api(`/api/sprints/${sprint.id}/ratings`, { method: "POST", body: { rateeId: partnerId, ...rating } }),
-    onSuccess: () => { refresh("ratings"); show({ tone: "success", text: "Rating submitted." }); },
-    onError: (e) => show({ tone: "error", text: errText(e, "Couldn't submit your rating.") }),
+    onSuccess: () => {
+      setRatedHere(true);
+      writePref(ratedKey(sprint.id), "1").catch(() => {});
+      refresh("ratings");
+      show({ tone: "success", text: "Rating submitted." });
+    },
+    onError: (e) => fail(e, "Couldn't submit your rating."),
   });
 
   return (
@@ -542,8 +588,8 @@ function ReviewPhase({ ctx, decisions, ratings }: { ctx: PhaseCtx; decisions: an
           <>
             <View style={{ flexDirection: "row", gap: spacing.sm }}>
               {([
-                { value: "proceed", label: "Proceed", icon: "thumbs-up-outline", body: "Keep building together" },
-                { value: "pivot", label: "Pivot", icon: "git-branch-outline", body: "Change direction" },
+                { value: "proceed", label: "Proceed", icon: "thumbs-up-outline", body: "Continue building together" },
+                { value: "pivot", label: "Pivot", icon: "warning-outline", body: "Change direction" },
                 { value: "kill", label: "Kill", icon: "thumbs-down-outline", body: "Stop this project" },
               ] as const).map((o) => (
                 <OptionCard key={o.value} compact icon={o.icon} title={o.label} body={o.body} selected={decision === o.value} onPress={() => setDecision(o.value)} style={{ flex: 1, paddingHorizontal: 6 }} />
@@ -574,7 +620,9 @@ function ReviewPhase({ ctx, decisions, ratings }: { ctx: PhaseCtx; decisions: an
       </TitledCard>
 
       {!isPractice && !bothSubmitted && (myDecision || myRating) && (
-        <Callout icon="hourglass-outline" body="Waiting for your partner to submit their decision and rating..." />
+        <Callout icon="hourglass-outline" body="Waiting for your partner to submit their decision and rating...">
+          <ActivityIndicator color={colors.primary} size="small" style={{ alignSelf: "flex-start", marginTop: 4 }} />
+        </Callout>
       )}
       {bothSubmitted && <Btn label="Complete sprint" icon="checkmark-done" loading={ctx.advancing} onPress={ctx.advance} />}
     </>
@@ -598,7 +646,7 @@ function Stars({ label, value, onChange }: { label: string; value: number; onCha
 // ------------------------------------------------------------ completed
 
 function CompletedPhase({ ctx, decisions, report }: { ctx: PhaseCtx; decisions: any[]; report: any }) {
-  const { sprint, userId, me, partner, show, refresh } = ctx;
+  const { sprint, userId, me, partner, show, fail, refresh } = ctx;
   const router = useRouter();
   const qc = useQueryClient();
   const novaDecision = sprint.isPractice ? decisions.find((d) => d.reason?.startsWith(NOVA_PREFIX)) : null;
@@ -609,12 +657,18 @@ function CompletedPhase({ ctx, decisions, report }: { ctx: PhaseCtx; decisions: 
   const generate = useMutation({
     mutationFn: () => api(`/api/sprints/${sprint.id}/generate-report`, { method: "POST" }),
     onSuccess: () => { refresh("report", ""); qc.invalidateQueries({ queryKey: ["subscription"] }); show({ tone: "success", text: "Compatibility report generated." }); },
-    onError: (e) => show({ tone: "error", text: errText(e, "Couldn't generate the report.") }),
+    onError: (e) => fail(e, "Couldn't generate the report."),
   });
   const convert = useMutation({
     mutationFn: () => api<any>(`/api/sprints/${sprint.id}/convert`, { method: "POST" }),
-    onSuccess: (r) => { if (r?.project?.id) router.replace(`/project/${r.project.id}`); else show({ tone: "success", text: "Sprint converted to a project." }); },
-    onError: (e) => show({ tone: "error", text: errText(e, "Couldn't convert to a project.") }),
+    // The server answers with the project itself (the web reads `project.id`, which isn't there).
+    onSuccess: (r) => {
+      const projectId = r?.id ?? r?.project?.id;
+      qc.invalidateQueries({ queryKey: ["projects"] });
+      if (projectId) router.replace(`/project/${projectId}`);
+      else show({ tone: "success", text: "Sprint converted to a project." });
+    },
+    onError: (e) => fail(e, "Couldn't convert to a project."),
   });
 
   const score = report?.overallScore ?? 0;
@@ -677,7 +731,7 @@ function CompletedPhase({ ctx, decisions, report }: { ctx: PhaseCtx; decisions: 
           <View style={{ alignItems: "center", gap: spacing.sm, paddingVertical: spacing.sm }}>
             <Icon name="sparkles" size={28} color={colors.primary} />
             <Text style={[meta, { textAlign: "center" }]}>Generate an AI compatibility report from your sprint data.</Text>
-            <Btn label="Generate report (1 credit)" icon="sparkles" loading={generate.isPending} onPress={() => generate.mutate()} />
+            <Btn label={`Generate report (${credits(SPRINT_CREDIT_COSTS.sprintReport)})`} icon="sparkles" loading={generate.isPending} onPress={() => generate.mutate()} />
           </View>
         )}
       </TitledCard>
@@ -688,7 +742,7 @@ function CompletedPhase({ ctx, decisions, report }: { ctx: PhaseCtx; decisions: 
         </Callout>
       )}
       {sprint.isPractice && (
-        <Callout icon="school" title="Practice sprint complete!" body="You've been through every phase of a real co-founder collaboration. When you're ready, try a real sprint with a matched partner.">
+        <Callout icon="school" title="Practice sprint complete!" body="Great job completing this practice sprint! You've gone through all the phases of a real co-founder collaboration. When you're ready, try a real sprint with a matched partner.">
           <Btn label="Start a real sprint" small style={{ alignSelf: "flex-start", marginTop: 6 }} onPress={() => router.push("/sprint/new")} />
         </Callout>
       )}
@@ -715,7 +769,7 @@ function ReportList({ title, icon, color, items }: { title: string; icon: IconNa
 // ----------------------------------------------------------------- chat
 
 function SprintChat({ ctx, messages }: { ctx: PhaseCtx; messages: any[] }) {
-  const { sprint, id, userId, show, refresh } = ctx;
+  const { sprint, id, userId, fail, refresh } = ctx;
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
   const [text, setText] = useState("");
@@ -725,12 +779,12 @@ function SprintChat({ ctx, messages }: { ctx: PhaseCtx; messages: any[] }) {
   const novaReply = useMutation({
     mutationFn: () => api(`/api/sprints/${id}/nova-reply`, { method: "POST" }),
     onSuccess: () => { refresh("messages"); qc.invalidateQueries({ queryKey: ["subscription"] }); },
-    onError: (e) => show({ tone: "error", text: errText(e, "Nova couldn't reply right now.") }),
+    onError: (e) => fail(e, "Nova couldn't reply right now.", () => novaReply.mutate()),
   });
   const send = useMutation({
     mutationFn: (content: string) => api(`/api/sprints/${id}/messages`, { method: "POST", body: { content } }),
     onSuccess: () => { setText(""); refresh("messages"); if (sprint.isPractice) novaReply.mutate(); },
-    onError: (e) => show({ tone: "error", text: errText(e, "Couldn't send that.") }),
+    onError: (e) => fail(e, "Couldn't send that."),
   });
 
   return (
@@ -738,7 +792,7 @@ function SprintChat({ ctx, messages }: { ctx: PhaseCtx; messages: any[] }) {
       <ScrollView ref={scroller} onContentSizeChange={() => scroller.current?.scrollToEnd({ animated: true })}
         contentContainerStyle={{ padding: spacing.md, gap: spacing.sm, flexGrow: 1 }}>
         {messages.length === 0 && (
-          <Empty icon="chatbubbles-outline" title="No messages yet" body={sprint.isPractice ? "Talk to Nova about the product — Nova replies as your partner." : "Start the conversation with your partner."} />
+          <Empty icon="chatbubbles-outline" title="No messages yet" body={sprint.isPractice ? "Start the conversation! Talk to Nova about the product — Nova replies as your partner." : "Start the conversation!"} />
         )}
         {messages.map((m) => {
           // In a practice sprint Nova shares the human's userId, so isNova decides the side.
@@ -754,7 +808,7 @@ function SprintChat({ ctx, messages }: { ctx: PhaseCtx; messages: any[] }) {
                 borderBottomRightRadius: mine ? 4 : 16, borderBottomLeftRadius: mine ? 16 : 4,
               }}>
                 {!mine && <Text style={{ fontSize: font.xs, fontFamily: fontFamily.semibold, color: isNova ? colors.primary : colors.textSecondary }}>{isNova ? "Nova" : m.user?.firstName || "Partner"}</Text>}
-                <Text style={{ color: mine ? colors.primaryText : colors.text, fontSize: font.base, lineHeight: 21, fontFamily: fontFamily.regular }}>{m.content}</Text>
+                <Text style={{ color: mine ? colors.primaryText : colors.text, fontSize: font.base, lineHeight: 21, fontFamily: fontFamily.regular }}>{isNova ? plain(String(m.content ?? "")) : m.content}</Text>
               </View>
             </View>
           );
@@ -775,9 +829,51 @@ function SprintChat({ ctx, messages }: { ctx: PhaseCtx; messages: any[] }) {
             <Icon name="send" size={18} color={text.trim() ? "#FFFFFF" : colors.textTertiary} />
           </Pressable>
         </View>
-        {sprint.isPractice && <Text style={[meta, { fontSize: font.xs }]}>Nova replies as your partner · 1 credit per reply</Text>}
+        {sprint.isPractice && <Text style={[meta, { fontSize: font.xs }]}>Nova replies as your partner · {credits(SPRINT_CREDIT_COSTS.novaPartnerReply)} per reply</Text>}
       </View>
     </View>
+  );
+}
+
+// ------------------------------------------------- nova's practice answers
+
+/**
+ * On a practice sprint Nova's ideation answers are written in the background
+ * when the phase opens, and silently skipped when the builder was short on
+ * credits. Say which it is, and offer to ask again rather than leaving an
+ * alignment phase with nothing to compare against.
+ */
+function NovaAnswersStatus({ ctx }: { ctx: PhaseCtx }) {
+  const { sprint, show, fail, refresh } = ctx;
+  const qc = useQueryClient();
+  const [, tick] = useState(0);
+  const openedAt = sprint.startedAt ? new Date(sprint.startedAt).getTime() : 0;
+  const writing = openedAt > 0 && Date.now() - openedAt < NOVA_ANSWER_GRACE_MS;
+  useEffect(() => {
+    if (!writing) return;
+    const t = setInterval(() => tick((n) => n + 1), 5000);
+    return () => clearInterval(t);
+  }, [writing]);
+
+  const ask = useMutation({
+    mutationFn: () => api(`/api/sprints/${sprint.id}/nova-answers`, { method: "POST", body: { questionKeys: IDEATION_QUESTIONS.map((q) => q.key) } }),
+    onSuccess: () => { refresh("responses"); qc.invalidateQueries({ queryKey: ["subscription"] }); show({ tone: "success", text: "Nova's answers are in." }); },
+    onError: (e) => fail(e, "Nova couldn't answer right now."),
+  });
+
+  if (writing && !ask.isPending) {
+    return (
+      <Callout icon="sparkles" title="Nova is writing its answers…" body="They'll be ready to compare in the alignment phase.">
+        <ActivityIndicator color={colors.primary} size="small" style={{ alignSelf: "flex-start", marginTop: 4 }} />
+      </Callout>
+    );
+  }
+  return (
+    <Callout tone="warn" icon="hardware-chip-outline" title="Nova hasn't answered yet"
+      body="Nova's answers didn't come through — usually because there weren't enough credits when this phase opened. Without them there's nothing to compare in alignment.">
+      <Btn label={`Ask Nova to answer (${credits(SPRINT_CREDIT_COSTS.novaPartnerAnswers)})`} icon="sparkles" small style={{ alignSelf: "flex-start", marginTop: 6 }}
+        loading={ask.isPending} onPress={() => ask.mutate()} />
+    </Callout>
   );
 }
 

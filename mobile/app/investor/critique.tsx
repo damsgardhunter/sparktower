@@ -3,19 +3,27 @@ import { KeyboardAvoidingView, Platform, Text } from "react-native";
 import { useLocalSearchParams, Stack } from "expo-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
+import { useEntitlementsQuery } from "../../src/hooks/useEntitlements";
+import { UpgradeCard } from "../../src/components/more/UpgradeCard";
+import { NoticeBanner, useNotice } from "../../src/components/Sheet";
 import { colors, fontFamily, spacing } from "../../src/theme";
 import {
   Body, Btn, Card, Cost, ErrorNote, Field, H1, H2, Label, Loading, Meta,
   Row, Screen, errText,
 } from "../../src/components/ui";
 
-/** Paste a pitch, get it pulled apart line by line. */
+/** Credit cost, restated from shared/plans.ts CREDIT_COSTS.pitchCritique. */
+const COST = 5;
+
+/** Paste a pitch, get it pulled apart line by line — the web's Investor tools › Pitch Critique. */
 export default function PitchCritique() {
   // Named `id` to match every other project-scoped route.
   const { id: projectId } = useLocalSearchParams<{ id: string }>();
   const qc = useQueryClient();
   const [pitch, setPitch] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const ent = useEntitlementsQuery();
+  const { notice, show, clear } = useNotice();
 
   const { data, isLoading } = useQuery({
     queryKey: ["project", projectId, "investor"],
@@ -28,6 +36,7 @@ export default function PitchCritique() {
       method: "POST", body: { pitch },
     }),
     onSuccess: () => {
+      show({ tone: "success", text: "Nova's done" });
       setPitch("");
       setError(null);
       qc.invalidateQueries({ queryKey: ["project", projectId, "investor"] });
@@ -36,7 +45,21 @@ export default function PitchCritique() {
     onError: (e) => setError(errText(e, "Couldn't critique that.")),
   });
 
-  if (isLoading) return <Loading />;
+  if (isLoading || ent.isLoading) return <Loading />;
+
+  // Same gate as the web's investor tools: the Builder plan's aiRoadmap feature.
+  if (!ent.can("aiRoadmap")) {
+    return (
+      <>
+        <Stack.Screen options={{ title: "Pitch Critique" }} />
+        <Screen canvas>
+          <UpgradeCard tier="builder" title="Get investor-ready"
+            description="Score your readiness, outline a deck, have your pitch pulled apart, and sit a mock investor interview that grades every answer." />
+        </Screen>
+      </>
+    );
+  }
+  const cantAfford = !ent.isUnlimited && ent.creditsRemaining < COST;
 
   const latest = data?.artifacts?.find((a: any) => a.kind === "pitch_critique");
   const c = latest?.content ?? {};
@@ -64,12 +87,14 @@ export default function PitchCritique() {
             multiline
             placeholder="Your elevator pitch, cold email, or the script you'd read in a meeting…"
           />
+          {cantAfford && <ErrorNote message={`This costs ${COST} credits and you have ${ent.creditsRemaining}.`} />}
           {error && <ErrorNote message={error} />}
           <Row center gap={spacing.sm}>
-            <Btn label={latest ? "Critique again" : "Critique it"} disabled={!pitch.trim()}
+            <Btn label={latest ? "Run again" : "Run"} disabled={!pitch.trim() || cantAfford}
               loading={run.isPending} onPress={() => run.mutate()} style={{ flex: 1 }} />
-            <Cost credits={5} />
+            <Cost credits={COST} />
           </Row>
+          {!latest && <Meta>No critique yet. Paste a pitch above and run it.</Meta>}
 
           {latest && (
             <>
@@ -87,6 +112,7 @@ export default function PitchCritique() {
                 </Card>
               )}
 
+              {(c.problems ?? []).length > 0 && <Label>What doesn't</Label>}
               {(c.problems ?? []).map((p: any, i: number) => (
                 <Card key={i} accent={colors.danger}>
                   <Body style={{ fontStyle: "italic" }}>"{p.quote}"</Body>
@@ -114,6 +140,7 @@ export default function PitchCritique() {
           )}
         </Screen>
       </KeyboardAvoidingView>
+      <NoticeBanner notice={notice} onDismiss={clear} />
     </>
   );
 }

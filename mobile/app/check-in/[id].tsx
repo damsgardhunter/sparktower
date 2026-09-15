@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Image, KeyboardAvoidingView, Platform, ScrollView, Share, Text, TextInput, View } from "react-native";
+import { Image, KeyboardAvoidingView, Linking, Platform, ScrollView, Share, Text, TextInput, View } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { API_URL, api } from "../../src/api/client";
@@ -8,12 +8,14 @@ import { colors, font, fontFamily, radius, shadow, spacing } from "../../src/the
 import { Avatar, Btn, Empty, ErrorNote, Icon, IconButton, Loading, assetUri, errText, timeAgo, type IconName } from "../../src/components/ui";
 import { Pill, weekLabel } from "../../src/components/MoreKit";
 import { ReportSheet } from "../../src/components/FeedParts";
+import type { ReportTarget } from "../../src/components/feedModel";
 
 const MAX = 2000;
 
 /**
- * One weekly check-in and its feedback thread — the web's /c/:id, which the
- * Needs feedback queue sends people to. Read the week, then leave a comment.
+ * One weekly check-in and its feedback thread — the web's /c/:id (also served
+ * at /c/[id] in the app, so a shared link opens here). Read the week, then
+ * leave a comment; the author hears about it and comes back.
  */
 export default function CheckInDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -22,7 +24,7 @@ export default function CheckInDetail() {
   const { user } = useAuth();
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [reportId, setReportId] = useState<string | null>(null);
+  const [report, setReport] = useState<{ type: "comment" | "check_in"; id: string } | null>(null);
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["check-in", id],
@@ -91,9 +93,14 @@ export default function CheckInDetail() {
               ? <Pill label="Got feedback" icon="checkmark-circle" color={colors.success} />
               : data.needsFeedback ? <Pill label="Wants feedback" icon="chatbubble-outline" color={colors.warning} /> : null}
             <Block label="The goal" text={data.goal} strong />
-            <Block label="What shipped" text={data.proof} />
+            <Block label="What shipped" text={data.proof} linkify />
             {data.blocker ? <Block label="In the way" text={data.blocker} icon="warning-outline" color={colors.warning} /> : null}
-            <Block label="Next step" text={data.nextStep} icon="arrow-forward" color={colors.primary} />
+            <Block label="Next" text={data.nextStep} icon="arrow-forward" color={colors.primary} />
+            <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, borderTopWidth: 1, borderColor: colors.borderSubtle, paddingTop: spacing.sm }}>
+              <Btn small variant="outline" icon="share-outline" label="Share link" onPress={share} />
+              <View style={{ flex: 1 }} />
+              <IconButton name="flag-outline" size={17} label="Report" color={colors.textTertiary} onPress={() => setReport({ type: "check_in", id: data.id })} />
+            </View>
           </View>
 
           <View style={card}>
@@ -124,27 +131,39 @@ export default function CheckInDetail() {
                   <Text style={small}><Text style={{ color: colors.text, fontFamily: fontFamily.semibold }}>{nameOf(c)}</Text> · {timeAgo(c.createdAt)}</Text>
                   <Text style={body}>{c.content}</Text>
                 </View>
-                <IconButton name="flag-outline" size={16} label="Report" color={colors.textTertiary} onPress={() => setReportId(c.id)} />
+                <IconButton name="flag-outline" size={16} label="Report" color={colors.textTertiary} onPress={() => setReport({ type: "comment", id: c.id })} />
                 {(user?.id === c.authorId || data.viewerCanModerate) && (
                   <IconButton name="trash-outline" size={16} label="Delete" color={colors.textTertiary} onPress={() => remove.mutate(c.id)} />
                 )}
               </View>
             ))}
           </View>
+          <Text style={[small, { textAlign: "center" }]}>A weekly check-in on SparkTower. Goal, proof, blocker, next step.</Text>
         </ScrollView>
       </KeyboardAvoidingView>
-      <ReportSheet visible={!!reportId} onClose={() => setReportId(null)} targetType="comment" targetId={reportId ?? ""} />
+      <ReportSheet visible={!!report} onClose={() => setReport(null)} targetType={(report?.type ?? "comment") as ReportTarget} targetId={report?.id ?? ""} />
     </>
   );
 }
 
-function Block({ label, text, strong, icon, color }: { label: string; text: string; strong?: boolean; icon?: IconName; color?: string }) {
+/** Bare links in the proof as real, tappable links. */
+function Linkified({ text }: { text: string }) {
+  return (
+    <>
+      {text.split(/(https?:\/\/\S+)/g).map((part, i) => /^https?:\/\//.test(part)
+        ? <Text key={i} style={{ color: colors.primary, textDecorationLine: "underline" }} onPress={() => void Linking.openURL(part).catch(() => {})}>{part}</Text>
+        : <Text key={i}>{part}</Text>)}
+    </>
+  );
+}
+
+function Block({ label, text, strong, icon, color, linkify }: { label: string; text: string; strong?: boolean; icon?: IconName; color?: string; linkify?: boolean }) {
   return (
     <View style={{ gap: 3 }}>
       <Text style={{ color: colors.textTertiary, fontSize: 11, fontFamily: fontFamily.semibold, letterSpacing: 0.6, textTransform: "uppercase" }}>{label}</Text>
       <View style={{ flexDirection: "row", gap: 6 }}>
         {icon ? <Icon name={icon} size={15} color={color ?? colors.textSecondary} /> : null}
-        <Text style={[body, { flex: 1 }, strong && { fontSize: font.base, fontFamily: fontFamily.semibold }, color && icon === "warning-outline" ? { color } : null]}>{text}</Text>
+        <Text style={[body, { flex: 1 }, strong && { fontSize: font.base, fontFamily: fontFamily.semibold }, color && icon === "warning-outline" ? { color } : null]}>{linkify ? <Linkified text={text} /> : text}</Text>
       </View>
     </View>
   );
