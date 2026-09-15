@@ -86,21 +86,30 @@ The browser batches events for up to four seconds, so give it a moment.
 
 ## Closing the loop
 
-What makes coming back worth it, and how coming back is measured.
+What brings someone back, what makes coming back worth it, and how coming back
+is measured.
 
-- **What you looked at is remembered** — in the browser, per builder or project,
-  when you open their page or follow, connect or message. Only what you
-  interacted with, so a return isn't a wall of badges.
-- **News since then.** On Discover, Matches and Projects, one request to
-  `GET /api/discover/updates` asks how many posts each of those has had since you
-  looked (at most 8 checked, 5 counted each). It counts through the feed's own
-  visibility rules, so a badge can't reveal a post the feed would hide, and your
-  own posts never count. Up to three cards get a "2 new posts" badge.
+| Step | Mechanism | Code | Tests |
+| --- | --- | --- | --- |
+| Remember what you looked at | `explore_seen` rows per person — builder or project, epoch-ms — written by `POST /api/discover/seen` when you open a profile or project (web and app), and by the follow, connect and message endpoints themselves when you act | `server/discover-routes.ts` (`rememberSeen`), `server/explore-actions.ts`, `client/src/lib/seen.ts`, `mobile/src/explore.ts` | `test/integration/discover-return.test.ts` |
+| Tell you there's news | **Discover badge** — "N new" on Discover in the web sidebar and on the app's Discover tab — and **"N new since you last looked"** at the top of the home feed, linking to Discover. Both from `GET /api/discover/new-count`: new posts from what you've looked at since the later of when you looked and your last Discover visit | `client/src/components/app-sidebar.tsx`, `client/src/components/discover-news.tsx`, `mobile/app/(tabs)/_layout.tsx` | `test/integration/discover-return.test.ts`, `e2e/return-loop.spec.ts` |
+| Show the news on return | Card badges ("2 new posts") and the welcome-back banner, from `GET /api/discover/updates` | `client/src/hooks/use-explore-updates.ts`, `client/src/components/return-banner.tsx` | `e2e/return-loop.spec.ts` |
+| Repeat | Opening Discover (`POST /api/discover/visit`) moves the badge's "since" to now, so the badge clears and the next post brings it back; cards keep their news until the thing itself is opened | `client/src/lib/explore.ts`, `mobile/app/(tabs)/discover.tsx` | both of the above |
+
+- **Only what you interacted with** is remembered — opening, following,
+  connecting, messaging — so a return isn't a wall of badges. The most recent
+  thirty are kept per person. It's on the server, so it's the same on every
+  device; a browser that remembered things locally before hands them over once,
+  never overwriting a newer record or trusting a clock from the future.
+- **News is counted through the feed's own visibility rules** (at most 8 targets
+  checked, 5 posts counted each), so a badge can't reveal a post the feed would
+  hide, and your own posts never count. Up to three cards get a badge.
 - **The welcome back.** A banner on return names what's new, links to it, and
   offers **Continue exploring** — to the first card you haven't looked at yet.
 - **The nudge.** After you connect or follow, the toast offers **More like
   this**: Discover searched by their top skill, or Projects filtered to that
   category (`?q=` and `?category=` in the URL).
+- Remembering and visiting aren't logged as actions in the behaviour stream.
 
 **Repeat measure:** a *cycle* is open Discover → follow, connect or message →
 come back. The Explore card shows the share of sessions with two or more, from

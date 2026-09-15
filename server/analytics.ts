@@ -42,7 +42,7 @@ const headerId = (v: unknown): string | null =>
  * The console watching itself would fill the feed with the act of reading the
  * feed, and the ingest endpoint would record its own arrival.
  */
-const IGNORED = [/^\/api\/track$/, /^\/api\/admin\/analytics/];
+const IGNORED = [/^\/api\/track$/, /^\/api\/admin\/analytics/, /^\/api\/discover\/(seen|visit)$/];
 
 /**
  * Gives every request a visitor and a session, minting them if absent.

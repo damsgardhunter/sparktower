@@ -78,3 +78,10 @@ export function isSectionEnabled(project: ProjectLike, key: ProjectSectionKey): 
   const overrides = project.publicSections || {};
   return overrides[key] ?? byKey[key].defaultVisible;
 }
+
+/** Shown on the public page: switched on, and with something in it. */
+export function isSectionVisible(project: ProjectLike, key: ProjectSectionKey): boolean {
+  return isSectionEnabled(project, key) && sectionHasContent(project, key);
+}
+
+export const PROJECT_SECTIONS_BY_KEY = byKey;

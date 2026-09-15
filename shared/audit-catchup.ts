@@ -153,7 +153,8 @@ export interface CatchUpContext {
 
 export interface TidiedCatchUp {
   operations: any[];
-  dropped: { reason: string; count: number }[];
+  /** What was left out and why — each with the edit and, for a duplicate, the card it matched — so it can be checked. */
+  dropped: { reason: string; count: number; items: string[] }[];
 }
 
 /** One line a person can read for an edit, used for the review list and for remembering what was declined. */
@@ -187,8 +188,14 @@ export function describeOp(op: any, ctx?: Pick<CatchUpContext, "tasks" | "loops"
  */
 export function tidyCatchUp(raw: unknown, ctx: CatchUpContext): TidiedCatchUp {
   const ops = Array.isArray(raw) ? raw.filter((o) => o && typeof o === "object" && typeof (o as any).op === "string") : [];
-  const dropped = new Map<string, number>();
-  const drop = (reason: string) => dropped.set(reason, (dropped.get(reason) ?? 0) + 1);
+  const dropped = new Map<string, { count: number; items: string[] }>();
+  let current = "";
+  const drop = (reason: string, detail?: string) => {
+    const entry = dropped.get(reason) ?? { count: 0, items: [] };
+    entry.count++;
+    if (entry.items.length < 25) entry.items.push(detail ? `${current} (${detail})` : current);
+    dropped.set(reason, entry);
+  };
   const taskById = new Map(ctx.tasks.map((t) => [t.id, t]));
   const loopById = new Map(ctx.loops.map((l) => [l.id, l]));
   const declined = ctx.declined.map(norm);
@@ -199,6 +206,7 @@ export function tidyCatchUp(raw: unknown, ctx: CatchUpContext): TidiedCatchUp {
 
   for (const op of ops) {
     const line = describeOp(op, ctx);
+    current = line;
     if (declined.some((d) => d && sameWork(d, norm(line)))) { drop("declined last time"); continue; }
 
     if (op.op === "create_task") {
@@ -213,7 +221,7 @@ export function tidyCatchUp(raw: unknown, ctx: CatchUpContext): TidiedCatchUp {
             kept.push({ ...close, _section: "closed", _label: `Mark done: ${twin.title}` }); closing.add(twin.id);
             perSection.set("closed", (perSection.get("closed") ?? 0) + 1);
           }
-        } else drop("already on the board");
+        } else drop("already on the board", `matches "${twin.title}"${twin.status === "done" ? ", done" : ""}`);
         continue;
       }
       if (titlesThisRun.some((t) => sameWork(t, title))) { drop("proposed twice"); continue; }
@@ -241,6 +249,20 @@ export function tidyCatchUp(raw: unknown, ctx: CatchUpContext): TidiedCatchUp {
       op.fields = fields;
     }
     if (op.op === "create_loop" && (ctx.rejectedLoops ?? []).some((r) => sameWork(r, String(op.title ?? "")))) { drop("removed by you before"); continue; }
+    // A kind that's already written can't take a second loop (only product repeats): that's a rewrite of the one there.
+    if (op.op === "create_loop" && op.type !== "product") {
+      const existing = ctx.loops.find((l) => l.type === op.type && l.description.trim());
+      if (existing) {
+        if (norm(existing.title) === norm(op.title) && norm(existing.description) === norm(op.steps)) { drop("changes nothing"); continue; }
+        const rewrite = { op: "update_loop", id: existing.id, title: op.title, steps: op.closes ? `${op.steps}\n\nCloses when: ${op.closes}` : op.steps };
+        const n = perSection.get("loops") ?? 0;
+        if (n < CATCHUP_CAPS.loops) {
+          perSection.set("loops", n + 1);
+          kept.push({ ...rewrite, _section: "loops", _label: `Rewrite the ${op.type} loop: "${existing.title}" → "${op.title}"` });
+        } else drop("over the loops limit");
+        continue;
+      }
+    }
     if (op.op === "retire_loop" && !loopById.has(op.id)) { drop("a loop that isn't on the project"); continue; }
     if (op.op === "add_loop_steps") {
       const current = loopById.get(op.loopId);
@@ -266,7 +288,7 @@ export function tidyCatchUp(raw: unknown, ctx: CatchUpContext): TidiedCatchUp {
     perSection.set(filed, n + 1);
     kept.push({ ...op, _section: filed, _label: describeOp(op, ctx) });
   }
-  return { operations: kept, dropped: [...dropped.entries()].map(([reason, count]) => ({ reason, count })) };
+  return { operations: kept, dropped: [...dropped.entries()].map(([reason, e]) => ({ reason, count: e.count, items: e.items })) };
 }
 
 /** "Recorded 3 pieces of shipped work, closed 5 tasks, updated the brief." — the brief version, for the top of the audit. */

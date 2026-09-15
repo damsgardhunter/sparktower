@@ -34,6 +34,37 @@ export interface CreateAppOptions {
   logRequests?: boolean;
 }
 
+/**
+ * The parts of an account row that are the account holder's business alone.
+ *
+ * Many routes embed whole `users` rows — a project's owner, its members, an
+ * applicant, a post's author — and every one of them used to send the email,
+ * Google and Stripe ids, plan and credits, platform role, suspension and
+ * signup attribution of whoever it was about, to whoever asked, signed in or
+ * not. A full account row is recognisable by `authProvider`, which every row
+ * has; purpose-built objects (an investor's consented contact, say) don't, and
+ * pass untouched. Your own row, and any row for a reviewer or admin, keep it all.
+ */
+const PRIVATE_ACCOUNT_FIELDS = new Set([
+  "email", "authProvider", "googleId", "stripeCustomerId", "stripeSubscriptionId", "stripeConnectAccountId",
+  "subscriptionTier", "creditsUsed", "creditsResetAt", "platformRole", "suspendedAt", "suspendedReason",
+  "signupSource", "signupMedium", "signupCampaign", "signupReferrer", "signupLandingPath", "signupParams", "updatedAt",
+]);
+
+export function stripOthersAccountFields(obj: any, viewer: { id?: string; platformRole?: string } | undefined, depth = 0): any {
+  if (depth > 12 || obj === null || obj === undefined || typeof obj !== "object") return obj;
+  if (viewer?.platformRole === "reviewer" || viewer?.platformRole === "admin") return obj;
+  if (Array.isArray(obj)) return obj.map((v) => stripOthersAccountFields(v, viewer, depth + 1));
+  if (obj instanceof Date) return obj;
+  const isOthersAccount = "authProvider" in obj && typeof obj.id === "string" && obj.id !== viewer?.id;
+  const result: any = {};
+  for (const key of Object.keys(obj)) {
+    if (isOthersAccount && PRIVATE_ACCOUNT_FIELDS.has(key)) continue;
+    result[key] = typeof obj[key] === "object" ? stripOthersAccountFields(obj[key], viewer, depth + 1) : obj[key];
+  }
+  return result;
+}
+
 function stripPasswordHash(obj: any): any {
   if (obj === null || obj === undefined || typeof obj !== "object") return obj;
   if (Array.isArray(obj)) return obj.map(stripPasswordHash);
@@ -70,9 +101,10 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
   // Sealed fields and password hashes never leave the server, whatever route
   // built the payload. The hash used to be stripped only by the request logger,
   // so it went out wherever logging was off.
-  app.use((_req, res, next) => {
+  app.use((req: any, res, next) => {
     const json = res.json.bind(res);
-    res.json = ((body: unknown) => json(stripPasswordHash(stripSealedFields(body)))) as typeof res.json;
+    // Read at send time: by then authentication has run and req.user is who's asking.
+    res.json = ((body: unknown) => json(stripOthersAccountFields(stripPasswordHash(stripSealedFields(body)), req.user))) as typeof res.json;
     next();
   });
 

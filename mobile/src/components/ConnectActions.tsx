@@ -8,7 +8,7 @@
  *    connected people message each other. Offering it earlier is a button that
  *    always fails — which this screen used to do.
  *  - Connect asks first, with room for a note: the one thing you can say before
- *    they accept. The card says "Requested" at once.
+ *    they accept. The card says "Pending" at once.
  *  - The composer opens already written from why you matched; one tap sends.
  *  - Follow flips at once, sends the state it wants rather than a toggle, and
  *    goes back if the server refuses.
@@ -22,6 +22,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { spacing } from "../theme";
 import { Btn, Chip, Field, Meta, Row } from "./ui";
+import { CONNECTION_REQUESTS_KEY, CONNECTIONS_KEY } from "../networkData";
 import { Sheet, type Notice } from "./Sheet";
 import { messageTemplates } from "../messageTemplates";
 import { exploreContext, type ExploreSource } from "../explore";
@@ -45,7 +46,7 @@ export function useConnectionStates(userIds: string[]) {
   });
 }
 
-export function ConnectActions({ userId, name, reason, headline, connection, notify, explore }: {
+export function ConnectActions({ userId, name, reason, headline, connection, notify, explore, block }: {
   userId: string;
   name: string;
   reason?: string | null;
@@ -53,6 +54,8 @@ export function ConnectActions({ userId, name, reason, headline, connection, not
   connection?: ConnectionState;
   notify: (notice: Notice) => void;
   explore?: ExploreOrigin;
+  /** One full-width button and no side note — for grid cards and search rows. */
+  block?: boolean;
 }) {
   const router = useRouter();
   const qc = useQueryClient();
@@ -69,7 +72,11 @@ export function ConnectActions({ userId, name, reason, headline, connection, not
   const [draft, setDraft] = useState(templates[0].body);
 
   const settle = async () => {
-    await qc.invalidateQueries({ queryKey: ["connection-states"] });
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: ["connection-states"] }),
+      qc.invalidateQueries({ queryKey: CONNECTION_REQUESTS_KEY }),
+      qc.invalidateQueries({ queryKey: CONNECTIONS_KEY }),
+    ]);
     setPending(null);
   };
 
@@ -103,6 +110,17 @@ export function ConnectActions({ userId, name, reason, headline, connection, not
     onSettled: settle,
   });
 
+  const ignore = useMutation({
+    mutationFn: () => api(`/api/connections/${connection?.connectionId}/reject`, { method: "POST" }),
+    onMutate: () => setPending("declined"),
+    onSuccess: () => notify({ text: `Ignored ${name}'s request.`, tone: "info" }),
+    onError: (error: any) => {
+      setPending(null);
+      notify({ text: error?.message || "Couldn't ignore the request.", tone: "error" });
+    },
+    onSettled: settle,
+  });
+
   const send = useMutation({
     mutationFn: (content: string) => api(`/api/messages/${userId}`, { method: "POST", body: { content, explore: explore && exploreContext(explore.source, explore.rankPosition) } }),
     onSuccess: () => {
@@ -121,20 +139,35 @@ export function ConnectActions({ userId, name, reason, headline, connection, not
 
   return (
     <>
-      <Row gap={spacing.sm} center wrap>
-        {state === "connected" ? (
-          <Btn label="Message" small onPress={openComposer} />
+      {block ? (
+        state === "connected" ? (
+          <Btn label="Message" small variant="outline" icon="paper-plane-outline" onPress={openComposer} style={{ alignSelf: "stretch" }} />
         ) : state === "incoming" ? (
-          <Btn label="Accept request" small loading={accept.isPending} disabled={!connection?.connectionId} onPress={() => accept.mutate()} />
+          <Btn label="Accept" small icon="checkmark" loading={accept.isPending} disabled={!connection?.connectionId} onPress={() => accept.mutate()} style={{ alignSelf: "stretch" }} />
         ) : state === "requested" ? (
-          <>
-            <Btn label="Requested" small variant="ghost" disabled />
-            <Meta>You can message once they accept</Meta>
-          </>
+          <Btn label="Pending" small variant="ghost" icon="time-outline" disabled style={{ alignSelf: "stretch", borderWidth: 1.5, borderColor: "#D4D4D4" }} />
         ) : state === "declined" ? null : (
-          <Btn label="Connect" small onPress={() => setConnectOpen(true)} />
-        )}
-      </Row>
+          <Btn label="Connect" small variant="outline" icon="person-add-outline" onPress={() => setConnectOpen(true)} style={{ alignSelf: "stretch" }} />
+        )
+      ) : (
+        <Row gap={spacing.sm} center wrap>
+          {state === "connected" ? (
+            <Btn label="Message" small icon="paper-plane-outline" onPress={openComposer} />
+          ) : state === "incoming" ? (
+            <>
+              <Btn label="Accept" small icon="checkmark" loading={accept.isPending} disabled={!connection?.connectionId} onPress={() => accept.mutate()} />
+              <Btn label="Ignore" small variant="ghost" loading={ignore.isPending} disabled={!connection?.connectionId} onPress={() => ignore.mutate()} />
+            </>
+          ) : state === "requested" ? (
+            <>
+              <Btn label="Pending" small variant="ghost" icon="time-outline" disabled />
+              <Meta>You can message once they accept</Meta>
+            </>
+          ) : state === "declined" ? null : (
+            <Btn label="Connect" small icon="person-add-outline" onPress={() => setConnectOpen(true)} />
+          )}
+        </Row>
+      )}
 
       <Sheet
         visible={connectOpen}
@@ -208,6 +241,12 @@ export function FollowButton({ projectId, title, following, notify, explore }: {
     },
   });
   return (
-    <Btn label={following ? "Following" : "Follow"} small variant={following ? "ghost" : "primary"} onPress={() => follow.mutate(!following)} />
+    <Btn
+      label={following ? "Following" : "Follow"}
+      small
+      variant={following ? "ghost" : "outline"}
+      icon={following ? "checkmark" : "add"}
+      onPress={() => follow.mutate(!following)}
+    />
   );
 }

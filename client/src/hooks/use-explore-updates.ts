@@ -33,7 +33,7 @@ export function useExploreUpdates() {
       const res = await fetch(`/api/discover/updates?t=${encodeURIComponent(tokens.join(","))}`, { credentials: "include" });
       return res.ok ? res.json() : { updates: [] };
     },
-    enabled: tokens.length > 0,
+    // The server remembers what you looked at, so there's news to check even with nothing in this browser.
     staleTime: 0,
   });
   const updates = [...(data?.updates ?? [])]

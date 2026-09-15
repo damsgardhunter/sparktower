@@ -15,11 +15,11 @@
  */
 import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
-import { eq, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { recordActivity } from "../../server/analytics";
 import { db } from "../../server/db";
-import { activityEvents, feedPosts, projects } from "@shared/schema";
+import { activityEvents, exploreSeen, feedPosts, projects } from "@shared/schema";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -128,5 +128,105 @@ describe("a post made a moment ago", () => {
     const res = await ari.agent.get(`/api/discover/updates?t=builder.${bea.id}.${lookedAt}`);
     expect(res.body.updates).toHaveLength(1);
     expect(res.body.updates[0].newPosts).toBe(1);
+  });
+});
+
+describe("what's new, remembered on the server", () => {
+  /** Remembered as looked at `minutes` ago — the server's own record, written the way an older browser hands one over. */
+  const lookedAt = (agent: any, kind: string, id: string, minutes: number) =>
+    agent.post("/api/discover/seen").send({ items: [{ kind, id, at: Date.now() - minutes * 60_000 }] });
+
+  it("feeds the cards and the badge from what you looked at, on any device, and a Discover visit clears the badge", async () => {
+    const app = await getTestApp();
+    const [ari, bea] = [await person(app), await person(app)];
+    await db.delete(feedPosts).where(eq(feedPosts.authorId, bea.id));
+
+    // Nothing looked at: nothing new, and a badge of zero.
+    expect((await ari.agent.get("/api/discover/new-count")).body).toMatchObject({ count: 0, updates: [] });
+
+    // Ari opens Bea's profile (on one device); Bea posts twice.
+    expect((await ari.agent.post("/api/discover/seen").send({ kind: "builder", id: bea.id })).body).toEqual({ remembered: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+    expect((await bea.agent.post("/api/feed").send({ postType: "project_update", content: "Shipped reminders today." })).status).toBe(200);
+    expect((await bea.agent.post("/api/feed").send({ postType: "project_update", content: "And streaks, finally." })).status).toBe(200);
+
+    // Any device asks with nothing remembered locally, and gets the news.
+    const updates = (await ari.agent.get("/api/discover/updates")).body.updates;
+    expect(updates).toEqual([expect.objectContaining({ kind: "builder", id: bea.id, newPosts: 2 })]);
+    const badge = (await ari.agent.get("/api/discover/new-count")).body;
+    expect(badge).toMatchObject({ count: 2, more: false, lastVisitAt: null });
+    expect(badge.updates[0]).toMatchObject({ id: bea.id, newPosts: 2 });
+
+    // Opening Discover clears the badge; the card keeps its news until Bea's profile is opened.
+    await ari.agent.post("/api/discover/visit").expect(200);
+    expect((await ari.agent.get("/api/discover/new-count")).body).toMatchObject({ count: 0 });
+    expect((await ari.agent.get("/api/discover/updates")).body.updates[0].newPosts).toBe(2);
+
+    // A new post after the visit brings the badge back.
+    await new Promise((r) => setTimeout(r, 20));
+    await bea.agent.post("/api/feed").send({ postType: "project_update", content: "Dark mode is live." }).expect(200);
+    expect((await ari.agent.get("/api/discover/new-count")).body.count).toBe(1);
+
+    // Opening her profile again: nothing is new on the card any more.
+    await ari.agent.post("/api/discover/seen").send({ kind: "builder", id: bea.id }).expect(200);
+    expect((await ari.agent.get("/api/discover/updates")).body.updates).toEqual([]);
+  });
+
+  it("remembers what you act on, not just what you open", async () => {
+    const app = await getTestApp();
+    const [ari, bea] = [await person(app), await person(app)];
+    const project = (await bea.agent.post("/api/projects").send({
+      title: "Plant Swap", description: "A small app for swapping cuttings with neighbours nearby.", category: "saas", goal: "ship_mvp", subcategory: "saas",
+    })).body.id as string;
+    await db.delete(feedPosts).where(eq(feedPosts.authorId, bea.id));
+
+    // Following the project is enough — the follow endpoint remembers it.
+    await ari.agent.post(`/api/projects/${project}/follow`).send({ following: true }).expect(200);
+    await new Promise((r) => setTimeout(r, 50));
+    await bea.agent.post("/api/feed").send({ postType: "project_update", content: "First swap happened!", projectId: project }).expect(200);
+    const badge = (await ari.agent.get("/api/discover/new-count")).body;
+    expect(badge.updates).toEqual([expect.objectContaining({ kind: "project", id: project, name: "Plant Swap", newPosts: 1 })]);
+  });
+
+  it("takes an older browser's memory once, without overwriting newer records or trusting its clock", async () => {
+    const app = await getTestApp();
+    const [ari, bea, cai] = [await person(app), await person(app), await person(app)];
+    await db.delete(feedPosts).where(inArray(feedPosts.authorId, [bea.id, cai.id]));
+    await post(bea.id, 30);   // after Ari looked at Bea (an hour ago): news
+    await post(cai.id, 30);   // but Ari's browser claims to have seen Cai in the future: clamped to now, so not news
+
+    expect((await lookedAt(ari.agent, "builder", bea.id, 60)).body).toEqual({ remembered: 1 });
+    await ari.agent.post("/api/discover/seen").send({ items: [
+      { kind: "builder", id: cai.id, at: Date.now() + 86_400_000 },
+      { kind: "builder", id: ari.id, at: Date.now() - 60_000 },  // yourself: ignored
+      { kind: "nonsense", id: bea.id, at: 1 },                   // not a kind: dropped
+    ] }).expect(200);
+    const ids = (await ari.agent.get("/api/discover/updates")).body.updates.map((u: any) => u.id);
+    expect(ids).toEqual([bea.id]);
+
+    // An old claim never rolls back a newer record: Ari has since opened Bea's profile.
+    await ari.agent.post("/api/discover/seen").send({ kind: "builder", id: bea.id }).expect(200);
+    await lookedAt(ari.agent, "builder", bea.id, 120);
+    expect((await ari.agent.get("/api/discover/updates")).body.updates).toEqual([]);
+
+    // Bad input and no account.
+    expect((await ari.agent.post("/api/discover/seen").send({ kind: "builder", id: "../etc" })).status).toBe(400);
+    expect((await request(app).post("/api/discover/seen").send({ kind: "builder", id: bea.id })).status).toBe(401);
+    expect((await request(app).get("/api/discover/new-count")).status).toBe(401);
+  });
+
+  it("keeps only the most recent thirty, and the visit apart from them", async () => {
+    const app = await getTestApp();
+    const ari = await person(app);
+    const items = Array.from({ length: 35 }, (_, i) => ({ kind: "project", id: `p-${i}`, at: Date.now() - (35 - i) * 60_000 }));
+    await ari.agent.post("/api/discover/visit").expect(200);
+    for (const item of items) await ari.agent.post("/api/discover/seen").send({ items: [item] }).expect(200);
+    const rows = await db.select().from(exploreSeen).where(eq(exploreSeen.userId, ari.id));
+    expect(rows.filter((r) => r.kind === "project")).toHaveLength(30);
+    expect(rows.filter((r) => r.kind === "project").map((r) => r.targetId)).not.toContain("p-0");
+    expect(rows.filter((r) => r.kind === "discover")).toHaveLength(1);
+    // Neither call is logged as an action in the behaviour stream.
+    const logged = await db.select().from(activityEvents).where(eq(activityEvents.userId, ari.id));
+    expect(logged.filter((e) => /\/api\/discover\/(seen|visit)/.test(e.path))).toHaveLength(0);
   });
 });

@@ -23,6 +23,7 @@ import {
 } from "@shared/phase-trees";
 import { withRunGroups } from "@shared/phase-trees/run-steps";
 import { describeOp } from "@shared/audit-catchup";
+import { afterPathStepDone } from "./path-return";
 import { PROJECT_GOALS } from "@shared/goals";
 import { capitalProfile, renderCapitalProfile, businessHistoryFromResume, CAPITAL_MILESTONES, CAPITAL_ROUTES, type CapitalAnswers } from "@shared/capital";
 import type { ProfileExperience } from "@shared/schema";
@@ -362,10 +363,12 @@ export function planShape(main: ResolvedMilestone[], tasks: { status: string; ta
 }
 
 /** Called from the task board when a task on the path is finished. */
-export async function onPathTaskDone(task: { id: string; projectId: string; title: string; tags: string[] | null; estimateHours: number | null; startedAt: Date | null; completedAt: Date | null }) {
+export async function onPathTaskDone(task: { id: string; projectId: string; title: string; tags: string[] | null; estimateHours: number | null; startedAt: Date | null; completedAt: Date | null; completedById?: string | null }) {
   if (isArchivedPath(task.tags)) return;
   const backboneId = backboneIdOf(task.tags) ?? parentOf(task.tags);
   if (!backboneId && !injectedPhaseOf(task.tags)) return;
+  // The retention loop's way back: the rest of the team hears the path moved, and what's next.
+  void afterPathStepDone(task);
   const started = task.startedAt ? new Date(task.startedAt).getTime() : null;
   const finished = task.completedAt ? new Date(task.completedAt).getTime() : Date.now();
   const actual = started && finished - started > 60_000 ? Math.round((finished - started) / 60_000) : null;

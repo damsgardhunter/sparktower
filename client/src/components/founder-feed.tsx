@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { FeedComposer } from "@/components/feed-composer";
 import { FeedbackUsedCard } from "@/components/feedback-inbox";
+import { ContinuePathCard } from "@/components/continue-path-card";
 import { useNotificationCounts, refreshNotifications } from "@/components/notification-bell";
 import { apiRequest } from "@/lib/queryClient";
 import { FeedPostCard, type FeedPostWithDetails } from "@/components/feed-post-card";
@@ -84,6 +85,7 @@ export function FounderFeed({ projectId }: { projectId?: string }) {
 
   return (
     <div className="space-y-2">
+      {!projectId && <ContinuePathCard />}
       {!projectId && <FeedbackUsedCard />}
       <FeedComposer defaultProjectId={projectId} />
 

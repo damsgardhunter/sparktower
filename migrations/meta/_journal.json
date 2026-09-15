@@ -50,6 +50,13 @@
       "when": 1789430087980,
       "tag": "0006_capital_route_and_investment_applications",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789434592797,
+      "tag": "0007_explore_seen",
+      "breakpoints": true
     }
   ]
 }

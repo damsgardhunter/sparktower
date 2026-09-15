@@ -4,6 +4,7 @@
   "main": "expo-router/entry",
   "dependencies": {
     "@expo-google-fonts/space-grotesk": "^0.4.1",
+    "@expo/vector-icons": "^15.0.2",
     "@tanstack/react-query": "^5.102.8",
     "expo": "~57.0.20",
     "expo-auth-session": "~57.0.11",
@@ -11,6 +12,7 @@
     "expo-dev-client": "^57.0.18",
     "expo-document-picker": "~57.0.1",
     "expo-font": "~57.0.3",
+    "expo-linear-gradient": "~57.0.2",
     "expo-linking": "~57.0.9",
     "expo-router": "~57.0.19",
     "expo-secure-store": "~57.0.3",

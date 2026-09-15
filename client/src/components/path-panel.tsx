@@ -3,6 +3,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { WorkView, refreshPath, useFail, type WorkRow } from "@/components/path-work";
 import { MilestoneDetail } from "@/components/path-milestone";
 import { LoopTree, addableLoopTypes, type LoopTreeData } from "@/components/loop-tree";
+import { ShareStepDialog } from "@/components/continue-path-card";
+import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -54,6 +56,8 @@ interface PathStatus {
   rejectedLoops: string[];
   /** What the latest codebase audit changed on its own, and what it left waiting. */
   auditUpdate?: { auditId: string; at: string; applied: string[]; appliedCount: number; pendingCount: number; pendingLoops: string[] } | null;
+  /** The step finished most recently, and the post that shared it, if one did. */
+  lastDone?: { taskId: string; title: string; completedAt: string; sharedPostId: string | null } | null;
   pace: { state: PaceState; multiplier: number | null; mode: ProjectionMode; projectedAt: string | null; projectedLow: string | null; projectedHigh: string | null; note: string; daysSinceActivity: number } | null;
   events: { id: string; title: string; estimateMinutes: number | null; actualMinutes: number | null; projectedBefore: string | null; projectedAfter: string | null; createdAt: string }[];
   proposal: { goal: ProjectGoal; why: string }[] | null;
@@ -89,6 +93,8 @@ function projection(p: NonNullable<PathStatus["pace"]>) {
 export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavigate: (tab: string) => void }) {
   const [showMap, setShowMap] = useState(false);
   const [showSwitch, setShowSwitch] = useState(false);
+  const [sharingStep, setSharingStep] = useState(false);
+  const { data: projectInfo } = useQuery<{ title?: string }>({ queryKey: ["/api/projects", projectId], enabled: !!projectId });
   const [open, setOpen] = useState<string | null>(null);
   const { toast } = useToast();
   const { data: raw, isLoading } = useQuery<PathStatus | NoPath>({ queryKey: ["/api/projects", projectId, "path"], enabled: !!projectId });
@@ -316,6 +322,22 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
 
       {/* The one next action. */}
       {next ? (
+        <>
+        {/* The step you just finished: share its output for feedback, which comes back as notifications. */}
+        {data.lastDone && (
+          <div className="flex items-center gap-2 text-xs rounded-md border border-border px-3 py-2 flex-wrap" data-testid="path-last-done">
+            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+            <span>Finished <span className="font-medium">{data.lastDone.title}</span></span>
+            {data.lastDone.sharedPostId ? (
+              <Link href={`/posts/${data.lastDone.sharedPostId}`} className="ml-auto text-primary hover:underline" data-testid="link-shared-step">See the feedback</Link>
+            ) : (
+              <button className="ml-auto text-primary hover:underline" onClick={() => setSharingStep(true)} data-testid="button-share-finished-step">Share it for feedback</button>
+            )}
+          </div>
+        )}
+        {sharingStep && data.lastDone && (
+          <ShareStepDialog projectId={projectId} projectTitle={projectInfo?.title ?? "your project"} step={data.lastDone} open onClose={() => setSharingStep(false)} />
+        )}
         <Card className="border-primary/40" data-testid="next-action">
           <CardContent className="p-4 space-y-2">
             <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
@@ -416,6 +438,7 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
             )}
           </CardContent>
         </Card>
+        </>
       ) : (
         <Card data-testid="path-complete"><CardContent className="p-4 space-y-3">
           <p className="text-sm font-medium">The path is complete.</p>

@@ -13,7 +13,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { FeedContent } from "@/components/mention-textarea";
 import { PrivateBadge } from "@/components/private-badge";
 import {
-  MessageSquare, Trash2, Sparkles, HelpCircle, Repeat,
+  MessageSquare, Trash2, Sparkles, HelpCircle, Repeat, Compass,
 } from "lucide-react";
 import { creditLine } from "@shared/feedback-loop";
 import * as Icons from "lucide-react";
@@ -30,6 +30,7 @@ export interface FeedPostWithDetails extends FeedPost {
   reactionBreakdown: { reaction: string; count: number }[];
   viewerIsTeam?: boolean;
   credits?: { commentId: string; authorId: string; name: string }[];
+  pathStep?: { taskId: string; title: string } | null;
 }
 
 
@@ -183,6 +184,17 @@ export function FeedPostCard({ post, standalone = false }: { post: FeedPostWithD
               <button className="text-xs text-primary hover:underline" onClick={() => setShowComments(true)} data-testid={`button-answer-asks-${post.id}`}>Answer in a comment</button>
             )}
           </div>
+        )}
+
+        {/* A step from the project's path, shared for feedback: back to the path for the team, to the project for everyone else. */}
+        {post.pathStep && post.project && (
+          <Link
+            href={post.viewerIsTeam ? `/projects/${post.project.id}/manage` : `/projects/${post.project.id}`}
+            className="inline-flex items-center gap-1.5 text-xs rounded-full border border-primary/30 bg-primary/5 px-2.5 py-1 text-primary hover:bg-primary/10"
+            data-testid={`post-path-step-${post.id}`}
+          >
+            <Compass className="h-3 w-3" /> From the path: {post.pathStep.title}
+          </Link>
         )}
 
         {/* This update closes the loop on earlier feedback, and says whose. */}

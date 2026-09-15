@@ -58,7 +58,10 @@ describe("keeping the catch-up brief and true", () => {
       ["update_task", "t1", "closed"],
       ["create_task", "Comment threads with replies", "shipped"],
     ]);
-    expect(dropped).toEqual(expect.arrayContaining([{ reason: "already on the board", count: 1 }, { reason: "proposed twice", count: 1 }]));
+    expect(dropped).toEqual(expect.arrayContaining([
+      { reason: "already on the board", count: 1, items: ['Record shipped: Rate limiting on reports (matches "Rate limit reports", done)'] },
+      expect.objectContaining({ reason: "proposed twice", count: 1 }),
+    ]));
   });
 
   it("drops edits that change nothing, what was declined, and what's past the caps", () => {
@@ -102,5 +105,26 @@ describe("keeping the catch-up brief and true", () => {
     expect(operations[0].steps).toEqual([{ title: "Comment threads", done: false }]);
     expect(Object.fromEntries(dropped.map((d) => [d.reason, d.count]))).toMatchObject({ "steps already there": 1, "removed by you before": 1, "a loop that isn't on the project": 1 });
     expect(sectionOf({ op: "add_loop_steps", steps: [{ title: "a", done: true }] })).toBe("path");
+  });
+
+  it("turns a second loop of a kind that's already written into a rewrite of the one there", () => {
+    const withReferral = ctx({ loops: [
+      { id: "l1", title: "Ship an MVP", description: "1. a", type: "product" },
+      { id: "r1", title: "Share a plan", description: "1. share 2. join", type: "referral" },
+    ] });
+    const { operations } = tidyCatchUp([
+      { op: "create_loop", type: "referral", title: "Invite a builder", steps: "1. invite 2. join 3. invite", closes: "the invitee invites" },
+      { op: "create_loop", type: "growth", title: "Public pages", steps: "1. publish 2. found" },
+    ], withReferral);
+    expect(operations[0]).toMatchObject({ op: "update_loop", id: "r1", title: "Invite a builder", _section: "loops", _label: 'Rewrite the referral loop: "Share a plan" → "Invite a builder"' });
+    expect(operations[0].steps).toMatch(/Closes when: the invitee invites/);
+    expect(operations[1]).toMatchObject({ op: "create_loop", type: "growth" });
+  });
+
+  it("counts every drop but keeps a readable sample", () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ op: "update_task", id: "t2", status: "done", _n: i }));
+    const { dropped } = tidyCatchUp(many.map(({ _n, ...o }) => o), ctx());
+    expect(dropped).toEqual([expect.objectContaining({ reason: "changes nothing", count: 30 })]);
+    expect(dropped[0].items).toHaveLength(25);
   });
 });

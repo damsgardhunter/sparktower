@@ -15,6 +15,21 @@ import {
   EXPLORE_EVENTS, type ExploreContext, type ExploreEventName, type ExploreProps, type ExploreSource,
 } from "@shared/explore-events";
 import { flushNow, onBeforeLeave, trackEvent } from "@/lib/analytics";
+import { queryClient } from "@/lib/queryClient";
+import { importSeenOnce } from "@/lib/seen";
+
+/**
+ * Opening Discover, Matches or Projects: the Discover badge's "since" moves to
+ * now, so the badge clears — the cards keep their own news until opened.
+ */
+function recordDiscoverVisit() {
+  importSeenOnce();
+  try {
+    void fetch("/api/discover/visit", { method: "POST", credentials: "include", keepalive: true })
+      .then(() => queryClient.invalidateQueries({ queryKey: ["/api/discover/new-count"] }))
+      .catch(() => { /* best-effort */ });
+  } catch { /* never surfaces */ }
+}
 
 /** This tab has opened Discover before. sessionStorage: it lives exactly as long as the tab. */
 const OPENED_KEY = "st_explore_opened";
@@ -76,6 +91,7 @@ export function openDiscover(source: ExploreSource) {
   openedAt = now;
   trackExplore(EXPLORE_EVENTS.openDiscover, { source });
   if (before) trackExplore(EXPLORE_EVENTS.returnToDiscover, { source });
+  recordDiscoverVisit();
   // Not left in the batch: an action seconds from now is stored by its own
   // endpoint, and the cycle count reads the open and the action in order.
   flushNow();

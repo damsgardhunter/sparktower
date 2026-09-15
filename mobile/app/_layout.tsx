@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { ActivityIndicator, View } from "react-native";
-import { Slot, useRouter, useSegments } from "expo-router";
+import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -9,7 +9,7 @@ import {
   SpaceGrotesk_600SemiBold, SpaceGrotesk_700Bold, useFonts,
 } from "@expo-google-fonts/space-grotesk";
 import { AuthProvider, useAuth } from "../src/auth/AuthContext";
-import { colors } from "../src/theme";
+import { colors, fontFamily } from "../src/theme";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -42,7 +42,26 @@ function AuthGate() {
 
   if (loading) return <Loading />;
 
-  return <Slot />;
+  /*
+   * One stack over everything: the tabs and sign-in draw their own chrome, and
+   * every screen pushed on top (a project, a chat, a profile) gets the same
+   * white header with a back arrow — set per screen with <Stack.Screen options>.
+   */
+  return (
+    <Stack
+      screenOptions={{
+        headerStyle: { backgroundColor: colors.background },
+        headerTintColor: colors.text,
+        headerTitleStyle: { fontFamily: fontFamily.semibold, fontSize: 17, color: colors.text },
+        headerShadowVisible: true,
+        headerBackButtonDisplayMode: "minimal",
+        contentStyle: { backgroundColor: colors.canvas },
+      }}
+    >
+      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+    </Stack>
+  );
 }
 
 function Loading() {
@@ -68,7 +87,7 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
-          <StatusBar style="light" />
+          <StatusBar style="dark" />
           {/* On a font error, fall through to the system font rather than
               stranding the user on a spinner. */}
           {fontsLoaded || fontError ? <AuthGate /> : <Loading />}

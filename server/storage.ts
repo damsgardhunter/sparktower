@@ -229,6 +229,8 @@ export interface FeedPostWithDetails extends FeedPost {
   viewerIsTeam: boolean;
   /** Feedback this update said it acted on: who gave it. */
   credits: { commentId: string; authorId: string; name: string }[];
+  /** The path step this post shares, when it shares one. */
+  pathStep: { taskId: string; title: string } | null;
 }
 
 export interface IStorage {
@@ -1534,10 +1536,15 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(userProfiles, eq(userProfiles.userId, users.id))
       .where(eq(feedComments.closedByPostId, post.id));
 
+    const [stepTask] = post.entityType === "path_step" && post.entityId
+      ? await db.select({ id: projectKanbanTasks.id, title: projectKanbanTasks.title }).from(projectKanbanTasks).where(eq(projectKanbanTasks.id, post.entityId))
+      : [];
+
     return {
       ...post,
       author,
       profile,
+      pathStep: stepTask ? { taskId: stepTask.id, title: stepTask.title } : null,
       project: project ? { id: project.id, title: project.title, isPrivate: project.isPrivate } : null,
       viewerReaction,
       reactionBreakdown: breakdownRows.map((r) => ({ reaction: r.reaction, count: r.count })),

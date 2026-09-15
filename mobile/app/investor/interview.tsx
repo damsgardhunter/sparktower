@@ -3,7 +3,7 @@ import { KeyboardAvoidingView, Platform, Text, View } from "react-native";
 import { useLocalSearchParams, Stack } from "expo-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
-import { colors, spacing } from "../../src/theme";
+import { colors, fontFamily, spacing } from "../../src/theme";
 import {
   Body, Btn, Card, Chip, Cost, ErrorNote, Field, H2, Label,
   Loading, Meta, Row, Screen, Segments, errText,
@@ -75,7 +75,7 @@ export default function MockInterview() {
     return (
       <>
         <Stack.Screen options={{ title: "Mock Interview" }} />
-        <Screen>
+        <Screen canvas>
           <Card>
             <H2>Mock investor interview</H2>
             <Meta>
@@ -119,7 +119,7 @@ export default function MockInterview() {
                 <Card key={iv.id} onPress={() => setInterviewId(iv.id)}>
                   <Row between>
                     <View style={{ flex: 1 }}>
-                      <Body style={{ fontWeight: "700", textTransform: "capitalize" }}>
+                      <Body style={{ fontFamily: fontFamily.bold, textTransform: "capitalize" }}>
                         {iv.persona.replace(/_/g, " ")} · {iv.difficulty}
                       </Body>
                       <Meta>{new Date(iv.createdAt).toLocaleString()}</Meta>
@@ -148,12 +148,12 @@ export default function MockInterview() {
       <Stack.Screen options={{ title: session?.persona?.label || "Interview" }} />
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
-        style={{ flex: 1, backgroundColor: colors.background }}
+        style={{ flex: 1, backgroundColor: colors.canvas }}
       >
-        <Screen>
+        <Screen canvas>
           <Card>
             <Row between>
-              <Body style={{ fontWeight: "700" }}>{session?.persona?.label}</Body>
+              <Body style={{ fontFamily: fontFamily.bold }}>{session?.persona?.label}</Body>
               {iv?.averageScore != null && <Chip label={`avg ${iv.averageScore}`} small active />}
             </Row>
             <Meta style={{ textTransform: "capitalize" }}>
@@ -164,7 +164,7 @@ export default function MockInterview() {
           {graded.map((t: any, i: number) => (
             <Card key={t.id}>
               <Label>Question {i + 1}</Label>
-              <Body style={{ fontWeight: "600" }}>{t.question}</Body>
+              <Body style={{ fontFamily: fontFamily.semibold }}>{t.question}</Body>
               <View style={{ borderLeftWidth: 2, borderLeftColor: colors.border, paddingLeft: spacing.sm }}>
                 <Meta>{t.answer}</Meta>
               </View>
@@ -173,7 +173,7 @@ export default function MockInterview() {
                   backgroundColor: scoreColor(t.score) + "22", borderRadius: 6,
                   paddingHorizontal: spacing.sm, paddingVertical: 2,
                 }}>
-                  <Text style={{ color: scoreColor(t.score), fontWeight: "800", fontSize: 12 }}>
+                  <Text style={{ color: scoreColor(t.score), fontFamily: fontFamily.bold, fontSize: 12 }}>
                     {t.score}/100
                   </Text>
                 </View>
@@ -203,7 +203,7 @@ export default function MockInterview() {
           ) : pending ? (
             <Card accent={colors.warning}>
               <Label>Question {graded.length + 1}</Label>
-              <Body style={{ fontWeight: "600" }}>{pending.question}</Body>
+              <Body style={{ fontFamily: fontFamily.semibold }}>{pending.question}</Body>
               <Field value={answer} onChangeText={setAnswer} multiline
                 placeholder="Answer like you're in the room…" />
               <Row center gap={spacing.sm}>

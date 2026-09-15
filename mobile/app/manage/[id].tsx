@@ -1,440 +1,144 @@
-import { useState } from "react";
-import { Text, View } from "react-native";
-import { useLocalSearchParams, useRouter, Stack } from "expo-router";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import { Image, ScrollView, RefreshControl, Text, View } from "react-native";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
 import { useAuth } from "../../src/auth/AuthContext";
-import { colors, spacing } from "../../src/theme";
-import {
-  Body, Btn, Card, Chip, Cost, Empty, ErrorNote, Field, H1, H2, Label, Loading,
-  Meta, Progress, Row, Screen, Segments, errText,
-} from "../../src/components/ui";
+import { colors, font, fontFamily, spacing } from "../../src/theme";
+import { Btn, Empty, Icon, Loading, Meta, NovaGradient, Row, TabStrip, assetUri } from "../../src/components/ui";
+import { NoticeProvider } from "../../src/components/manage/bits";
+import { Dashboard } from "../../src/components/manage/Dashboard";
+import { Kanban } from "../../src/components/manage/Kanban";
+import { Milestones } from "../../src/components/manage/Milestones";
+import { CheckIns } from "../../src/components/manage/CheckIns";
+import { Team } from "../../src/components/manage/Team";
+import { Investors } from "../../src/components/manage/Investors";
+import { Setup } from "../../src/components/manage/Setup";
+import { Roadmap } from "../../src/components/manage/Roadmap";
+import { WebTools } from "../../src/components/manage/WebTools";
+import { goalLabel, mkey } from "../../src/components/manage/shared";
 
-type Tab = "nova" | "roadmap" | "tasks" | "investor";
+type Tab = "dashboard" | "tasks" | "milestones" | "checkins" | "team" | "investors" | "roadmap" | "setup" | "tools";
 
-function greeting(): string {
-  const h = new Date().getHours();
-  if (h < 12) return "Good morning";
-  if (h < 18) return "Good afternoon";
-  return "Good evening";
-}
-
-/** Nova's project dashboard — the native counterpart of the web Manage screen. */
+/**
+ * The project manager — the owner's and members' workspace, the native
+ * counterpart of client/src/pages/project-manager.tsx. Nova's path leads;
+ * the sections sit in a scrollable tab strip under the project header.
+ */
 export default function Manage() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, tab: initialTab } = useLocalSearchParams<{ id: string; tab?: string }>();
   const { user } = useAuth();
   const router = useRouter();
   const qc = useQueryClient();
-  const [tab, setTab] = useState<Tab>("nova");
-  const [error, setError] = useState<string | null>(null);
-  const [running, setRunning] = useState<string | null>(null);
+  const [tab, setTab] = useState<Tab>((initialTab as Tab) || "dashboard");
+  const [refreshing, setRefreshing] = useState(false);
+  // A link can open straight onto a section (`?tab=investors`), as on the web.
+  useEffect(() => { if (initialTab) setTab(initialTab as Tab); }, [initialTab]);
 
-  const { data: briefing, isLoading, isRefetching, refetch } = useQuery({
-    queryKey: ["briefing", id],
-    queryFn: () => api<any>(`/api/projects/${id}/nova-briefing`),
+  const { data: project, isLoading, error } = useQuery({
+    queryKey: mkey(id!, "project"),
+    queryFn: () => api<any>(`/api/projects/${id}`),
+    enabled: !!id,
+  });
+  const { data: members } = useQuery({
+    queryKey: mkey(id!, "members"),
+    queryFn: () => api<any[]>(`/api/projects/${id}/members`),
     enabled: !!id,
   });
 
-  const runAction = useMutation({
-    mutationFn: (endpoint: string) => api(endpoint, { method: "POST" }),
-    onSuccess: () => {
-      setRunning(null);
-      setError(null);
-      qc.invalidateQueries({ queryKey: ["briefing", id] });
-      qc.invalidateQueries({ queryKey: ["subscription"] });
-    },
-    onError: (e) => { setRunning(null); setError(errText(e, "Couldn't run that.")); },
-  });
+  const isOwner = !!project && project.ownerId === user?.id;
+  const isMember = isOwner || !!members?.some((m) => m.userId === user?.id);
 
-  if (isLoading) return <Loading />;
-  if (!briefing) return <Screen><Empty title="Couldn't load this project" /></Screen>;
+  const tabs = useMemo(() => ([
+    { value: "dashboard", label: "Dashboard" },
+    { value: "tasks", label: "Tasks" },
+    { value: "milestones", label: "Milestones" },
+    { value: "checkins", label: "Check-ins" },
+    { value: "team", label: "Team" },
+    { value: "investors", label: "Investors" },
+    { value: "roadmap", label: "Roadmap" },
+    { value: "setup", label: "Setup" },
+    { value: "tools", label: "More tools" },
+  ] as { value: Tab; label: string }[]), []);
 
-  const severityColor = (s: string) =>
-    s === "critical" ? colors.danger : s === "important" ? colors.warning : colors.primary;
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await qc.invalidateQueries({ queryKey: ["manage", id] });
+    setRefreshing(false);
+  };
 
-  return (
-    <>
-      <Stack.Screen options={{ title: briefing.project?.title || "Manage" }} />
-      <Screen onRefresh={refetch} refreshing={isRefetching}>
-        <Segments
-          options={[
-            { value: "nova" as Tab, label: "Dashboard" },
-            { value: "roadmap" as Tab, label: "Roadmap" },
-            { value: "tasks" as Tab, label: "Tasks" },
-            { value: "investor" as Tab, label: "Investor" },
-          ]}
-          value={tab}
-          onChange={setTab}
-        />
-
-        {error && <ErrorNote message={error} />}
-
-        {tab === "nova" && (
-          <>
-            <View style={{ gap: spacing.xs }}>
-              <H1>{greeting()}, {user?.firstName || "there"}</H1>
-              <Body muted>
-                Your project is <Text style={{ color: colors.text, fontWeight: "700" }}>
-                  {briefing.completion}% complete
-                </Text>
-              </Body>
-              <Progress value={briefing.completion} />
-            </View>
-
-            <Row wrap gap={spacing.sm}>
-              <Card style={{ flex: 1, minWidth: 140 }}>
-                <Label>Phases done</Label>
-                <H2>{briefing.stats.completedPhases}/{briefing.stats.phases}</H2>
-              </Card>
-              <Card style={{ flex: 1, minWidth: 140 }}>
-                <Label>Tasks done</Label>
-                <H2>{briefing.stats.doneTasks}/{briefing.stats.tasks}</H2>
-              </Card>
-              <Card style={{ flex: 1, minWidth: 140 }}>
-                <Label>Milestones</Label>
-                <H2>{briefing.stats.milestones}</H2>
-              </Card>
-              <Card style={{ flex: 1, minWidth: 140 }}>
-                <Label>Team</Label>
-                <H2>{briefing.stats.members}/{briefing.stats.teamSize ?? "?"}</H2>
-              </Card>
-            </Row>
-
-            <Label>Nova recommends</Label>
-            {!briefing.recommendations?.length ? (
-              <Card>
-                <H2>Nothing needs your attention</H2>
-                <Meta>Your brief, roadmap, tasks and team are all in good shape.</Meta>
-              </Card>
-            ) : (
-              briefing.recommendations.map((r: any, i: number) => (
-                <Card key={r.id} accent={severityColor(r.severity)}>
-                  <Row gap={spacing.sm} style={{ alignItems: "flex-start" }}>
-                    <Meta style={{ fontWeight: "800", marginTop: 2 }}>{i + 1}.</Meta>
-                    <View style={{ flex: 1, gap: spacing.xs }}>
-                      <Body style={{ fontWeight: "700" }}>{r.title}</Body>
-                      {r.detail && <Meta>{r.detail}</Meta>}
-                      <Row center gap={spacing.sm}>
-                        <Btn
-                          label={r.actionLabel}
-                          variant={r.severity === "critical" ? "primary" : "outline"}
-                          small
-                          loading={running === r.id}
-                          onPress={() => {
-                            if (r.endpoint) { setRunning(r.id); runAction.mutate(r.endpoint); }
-                            else if (r.tab === "roadmap") setTab("roadmap");
-                            else if (r.tab === "kanban") setTab("tasks");
-                            else if (r.tab === "strategy") setTab("investor");
-                          }}
-                        />
-                        {r.credits > 0 && <Cost credits={r.credits} />}
-                      </Row>
-                    </View>
-                  </Row>
-                </Card>
-              ))
-            )}
-            <Meta>Recommendations are free — you only spend credits when you run one.</Meta>
-
-            <Label>Project tools</Label>
-            {[
-              { href: `/project/visibility?id=${id}`, glyph: "👁", label: "Public page", sub: "Choose what visitors see" },
-              { href: `/project/storyboards?id=${id}`, glyph: "🎬", label: "AI storyboard", sub: "A showcase reel from your brief", credits: 5 },
-              { href: `/project/${id}`, glyph: "🚀", label: "View public page", sub: "See it the way visitors do" },
-            ].map((t) => (
-              <Card key={t.href} onPress={() => router.push(t.href as any)}>
-                <Row center gap={spacing.md}>
-                  <Text style={{ fontSize: 22 }}>{t.glyph}</Text>
-                  <View style={{ flex: 1 }}>
-                    <Body style={{ fontWeight: "700" }}>{t.label}</Body>
-                    <Meta>{t.sub}</Meta>
-                  </View>
-                  {t.credits ? <Cost credits={t.credits} /> : <Meta>›</Meta>}
-                </Row>
-              </Card>
-            ))}
-          </>
-        )}
-
-        {tab === "roadmap" && <RoadmapTab projectId={id!} />}
-        {tab === "tasks" && <TasksTab projectId={id!} />}
-        {tab === "investor" && <InvestorTab projectId={id!} />}
-      </Screen>
-    </>
-  );
-}
-
-function RoadmapTab({ projectId }: { projectId: string }) {
-  const qc = useQueryClient();
-  const [goal, setGoal] = useState("");
-  const [next, setNext] = useState<any>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const { data, isLoading } = useQuery({
-    queryKey: ["project", projectId, "roadmap"],
-    queryFn: () => api<any>(`/api/projects/${projectId}/roadmap`),
-  });
-
-  const { data: quote } = useQuery({
-    queryKey: ["project", projectId, "rebuild-quote"],
-    queryFn: () => api<any>(`/api/projects/${projectId}/roadmap/rebuild-quote`),
-    enabled: !!data?.roadmap,
-  });
-
-  const invalidate = () => qc.invalidateQueries({ queryKey: ["project", projectId, "roadmap"] });
-
-  const generate = useMutation({
-    mutationFn: () => api(`/api/projects/${projectId}/roadmap/generate`, { method: "POST", body: { goal } }),
-    onSuccess: () => { setGoal(""); invalidate(); },
-    onError: (e) => setError(errText(e)),
-  });
-
-  const nextActions = useMutation({
-    mutationFn: () => api<any>(`/api/projects/${projectId}/roadmap/next-actions`, { method: "POST" }),
-    onSuccess: (r) => setNext(r),
-    onError: (e) => setError(errText(e)),
-  });
-
-  const replan = useMutation({
-    mutationFn: () => api(`/api/projects/${projectId}/roadmap/update`, { method: "POST" }),
-    onSuccess: invalidate,
-    onError: (e) => setError(errText(e)),
-  });
-
-  const rebuild = useMutation({
-    mutationFn: () => api(`/api/projects/${projectId}/roadmap/rebuild`, { method: "POST" }),
-    onSuccess: invalidate,
-    onError: (e) => setError(errText(e)),
-  });
-
-  if (isLoading) return <Loading />;
-
-  if (!data?.roadmap) {
+  if (isLoading) return <><Stack.Screen options={{ title: "Manage" }} /><Loading /></>;
+  if (!project) {
     return (
-      <Card>
-        <H2>Build your roadmap</H2>
-        <Meta>Nova plans backwards from your goal, using your project brief.</Meta>
-        <Field label="Where do you want to get to?" value={goal} onChangeText={setGoal} multiline
-          placeholder="e.g. Launch to 500 students across 3 campuses by June" />
-        {error && <ErrorNote message={error} />}
-        <Row center gap={spacing.sm}>
-          <Btn label="Build my roadmap" disabled={!goal.trim()} loading={generate.isPending}
-            onPress={() => generate.mutate()} style={{ flex: 1 }} />
-          <Cost credits={3} />
-        </Row>
-      </Card>
+      <><Stack.Screen options={{ title: "Manage" }} />
+        <View style={{ flex: 1, backgroundColor: colors.canvas, justifyContent: "center" }}>
+          <Empty icon="alert-circle-outline" title="Couldn't load this project" body={(error as any)?.message} action="Back to projects" onAction={() => router.back()} />
+        </View>
+      </>
+    );
+  }
+  if (members && !isMember) {
+    return (
+      <><Stack.Screen options={{ title: project.title }} />
+        <View style={{ flex: 1, backgroundColor: colors.canvas, justifyContent: "center" }}>
+          <Empty icon="lock-closed-outline" title="This workspace is for the team" body="You don't have access to this project's management dashboard." action="View the project" onAction={() => router.replace(`/project/${id}` as any)} />
+        </View>
+      </>
     );
   }
 
-  const done = data.roadmap.phases.filter((p: any) => p.status === "completed").length;
+  const go = (t: string) => setTab((tabs.some((x) => x.value === t) ? t : "tools") as Tab);
 
   return (
-    <View style={{ gap: spacing.md }}>
-      <Card>
-        <Label>Goal · v{data.roadmap.version}</Label>
-        <H2>{data.roadmap.goal}</H2>
-        {data.roadmap.summary && <Body muted>{data.roadmap.summary}</Body>}
-        <Progress value={(done / Math.max(1, data.roadmap.phases.length)) * 100} />
-        <Meta>{done} of {data.roadmap.phases.length} phases complete</Meta>
-      </Card>
-
-      <Row center gap={spacing.sm}>
-        <Btn label="What should I do next?" loading={nextActions.isPending}
-          onPress={() => nextActions.mutate()} style={{ flex: 1 }} />
-        <Cost credits={3} />
-      </Row>
-
-      {next && (
-        <Card accent={colors.primary}>
-          <Label>Do these next</Label>
-          {next.reasoning && <Body muted>{next.reasoning}</Body>}
-          {next.actions.map((a: any, i: number) => (
-            <View key={i} style={{ gap: 2, marginTop: spacing.sm }}>
-              <Body style={{ fontWeight: "700" }}>{i + 1}. {a.title}</Body>
-              <Meta>{a.why}</Meta>
-              <Row gap={spacing.xs}>
-                <Chip label={a.impact === "high" ? "High impact" : "Medium impact"} small active={a.impact === "high"} />
-                <Chip label={a.effort} small />
-              </Row>
+    <NoticeProvider>
+      <Stack.Screen options={{ title: "Manage" }} />
+      <ScrollView
+        style={{ flex: 1, backgroundColor: colors.canvas }}
+        contentContainerStyle={{ paddingBottom: spacing.xxl * 3 }}
+        stickyHeaderIndices={[1]}
+        keyboardShouldPersistTaps="handled"
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+      >
+        {/* Project header: cover, logo, title, path — LinkedIn's page header */}
+        <View style={{ backgroundColor: colors.surface }}>
+          {project.coverUrl
+            ? <Image source={{ uri: assetUri(project.coverUrl)! }} style={{ height: 88, width: "100%" }} resizeMode="cover" />
+            : <NovaGradient style={{ height: 88, opacity: 0.85 }} />}
+          <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.md }}>
+            <View style={{ marginTop: -30, width: 60, height: 60, borderRadius: 12, backgroundColor: colors.surface, borderWidth: 3, borderColor: colors.surface, overflow: "hidden", alignItems: "center", justifyContent: "center" }}>
+              {project.logoUrl
+                ? <Image source={{ uri: assetUri(project.logoUrl)! }} style={{ width: 54, height: 54, borderRadius: 9 }} resizeMode="cover" />
+                : <View style={{ width: 54, height: 54, borderRadius: 9, backgroundColor: colors.primarySoft, alignItems: "center", justifyContent: "center" }}><Text style={{ fontFamily: fontFamily.bold, fontSize: 24, color: colors.primary }}>{(project.title || "?").charAt(0).toUpperCase()}</Text></View>}
             </View>
-          ))}
-        </Card>
-      )}
-
-      <Row center gap={spacing.sm}>
-        <Btn label="Re-plan" variant="outline" small loading={replan.isPending}
-          onPress={() => replan.mutate()} style={{ flex: 1 }} />
-        <Cost credits={2} />
-        <Btn label="Rebuild" variant="outline" small loading={rebuild.isPending}
-          onPress={() => rebuild.mutate()} style={{ flex: 1 }} />
-        <Cost credits={quote?.cost ?? 8} />
-      </Row>
-
-      {error && <ErrorNote message={error} />}
-
-      {data.roadmap.phases.map((p: any) => (
-        <Card key={p.id}>
-          <Row center gap={spacing.sm}>
-            <Text style={{ fontSize: 16 }}>
-              {p.status === "completed" ? "✅" : p.status === "in-progress" ? "🔵" : "⚪️"}
-            </Text>
-            <H2 style={{ flex: 1 }}>{p.title}</H2>
-          </Row>
-          {p.estimatedDuration && <Meta>{p.estimatedDuration}</Meta>}
-          {p.description && <Body muted>{p.description}</Body>}
-        </Card>
-      ))}
-    </View>
-  );
-}
-
-function TasksTab({ projectId }: { projectId: string }) {
-  const qc = useQueryClient();
-  const [error, setError] = useState<string | null>(null);
-
-  const { data, isLoading } = useQuery({
-    queryKey: ["project", projectId, "kanban"],
-    queryFn: () => api<any[]>(`/api/projects/${projectId}/kanban`),
-  });
-
-  const generate = useMutation({
-    mutationFn: () => api(`/api/projects/${projectId}/kanban/ai-generate`, { method: "POST" }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["project", projectId, "kanban"] }),
-    onError: (e) => setError(errText(e)),
-  });
-
-  const update = useMutation({
-    mutationFn: (t: any) => api(`/api/kanban/${t.id}`, {
-      method: "PATCH",
-      body: { status: t.status === "done" ? "todo" : "done" },
-    }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["project", projectId, "kanban"] }),
-  });
-
-  if (isLoading) return <Loading />;
-
-  return (
-    <View style={{ gap: spacing.md }}>
-      <Row center gap={spacing.sm}>
-        <Btn label="Generate tasks with Nova" variant="outline" small
-          loading={generate.isPending} onPress={() => generate.mutate()} style={{ flex: 1 }} />
-        <Cost credits={1} />
-      </Row>
-      {error && <ErrorNote message={error} />}
-      {!data?.length ? (
-        <Empty title="Nothing on the board" body="Generate tasks to break the project down." />
-      ) : (
-        data.map((t) => (
-          <Card key={t.id} onPress={() => update.mutate(t)}>
-            <Row center gap={spacing.sm}>
-              <Text style={{ fontSize: 16 }}>{t.status === "done" ? "☑️" : "⬜️"}</Text>
-              <View style={{ flex: 1 }}>
-                <Body style={t.status === "done" ? { textDecorationLine: "line-through" } : undefined}>
-                  {t.title}
-                </Body>
-                {t.description && <Meta numberOfLines={2}>{t.description}</Meta>}
+            <Row between style={{ marginTop: spacing.sm, alignItems: "flex-start" }} gap={spacing.md}>
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text style={{ fontFamily: fontFamily.bold, fontSize: font.xl, color: colors.text, letterSpacing: -0.3 }} numberOfLines={2}>{project.title}</Text>
+                {!!project.oneLiner && <Text style={{ fontFamily: fontFamily.regular, fontSize: font.sm, color: colors.textSecondary }} numberOfLines={2}>{project.oneLiner}</Text>}
+                <Row center gap={4} style={{ marginTop: 2 }}>
+                  <Icon name="navigate-circle-outline" size={13} color={colors.primary} />
+                  <Meta style={{ color: colors.primary, fontFamily: fontFamily.semibold }}>{goalLabel(project.goal)}</Meta>
+                  <Meta>· {isOwner ? "Owner" : "Member"}{project.isPrivate ? " · Private" : ""}</Meta>
+                </Row>
               </View>
-              <Chip label={t.priority} small />
+              <Btn small variant="outline" icon="eye-outline" label="Public page" onPress={() => router.push(`/project/${id}` as any)} />
             </Row>
-          </Card>
-        ))
-      )}
-    </View>
-  );
-}
-
-function InvestorTab({ projectId }: { projectId: string }) {
-  const qc = useQueryClient();
-  const router = useRouter();
-  const [error, setError] = useState<string | null>(null);
-  const [running, setRunning] = useState<string | null>(null);
-
-  const { data, isLoading } = useQuery({
-    queryKey: ["project", projectId, "investor"],
-    queryFn: () => api<any>(`/api/projects/${projectId}/investor-artifacts`),
-  });
-
-  const run = useMutation({
-    mutationFn: (path: string) => api(`/api/projects/${projectId}/${path}`, { method: "POST" }),
-    onSuccess: () => {
-      setRunning(null);
-      qc.invalidateQueries({ queryKey: ["project", projectId, "investor"] });
-      qc.invalidateQueries({ queryKey: ["subscription"] });
-    },
-    onError: (e) => { setRunning(null); setError(errText(e)); },
-  });
-
-  if (isLoading) return <Loading />;
-
-  const latest = (kind: string) => data?.artifacts?.find((a: any) => a.kind === kind);
-  const score = latest("readiness_score");
-  const deck = latest("deck_outline");
-
-  const TOOLS = [
-    { key: "readiness-score", label: "Readiness Score", credits: 5 },
-    { key: "pitch-deck", label: "Pitch Deck Outline", credits: 8 },
-    { key: "pricing-analysis", label: "Pricing Analysis", credits: 5 },
-  ];
-
-  return (
-    <View style={{ gap: spacing.md }}>
-      {TOOLS.map((t) => (
-        <Row key={t.key} center gap={spacing.sm}>
-          <Btn label={t.label} variant="outline" small loading={running === t.key}
-            onPress={() => { setRunning(t.key); run.mutate(t.key); }} style={{ flex: 1 }} />
-          <Cost credits={t.credits} />
-        </Row>
-      ))}
-      {error && <ErrorNote message={error} />}
-
-      {score && (
-        <Card>
-          <Label>Investor readiness</Label>
-          <Row center gap={spacing.md}>
-            <H1>{score.score}</H1>
-            <View style={{ flex: 1 }}>
-              <Chip label={String(score.content?.verdict || "").replace(/-/g, " ")} small active />
-              <Body muted>{score.summary}</Body>
-            </View>
-          </Row>
-          {(score.content?.blockers ?? []).map((b: string, i: number) => (
-            <Meta key={i}>· {b}</Meta>
-          ))}
-        </Card>
-      )}
-
-      {deck && (
-        <Card>
-          <Label>Pitch deck outline</Label>
-          {deck.summary && <Body muted>{deck.summary}</Body>}
-          {(deck.content?.slides ?? []).slice(0, 12).map((s: any, i: number) => (
-            <View key={i} style={{ gap: 2, marginTop: spacing.xs }}>
-              <Body style={{ fontWeight: "700" }}>{s.number}. {s.headline}</Body>
-              <Meta>{s.purpose}</Meta>
-            </View>
-          ))}
-        </Card>
-      )}
-
-      <Card onPress={() => router.push(`/investor/interview?id=${projectId}`)}>
-        <Row between center>
-          <View style={{ flex: 1, paddingRight: spacing.sm }}>
-            <Body style={{ fontWeight: "700" }}>Mock investor interview</Body>
-            <Meta>Nova plays the investor and grades every answer.</Meta>
           </View>
-          <Cost credits={1} />
-        </Row>
-      </Card>
+        </View>
 
-      <Card onPress={() => router.push(`/investor/critique?id=${projectId}`)}>
-        <Row between center>
-          <View style={{ flex: 1, paddingRight: spacing.sm }}>
-            <Body style={{ fontWeight: "700" }}>Pitch critique</Body>
-            <Meta>Paste your pitch and get it torn apart, kindly.</Meta>
-          </View>
-          <Cost credits={5} />
-        </Row>
-      </Card>
-    </View>
+        <TabStrip options={tabs} value={tab} onChange={setTab} />
+
+        <View style={{ padding: spacing.md, gap: spacing.md }}>
+          {tab === "dashboard" && <Dashboard projectId={id!} project={project} onNavigate={go} />}
+          {tab === "tasks" && <Kanban projectId={id!} members={members ?? []} />}
+          {tab === "milestones" && <Milestones projectId={id!} />}
+          {tab === "checkins" && <CheckIns projectId={id!} projectTitle={project.title} />}
+          {tab === "team" && <Team projectId={id!} project={project} members={members ?? []} isOwner={isOwner} />}
+          {tab === "investors" && <Investors projectId={id!} isOwner={isOwner} />}
+          {tab === "roadmap" && <Roadmap projectId={id!} />}
+          {tab === "setup" && <Setup projectId={id!} project={project} isOwner={isOwner} />}
+          {tab === "tools" && <WebTools projectId={id!} />}
+        </View>
+      </ScrollView>
+    </NoticeProvider>
   );
 }

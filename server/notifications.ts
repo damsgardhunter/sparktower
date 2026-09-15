@@ -46,15 +46,21 @@ export async function notify(input: {
   postId?: string | null;
   projectId?: string | null;
   excerpt?: string | null;
+  /** For what the system tells someone about their own work ("your next step is ready"). */
+  allowSelf?: boolean;
+  /** Record it once and never resurface it — a nudge, not an event that can recur. */
+  once?: boolean;
 }): Promise<void> {
   try {
-    const recipients = [...new Set(input.recipients.filter((r): r is string => !!r && r !== input.actorId))].slice(0, MAX_FANOUT);
+    const recipients = [...new Set(input.recipients.filter((r): r is string => !!r && (input.allowSelf || r !== input.actorId)))].slice(0, MAX_FANOUT);
     if (!recipients.length) return;
     const excerpt = clip(input.excerpt);
-    await db.insert(notifications).values(recipients.map((recipientId) => ({
+    const insert = db.insert(notifications).values(recipients.map((recipientId) => ({
       recipientId, actorId: input.actorId, kind: input.kind, targetId: input.targetId,
       postId: input.postId ?? null, projectId: input.projectId ?? null, excerpt,
-    }))).onConflictDoUpdate({
+    })));
+    if (input.once) await insert.onConflictDoNothing();
+    else await insert.onConflictDoUpdate({
       target: [notifications.recipientId, notifications.actorId, notifications.kind, notifications.targetId],
       set: { readAt: null, createdAt: sql`now()`, excerpt },
     });

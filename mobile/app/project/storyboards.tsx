@@ -3,9 +3,9 @@ import { Image, Pressable, Text, View, useWindowDimensions } from "react-native"
 import { Stack, useLocalSearchParams } from "expo-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, API_URL, getAccessToken } from "../../src/api/client";
-import { colors, radius, spacing } from "../../src/theme";
+import { colors, fontFamily, radius, spacing } from "../../src/theme";
 import {
-  Body, Btn, Card, Chip, Cost, Empty, ErrorNote, Field, H2, Label, Loading,
+  Body, Btn, Card, Chip, Cost, Empty, ErrorNote, Field, H2, Icon, Label, Loading,
   Meta, Row, Screen, errText, plain, timeAgo,
 } from "../../src/components/ui";
 
@@ -100,8 +100,8 @@ export default function Storyboards() {
     return (
       <>
         <Stack.Screen options={{ title: "Storyboard" }} />
-        <Screen>
-          <Btn label="← All storyboards" variant="ghost" small onPress={() => setOpenId(null)} />
+        <Screen canvas>
+          <Btn label="All storyboards" icon="arrow-back" variant="ghost" small style={{ alignSelf: "flex-start" }} onPress={() => setOpenId(null)} />
           {!open ? (
             <Loading label="Opening…" />
           ) : (
@@ -121,7 +121,7 @@ export default function Storyboards() {
                     <Label>Scene {i + 1}</Label>
                   </Row>
                   <SceneImage path={scene.imageUrl} headers={headers} width={frameWidth} />
-                  {scene.caption ? <Body style={{ fontWeight: "700" }}>{plain(scene.caption)}</Body> : null}
+                  {scene.caption ? <Body style={{ fontFamily: fontFamily.semibold }}>{plain(scene.caption)}</Body> : null}
                   {scene.prompt ? <Meta>{plain(scene.prompt)}</Meta> : null}
                 </Card>
               ))}
@@ -143,7 +143,7 @@ export default function Storyboards() {
   return (
     <>
       <Stack.Screen options={{ title: "AI storyboard" }} />
-      <Screen>
+      <Screen canvas>
         <Card>
           <H2>Generate a storyboard</H2>
           <Meta>
@@ -169,7 +169,7 @@ export default function Storyboards() {
                   gap: 2,
                 }}
               >
-                <Body style={{ fontWeight: "700" }}>{s.label}</Body>
+                <Body style={{ fontFamily: fontFamily.semibold }}>{s.label}</Body>
                 <Meta>{s.blurb}</Meta>
               </Pressable>
             ))}
@@ -187,7 +187,7 @@ export default function Storyboards() {
           />
           <Row between center>
             <View style={{ flex: 1, paddingRight: spacing.md }}>
-              <Body style={{ fontWeight: "700" }}>AI-rendered frames</Body>
+              <Body style={{ fontFamily: fontFamily.semibold }}>AI-rendered frames</Body>
               <Meta>
                 {useAiImages
                   ? "Slower, but the frames look like real shots."
@@ -220,6 +220,7 @@ export default function Storyboards() {
           <Loading />
         ) : !list?.length ? (
           <Empty
+            icon="film-outline"
             title="No storyboards yet"
             body="Generate one above. Try a couple of different styles — they read very differently."
           />
@@ -234,11 +235,11 @@ export default function Storyboards() {
                   />
                 ) : (
                   <View style={{ width: 72, height: 72, borderRadius: radius.sm, backgroundColor: colors.surfaceRaised, alignItems: "center", justifyContent: "center" }}>
-                    <Text style={{ fontSize: 24 }}>🎬</Text>
+                    <Icon name="film-outline" size={26} color={colors.textTertiary} />
                   </View>
                 )}
                 <View style={{ flex: 1, gap: 2 }}>
-                  <Body style={{ fontWeight: "700" }}>
+                  <Body style={{ fontFamily: fontFamily.semibold }}>
                     {STYLES.find((x) => x.value === s.style)?.label || s.style}
                   </Body>
                   <Meta numberOfLines={1}>{s.prompt || `${s.sceneCount} scenes`}</Meta>

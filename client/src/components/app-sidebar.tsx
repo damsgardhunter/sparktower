@@ -60,6 +60,14 @@ export function AppSidebar() {
   });
   const unreadCount = unreadData?.count || 0;
 
+  // What's new from the builders and projects you've looked at since you last opened Discover.
+  const { data: discoverNews } = useQuery<{ count: number; more: boolean }>({
+    queryKey: ["/api/discover/new-count"],
+    enabled: !!user,
+    refetchInterval: 60_000,
+  });
+  const discoverNew = discoverNews?.count ?? 0;
+
   // Reviewers get the daily safety review, badged when alerts are waiting or a review is due.
   const isReviewer = !!user && ["reviewer", "admin"].includes((user as any).platformRole);
   const { data: safety } = useQuery<{ reviewDue: boolean; alerts: number }>({
@@ -95,6 +103,11 @@ export function AppSidebar() {
                     <Link href={item.url} data-testid={`link-${item.title.toLowerCase()}`}>
                       <item.icon className="h-4 w-4" />
                       <span className="flex-1">{item.title}</span>
+                      {item.title === "Discover" && discoverNew > 0 && (
+                        <Badge variant="default" className="no-default-hover-elevate no-default-active-elevate text-xs" data-testid="badge-discover-new" title="New posts from people and projects you've looked at">
+                          {discoverNew > 99 ? "99+" : `${discoverNew}${discoverNews?.more ? "+" : ""} new`}
+                        </Badge>
+                      )}
                       {item.title === "Messages" && unreadCount > 0 && (
                         <Badge variant="default" className="no-default-hover-elevate no-default-active-elevate text-xs" data-testid="badge-unread-messages">
                           {unreadCount > 99 ? "99+" : unreadCount}

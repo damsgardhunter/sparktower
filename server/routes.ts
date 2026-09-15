@@ -16,6 +16,7 @@ import { registerInvestorRoutes } from "./investor-routes";
 import { registerNovaBriefingRoutes } from "./nova-briefing";
 import { registerFeedbackLoopRoutes } from "./feedback-loop-routes";
 import { registerNotificationRoutes, notify, unnotify } from "./notifications";
+import { registerPathReturnRoutes, lastDoneStep } from "./path-return";
 import { ensureCreatorBadges } from "./backer-badges";
 import { registerFeedRoutes, registerProjectDiscussionRoutes, publishSystemPost, SYSTEM_POST_COPY, SYSTEM_POST_TYPES } from "./feed-routes";
 import { registerProfileRoutes } from "./profile-routes";
@@ -359,6 +360,7 @@ export async function registerRoutes(
   registerProjectDiscussionRoutes(app);
   registerFeedbackLoopRoutes(app);
   registerNotificationRoutes(app);
+  registerPathReturnRoutes(app);
   registerProfileRoutes(app);
   registerDocumentRoutes(app);
   registerCodeAuditRoutes(app);
@@ -2717,7 +2719,8 @@ RULES:
     try {
       const status = await pathStatus(req.params.id);
       if (!status) return res.status(404).json({ message: "Project not found" });
-      res.json(status);
+      // The step just finished, for "share it for feedback" on the path.
+      res.json(status.adopted ? { ...status, lastDone: await lastDoneStep(req.params.id, status.events).catch(() => null) } : status);
     } catch (error) {
       console.error("Path status error:", error);
       res.status(500).json({ message: "Couldn't read the path" });
@@ -3699,13 +3702,27 @@ RULES:
     res.json(users);
   });
 
-  app.get("/api/users/:id", async (req, res) => {
+  /**
+   * Someone's public profile. Readable signed out, so it carries only what a
+   * profile page shows: never the account row itself, which holds the email,
+   * Google and Stripe ids, plan and credits, platform role, suspension reason
+   * and signup attribution. Private projects appear only to their team.
+   */
+  app.get("/api/users/:id", async (req: any, res) => {
     const user = await storage.getUser(req.params.id);
     if (!user) return res.status(404).json({ message: "User not found" });
     const profile = await storage.getUserProfile(req.params.id);
     const allProjects = await storage.getProjects();
-    const userProjects = allProjects.filter(p => p.ownerId === req.params.id);
-    res.json({ ...user, profile, projects: userProjects });
+    const viewerId = req.user?.id as string | undefined;
+    const userProjects = [];
+    for (const p of allProjects.filter((x) => x.ownerId === req.params.id)) {
+      if (!p.isPrivate || (viewerId && (viewerId === p.ownerId || (await isProjectMember(viewerId, p.id))))) userProjects.push(p);
+    }
+    res.json({
+      id: user.id, firstName: user.firstName, lastName: user.lastName,
+      profileImageUrl: user.profileImageUrl, createdAt: user.createdAt,
+      profile, projects: userProjects,
+    });
   });
 
   app.post("/api/projects/:id/media", isAuthenticated, async (req: any, res) => {

@@ -33,11 +33,12 @@ import { refreshDataShape, compareWithCode } from "./data-shape";
 import { verifyMilestonesFromAudit } from "./phase-tree-verifiers";
 import { refreshPace, loopsForAudit, renderLoopsForPrompt, backboneIdOf, renderPathForAudit } from "./phase-trees";
 import {
-  diffFileIndex, renderFileChanges, tidyCatchUp, summarizeCatchUp, describeOp, SAFE_SECTIONS, CATCHUP_SECTIONS,
+  diffFileIndex, renderFileChanges, tidyCatchUp, summarizeCatchUp, describeOp, sameWork, SAFE_SECTIONS, CATCHUP_SECTIONS,
   type CatchUpSection, type AuditAutoApply,
 } from "@shared/audit-catchup";
 import { fetchCommitsSince } from "./code-ingest";
 import { sanitizeLoopClosures } from "@shared/phase-trees";
+import { rereadOpenLoops } from "./audit-loop-reads";
 
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
@@ -54,6 +55,25 @@ const strList = (v: unknown, max = 20, len = 300): string[] =>
   Array.isArray(v) ? v.map((x) => str(x, len)).filter(Boolean).slice(0, max) : [];
 
 const SEVERITIES = ["low", "medium", "high"];
+
+/** Loops that look like the same loop twice — which the catch-up should reconcile, not leave for the builder to notice. */
+function duplicateLoops(loops: { key: string; taskId: string; title: string; type: string }[]): string | null {
+  const pairs: string[] = [];
+  for (let i = 0; i < loops.length; i++) for (let j = i + 1; j < loops.length; j++) {
+    if (loops[i].type === loops[j].type && sameWork(loops[i].title, loops[j].title)) {
+      pairs.push(`- ${loops[i].key} id=${loops[i].taskId} "${loops[i].title}" and ${loops[j].key} id=${loops[j].taskId} "${loops[j].title}"`);
+    }
+  }
+  return pairs.length ? `POSSIBLE DUPLICATE LOOPS — the same cycle written twice; keep the better one and retire the other (or merge with update_loop)\n${pairs.join("\n")}` : null;
+}
+
+/** Short enough to read at a glance, and never cut mid-word: ends at the last full sentence that fits. */
+export function clipToSentence(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("! "), cut.lastIndexOf("? "));
+  return end > max * 0.4 ? cut.slice(0, end + 1) : `${cut.slice(0, cut.lastIndexOf(" "))}…`;
+}
 
 const AUDIT_SCHEMA = `Respond ONLY with valid JSON (no markdown, no code fences):
 {
@@ -99,7 +119,7 @@ const AUDIT_SCHEMA = `Respond ONLY with valid JSON (no markdown, no code fences)
       "fix": "for open or not-built: the concrete change that closes it" }
   ],
   "nextThreeThings": ["the three highest-leverage things to do next, in order"],
-  "catchUpNote": "one or two sentences, to the builder: what they've done since the last audit and where the project is heading now",
+  "catchUpNote": "at most three short sentences, to the builder: what they've done since the last audit and where the project is heading now. Anything it says needs reconciling must also be in operations.",
   "operations": [ ... ]
 }`;
 
@@ -133,6 +153,7 @@ CATCHING THE PROJECT UP. Builders work ahead: they ship features without writing
 - The brief, scope and tech stack: update_project / update_scope only where the code shows the project has moved — a new direction, a feature now core, a stack that changed, a live URL. Rewrite the field in the builder's voice; don't pad it.
 - The core loops follow the product. When the code shows the product has changed direction — a loop now works differently, a new cycle has become central, an old one is gone — change them: update_loop to rewrite one (or change its kind), create_loop for a kind that isn't written, retire_loop for a loop the product no longer runs (never the last of its kind; rewrite that instead). Change a loop only on clear evidence in the code, say what changed in the steps, and never propose anything the builder REMOVED.
 - What's next: create_task for real gaps in the direction the builder is heading (at most 10), update_task where a task's scope changed. Milestones and roadmap phases only where they're plainly out of date.
+- A note that names a problem with no operation for it is a failed audit. If catchUpNote says the direction needs reconciling — a loop that contradicts THE BUILDER'S STANDING NOTES, two loops that are the same loop (see POSSIBLE DUPLICATE LOOPS), a brief that describes a product the code has moved away from — operations must contain the edits that reconcile it: update_loop to rewrite, retire_loop to drop a duplicate or a dead loop, update_project for the brief.
 - If nothing changed, return no operations. Never re-propose anything in DECLINED LAST TIME unless the code has changed in that exact area since.
 - THE BUILDER'S STANDING NOTES override the code's suggestions about direction.
 
@@ -215,6 +236,7 @@ export async function runCodeAudit(opts: {
           auditLoops.length
             ? `THE BUSINESS'S LOOPS (check each one closes in the code; ids are for update_loop)\n${renderLoopsForPrompt(auditLoops)}\n${auditLoops.map((l) => `${l.key} id=${l.taskId}`).join(", ")}`
             : "THE BUSINESS'S LOOPS\nNone written yet.",
+          duplicateLoops(auditLoops),
           loopRead?.coverage.missing.length || loopRead?.coverage.unwritten.length
             ? `LOOP KINDS NOT WRITTEN YET: ${[...(loopRead?.coverage.missing ?? []), ...(loopRead?.coverage.unwritten ?? [])].join(", ")}`
             : null,
@@ -290,8 +312,8 @@ export async function runCodeAudit(opts: {
       verdict: ["complete", "in-progress", "not-started"].includes(m?.verdict) ? m.verdict : "not-started",
       why: str(m?.why, 400),
     })).filter((m: any) => m.title),
-    /** Whether each written loop closes in the code, held to cited files. */
-    loops: sanitizeLoopClosures(parsed.loops, auditLoops, new Set(snapshot.files.map((f) => f.path))),
+    /** Whether each written loop closes in the code, held to cited files — open ones read again, closely. */
+    loops: await rereadOpenLoops(ent, auditLoops, sanitizeLoopClosures(parsed.loops, auditLoops, new Set(snapshot.files.map((f) => f.path))), snapshot.files, digest.signals.routes),
     nextThreeThings: strList(parsed.nextThreeThings, 5, 400),
     /** Scan facts the builder should see even if the model ignored them. */
     scan: {
@@ -332,7 +354,7 @@ export async function runCodeAudit(opts: {
     declined,
   });
   (findings as any).catchUp = {
-    note: str(parsed.catchUpNote, 600),
+    note: clipToSentence(str(parsed.catchUpNote, 2000), 900),
     summary: summarizeCatchUp(tidied.operations),
     since: since?.toISOString() ?? null,
     files: fileChanges ? { added: fileChanges.added.length, modified: fileChanges.modified.length, removed: fileChanges.removed.length } : null,
@@ -402,19 +424,33 @@ export async function applyAuditSections(
   if (!audit) throw Object.assign(new Error("Audit not found"), { status: 404 });
   const ops = ((audit.operations as any[]) ?? []).map((o) => ({ ...o }));
   const pending = (o: any) => !o._status || o._status === "pending";
-  const chosen = ops.filter((o) => pending(o) && sections.includes(o._section ?? "plan"));
-  const { changes, skipped } = chosen.length
-    ? await applyProjectOperations(audit.projectId, userId, chosen.map(({ _section, _status, _label, ...op }) => op), {
-        canEditMilestones: ent.aiMilestones, canEditRoadmap: ent.roadmapUpdates, maxOperations: 200, source: "audit",
-      })
-    : { changes: [], skipped: [] as string[] };
+  const changes: Awaited<ReturnType<typeof applyProjectOperations>>["changes"] = [];
+  const skipped: string[] = [];
+  /*
+   * One edit at a time, so each is marked with what really happened to it. As
+   * a batch, an edit the engine skipped (a loop kind already written, a task
+   * that's gone) was marked applied along with the rest — and the card said
+   * the project was up to date when part of it wasn't.
+   */
   for (const o of ops) {
     if (!pending(o)) continue;
-    if (sections.includes(o._section ?? "plan")) o._status = "applied";
-    else if (opts.declineOthers) o._status = "declined";
+    if (!sections.includes(o._section ?? "plan")) {
+      if (opts.declineOthers) o._status = "declined";
+      continue;
+    }
+    const { _section, _status, _label, _reason, ...op } = o;
+    const r = await applyProjectOperations(audit.projectId, userId, [op], {
+      canEditMilestones: ent.aiMilestones, canEditRoadmap: ent.roadmapUpdates, maxOperations: 1, source: "audit",
+    });
+    changes.push(...r.changes);
+    if (r.changes.length) o._status = "applied";
+    else { o._status = "skipped"; o._reason = r.skipped[0] ?? "Nothing changed."; skipped.push(`${o._label ?? op.op}: ${o._reason}`); }
   }
   const findings = (audit.findings as any) ?? {};
-  if (findings.catchUp) findings.catchUp.applied = [...(findings.catchUp.applied ?? []), ...changes.map((c) => c.description)].slice(-200);
+  if (findings.catchUp) {
+    findings.catchUp.applied = [...(findings.catchUp.applied ?? []), ...changes.map((c) => c.description)].slice(-200);
+    findings.catchUp.skipped = [...(findings.catchUp.skipped ?? []), ...skipped].slice(-100);
+  }
   await storage.updateCodeAudit(audit.id, {
     operations: ops, findings,
     ...(ops.some(pending) ? {} : { appliedAt: new Date() }),

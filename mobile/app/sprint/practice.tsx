@@ -1,138 +1,121 @@
 import { useState } from "react";
-import { View } from "react-native";
+import { ScrollView, Text, View } from "react-native";
 import { useRouter, Stack } from "expo-router";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api } from "../../src/api/client";
-import { spacing } from "../../src/theme";
-import {
-  Body, Btn, Card, Chip, Cost, ErrorNote, H2, Label, Meta, Row, Screen, Segments, errText,
-} from "../../src/components/ui";
+import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
+import { Btn, ErrorNote, Icon, NovaGradient, errText } from "../../src/components/ui";
+import { OptionCard } from "../../src/components/MoreKit";
+import { SprintIdeaPicker } from "../../src/components/SprintIdeaPicker";
+import { DURATION_OPTIONS, STYLE_OPTIONS, type Duration, type ProductStyle, type SprintIdea } from "../../src/components/SprintKit";
 
-const DURATIONS = [
-  { value: "24h" as const, label: "24 hours" },
-  { value: "72h" as const, label: "72 hours" },
-];
-const STYLES = [
-  { value: "past" as const, label: "Reimagined Classic" },
-  { value: "modern" as const, label: "Modern Innovation" },
-  { value: "futuristic" as const, label: "Future Vision" },
-];
-
-interface Idea {
-  name: string; tagline: string; pitch: string; twist: string; whoItsFor: string; vibe: string;
-}
-
-/** Practice sprint setup: duration, style, then pick one of three Nova ideas. */
+/** Practice sprint setup — duration, style, then one of three ideas from Nova. The web's /sprints/practice. */
 export default function PracticeSprint() {
   const router = useRouter();
-  const [duration, setDuration] = useState<"24h" | "72h">("24h");
-  const [style, setStyle] = useState<"past" | "modern" | "futuristic">("modern");
-  const [ideas, setIdeas] = useState<Idea[]>([]);
-  const [picked, setPicked] = useState<string | null>(null);
+  const qc = useQueryClient();
+  const insets = useSafeAreaInsets();
+  const [step, setStep] = useState(1);
+  const [duration, setDuration] = useState<Duration | null>(null);
+  const [style, setStyle] = useState<ProductStyle | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchIdeas = useMutation({
-    mutationFn: () => api<{ ideas: Idea[] }>("/api/sprints/idea-options", {
-      method: "POST",
-      body: { productStyle: style },
-    }),
-    onSuccess: (r) => { setIdeas(r.ideas); setPicked(null); setError(null); },
-    onError: (e) => setError(errText(e, "Nova couldn't come up with ideas.")),
+  const create = useMutation({
+    // Without an idea the server generates one, which is "surprise me".
+    mutationFn: (idea?: SprintIdea) => api<any>("/api/sprints/practice", { method: "POST", body: { duration, productStyle: style, idea } }),
+    onSuccess: (sprint) => {
+      qc.invalidateQueries({ queryKey: ["sprints"] });
+      qc.invalidateQueries({ queryKey: ["subscription"] });
+      router.replace(`/sprint/${sprint.id}`);
+    },
+    onError: (e: any) => setError(
+      e?.status === 402 || e?.status === 403 || /credit/i.test(e?.message ?? "")
+        ? "Not enough AI credits. Practice sprints use 1 credit for Nova's product suggestion."
+        : errText(e, "Couldn't create the practice sprint."),
+    ),
   });
 
-  const create = useMutation({
-    mutationFn: (idea?: Idea) => api<any>("/api/sprints/practice", {
-      method: "POST",
-      body: { duration, productStyle: style, idea },
-    }),
-    onSuccess: (sprint) => router.replace(`/sprint/${sprint.id}`),
-    onError: (e) => setError(errText(e, "Couldn't create the practice sprint.")),
-  });
+  const styleName = STYLE_OPTIONS.find((o) => o.value === style)?.label.toLowerCase();
 
   return (
     <>
-      <Stack.Screen options={{ title: "Practice Sprint" }} />
-      <Screen>
-        <Card>
-          <H2>Practice with Nova</H2>
-          <Meta>
-            Nova pitches you ideas, talks through the product, answers the ideation
-            questions as your partner, and gives feedback at the end.
-          </Meta>
-        </Card>
+      <Stack.Screen options={{ title: "Practice sprint" }} />
+      <ScrollView style={{ flex: 1, backgroundColor: colors.background }} contentContainerStyle={{ padding: spacing.lg, gap: spacing.lg, paddingBottom: spacing.xxl }}>
+        {/* Nova, the practice partner. */}
+        <NovaGradient style={{ borderRadius: radius.lg, padding: spacing.lg, gap: spacing.sm }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+            <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(255,255,255,0.25)", alignItems: "center", justifyContent: "center" }}>
+              <Icon name="school" size={22} color="#FFFFFF" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: "#FFFFFF", fontSize: font.lg, fontFamily: fontFamily.bold }}>Practice with Nova</Text>
+              <Text style={{ color: "rgba(255,255,255,0.9)", fontSize: font.xs, fontFamily: fontFamily.medium }}>Your AI co-founder for a dry run</Text>
+            </View>
+          </View>
+          <Text style={{ color: "#FFFFFF", fontSize: font.sm, lineHeight: 19, fontFamily: fontFamily.regular }}>
+            Nova pitches you ideas, talks through the product with you, answers the ideation questions as your partner, and gives feedback at the end.
+          </Text>
+        </NovaGradient>
 
-        <Label>How long?</Label>
-        <Segments options={DURATIONS} value={duration} onChange={setDuration} />
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.sm }}>
+          {[1, 2, 3].map((n) => (
+            <View key={n} style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+              <View style={{ width: 28, height: 28, borderRadius: 14, alignItems: "center", justifyContent: "center", backgroundColor: n <= step ? colors.primary : colors.surfaceRaised }}>
+                {n < step ? <Icon name="checkmark" size={15} color="#FFFFFF" /> : (
+                  <Text style={{ color: n <= step ? "#FFFFFF" : colors.textTertiary, fontFamily: fontFamily.semibold, fontSize: font.sm }}>{n}</Text>
+                )}
+              </View>
+              {n < 3 && <View style={{ width: 36, height: 2, backgroundColor: n < step ? colors.primary : colors.surfaceRaised }} />}
+            </View>
+          ))}
+        </View>
 
-        <Label>Product style</Label>
-        <Segments options={STYLES} value={style} onChange={setStyle} />
-
-        {ideas.length === 0 ? (
-          <Card>
-            <H2>Need something to build?</H2>
-            <Meta>Nova will pitch three ideas. Pick whichever sounds most fun.</Meta>
-            <Btn
-              label="Show me 3 ideas"
-              loading={fetchIdeas.isPending}
-              onPress={() => fetchIdeas.mutate()}
-            />
-            <Btn
-              label="Surprise me instead"
-              variant="outline"
-              small
-              loading={create.isPending}
-              onPress={() => create.mutate(undefined)}
-            />
-          </Card>
-        ) : (
-          <View style={{ gap: spacing.md }}>
-            <Row between>
-              <Label>Pick one</Label>
-              <Btn
-                label="Reshuffle"
-                variant="ghost"
-                small
-                loading={fetchIdeas.isPending}
-                onPress={() => fetchIdeas.mutate()}
-              />
-            </Row>
-            {ideas.map((idea) => (
-              <Card
-                key={idea.name}
-                onPress={() => setPicked(idea.name)}
-                accent={picked === idea.name ? "#4ADE80" : undefined}
-              >
-                <Row between>
-                  <H2 style={{ flex: 1 }}>{idea.name}</H2>
-                  {idea.vibe ? <Chip label={idea.vibe} small /> : null}
-                </Row>
-                {idea.tagline ? <Body style={{ fontWeight: "600" }}>{idea.tagline}</Body> : null}
-                <Body muted>{idea.pitch}</Body>
-                {idea.twist ? (
-                  <View style={{ gap: 2 }}>
-                    <Label>The twist</Label>
-                    <Meta>{idea.twist}</Meta>
-                  </View>
-                ) : null}
-                {idea.whoItsFor ? (
-                  <View style={{ gap: 2 }}>
-                    <Label>Who it's for</Label>
-                    <Meta>{idea.whoItsFor}</Meta>
-                  </View>
-                ) : null}
-              </Card>
+        {step === 1 && (
+          <View style={{ gap: spacing.sm }}>
+            <Text style={h2}>Choose sprint duration</Text>
+            {DURATION_OPTIONS.map((o) => (
+              <OptionCard key={o.value} icon={o.icon} title={o.label}
+                body={o.value === "24h" ? "Quick practice run. Problem definition, ICP, value proposition, and a product brief." : "Full practice with a validation phase: outreach, social posts, and interview questions."}
+                selected={duration === o.value} onPress={() => setDuration(o.value)} />
             ))}
-            <Btn
-              label={picked ? `Build "${picked}"` : "Pick an idea above"}
-              disabled={!picked}
-              loading={create.isPending}
-              onPress={() => create.mutate(ideas.find((i) => i.name === picked))}
-            />
+          </View>
+        )}
+
+        {step === 2 && (
+          <View style={{ gap: spacing.sm }}>
+            <Text style={h2}>Choose product style</Text>
+            {STYLE_OPTIONS.map((o) => (
+              <OptionCard key={o.value} icon={o.icon} title={o.label} body={o.body} selected={style === o.value} onPress={() => setStyle(o.value)} />
+            ))}
+          </View>
+        )}
+
+        {step === 3 && style && (
+          <View style={{ gap: spacing.md }}>
+            <View style={{ gap: 2 }}>
+              <Text style={h2}>Pick your product</Text>
+              <Text style={sub}>Nova will pitch three {styleName} ideas. Choose whichever sounds most fun to build.</Text>
+            </View>
+            <SprintIdeaPicker productStyle={style} onChoose={(idea) => create.mutate(idea)} isSubmitting={create.isPending} chooseLabel="Build" />
           </View>
         )}
 
         {error && <ErrorNote message={error} />}
-      </Screen>
+      </ScrollView>
+
+      <View style={{ flexDirection: "row", gap: spacing.sm, paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.md + insets.bottom, borderTopWidth: 1, borderColor: colors.border, backgroundColor: colors.background }}>
+        <Btn label="Back" icon="arrow-back" variant="outline" style={{ flex: 1 }} onPress={() => (step > 1 ? setStep(step - 1) : router.back())} />
+        {step === 1 ? (
+          <Btn label="Next" style={{ flex: 1.5 }} disabled={!duration} onPress={() => setStep(2)} />
+        ) : step === 2 ? (
+          <Btn label="Pick an idea" style={{ flex: 1.5 }} disabled={!style} onPress={() => setStep(3)} />
+        ) : (
+          <Btn label="Surprise me instead" icon="school-outline" variant="outline" style={{ flex: 1.5 }} loading={create.isPending} onPress={() => { setError(null); create.mutate(undefined); }} />
+        )}
+      </View>
     </>
   );
 }
+
+const h2 = { color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold } as const;
+const sub = { color: colors.textSecondary, fontSize: font.sm, fontFamily: fontFamily.regular, lineHeight: 19 } as const;

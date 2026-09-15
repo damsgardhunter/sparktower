@@ -60,6 +60,7 @@ describe("an audit catches the project up", () => {
       { op: "create_task", title: "Post page with comments", status: "done", description: "client/src/pages/post.tsx" },
       { op: "create_task", title: "Comment reactions", status: "done", description: "server/index.ts" },
       { op: "complete_path_milestone", backboneId: "SHIP.M1.5", evidence: "server/index.ts runs an Express app" },
+      { op: "complete_path_milestone", backboneId: "SHIP.NOPE", evidence: "a milestone this path doesn't have" },
       { op: "update_project", fields: { oneLiner: "Plan a week of dinners from what's in your fridge" } },
       { op: "create_loop", type: "growth", title: "Share a plan", steps: "1. Share 2. Friend lands 3. Signs up 4. Shares theirs", closes: "their share link" },
       { op: "create_task", title: "Add Stripe checkout", priority: "high" },
@@ -81,8 +82,13 @@ describe("an audit catches the project up", () => {
     expect(board.some((t: any) => t.title === "Post page with comments")).toBe(false);
     expect(board.find((t: any) => (t.tags ?? []).includes("backbone:SHIP.M1.5")).status).toBe("done");
 
-    // The rest waits, by section.
+    // An edit that didn't take is marked as such, with why — not counted as applied.
     const a1 = first.body.audit;
+    expect(a1.operations.find((o: any) => o.backboneId === "SHIP.NOPE")).toMatchObject({ _status: "skipped", _reason: expect.stringMatching(/isn't open/) });
+    expect(a1.findings.catchUp.skipped).toEqual([expect.stringMatching(/SHIP.NOPE.*isn't open/)]);
+    expect(first.body.autoApplied.changes).toHaveLength(3);
+
+    // The rest waits, by section.
     const pending = a1.operations.filter((o: any) => !o._status);
     expect(pending.map((o: any) => o._section).sort()).toEqual(["brief", "loops", "tasks"]);
     expect(a1.findings.catchUp).toMatchObject({ note: "You shipped post pages and comment threads.", applied: expect.any(Array) });
@@ -107,7 +113,9 @@ describe("an audit catches the project up", () => {
     expect(prompts[0]).toMatch(/DECLINED LAST TIME[\s\S]*Add task: Add Stripe checkout/);
     expect(second.body.audit.operations).toEqual([]);
     expect(second.body.audit.findings.catchUp.dropped).toEqual(expect.arrayContaining([
-      { reason: "declined last time", count: 1 }, { reason: "already on the board", count: 1 }, { reason: "changes nothing", count: 1 },
+      expect.objectContaining({ reason: "declined last time", count: 1 }),
+      { reason: "already on the board", count: 1, items: ['Record shipped: Comment reactions (matches "Comment reactions", done)'] },
+      expect.objectContaining({ reason: "changes nothing", count: 1 }),
     ]));
     expect(second.body.autoApplied).toBeNull();
 
@@ -159,7 +167,7 @@ describe("an audit catches the project up", () => {
 
     // Progress on the path applied by itself; the new step that's already built too, without repeating the one that exists.
     const auditRow = res.body.audit;
-    expect(auditRow.findings.catchUp.dropped).toEqual(expect.arrayContaining([{ reason: "removed by you before", count: 1 }]));
+    expect(auditRow.findings.catchUp.dropped).toEqual(expect.arrayContaining([expect.objectContaining({ reason: "removed by you before", count: 1 })]));
     const addSteps = auditRow.operations.find((o: any) => o.op === "add_loop_steps");
     expect(addSteps).toMatchObject({ _section: "path", _status: "applied", steps: [{ title: "Comment threads", done: true }] });
     let status = await path();

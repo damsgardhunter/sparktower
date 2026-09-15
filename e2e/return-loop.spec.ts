@@ -5,7 +5,9 @@
  * Bea is looked at; Ari does the looking. The news is real — Bea posts after
  * Ari has seen her profile — so what's being proven is the whole path: the
  * profile visit remembered, the post counted through the feed's rules, and the
- * banner and badge on the way back.
+ * banner and badge on the way back — and what brings someone back at all: the
+ * Discover badge and the feed's "new since you last looked", from what the
+ * server remembers, on a device that remembers nothing.
  */
 import { test, expect } from "@playwright/test";
 
@@ -41,7 +43,23 @@ test("a return shows what's new since you looked, continues exploring, and actin
   // Then Bea posts.
   expect((await bea.post("/api/feed", { data: { postType: "project_update", content: "Shipped reminders today." } })).ok()).toBeTruthy();
 
-  // Back on Discover: the banner names her, and her card carries the news.
+  // What brings Ari back: on a fresh device — Ari's session, nothing remembered
+  // in this browser — the Discover badge and the feed both say there's news.
+  const fresh = await browser.newContext({ storageState: { cookies: (await page.context().storageState()).cookies, origins: [] } });
+  const other = await fresh.newPage();
+  await other.goto("/");
+  await expect(other.getByTestId("badge-discover-new")).toHaveText("1 new");
+  const news = other.getByTestId("link-discover-news");
+  await expect(news).toContainText("1 new since you last looked");
+  await expect(news).toContainText("Bea Builder");
+  await news.click();
+  await other.waitForURL(/\/discover$/);
+  await expect(other.getByTestId("return-banner-detail")).toContainText("Bea Builder: 1 new post");
+  // Opening Discover clears the badge.
+  await expect(other.getByTestId("badge-discover-new")).toHaveCount(0);
+  await fresh.close();
+
+  // Back on Discover in the first browser: the banner names her, and her card carries the news.
   await page.goto("/discover");
   await expect(page.getByTestId("return-banner")).toBeVisible();
   await expect(page.getByTestId("return-banner-detail")).toContainText("Bea Builder: 1 new post");

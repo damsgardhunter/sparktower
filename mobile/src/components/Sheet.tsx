@@ -8,10 +8,10 @@
  * in a line, can carry one action ("Open chat"), and goes away on its own.
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { KeyboardAvoidingView, Modal, Platform, Pressable, View } from "react-native";
+import { KeyboardAvoidingView, Modal, Platform, Pressable, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { colors, radius, spacing } from "../theme";
-import { Body, Btn, H2, Meta } from "./ui";
+import { colors, font, fontFamily, radius, shadow, spacing } from "../theme";
+import { Icon, type IconName } from "./ui";
 
 export function Sheet({ visible, onClose, title, subtitle, children }: {
   visible: boolean;
@@ -24,17 +24,27 @@ export function Sheet({ visible, onClose, title, subtitle, children }: {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
-        <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.55)" }} onPress={onClose} accessibilityLabel="Close" />
+        {/* A light scrim: the page behind stays legible, the way the website's dialogs dim it. */}
+        <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.32)" }} onPress={onClose} accessibilityLabel="Close" />
         <View
           style={{
-            backgroundColor: colors.surface, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg,
-            borderTopWidth: 1, borderColor: colors.border,
-            padding: spacing.lg, paddingBottom: spacing.lg + insets.bottom, gap: spacing.md,
+            backgroundColor: colors.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20,
+            paddingBottom: spacing.sm + insets.bottom, ...shadow.raised,
           }}
         >
-          <H2>{title}</H2>
-          {subtitle && <Meta>{subtitle}</Meta>}
-          {children}
+          <View style={{ alignItems: "center", paddingTop: spacing.sm }}>
+            <View style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border }} />
+          </View>
+          <View style={{ flexDirection: "row", alignItems: "flex-start", gap: spacing.sm, paddingHorizontal: spacing.lg, paddingTop: spacing.md }}>
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text style={{ color: colors.text, fontSize: font.lg, fontFamily: fontFamily.bold }}>{title}</Text>
+              {subtitle ? <Text style={{ color: colors.textSecondary, fontSize: font.sm, fontFamily: fontFamily.regular, lineHeight: 19 }}>{subtitle}</Text> : null}
+            </View>
+          </View>
+          {/* A plain View, not a ScrollView: several sheets bring their own scrolling list. */}
+          <View style={{ padding: spacing.lg, paddingTop: spacing.md, gap: spacing.md }}>
+            {children}
+          </View>
         </View>
       </KeyboardAvoidingView>
     </Modal>
@@ -68,24 +78,35 @@ export function useNotice() {
   return { notice, show, clear };
 }
 
+const TONE: Record<Notice["tone"], { color: string; icon: IconName }> = {
+  success: { color: colors.success, icon: "checkmark-circle" },
+  error: { color: colors.danger, icon: "alert-circle" },
+  info: { color: colors.primary, icon: "information-circle" },
+};
+
 /** Floats above the bottom of the screen, so it's seen wherever in the list the tap happened. */
 export function NoticeBanner({ notice, onDismiss }: { notice: Notice | null; onDismiss: () => void }) {
   const insets = useSafeAreaInsets();
   if (!notice) return null;
-  const tint = notice.tone === "error" ? colors.danger : notice.tone === "success" ? colors.success : colors.info;
+  const tone = TONE[notice.tone];
   return (
     <Pressable
       onPress={onDismiss}
       accessibilityRole="alert"
       style={{
-        position: "absolute", left: spacing.lg, right: spacing.lg, bottom: spacing.lg + insets.bottom,
+        position: "absolute", left: spacing.md, right: spacing.md, bottom: spacing.lg + insets.bottom,
         flexDirection: "row", alignItems: "center", gap: spacing.sm,
-        backgroundColor: colors.surfaceRaised, borderColor: tint, borderWidth: 1, borderRadius: radius.md, padding: spacing.md,
+        backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1,
+        borderLeftWidth: 4, borderLeftColor: tone.color,
+        borderRadius: radius.md, paddingVertical: spacing.md, paddingHorizontal: spacing.md, ...shadow.raised,
       }}
     >
-      <Body style={{ flex: 1 }}>{notice.text}</Body>
+      <Icon name={tone.icon} size={20} color={tone.color} />
+      <Text style={{ flex: 1, color: colors.text, fontSize: font.sm, lineHeight: 19, fontFamily: fontFamily.medium }}>{notice.text}</Text>
       {notice.action && (
-        <Btn label={notice.action.label} small variant="outline" onPress={() => { notice.action?.onPress(); onDismiss(); }} />
+        <Pressable onPress={() => { notice.action?.onPress(); onDismiss(); }} hitSlop={8}>
+          <Text style={{ color: colors.primary, fontSize: font.sm, fontFamily: fontFamily.bold }}>{notice.action.label}</Text>
+        </Pressable>
       )}
     </Pressable>
   );

@@ -3,7 +3,7 @@ import { Switch, View } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
-import { colors, spacing } from "../../src/theme";
+import { colors, fontFamily, spacing } from "../../src/theme";
 import {
   Body, Btn, Card, Chip, ErrorNote, H2, Label, Loading, Meta, Row, Screen, errText,
 } from "../../src/components/ui";
@@ -60,7 +60,7 @@ export default function Visibility() {
     return (
       <>
         <Stack.Screen options={{ title: "Public page" }} />
-        <Screen><Loading label="Loading your project…" /></Screen>
+        <Screen canvas><Loading label="Loading your project…" /></Screen>
       </>
     );
   }
@@ -76,7 +76,7 @@ export default function Visibility() {
   return (
     <>
       <Stack.Screen options={{ title: "Public page" }} />
-      <Screen>
+      <Screen canvas>
         <Card accent={colors.primary}>
           <H2>{project.title}</H2>
           <Meta>
@@ -88,7 +88,7 @@ export default function Visibility() {
         <Card accent={isPrivate ? colors.warning : undefined}>
           <Row between center>
             <View style={{ flex: 1, paddingRight: spacing.md }}>
-              <Body style={{ fontWeight: "700" }}>Private project</Body>
+              <Body style={{ fontFamily: fontFamily.semibold }}>Private project</Body>
               <Meta>
                 {isPrivate
                   ? "Only you and your team can open this. Visitors see the name and nothing else."
@@ -99,7 +99,7 @@ export default function Visibility() {
               value={!!isPrivate}
               onValueChange={setIsPrivate}
               trackColor={{ false: colors.border, true: colors.primary }}
-              thumbColor={colors.text}
+              thumbColor="#FFFFFF"
             />
           </Row>
         </Card>
@@ -118,7 +118,7 @@ export default function Visibility() {
                     <Row key={s.key} between center>
                       <View style={{ flex: 1, paddingRight: spacing.md, gap: 2 }}>
                         <Row center gap={spacing.xs} style={{ flexWrap: "wrap" }}>
-                          <Body style={{ fontWeight: "700" }}>{s.label}</Body>
+                          <Body style={{ fontFamily: fontFamily.semibold }}>{s.label}</Body>
                           {empty && <Chip label="Nothing written yet" color={colors.textTertiary} small />}
                         </Row>
                         <Meta>{s.hint}</Meta>
@@ -127,7 +127,7 @@ export default function Visibility() {
                         value={!!overrides[s.key]}
                         onValueChange={(v) => setOverrides({ ...overrides, [s.key]: v })}
                         trackColor={{ false: colors.border, true: colors.primary }}
-                        thumbColor={colors.text}
+                        thumbColor="#FFFFFF"
                       />
                     </Row>
                   );

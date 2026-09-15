@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { errorText } from "@/lib/api-error";
 import {
-  CATCHUP_SECTIONS, AUDIT_AUTO_APPLY, AUDIT_AUTO_APPLY_LABEL, describeOp,
+  CATCHUP_SECTIONS, AUDIT_AUTO_APPLY, AUDIT_AUTO_APPLY_LABEL, describeOp, summarizeCatchUp,
   type CatchUpSection, type AuditAutoApply,
 } from "@shared/audit-catchup";
 import { Check, ChevronDown, ChevronRight, GitCommit, Loader2, RefreshCcw, Wand2 } from "lucide-react";
@@ -17,8 +17,10 @@ interface CatchUpFindings {
   since?: string | null;
   files?: { added: number; modified: number; removed: number } | null;
   commits?: { count: number; recent: string[] };
-  dropped?: { reason: string; count: number }[];
+  dropped?: { reason: string; count: number; items?: string[] }[];
   applied?: string[];
+  /** Edits that were applied for but didn't take, each with why. */
+  skipped?: string[];
 }
 
 /** Everything the project is refreshed from once changes land. */
@@ -50,6 +52,7 @@ export function AuditCatchUp({ projectId, audit }: {
   const selected = chosen ?? new Set(bySection.map((s) => s.id));
   const [open, setOpen] = useState<string | null>(null);
   const [showDone, setShowDone] = useState(false);
+  const [showDropped, setShowDropped] = useState(false);
 
   const { data: project } = useQuery<{ auditAutoApply?: AuditAutoApply }>({ queryKey: ["/api/projects", projectId] });
   const mode = project?.auditAutoApply ?? "safe";
@@ -100,7 +103,7 @@ export function AuditCatchUp({ projectId, audit }: {
 
       {bySection.length > 0 ? (
         <div className="space-y-1.5">
-          <p className="text-xs font-medium">Waiting for you: {catchUp.summary}</p>
+          <p className="text-xs font-medium">Waiting for you: {summarizeCatchUp(pending)}</p>
           <ul className="space-y-1">
             {bySection.map((s) => (
               <li key={s.id} className="rounded border border-border bg-background/60" data-testid={`catchup-section-${s.id}`}>
@@ -137,8 +140,30 @@ export function AuditCatchUp({ projectId, audit }: {
         <p className="text-xs text-muted-foreground" data-testid="audit-catchup-clear">{applied.length ? "Nothing else is waiting." : "Your project already matches the code."}</p>
       )}
 
+      {!!catchUp.skipped?.length && (
+        <div className="text-xs text-amber-800 dark:text-amber-300" data-testid="audit-catchup-skipped">
+          <p className="font-medium">{catchUp.skipped.length} change{catchUp.skipped.length === 1 ? "" : "s"} didn't take:</p>
+          <ul className="ml-4 list-disc">{catchUp.skipped.map((x, i) => <li key={i}>{x}</li>)}</ul>
+        </div>
+      )}
+
       {!!catchUp.dropped?.length && (
-        <p className="text-[11px] text-muted-foreground">Left out to keep this short: {catchUp.dropped.map((d) => `${d.count} ${d.reason}`).join(", ")}.</p>
+        <div className="text-[11px] text-muted-foreground" data-testid="audit-catchup-dropped">
+          <button className="hover:underline flex items-center gap-1" onClick={() => setShowDropped((v) => !v)}>
+            {showDropped ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+            Left out to keep this short: {catchUp.dropped.map((d) => `${d.count} ${d.reason}`).join(", ")}
+          </button>
+          {showDropped && (
+            <ul className="mt-1 ml-5 space-y-1">
+              {catchUp.dropped.map((d) => (
+                <li key={d.reason}>
+                  <span className="font-medium">{d.reason}</span>
+                  {d.items?.length ? <ul className="ml-3 list-disc">{d.items.map((it, i) => <li key={i}>{it}</li>)}</ul> : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
 
       <div className="flex items-center gap-2 text-[11px] text-muted-foreground pt-1 border-t border-border/50">

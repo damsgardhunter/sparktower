@@ -151,13 +151,15 @@ export function registerFeedRoutes(app: Express) {
   app.post("/api/feed", isAuthenticated, rateLimit("feedPost"), async (req: any, res) => {
     try {
       const userId = req.user.id;
-      const { postType, content, projectId, mediaUrls, mentions, asks: rawAsks, closesCommentIds } = req.body as {
+      const { postType, content, projectId, mediaUrls, mentions, asks: rawAsks, closesCommentIds, pathTaskId } = req.body as {
         postType?: string; content?: string; projectId?: string;
         mediaUrls?: string[]; mentions?: unknown;
         /** Specific questions for readers (a project's progress post). */
         asks?: unknown;
         /** Feedback this update acted on, credited on the post and told to whoever gave it. */
         closesCommentIds?: unknown;
+        /** A finished step on the project's path this post shares, so feedback on it is feedback on that step. */
+        pathTaskId?: unknown;
       };
 
       if (!FEED_POST_TYPES.includes(postType as any)) {
@@ -185,6 +187,14 @@ export function registerFeedRoutes(app: Express) {
       }
       const closes = projectId ? await closableComments(projectId, closesCommentIds) : { ids: [] as string[] };
       if ("error" in closes) return res.status(400).json({ message: closes.error, code: "invalid_input", field: "closesCommentIds" });
+      let pathStep: string | null = null;
+      if (pathTaskId != null && pathTaskId !== "") {
+        const task = projectId ? await storage.getKanbanTask(String(pathTaskId)) : undefined;
+        const onPath = task && task.projectId === projectId && (task.tags ?? []).some((t) => t.startsWith("backbone:") || t.startsWith("parent:") || t.startsWith("injected:"));
+        if (!onPath) return res.status(400).json({ message: "That isn't a step on this project's path.", code: "invalid_input", field: "pathTaskId" });
+        if (task.status !== "done") return res.status(400).json({ message: "Share a step once it's done.", code: "invalid_input", field: "pathTaskId" });
+        pathStep = task.id;
+      }
 
       const post = await storage.createFeedPost({
         authorId: userId,
@@ -195,6 +205,7 @@ export function registerFeedRoutes(app: Express) {
         mentions: await resolveMentions(mentions),
         asks: asked.asks,
         isSystemGenerated: false,
+        ...(pathStep ? { entityType: "path_step", entityId: pathStep } : {}),
       });
       await markClosed(post, closes.ids);
       // The Explore loop's way back: people following this builder or project hear there's progress.

@@ -2,6 +2,7 @@ import { PinnedBadges } from "@/components/pinned-badges";
 import { useQuery } from "@tanstack/react-query";
 import { PrivateBadge } from "@/components/private-badge";
 import { FounderFeed } from "@/components/founder-feed";
+import { DiscoverNewsLink } from "@/components/discover-news";
 import { ProfileRailCard } from "@/components/profile-rail-card";
 import { MyProjectsCard } from "@/components/my-projects-card";
 import { RailCard, RailHeader, RailDivider } from "@/components/rail-card";
@@ -68,6 +69,7 @@ export default function Home() {
                 Create Project
               </Link>
             </Button>
+            <DiscoverNewsLink />
             <FounderFeed />
           </div>
 

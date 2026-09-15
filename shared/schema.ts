@@ -1,4 +1,4 @@
-import { pgTable, text, varchar, timestamp, integer, boolean, index, jsonb, unique, foreignKey, bigserial, real } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, integer, boolean, index, jsonb, unique, foreignKey, bigserial, bigint, real } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
@@ -1087,6 +1087,8 @@ export const NOTIFICATION_KINDS = [
   "follow", "project_follow", "connection_request", "connection_accepted",
   // The build loop's last step: a project credited your feedback in an update.
   "feedback_used",
+  // The retention loop: a step on a project's path was finished, and the next one is ready.
+  "path_step_done", "next_step",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
@@ -1460,6 +1462,28 @@ export const investmentApplications = pgTable("investment_applications", {
   index("investment_applications_investor_idx").on(t.investorId, t.createdAt),
 ]);
 export type InvestmentApplication = typeof investmentApplications.$inferSelect;
+
+/**
+ * What someone has looked at in the Explore loop, and when — the "since" in
+ * "3 new posts since you last looked" — kept on the server so it's the same on
+ * every device, and so the app's badge can be worked out without a browser.
+ *
+ * `kind` is "builder" or "project" for a thing they interacted with (opened,
+ * followed, connected, messaged), or "discover" with target "visit" for the
+ * last time they opened Discover. `seenMs` is epoch milliseconds from the
+ * server's clock, compared inside the database — never a timestamp read back
+ * into JS, which shifts by the server's timezone.
+ */
+export const exploreSeen = pgTable("explore_seen", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  kind: text("kind", { enum: ["builder", "project", "discover"] }).notNull(),
+  targetId: varchar("target_id").notNull(),
+  seenMs: bigint("seen_ms", { mode: "number" }).notNull(),
+}, (t) => [
+  unique("explore_seen_user_target").on(t.userId, t.kind, t.targetId),
+  index("explore_seen_recent_idx").on(t.userId, t.seenMs),
+]);
 
 export const contentReports = pgTable("content_reports", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

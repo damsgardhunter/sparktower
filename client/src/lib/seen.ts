@@ -4,9 +4,13 @@
  *
  * Only what you interacted with: opening their page, following, connecting,
  * messaging. Everything merely scrolled past would turn every return into a
- * wall of badges, which is the named risk of this feature. Kept in the
- * browser, capped to the most recent few dozen, and never sent anywhere except
- * as the short list of ids and times the updates check needs.
+ * wall of badges, which is the named risk of this feature.
+ *
+ * The server keeps it (`/api/discover/seen`), so it's the same on every device
+ * and the Discover badge works anywhere; follows, connections and messages are
+ * remembered by their own endpoints. This browser keeps a copy too, which is
+ * what a page reads on first render and what's handed over once to the server
+ * from before it remembered anything.
  */
 const KEY = "st_seen_v1";
 const MAX = 30;
@@ -22,13 +26,37 @@ function read(): Record<string, number> {
   }
 }
 
+const send = (body: unknown) => {
+  try {
+    void fetch("/api/discover/seen", {
+      method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", keepalive: true,
+      body: JSON.stringify(body),
+    }).catch(() => { /* best-effort */ });
+  } catch { /* never surfaces */ }
+};
+
 export function markSeen(kind: SeenKind, id: string) {
   try {
     const all = read();
     all[`${kind}.${id}`] = Date.now();
     const recent = Object.entries(all).sort((a, b) => b[1] - a[1]).slice(0, MAX);
     localStorage.setItem(KEY, JSON.stringify(Object.fromEntries(recent)));
-  } catch { /* storage refused: nothing is remembered, nothing breaks */ }
+  } catch { /* storage refused: the server still remembers */ }
+  send({ kind, id });
+}
+
+const IMPORTED_KEY = "st_seen_imported_v1";
+
+/** Hands what this browser remembered before the server did over to it, once. */
+export function importSeenOnce() {
+  try {
+    if (localStorage.getItem(IMPORTED_KEY)) return;
+    localStorage.setItem(IMPORTED_KEY, "1");
+    const items = Object.entries(read())
+      .map(([key, at]) => { const [k, ...rest] = key.split("."); return { kind: k, id: rest.join("."), at }; })
+      .filter((x) => (x.kind === "builder" || x.kind === "project") && x.id && Number.isFinite(x.at));
+    if (items.length) send({ items });
+  } catch { /* storage refused: nothing to hand over */ }
 }
 
 export function isSeen(kind: SeenKind, id: string): boolean {

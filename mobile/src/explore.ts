@@ -49,6 +49,22 @@ export function trackExplore(name: (typeof EXPLORE)[keyof typeof EXPLORE], props
   void api("/api/track", { method: "POST", body: { events: [{ name, path, props }] } }).catch(() => {});
 }
 
+/**
+ * Remembering that you looked at a builder or project, on the server — so what
+ * they post next counts as news for you on Discover, on any device.
+ */
+export function markSeen(kind: "builder" | "project", id: string) {
+  void api("/api/discover/seen", { method: "POST", body: { kind, id } }).catch(() => {});
+}
+
+/** Opening Discover moves its badge's "since" to now. Resolves when recorded. */
+export function recordDiscoverVisit(): Promise<unknown> {
+  return api("/api/discover/visit", { method: "POST" }).catch(() => {});
+}
+
+/** The Discover tab's badge: new posts from what you've looked at since your last visit. */
+export const DISCOVER_NEW_KEY = ["discover-new-count"];
+
 /** Discover came into view. A second time in the same visit is also a return. */
 export function openDiscover() {
   const visit = currentVisit().id;

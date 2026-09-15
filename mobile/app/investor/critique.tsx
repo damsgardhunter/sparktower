@@ -3,7 +3,7 @@ import { KeyboardAvoidingView, Platform, Text } from "react-native";
 import { useLocalSearchParams, Stack } from "expo-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
-import { colors, spacing } from "../../src/theme";
+import { colors, fontFamily, spacing } from "../../src/theme";
 import {
   Body, Btn, Card, Cost, ErrorNote, Field, H1, H2, Label, Loading, Meta,
   Row, Screen, errText,
@@ -46,9 +46,9 @@ export default function PitchCritique() {
       <Stack.Screen options={{ title: "Pitch Critique" }} />
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
-        style={{ flex: 1, backgroundColor: colors.background }}
+        style={{ flex: 1, backgroundColor: colors.canvas }}
       >
-        <Screen>
+        <Screen canvas>
           <Card>
             <H2>Pitch critique</H2>
             <Meta>

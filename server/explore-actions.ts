@@ -13,6 +13,7 @@
  * "opened Discover" that led to it, and the funnel and cycle counts join up.
  */
 import { recordActivity } from "./analytics";
+import { rememberSeen } from "./discover-routes";
 import {
   EXPLORE_EVENTS, sanitizeExploreProps, type ExploreMatchType,
 } from "@shared/explore-events";
@@ -40,4 +41,8 @@ export function recordExploreAction(
     userAgent: req.headers?.["user-agent"],
     props: { ...props },
   });
+  // Acting on someone is looking at them: their news counts from now, on every device.
+  if (req.user?.id) {
+    void rememberSeen(req.user.id, target.matchType, target.targetId).catch((err) => console.error("[explore] Couldn't remember seen:", err));
+  }
 }

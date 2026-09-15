@@ -1,346 +1,220 @@
-import { useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
-import { useLocalSearchParams, useRouter, Stack } from "expo-router";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { RefreshControl, ScrollView, View } from "react-native";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
-import { exploreContext } from "../../src/explore";
-import { colors, font, radius, spacing, postTypeColors } from "../../src/theme";
+import { useAuth } from "../../src/auth/AuthContext";
+import { exploreContext, markSeen } from "../../src/explore";
+import { colors, spacing } from "../../src/theme";
+import { Body, Btn, Empty, H1, Icon, Loading, Meta, TabStrip, errText } from "../../src/components/ui";
+import { NoticeBanner, useNotice } from "../../src/components/Sheet";
+import { ProjectHeader } from "../../src/components/ProjectHeader";
+import { InvestCard } from "../../src/components/InvestSheet";
+import { BackingCard } from "../../src/components/BackingSheet";
+import { ApplySheet, PendingApplications, QuestionsSheet, type AppQuestion } from "../../src/components/ProjectApplications";
 import {
-  Avatar, Body, Btn, Card, Chip, Empty, ErrorNote, H1, H2, Label, Loading,
-  Meta, Row, Screen, Segments, timeAgo, plain, errText,
-} from "../../src/components/ui";
-import { Discussion } from "../../src/components/Discussion";
-
-type Tab = "overview" | "updates" | "roadmap" | "milestones" | "team" | "roles" | "discussion";
-
-const TABS: { value: Tab; label: string }[] = [
-  { value: "overview", label: "Overview" },
-  { value: "updates", label: "Updates" },
-  { value: "roadmap", label: "Roadmap" },
-  { value: "milestones", label: "Milestones" },
-  { value: "team", label: "Team" },
-  { value: "roles", label: "Open Roles" },
-  { value: "discussion", label: "Discussion" },
-];
+  DiscussionTab, FollowersTab, MediaTab, MilestonesTab, OverviewTab, PROJECT_TABS, RoadmapTab, RolesTab, TeamTab,
+  UpdatesTab, unfilledRoles, type ProjectTab,
+} from "../../src/components/ProjectPageTabs";
 
 /**
- * A project's public social page — the native counterpart of the web's
- * ProjectSocialTabs. Milestones and roadmap phases carry their own threads.
+ * A project's public page, laid out like a company page — the native
+ * counterpart of client/src/pages/project-dashboard.tsx and its social tabs.
  */
 export default function ProjectDetail() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, tab: initialTab } = useLocalSearchParams<{ id: string; tab?: ProjectTab }>();
+  // Opening it is looking at it: what it posts next is news for you on Discover.
+  useEffect(() => { if (id) markSeen("project", id); }, [id]);
   const router = useRouter();
   const qc = useQueryClient();
-  const [tab, setTab] = useState<Tab>("overview");
+  const { user } = useAuth();
+  const { notice, show: notify, clear } = useNotice();
+  const [tab, setTab] = useState<ProjectTab>(PROJECT_TABS.some((t) => t.value === initialTab) ? initialTab! : "overview");
+  const [applyOpen, setApplyOpen] = useState(false);
+  const [questionsOpen, setQuestionsOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const { data: project, isLoading } = useQuery({
+  const { data: project, isLoading, isError } = useQuery({
     queryKey: ["project", id],
     queryFn: () => api<any>(`/api/projects/${id}`),
     enabled: !!id,
   });
+  const restricted = !!project?.restricted;
+  const isOwner = !!project && !!user && project.ownerId === user.id;
 
-  const { data: members } = useQuery({
+  const { data: members = [] } = useQuery({
     queryKey: ["project", id, "members"],
     queryFn: () => api<any[]>(`/api/projects/${id}/members`),
-    enabled: !!id,
+    enabled: !!id && !restricted,
   });
-
   const { data: counts } = useQuery({
     queryKey: ["project", id, "comment-counts"],
     queryFn: () => api<Record<string, number>>(`/api/projects/${id}/comment-counts`),
-    enabled: !!id,
+    enabled: !!id && !restricted,
   });
-
+  const followKey = ["project", id, "follow-status"];
   const { data: follow } = useQuery({
-    queryKey: ["project", id, "follow-status"],
-    queryFn: () => api<{ following: boolean; count: number }>(`/api/projects/${id}/follow-status`),
-    enabled: !!id,
+    queryKey: followKey,
+    queryFn: () => api<{ following: boolean; count: number }>(`/api/projects/${id}/follow-status`).catch(() => ({ following: false, count: 0 })),
+    enabled: !!id && !restricted,
+  });
+  const { data: myApplications } = useQuery({
+    queryKey: ["user-applications"],
+    queryFn: () => api<any[]>("/api/user/applications"),
+    enabled: !!user && !restricted && !isOwner,
+  });
+  const { data: applications } = useQuery({
+    queryKey: ["project", id, "applications"],
+    queryFn: () => api<any[]>(`/api/projects/${id}/applications`),
+    enabled: isOwner,
   });
 
-  // Sends the state it wants, not a toggle, so a double tap can't undo itself.
+  /*
+   * Follow says what it wants rather than toggling, so a double tap can't undo
+   * itself; it changes at once and goes back if the server refuses.
+   */
   const toggleFollow = useMutation({
     mutationFn: (want: boolean) =>
       api(`/api/projects/${id}/follow`, { method: "POST", body: { following: want, explore: exploreContext("project_page") } }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["project", id, "follow-status"] });
-      qc.invalidateQueries({ queryKey: ["followed-projects"] });
+    onMutate: async (want) => {
+      await qc.cancelQueries({ queryKey: followKey });
+      const before = qc.getQueryData<{ following: boolean; count: number }>(followKey);
+      qc.setQueryData(followKey, { following: want, count: Math.max(0, (before?.count ?? 0) + (want ? 1 : -1)) });
+      return { before };
+    },
+    onError: (e, _want, ctx) => {
+      qc.setQueryData(followKey, ctx?.before);
+      notify({ text: errText(e, "Couldn't update. Try again in a moment."), tone: "error" });
+    },
+    onSuccess: (_r, want) => notify(want
+      ? { text: "Following. Its updates now show in your feed.", tone: "success", action: { label: "Open feed", onPress: () => router.push("/(tabs)/feed" as any) } }
+      : { text: "Unfollowed.", tone: "info" }),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: followKey });
+      void qc.invalidateQueries({ queryKey: ["followed-projects"] });
     },
   });
 
-  if (isLoading) return <Loading />;
-  if (!project) return <Screen><Empty title="Project not found" /></Screen>;
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await qc.invalidateQueries({ queryKey: ["project", id] });
+    await qc.invalidateQueries({ queryKey: ["feed", "project", id] });
+    setRefreshing(false);
+  };
 
-  // A private project the viewer can't access returns only the title.
-  if (project.restricted) {
+  if (isLoading) return <><Stack.Screen options={{ title: "" }} /><Loading /></>;
+  if (!project || isError) {
     return (
       <>
-        <Stack.Screen options={{ title: "Private" }} />
-        <Screen contentStyle={{ flex: 1, justifyContent: "center" }}>
-          <View style={{ alignItems: "center", gap: spacing.md }}>
-            <Text style={{ fontSize: 40 }}>🔒</Text>
-            <H1 style={{ textAlign: "center" }}>{project.title}</H1>
-            <Body muted style={{ textAlign: "center" }}>This is a private project.</Body>
-            <Meta style={{ textAlign: "center", maxWidth: 260 }}>
-              Only the owner and their team can view it. If you should have access, ask them to add you.
-            </Meta>
-            <Btn label="Go back" variant="outline" small onPress={() => router.back()} />
-          </View>
-        </Screen>
+        <Stack.Screen options={{ title: "Project" }} />
+        <View style={{ flex: 1, backgroundColor: colors.canvas, justifyContent: "center" }}>
+          <Empty icon="alert-circle-outline" title="Project not found" body="It may have been removed." action="Go back" onAction={() => router.back()} />
+        </View>
       </>
     );
   }
 
+  // A private project the viewer can't access returns only the title.
+  if (restricted) {
+    return (
+      <>
+        <Stack.Screen options={{ title: "Private project" }} />
+        <View style={{ flex: 1, backgroundColor: colors.background, alignItems: "center", justifyContent: "center", padding: spacing.xl, gap: spacing.md }}>
+          <View style={{ width: 64, height: 64, borderRadius: 18, backgroundColor: colors.surfaceRaised, alignItems: "center", justifyContent: "center" }}>
+            <Icon name="lock-closed" size={28} color={colors.textSecondary} />
+          </View>
+          <H1 style={{ textAlign: "center" }}>{project.title}</H1>
+          <Body muted style={{ textAlign: "center", fontSize: 16 }}>This is a private project.</Body>
+          <Meta style={{ textAlign: "center", maxWidth: 280, fontSize: 13 }}>
+            Only the owner and their team can view it. If you should have access, ask them to add you.
+          </Meta>
+          <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm }}>
+            <Btn label="Go back" icon="arrow-back" variant="outline" small onPress={() => router.back()} />
+            <Btn label="Discover projects" icon="compass-outline" small onPress={() => router.replace("/(tabs)/discover" as any)} />
+          </View>
+        </View>
+      </>
+    );
+  }
+
+  const isMember = isOwner || members.some((m) => m.userId === user?.id);
+  const role = isOwner ? "owner" : isMember ? "member" : "visitor";
+  const applied = !!myApplications?.some((a) => a.projectId === id && a.status === "pending");
+  const ownerRow = members.find((m) => m.userId === project.ownerId);
+  const owner = ownerRow ? {
+    userId: ownerRow.userId,
+    name: ownerRow.profile?.displayName || [ownerRow.user?.firstName, ownerRow.user?.lastName].filter(Boolean).join(" ") || "The founder",
+    avatarUrl: ownerRow.profile?.avatarUrl,
+  } : null;
+  const questions = (project.applicationQuestions || []) as AppQuestion[];
+  const manage = () => router.push(`/manage/${id}` as any);
+  const apply = () => (applied ? notify({ text: "You've already applied. The owner will review it.", tone: "info" }) : setApplyOpen(true));
+
+  const tabLabel = (t: { value: ProjectTab; label: string }) => {
+    const n = t.value === "team" ? members.length
+      : t.value === "roles" ? unfilledRoles(project, members).length
+      : t.value === "media" ? project.mediaUrls?.length || 0
+      : t.value === "followers" ? follow?.count || 0
+      : t.value === "discussion" ? Object.values(counts || {}).reduce((a, b) => a + b, 0)
+      : 0;
+    return { value: t.value, label: n > 0 ? `${t.label} ${n}` : t.label };
+  };
+
   return (
     <>
       <Stack.Screen options={{ title: project.title }} />
-      <Screen>
-        <View style={{ gap: spacing.sm }}>
-          <Row gap={spacing.sm} wrap center>
-            <Chip label={project.status} small active />
-            <Meta>{project.category}</Meta>
-            {project.isPrivate && <Chip label="🔒 Private" small />}
-          </Row>
-          <H1>{project.title}</H1>
-          {project.oneLiner && <Body muted>{project.oneLiner}</Body>}
-          <Row gap={spacing.sm}>
-            <Btn
-              label={follow?.following ? `Following${follow.count ? ` · ${follow.count}` : ""}` : "Follow"}
-              variant={follow?.following ? "primary" : "outline"}
-              small
-              loading={toggleFollow.isPending}
-              onPress={() => toggleFollow.mutate(!follow?.following)}
-            />
-          </Row>
-        </View>
+      <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+        <ScrollView
+          stickyHeaderIndices={[1]}
+          contentContainerStyle={{ paddingBottom: spacing.xxl * 3 }}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+          keyboardShouldPersistTaps="handled"
+        >
+          <ProjectHeader
+            project={project}
+            owner={owner}
+            followerCount={follow?.count ?? 0}
+            memberCount={members.length}
+            following={!!follow?.following}
+            onFollow={() => toggleFollow.mutate(!follow?.following)}
+            role={role}
+            applied={applied}
+            onApply={apply}
+            onManage={manage}
+            onVisibility={() => router.push(`/project/visibility?id=${id}` as any)}
+            onStoryboards={() => router.push(`/project/storyboards?id=${id}` as any)}
+            onOwner={() => owner && router.push(`/user/${owner.userId}` as any)}
+          />
+          <TabStrip options={PROJECT_TABS.map(tabLabel)} value={tab} onChange={setTab} />
+          <View style={{ paddingTop: spacing.sm }}>
+            {tab === "overview" && (
+              <OverviewTab project={project} members={members} followerCount={follow?.count ?? 0} isOwner={isOwner} isMember={isMember}
+                onApply={apply} onManage={manage} onTab={setTab}>
+                {isOwner && (
+                  <PendingApplications projectId={id!} applications={applications || []} questions={questions}
+                    onEditQuestions={() => setQuestionsOpen(true)} notify={notify} />
+                )}
+                <InvestCard projectId={id!} notify={notify} />
+                <BackingCard projectId={id!} projectTitle={project.title} isOwner={isOwner} notify={notify} />
+              </OverviewTab>
+            )}
+            {tab === "updates" && <UpdatesTab projectId={id!} isMember={isMember} />}
+            {tab === "roadmap" && <RoadmapTab projectId={id!} isOwner={isOwner} onManage={manage} counts={counts} />}
+            {tab === "milestones" && <MilestonesTab projectId={id!} counts={counts} />}
+            {tab === "team" && <TeamTab members={members} />}
+            {tab === "roles" && <RolesTab project={project} members={members} isOwner={isOwner} isMember={isMember} onApply={apply} />}
+            {tab === "media" && <MediaTab projectId={id!} mediaUrls={project.mediaUrls || []} isOwner={isOwner} notify={notify} />}
+            {tab === "discussion" && <DiscussionTab projectId={id!} />}
+            {tab === "followers" && <FollowersTab projectId={id!} />}
+          </View>
+        </ScrollView>
+        <NoticeBanner notice={notice} onDismiss={clear} />
+      </View>
 
-        <Segments options={TABS} value={tab} onChange={setTab} />
-
-        {tab === "overview" && <Overview project={project} />}
-        {tab === "updates" && <Updates projectId={id!} />}
-        {tab === "roadmap" && <Roadmap projectId={id!} counts={counts} />}
-        {tab === "milestones" && <Milestones projectId={id!} counts={counts} />}
-        {tab === "team" && <Team members={members || []} onOpen={(uid) => router.push(`/user/${uid}`)} />}
-        {tab === "roles" && <Roles project={project} members={members || []} />}
-        {tab === "discussion" && (
-          <Card>
-            <H2>Project discussion</H2>
-            <Meta>Ask questions, offer help, or share what you'd want from this.</Meta>
-            <Discussion projectId={id!} targetType="project" targetId={id!} />
-          </Card>
-        )}
-      </Screen>
+      <ApplySheet visible={applyOpen} onClose={() => setApplyOpen(false)} project={project} notify={notify} />
+      {isOwner && (
+        <QuestionsSheet visible={questionsOpen} onClose={() => setQuestionsOpen(false)} projectId={id!} initial={questions} notify={notify} />
+      )}
     </>
-  );
-}
-
-function Overview({ project }: { project: any }) {
-  const brief: [string, string | null][] = [
-    ["The problem", project.problemStatement],
-    ["Who it's for", project.targetUser],
-    ["Value proposition", project.valueProposition],
-    ["Target customer", project.targetCustomerProfile],
-    ["What success looks like", project.successMetrics],
-  ];
-  const scope = project.scope || {};
-  return (
-    <View style={{ gap: spacing.md }}>
-      {project.mission && (
-        <Card>
-          <Label>Mission</Label>
-          <Body>{project.mission}</Body>
-        </Card>
-      )}
-      {project.description && (
-        <Card>
-          <Label>About</Label>
-          <Body>{project.description}</Body>
-        </Card>
-      )}
-      {brief.filter(([, v]) => v).map(([label, value]) => (
-        <Card key={label}>
-          <Label>{label}</Label>
-          <Body>{value}</Body>
-        </Card>
-      ))}
-      {(scope.mvp?.length || scope.niceToHave?.length) > 0 && (
-        <Card>
-          <Label>Roadmap scope</Label>
-          {scope.mvp?.length > 0 && (
-            <>
-              <Meta>Building now</Meta>
-              {scope.mvp.map((x: string, i: number) => <Body key={i}>· {x}</Body>)}
-            </>
-          )}
-          {scope.niceToHave?.length > 0 && (
-            <>
-              <Meta style={{ marginTop: spacing.sm }}>Exploring next</Meta>
-              <Row wrap gap={spacing.xs}>
-                {scope.niceToHave.map((x: string) => <Chip key={x} label={x} small />)}
-              </Row>
-            </>
-          )}
-        </Card>
-      )}
-      {(project.techStack?.length ?? 0) > 0 && (
-        <Card>
-          <Label>Tech stack</Label>
-          <Row wrap gap={spacing.xs}>
-            {project.techStack.map((t: string) => <Chip key={t} label={t} small />)}
-          </Row>
-        </Card>
-      )}
-    </View>
-  );
-}
-
-function Updates({ projectId }: { projectId: string }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ["feed", "project", projectId],
-    queryFn: () => api<{ posts: any[] }>(`/api/feed?projectId=${projectId}&limit=20`),
-  });
-  if (isLoading) return <Loading />;
-  if (!data?.posts?.length) return <Empty title="No updates yet" />;
-  return (
-    <View style={{ gap: spacing.md }}>
-      {data.posts.map((p) => {
-        const accent = postTypeColors[p.postType] || colors.info;
-        const name = p.profile?.displayName || p.author?.firstName || "Someone";
-        return (
-          <Card key={p.id} accent={accent}>
-            <Row center gap={spacing.sm}>
-              <Avatar name={name} size={32} />
-              <View style={{ flex: 1 }}>
-                <Body style={{ fontWeight: "700" }}>{name}</Body>
-                <Meta>{timeAgo(p.createdAt)}</Meta>
-              </View>
-            </Row>
-            <Body>{plain(p.content)}</Body>
-            <Meta>👍 {p.reactionCount} · 💬 {p.commentCount}</Meta>
-          </Card>
-        );
-      })}
-    </View>
-  );
-}
-
-function Roadmap({ projectId, counts }: { projectId: string; counts?: Record<string, number> }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ["project", projectId, "roadmap"],
-    queryFn: () => api<any>(`/api/projects/${projectId}/roadmap`),
-  });
-  if (isLoading) return <Loading />;
-  if (!data?.roadmap) return <Empty title="No public roadmap yet" />;
-  const done = data.roadmap.phases.filter((p: any) => p.status === "completed").length;
-  return (
-    <View style={{ gap: spacing.md }}>
-      <Card>
-        <Label>The goal</Label>
-        <H2>{data.roadmap.goal}</H2>
-        {data.roadmap.summary && <Body muted>{data.roadmap.summary}</Body>}
-        <Meta>{done} of {data.roadmap.phases.length} phases complete</Meta>
-      </Card>
-      {data.roadmap.phases.map((phase: any, i: number) => (
-        <Card key={phase.id}>
-          <Row center gap={spacing.sm}>
-            <Text style={{ fontSize: 16 }}>
-              {phase.status === "completed" ? "✅" : phase.status === "in-progress" ? "🔵" : "⚪️"}
-            </Text>
-            <H2 style={{ flex: 1 }}>{phase.title}</H2>
-          </Row>
-          {phase.estimatedDuration && <Meta>{phase.estimatedDuration}</Meta>}
-          {phase.description && <Body muted>{phase.description}</Body>}
-          {(phase.skillsNeeded?.length ?? 0) > 0 && (
-            <Row wrap gap={spacing.xs}>
-              {phase.skillsNeeded.map((sk: string) => <Chip key={sk} label={sk} small />)}
-            </Row>
-          )}
-          <Discussion
-            projectId={projectId}
-            targetType="roadmap_phase"
-            targetId={phase.id}
-            compact={(counts?.[`roadmap_phase:${phase.id}`] || 0) === 0}
-          />
-        </Card>
-      ))}
-    </View>
-  );
-}
-
-function Milestones({ projectId, counts }: { projectId: string; counts?: Record<string, number> }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ["project", projectId, "milestones"],
-    queryFn: () => api<any[]>(`/api/projects/${projectId}/milestones`),
-  });
-  if (isLoading) return <Loading />;
-  if (!data?.length) return <Empty title="No milestones yet" />;
-  return (
-    <View style={{ gap: spacing.md }}>
-      {data.map((m) => (
-        <Card key={m.id}>
-          <Row center gap={spacing.sm}>
-            <Text style={{ fontSize: 16 }}>
-              {m.status === "completed" ? "✅" : m.status === "in-progress" ? "🔵" : "⚪️"}
-            </Text>
-            <H2 style={{ flex: 1 }}>{m.title}</H2>
-          </Row>
-          {m.description && <Body muted>{m.description}</Body>}
-          {m.targetDate && <Meta>Target {new Date(m.targetDate).toLocaleDateString()}</Meta>}
-          {/* Anyone can congratulate or offer help — building in public. */}
-          <Discussion
-            projectId={projectId}
-            targetType="milestone"
-            targetId={m.id}
-            compact={(counts?.[`milestone:${m.id}`] || 0) === 0}
-          />
-        </Card>
-      ))}
-    </View>
-  );
-}
-
-function Team({ members, onOpen }: { members: any[]; onOpen: (id: string) => void }) {
-  if (!members.length) return <Empty title="No team members listed" />;
-  return (
-    <View style={{ gap: spacing.sm }}>
-      {members.map((m) => {
-        const name = m.profile?.displayName || m.user?.firstName || m.user?.email || "Member";
-        return (
-          <Card key={m.id} onPress={() => onOpen(m.userId)}>
-            <Row center gap={spacing.md}>
-              <Avatar name={name} />
-              <View style={{ flex: 1 }}>
-                <Body style={{ fontWeight: "700" }}>{name}</Body>
-                <Meta>{m.role}</Meta>
-                {m.profile?.headline && <Meta numberOfLines={1}>{m.profile.headline}</Meta>}
-              </View>
-            </Row>
-          </Card>
-        );
-      })}
-    </View>
-  );
-}
-
-function Roles({ project, members }: { project: any; members: any[] }) {
-  // A Solo Builder project isn't recruiting, even if rolesNeeded still has
-  // entries left over from before the toggle was flipped.
-  if (project.soloMode) {
-    return <Empty title="Solo Builder project — the owner isn't recruiting teammates" />;
-  }
-  const filled = new Set(members.map((m) => (m.role || "").toLowerCase()));
-  const open = (project.rolesNeeded || []).filter((r: string) => !filled.has(r.toLowerCase()));
-  if (!open.length) {
-    return <Empty title={project.rolesNeeded?.length ? "Every role is filled" : "No open roles listed"} />;
-  }
-  return (
-    <View style={{ gap: spacing.sm }}>
-      <Meta>{open.length} role{open.length === 1 ? "" : "s"} still open.</Meta>
-      {open.map((r: string) => (
-        <Card key={r}>
-          <Body style={{ fontWeight: "700" }}>{r}</Body>
-          <Meta>{project.estimatedWeeks ? `~${project.estimatedWeeks} week project` : "Open-ended"}</Meta>
-        </Card>
-      ))}
-    </View>
   );
 }
