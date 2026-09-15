@@ -13,6 +13,7 @@ import { renderRouteCoverage } from "./route-coverage";
 import { renderDataShape, type DataShape } from "@shared/data-shape";
 import { CAPABILITY_AREAS, sanitizeDeepRead, type CapabilityEntry, type CapabilityArea, type CapabilityDetail } from "@shared/capabilities";
 import { parseModelJson } from "./ai-json";
+import { isTest, summarizeTestInventory, summarizeMobileScreens } from "./audit-evidence";
 
 const rawBase = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
 const openai = new OpenAI({
@@ -88,15 +89,27 @@ export async function deepReadArea(
   // Files the area's question is about, by name, so "not present in the
   // files provided" stops being the answer when the file exists.
   const hint = AREA_FILE_HINTS[entry.area];
+  // For the testing and CI areas the test harness and the pipeline ARE the evidence; elsewhere tests stay out of the full text.
+  const testsAreTheSubject = entry.area === "tests" || entry.area === "ci";
+  if (testsAreTheSubject) {
+    for (const f of files) {
+      if (chosen.length >= maxFiles) break;
+      if (f.content && !chosen.includes(f) && /(^|\/)\.github\/workflows\/|(^|\/)(vitest|playwright)\.config\.|(^|\/)test\/(setup|helpers)\//.test(f.path)) chosen.push(f);
+    }
+  }
   if (hint) for (const f of files) {
     if (chosen.length >= maxFiles) break;
-    if (f.content && !chosen.includes(f) && hint.test(f.path) && !/(^|\/)(test|tests|e2e)\//.test(f.path)) chosen.push(f);
+    if (f.content && !chosen.includes(f) && hint.test(f.path) && (testsAreTheSubject || !isTest(f.path))) chosen.push(f);
   }
   if (!chosen.length) return null;
   const fileText = chosen.map((f) => `### ${f.path}\n${f.content!.slice(0, maxChars)}${f.content!.length > maxChars ? "\n… (truncated)" : ""}`).join("\n\n");
   const cov = [
     RELEVANT_TO_COVERAGE.has(entry.area) && coverage ? [renderRouteCoverage(coverage, 40), rowsForArea(entry.area, coverage)].filter(Boolean).join("\n\n") : null,
     opts.dataShape ? renderDataShape(opts.dataShape) : null,
+    // Every test file's path — all of them for the testing and CI areas, the ones named for this area elsewhere — so
+    // "is this tested?" is answered from the repository, not from the handful of files whose full text fits.
+    summarizeTestInventory(files.map((f) => f.path), testsAreTheSubject ? null : hint ?? null),
+    entry.area === "mobile" ? summarizeMobileScreens(files) : null,
   ].filter(Boolean).join("\n\n") || null;
   const allowed = new Set(files.map((f) => f.path));
 
@@ -107,7 +120,7 @@ export async function deepReadArea(
         { role: "system", content: `You are Nova, doing a close read of one area of a builder's codebase. ${coachingDirectiveFor(ent)}
 Area: ${area.label}. What counts: ${area.counts}.
 First-pass verdict: ${entry.status}${entry.summary ? ` — ${entry.summary}` : ""}.
-Answer the question from the FILES and the ROUTE COVERAGE only. Quantify wherever the code lets you ("14 of 19 write routes"). Name gaps as concrete things to change, each with the file it lives in when you can point at one — only paths that appear in the files given or the coverage list. No advice, no generalities: if it isn't in the code in front of you, say it isn't there.
+Answer the question from the FILES, the ROUTE COVERAGE and the TEST FILES and MOBILE SCREENS lists only. Those lists are complete (every test in the repository, or every one named for this area; every mobile route file): a file on them exists even when its full text isn't in FILES — never call it missing, and count from the lists. Quantify wherever the code lets you ("14 of 19 write routes"). Name gaps as concrete things to change, each with the file it lives in when you can point at one — only paths that appear in the files given or the coverage list. No advice, no generalities: if it isn't in the code in front of you, say it isn't there.
 Respond ONLY with JSON: {"coverage":"one or two sentences, quantified","gaps":[{"item":"","file":"path or omit","severity":"low|medium|high"}],"strengths":["what is done well, one line each, at most three"]}` },
         { role: "user", content: `QUESTION\n${AREA_QUESTIONS[entry.area]}\n\n${cov ? `${cov}\n\n` : ""}FILES\n${fileText}` },
       ],

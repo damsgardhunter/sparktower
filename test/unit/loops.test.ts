@@ -25,6 +25,12 @@ describe("the five loops a business runs on", () => {
     expect(loopTypeRefusal(products, "product")?.code).toBe("loop_cap");
     expect(loopTypeRefusal(products, "growth")).toBeNull();
     expect(LOOP_CAP).toBe(4 + MAX_PRODUCT_LOOPS);
+    // Extra product loops — from before the cap — never block a business loop every project needs.
+    const crowded: { type: LoopType }[] = [...Array.from({ length: MAX_PRODUCT_LOOPS + 1 }, () => ({ type: "product" as LoopType })), { type: "growth" }, { type: "retention" }, { type: "revenue" }];
+    expect(crowded.length).toBeGreaterThanOrEqual(LOOP_CAP);
+    expect(loopTypeRefusal(crowded, "referral")).toBeNull();
+    expect(loopTypeRefusal(crowded, "product")?.code).toBe("loop_cap");
+    expect(loopTypeRefusal(crowded, "growth")?.code).toBe("loop_type_taken");
   });
 
   it("reads a loop from before types as a product loop", () => {

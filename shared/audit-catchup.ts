@@ -83,6 +83,8 @@ export function renderFileChanges(c: FileChanges | null, since: string | null): 
 // --- Sections ----------------------------------------------------------------
 
 export const CATCHUP_SECTIONS = [
+  // First: it's the one asking a question — "your board says this, the code says otherwise".
+  { id: "drift", label: "Out of date on your board", hint: "Things your board says that the code doesn't — removed or reopened only with your OK" },
   { id: "shipped", label: "Work you shipped", hint: "Recorded as finished tasks" },
   { id: "closed", label: "Tasks that are done", hint: "Moved to done" },
   { id: "path", label: "Path milestones reached", hint: "Checked off on your path" },
@@ -113,6 +115,8 @@ export function sectionOf(op: any): CatchUpSection {
     // Build steps that are all already built are progress on the path, not a change of direction.
     case "add_loop_steps": return Array.isArray(op.steps) && op.steps.length > 0 && op.steps.every((st: any) => st?.done === true) ? "path" : "loops";
     case "create_loop": case "update_loop": case "retire_loop": return "loops";
+    // Taking something off the board is never automatic: it's the builder's call.
+    case "retire_task": return "drift";
     default: return "plan";
   }
 }
@@ -120,7 +124,7 @@ export function sectionOf(op: any): CatchUpSection {
 // --- Keeping it brief --------------------------------------------------------
 
 /** How many of each an audit may propose. Past these, it's describing files, not work. */
-export const CATCHUP_CAPS: Record<CatchUpSection, number> = { shipped: 12, closed: 40, path: 12, brief: 3, loops: 8, tasks: 10, plan: 10 };
+export const CATCHUP_CAPS: Record<CatchUpSection, number> = { shipped: 12, closed: 40, path: 12, brief: 3, loops: 8, tasks: 10, plan: 10, drift: 25 };
 export const CATCHUP_MAX = 80;
 
 const norm = (s: unknown) => String(s ?? "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
@@ -173,6 +177,7 @@ export function describeOp(op: any, ctx?: Pick<CatchUpContext, "tasks" | "loops"
     case "update_loop": return `Rewrite loop: ${op.title ?? loop(op.id)}`;
     case "add_loop_steps": return `Add ${Array.isArray(op.steps) ? op.steps.length : 0} build step${op.steps?.length === 1 ? "" : "s"} to ${loop(op.loopId)}`;
     case "retire_loop": return `Retire loop: ${loop(op.id)}`;
+    case "retire_task": return `Remove from your board: ${task(op.id)}${op.reason ? ` — ${String(op.reason).slice(0, 120)}` : ""}`;
     case "create_milestone": return `Add milestone: ${op.title}`;
     case "update_milestone": return `Update milestone${op.title ? `: ${op.title}` : ""}`;
     case "update_phase": return `Update roadmap phase${op.title ? `: ${op.title}` : ""}`;
@@ -203,6 +208,7 @@ export function tidyCatchUp(raw: unknown, ctx: CatchUpContext): TidiedCatchUp {
   const perSection = new Map<CatchUpSection, number>();
   const titlesThisRun: string[] = [];
   const closing = new Set<string>();
+  const retiring = new Set<string>();
 
   for (const op of ops) {
     const line = describeOp(op, ctx);
@@ -264,6 +270,14 @@ export function tidyCatchUp(raw: unknown, ctx: CatchUpContext): TidiedCatchUp {
       }
     }
     if (op.op === "retire_loop" && !loopById.has(op.id)) { drop("a loop that isn't on the project"); continue; }
+    if (op.op === "retire_task") {
+      const current = taskById.get(op.id);
+      if (!current) { drop("a task that isn't on the board"); continue; }
+      if ((current.tags ?? []).some((t) => t.startsWith("archived:"))) { drop("already off the board"); continue; }
+      if ((current.tags ?? []).some((t) => t.startsWith("backbone:"))) { drop("a path milestone (those aren't removed)"); continue; }
+      if (retiring.has(op.id) || closing.has(op.id)) { drop("proposed twice"); continue; }
+      retiring.add(op.id);
+    }
     if (op.op === "add_loop_steps") {
       const current = loopById.get(op.loopId);
       if (!current) { drop("a loop that isn't on the project"); continue; }
@@ -281,12 +295,14 @@ export function tidyCatchUp(raw: unknown, ctx: CatchUpContext): TidiedCatchUp {
     }
 
     // Filed again after tidying: dropping steps that already exist can change where the rest belong.
-    const filed = sectionOf(op);
+    // A card marked done that the code says isn't: that's drift too — reopened only with the builder's OK.
+    const reopening = op.op === "update_task" && taskById.get(op.id)?.status === "done" && typeof op.status === "string" && op.status !== "done";
+    const filed: CatchUpSection = reopening ? "drift" : sectionOf(op);
     const n = perSection.get(filed) ?? 0;
     if (n >= CATCHUP_CAPS[filed]) { drop(`over the ${filed} limit`); continue; }
     if (kept.length >= CATCHUP_MAX) { drop("over the total limit"); continue; }
     perSection.set(filed, n + 1);
-    kept.push({ ...op, _section: filed, _label: describeOp(op, ctx) });
+    kept.push({ ...op, _section: filed, _label: reopening ? `Not actually done: ${taskById.get(op.id)!.title} — back to ${op.status === "todo" ? "To do" : op.status}` : describeOp(op, ctx) });
   }
   return { operations: kept, dropped: [...dropped.entries()].map(([reason, e]) => ({ reason, count: e.count, items: e.items })) };
 }
@@ -302,6 +318,7 @@ export function summarizeCatchUp(ops: { _section?: string }[]): string {
     count("loops") && `${count("loops")} loop change${count("loops") === 1 ? "" : "s"}`,
     count("tasks") && `${count("tasks")} task change${count("tasks") === 1 ? "" : "s"}`,
     count("plan") && `${count("plan")} milestone or roadmap change${count("plan") === 1 ? "" : "s"}`,
+    count("drift") && `${count("drift")} out-of-date item${count("drift") === 1 ? "" : "s"} on your board to check`,
   ].filter(Boolean) as string[];
   return parts.length ? parts.join(", ") : "Your project already matches the code.";
 }

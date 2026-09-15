@@ -15,7 +15,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { db } from "../../server/db";
 import { feedComments, feedPosts, rateLimitHits, users } from "@shared/schema";
-import { RATE_LIMITS, RATE_LIMITED, type RateLimitAction } from "@shared/moderation";
+import { RATE_LIMITS, RATE_LIMITED, DUPLICATE_RULES, DUPLICATE_CONTENT, type RateLimitAction } from "@shared/moderation";
 
 afterAll(async () => { await closeTestApp(); });
 afterEach(() => { vi.restoreAllMocks(); delete process.env.RATE_LIMIT_EXEMPT_EMAILS; });
@@ -75,7 +75,7 @@ describe("the three categories, past their limits", () => {
 
     for (let i = 0; i < RATE_LIMITS.comment.max; i++) {
       const ok = await agent.post(`/api/feed/${post.id}/comments`).send({ content: `Comment number ${i} on how the launch went` });
-      expect(ok.status).toBeLessThan(300);
+      expect(ok.status, JSON.stringify(ok.body)).toBeLessThan(300);
     }
     expectRefusal(await agent.post(`/api/feed/${post.id}/comments`).send({ content: "One more, past the limit" }), "comment");
     // Comments are counted from their own rows, so the rows are the counter.
@@ -135,5 +135,22 @@ describe("around the contract", () => {
       .where(and(eq(rateLimitHits.userId, id), eq(rateLimitHits.action, "upload")))).length;
     expect(await count(admin.id)).toBe(max + 1);
     expect(await count(someone.id)).toBe(max);
+  });
+});
+
+describe("repeating yourself", () => {
+  it("is refused with 409 and the shared message/code/action — and no retry fields, since waiting doesn't help", async () => {
+    const app = await getTestApp();
+    const me = await person(app);
+    const content = "Same exact post about our launch week, sent again to see what happens.";
+    const first = await me.agent.post("/api/feed").send({ postType: "project_update", content });
+    expect(first.status).toBe(200);
+    const again = await me.agent.post("/api/feed").send({ postType: "project_update", content });
+    expect(again.status).toBe(409);
+    expect(Object.keys(again.body).sort()).toEqual(["action", "code", "message"]);
+    expect(again.body).toEqual({ code: DUPLICATE_CONTENT, action: "feedPost", message: DUPLICATE_RULES.feedPost.message });
+    expect(again.headers["retry-after"]).toBeUndefined();
+    // Something different goes through.
+    expect((await me.agent.post("/api/feed").send({ postType: "project_update", content: `${content} Plus one new thing.` })).status).toBe(200);
   });
 });

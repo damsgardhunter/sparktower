@@ -62,7 +62,7 @@ function goalOfTags(tags: string[] | null | undefined): ProjectGoal | null {
 }
 
 /** Operations that move the path: milestones reached, work recorded, tasks closed, loop steps built. */
-const PATH_SECTIONS: readonly CatchUpSection[] = ["path", "shipped", "closed"];
+const PATH_SECTIONS: readonly CatchUpSection[] = ["drift", "path", "shipped", "closed"];
 
 function pathRow(op: Op, tasks: KanbanTask[]): { key: string; title: string; kind: string; goal: ProjectGoal | null } {
   const task = (id: string) => tasks.find((t) => t.id === id);
@@ -75,7 +75,12 @@ function pathRow(op: Op, tasks: KanbanTask[]): { key: string; title: string; kin
       return { key: `c-${op.title}`, title: String(op.title ?? "Task"), kind: op.status === "done" ? "Shipped" : "New task", goal: goalOfTags(op.tags) };
     case "update_task": {
       const t = task(op.id);
-      return { key: `u-${op.id}`, title: t?.title ?? op.title ?? describeOp(op), kind: op.status === "done" ? "Done" : "Task", goal: goalOfTags(t?.tags) };
+      const reopen = op._section === "drift";
+      return { key: `u-${op.id}`, title: t?.title ?? op.title ?? describeOp(op), kind: op.status === "done" ? "Done" : reopen ? "Not actually done" : "Task", goal: goalOfTags(t?.tags) };
+    }
+    case "retire_task": {
+      const t = task(op.id);
+      return { key: `r-${op.id}`, title: t?.title ?? describeOp(op), kind: "Out of date · remove", goal: goalOfTags(t?.tags) };
     }
     case "add_loop_steps": {
       const t = task(op.loopId);
@@ -106,7 +111,7 @@ export function PathChanges({ projectId, audit, limit = 6 }: {
   const [all, setAll] = useState(false);
   const ops = ((Array.isArray(audit.operations) ? audit.operations : []) as Op[])
     .filter((o) => PATH_SECTIONS.includes((o._section ?? "plan") as CatchUpSection) || o.op === "complete_path_milestone");
-  const needsTasks = ops.some((o) => o.op === "update_task" || o.op === "add_loop_steps");
+  const needsTasks = ops.some((o) => o.op === "update_task" || o.op === "add_loop_steps" || o.op === "retire_task");
   const { data: tasks = [] } = useQuery<KanbanTask[]>({
     queryKey: ["/api/projects", projectId, "kanban"],
     enabled: needsTasks,

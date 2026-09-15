@@ -23,6 +23,7 @@ import { requireCredits } from "./entitlements";
 import { storage } from "./storage";
 import { CREDIT_COSTS } from "@shared/plans";
 import { rateLimit } from "./moderation";
+import { respondToAiError } from "./ai-json";
 import {
   PROJECT_VISUAL_SLOTS, isProjectVisualSlot,
   type ProjectVisualSlot, type ProjectVisualSlotDef, type ProjectVisuals,
@@ -170,7 +171,7 @@ export function registerProjectVisualRoutes(app: Express) {
       const made = results.filter((r) => r.path);
       if (made.length === 0) {
         console.error("Project visuals: every slot failed:", results[0]?.error);
-        return res.status(502).json({ message: "Couldn't draw that this time. Nothing was charged — try again." });
+        return res.status(502).json({ message: "Couldn't draw that this time. Nothing was charged — try again.", code: "model_unreadable" });
       }
 
       let visuals = currentVisuals(project);
@@ -186,7 +187,7 @@ export function registerProjectVisualRoutes(app: Express) {
       });
     } catch (error: any) {
       console.error("Project visuals error:", error);
-      if (!res.headersSent) res.status(500).json({ message: "Couldn't add visuals" });
+      respondToAiError(res, error, "Couldn't add visuals");
     }
   });
 

@@ -26,15 +26,32 @@ import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;          // 15 minutes
 const REFRESH_TOKEN_TTL_DAYS = 60;
 
+/** Labels the key derived for access tokens when there's no MOBILE_TOKEN_SECRET. Changing it signs everyone's access tokens out (refresh tokens are unaffected). */
+export const ACCESS_TOKEN_KEY_LABEL = "sparktower/mobile-access-token/v1";
+
 /**
- * Signing secret for access tokens. Falls back to SESSION_SECRET so the app
- * boots in development without extra setup, but a dedicated
- * MOBILE_TOKEN_SECRET is preferable in production.
+ * The key access tokens are signed with.
+ *
+ * MOBILE_TOKEN_SECRET when it's set. Without it, a key DERIVED from
+ * SESSION_SECRET — HMAC-SHA256 over a fixed label — never SESSION_SECRET
+ * itself: the raw secret signs web session cookies, and one key doing two
+ * jobs means a flaw or leak in either reaches both. Derivation keeps the app
+ * booting with one secret while the two keys stay separate. (Access tokens
+ * signed with the raw secret before this stop verifying; the app refreshes
+ * with its refresh token, which is stored by hash and doesn't depend on it.)
  */
-function tokenSecret(): string {
-  const secret = process.env.MOBILE_TOKEN_SECRET || process.env.SESSION_SECRET;
-  if (!secret) throw new Error("MOBILE_TOKEN_SECRET or SESSION_SECRET must be set");
-  return secret;
+export function tokenSecret(): string {
+  if (process.env.MOBILE_TOKEN_SECRET) return process.env.MOBILE_TOKEN_SECRET;
+  const session = process.env.SESSION_SECRET;
+  if (!session) throw new Error("MOBILE_TOKEN_SECRET or SESSION_SECRET must be set");
+  return crypto.createHmac("sha256", session).update(ACCESS_TOKEN_KEY_LABEL).digest("base64url");
+}
+
+/** Said once at boot in production: a dedicated secret is still the better setup. */
+export function warnIfSharedTokenSecret(): void {
+  if (process.env.NODE_ENV === "production" && !process.env.MOBILE_TOKEN_SECRET) {
+    console.warn("[auth] MOBILE_TOKEN_SECRET is not set; mobile access tokens use a key derived from SESSION_SECRET. Set a separate MOBILE_TOKEN_SECRET so rotating one secret doesn't touch the other.");
+  }
 }
 
 const b64url = (input: Buffer | string): string =>

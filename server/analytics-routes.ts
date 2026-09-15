@@ -10,17 +10,21 @@
  * of latency is well inside what "live" means to someone watching.
  */
 import type { Express, Response } from "express";
-import { and, desc, eq, gte, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, sql, type SQL } from "drizzle-orm";
+import { rateLimit } from "./moderation";
 import { db } from "./db";
 import { activityEvents, users, userProfiles } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { requireOwner } from "./platform-roles";
 import {
-  ACTIVITY_EVENTS, ONLINE_WINDOW_MINUTES, actionLabel, pageLabel,
+  ACTIVITY_EVENTS, ONLINE_WINDOW_MINUTES, RETENTION_DAYS, actionLabel, pageLabel,
 } from "@shared/analytics";
 import {
   EXPLORE_ACTIONS, EXPLORE_EVENTS, EXPLORE_EVENT_NAMES, EXPLORE_FUNNEL, EXPLORE_LABEL, countCycles, exploreLabel,
 } from "@shared/explore-events";
+
+/** Rows one export may hold. */
+export const EXPORT_MAX_ROWS = 50_000;
 
 /** How often the live stream checks for new rows. */
 const POLL_MS = 2000;
@@ -463,6 +467,72 @@ export function registerAnalyticsRoutes(app: Express) {
     } catch (error) {
       console.error("Analytics session detail error:", error);
       res.status(500).json({ message: "Couldn't load that session" });
+    }
+  });
+
+  /**
+   * Export: every activity event in the last `days` (1–90, the retention
+   * window), newest first, as CSV (default) or JSON. Capped so one click
+   * can't pull an unbounded table into memory; the response says when it was.
+   */
+  app.get("/api/admin/analytics/export", isAuthenticated, requireOwner, async (req, res) => {
+    try {
+      const days = Math.min(RETENTION_DAYS, Math.max(1, Math.floor(Number(req.query.days) || 30)));
+      const rows = await db.select({
+        createdAt: activityEvents.createdAt, name: activityEvents.name, userId: activityEvents.userId,
+        visitorId: activityEvents.visitorId, sessionId: activityEvents.sessionId, method: activityEvents.method,
+        path: activityEvents.path, pattern: activityEvents.pattern, status: activityEvents.status,
+        durationMs: activityEvents.durationMs, projectId: activityEvents.projectId, referrer: activityEvents.referrer,
+      }).from(activityEvents)
+        .where(sql`${activityEvents.createdAt} >= now() - make_interval(days => ${days})`)
+        .orderBy(desc(activityEvents.seq))
+        .limit(EXPORT_MAX_ROWS + 1);
+      const truncated = rows.length > EXPORT_MAX_ROWS;
+      const out = rows.slice(0, EXPORT_MAX_ROWS);
+      res.setHeader("X-Export-Truncated", truncated ? "true" : "false");
+      if (req.query.format === "json") return res.json({ days, truncated, rows: out });
+      const columns = ["createdAt", "name", "userId", "visitorId", "sessionId", "method", "path", "pattern", "status", "durationMs", "projectId", "referrer"] as const;
+      const cell = (v: unknown) => {
+        const s = v instanceof Date ? v.toISOString() : v == null ? "" : String(v);
+        // Quoted when needed, and a leading = + - @ neutralised so a spreadsheet doesn't run it as a formula.
+        const safe = /^[=+\-@]/.test(s) ? `'${s}` : s;
+        return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+      };
+      const csv = [columns.join(","), ...out.map((r) => columns.map((c) => cell((r as any)[c])).join(","))].join("\n");
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="sparktower-activity-last-${days}-days.csv"`);
+      res.send(csv);
+    } catch (error) {
+      console.error("Analytics export error:", error);
+      res.status(500).json({ message: "Couldn't export analytics" });
+    }
+  });
+
+  /**
+   * Erasing one person's activity history — on their request, or the owner's
+   * call. By account (every event recorded while signed in as them, and every
+   * event from a browser they used) — the rows go, and the count comes back.
+   * Page views they made signed out on a browser they never signed in on
+   * can't be tied to them and aren't touched.
+   */
+  app.delete("/api/admin/analytics/people/:userId", isAuthenticated, requireOwner, rateLimit("review"), async (req: any, res) => {
+    try {
+      // An account id, or the email the person wrote in from.
+      const who = String(req.params.userId).trim();
+      const [person] = await db.select({ id: users.id }).from(users)
+        .where(who.includes("@") ? sql`lower(${users.email}) = ${who.toLowerCase()}` : eq(users.id, who));
+      if (!person) return res.status(404).json({ message: "No account with that id or email" });
+      const userId = person.id;
+      const visitors = await db.selectDistinct({ visitorId: activityEvents.visitorId }).from(activityEvents).where(eq(activityEvents.userId, userId));
+      const byAccount = await db.delete(activityEvents).where(eq(activityEvents.userId, userId));
+      const ids = visitors.map((v) => v.visitorId).filter((v) => v && v !== "unknown");
+      const byBrowser = ids.length ? await db.delete(activityEvents).where(inArray(activityEvents.visitorId, ids)) : null;
+      const erased = ((byAccount as any)?.rowCount ?? 0) + ((byBrowser as any)?.rowCount ?? 0);
+      console.log(`[analytics] Erased ${erased} activity event(s) for user ${userId} at the owner's request (${req.user.id}).`);
+      res.json({ erased });
+    } catch (error) {
+      console.error("Analytics erase error:", error);
+      res.status(500).json({ message: "Couldn't erase that activity" });
     }
   });
 

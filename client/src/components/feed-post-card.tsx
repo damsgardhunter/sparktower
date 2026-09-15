@@ -25,7 +25,7 @@ import type { FeedMention, FeedPost, FeedReaction, User, UserProfile } from "@sh
 export interface FeedPostWithDetails extends FeedPost {
   author: User;
   profile?: UserProfile;
-  project: { id: string; title: string; isPrivate: boolean } | null;
+  project: { id: string; title: string; isPrivate: boolean; logoUrl: string | null } | null;
   viewerReaction: FeedReaction | null;
   reactionBreakdown: { reaction: string; count: number }[];
   viewerIsTeam?: boolean;
@@ -113,7 +113,7 @@ export function FeedPostCard({ post, standalone = false }: { post: FeedPostWithD
     >
       <CardContent className="p-0 text-[13px]">
         {/* Author, and which project they're posting for */}
-        <div className="flex items-start gap-3 px-4 pt-3.5 pb-2.5 border-b border-border/60">
+        <div className="flex items-start gap-3 px-4 pt-3.5 pb-2.5 border-b border-border">
           <Link href={`/profile/${post.authorId}`}>
             <UserAvatar
               src={post.profile?.avatarUrl || post.author?.profileImageUrl}
@@ -126,20 +126,7 @@ export function FeedPostCard({ post, standalone = false }: { post: FeedPostWithD
               <Link href={`/profile/${post.authorId}`} className="font-semibold text-[13px] hover:underline" data-testid={`post-author-${post.id}`}>
                 {authorName}
               </Link>
-              {post.project && (
-                <>
-                  <span className="text-muted-foreground text-[13px]">·</span>
-                  <Link
-                    href={`/projects/${post.project.id}`}
-                    className="text-[13px] text-primary hover:underline flex items-center gap-1"
-                    data-testid={`post-project-${post.id}`}
-                  >
-                    {post.project.title}
-                  </Link>
-                  {post.project.isPrivate && <PrivateBadge variant="icon" />}
-                </>
-              )}
-              {/* What kind of post, on the same line as who and which project. */}
+              {/* What kind of post, on the same line as who posted it. */}
               <Badge variant="outline" className={`text-[10px] gap-1 font-normal ${def.accent}`} data-testid={`post-type-${post.id}`}>
                 <TypeIcon name={def.icon} className="h-2.5 w-2.5" />
                 {def.label}
@@ -159,6 +146,28 @@ export function FeedPostCard({ post, standalone = false }: { post: FeedPostWithD
                 : <Link href={`/posts/${post.id}`} className="text-[11px] text-muted-foreground hover:underline" title="Open this post" data-testid={`post-link-${post.id}`}>{timeAgo(post.createdAt)}</Link>}
             </div>
           </div>
+          {/* The project this post is about, top right: its logo (if uploaded) over its name, both opening the project. */}
+          {post.project && (
+            <Link
+              href={`/projects/${post.project.id}`}
+              className="shrink-0 max-w-[96px] flex flex-col items-center gap-1 text-center group"
+              title={post.project.title}
+              data-testid={`post-project-${post.id}`}
+            >
+              {post.project.logoUrl && (
+                <img
+                  src={post.project.logoUrl}
+                  alt={`${post.project.title} logo`}
+                  className="h-10 w-10 rounded-md object-contain border border-border/60 bg-background p-0.5"
+                  data-testid={`post-project-logo-${post.id}`}
+                />
+              )}
+              <span className="flex items-center gap-1 max-w-full text-[11px] font-medium text-primary group-hover:underline">
+                <span className="truncate">{post.project.title}</span>
+                {post.project.isPrivate && <PrivateBadge variant="icon" />}
+              </span>
+            </Link>
+          )}
           {isMine && (
             <Button
               variant="ghost"

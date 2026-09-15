@@ -458,6 +458,7 @@ export function CodebaseTool({ projectId, repoUrl, isOwner }: { projectId: strin
 
 /** shared/audit-catchup.ts CATCHUP_SECTIONS, AUDIT_AUTO_APPLY_LABEL and describeOp, restated. */
 const CATCHUP_SECTIONS = [
+  { id: "drift", label: "Out of date on your board", hint: "Things your board says that the code doesn't — removed or reopened only with your OK" },
   { id: "shipped", label: "Work you shipped", hint: "Recorded as finished tasks" },
   { id: "closed", label: "Tasks that are done", hint: "Moved to done" },
   { id: "path", label: "Path milestones reached", hint: "Checked off on your path" },
@@ -483,6 +484,7 @@ function describeOp(op: any): string {
     case "update_loop": return `Rewrite loop: ${op.title ?? "a loop"}`;
     case "add_loop_steps": return `Add ${Array.isArray(op.steps) ? op.steps.length : 0} build step${op.steps?.length === 1 ? "" : "s"} to a loop`;
     case "retire_loop": return "Retire loop";
+    case "retire_task": return `Remove from your board${op.reason ? ` — ${op.reason}` : ""}`;
     case "create_milestone": return `Add milestone: ${op.title}`;
     case "update_milestone": return `Update milestone${op.title ? `: ${op.title}` : ""}`;
     case "update_phase": return `Update roadmap phase${op.title ? `: ${op.title}` : ""}`;
@@ -499,6 +501,7 @@ function summarizeCatchUp(ops: { _section?: string }[]): string {
     count("loops") && `${count("loops")} loop change${count("loops") === 1 ? "" : "s"}`,
     count("tasks") && `${count("tasks")} task change${count("tasks") === 1 ? "" : "s"}`,
     count("plan") && `${count("plan")} milestone or roadmap change${count("plan") === 1 ? "" : "s"}`,
+    count("drift") && `${count("drift")} out-of-date item${count("drift") === 1 ? "" : "s"} on your board to check`,
   ].filter(Boolean) as string[];
   return parts.length ? parts.join(", ") : "Your project already matches the code.";
 }

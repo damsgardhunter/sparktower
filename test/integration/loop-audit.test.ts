@@ -161,6 +161,47 @@ describe("Nova writing the loops for the builder", () => {
     expect((await agent.post(`/api/projects/${id}/path/loops/write`).send({})).body.code).toBe("nothing_to_write");
   });
 
+  it("writes a missing referral loop for a project with more product loops than today's cap — and says why when it can't add one", async () => {
+    const app = await getTestApp();
+    const { agent, id } = await project(app);
+    const { db } = await import("../../server/db");
+    const { projectKanbanTasks } = await import("@shared/schema");
+    const { eq } = await import("drizzle-orm");
+    // A project like one from before the product-loop cap: five product loops, growth, retention and
+    // revenue written, and no referral loop at all — eight loops, the whole cap, without the one it needs.
+    const start = (await tree(agent, id)).loops as any[];
+    const referral = start.find((l) => l.type === "referral");
+    await db.delete(projectKanbanTasks).where(eq(projectKanbanTasks.id, referral.taskId));
+    for (const l of start.filter((x) => x.type !== "referral")) await agent.patch(`/api/kanban/${l.taskId}`).send({ description: `1. ${l.type} 2. step 3. back to 1`, status: "done" });
+    const [product] = start;
+    const [legacy] = await db.select().from(projectKanbanTasks).where(eq(projectKanbanTasks.id, product.taskId));
+    for (let i = 0; i < 4; i++) {
+      await db.insert(projectKanbanTasks).values({ projectId: id, milestoneId: legacy.milestoneId, title: `Old product loop ${i}`, description: "1. a 2. b 3. back", status: "done", priority: "medium", order: 50 + i, tags: (legacy.tags ?? []).filter((t) => !t.startsWith("loop-type:")) } as any);
+    }
+    let t = await tree(agent, id);
+    expect(t.loops).toHaveLength(8);
+    expect(t.coverage.missing).toEqual(["referral"]);
+
+    // Nova's draft is only for a kind that's taken: nothing can be added, and the answer says why — not "unreadable" — and costs nothing.
+    reply = JSON.stringify({ loops: [{ type: "growth", title: "Another growth loop", steps: "1. x 2. y 3. back" }] });
+    const before = await creditsUsed(agent);
+    const refused = await agent.post(`/api/projects/${id}/path/loops/write`).send({});
+    expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+    expect(refused.body).toMatchObject({ code: "loops_not_added", message: expect.stringContaining("the growth loop is already written") });
+    expect(await creditsUsed(agent)).toBe(before);
+
+    // Nova writes the referral loop: added, even with the project over today's product-loop cap.
+    reply = JSON.stringify({ loops: [{ type: "referral", title: "Invite a cofounder", steps: "1. Invite a builder 2. They join your project 3. They invite theirs", closes: "the invitee gets their own invite link" }] });
+    const wrote = await agent.post(`/api/projects/${id}/path/loops/write`).send({});
+    expect(wrote.status, JSON.stringify(wrote.body)).toBe(200);
+    expect(wrote.body.created).toHaveLength(1);
+    t = await tree(agent, id);
+    expect(t.coverage.complete).toBe(true);
+    expect(t.loops.find((l: any) => l.type === "referral")).toMatchObject({ title: "Invite a cofounder", status: "done" });
+    // A fifth-plus product loop is still refused.
+    expect((await agent.post(`/api/projects/${id}/path/loops`).send({ title: "Yet another", type: "product" })).body.code).toBe("loop_cap");
+  });
+
   it("writes loops from Nova chat with the write_loops action", async () => {
     const app = await getTestApp();
     const { agent, id } = await project(app);

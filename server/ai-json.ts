@@ -37,3 +37,16 @@ export function answerUnreadable(res: any, err: unknown, what = "response") {
   console.error(`[ai] unreadable ${what}:`, e.raw?.slice(0, 200) ?? "(empty)");
   return res.status(502).json({ message: e.message, code: e.code });
 }
+
+/**
+ * The catch-all at the end of an AI route. An unreadable model answer — thrown
+ * by the route or by a helper it called — is a 502 model_unreadable, so the
+ * person is told to try again and the client can tell it apart; anything else
+ * is the route's own 500 message. Charging is untouched: every AI route charges
+ * only after its answer is read, so neither path is billed.
+ */
+export function respondToAiError(res: any, err: unknown, fallbackMessage: string) {
+  if (err instanceof ModelResponseError) return answerUnreadable(res, err);
+  if (res.headersSent) return;
+  return res.status(500).json({ message: fallbackMessage });
+}

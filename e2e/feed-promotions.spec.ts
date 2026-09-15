@@ -10,16 +10,16 @@ import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
 
 loadEnvFile();
-// Real Chrome: the bundled test Chromium has no codecs for YouTube's streams, so videos buffer forever there.
-test.use({ channel: "chrome" });
-
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
 test("featured tools rotate through the feed, can be hidden, and play an admin's video", async ({ browser }) => {
-  const context = await browser.newContext({ extraHTTPHeaders: { "x-forwarded-for": "203.0.113.120" } });
+  // Visits, admin edits across the whole catalog, and a real YouTube video: longer than the default minute.
+  test.setTimeout(240_000);
+  // The test address goes on the sign-up request only: sent on every request, YouTube's video servers refuse to stream to it.
+  const context = await browser.newContext();
   const api = context.request;
   await api.get("/");
-  const me = await (await api.post("/api/auth/register", { data: { email: `e2e-promo-${stamp()}@example.test`, password: "Testpass123!", firstName: "Promo", lastName: "Viewer" } })).json();
+  const me = await (await api.post("/api/auth/register", { headers: { "x-forwarded-for": "203.0.113.120" }, data: { email: `e2e-promo-${stamp()}@example.test`, password: "Testpass123!", firstName: "Promo", lastName: "Viewer" } })).json();
   expect((await api.post("/api/profile/complete-onboarding", { data: { displayName: "Promo Viewer", headline: "x", bio: "y" } })).ok()).toBeTruthy();
   for (let i = 0; i < 3; i++) await api.post("/api/feed", { data: { postType: "project_update", content: `Progress note ${i} ${stamp()}` } });
 
@@ -101,4 +101,53 @@ test("featured tools rotate through the feed, can be hidden, and play an admin's
 
   // Put the catalog back for other specs.
   for (const row of others.promotions) await api.put(`/api/admin/promotions/${row.promotion.id}`, { data: { active: true } });
+});
+
+test("scrolling fast past loading videos doesn't throw", async ({ browser }) => {
+  test.setTimeout(240_000);
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const api = context.request;
+  await api.get("/");
+  const me = await (await api.post("/api/auth/register", { headers: { "x-forwarded-for": "203.0.113.121" }, data: { email: `e2e-promo-scroll-${stamp()}@example.test`, password: "Testpass123!", firstName: "Fast", lastName: "Scroller" } })).json();
+  expect((await api.post("/api/profile/complete-onboarding", { data: { displayName: "Fast Scroller", headline: "x", bio: "y" } })).ok()).toBeTruthy();
+  const db = new pg.Client({ connectionString: testDatabaseUrl("_e2e") });
+  await db.connect();
+  try { await db.query("UPDATE users SET platform_role = 'admin' WHERE id = $1", [me.id]); } finally { await db.end(); }
+  for (let i = 0; i < 20; i++) await api.post("/api/feed", { data: { postType: "project_update", content: `Scroll filler ${i} ${stamp()}` } });
+
+  // Every promotion has a video, so every slot in the feed builds a player.
+  const all = (await (await api.get("/api/admin/promotions")).json()).promotions as any[];
+  const withVideo = all.slice(0, 12).map((r) => r.promotion.id);
+  for (const r of all) {
+    await api.put(`/api/admin/promotions/${r.promotion.id}`, { data: withVideo.includes(r.promotion.id) ? { videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" } : { active: false } });
+  }
+
+  const errors: string[] = [];
+  const page = await context.newPage();
+  page.on("pageerror", (e) => errors.push(e.message));
+  // A slow connection to YouTube: each player exists for seconds before it's ready, which is the window fast scrolling hits.
+  await context.route("https://www.youtube-nocookie.com/embed/**", async (route) => { await new Promise((r) => setTimeout(r, 3000)); await route.continue(); });
+  await page.goto("/");
+  await expect(page.locator('[data-testid^="promo-video-"]').first()).toBeVisible({ timeout: 20_000 });
+  // Over the feed, which scrolls in its own panel; and check that it really moves.
+  const overFeed = async () => { const box = await page.getByTestId("feed-filter-bar").boundingBox(); await page.mouse.move(box!.x + box!.width / 2, 400); };
+  const scrollTop = () => page.evaluate(() => Math.max(...[...document.querySelectorAll("main, main *")].filter((el) => el.scrollHeight > el.clientHeight + 10).map((el) => el.scrollTop), window.scrollY));
+  await overFeed();
+  await page.mouse.wheel(0, 900);
+  await expect.poll(scrollTop).toBeGreaterThan(300);
+  // Fast, back and forth: players come into view mid-load and leave before they're ready.
+  for (let round = 0; round < 6; round++) {
+    for (let i = 0; i < 12; i++) { await page.mouse.wheel(0, 900); await page.waitForTimeout(40); }
+    for (let i = 0; i < 12; i++) { await page.mouse.wheel(0, -900); await page.waitForTimeout(40); }
+  }
+  // And a reload mid-scroll, which tears every player down while some are still loading.
+  await page.mouse.wheel(0, 2000);
+  await page.reload();
+  await expect(page.getByTestId("feed-filter-bar")).toBeVisible();
+  await overFeed();
+  for (let i = 0; i < 15; i++) { await page.mouse.wheel(0, 700); await page.waitForTimeout(30); }
+  await page.waitForTimeout(3000);
+  expect(errors, errors.join("\n")).toEqual([]);
+
+  for (const r of all) await api.put(`/api/admin/promotions/${r.promotion.id}`, { data: { active: true, videoUrl: "" } });
 });

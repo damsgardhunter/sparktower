@@ -207,7 +207,7 @@ export interface FeedPostWithDetails extends FeedPost {
   author: User;
   profile?: UserProfile;
   /** Null for posts not attached to a project. */
-  project: { id: string; title: string; isPrivate: boolean } | null;
+  project: { id: string; title: string; isPrivate: boolean; logoUrl: string | null } | null;
   /** The viewing user's own reaction, or null. */
   viewerReaction: string | null;
   reactionBreakdown: { reaction: string; count: number }[];
@@ -1533,7 +1533,7 @@ export class DatabaseStorage implements IStorage {
       pathStep: stepTask ? { taskId: stepTask.id, title: stepTask.title } : null,
       pathWeek: post.entityType === "path_week" ? { steps: weekSteps.map((t) => ({ taskId: t.id, title: t.title })) } : null,
       artifact: artifactRow ? { id: artifactRow.id, title: artifactRow.title, tags: artifactRow.tags, public: artifactRow.visibility === "public" } : null,
-      project: project ? { id: project.id, title: project.title, isPrivate: project.isPrivate } : null,
+      project: project ? { id: project.id, title: project.title, isPrivate: project.isPrivate, logoUrl: project.logoUrl } : null,
       viewerReaction,
       reactionBreakdown: breakdownRows.map((r) => ({ reaction: r.reaction, count: r.count })),
       viewerIsTeam,

@@ -25,7 +25,7 @@ import {
   buildOperableProjectState, stripIdFragments, collectProjectIds,
 } from "./project-operations";
 import { renderDocumentPdf } from "./document-pdf";
-import { parseModelJson } from "./ai-json";
+import { parseModelJson, respondToAiError } from "./ai-json";
 import {
   BLOCK_KINDS, BLOCK_KIND_CONTENT_RULES, DEFAULT_SETTINGS, MAX_GRID_COLUMNS,
   MAX_PAGES, MAX_BLOCKS_PER_PAGE, normalizePage, emptyBlocks, blockWordBudget, pageWordBudget,
@@ -329,7 +329,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         parsed = parseJson(completion.choices[0].message.content ?? "");
       } catch (err) {
         console.error("Document plan parse failed:", err);
-        return res.status(502).json({ message: "Nova returned an unreadable plan. Please try again." });
+        return res.status(502).json({ message: "Nova returned an unreadable plan. Please try again.", code: "model_unreadable" });
       }
 
       let pages = coercePages(parsed.pages);
@@ -342,7 +342,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         pages = pages.slice(1);
       }
       if (!pages.length) {
-        return res.status(502).json({ message: "Nova couldn't work out a structure for that. Try describing the document differently." });
+        return res.status(502).json({ message: "Nova couldn't work out a structure for that. Try describing the document differently.", code: "model_unreadable" });
       }
 
       const settings = coerceSettings({
@@ -376,7 +376,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       });
     } catch (error) {
       console.error("Document plan error:", error);
-      res.status(500).json({ message: "Nova couldn't plan that document" });
+      respondToAiError(res, error, "Nova couldn't plan that document");
     }
   });
 
@@ -668,7 +668,7 @@ Return one entry per block you were asked to write, and nothing else.`,
       });
     } catch (error) {
       console.error("Document fill error:", error);
-      res.status(500).json({ message: "Nova couldn't fill in the document" });
+      respondToAiError(res, error, "Nova couldn't fill in the document");
     }
   });
 
@@ -726,12 +726,12 @@ Respond ONLY with valid JSON:
       try {
         parsed = parseJson(completion.choices[0].message.content ?? "");
       } catch {
-        return res.status(502).json({ message: "Nova returned an unreadable structure. Please try again." });
+        return res.status(502).json({ message: "Nova returned an unreadable structure. Please try again.", code: "model_unreadable" });
       }
 
       const nextPages = coercePages(parsed.pages);
       if (!nextPages.length) {
-        return res.status(502).json({ message: "Nova couldn't restructure that. Try describing what you want differently." });
+        return res.status(502).json({ message: "Nova couldn't restructure that. Try describing what you want differently.", code: "model_unreadable" });
       }
 
       // Carry existing content across by id, so a restructure never silently
@@ -749,7 +749,7 @@ Respond ONLY with valid JSON:
       res.json({ document: updated, approach: str(parsed.approach, 1000), creditsCharged: CREDIT_COSTS.documentPlan });
     } catch (error) {
       console.error("Document replan error:", error);
-      res.status(500).json({ message: "Nova couldn't restructure that document" });
+      respondToAiError(res, error, "Nova couldn't restructure that document");
     }
   });
 
@@ -852,7 +852,7 @@ Respond ONLY with valid JSON:
       });
     } catch (error) {
       console.error("Tighten error:", error);
-      res.status(500).json({ message: "Couldn't tighten the document" });
+      respondToAiError(res, error, "Couldn't tighten the document");
     }
   });
 

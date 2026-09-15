@@ -51,6 +51,14 @@ export interface MeteringFacts {
   chargeBeforeParse: boolean;
   /** A charge inside a catch block: charging for a failure. */
   chargeInCatch: boolean;
+  /** How the model's answer is read in the route's own body: the shared JSON parser, a bare JSON.parse, as prose, or in a helper it calls. */
+  answerRead: "parseModelJson" | "JSON.parse" | "prose" | "helper";
+  /**
+   * What an unreadable answer gets back: "502" when the route answers it as
+   * model_unreadable itself or lets it reach the app's error handler (which
+   * does), "5xx" when a catch-all in the route turns it into a generic error.
+   */
+  unreadableAnswer: "502" | "5xx";
 }
 
 export interface RouteCoverage {
@@ -77,6 +85,8 @@ export interface RouteCoverage {
   creditChokepoint: { fn: string; file: string; burstAction: string; max: number | null; windowMinutes: number | null } | null;
   /** Test files about metering, credits or AI failures: where "what does a failure cost" is proven. */
   meteringTests: string[];
+  /** Tests that take their route list from this scan and call every costly route with a failing model. */
+  failingModelSweep: string[];
   /** Surface prefixes found, so a reader knows what a kill switch covers. */
   surfacePrefixes: { prefix: string; surface: string }[];
   /** Route files nothing imports: their routes exist in code and nowhere else. */
@@ -207,6 +217,21 @@ const MODEL_CALL = /\b(openai|anthropic)\s*\.|completions\.create\(|responses\.c
  * The rule every AI route keeps: check before the model runs, charge only
  * after it answered, and never charge in an error path.
  */
+/**
+ * Whether an unreadable answer reaches the person as 502 model_unreadable. It
+ * does when the route answers it (answerUnreadable, a ModelResponseError check,
+ * or passing the error's own status on), or has no catch-all that would swallow
+ * it before the app's error handler — which maps ModelResponseError to 502.
+ */
+function unreadableAnswerOf(body: string, catches: (readonly [number, number])[]): "502" | "5xx" {
+  if (/\banswerUnreadable\s*\(|\brespondToAiError\s*\(|\binstanceof\s+ModelResponseError\b|model_unreadable/.test(body)) return "502";
+  const swallowing = catches.some(([a, b]) => {
+    const block = body.slice(a, b);
+    return /status\(\s*5\d\d\s*\)/.test(block) && !/\b(?:err|error|e)\??\.status\b|\bnext\s*\(\s*(?:err|error|e)\s*\)|\bthrow\b/.test(block);
+  });
+  return swallowing ? "5xx" : "502";
+}
+
 export function analyzeMetering(body: string): MeteringFacts | null {
   const checks = [...body.matchAll(/\b(?:requireCredits\s*\(\s*res\s*,\s*[^,]+,|reserveOptionalAi\s*\(\s*[^,]+,)\s*([^,)]+)/g)];
   const charges = [...body.matchAll(/\bdeductCredits\s*\(\s*[^,]+,\s*([^)]+)\)/g)];
@@ -229,6 +254,8 @@ export function analyzeMetering(body: string): MeteringFacts | null {
     chargeBeforeModel: firstModel >= 0 && charges.some((c) => c.index! < firstModel),
     chargeBeforeParse: firstParse >= 0 && charges.some((c) => c.index! > from && c.index! < firstParse),
     chargeInCatch: charges.some((c) => catches.some(([a, b]) => c.index! > a && c.index! < b)),
+    answerRead: /\bparseModelJson\s*\(/.test(body) ? "parseModelJson" : /\bJSON\.parse\s*\(/.test(body) ? "JSON.parse" : models.length ? "prose" : "helper",
+    unreadableAnswer: unreadableAnswerOf(body, catches),
   };
 }
 
@@ -326,6 +353,7 @@ export function buildRouteCoverage(files: RepoFile[]): RouteCoverage {
     unmeteredCost: costly.filter((r) => !r.credits && !r.rateLimited).map(label),
     creditChokepoint: detectCreditChokepoint(files),
     meteringTests: files.map((f) => f.path).filter((p) => isTestPath(p) && /meter|credit|ai-fail|revenue/i.test(p)).sort(),
+    failingModelSweep: files.filter((f) => /\.(test|spec)\.[cm]?[jt]sx?$/.test(f.path) && f.content && /\bbuildRouteCoverage\b/.test(f.content) && /\.cost\b/.test(f.content) && /throw|garbage|empty/.test(f.content)).map((f) => f.path).sort(),
     surfacePrefixes: prefixes,
     unmountedFiles: [...new Set(rows.filter((r) => !r.mounted).map((r) => r.file))].sort(),
   };
@@ -367,6 +395,14 @@ function floorOnlyLines(c: RouteCoverage): string[] {
   ];
 }
 
+/** What an unreadable model answer gets back, route by route, and which test calls every costly route with a failing model. */
+function unreadableLine(c: RouteCoverage, lst: (xs: string[]) => string): string {
+  const live = c.rows.filter((r) => r.mounted && r.cost && r.metering);
+  const count = (k: MeteringFacts["answerRead"]) => live.filter((r) => r.metering!.answerRead === k).length;
+  const generic = live.filter((r) => r.metering!.unreadableAnswer === "5xx").map((r) => `${r.method} ${r.path}`);
+  return `- Unreadable model answers: ${live.length - generic.length}/${live.length} costly routes answer 502 model_unreadable (in the route, through respondToAiError, or via the app's error handler, which maps ModelResponseError to 502); generic 5xx instead: ${lst(generic)}. The answer is read with parseModelJson in ${count("parseModelJson")}, a bare JSON.parse in ${count("JSON.parse")}, as prose in ${count("prose")}, and in a helper in ${count("helper")}.${c.failingModelSweep.length ? ` Every costly write is called with a model that throws, answers garbage and answers nothing by ${c.failingModelSweep.join(", ")} (its route list is this scan), which fails if any of them charges.` : ""}`;
+}
+
 /** When costly routes check and charge, as read from each route's own body — and where a failure's cost is tested. */
 function meteringLines(c: RouteCoverage, lst: (xs: string[]) => string, maxList: number): string[] {
   const live = c.rows.filter((r) => r.mounted && r.cost);
@@ -377,6 +413,7 @@ function meteringLines(c: RouteCoverage, lst: (xs: string[]) => string, maxList:
   const noted = live.filter((r) => r.meteringNote || !r.metering?.charges.length);
   return [
     cp ? `- AI burst limit: ${cp.fn} (${cp.file}) calls enforceRateLimit("${cp.burstAction}") before every credit check${cp.max != null ? ` — ${cp.max} per ${cp.windowMinutes} minutes per user` : ""}; every credit-metered route above is under it.` : "- AI burst limit: no credit check that also applies a rate limit was found.",
+    unreadableLine(c, lst),
     `- Charge order, read from each route's body: charged only after the model answered and its answer was read: ${clean.length}/${charging.length} routes that charge in their own body. Charged before the model: ${lst(bad("chargeBeforeModel"))}. Charged before its answer is read (an unreadable answer billed): ${lst(bad("chargeBeforeParse"))}. Charged in a catch: ${lst(bad("chargeInCatch"))}. Checked only after the model: ${lst(bad("checkAfterModel"))}.`,
     ...noted.slice(0, maxList).map((r) => `  - ${r.method} ${r.path}: ${r.meteringNote ?? (r.credits ? "checks credits here; the charge is in a helper it calls" : "NO METERING REASON GIVEN")} [${r.file}]`),
     c.meteringTests.length ? `- Tests of metering and what a failure costs: ${c.meteringTests.join(", ")}` : null,

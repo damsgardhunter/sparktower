@@ -2,6 +2,7 @@ import { getStripeSync, getUncachableStripeClient } from './stripeClient';
 import { db } from './db';
 import { users, donations, projects, projectBackings, projectMerchOrders, stripeEvents } from '@shared/schema';
 import { isPaidSubscriptionStatus } from '@shared/subscriptions';
+import { normalizeTier } from '@shared/plans';
 import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import { applyTier, onInvoicePaid, onSubscriptionPaymentFailed, onSubscriptionChargeRefunded } from "./billing-credits";
 import { recordBacking } from './backing-routes';
@@ -10,6 +11,31 @@ import { recordBacking } from './backing-routes';
 export class WebhookVerificationError extends Error {
   constructor(message: string) { super(message); this.name = "WebhookVerificationError"; }
 }
+
+/** A paid price whose tier can't be read. Never read as "free": that would downgrade someone who is paying. */
+export class PriceTierMissingError extends Error {
+  constructor(public priceId: string) { super(`Stripe price ${priceId} has no tier in its metadata or its product's`); }
+}
+
+/**
+ * The tier a price entitles — from the price's metadata, else its product's,
+ * the same two places the pricing page reads when it offers checkout. A price
+ * with neither is a misconfiguration: it throws (the webhook answers 500 and
+ * Stripe retries, visibly failing in its dashboard and Stripe health) rather
+ * than quietly setting a paying subscriber to free.
+ */
+export async function tierForPrice(priceId: string): Promise<string> {
+  const stripe = await getUncachableStripeClient();
+  const price: any = await stripe.prices.retrieve(priceId, { expand: ['product'] });
+  const product = typeof price.product === 'object' ? price.product : null;
+  const raw = price.metadata?.tier || product?.metadata?.tier;
+  const tier = normalizeTier(raw);
+  if (!raw || (tier === 'free' && raw !== 'free')) throw new PriceTierMissingError(priceId);
+  return tier;
+}
+
+/** A claim "processing" longer than this is a dead attempt. Handlers take seconds; Stripe's retries come minutes to hours apart. */
+export const STALE_CLAIM_MINUTES = 10;
 
 export class WebhookHandlers {
   /**
@@ -82,23 +108,37 @@ export class WebhookHandlers {
     }
   }
 
-  /** True when this delivery should be processed: first sight, or a retry of a failure. */
+  /**
+   * True when this delivery should be processed: first sight, a retry of a
+   * failure, or a takeover of an attempt that died while "processing".
+   *
+   * One atomic statement each, so two deliveries arriving together can't both
+   * win. Without the takeover, a crash or deploy mid-event left the row
+   * "processing" forever and every retry from Stripe was answered as a
+   * duplicate — a 200 that quietly lost the payment event. The stale check is
+   * the database's clock against the database's timestamp.
+   */
   static async claim(eventId: string, type: string): Promise<boolean> {
     const inserted = await db.insert(stripeEvents).values({ id: eventId, type, status: "processing" }).onConflictDoNothing().returning({ id: stripeEvents.id });
     if (inserted.length) return true;
-    const [existing] = await db.select().from(stripeEvents).where(eq(stripeEvents.id, eventId));
-    if (existing?.status !== "failed") return false;
-    await db.update(stripeEvents).set({ status: "processing", error: null }).where(eq(stripeEvents.id, eventId));
-    return true;
+    const reclaimed = await db.update(stripeEvents)
+      .set({ status: "processing", error: null, claimedAt: sql`now()` })
+      .where(and(
+        eq(stripeEvents.id, eventId),
+        or(
+          eq(stripeEvents.status, "failed"),
+          and(eq(stripeEvents.status, "processing"), sql`${stripeEvents.claimedAt} < now() - make_interval(mins => ${STALE_CLAIM_MINUTES})`),
+        ),
+      ))
+      .returning({ id: stripeEvents.id });
+    return reclaimed.length > 0;
   }
 
   /** The tier a subscription entitles, from the price's metadata. Throws if Stripe can't be asked; that is a retry, not a silent free tier. */
   static async tierForSubscription(subscription: any): Promise<string> {
     const priceId = subscription.items?.data?.[0]?.price?.id || subscription.items?.data?.[0]?.plan?.id;
     if (!priceId) return 'free';
-    const stripe = await getUncachableStripeClient();
-    const price = await stripe.prices.retrieve(priceId);
-    return price.metadata?.tier || 'free';
+    return tierForPrice(priceId);
   }
 
   static async handleSubscriptionEvent(event: any): Promise<void> {

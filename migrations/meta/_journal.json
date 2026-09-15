@@ -106,6 +106,13 @@
       "when": 1789488783569,
       "tag": "0014_promotion_sources",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1789493295757,
+      "tag": "0015_stripe_event_claimed_at",
+      "breakpoints": true
     }
   ]
 }

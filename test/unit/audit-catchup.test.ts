@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  fingerprint, fileIndexOf, diffFileIndex, summarizePaths, renderFileChanges, sectionOf, tidyCatchUp, summarizeCatchUp,
+  fingerprint, fileIndexOf, diffFileIndex, summarizePaths, renderFileChanges, sectionOf, tidyCatchUp, summarizeCatchUp, SAFE_SECTIONS,
   sameWork, CATCHUP_CAPS, type CatchUpContext,
 } from "@shared/audit-catchup";
 
@@ -45,6 +45,37 @@ describe("keeping the catch-up brief and true", () => {
     expect(sectionOf({ op: "complete_path_milestone", backboneId: "SHIP.M1.5" })).toBe("path");
     expect(sectionOf({ op: "update_loop", id: "l1" })).toBe("loops");
     expect(sectionOf({ op: "update_scope" })).toBe("brief");
+  });
+
+  it("files drift — a card for removed work, a done card with no code — for the builder's OK", () => {
+    expect(sectionOf({ op: "retire_task", id: "t1", reason: "feature removed" })).toBe("drift");
+    const board = ctx({
+      tasks: [
+        { id: "t1", title: "Weekly check-in composer", status: "done" },
+        { id: "t2", title: "Needs feedback queue", status: "todo" },
+        { id: "t3", title: "Stripe checkout", status: "done" },
+        { id: "t4", title: "Already gone", status: "todo", tags: ["archived:retired"] },
+        { id: "t5", title: "Product statement", status: "done", tags: ["backbone:SHIP.M1.1"] },
+      ],
+    });
+    const { operations, dropped } = tidyCatchUp([
+      { op: "retire_task", id: "t1", reason: "check-ins were removed" },
+      { op: "retire_task", id: "t2", reason: "the queue was removed" },
+      { op: "retire_task", id: "t2", reason: "again" },
+      { op: "update_task", id: "t3", status: "todo" },
+      { op: "retire_task", id: "t4", reason: "x" },
+      { op: "retire_task", id: "t5", reason: "x" },
+      { op: "retire_task", id: "nope", reason: "x" },
+    ], board);
+    expect(operations.map((o) => [o.op, o.id, o._section])).toEqual([
+      ["retire_task", "t1", "drift"], ["retire_task", "t2", "drift"], ["update_task", "t3", "drift"],
+    ]);
+    expect(operations[0]._label).toBe("Remove from your board: Weekly check-in composer — check-ins were removed");
+    expect(operations[2]._label).toBe("Not actually done: Stripe checkout — back to To do");
+    expect(dropped.map((d) => d.reason).sort()).toEqual(["a path milestone (those aren't removed)", "a task that isn't on the board", "already off the board", "proposed twice"]);
+    expect(summarizeCatchUp(operations)).toMatch(/3 out-of-date items on your board to check/);
+    // Drift is never in the sections that apply on their own.
+    expect(SAFE_SECTIONS).not.toContain("drift");
   });
 
   it("turns 'record shipped' for work already on the board into closing that card", () => {

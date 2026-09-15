@@ -300,7 +300,7 @@ export default function Profile() {
 
   if (profileLoading || !userId) {
     return (
-      <div className="container max-w-5xl mx-auto py-10 px-4 space-y-8">
+      <div className="sharp-boxes container max-w-5xl mx-auto py-10 px-4 space-y-8">
         <Skeleton className="h-48 w-full rounded-xl" />
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
           <Skeleton className="h-96 rounded-xl" />
@@ -383,7 +383,7 @@ export default function Profile() {
   };
 
   return (
-    <div className="container max-w-5xl mx-auto py-10 px-4 space-y-8">
+    <div className="sharp-boxes container max-w-5xl mx-auto py-10 px-4 space-y-8">
       <Card className="overflow-hidden border-border/50">
         {/*
           * The cover photo. This used to be a hardcoded gradient, so a cover

@@ -51,7 +51,8 @@ function AuthGate() {
     } else if (!onboarded) {
       if (!inOnboarding) router.replace("/welcome");
     } else if (inAuthGroup) {
-      router.replace("/(tabs)/feed");
+      // Through the entry point, which opens on the person's path when they have one.
+      router.replace("/");
     }
   }, [user, onboarded, loading, segments]);
 

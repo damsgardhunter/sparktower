@@ -23,7 +23,7 @@ import {
   stripIdFragments, collectProjectIds, OPERATION_SCHEMA_INSTRUCTIONS,
 } from "./project-operations";
 import { NOVA_SURFACES, type NovaSurfaceId, type NovaSurfaceConfig } from "@shared/nova-surfaces";
-import { parseModelJson } from "./ai-json";
+import { parseModelJson, respondToAiError } from "./ai-json";
 import { rateLimit } from "./moderation";
 
 let _openai: OpenAI | null = null;
@@ -238,7 +238,7 @@ export function registerNovaAssistRoutes(app: Express) {
       await novaSuggest(projectId, userId, input, ent, config, res);
     } catch (error) {
       console.error("Nova assist error:", error);
-      res.status(500).json({ message: "Nova couldn't help with that" });
+      respondToAiError(res, error, "Nova couldn't help with that");
     }
   });
 

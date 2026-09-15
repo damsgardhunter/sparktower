@@ -22,7 +22,7 @@ import { SAFETY_EVENTS } from "@shared/safety";
 import { requireReviewer } from "./platform-roles";
 import {
   RATE_LIMITS, DUPLICATE_RULES, REPORT_TARGETS, RETIRED_REPORT_TARGETS, REPORT_REASON_IDS, reportDetailLabel, REPORT_NOTE_MAX,
-  REPORT_STATUSES, RATE_LIMITED, MODERATION_ACTION_IDS, isActionableTarget, isReasonCode,
+  REPORT_STATUSES, RATE_LIMITED, DUPLICATE_CONTENT, type DuplicateContentBody, MODERATION_ACTION_IDS, isActionableTarget, isReasonCode,
   reasonCodesFor, moderationReasonLabel, isUndoReasonCode, UNDOABLE_ACTIONS, sameModeratedState,
   type RateLimitAction, type ReportTarget, type DuplicateRule, type RateLimitedBody, type ModerationAction,
 } from "@shared/moderation";
@@ -471,7 +471,8 @@ export function rateLimit(action: RateLimitAction): RequestHandler {
        * would be honest.
        */
       recordRefusal(req, action, "duplicate");
-      return res.status(409).json({ message: rule.message, code: "duplicate_content" });
+      const body: DuplicateContentBody = { message: rule.message, code: DUPLICATE_CONTENT, action };
+      return res.status(409).json(body);
     }
 
     await recordHit(userId, action);
@@ -484,11 +485,20 @@ export function rateLimit(action: RateLimitAction): RequestHandler {
  * free: a delete of expired rows is idempotent, so two instances doing it at
  * once just means one of them deletes nothing.
  */
+/** How long a limiter hit is kept: past the longest window any action counts over (reportDaily, 24h). */
+export const RATE_LIMIT_HIT_RETENTION_HOURS = Math.max(...Object.values(RATE_LIMITS).map((r) => r.windowMinutes)) / 60;
+
+/** Deletes hits no window can count any more. Returns how many went. */
+export async function sweepRateLimitHits(): Promise<number> {
+  const result = await db.delete(rateLimitHits)
+    .where(sql`${rateLimitHits.createdAt} < now() - make_interval(hours => ${RATE_LIMIT_HIT_RETENTION_HOURS})`);
+  return (result as any)?.rowCount ?? 0;
+}
+
 export function startModerationJobs(): void {
   const sweep = async () => {
     try {
-      await db.delete(rateLimitHits)
-        .where(sql`${rateLimitHits.createdAt} < now() - interval '1 day'`);
+      await sweepRateLimitHits();
     } catch (err) {
       console.error("[moderation] Hit sweep failed:", err);
     }

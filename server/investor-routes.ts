@@ -17,7 +17,7 @@ import { CREDIT_COSTS } from "@shared/plans";
 import { formatProjectBriefForPrompt } from "@shared/project-sections";
 import type { Project } from "@shared/schema";
 import { rateLimit } from "./moderation";
-import { parseModelJson, ModelResponseError, answerUnreadable } from "./ai-json";
+import { parseModelJson, ModelResponseError, answerUnreadable, respondToAiError } from "./ai-json";
 
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
@@ -143,7 +143,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         parsed = parseJsonObject(completion.choices[0].message.content ?? "");
       } catch (err) {
         console.error("Pitch deck parse failed:", err);
-        return res.status(502).json({ message: "Nova's outline came back unreadable. Try again." });
+        return res.status(502).json({ message: "Nova's outline came back unreadable. Try again.", code: "model_unreadable" });
       }
 
       const slides = (Array.isArray(parsed.slides) ? parsed.slides : []).slice(0, 14).map((s: any, i: number) => ({
@@ -156,7 +156,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       })).filter((s: any) => s.headline);
 
       if (slides.length === 0) {
-        return res.status(502).json({ message: "Nova couldn't build an outline. Try again." });
+        return res.status(502).json({ message: "Nova couldn't build an outline. Try again.", code: "model_unreadable" });
       }
 
       const artifact = await storage.createInvestorArtifact({
@@ -172,7 +172,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       res.json({ artifact, creditsCharged: CREDIT_COSTS.pitchDeckOutline });
     } catch (error) {
       console.error("Pitch deck error:", error);
-      res.status(500).json({ message: "Failed to build a pitch deck outline" });
+      respondToAiError(res, error, "Failed to build a pitch deck outline");
     }
   });
 
@@ -320,7 +320,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         parsed = parseJsonObject(completion.choices[0].message.content ?? "");
       } catch (err) {
         console.error("Pitch critique parse failed:", err);
-        return res.status(502).json({ message: "Nova's critique came back unreadable. Try again." });
+        return res.status(502).json({ message: "Nova's critique came back unreadable. Try again.", code: "model_unreadable" });
       }
 
       const artifact = await storage.createInvestorArtifact({
@@ -347,7 +347,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       res.json({ artifact, creditsCharged: CREDIT_COSTS.pitchCritique });
     } catch (error) {
       console.error("Pitch critique error:", error);
-      res.status(500).json({ message: "Failed to critique the pitch" });
+      respondToAiError(res, error, "Failed to critique the pitch");
     }
   });
 
@@ -560,7 +560,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         graded = parseJsonObject(grading.choices[0].message.content || "{}");
       } catch (err) {
         console.error("Interview grading parse failed:", err);
-        return res.status(502).json({ message: "Nova's grading came back unreadable. Try again." });
+        return res.status(502).json({ message: "Nova's grading came back unreadable. Try again.", code: "model_unreadable" });
       }
 
       const score = Math.max(0, Math.min(100, Number(graded.score) || 0));
@@ -618,7 +618,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       });
     } catch (error) {
       console.error("Mock interview answer error:", error);
-      res.status(500).json({ message: "Failed to grade your answer" });
+      respondToAiError(res, error, "Failed to grade your answer");
     }
   });
 
@@ -672,7 +672,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       res.json({ interview: updated, questionsAnswered: answered.length });
     } catch (error) {
       console.error("Mock interview finish error:", error);
-      res.status(500).json({ message: "Failed to finish the interview" });
+      respondToAiError(res, error, "Failed to finish the interview");
     }
   });
 

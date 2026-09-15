@@ -8,7 +8,7 @@ import { requireFeature, requireCredits, reserveOptionalAi, getUserEntitlements,
 import { CREDIT_COSTS } from "@shared/plans";
 import type { CofounderSprint } from "@shared/schema";
 import OpenAI from "openai";
-import { parseModelJson, ModelResponseError, answerUnreadable } from "./ai-json";
+import { parseModelJson, ModelResponseError, answerUnreadable, respondToAiError } from "./ai-json";
 import { rateLimit } from "./moderation";
 
 let _openai: OpenAI | null = null;
@@ -325,14 +325,14 @@ export function registerSprintRoutes(app: Express) {
       }
 
       if (ideas.length === 0) {
-        return res.status(502).json({ message: "Nova couldn't come up with anything good. Try again." });
+        return res.status(502).json({ message: "Nova couldn't come up with anything good. Try again.", code: "model_unreadable" });
       }
 
       await storage.deductCredits(req.user.id, CREDIT_COSTS.sprintIdeaSuggestion);
       res.json({ style, ideas, creditsCharged: CREDIT_COSTS.sprintIdeaSuggestion });
     } catch (error) {
       console.error("Idea options error:", error);
-      res.status(500).json({ message: "Failed to generate ideas" });
+      respondToAiError(res, error, "Failed to generate ideas");
     }
   });
 
@@ -458,7 +458,7 @@ export function registerSprintRoutes(app: Express) {
       res.json({ ...sprint, creditsCharged: CREDIT_COSTS.practiceSprint });
     } catch (error: any) {
       console.error("Practice sprint error:", error);
-      res.status(500).json({ message: "Failed to create practice sprint" });
+      respondToAiError(res, error, "Failed to create practice sprint");
     }
   });
 
@@ -500,7 +500,7 @@ export function registerSprintRoutes(app: Express) {
       });
 
       const content = completion.choices[0]?.message?.content?.trim();
-      if (!content) return res.status(502).json({ message: "Nova didn't respond. Try again." });
+      if (!content) return res.status(502).json({ message: "Nova didn't respond. Try again.", code: "model_unreadable" });
 
       const message = await storage.sendSprintMessage({
         sprintId: req.params.id,
@@ -513,7 +513,7 @@ export function registerSprintRoutes(app: Express) {
       res.json({ message, creditsCharged: CREDIT_COSTS.novaPartnerReply });
     } catch (error) {
       console.error("Nova reply error:", error);
-      res.status(500).json({ message: "Failed to get a reply from Nova" });
+      respondToAiError(res, error, "Failed to get a reply from Nova");
     }
   });
 
@@ -575,7 +575,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         parsed = parseModelJson(raw);
       } catch (parseErr) {
         console.error("Nova answers parse failed:", parseErr);
-        return res.status(502).json({ message: "Nova's answers came back unreadable. Try again." });
+        return res.status(502).json({ message: "Nova's answers came back unreadable. Try again.", code: "model_unreadable" });
       }
 
       const allowed = new Set(questionKeys);
@@ -595,14 +595,14 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       }
 
       if (saved.length === 0) {
-        return res.status(502).json({ message: "Nova didn't return usable answers. Try again." });
+        return res.status(502).json({ message: "Nova didn't return usable answers. Try again.", code: "model_unreadable" });
       }
 
       await storage.deductCredits(req.user.id, CREDIT_COSTS.novaPartnerAnswers);
       res.json({ answers: saved, creditsCharged: CREDIT_COSTS.novaPartnerAnswers });
     } catch (error) {
       console.error("Nova answers error:", error);
-      res.status(500).json({ message: "Failed to get Nova's answers" });
+      respondToAiError(res, error, "Failed to get Nova's answers");
     }
   });
 
@@ -693,7 +693,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       res.json({ ...updated, novaCreditsOnSuccess });
     } catch (error) {
       console.error("Advance sprint error:", error);
-      res.status(500).json({ message: "Failed to advance sprint" });
+      respondToAiError(res, error, "Failed to advance sprint");
     }
   });
 

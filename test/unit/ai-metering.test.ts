@@ -106,4 +106,9 @@ describe("metering every AI route", () => {
     expect(silent, `add a "// metering: <why>" comment inside:\n  ${silent.join("\n  ")}`).toEqual([]);
     for (const l of [...Object.keys(FREE_AI), ...Object.keys(CHARGED_IN_HELPER)]) expect(costly.find((r) => label(r) === l)?.meteringNote, l).toBeTruthy();
   });
+
+  it("every costly route answers an unreadable model answer as 502 model_unreadable, not a generic error", () => {
+    const generic = costly.filter((r) => r.metering?.unreadableAnswer === "5xx").map(label);
+    expect(generic, `catch-alls that turn an unreadable answer into a generic 500 — use respondToAiError:\n  ${generic.join("\n  ")}`).toEqual([]);
+  });
 });

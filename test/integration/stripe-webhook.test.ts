@@ -22,7 +22,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import request from "supertest";
 import Stripe from "stripe";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "../../server/db";
 import { users, projects, donations, stripeEvents, projectBackings } from "@shared/schema";
 
@@ -277,6 +277,31 @@ describe("idempotency and retry", () => {
     const res = await request(app).post("/api/stripe/webhook").set("Content-Type", "application/json").set("stripe-signature", "t=1,v1=bad").send(JSON.stringify({ id: "evt_unsigned", type: "checkout.session.completed", data: { object: {} } }));
     expect(res.status).toBe(400);
     expect(await db.select().from(stripeEvents).where(eq(stripeEvents.id, "evt_unsigned"))).toHaveLength(0);
+  });
+});
+
+describe("an attempt that died mid-event", () => {
+  it("is taken over by the next delivery once it's stale, and still skipped while it's fresh", async () => {
+    const app = await getTestApp();
+    const { donor, project } = await aProjectWithDonor();
+    const session = { id: "cs_test_crash", object: "checkout.session", mode: "payment", payment_intent: "pi_test_crash", customer: donor.stripeCustomerId, metadata: { type: "donation", projectId: project.id, donorId: donor.id, amount: "1200" } };
+    const event = { id: "evt_crashed", object: "event", type: "checkout.session.completed", data: { object: session } };
+
+    // A claim left "processing" moments ago: another attempt may still be working on it.
+    await db.insert(stripeEvents).values({ id: "evt_crashed", type: "checkout.session.completed", status: "processing" } as any);
+    expect((await deliver(app, event)).body).toMatchObject({ received: true, duplicate: true });
+    expect(await totalOf(project.id)).toBe(0);
+
+    // The same claim, long past any handler's runtime: the attempt died. The retry processes it.
+    await db.update(stripeEvents).set({ claimedAt: sql`now() - interval '30 minutes'` } as any).where(eq(stripeEvents.id, "evt_crashed"));
+    expect((await deliver(app, event)).body).toMatchObject({ received: true, duplicate: false });
+    expect(await totalOf(project.id)).toBe(1200);
+    const [ledger] = await db.select().from(stripeEvents).where(eq(stripeEvents.id, "evt_crashed"));
+    expect(ledger.status).toBe("processed");
+
+    // And once processed it's a duplicate for good.
+    expect((await deliver(app, event)).body).toMatchObject({ duplicate: true });
+    expect(await totalOf(project.id)).toBe(1200);
   });
 });
 

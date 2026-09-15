@@ -14,6 +14,7 @@ import { startModerationJobs } from "./moderation";
 import { checkMerchFonts } from "./merch-render";
 import { serveStatic } from "./static";
 import { createApp, log } from "./app";
+import { warnIfSharedTokenSecret } from "./mobile-auth";
 
 declare module "http" {
   interface IncomingMessage {
@@ -68,6 +69,7 @@ let appReady = false;
   // Feature kill switches, read before any route can be hit, then re-read on a
   // timer so a toggle reaches every instance rather than only the one that
   // served it — this deploys to autoscale.
+  warnIfSharedTokenSecret();
   await loadSurfaceFlags();
   startSurfaceFlagRefresh();
 

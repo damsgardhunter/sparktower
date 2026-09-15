@@ -187,4 +187,46 @@ describe("an audit catches the project up", () => {
     expect(status.auditUpdate.pendingCount).toBe(0);
     expect(status.auditUpdate.applied).toEqual(expect.arrayContaining([expect.stringMatching(/Rewrote the loop/), expect.stringMatching(/Retired the loop "Browse the feed"/)]));
   });
+
+  it("asks before taking out-of-date cards off the board, then removes them (kept in history) and reopens what isn't built", async () => {
+    const app = await getTestApp();
+    const agent = request.agent(app);
+    const email = `catchup-drift-${Date.now()}@example.test`;
+    await agent.post("/api/auth/register").set("x-forwarded-for", "203.0.113.233").send({ email, password: "Testpass123!", firstName: "Builder" });
+    await db.update(users).set({ subscriptionTier: "pro" }).where(eq(users.email, email));
+    const project = (await agent.post("/api/projects").send({ title: "Drift Check", description: "A project whose board kept things the code removed.", category: "saas", goal: "ship_mvp", subcategory: "saas" })).body;
+    const old = (await agent.post(`/api/projects/${project.id}/kanban`).send({ title: "Weekly check-in composer", status: "done" })).body;
+    const fake = (await agent.post(`/api/projects/${project.id}/kanban`).send({ title: "Stripe checkout", status: "done" })).body;
+    const milestone = (await agent.get(`/api/projects/${project.id}/kanban`)).body.find((t: any) => (t.tags ?? []).includes("backbone:SHIP.M1.1"));
+    const token = (await agent.post("/api/mcp-tokens").send({ label: "editor" })).body.token;
+
+    reply = audit([
+      { op: "retire_task", id: old.id, reason: "check-ins were removed from the product" },
+      { op: "update_task", id: fake.id, status: "todo" },
+      { op: "retire_task", id: milestone.id, reason: "not allowed" },
+    ], "Your board still lists check-ins, which the code removed.");
+    const res = await request(app).post(`/api/mcp/projects/${project.id}/audit`).set("authorization", `Bearer ${token}`)
+      .send({ files: [{ path: "package.json", content: JSON.stringify({ name: "drift" }) }], label: "tree" });
+    expect(res.status, JSON.stringify(res.body).slice(0, 300)).toBe(200);
+
+    // Nothing changed on its own (the default applies only finished work), and both wait under drift.
+    expect(res.body.autoApplied).toBeNull();
+    const auditRow = res.body.audit;
+    expect(auditRow.operations.map((o: any) => [o.op, o._section, o._status ?? "pending"])).toEqual([
+      ["retire_task", "drift", "pending"], ["update_task", "drift", "pending"],
+    ]);
+    let board = (await agent.get(`/api/projects/${project.id}/kanban`)).body;
+    expect(board.find((t: any) => t.id === old.id).tags ?? []).not.toContain("archived:retired");
+    expect(board.find((t: any) => t.id === fake.id).status).toBe("done");
+
+    // With the builder's OK: removed from the board (archived, history kept) and reopened.
+    const applied = await agent.post(`/api/code-audits/${auditRow.id}/apply`).send({ sections: ["drift"] });
+    expect(applied.status, JSON.stringify(applied.body)).toBe(200);
+    board = (await agent.get(`/api/projects/${project.id}/kanban`)).body;
+    const retired = board.find((t: any) => t.id === old.id);
+    expect(retired.tags).toContain("archived:retired");
+    expect(retired.description).toMatch(/Removed from the board: check-ins were removed/);
+    expect(board.find((t: any) => t.id === fake.id).status).toBe("todo");
+    expect(board.find((t: any) => t.id === milestone.id).tags).not.toContain("archived:retired");
+  });
 });

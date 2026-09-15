@@ -60,4 +60,28 @@ describe("a model that fails", () => {
     const { CREDIT_COSTS } = await import("@shared/plans");
     expect(await creditsUsed(agent)).toBe(before + CREDIT_COSTS.taskAssist);
   });
+
+  it("answers an unreadable answer from a helper as 502 model_unreadable too, and charges nothing", async () => {
+    const app = await getTestApp();
+    const { agent, projectId } = await owner(app);
+    const { db } = await import("../../server/db");
+    const { users } = await import("@shared/schema");
+    const { eq } = await import("drizzle-orm");
+    const me = (await agent.get("/api/auth/user")).body;
+    // The top tier, so no feature gate stops these routes before the model.
+    await db.update(users).set({ subscriptionTier: "pro" }).where(eq(users.id, me.id));
+    mode = "garbage";
+    const before = await creditsUsed(agent);
+    // Roadmap generation parses in the route; Nova's assistant parses in its helper, novaSuggest.
+    for (const [url, body] of [
+      [`/api/projects/${projectId}/roadmap/generate`, {}],
+      [`/api/projects/${projectId}/nova/suggest`, { kind: "brief", field: "problem", input: "Help me say the problem better." }],
+    ] as const) {
+      const res = await agent.post(url).send(body);
+      if (res.status === 400) continue; // an input this test's body doesn't satisfy: not a model failure
+      expect(res.status, `${url} ${JSON.stringify(res.body)}`).toBe(502);
+      expect(res.body.code).toBe("model_unreadable");
+    }
+    expect(await creditsUsed(agent)).toBe(before);
+  });
 });

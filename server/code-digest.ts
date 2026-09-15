@@ -152,7 +152,7 @@ const ext = (path: string) => {
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
 };
 
-const isTest = (path: string) =>
+export const isTest = (path: string) =>
   /(^|\/)(tests?|__tests__|spec|e2e|cypress|playwright)(\/|$)/i.test(path) ||
   /\.(test|spec)\.[cm]?[jt]sx?$/.test(path) ||
   /_test\.(go|py|rb)$/.test(path) ||

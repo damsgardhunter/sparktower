@@ -41,7 +41,7 @@ export default function Home() {
   });
 
   return (
-    <div className="h-full overflow-y-auto bg-muted dark:bg-background">
+    <div className="sharp-boxes h-full overflow-y-auto bg-muted dark:bg-background">
       <div className="mx-auto max-w-[1128px] px-4 py-5">
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_300px] gap-5 items-start">
           {/* --- The feed --- */}

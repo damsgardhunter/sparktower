@@ -1356,6 +1356,12 @@ export const stripeEvents = pgTable("stripe_events", {
   error: text("error"),
   receivedAt: timestamp("received_at").defaultNow().notNull(),
   processedAt: timestamp("processed_at"),
+  /**
+   * When the current attempt claimed the event. A claim still "processing"
+   * long after this is an attempt that died mid-way (a crash, a deploy), and
+   * the next delivery takes it over instead of being told it's a duplicate.
+   */
+  claimedAt: timestamp("claimed_at").defaultNow().notNull(),
 });
 
 export const activityEvents = pgTable("activity_events", {

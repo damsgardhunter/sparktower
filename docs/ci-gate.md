@@ -9,7 +9,7 @@ requires these status checks by job name, so the names in
 | `server-web` | lint clean, **zero** type errors, the API and unit suites against a real Postgres |
 | `e2e` | the browser journeys (sign up → project → path → first update; a stranger reads a shared step) |
 | `secrets` | gitleaks over the full history, every run, whatever the trigger |
-| `mobile` | the Expo app typechecks |
+| `mobile` | the Expo app typechecks, and its own tests pass (`mobile/`: `npm test` — the API client's token refresh, session expiry, visits and API host; project and backing rules) |
 | `packages` | the MCP server and the VS Code extension build, the MCP bundle runs with its workspace dependency removed, and the extension packages into a .vsix |
 | `dependencies` | no known high or critical vulnerability in production dependencies, server/web and mobile |
 | `codeql` | GitHub's static analysis for JavaScript/TypeScript, security-and-quality queries |

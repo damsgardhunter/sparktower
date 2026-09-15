@@ -267,8 +267,13 @@ jobs:
       - name: Install
         run: npm ci
 
-      # No tests yet on mobile; the typecheck is the gate. When a test runner
-      # is added there, it goes here, and the job name stays the same so the
-      # branch protection keeps covering it.
+      # The job name stays "mobile" so the branch protection keeps covering it.
       - name: Typecheck
         run: npm run typecheck
+
+      # The app's own tests, in Node: the API client (one shared token refresh,
+      # the session ending when a refresh is refused, visits, the reachable API
+      # host) and the project and backing rules. React Native and the Expo
+      # native modules are stand-ins (mobile/test/stubs).
+      - name: Test
+        run: npm test

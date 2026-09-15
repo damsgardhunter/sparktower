@@ -44,6 +44,16 @@ function loadYouTubeApi(): Promise<YTNamespace> {
   return apiPromise;
 }
 
+/**
+ * Calls into a YouTube player, safely. Its methods only exist once it's ready,
+ * and they throw once it's destroyed — both easy to hit when scrolling fast —
+ * so a call to a player in either state is skipped rather than crashing the feed.
+ */
+function ytCall<R>(player: YTPlayer, fn: (p: YTPlayer) => R): R | undefined {
+  if (typeof player.getPlayerState !== "function") return undefined;
+  try { return fn(player); } catch { return undefined; }
+}
+
 /** A playing video, whichever kind: what the controls and the one-sound rule need. */
 interface Controls { play(): void; pause(): void; setMuted(m: boolean): void; setVolume(v: number): void }
 
@@ -92,10 +102,14 @@ export function PromoVideoPlayer({ video, label, fallbackTitle, onFirstPlay, tes
         setVolume: (v) => { el.volume = v / 100; },
       } : null;
     }
+    // Only a player that's finished loading: until onReady, YouTube's object has none of these methods.
     const p = ytRef.current;
     return p ? {
-      play: () => p.playVideo(), pause: () => p.pauseVideo(),
-      setMuted: (m) => (m ? p.mute() : p.unMute()), setVolume: (v) => p.setVolume(v),
+      // Asking a player that's already playing or buffering to play again stalls it: only ask when it isn't.
+      play: () => ytCall(p, (x) => { if (![1, 3].includes(x.getPlayerState())) x.playVideo(); }),
+      pause: () => ytCall(p, (x) => x.pauseVideo()),
+      setMuted: (m) => ytCall(p, (x) => (m ? x.mute() : x.unMute())),
+      setVolume: (v) => ytCall(p, (x) => x.setVolume(v)),
     } : null;
   }, [video.kind]);
 
@@ -134,9 +148,12 @@ export function PromoVideoPlayer({ video, label, fallbackTitle, onFirstPlay, tes
   useEffect(() => {
     if (video.kind !== "youtube" || !near || !mountRef.current) return;
     let cancelled = false;
+    // Kept here, not in ytRef, until it's ready: scrolling past fast can reach the controls in between.
+    let player: YTPlayer | null = null;
+    const timers: number[] = [];
     loadYouTubeApi().then((YT) => {
       if (cancelled || !mountRef.current) return;
-      ytRef.current = new YT.Player(mountRef.current, {
+      player = new YT.Player(mountRef.current, {
         host: "https://www.youtube-nocookie.com",
         videoId: video.id,
         width: "100%", height: "100%",
@@ -144,35 +161,42 @@ export function PromoVideoPlayer({ video, label, fallbackTitle, onFirstPlay, tes
           autoplay: 0, mute: 1, controls: 0, rel: 0, playsinline: 1, modestbranding: 1, iv_load_policy: 3, fs: 0, disablekb: 1,
           // Captions on whenever the video has them, in English where there's a choice.
           cc_load_policy: 1, cc_lang_pref: "en", hl: "en",
-          // Loops: a one-video playlist of itself.
-          loop: 1, playlist: video.id,
           origin: window.location.origin,
         },
         events: {
           onReady: (e: { target: YTPlayer }) => {
             if (cancelled) return;
-            e.target.mute();
-            e.target.setVolume(70);
-            const t = e.target.getVideoData?.().title;
+            ytRef.current = e.target;
+            ytCall(e.target, (x) => { x.mute(); x.setVolume(70); });
+            const t = ytCall(e.target, (x) => x.getVideoData?.().title);
             if (t) setTitle(t);
             setReady(true);
             // Browsers only allow autoplay once the player is actually muted, which YouTube applies
             // asynchronously: ask now, and again shortly after if it hasn't started.
-            const autoplay = () => { if (visibleRef.current && !userPausedRef.current && e.target.getPlayerState() !== YT.PlayerState.PLAYING) { e.target.mute(); e.target.playVideo(); } };
+            const autoplay = () => {
+              if (cancelled || !visibleRef.current || userPausedRef.current) return;
+              ytCall(e.target, (x) => { if ([-1, 5].includes(x.getPlayerState())) { x.mute(); x.playVideo(); } });
+            };
             autoplay();
-            window.setTimeout(autoplay, 600);
-            window.setTimeout(autoplay, 1800);
+            timers.push(window.setTimeout(autoplay, 600), window.setTimeout(autoplay, 1800));
           },
           onStateChange: (e: { data: number }) => {
             setYtState(e.data);
             if (e.data === YT.PlayerState.PLAYING) started();
-            else if (e.data === YT.PlayerState.PAUSED || e.data === YT.PlayerState.ENDED) setPlaying(false);
+            // Loops by starting over at the end (YouTube's own loop, a one-video playlist, stalls embeds).
+            else if (e.data === YT.PlayerState.ENDED && ytRef.current) ytCall(ytRef.current, (x) => { (x as any).seekTo?.(0, true); x.playVideo(); });
+            else if (e.data === YT.PlayerState.PAUSED) setPlaying(false);
           },
           onError: (e: { data: number }) => { setYtState(-100 - e.data); setFailed(true); },
         },
       });
     }).catch(() => setFailed(true));
-    return () => { cancelled = true; ytRef.current?.destroy(); ytRef.current = null; };
+    return () => {
+      cancelled = true;
+      timers.forEach((t) => window.clearTimeout(t));
+      ytRef.current = null;
+      if (player) ytCall(player, (x) => x.destroy());
+    };
     // Rebuilt only for a different video.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [video.kind === "youtube" ? video.id : null, near, started]);

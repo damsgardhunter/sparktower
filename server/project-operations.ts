@@ -35,7 +35,8 @@ export type ProjectOperation =
   | { op: "update_loop"; id: string; title?: string; steps?: string; type?: string }
   | { op: "complete_path_milestone"; backboneId: string; evidence: string; answer?: string }
   | { op: "add_loop_steps"; loopId: string; steps: { title: string; description?: string; done?: boolean }[] }
-  | { op: "retire_loop"; id: string; reason: string };
+  | { op: "retire_loop"; id: string; reason: string }
+  | { op: "retire_task"; id: string; reason: string };
 
 export interface AppliedChange {
   /** Machine-readable, for the client to route an invalidation. */
@@ -69,6 +70,7 @@ export const OPERATION_SCHEMA_INSTRUCTIONS = `Each operation is one object. Vali
 { "op": "complete_path_milestone", "backboneId": "e.g. SHIP.M1.5, from a backbone: tag", "evidence": "one line: what shows it's done", "answer": "the milestone's content, if it's a written one" }
 { "op": "add_loop_steps", "loopId": "existing loop task id", "steps": [{ "title": "a 1–3h unit of building this loop", "description": "", "done": true }] }   // the loop's build steps as the code shows them; "done" for steps already built
 { "op": "retire_loop", "id": "existing loop task id", "reason": "one line: why the product no longer runs this loop" }   // the last loop of a kind can't be retired — rewrite it with update_loop instead
+{ "op": "retire_task", "id": "existing task or loop-step id", "reason": "one line: why it no longer belongs, e.g. the feature was removed" }   // takes a card off the board (kept in its history); not for loops (retire_loop) or path milestones
 
 Only include the fields you are changing. Only ever use ids that appear in the project state you were given.`;
 
@@ -696,6 +698,23 @@ export async function applyProjectOperations(
             entity: "loop", action: "updated", entityId: loop.id,
             description: `Added ${created.length} build step${created.length === 1 ? "" : "s"} to "${loop.title}"${done.length ? ` (${done.length} already built)` : ""}`,
           });
+          break;
+        }
+
+        case "retire_task": {
+          const task = ownTasks.find((t: any) => t.id === operation.id);
+          if (!task) { skipped.push(`A task id that isn't on this project (${operation.id}).`); break; }
+          const tags: string[] = (task as any).tags ?? [];
+          if (tags.includes("kind:loop")) { skipped.push(`"${task.title}" is a loop — retire it as a loop instead.`); break; }
+          if (tags.some((t) => t.startsWith("backbone:"))) { skipped.push(`"${task.title}" is a milestone on the path, which isn't removed.`); break; }
+          if (tags.some((t) => t.startsWith("archived:"))) { skipped.push(`"${task.title}" is already off the board.`); break; }
+          const reason = text(operation.reason, 200);
+          // Archived, not deleted: it leaves the board and the path's counts, and its history stays.
+          await storage.updateKanbanTask(task.id, {
+            tags: [...tags, "archived:retired"],
+            description: [task.description?.trim(), `Removed from the board${reason ? `: ${reason}` : ""}`].filter(Boolean).join("\n\n"),
+          } as any);
+          changes.push({ entity: "task", action: "updated", entityId: task.id, description: `Removed "${task.title}" from the board${reason ? `: ${reason}` : ""}` });
           break;
         }
 

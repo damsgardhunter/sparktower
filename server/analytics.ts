@@ -13,9 +13,9 @@
  */
 import type { Express, RequestHandler } from "express";
 import { randomUUID } from "crypto";
-import { and, eq, gte, sql } from "drizzle-orm";
+import { and, eq, gte, isNotNull, sql } from "drizzle-orm";
 import { db } from "./db";
-import { activityEvents } from "@shared/schema";
+import { activityEvents, codeAuditRuns } from "@shared/schema";
 import { readCookies, setCookie, isDocumentRequest } from "./http-cookies";
 import {
   ACTIVITY_EVENTS, MAX_BATCH_EVENTS, RETENTION_DAYS, SESSION_IDLE_MINUTES,
@@ -286,19 +286,24 @@ export function registerAnalyticsIngest(app: Express) {
  * `project_analytics_events` isn't a stream — it's a creator's list of metric
  * definitions — so it has no expiry.
  */
-export async function sweepExpiredEvents(): Promise<{ activity: number }> {
+export async function sweepExpiredEvents(): Promise<{ activity: number; auditRuns: number }> {
   const result = await db.delete(activityEvents).where(
     sql`${activityEvents.createdAt} < now() - interval '${sql.raw(String(RETENTION_DAYS))} days'`,
   );
   const activity = (result as any)?.rowCount ?? 0;
-  return { activity };
+  // Finished audit runs are only the "is one running?" signal; the audits themselves are kept.
+  const runs = await db.delete(codeAuditRuns).where(and(
+    isNotNull(codeAuditRuns.finishedAt),
+    sql`${codeAuditRuns.startedAt} < now() - interval '${sql.raw(String(RETENTION_DAYS))} days'`,
+  ));
+  return { activity, auditRuns: (runs as any)?.rowCount ?? 0 };
 }
 
 export function startAnalyticsJobs(): void {
   const sweep = async () => {
     try {
       const n = await sweepExpiredEvents();
-      if (n.activity > 0) console.log(`[analytics] Swept ${n.activity} activity event(s) past ${RETENTION_DAYS} days.`);
+      if (n.activity > 0 || n.auditRuns > 0) console.log(`[analytics] Swept ${n.activity} activity event(s) and ${n.auditRuns} audit run(s) past ${RETENTION_DAYS} days.`);
     } catch (err) {
       console.error("[analytics] Retention sweep failed:", err);
     }

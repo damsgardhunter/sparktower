@@ -191,6 +191,21 @@ export interface RateLimitedBody {
   retryAfterMinutes: number;
 }
 
+/** The machine-readable code on every duplicate-content refusal. */
+export const DUPLICATE_CONTENT = "duplicate_content" as const;
+
+/**
+ * What a request refused for repeating itself gets back: status 409 and this
+ * body — the same `message`/`code`/`action` a rate-limit refusal carries, so a
+ * client handles both in one place. No retry fields, on purpose: waiting
+ * doesn't help, writing something different does.
+ */
+export interface DuplicateContentBody {
+  message: string;
+  code: typeof DUPLICATE_CONTENT;
+  action: RateLimitAction;
+}
+
 /** How long a note on a connection request may be. A hello, not a letter. */
 export const CONNECTION_NOTE_MAX = 280;
 

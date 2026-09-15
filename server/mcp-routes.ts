@@ -39,6 +39,7 @@ import { buildCodeDigest } from "./code-digest";
 import { probeRuntime } from "./runtime-probe";
 import { VERIFIERS, verifyMilestonesFromAudit } from "./phase-tree-verifiers";
 import { runCodeAudit } from "./code-audit-routes";
+import { respondToAiError } from "./ai-json";
 import { novaSuggest, validateNovaAsk } from "./nova-assist-routes";
 
 const str = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
@@ -730,7 +731,7 @@ export function registerMcpRoutes(app: Express) {
       await novaSuggest(ctx.projectId, ctx.userId, input, ent, config, res);
     } catch (error) {
       console.error("MCP ask error:", error);
-      res.status(500).json({ message: "Nova couldn't help with that" });
+      respondToAiError(res, error, "Nova couldn't help with that");
     }
   });
 

@@ -103,7 +103,9 @@ export function loopCoverage(loops: { type: LoopType; written: boolean }[]): Loo
  * `existing` is the project's loops, excluding the one being retyped.
  */
 export function loopTypeRefusal(existing: { type: LoopType }[], type: LoopType): { code: string; message: string } | null {
-  if (existing.length >= LOOP_CAP) return { code: "loop_cap", message: `${LOOP_CAP} loops is the cap: the four business loops and up to ${MAX_PRODUCT_LOOPS} product loops.` };
+  // Limits per kind, not a total: a project with extra product loops (from before the cap) must still
+  // be able to add the growth, retention, revenue or referral loop every business needs. Business
+  // kinds come one each, so the total never passes LOOP_CAP through them.
   if (type === "product") {
     return existing.filter((l) => l.type === "product").length >= MAX_PRODUCT_LOOPS
       ? { code: "loop_cap", message: `${MAX_PRODUCT_LOOPS} product loops is already a lot to build. Finish or remove one first.` }

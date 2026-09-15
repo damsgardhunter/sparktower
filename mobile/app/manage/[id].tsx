@@ -50,7 +50,7 @@ const sectionPrefKey = (projectId: string) => `manager-section.${projectId}`;
  * to the whole project. Switching section only changes what you're looking at.
  */
 export default function Manage() {
-  const { id, tab: initialTab, section: sectionParam } = useLocalSearchParams<{ id: string; tab?: string; section?: string }>();
+  const { id, tab: initialTab, section: sectionParam, from } = useLocalSearchParams<{ id: string; tab?: string; section?: string; from?: string }>();
   const { user } = useAuth();
   const router = useRouter();
   const qc = useQueryClient();
@@ -112,7 +112,9 @@ export default function Manage() {
     const member = project.ownerId === user?.id || members.some((m) => m.userId === user?.id);
     if (member && !project.novaOnboardingComplete && novaMessages.length === 0 && !MONEY_FIRST.has(project.goal) && tab === "dashboard"
       // A link into another section (the home card's "Continue" on Raise, say) opens that section, not the welcome.
-      && (!isProjectGoal(sectionParam) || sectionParam === project.goal)) {
+      && (!isProjectGoal(sectionParam) || sectionParam === project.goal)
+      // Opening the app lands on the path; the welcome chat is for arriving from a new project, not every launch (the Nova button is right there).
+      && from !== "launch") {
       setNova({ open: true, message: null });
     }
   }, [project, novaMessages, members]);

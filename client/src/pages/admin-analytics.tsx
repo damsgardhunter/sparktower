@@ -245,7 +245,10 @@ export default function AdminAnalytics() {
             Every page opened and every action taken, as it happens. Only you can see this.
           </p>
         </div>
-        <div className="flex gap-1">
+        <div className="flex gap-1 items-center">
+          <Button asChild size="sm" variant="outline" className="mr-2" data-testid="button-export-analytics">
+            <a href={`/api/admin/analytics/export?days=${Math.max(days, 1)}`} download>Export CSV</a>
+          </Button>
           {[1, 7, 30].map((d) => (
             <Button
               key={d} size="sm" variant={days === d ? "default" : "outline"}
@@ -642,6 +645,45 @@ export default function AdminAnalytics() {
           </ScrollArea>
         </DialogContent>
       </Dialog>
+
+      <EraseActivity />
     </div>
+  );
+}
+
+/**
+ * Erasing one person's activity history, when they ask. By account id or
+ * email: every event recorded as them and from the browsers they used.
+ */
+function EraseActivity() {
+  const [who, setWho] = useState("");
+  const [state, setState] = useState<{ busy: boolean; note: string | null; error: boolean }>({ busy: false, note: null, error: false });
+  const erase = async () => {
+    if (!who.trim() || !window.confirm(`Erase all recorded activity for ${who.trim()}? This can't be undone.`)) return;
+    setState({ busy: true, note: null, error: false });
+    try {
+      const res = await fetch(`/api/admin/analytics/people/${encodeURIComponent(who.trim())}`, { method: "DELETE", credentials: "include" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.message || "Couldn't erase that activity");
+      setState({ busy: false, note: `Erased ${body.erased} event${body.erased === 1 ? "" : "s"}.`, error: false });
+      setWho("");
+    } catch (e: any) {
+      setState({ busy: false, note: e.message, error: true });
+    }
+  };
+  return (
+    <Card data-testid="card-erase-activity">
+      <CardHeader className="pb-2"><CardTitle className="text-base">Erase someone's activity</CardTitle></CardHeader>
+      <CardContent className="flex flex-col sm:flex-row gap-2 sm:items-center">
+        <input
+          value={who} onChange={(e) => setWho(e.target.value)} placeholder="Account email or id"
+          className="flex-1 h-9 rounded-md border border-input bg-background px-3 text-sm" data-testid="input-erase-who"
+        />
+        <Button size="sm" variant="destructive" disabled={!who.trim() || state.busy} onClick={erase} data-testid="button-erase-activity">
+          {state.busy ? "Erasing…" : "Erase"}
+        </Button>
+        {state.note && <span className={`text-sm ${state.error ? "text-destructive" : "text-muted-foreground"}`}>{state.note}</span>}
+      </CardContent>
+    </Card>
   );
 }

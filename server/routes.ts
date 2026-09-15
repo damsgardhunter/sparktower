@@ -1,4 +1,5 @@
 import { productNameNote } from "@shared/project-draft";
+import { tierForPrice, PriceTierMissingError } from "./webhookHandlers";
 import { paidSubscription } from "@shared/subscriptions";
 import { registerStripeHealthRoutes } from "./stripe-health";
 import { ROADMAP_DEPTHS, DEFAULT_ROADMAP_DEPTH, MAX_ROADMAP_PHASES, roadmapDepth, depthForRevision, type RoadmapDepth } from "@shared/roadmap";
@@ -80,7 +81,7 @@ import { workKindFor, sanitizeLoopAudit, loopTypeOf, LOOP_TYPE_INFO, type WorkPa
 import { resolveTree, treeFor } from "@shared/phase-trees";
 import { creditState, lowCreditsAt, checkoutReturnUrls, safeReturnPath } from "@shared/credits";
 import { applyTier, billingIssueFor } from "./billing-credits";
-import { parseModelJson, answerUnreadable, ModelResponseError } from "./ai-json";
+import { parseModelJson, answerUnreadable, ModelResponseError, respondToAiError } from "./ai-json";
 
 async function isProjectMember(userId: string, projectId: string): Promise<boolean> {
   const project = await storage.getProject(projectId);
@@ -1331,7 +1332,7 @@ If the ask has nothing to do with planning tasks, say so in "summary", return an
         parsed = parseModelJson(raw);
       } catch (parseErr) {
         console.error("Task assist parse failed:", parseErr);
-        return res.status(502).json({ message: "Nova returned an unreadable plan. Please try again." });
+        return res.status(502).json({ message: "Nova returned an unreadable plan. Please try again.", code: "model_unreadable" });
       }
 
       await storage.deductCredits(userId, CREDIT_COSTS.taskAssist);
@@ -1374,7 +1375,7 @@ If the ask has nothing to do with planning tasks, say so in "summary", return an
       });
     } catch (error) {
       console.error("Task assist error:", error);
-      res.status(500).json({ message: "Nova couldn't plan that" });
+      respondToAiError(res, error, "Nova couldn't plan that");
     }
   });
 
@@ -3148,7 +3149,18 @@ RULES:
         const slot = d.key ? byKey.get(String(d.key).trim()) : undefined;
         return { ...d, type: slot?.type ?? d.type, loopTaskId: slot?.taskId ?? null };
       }), { only: asked ? toWrite.map((l) => l.taskId) : null });
-      if (!result.written.length && !result.created.length) return answerUnreadable(res, new ModelResponseError("loops"), "loops");
+      if (!result.written.length && !result.created.length) {
+        // Nova answered, but every draft was set aside. Say why, rather than calling the answer
+        // unreadable — which it wasn't — and charge nothing.
+        if (result.skipped.length) {
+          console.warn(`[loops] nothing written for ${projectId}:`, result.skipped);
+          return res.status(409).json({
+            message: `Nova wrote the loop, but it couldn't be added: ${[...new Set(result.skipped.map((s) => s.reason))].join("; ")}.`,
+            code: "loops_not_added", skipped: result.skipped,
+          });
+        }
+        return answerUnreadable(res, new ModelResponseError("loops"), "loops");
+      }
       await storage.deductCredits(userId, CREDIT_COSTS.taskAssist);
       res.json({ ...result, creditsCharged: CREDIT_COSTS.taskAssist });
     } catch (error: any) {
@@ -3719,9 +3731,12 @@ RULES:
               { role: "user", content: `User profile: skills=${userProfile.skills?.join(", ")}, interests=${userProfile.interests?.join(", ")}, experience=${userProfile.experienceLevel}.\n\nMatches: ${JSON.stringify(matchSummary)}` }
             ],
           });
-          const rawContent = (response.choices[0].message.content || '{"reasons":{}}').replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-          const parsed = JSON.parse(rawContent);
-          matchReasons = parsed.reasons || {};
+          // Read with the shared parser: an empty or unreadable answer throws here, so the default
+          // reasons are used and nothing is charged. (It used to default to '{"reasons":{}}' first,
+          // which parsed as a valid answer and billed for reasons Nova never gave.)
+          const parsed = parseModelJson<{ reasons?: Record<string, string[]> }>(response.choices[0].message.content, "match reasons");
+          if (!parsed.reasons || !Object.keys(parsed.reasons).length) throw new Error("no match reasons in the answer");
+          matchReasons = parsed.reasons;
           await storage.deductCredits(userId, CREDIT_COSTS.matchExplanation);
         } catch (e) {
           console.error("AI reason generation failed, using defaults:", e);
@@ -3745,7 +3760,7 @@ RULES:
       res.json(savedMatches);
     } catch (error) {
       console.error("Match generation error:", error);
-      res.status(500).json({ message: "Failed to generate matches" });
+      respondToAiError(res, error, "Failed to generate matches");
     }
   });
 
@@ -3783,7 +3798,7 @@ RULES:
       res.json(reputation);
     } catch (error: any) {
       console.error("Reputation calculation error:", error);
-      res.status(500).json({ message: "Failed to calculate reputation" });
+      respondToAiError(res, error, "Failed to calculate reputation");
     }
   });
 
@@ -4119,7 +4134,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences),
       });
     } catch (error) {
       console.error("Error generating video:", error);
-      res.status(500).json({ message: "Failed to generate video" });
+      respondToAiError(res, error, "Failed to generate video");
     }
   });
 
@@ -4500,10 +4515,10 @@ Respond ONLY with the JSON, in the same shape as before.`,
         );
       } catch (parseErr) {
         console.error("Roadmap parse failed:", parseErr);
-        return res.status(502).json({ message: "Nova returned an unreadable roadmap. Please try again." });
+        return res.status(502).json({ message: "Nova returned an unreadable roadmap. Please try again.", code: "model_unreadable" });
       }
       if (parsed.phases.length === 0) {
-        return res.status(502).json({ message: "Nova couldn't build a roadmap from that goal. Try describing it differently." });
+        return res.status(502).json({ message: "Nova couldn't build a roadmap from that goal. Try describing it differently.", code: "model_unreadable" });
       }
 
       const created = await storage.createRoadmap(
@@ -4539,7 +4554,7 @@ Respond ONLY with the JSON, in the same shape as before.`,
       res.json({ roadmap: created, creditsCharged: CREDIT_COSTS.roadmapGeneration });
     } catch (error) {
       console.error("Roadmap generation error:", error);
-      res.status(500).json({ message: "Failed to generate roadmap" });
+      respondToAiError(res, error, "Failed to generate roadmap");
     }
   });
 
@@ -4600,10 +4615,10 @@ Additionally, each phase may include "status": one of "upcoming", "in-progress",
         );
       } catch (parseErr) {
         console.error("Roadmap update parse failed:", parseErr);
-        return res.status(502).json({ message: "Nova returned an unreadable roadmap. Please try again." });
+        return res.status(502).json({ message: "Nova returned an unreadable roadmap. Please try again.", code: "model_unreadable" });
       }
       if (parsed.phases.length === 0) {
-        return res.status(502).json({ message: "Nova couldn't revise the roadmap. Please try again." });
+        return res.status(502).json({ message: "Nova couldn't revise the roadmap. Please try again.", code: "model_unreadable" });
       }
 
       // Carry forward status for phases Nova kept by title, so completed work
@@ -4634,7 +4649,7 @@ Additionally, each phase may include "status": one of "upcoming", "in-progress",
       res.json({ roadmap: fresh, creditsCharged: CREDIT_COSTS.roadmapUpdate });
     } catch (error) {
       console.error("Roadmap update error:", error);
-      res.status(500).json({ message: "Failed to update roadmap" });
+      respondToAiError(res, error, "Failed to update roadmap");
     }
   });
 
@@ -4709,7 +4724,7 @@ ${PLAIN_LANGUAGE_RULES}`,
         parsed = parseModelJson(nextActionsRaw);
       } catch (parseErr) {
         console.error("Next actions parse failed:", parseErr);
-        return res.status(502).json({ message: "Nova's answer came back unreadable. Try again." });
+        return res.status(502).json({ message: "Nova's answer came back unreadable. Try again.", code: "model_unreadable" });
       }
 
       const actions = (Array.isArray(parsed.actions) ? parsed.actions : []).slice(0, 3).map((a: any) => ({
@@ -4721,7 +4736,7 @@ ${PLAIN_LANGUAGE_RULES}`,
       })).filter((a: any) => a.title);
 
       if (actions.length === 0) {
-        return res.status(502).json({ message: "Nova couldn't work out what's next. Try again." });
+        return res.status(502).json({ message: "Nova couldn't work out what's next. Try again.", code: "model_unreadable" });
       }
 
       await storage.deductCredits(userId, CREDIT_COSTS.nextActions);
@@ -4732,7 +4747,7 @@ ${PLAIN_LANGUAGE_RULES}`,
       });
     } catch (error) {
       console.error("Next actions error:", error);
-      res.status(500).json({ message: "Failed to work out next actions" });
+      respondToAiError(res, error, "Failed to work out next actions");
     }
   });
 
@@ -4847,7 +4862,7 @@ Additionally include:
         parsed = parseModelJson(rebuildRaw);
       } catch (parseErr) {
         console.error("Roadmap rebuild parse failed:", parseErr);
-        return res.status(502).json({ message: "Nova's rebuild came back unreadable. Try again." });
+        return res.status(502).json({ message: "Nova's rebuild came back unreadable. Try again.", code: "model_unreadable" });
       }
 
       const phases = parseRoadmapJson(JSON.stringify(parsed)).phases.map((p: any) => ({
@@ -4857,7 +4872,7 @@ Additionally include:
           : "upcoming",
       }));
       if (phases.length === 0) {
-        return res.status(502).json({ message: "Nova couldn't rebuild the roadmap. Try again." });
+        return res.status(502).json({ message: "Nova couldn't rebuild the roadmap. Try again.", code: "model_unreadable" });
       }
 
       await storage.replaceRoadmapPhases(existing.id, phases);
@@ -4909,7 +4924,7 @@ Additionally include:
       });
     } catch (error) {
       console.error("Roadmap rebuild error:", error);
-      res.status(500).json({ message: "Failed to rebuild the roadmap" });
+      respondToAiError(res, error, "Failed to rebuild the roadmap");
     }
   });
 
@@ -5283,7 +5298,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         parsed = parseModelJson(raw);
       } catch (parseErr) {
         console.error("Health fix parse failed:", parseErr);
-        return res.status(502).json({ message: "Nova returned an unreadable plan. Please try again." });
+        return res.status(502).json({ message: "Nova returned an unreadable plan. Please try again.", code: "model_unreadable" });
       }
 
       const { changes, skipped } = await applyProjectOperations(projectId, userId, parsed.operations, {
@@ -5308,7 +5323,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       });
     } catch (error) {
       console.error("Health fix error:", error);
-      res.status(500).json({ message: "Nova couldn't apply that fix" });
+      respondToAiError(res, error, "Nova couldn't apply that fix");
     }
   });
 
@@ -6277,17 +6292,20 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       }
       const priceId = sub.items.data[0]?.price?.id;
       if (priceId) {
-        const price = await stripe.prices.retrieve(priceId);
-        const metadata = price.metadata || {};
-        const tier = metadata.tier || "free";
+        // Price metadata, else product metadata — as checkout reads it. A tier that can't be read changes nothing.
+        const tier = await tierForPrice(priceId);
         const { refilled } = await applyTier(userId, tier, sub.id);
         return res.json({ tier, refilled });
       }
 
       res.json({ tier: user.subscriptionTier || "free" });
     } catch (error) {
+      if (error instanceof PriceTierMissingError) {
+        console.error("[stripe] Sync: a paid subscription's price has no tier configured:", error.priceId);
+        return res.status(502).json({ message: "Your plan couldn't be read from Stripe, so nothing was changed. We've logged it — try again shortly.", code: "plan_unreadable" });
+      }
       console.error("Sync subscription error:", error);
-      res.status(500).json({ message: "Failed to sync subscription" });
+      res.status(500).json({ message: "Couldn't check your plan with Stripe. Nothing was changed — try again shortly.", code: "sync_failed" });
     }
   });
 

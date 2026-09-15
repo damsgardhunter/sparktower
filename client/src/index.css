@@ -363,6 +363,16 @@
 .home-rail-scroll:hover::-webkit-scrollbar-thumb { background: hsl(var(--muted-foreground) / 0.35); }
 
 /*
+ * Home and profile use sharp-cornered boxes. Scoped here rather than edited
+ * into each card, because the same cards (Card, feed posts, rail modules) are
+ * shared with pages that keep the softer shape. Pills and avatars
+ * (rounded-full) and small controls (rounded-md) are left alone.
+ */
+.sharp-boxes :is(.shadcn-card, .rounded, .rounded-lg, .rounded-xl, .rounded-2xl, .rounded-3xl, .rounded-\[5px\]) {
+  border-radius: 2px;
+}
+
+/*
  * The header logo's lightning (components/animated-tower-logo.tsx), one loop:
  * fade in on the dome → hold → shoot outward, fading as they leave the
  * semicircle → bare tower → again. Each bolt's --bolt-dx/--bolt-dy is its own
