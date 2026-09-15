@@ -11,7 +11,7 @@ import { NoticeBanner, useNotice } from "../../src/components/Sheet";
 import { DISCOVER_NEW_KEY, EXPLORE, markSeen as rememberSeen, openDiscover, recordDiscoverVisit, trackExplore } from "../../src/explore";
 import {
   DISCOVER_UPDATES_KEY, CONNECTION_REQUESTS_KEY, personAvatar, personName, updateLabel,
-  useConnectionRequests, useConnections, useExploreUpdates, useInvitationActions,
+  DIRECTORY_KEY, useConnectionRequests, useConnections, useDirectory, useExploreUpdates, useInvitationActions,
 } from "../../src/networkData";
 import {
   InvitationRow, LookingForCardView, NetworkBlock, NewsBanner, PersonGridCard, ProjectRowItem, ShowMore, networkStyles,
@@ -22,6 +22,7 @@ type Mode = "grow" | "looking";
 const GRID_START = 6;
 const PROJECTS_START = 4;
 const INVITES_SHOWN = 3;
+const MORE_START = 4;
 
 /**
  * My Network: invitations to answer, builders Nova matched you with, projects
@@ -45,6 +46,7 @@ export default function Discover() {
   const [mode, setMode] = useState<Mode>("grow");
   const [gridAll, setGridAll] = useState(false);
   const [projectsAll, setProjectsAll] = useState(false);
+  const [moreAll, setMoreAll] = useState(false);
   const [hidden, setHidden] = useState<Set<string>>(() => new Set());
   const [newsDismissed, setNewsDismissed] = useState(false);
 
@@ -58,6 +60,8 @@ export default function Discover() {
   const connectionsList = useConnections();
   const looking = useQuery({ queryKey: ["looking-for"], queryFn: () => api<any[]>("/api/looking-for") });
   const { updates, byKey } = useExploreUpdates();
+  // Everyone else on SparkTower — the web's Discover People list — for when Nova's matches run short.
+  const directory = useDirectory();
 
   // --- what's new ---------------------------------------------------------
   //
@@ -116,14 +120,34 @@ export default function Discover() {
   const builders = ranked.filter((r): r is { item: BuilderItem; rank: number } => r.item.kind === "builder" && !hidden.has(r.item.key));
   const projectItems = ranked.filter((r): r is { item: ProjectItem; rank: number } => r.item.kind === "project");
   const covers = useMemo(() => new Map((matches.data ?? []).map((m: any) => [m.matchedUserId, m.matchedProfile?.coverUrl])), [matches.data]);
+  const matchedSkills = useMemo(() => new Map<string, string[]>((matches.data ?? []).map((m: any) => [m.matchedUserId, m.matchedProfile?.skills ?? []])), [matches.data]);
+  const categories = useMemo(() => new Map<string, string | null>((projects.data ?? []).map((p: any) => [p.id, p.category ?? null])), [projects.data]);
+
+  // Builders Nova hasn't matched you with, you aren't connected to, and haven't hidden.
+  const moreBuilders = useMemo(() => {
+    const skip = new Set<string>([
+      ...(meId ? [meId] : []),
+      ...builders.map((b) => b.item.userId),
+      ...(connectionsList.data ?? []).map((c) => c.user.id),
+      ...(requests.data ?? []).map((r) => r.requesterId),
+    ]);
+    const candidates = (directory.data ?? [])
+      .filter((u) => u?.id && !skip.has(u.id) && !hidden.has(`more:${u.id}`) && (u.profile?.displayName || u.firstName));
+    // Empty profiles make empty cards; leave them out once there are enough filled-in ones.
+    const filled = candidates.filter((u) => u.profile?.headline || u.profile?.skills?.length);
+    return (filled.length >= MORE_START ? filled : candidates)
+      // Filled-in profiles first: a photo and a headline are what make a card worth tapping.
+      .sort((a, b) => Number(!!b.profile?.headline) - Number(!!a.profile?.headline) || Number(!!(b.profile?.avatarUrl || b.profileImageUrl)) - Number(!!(a.profile?.avatarUrl || a.profileImageUrl)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [directory.data, meId, builders.length, connectionsList.data, requests.data, hidden]);
 
   // --- refreshing ---------------------------------------------------------
 
   const refreshing = matches.isRefetching || projects.isRefetching || followed.isRefetching || requests.isRefetching;
   const refresh = useCallback(() => {
-    void Promise.all([matches.refetch(), projects.refetch(), followed.refetch(), requests.refetch(), looking.refetch()]);
+    void Promise.all([matches.refetch(), projects.refetch(), followed.refetch(), requests.refetch(), looking.refetch(), directory.refetch()]);
     void qc.invalidateQueries({ queryKey: DISCOVER_UPDATES_KEY });
-  }, [matches, projects, followed, requests, looking, qc]);
+  }, [matches, projects, followed, requests, looking, directory, qc]);
 
   // Coming back to the tab re-reads, so something new since the last visit
   // shows up — and the banner with it — without anyone having to pull.
@@ -139,6 +163,7 @@ export default function Discover() {
     void qc.invalidateQueries({ queryKey: ["followed-projects"] });
     void qc.invalidateQueries({ queryKey: CONNECTION_REQUESTS_KEY });
     void qc.invalidateQueries({ queryKey: DISCOVER_UPDATES_KEY });
+    void qc.invalidateQueries({ queryKey: DIRECTORY_KEY });
   }, [qc]));
 
   const updatedAt = Math.max(matches.dataUpdatedAt || 0, projects.dataUpdatedAt || 0);
@@ -148,7 +173,9 @@ export default function Discover() {
   // One lookup for where you stand with every builder on screen, and one
   // notice for how any action went.
   const lookingIds = (looking.data ?? []).map((p: any) => p.userId).filter((id: string) => id !== meId);
-  const { data: connections } = useConnectionStates([...builders.map((b) => b.item.userId), ...lookingIds]);
+  const { data: connections } = useConnectionStates([
+    ...builders.map((b) => b.item.userId), ...lookingIds, ...moreBuilders.slice(0, 24).map((u) => u.id),
+  ]);
   const { notice, show, clear } = useNotice();
   const invites = useInvitationActions(show);
 
@@ -179,6 +206,7 @@ export default function Discover() {
   const invitations = requests.data ?? [];
   const shownBuilders = gridAll ? builders : builders.slice(0, GRID_START);
   const shownProjects = projectsAll ? projectItems : projectItems.slice(0, PROJECTS_START);
+  const shownMore = moreAll ? moreBuilders.slice(0, 24) : moreBuilders.slice(0, MORE_START);
   const showNews = !newsDismissed && (updates.length > 0 || feed.newCount > 0);
 
   const newsTitle = updates.length ? "Welcome back — new since you last looked" : `${feed.newCount} new since you last looked`;
@@ -310,13 +338,14 @@ export default function Discover() {
                         avatarUrl={item.avatarUrl}
                         coverUrl={covers.get(item.userId)}
                         reason={item.reason}
+                        skills={matchedSkills.get(item.userId)}
                         score={item.score}
                         isNew={item.isNew}
                         update={byKey.get(`builder:${item.userId}`)}
                         onOpen={() => openBuilder(item.userId, rank)}
                         onDismiss={() => setHidden((prev) => new Set(prev).add(item.key))}
                         action={
-                          <ConnectActions block userId={item.userId} name={item.name} reason={item.reason} headline={item.headline} connection={connections?.[item.userId]} notify={show} explore={{ source: "discover", rankPosition: rank }} />
+                          <ConnectActions block userId={item.userId} name={item.name} reason={item.reason} headline={item.headline} connection={connections?.[item.userId]} notify={show} explore={{ source: "discover", rankPosition: rank }} moreLikeThis={matchedSkills.get(item.userId)?.[0]} />
                         }
                       />
                     ))}
@@ -332,6 +361,45 @@ export default function Discover() {
               )}
             </NetworkBlock>
 
+            {moreBuilders.length > 0 && (
+              <NetworkBlock
+                title="More builders to meet"
+                subtitle="Find entrepreneurs and freelancers to join your next project"
+                action="Search"
+                onAction={() => router.push("/search")}
+              >
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.sm }}>
+                  {shownMore.map((u) => {
+                    const name = personName(u, u.profile);
+                    return (
+                      <PersonGridCard
+                        key={u.id}
+                        width={gridWidth}
+                        name={name}
+                        headline={u.profile?.headline}
+                        avatarUrl={personAvatar(u, u.profile)}
+                        coverUrl={u.profile?.coverUrl}
+                        skills={u.profile?.skills ?? undefined}
+                        update={byKey.get(`builder:${u.id}`)}
+                        onOpen={() => {
+                          trackExplore(EXPLORE.openProfile, { matchType: "builder", targetId: u.id, source: "discover" });
+                          rememberSeen("builder", u.id);
+                          router.push(`/user/${u.id}`);
+                        }}
+                        onDismiss={() => setHidden((prev) => new Set(prev).add(`more:${u.id}`))}
+                        action={
+                          <ConnectActions block userId={u.id} name={name} headline={u.profile?.headline} connection={connections?.[u.id]} notify={show} explore={{ source: "discover" }} moreLikeThis={u.profile?.skills?.[0]} />
+                        }
+                      />
+                    );
+                  })}
+                </View>
+                {moreBuilders.length > MORE_START && (
+                  <ShowMore label={moreAll ? "Show less" : `Show more`} onPress={() => setMoreAll((v) => !v)} />
+                )}
+              </NetworkBlock>
+            )}
+
             {projectItems.length > 0 && (
               <NetworkBlock title="Projects to follow" subtitle="Follow along and their updates come to your feed" flush>
                 {shownProjects.map(({ item, rank }, i) => (
@@ -346,7 +414,7 @@ export default function Discover() {
                       isNew={item.isNew}
                       update={byKey.get(`project:${item.projectId}`)}
                       onOpen={() => openProject(item.projectId, rank)}
-                      action={<FollowButton projectId={item.projectId} title={item.title} following={item.following} notify={show} explore={{ source: "discover", rankPosition: rank }} />}
+                      action={<FollowButton projectId={item.projectId} title={item.title} following={item.following} notify={show} explore={{ source: "discover", rankPosition: rank }} moreLikeThis={categories.get(item.projectId)} />}
                     />
                   </View>
                 ))}

@@ -26,6 +26,7 @@ import Contests from "@/pages/contests";
 import Pricing from "@/pages/pricing";
 import BackingReview from "@/pages/backing-review";
 import CheckInDetail from "@/pages/check-in-detail";
+import PublicArtifactPage from "@/pages/public-artifact";
 import { useSurfaces } from "@/hooks/use-surfaces";
 import { isPathDisabled } from "@shared/surfaces";
 import FeedbackQueue from "@/pages/feedback-queue";
@@ -94,11 +95,13 @@ function Router() {
    * landing page would make the whole share step pointless. Checked before
    * both the auth gate and the onboarding redirect so neither can swallow it.
    */
-  const isPublicRoute = /^\/c\/[^/]+$/.test(window.location.pathname);
+  const isPublicRoute = /^\/(c|a)\/[^/]+$/.test(window.location.pathname);
   if (isPublicRoute) {
     return (
       <Switch>
         <Route path="/c/:id" component={CheckInDetail} />
+        {/* A published path artifact: the growth loop's front door. */}
+        <Route path="/a/:id" component={PublicArtifactPage} />
       </Switch>
     );
   }

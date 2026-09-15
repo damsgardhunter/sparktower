@@ -1,22 +1,22 @@
 /**
- * The top of a project page, laid out like a company page: cover banner, the
- * logo overlapping it, the name, what it is, who runs it, and the actions.
+ * The top of a project page, as on client/src/pages/project-dashboard.tsx:
+ * the cover, the logo over it, the status / category / private badges, the
+ * title, and Follow (with its count), Apply or Applied, Manage and Share.
  */
 import { Image, Pressable, Share, StyleSheet, Text, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
-import { colors, font, fontFamily, spacing } from "../theme";
-import { Avatar, Btn, Icon, Meta, Row, assetUri } from "./ui";
+import { colors, font, fontFamily, radius, spacing } from "../theme";
+import { Avatar, Btn, Icon, Row, assetUri } from "./ui";
 import { ProjectLogo, StatusPill, Tag } from "./ProjectBits";
-import { projectGoal } from "../projectData";
+import { API_URL } from "../api/client";
 
 export function ProjectHeader({
-  project, owner, followerCount, memberCount, following, followPending, onFollow,
-  role, applied, onApply, onManage, onVisibility, onStoryboards, onOwner,
+  project, owner, followerCount, following, followPending, onFollow,
+  role, applied, onApply, onManage, onOwner, onBack,
 }: {
   project: any;
-  owner?: { userId: string; name: string; avatarUrl?: string | null; headline?: string | null } | null;
+  owner?: { userId: string; name: string; avatarUrl?: string | null } | null;
   followerCount: number;
-  memberCount: number;
   following: boolean;
   followPending?: boolean;
   onFollow: () => void;
@@ -24,92 +24,76 @@ export function ProjectHeader({
   applied: boolean;
   onApply: () => void;
   onManage: () => void;
-  onVisibility: () => void;
-  onStoryboards: () => void;
   onOwner: () => void;
+  /** Jumps to "Back this project" when the project runs a campaign. */
+  onBack?: () => void;
 }) {
   const cover = assetUri(project.coverUrl);
-  const recruiting = !project.soloMode && (project.rolesNeeded?.length ?? 0) > 0;
 
   const share = () => {
-    void Share.share({ message: `${project.title}${project.oneLiner ? ` — ${project.oneLiner}` : ""} on SparkTower` }).catch(() => {});
+    const url = `${API_URL}/projects/${project.id}`;
+    void Share.share({ message: `${project.title}${project.oneLiner ? ` — ${project.oneLiner}` : ""}\n${url}`, url }).catch(() => {});
   };
 
   return (
     <View style={s.wrap}>
-      <View style={s.cover}>
+      <View style={s.cover} testID="project-cover">
         {cover
           ? <Image source={{ uri: cover }} style={StyleSheet.absoluteFill} resizeMode="cover" />
-          : <LinearGradient colors={["#E9D5F5", "#D9D1FF", "#CFFAFE"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />}
+          : <LinearGradient colors={["#EDE4F3", "#E4DEFB", "#F3F2EF"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />}
+        {cover ? <LinearGradient colors={["transparent", "rgba(255,255,255,0.35)"]} style={StyleSheet.absoluteFill} /> : null}
       </View>
 
       <View style={s.body}>
         <Row between style={{ alignItems: "flex-end" }}>
-          <ProjectLogo title={project.title} uri={project.logoUrl} size={84} style={s.logo} />
-          <Pressable onPress={share} hitSlop={8} accessibilityLabel="Share" style={s.share}>
-            <Icon name="share-social-outline" size={20} color={colors.textSecondary} />
+          <ProjectLogo title={project.title} uri={project.logoUrl} size={80} style={s.logo} />
+          <Pressable onPress={share} hitSlop={8} accessibilityLabel="Share" style={({ pressed }) => [s.share, pressed && { opacity: 0.6 }]}>
+            <Icon name="share-social-outline" size={19} color={colors.textSecondary} />
           </Pressable>
         </Row>
 
-        <Text style={s.title}>{project.title}</Text>
-        {project.oneLiner ? <Text style={s.tagline}>{project.oneLiner}</Text> : null}
-
-        <Text style={s.meta}>
-          {[project.category, projectGoal(project.goal).label].filter(Boolean).join(" · ")}
-        </Text>
-        <Text style={s.metaStrong}>
-          {followerCount} follower{followerCount === 1 ? "" : "s"} · {memberCount} on the team · {project.views ?? 0} views
-        </Text>
-
-        <Row wrap gap={6} center style={{ marginTop: 2 }}>
+        <Row wrap gap={6} center style={{ marginTop: spacing.sm }}>
           <StatusPill status={project.status} />
+          {project.category ? <Text style={s.category}>{project.category}</Text> : null}
           {project.isPrivate && <Tag icon="lock-closed" label="Private" />}
-          {project.soloMode ? <Tag icon="rocket-outline" tone="primary" label="Solo Builder" /> : recruiting ? <Tag icon="briefcase-outline" tone="primary" label="Hiring" /> : null}
         </Row>
+        <Text style={s.title} testID="text-project-title">{project.title}</Text>
 
         {owner && (
           <Pressable onPress={onOwner} style={({ pressed }) => [s.owner, pressed && { opacity: 0.7 }]}>
-            <Avatar name={owner.name} uri={owner.avatarUrl} size={28} />
+            <Avatar name={owner.name} uri={owner.avatarUrl} size={24} />
             <Text style={s.ownerText} numberOfLines={1}>
               Started by <Text style={{ fontFamily: fontFamily.semibold, color: colors.text }}>{owner.name}</Text>
             </Text>
           </Pressable>
         )}
 
-        {role === "owner" ? (
-          <View style={{ gap: spacing.sm, marginTop: spacing.xs }}>
-            <Row gap={spacing.sm}>
-              <Btn label="Manage" icon="settings-outline" onPress={onManage} style={{ flex: 1 }} small />
-              <Btn label="Public page" icon="eye-outline" variant="outline" onPress={onVisibility} style={{ flex: 1 }} small />
-            </Row>
-            <Pressable onPress={onStoryboards} style={({ pressed }) => [s.novaRow, pressed && { opacity: 0.7 }]}>
-              <Icon name="sparkles" size={16} color={colors.primary} />
-              <Text style={s.novaText}>AI storyboards</Text>
-              <Meta>Only you can see these</Meta>
-              <View style={{ flex: 1 }} />
-              <Icon name="chevron-forward" size={16} color={colors.textTertiary} />
-            </Pressable>
-          </View>
-        ) : (
-          <Row gap={spacing.sm} style={{ marginTop: spacing.xs }}>
-            <Btn
-              label={following ? "Following" : "Follow"}
-              icon={following ? "checkmark" : "add"}
-              variant={following ? "outline" : "primary"}
-              loading={followPending}
-              onPress={onFollow}
-              style={{ flex: 1 }}
-              small
-            />
-            {role === "member" ? (
-              <Btn label="Manage" icon="settings-outline" variant="outline" onPress={onManage} style={{ flex: 1 }} small />
-            ) : applied ? (
-              <Btn label="Applied" icon="time-outline" variant="ghost" disabled style={{ flex: 1 }} small />
-            ) : !project.soloMode ? (
-              <Btn label="Apply to join" icon="send-outline" variant="outline" onPress={onApply} style={{ flex: 1 }} small />
-            ) : null}
-          </Row>
-        )}
+        <Row gap={spacing.sm} wrap style={{ marginTop: spacing.sm }}>
+          <Btn
+            label={`${following ? "Following" : "Follow"}${followerCount > 0 ? ` (${followerCount})` : ""}`}
+            icon={following ? "heart" : "heart-outline"}
+            variant={following ? "primary" : "outline"}
+            loading={followPending}
+            onPress={onFollow}
+            style={{ flexGrow: 1 }}
+            small
+          />
+          {role === "visitor" && !applied && !project.soloMode && (
+            <Btn label="Apply" icon="send" onPress={onApply} style={{ flexGrow: 1 }} small />
+          )}
+          {role === "visitor" && applied && (
+            <View style={s.applied}>
+              <Icon name="time-outline" size={14} color={colors.textSecondary} />
+              <Text style={s.appliedText}>Applied</Text>
+            </View>
+          )}
+          {role !== "visitor" && (
+            <Btn label="Manage" icon="settings-outline" variant="outline" onPress={onManage} style={{ flexGrow: 1 }} small />
+          )}
+          {onBack && role !== "owner" && (
+            <Btn label="Back this project" icon="heart" variant="outline" onPress={onBack} style={{ flexGrow: 1 }} small />
+          )}
+        </Row>
       </View>
     </View>
   );
@@ -117,19 +101,17 @@ export function ProjectHeader({
 
 const s = StyleSheet.create({
   wrap: { backgroundColor: colors.surface, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
-  cover: { height: 116, backgroundColor: colors.primarySoft, overflow: "hidden" },
-  body: { paddingHorizontal: spacing.lg, paddingBottom: spacing.lg, gap: 4 },
-  logo: { marginTop: -42, borderWidth: 3, borderColor: colors.surface },
+  cover: { height: 150, backgroundColor: colors.surfaceRaised, overflow: "hidden" },
+  body: { paddingHorizontal: spacing.lg, paddingBottom: spacing.md, gap: 4 },
+  logo: { marginTop: -40, borderWidth: 3, borderColor: colors.surface, ...{ shadowColor: "#000", shadowOpacity: 0.12, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } } },
   share: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: colors.border, alignItems: "center", justifyContent: "center" },
-  title: { fontSize: font.xl + 2, fontFamily: fontFamily.bold, color: colors.text, letterSpacing: -0.3, marginTop: spacing.sm },
-  tagline: { fontSize: font.base, lineHeight: 21, fontFamily: fontFamily.regular, color: colors.text },
-  meta: { fontSize: font.sm, color: colors.textSecondary, fontFamily: fontFamily.regular, marginTop: 2 },
-  metaStrong: { fontSize: font.sm, color: colors.textTertiary, fontFamily: fontFamily.regular },
-  owner: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.sm },
+  category: { fontSize: font.sm, color: colors.textSecondary, fontFamily: fontFamily.medium },
+  title: { fontSize: font.xxl, fontFamily: fontFamily.bold, color: colors.text, letterSpacing: -0.4, lineHeight: 34 },
+  owner: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: 2 },
   ownerText: { flex: 1, fontSize: font.sm, color: colors.textSecondary, fontFamily: fontFamily.regular },
-  novaRow: {
-    flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: spacing.sm, paddingHorizontal: spacing.md,
-    backgroundColor: colors.primarySoft, borderRadius: 999,
+  applied: {
+    flexGrow: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
+    backgroundColor: colors.surfaceRaised, borderRadius: radius.pill, paddingVertical: 7, paddingHorizontal: spacing.md,
   },
-  novaText: { fontSize: font.sm, fontFamily: fontFamily.semibold, color: colors.primary },
+  appliedText: { fontSize: font.sm, fontFamily: fontFamily.semibold, color: colors.textSecondary },
 });

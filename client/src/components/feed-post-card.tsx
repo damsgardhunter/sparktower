@@ -13,7 +13,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { FeedContent } from "@/components/mention-textarea";
 import { PrivateBadge } from "@/components/private-badge";
 import {
-  MessageSquare, Trash2, Sparkles, HelpCircle, Repeat, Compass,
+  MessageSquare, Trash2, Sparkles, HelpCircle, Repeat, Compass, Globe,
 } from "lucide-react";
 import { creditLine } from "@shared/feedback-loop";
 import * as Icons from "lucide-react";
@@ -31,6 +31,7 @@ export interface FeedPostWithDetails extends FeedPost {
   viewerIsTeam?: boolean;
   credits?: { commentId: string; authorId: string; name: string }[];
   pathStep?: { taskId: string; title: string } | null;
+  artifact?: { id: string; title: string; tags: string[]; public: boolean } | null;
   pathWeek?: { steps: { taskId: string; title: string }[] } | null;
 }
 
@@ -196,6 +197,18 @@ export function FeedPostCard({ post, standalone = false }: { post: FeedPostWithD
           >
             <Compass className="h-3 w-3" /> From the path: {post.pathStep.title}
           </Link>
+        )}
+
+        {/* A published artifact: its public page is the shareable one. */}
+        {post.artifact?.public && (
+          <a
+            href={`/a/${post.artifact.id}`}
+            onClick={(e) => e.stopPropagation()}
+            className="inline-flex items-center gap-1.5 text-xs rounded-full border border-primary/30 bg-primary/5 px-2.5 py-1 text-primary hover:bg-primary/10"
+            data-testid={`post-artifact-${post.id}`}
+          >
+            <Globe className="h-3 w-3" /> Public page{post.artifact.tags.length ? ` · ${post.artifact.tags.map((t) => `#${t}`).join(" ")}` : ""}
+          </a>
         )}
 
         {post.pathWeek && post.project && (

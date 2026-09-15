@@ -8,6 +8,7 @@ import { Empty, Loading } from "../../src/components/ui";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
 import { PostCard } from "../../src/components/PostCard";
 import { CommentBar, FeedCommentThread, commentsKey, type ReplyTarget } from "../../src/components/FeedComments";
+import { NextStepLink, ReactionsBox } from "../../src/components/feed/PostExtras";
 import type { FeedPost } from "../../src/components/feedModel";
 
 /**
@@ -70,9 +71,17 @@ export default function PostScreen() {
       <ScrollView
         ref={scrollRef}
         keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{ paddingBottom: spacing.xl }}
+        contentContainerStyle={{ paddingTop: spacing.sm, paddingBottom: spacing.xl, gap: spacing.sm }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
       >
+        {/* Opened from a link rather than the feed: the web's way back. */}
+        {!router.canGoBack() && (
+          <Text style={s.back} onPress={() => router.replace("/(tabs)/feed")} testID="link-back-to-feed">← Back to the feed</Text>
+        )}
+
+        {/* A step shared from the path: feedback read, back to the next one. Team only. */}
+        {post.project && post.viewerIsTeam && (post.pathStep || post.pathWeek) && <NextStepLink projectId={post.project.id} />}
+
         <PostCard
           post={post}
           standalone
@@ -81,13 +90,15 @@ export default function PostScreen() {
           onDeleted={() => router.back()}
         />
         <View style={s.comments}>
-          <Text style={s.title}>Comments</Text>
+          <Text style={s.title}>Comments{post.commentCount > 0 ? ` · ${post.commentCount}` : ""}</Text>
           <FeedCommentThread
             post={post}
             onReply={(t) => { setReplyTo(t); focusBox(); }}
             onNotice={show}
           />
         </View>
+
+        <ReactionsBox postId={post.id} />
       </ScrollView>
       <CommentBar
         postId={post.id}
@@ -104,9 +115,11 @@ export default function PostScreen() {
 }
 
 const s = StyleSheet.create({
+  // The same box as the post above it.
   comments: {
-    marginTop: spacing.sm, backgroundColor: colors.surface, paddingHorizontal: spacing.lg, paddingVertical: spacing.lg, gap: spacing.md,
-    borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
+    marginHorizontal: spacing.sm, backgroundColor: colors.surface, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, gap: spacing.md,
+    borderWidth: 1, borderColor: colors.border, borderRadius: 8,
   },
+  back: { color: colors.textTertiary, fontSize: 12, fontFamily: fontFamily.regular, marginHorizontal: spacing.lg, marginTop: spacing.xs },
   title: { color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold },
 });

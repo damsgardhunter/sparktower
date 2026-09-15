@@ -1,67 +1,75 @@
 /**
- * The blocks a profile is made of, LinkedIn-style: the header card, the open
- * ask, About, résumé credentials, projects, activity and the Builder Index.
+ * The cards a profile is made of, in the website's order and words.
  *
- * Mirrors client/src/pages/profile.tsx and its components
- * (profile-credentials, looking-for-card, reputation-card, profile-feed) on
- * the same endpoints, laid out as full-width white sections on the gray canvas.
+ * Mirrors client/src/pages/profile.tsx and the components it draws —
+ * looking-for-card, profile-resume-panel, profile-credentials, profile-feed,
+ * project-card and reputation-card — on the same endpoints. On a phone the
+ * web's two columns stack the way the website's own narrow layout stacks
+ * them: the left column's cards first, then posts, projects and the Builder
+ * Index.
  */
 import { useState, type ReactNode } from "react";
 import { Image, Linking, Pressable, Text, View } from "react-native";
 import { useRouter } from "expo-router";
+import { LinearGradient } from "expo-linear-gradient";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
-import { colors, font, fontFamily, postTypeColors, radius, spacing } from "../theme";
-import {
-  assetUri, Avatar, Body, Btn, Chip, Divider, Icon, Meta, NovaGradient, Progress, Row, Section,
-  plain, timeAgo, type IconName,
-} from "./ui";
+import { useEntitlementsQuery } from "../hooks/useEntitlements";
+import { colors, font, fontFamily, radius, spacing } from "../theme";
+import { assetUri, Avatar, Btn, Icon, Meta, Progress, Row, type IconName } from "./ui";
 import type { Notice } from "./Sheet";
+import { PostCard } from "./PostCard";
 import { PinnedBadgesRow } from "./ProfileBadges";
+import { CardTitle, EmptyCard, GUTTER, Heading, OutlineButton, PCard, Pill, StrongTitle } from "./profile/kit";
 
+/** The web's header name: display name, else the account's name, else the headline. */
 export const nameOf = (profile: any, user?: any) =>
-  profile?.displayName || [user?.firstName, user?.lastName].filter(Boolean).join(" ") || profile?.headline || "Builder";
+  profile?.displayName || [user?.firstName, user?.lastName].filter(Boolean).join(" ") || profile?.headline || "Untitled Profile";
 
-// --- Header ----------------------------------------------------------------
+const bodyText = { fontSize: font.sm, lineHeight: 20, fontFamily: fontFamily.regular, color: colors.text } as const;
+const mutedText = { fontSize: font.xs + 1, lineHeight: 18, fontFamily: fontFamily.regular, color: colors.textTertiary } as const;
+
+// --- Header ------------------------------------------------------------------
+
+export interface HeaderStat { value: number | string; label: string; onPress?: () => void }
 
 export function ProfileHeader({
-  userId, profile, user, followers, connections, actions, onEditCover, onEditAvatar,
+  userId, profile, user, stats, actions, onEditCover, onEditAvatar,
 }: {
   userId: string;
   profile: any;
   user?: any;
-  followers?: number;
-  connections?: number;
+  stats: HeaderStat[];
   actions: ReactNode;
   onEditCover?: () => void;
   onEditAvatar?: () => void;
 }) {
   const name = nameOf(profile, user);
   const cover = assetUri(profile?.coverUrl);
-  const counts = [
-    followers != null ? `${followers} follower${followers === 1 ? "" : "s"}` : null,
-    connections != null ? `${connections} connection${connections === 1 ? "" : "s"}` : null,
-  ].filter(Boolean).join(" · ");
 
   return (
-    <View style={{ backgroundColor: colors.surface, borderBottomWidth: 1, borderColor: colors.border }}>
-      <View style={{ height: 112 }}>
+    <View style={{ marginHorizontal: GUTTER, backgroundColor: colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, overflow: "hidden" }}>
+      {/* The cover photo, or the web's soft primary → accent gradient when there isn't one. */}
+      <View style={{ height: 120 }}>
         {cover
-          ? <Image source={{ uri: cover }} style={{ width: "100%", height: 112 }} resizeMode="cover" />
-          : <NovaGradient style={{ height: 112, opacity: 0.55 }} />}
+          ? <Image source={{ uri: cover }} style={{ width: "100%", height: 120 }} resizeMode="cover" />
+          : <LinearGradient colors={["#EADCF0", "#F1EEFF", "#EADCF0"]} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={{ height: 120 }} />}
         {onEditCover && (
           <Pressable onPress={onEditCover} accessibilityLabel="Change cover photo" hitSlop={8}
-            style={{ position: "absolute", top: spacing.md, right: spacing.md, width: 34, height: 34, borderRadius: 17, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}>
-            <Icon name="camera-outline" size={18} color={colors.text} />
+            style={({ pressed }) => [{ position: "absolute", top: spacing.sm, right: spacing.sm, width: 32, height: 32, borderRadius: 16, backgroundColor: "rgba(255,255,255,0.92)", alignItems: "center", justifyContent: "center" }, pressed && { opacity: 0.7 }]}>
+            <Icon name="camera-outline" size={17} color={colors.text} />
           </Pressable>
         )}
       </View>
+
       <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.lg }}>
-        <Pressable onPress={onEditAvatar} disabled={!onEditAvatar} style={{ marginTop: -52, alignSelf: "flex-start" }} accessibilityLabel="Change profile photo">
-          <Avatar name={name} uri={profile?.avatarUrl ?? user?.profileImageUrl} size={104} ring />
+        <Pressable onPress={onEditAvatar} disabled={!onEditAvatar} style={{ marginTop: -48, alignSelf: "flex-start" }} accessibilityLabel="Change profile photo">
+          <View style={{ borderRadius: 52, borderWidth: 4, borderColor: colors.surface }}>
+            <Avatar name={name} uri={profile?.avatarUrl ?? user?.profileImageUrl} size={96} />
+          </View>
           {onEditAvatar && (
-            <View style={{ position: "absolute", right: 2, bottom: 4, width: 28, height: 28, borderRadius: 14, backgroundColor: colors.primary, borderWidth: 2, borderColor: colors.surface, alignItems: "center", justifyContent: "center" }}>
-              <Icon name="add" size={18} color="#FFFFFF" />
+            <View style={{ position: "absolute", right: 4, bottom: 6, width: 26, height: 26, borderRadius: 13, backgroundColor: colors.primary, borderWidth: 2, borderColor: colors.surface, alignItems: "center", justifyContent: "center" }}>
+              <Icon name="camera" size={13} color="#FFFFFF" />
             </View>
           )}
         </Pressable>
@@ -69,22 +77,34 @@ export function ProfileHeader({
         <View style={{ marginTop: spacing.sm, gap: 3 }}>
           <Row center gap={spacing.sm} wrap>
             <Text style={{ fontSize: font.xl, fontFamily: fontFamily.bold, color: colors.text, letterSpacing: -0.3, flexShrink: 1 }}>{name}</Text>
-            {profile?.experienceLevel && (
-              <View style={{ borderWidth: 1, borderColor: colors.border, borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 1 }}>
-                <Text style={{ fontSize: font.xs, fontFamily: fontFamily.medium, color: colors.textSecondary, textTransform: "capitalize" }}>{profile.experienceLevel}</Text>
-              </View>
-            )}
+            {profile?.experienceLevel ? (
+              <Pill label={profile.experienceLevel.charAt(0).toUpperCase() + profile.experienceLevel.slice(1)} />
+            ) : null}
           </Row>
-          {profile?.username ? <Meta style={{ fontSize: font.sm }}>@{profile.username}</Meta> : null}
+          {profile?.username ? <Text style={{ fontSize: font.sm, fontFamily: fontFamily.regular, color: colors.textTertiary }}>@{profile.username}</Text> : null}
           {profile?.headline && profile?.displayName ? (
-            <Text style={{ fontSize: font.base, lineHeight: 21, fontFamily: fontFamily.regular, color: colors.text }}>{profile.headline}</Text>
+            <Text style={{ fontSize: font.base, lineHeight: 21, fontFamily: fontFamily.regular, color: colors.textSecondary }}>{profile.headline}</Text>
           ) : null}
+          <View style={{ marginTop: 2 }}><PinnedBadgesRow userId={userId} /></View>
           {profile?.location ? (
-            <Text style={{ fontSize: font.sm, fontFamily: fontFamily.regular, color: colors.textTertiary }}>{profile.location}</Text>
+            <Row center gap={4} style={{ marginTop: 2 }}>
+              <Icon name="location-outline" size={15} color={colors.textTertiary} />
+              <Text style={{ fontSize: font.sm, fontFamily: fontFamily.regular, color: colors.textTertiary }}>{profile.location}</Text>
+            </Row>
           ) : null}
-          {counts ? <Text style={{ fontSize: font.sm, fontFamily: fontFamily.semibold, color: colors.primary, marginTop: 2 }}>{counts}</Text> : null}
-          <View style={{ marginTop: 6 }}><PinnedBadgesRow userId={userId} /></View>
         </View>
+
+        {stats.length > 0 && (
+          <View style={{ flexDirection: "row", marginTop: spacing.md, borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.borderSubtle, paddingVertical: spacing.sm }}>
+            {stats.map((st, i) => (
+              <Pressable key={st.label} onPress={st.onPress} disabled={!st.onPress}
+                style={({ pressed }) => [{ flex: 1, alignItems: "center", gap: 1 }, i > 0 && { borderLeftWidth: 1, borderColor: colors.borderSubtle }, pressed && { opacity: 0.6 }]}>
+                <Text style={{ fontSize: font.lg, fontFamily: fontFamily.bold, color: colors.text }}>{st.value}</Text>
+                <Text style={{ fontSize: font.xs, fontFamily: fontFamily.medium, color: colors.textTertiary }}>{st.label}</Text>
+              </Pressable>
+            ))}
+          </View>
+        )}
 
         <View style={{ marginTop: spacing.md }}>{actions}</View>
       </View>
@@ -92,443 +112,474 @@ export function ProfileHeader({
   );
 }
 
-// --- Looking for -----------------------------------------------------------
+// --- Looking for -------------------------------------------------------------
 
-export function LookingForBlock({ lookingFor, isOwn }: { lookingFor: any; isOwn: boolean }) {
+function Fact({ icon, label, value }: { icon: IconName; label: string; value: string }) {
+  return (
+    <View style={{ gap: 1, minWidth: "45%", flexGrow: 1 }}>
+      <Row center gap={3}>
+        <Icon name={icon} size={10} color={colors.textTertiary} />
+        <Text style={overline}>{label}</Text>
+      </Row>
+      <Text style={bodyText}>{value}</Text>
+    </View>
+  );
+}
+const overline = { fontSize: 10, fontFamily: fontFamily.semibold, color: colors.textTertiary, textTransform: "uppercase", letterSpacing: 0.5 } as const;
+
+/** The public ask. Visitors see it only while it's switched on; the owner always sees it, or the prompt to add one. */
+export function LookingForCard({ lookingFor, isOwn }: { lookingFor: any; isOwn: boolean }) {
   const router = useRouter();
   const edit = () => router.push("/profile/looking-for");
 
   if (!lookingFor || (!lookingFor.isActive && !isOwn)) {
     if (!isOwn) return null;
     return (
-      <Pressable onPress={edit} style={({ pressed }) => [{ backgroundColor: colors.surface, borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.border, padding: spacing.lg, flexDirection: "row", gap: spacing.md, alignItems: "center" }, pressed && { opacity: 0.7 }]}>
-        <View style={{ width: 40, height: 40, borderRadius: 20, borderWidth: 1.5, borderStyle: "dashed", borderColor: colors.primary, alignItems: "center", justifyContent: "center" }}>
-          <Icon name="add" size={20} color={colors.primary} />
+      <PCard dashed style={{ backgroundColor: colors.surface, flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md + 2 }}>
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text style={{ fontSize: font.sm, fontFamily: fontFamily.semibold, color: colors.text }}>Looking for someone?</Text>
+          <Text style={mutedText}>Post what you need — a cofounder, a first engineer, a project to join.</Text>
         </View>
-        <View style={{ flex: 1 }}>
-          <Body style={{ fontFamily: fontFamily.semibold }}>Looking for someone?</Body>
-          <Meta style={{ fontSize: font.sm }}>Post what you need: a cofounder, a first engineer, a project to join.</Meta>
-        </View>
-        <Icon name="chevron-forward" size={18} color={colors.textTertiary} />
-      </Pressable>
+        <OutlineButton label="Add" icon="add" onPress={edit} />
+      </PCard>
     );
   }
 
-  const facts: { icon: IconName; label: string; value: string }[] = [];
-  if (lookingFor.commitment) facts.push({ icon: "time-outline", label: "Commitment", value: lookingFor.commitment });
-  if (lookingFor.stage) facts.push({ icon: "layers-outline", label: "Stage", value: lookingFor.stage });
-  if (lookingFor.equityAvailable === true || lookingFor.equityAvailable === false) {
-    facts.push({ icon: "pie-chart-outline", label: "Equity", value: lookingFor.equityAvailable ? "Available" : "Not available" });
-  }
-
   return (
-    <View style={{ backgroundColor: colors.surface, borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.border, paddingHorizontal: spacing.lg, paddingVertical: spacing.md }}>
-      <View style={{ backgroundColor: colors.primarySoft, borderRadius: radius.md, padding: spacing.md, gap: spacing.sm }}>
-        <Row between>
-          <Row center gap={spacing.sm} style={{ flex: 1 }}>
-            <Icon name="hand-left-outline" size={18} color={colors.primary} />
-            <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: font.xs, fontFamily: fontFamily.semibold, color: colors.primary, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                Looking for{isOwn && !lookingFor.isActive ? " · Hidden" : ""}
-              </Text>
-              <Text style={{ fontSize: font.base, fontFamily: fontFamily.bold, color: colors.text }}>{lookingFor.role}</Text>
-            </View>
-          </Row>
-          {isOwn && (
-            <Pressable onPress={edit} hitSlop={8} accessibilityLabel="Edit what you're looking for">
-              <Icon name="pencil" size={18} color={colors.textSecondary} />
+    <PCard tone="primary" style={{ padding: spacing.md + 2 }}>
+      <Row gap={spacing.sm + 2} style={{ alignItems: "flex-start" }}>
+        <View style={{ width: 32, height: 32, borderRadius: radius.sm, backgroundColor: "#EBD9F2", alignItems: "center", justifyContent: "center" }}>
+          <Icon name="hand-left-outline" size={16} color={colors.primary} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={{ fontSize: font.xs, fontFamily: fontFamily.semibold, color: colors.primary, textTransform: "uppercase", letterSpacing: 0.5 }}>Looking for</Text>
+          <Text style={{ fontSize: font.base, fontFamily: fontFamily.semibold, color: colors.text }}>{lookingFor.role}</Text>
+        </View>
+        {isOwn && (
+          <Row center gap={4}>
+            {!lookingFor.isActive && <Pill label="Hidden" icon="eye-off-outline" variant="secondary" />}
+            <Pressable onPress={edit} hitSlop={8} accessibilityLabel="Edit what you're looking for" style={{ padding: 4 }}>
+              <Icon name="pencil" size={15} color={colors.textSecondary} />
             </Pressable>
-          )}
-        </Row>
-        {(lookingFor.industries?.length ?? 0) > 0 && (
-          <Row wrap gap={6}>{lookingFor.industries.map((i: string) => <Chip key={i} label={i} small />)}</Row>
-        )}
-        {facts.length > 0 && (
-          <Row wrap gap={spacing.lg}>
-            {facts.map((f) => (
-              <View key={f.label} style={{ gap: 1 }}>
-                <Row center gap={4}>
-                  <Icon name={f.icon} size={12} color={colors.textTertiary} />
-                  <Meta>{f.label}</Meta>
-                </Row>
-                <Body>{f.value}</Body>
-              </View>
-            ))}
           </Row>
         )}
-        {lookingFor.details ? <Body muted>{lookingFor.details}</Body> : null}
+      </Row>
+
+      <View style={{ flexDirection: "row", flexWrap: "wrap", rowGap: spacing.sm, columnGap: spacing.sm }}>
+        {(lookingFor.industries?.length ?? 0) > 0 && (
+          <View style={{ width: "100%", gap: 4 }}>
+            <Text style={overline}>Industry</Text>
+            <Row wrap gap={4}>{lookingFor.industries.map((i: string) => <Pill key={i} label={i} />)}</Row>
+          </View>
+        )}
+        {lookingFor.commitment ? <Fact icon="time-outline" label="Commitment" value={lookingFor.commitment} /> : null}
+        {lookingFor.stage ? <Fact icon="layers-outline" label="Stage" value={lookingFor.stage} /> : null}
+        {lookingFor.equityAvailable === true || lookingFor.equityAvailable === false ? (
+          <Fact icon="pie-chart-outline" label="Equity" value={lookingFor.equityAvailable ? "Available" : "Not available"} />
+        ) : null}
       </View>
-    </View>
+
+      {lookingFor.details ? (
+        <Text style={[bodyText, { color: colors.textSecondary, borderTopWidth: 1, borderColor: "#E3CCEC", paddingTop: spacing.sm }]}>{lookingFor.details}</Text>
+      ) : null}
+    </PCard>
   );
 }
 
-// --- About -----------------------------------------------------------------
+// --- Résumé panel ------------------------------------------------------------
+
+/** The owner's prompt to let Nova fill the profile from a résumé. The review happens on the builder screen. */
+export function ResumePanel({ hasContent }: { hasContent: boolean }) {
+  const router = useRouter();
+  const ent = useEntitlementsQuery();
+  const { data: status } = useQuery({ queryKey: ["resume-status"], queryFn: () => api<any>("/api/profile/resume-status") });
+  const cost: number = ent.creditCosts?.resumeEvaluation ?? 4;
+  const cantAfford = !ent.isLoading && !ent.isUnlimited && ent.creditsRemaining < cost;
+
+  return (
+    <PCard tone="primary" dashed style={{ padding: spacing.md + 2 }}>
+      <Row gap={spacing.sm + 2} style={{ alignItems: "flex-start" }}>
+        <View style={{ width: 32, height: 32, borderRadius: radius.sm, backgroundColor: "#EBD9F2", alignItems: "center", justifyContent: "center" }}>
+          <Icon name="color-wand-outline" size={16} color={colors.primary} />
+        </View>
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text style={{ fontSize: font.sm, fontFamily: fontFamily.semibold, color: colors.text }}>
+            {hasContent ? "Refresh your profile with Nova" : "Let Nova build your profile"}
+          </Text>
+          <Text style={mutedText}>
+            {status?.hasResume && status.readable
+              ? "Nova reads the résumé on your profile and fills in your experience, education, projects, and skills."
+              : "Upload your résumé and Nova fills in your experience, education, projects, and skills."}
+          </Text>
+        </View>
+      </Row>
+      <Pressable onPress={() => router.push("/profile-builder")} disabled={cantAfford}
+        style={({ pressed }) => [{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: colors.primary, borderRadius: radius.pill, paddingVertical: 8 }, (pressed || cantAfford) && { opacity: 0.6 }]}>
+        <Icon name="sparkles" size={14} color="#FFFFFF" />
+        <Text style={{ color: "#FFFFFF", fontSize: font.sm, fontFamily: fontFamily.semibold }}>{hasContent ? "Re-run" : "Build my profile"}</Text>
+        <View style={{ backgroundColor: "rgba(255,255,255,0.25)", borderRadius: radius.pill, paddingHorizontal: 6 }}>
+          <Text style={{ color: "#FFFFFF", fontSize: 10, fontFamily: fontFamily.bold }}>{cost}</Text>
+        </View>
+      </Pressable>
+      {cantAfford && <Text style={[mutedText, { color: colors.danger }]}>Needs {cost} credits, you have {ent.creditsRemaining}.</Text>}
+    </PCard>
+  );
+}
+
+// --- About ---------------------------------------------------------------------
 
 function LinkRow({ icon, label, url }: { icon: IconName; label: string; url: string }) {
-  const href = /^https?:\/\//.test(url) || url.startsWith("/") ? url : `https://${url}`;
+  const href = url.startsWith("/") ? assetUri(url)! : /^https?:\/\//.test(url) ? url : `https://${url}`;
   return (
-    <Pressable onPress={() => Linking.openURL(href.startsWith("/") ? assetUri(href)! : href).catch(() => {})} style={({ pressed }) => [{ flexDirection: "row", alignItems: "center", gap: spacing.sm }, pressed && { opacity: 0.6 }]}>
-      <Icon name={icon} size={17} color={colors.textSecondary} />
-      <Text style={{ fontSize: font.sm, fontFamily: fontFamily.semibold, color: colors.primary, flexShrink: 1 }} numberOfLines={1}>{label}</Text>
+    <Pressable onPress={() => Linking.openURL(href).catch(() => {})} style={({ pressed }) => [{ flexDirection: "row", alignItems: "center", gap: spacing.sm }, pressed && { opacity: 0.6 }]}>
+      <Icon name={icon} size={16} color={colors.textSecondary} />
+      <Text style={{ fontSize: font.sm, fontFamily: fontFamily.regular, color: colors.textSecondary, flexShrink: 1 }} numberOfLines={1}>{label}</Text>
     </Pressable>
   );
 }
 
-export function AboutBlock({ profile, isOwn }: { profile: any; isOwn: boolean }) {
+export function AboutCard({ profile, isOwn }: { profile: any; isOwn: boolean }) {
   const router = useRouter();
   const [expanded, setExpanded] = useState(false);
   const bio: string = profile?.bio || "";
+  const long = bio.length > 320;
   const links = [
-    profile?.websiteUrl && { icon: "globe-outline" as IconName, label: "Website", url: profile.websiteUrl },
-    profile?.githubUrl && { icon: "logo-github" as IconName, label: "GitHub", url: profile.githubUrl },
-    profile?.linkedinUrl && { icon: "logo-linkedin" as IconName, label: "LinkedIn", url: profile.linkedinUrl },
-    profile?.resumeUrl && { icon: "document-text-outline" as IconName, label: "Résumé", url: profile.resumeUrl },
+    profile?.githubUrl && { icon: "logo-github" as IconName, label: "GitHub Profile", url: profile.githubUrl },
+    profile?.linkedinUrl && { icon: "logo-linkedin" as IconName, label: "LinkedIn Profile", url: profile.linkedinUrl },
+    profile?.websiteUrl && { icon: "globe-outline" as IconName, label: "Portfolio Website", url: profile.websiteUrl },
+    profile?.resumeUrl && { icon: "document-text-outline" as IconName, label: "Resume", url: profile.resumeUrl },
   ].filter(Boolean) as { icon: IconName; label: string; url: string }[];
 
-  if (!bio && !links.length && !profile?.novaSummary && !isOwn) return null;
+  return (
+    <PCard>
+      <CardTitle action={isOwn ? "Edit" : undefined} actionIcon="pencil" onAction={() => router.push("/profile/edit")}>About</CardTitle>
+      <Pressable onPress={() => setExpanded((v) => !v)} disabled={!long}>
+        <Text style={bodyText} numberOfLines={expanded || !long ? undefined : 6}>{bio || "No bio yet."}</Text>
+        {long && !expanded && <Text style={{ color: colors.textSecondary, fontFamily: fontFamily.semibold, fontSize: font.sm, marginTop: 2 }}>…see more</Text>}
+      </Pressable>
+      {links.length > 0 && <View style={{ gap: spacing.sm, paddingTop: 2 }}>{links.map((l) => <LinkRow key={l.label} {...l} />)}</View>}
+    </PCard>
+  );
+}
+
+// --- Résumé credentials ---------------------------------------------------------
+
+/** Nova's read, skills, experience, education and other work. Each hides when empty. */
+export function Credentials({ profile }: { profile: any }) {
+  const exp: any[] = profile?.experience ?? [];
+  const edu: any[] = profile?.education ?? [];
+  const work: any[] = profile?.portfolioProjects ?? [];
+  const skills: string[] = profile?.skills ?? [];
 
   return (
-    <Section title="About" action={isOwn ? "Edit" : undefined} onAction={() => router.push("/profile/edit")}>
-      {bio ? (
-        <Pressable onPress={() => setExpanded((v) => !v)} disabled={bio.length < 220}>
-          <Body style={{ fontSize: font.base - 1, lineHeight: 21 }} numberOfLines={expanded ? undefined : 4}>{bio}</Body>
-          {bio.length >= 220 && !expanded && <Text style={{ color: colors.textSecondary, fontFamily: fontFamily.semibold, fontSize: font.sm, marginTop: 2 }}>...see more</Text>}
-        </Pressable>
-      ) : isOwn ? (
-        <Body muted>Tell people what you build and what you're looking for.</Body>
-      ) : null}
-
+    <>
       {profile?.novaSummary ? (
-        <View style={{ borderRadius: radius.md, borderWidth: 1, borderColor: "#DCC4E8", backgroundColor: colors.primarySoft, padding: spacing.md, gap: 4 }}>
+        <PCard tone="primary" style={{ padding: spacing.md + 2, gap: 6 }}>
           <Row center gap={6}>
-            <Icon name="sparkles" size={13} color={colors.primary} />
+            <Icon name="sparkles" size={12} color={colors.primary} />
             <Text style={{ fontSize: font.xs, fontFamily: fontFamily.semibold, color: colors.primary, textTransform: "uppercase", letterSpacing: 0.5 }}>Nova's read</Text>
           </Row>
-          <Body>{profile.novaSummary}</Body>
-        </View>
+          <Text style={bodyText}>{profile.novaSummary}</Text>
+        </PCard>
       ) : null}
 
-      {links.length > 0 && (
-        <View style={{ gap: spacing.sm }}>
-          {links.map((l) => <LinkRow key={l.label} {...l} />)}
-        </View>
+      {skills.length > 0 && (
+        <PCard>
+          <CardTitle icon="construct-outline">Skills</CardTitle>
+          <Row wrap gap={6}>{skills.map((s) => <SoftChip key={s} label={s} />)}</Row>
+        </PCard>
       )}
-    </Section>
-  );
-}
 
-// --- Résumé credentials ------------------------------------------------------
+      {exp.length > 0 && (
+        <PCard>
+          <CardTitle icon="briefcase-outline">Experience</CardTitle>
+          <View style={{ gap: spacing.lg }}>
+            {exp.map((e, i) => (
+              <View key={i} style={{ paddingLeft: spacing.lg, borderLeftWidth: 2, borderColor: colors.border, gap: 1 }}>
+                <View style={{ position: "absolute", left: -5, top: 6, width: 8, height: 8, borderRadius: 4, backgroundColor: colors.primary }} />
+                <Text style={{ fontSize: font.sm, fontFamily: fontFamily.semibold, color: colors.text }}>{e.title}</Text>
+                {e.company ? <Text style={[bodyText, { color: colors.textSecondary }]}>{e.company}</Text> : null}
+                <Text style={mutedText}>
+                  {[e.startDate, e.current ? "Present" : e.endDate].filter(Boolean).join(" – ") || "—"}
+                  {e.location ? ` · ${e.location}` : ""}
+                </Text>
+                {e.description ? <Text style={[mutedText, { marginTop: 4 }]}>{e.description}</Text> : null}
+                {(e.skills?.length ?? 0) > 0 && (
+                  <Row wrap gap={4} style={{ marginTop: 6 }}>{e.skills.map((s: string) => <Pill key={s} label={s} />)}</Row>
+                )}
+              </View>
+            ))}
+          </View>
+        </PCard>
+      )}
 
-function TimelineItem({ icon, title, subtitle, meta, description, tags, last }: {
-  icon: IconName; title: string; subtitle?: string | null; meta?: string | null; description?: string | null; tags?: string[]; last?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      <View style={{ flexDirection: "row", gap: spacing.md }}>
-        <View style={{ width: 44, height: 44, borderRadius: radius.sm, backgroundColor: colors.surfaceRaised, alignItems: "center", justifyContent: "center" }}>
-          <Icon name={icon} size={22} color={colors.textSecondary} />
-        </View>
-        <View style={{ flex: 1, gap: 1 }}>
-          <Text style={{ fontSize: font.base, fontFamily: fontFamily.semibold, color: colors.text }}>{title}</Text>
-          {subtitle ? <Body>{subtitle}</Body> : null}
-          {meta ? <Meta style={{ fontSize: font.sm }}>{meta}</Meta> : null}
-          {description ? (
-            <Pressable onPress={() => setOpen((v) => !v)} style={{ marginTop: 4 }}>
-              <Body muted numberOfLines={open ? undefined : 3}>{description}</Body>
-            </Pressable>
-          ) : null}
-          {tags && tags.length > 0 && (
-            <Row wrap gap={4} style={{ marginTop: 6 }}>
-              {tags.map((t) => <Chip key={t} label={t} small />)}
-            </Row>
-          )}
-        </View>
-      </View>
-      {!last && <Divider style={{ marginLeft: 56 }} />}
+      {edu.length > 0 && (
+        <PCard>
+          <CardTitle icon="school-outline">Education</CardTitle>
+          <View style={{ gap: spacing.md }}>
+            {edu.map((e, i) => (
+              <View key={i} style={{ gap: 1 }}>
+                <Text style={{ fontSize: font.sm, fontFamily: fontFamily.semibold, color: colors.text }}>{e.school}</Text>
+                {e.degree || e.field ? <Text style={[bodyText, { color: colors.textSecondary }]}>{[e.degree, e.field].filter(Boolean).join(", ")}</Text> : null}
+                {e.startYear || e.endYear ? <Text style={mutedText}>{[e.startYear, e.endYear].filter(Boolean).join(" – ")}</Text> : null}
+                {e.description ? <Text style={[mutedText, { marginTop: 4 }]}>{e.description}</Text> : null}
+              </View>
+            ))}
+          </View>
+        </PCard>
+      )}
+
+      {work.length > 0 && (
+        <PCard>
+          <CardTitle icon="folder-open-outline">Other work</CardTitle>
+          <View style={{ gap: spacing.md }}>
+            {work.map((p, i) => (
+              <View key={i} style={{ gap: 1 }}>
+                <Row center gap={6}>
+                  <Text style={{ fontSize: font.sm, fontFamily: fontFamily.semibold, color: colors.text, flexShrink: 1 }}>{p.name}</Text>
+                  {p.url ? (
+                    <Pressable hitSlop={8} accessibilityLabel={`Open ${p.name}`} onPress={() => Linking.openURL(/^https?:\/\//.test(p.url) ? p.url : `https://${p.url}`).catch(() => {})}>
+                      <Icon name="open-outline" size={13} color={colors.textTertiary} />
+                    </Pressable>
+                  ) : null}
+                </Row>
+                {p.role ? <Text style={[mutedText, { color: colors.textSecondary }]}>{p.role}</Text> : null}
+                {p.description ? <Text style={[mutedText, { marginTop: 2 }]}>{p.description}</Text> : null}
+                {(p.technologies?.length ?? 0) > 0 && (
+                  <Row wrap gap={4} style={{ marginTop: 6 }}>{p.technologies.map((t: string) => <Pill key={t} label={t} />)}</Row>
+                )}
+              </View>
+            ))}
+          </View>
+        </PCard>
+      )}
+
+      {profile?.resumeParsedAt ? (
+        <Text style={{ fontSize: 10, fontFamily: fontFamily.regular, color: colors.textTertiary, paddingHorizontal: GUTTER + 4, marginTop: -spacing.xs }}>
+          Profile built from résumé {new Date(profile.resumeParsedAt).toLocaleDateString()}
+        </Text>
+      ) : null}
     </>
   );
 }
 
-function Collapsible<T>({ items, limit, render, noun }: { items: T[]; limit: number; render: (item: T, i: number, last: boolean) => ReactNode; noun: string }) {
-  const [all, setAll] = useState(false);
-  const shown = all ? items : items.slice(0, limit);
+/** The web's secondary Badge, which wraps long résumé skills instead of overflowing. */
+function SoftChip({ label, tint }: { label: string; tint?: boolean }) {
   return (
-    <>
-      {shown.map((item, i) => render(item, i, i === shown.length - 1))}
-      {items.length > limit && (
-        <>
-          <Divider style={{ marginHorizontal: -spacing.lg }} />
-          <Pressable onPress={() => setAll((v) => !v)} style={{ alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 6, marginBottom: -spacing.xs }}>
-            <Text style={{ fontSize: font.sm, fontFamily: fontFamily.semibold, color: colors.textSecondary }}>
-              {all ? "Show less" : `Show all ${items.length} ${noun}`}
-            </Text>
-            <Icon name={all ? "chevron-up" : "arrow-forward"} size={15} color={colors.textSecondary} />
-          </Pressable>
-        </>
-      )}
-    </>
+    <View style={{ backgroundColor: tint ? "#F1EEFF" : colors.surfaceRaised, borderWidth: 1, borderColor: tint ? "#E2DBFF" : colors.surfaceRaised, borderRadius: radius.pill, paddingHorizontal: 10, paddingVertical: 4, maxWidth: "100%" }}>
+      <Text style={{ fontSize: font.xs + 1, fontFamily: fontFamily.medium, color: colors.text }}>{label}</Text>
+    </View>
   );
 }
 
-const dateRange = (start?: string | null, end?: string | null, current?: boolean) =>
-  [start, current ? "Present" : end].filter(Boolean).join(" – ");
-
-export function ExperienceBlock({ experience }: { experience?: any[] | null }) {
-  const list = experience ?? [];
-  if (!list.length) return null;
+export function InterestsCard({ interests }: { interests?: string[] | null }) {
+  if (!interests?.length) return null;
   return (
-    <Section title="Experience">
-      <Collapsible items={list} limit={3} noun="experiences" render={(e: any, i, last) => (
-        <TimelineItem key={i} icon="briefcase-outline" title={e.title} subtitle={e.company}
-          meta={[dateRange(e.startDate, e.endDate, e.current), e.location].filter(Boolean).join(" · ")}
-          description={e.description} tags={e.skills} last={last} />
-      )} />
-    </Section>
+    <PCard>
+      <CardTitle>Interests</CardTitle>
+      <Row wrap gap={6}>{interests.map((i) => <SoftChip key={i} label={i} tint />)}</Row>
+    </PCard>
   );
 }
 
-export function EducationBlock({ education }: { education?: any[] | null }) {
-  const list = education ?? [];
-  if (!list.length) return null;
-  return (
-    <Section title="Education">
-      <Collapsible items={list} limit={3} noun="schools" render={(e: any, i, last) => (
-        <TimelineItem key={i} icon="school-outline" title={e.school}
-          subtitle={[e.degree, e.field].filter(Boolean).join(", ") || null}
-          meta={[e.startYear, e.endYear].filter(Boolean).join(" – ") || null}
-          description={e.description} last={last} />
-      )} />
-    </Section>
-  );
-}
+// --- Posts ---------------------------------------------------------------------
 
-export function PortfolioBlock({ portfolio }: { portfolio?: any[] | null }) {
-  const list = portfolio ?? [];
-  if (!list.length) return null;
-  return (
-    <Section title="Other work">
-      <Collapsible items={list} limit={3} noun="projects" render={(p: any, i, last) => (
-        <View key={i} style={{ gap: spacing.md }}>
-          <TimelineItem icon="folder-open-outline" title={p.name} subtitle={p.role} description={p.description} tags={p.technologies} last />
-          {p.url ? <View style={{ marginLeft: 56, marginTop: -spacing.sm }}><LinkRow icon="open-outline" label="Open" url={p.url} /></View> : null}
-          {!last && <Divider style={{ marginLeft: 56 }} />}
-        </View>
-      )} />
-    </Section>
-  );
-}
-
-export function SkillsBlock({ title, skills, isOwn }: { title: string; skills?: string[] | null; isOwn?: boolean }) {
-  const router = useRouter();
-  const list = skills ?? [];
-  if (!list.length) return null;
-  return (
-    <Section title={title} action={isOwn ? "Edit" : undefined} onAction={() => router.push("/profile/edit")}>
-      <Row wrap gap={spacing.sm}>{list.map((s) => <Chip key={s} label={s} />)}</Row>
-    </Section>
-  );
-}
-
-// --- Projects ----------------------------------------------------------------
-
-export function ProjectsBlock({ projects, isOwn, firstName }: { projects: any[]; isOwn: boolean; firstName: string }) {
-  const router = useRouter();
-  if (!projects.length && !isOwn) return null;
-  return (
-    <Section title={projects.length ? "Building" : "Projects"} action={isOwn ? "New project" : undefined} onAction={() => router.push("/project/new")}>
-      {projects.length === 0 ? (
-        <View style={{ alignItems: "flex-start", gap: spacing.sm }}>
-          <Body muted>You're not building anything yet.</Body>
-          <Btn label="Start your first project" icon="rocket-outline" variant="outline" small onPress={() => router.push("/project/new")} />
-        </View>
-      ) : (
-        <Collapsible items={projects} limit={4} noun="projects" render={(p: any, i, last) => {
-          const logo = assetUri(p.logoUrl);
-          return (
-            <View key={p.id} style={{ gap: spacing.md }}>
-              <Pressable onPress={() => router.push(`/project/${p.id}`)} style={({ pressed }) => [{ flexDirection: "row", gap: spacing.md }, pressed && { opacity: 0.7 }]}>
-                <View style={{ width: 48, height: 48, borderRadius: radius.sm, backgroundColor: colors.primarySoft, overflow: "hidden", alignItems: "center", justifyContent: "center" }}>
-                  {logo ? <Image source={{ uri: logo }} style={{ width: 48, height: 48 }} /> : <Icon name="rocket" size={22} color={colors.primary} />}
-                </View>
-                <View style={{ flex: 1, gap: 2 }}>
-                  <Row center gap={6}>
-                    <Text style={{ fontSize: font.base, fontFamily: fontFamily.semibold, color: colors.text, flexShrink: 1 }} numberOfLines={1}>{p.title}</Text>
-                    {p.isPrivate && <Icon name="lock-closed" size={12} color={colors.textTertiary} />}
-                  </Row>
-                  {(p.oneLiner || p.description) ? <Body muted numberOfLines={2}>{p.oneLiner || p.description}</Body> : null}
-                  <Meta style={{ textTransform: "capitalize" }}>
-                    {[p.stage?.replace(/_/g, " "), p.category, p.views != null ? `${p.views} views` : null].filter(Boolean).join(" · ")}
-                  </Meta>
-                </View>
-              </Pressable>
-              {!last && <Divider style={{ marginLeft: 60 }} />}
-            </View>
-          );
-        }} />
-      )}
-      {!isOwn && projects.length === 0 && <Body muted>{firstName} has nothing public yet.</Body>}
-    </Section>
-  );
-}
-
-// --- Activity ----------------------------------------------------------------
-
-const TYPE_LABELS: Record<string, string> = {
-  project_update: "Project update", looking_for_help: "Looking for help", looking_for_cofounder: "Looking for cofounder",
-  seeking_feedback: "Seeking feedback", milestone: "Milestone", idea_validation: "Idea validation", launch: "Launch", investor_update: "Investor update",
-};
-
-export function ActivityBlock({ userId, isOwn, firstName, onCompose, notify }: {
-  userId: string; isOwn: boolean; firstName: string; onCompose?: () => void; notify: (n: Notice) => void;
+/** "Your posts" / "Maya's posts": the feed card, as on the web, with a way to post on your own. */
+export function PostsSection({ userId, isOwn, firstName, avatarUri, myName, onCompose, notify }: {
+  userId: string; isOwn: boolean; firstName: string; avatarUri?: string | null; myName: string;
+  onCompose?: () => void; notify: (n: Notice) => void;
 }) {
-  const qc = useQueryClient();
-  const [all, setAll] = useState(false);
-  const key = ["feed", "author", userId];
+  const router = useRouter();
   const { data, isLoading } = useQuery({
-    queryKey: key,
+    queryKey: ["feed", "author", userId],
     queryFn: () => api<{ posts: any[] }>(`/api/feed?authorId=${encodeURIComponent(userId)}&limit=10`),
   });
-  const react = useMutation({
-    mutationFn: (postId: string) => api(`/api/feed/${postId}/react`, { method: "POST", body: { reaction: "like" } }),
-    onSettled: () => qc.invalidateQueries({ queryKey: key }),
-    onError: (e: any) => notify({ text: e?.message || "Couldn't react.", tone: "error" }),
-  });
-
   const posts = data?.posts ?? [];
-  const shown = all ? posts : posts.slice(0, 2);
 
   return (
-    <Section title="Activity" action={isOwn && onCompose ? "Create a post" : undefined} onAction={onCompose}>
-      {isLoading ? <Meta>Loading posts…</Meta> : posts.length === 0 ? (
-        <View style={{ gap: spacing.xs }}>
-          <Body style={{ fontFamily: fontFamily.semibold }}>{isOwn ? "You haven't posted yet" : `${firstName} hasn't posted yet`}</Body>
-          <Body muted>{isOwn ? "Share an update, ask for help, or announce a milestone." : "Posts they share will show up here."}</Body>
-          {isOwn && onCompose && <Btn label="Start a post" icon="create-outline" variant="outline" small style={{ alignSelf: "flex-start", marginTop: spacing.xs }} onPress={onCompose} />}
-        </View>
+    <>
+      <Heading>{isOwn ? "Your posts" : `${firstName}'s posts`}</Heading>
+      {isOwn && onCompose && (
+        <PCard style={{ flexDirection: "row", alignItems: "center", gap: spacing.md, padding: spacing.md }}>
+          <Avatar name={myName} uri={avatarUri} size={40} />
+          <Pressable onPress={onCompose} accessibilityLabel="Start a post"
+            style={({ pressed }) => [{ flex: 1, borderWidth: 1, borderColor: colors.textTertiary, borderRadius: radius.pill, paddingHorizontal: spacing.lg, paddingVertical: 10 }, pressed && { backgroundColor: colors.surfaceRaised }]}>
+            <Text style={{ fontSize: font.sm, fontFamily: fontFamily.semibold, color: colors.textSecondary }}>Start a post</Text>
+          </Pressable>
+          <Pressable onPress={onCompose} hitSlop={6} accessibilityLabel="Add a photo"><Icon name="image-outline" size={22} color={colors.info} /></Pressable>
+        </PCard>
+      )}
+      {isLoading ? (
+        <PCard><Meta>Loading posts…</Meta></PCard>
+      ) : posts.length === 0 ? (
+        <EmptyCard icon="newspaper-outline" text={isOwn ? "You haven't posted yet. Share an update, ask for help, or announce a milestone." : "No posts yet."} />
       ) : (
         <>
-          <Meta style={{ marginTop: -spacing.sm, fontSize: font.sm, color: colors.primary, fontFamily: fontFamily.semibold }}>
-            {posts.length}{posts.length >= 10 ? "+" : ""} post{posts.length === 1 ? "" : "s"}
-          </Meta>
-          {shown.map((post, i) => {
-            const accent = postTypeColors[post.postType] || colors.info;
-            const liked = !!post.viewerReaction;
-            return (
-              <View key={post.id} style={{ gap: spacing.sm }}>
-                {i > 0 && <Divider style={{ marginHorizontal: -spacing.lg, marginBottom: spacing.xs }} />}
-                <Row center gap={6} wrap>
-                  <Meta style={{ fontSize: font.sm }}>{isOwn ? "You" : firstName} posted this · {timeAgo(post.createdAt)}</Meta>
-                  <View style={{ borderWidth: 1, borderColor: accent, borderRadius: radius.pill, paddingHorizontal: 7, paddingVertical: 0 }}>
-                    <Text style={{ fontSize: 10, fontFamily: fontFamily.semibold, color: accent }}>{TYPE_LABELS[post.postType] || post.postType}</Text>
-                  </View>
-                </Row>
-                {post.project?.title ? (
-                  <Row center gap={4}><Icon name="rocket-outline" size={13} color={colors.primary} /><Text style={{ fontSize: font.sm, fontFamily: fontFamily.semibold, color: colors.primary }}>{post.project.title}</Text></Row>
-                ) : null}
-                <Body style={{ fontSize: font.base - 1, lineHeight: 21 }} numberOfLines={all ? 8 : 4}>{plain(post.content || "")}</Body>
-                {(post.mediaUrls?.length ?? 0) > 0 && assetUri(post.mediaUrls[0]) ? (
-                  <Image source={{ uri: assetUri(post.mediaUrls[0])! }} style={{ width: "100%", height: 180, borderRadius: radius.sm, backgroundColor: colors.surfaceRaised }} resizeMode="cover" />
-                ) : null}
-                <Row gap={spacing.lg} center>
-                  <Pressable onPress={() => react.mutate(post.id)} hitSlop={6} style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-                    <Icon name={liked ? "thumbs-up" : "thumbs-up-outline"} size={17} color={liked ? colors.primary : colors.textSecondary} />
-                    <Text style={{ fontSize: font.sm, fontFamily: fontFamily.medium, color: liked ? colors.primary : colors.textSecondary }}>{post.reactionCount > 0 ? post.reactionCount : "Like"}</Text>
-                  </Pressable>
-                  <Row center gap={5}>
-                    <Icon name="chatbubble-outline" size={16} color={colors.textSecondary} />
-                    <Text style={{ fontSize: font.sm, fontFamily: fontFamily.medium, color: colors.textSecondary }}>{post.commentCount > 0 ? post.commentCount : "Comment"}</Text>
-                  </Row>
-                </Row>
-              </View>
-            );
-          })}
-          {posts.length > 2 && (
-            <>
-              <Divider style={{ marginHorizontal: -spacing.lg }} />
-              <Pressable onPress={() => setAll((v) => !v)} style={{ flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 6, marginBottom: -spacing.xs }}>
-                <Text style={{ fontSize: font.sm, fontFamily: fontFamily.semibold, color: colors.textSecondary }}>{all ? "Show less" : "Show all posts"}</Text>
-                <Icon name={all ? "chevron-up" : "arrow-forward"} size={15} color={colors.textSecondary} />
-              </Pressable>
-            </>
+          {posts.map((post) => (
+            <View key={post.id} style={{ marginHorizontal: GUTTER - spacing.sm }}>
+              <PostCard post={post} onNotice={notify} />
+            </View>
+          ))}
+          {posts.length >= 10 && (
+            <OutlineButton label="See the whole feed" onPress={() => router.push("/(tabs)/feed")} style={{ marginHorizontal: GUTTER }} />
           )}
         </>
       )}
-    </Section>
+    </>
   );
 }
 
-// --- Builder Index -------------------------------------------------------------
+// --- Projects --------------------------------------------------------------------
+
+const STATUS_ACTIVE = "active";
+
+/** The web's ProjectCard: title and status, the description, roles or Solo Builder, the owner, views and donations. */
+export function ProjectCardLite({ project, ownerName, ownerAvatar }: { project: any; ownerName: string; ownerAvatar?: string | null }) {
+  const router = useRouter();
+  const roles: string[] = project.soloMode ? [] : (project.rolesNeeded ?? []);
+  return (
+    <PCard onPress={() => router.push(`/project/${project.id}`)} style={{ gap: spacing.sm }}>
+      <Row between style={{ alignItems: "flex-start" }}>
+        <Row center gap={6} style={{ flex: 1 }}>
+          {project.isPrivate && <Icon name="lock-closed" size={14} color={colors.textTertiary} />}
+          <Text style={{ fontSize: font.lg + 1, fontFamily: fontFamily.bold, color: colors.text, flexShrink: 1 }} numberOfLines={1}>{project.title}</Text>
+        </Row>
+        {project.status ? <Pill label={project.status} variant={project.status === STATUS_ACTIVE ? "default" : "secondary"} /> : null}
+      </Row>
+      <Text style={[bodyText, { color: colors.textSecondary, minHeight: 40 }]} numberOfLines={2}>{project.description || project.oneLiner || ""}</Text>
+      <Row wrap gap={4} center>
+        {project.soloMode ? (
+          <Pill label="Solo Builder" icon="rocket-outline" color={colors.primary} />
+        ) : (
+          <>
+            {roles.slice(0, 3).map((r) => <Pill key={r} label={r} variant="secondary" />)}
+            {roles.length > 3 && <Meta>+{roles.length - 3} more</Meta>}
+          </>
+        )}
+      </Row>
+      <Row between>
+        <Row center gap={spacing.sm} style={{ flex: 1 }}>
+          <Avatar name={ownerName} uri={ownerAvatar} size={24} />
+          <Text style={{ fontSize: font.sm, fontFamily: fontFamily.regular, color: colors.textSecondary, flexShrink: 1 }} numberOfLines={1}>{ownerName}</Text>
+        </Row>
+        <Row center gap={spacing.md}>
+          <Row center gap={3}><Icon name="eye-outline" size={15} color={colors.textTertiary} /><Meta style={{ fontSize: font.sm }}>{project.views ?? 0}</Meta></Row>
+          <Row center gap={1}><Icon name="logo-usd" size={14} color={colors.textTertiary} /><Meta style={{ fontSize: font.sm }}>{(project.totalDonations ?? 0) / 100}</Meta></Row>
+        </Row>
+      </Row>
+    </PCard>
+  );
+}
+
+/**
+ * Projects on the About tab ("Building", up to four) or the Projects tab (all).
+ * The copy for an empty list differs between them on the web, so it does here.
+ */
+export function ProjectsSection({ projects, isOwn, loading, ownerName, ownerAvatar, full }: {
+  projects: any[]; isOwn: boolean; loading?: boolean; ownerName: string; ownerAvatar?: string | null; full?: boolean;
+}) {
+  const router = useRouter();
+  const newProject = () => router.push("/project/new");
+  const shown = full ? projects : projects.slice(0, 4);
+  return (
+    <>
+      <Heading action={isOwn ? (full ? "New Project" : "New project") : undefined} onAction={newProject}>
+        {full ? "Projects" : projects.length > 0 ? "Building" : "Projects"}
+      </Heading>
+      {loading ? (
+        <PCard><Meta>Loading projects…</Meta></PCard>
+      ) : shown.length > 0 ? (
+        shown.map((p) => <ProjectCardLite key={p.id} project={p} ownerName={p.profile?.displayName || ownerName} ownerAvatar={p.profile?.avatarUrl ?? ownerAvatar} />)
+      ) : full ? (
+        <EmptyCard text="No projects yet." action={isOwn ? "Create your first project" : undefined} onAction={newProject} />
+      ) : (
+        <EmptyCard text={isOwn ? "You're not building anything yet." : "Nothing public yet."} action={isOwn ? "Start your first project" : undefined} onAction={newProject} />
+      )}
+    </>
+  );
+}
+
+// --- Builder Reputation Index ------------------------------------------------------
 
 const SCORES: { key: string; label: string; icon: IconName; color: string; hint: string }[] = [
-  { key: "executionScore", label: "Execution", icon: "flash", color: "#F59E0B", hint: "Milestones completed, deadlines met, sprint consistency" },
-  { key: "contributionScore", label: "Contribution", icon: "people", color: "#3B82F6", hint: "Projects involved in, tasks completed, solo builds" },
-  { key: "marketSignalScore", label: "Market signal", icon: "trending-up", color: "#10B981", hint: "Donations, applications, build log engagement" },
-  { key: "strategicThinkingScore", label: "Strategic thinking", icon: "bulb", color: "#A855F7", hint: "Contest wins, game scores, Nova's read of strategy" },
+  { key: "executionScore", label: "Execution", icon: "flash", color: "#F59E0B", hint: "Based on milestones completed, deadlines met, sprint consistency, and project completion rate" },
+  { key: "contributionScore", label: "Contribution", icon: "people", color: "#3B82F6", hint: "Based on projects involved in, tasks completed, projects followed, and solo build completions" },
+  { key: "marketSignalScore", label: "Market Signal", icon: "trending-up", color: "#10B981", hint: "Based on donations received, project applications, build log engagement, and external traction" },
+  { key: "strategicThinkingScore", label: "Strategic Thinking", icon: "bulb", color: "#A855F7", hint: "Based on contest wins, game scores, and AI evaluation of project strategies" },
 ];
 
 function tierOf(score: number) {
-  if (score >= 80) return { label: "Elite", color: "#D97706" };
-  if (score >= 60) return { label: "Advanced", color: "#9333EA" };
-  if (score >= 40) return { label: "Rising", color: "#2563EB" };
-  if (score >= 20) return { label: "Emerging", color: "#059669" };
-  return { label: "New builder", color: colors.textTertiary };
+  if (score >= 80) return { label: "Elite", color: "#F59E0B" };
+  if (score >= 60) return { label: "Advanced", color: "#A855F7" };
+  if (score >= 40) return { label: "Rising", color: "#3B82F6" };
+  if (score >= 20) return { label: "Emerging", color: "#10B981" };
+  return { label: "New Builder", color: colors.textTertiary };
 }
 
-export function ReputationBlock({ userId, isOwn, notify }: { userId: string; isOwn: boolean; notify: (n: Notice) => void }) {
+export function ReputationCard({ userId, isOwn, notify }: { userId: string; isOwn: boolean; notify: (n: Notice) => void }) {
   const qc = useQueryClient();
-  const { data: rep } = useQuery({
-    queryKey: ["reputation", userId],
-    queryFn: () => api<any>(`/api/reputation/${userId}`),
-  });
+  const [hint, setHint] = useState<string | null>(null);
+  const { data: rep, isLoading } = useQuery({ queryKey: ["reputation", userId], queryFn: () => api<any>(`/api/reputation/${userId}`) });
   const calc = useMutation({
     mutationFn: () => api("/api/reputation/calculate", { method: "POST" }),
     onSuccess: () => {
-      notify({ text: "Your Builder Index has been recalculated.", tone: "success" });
+      notify({ text: "Reputation updated. Your Builder Index has been recalculated.", tone: "success" });
       void qc.invalidateQueries({ queryKey: ["reputation", userId] });
       void qc.invalidateQueries({ queryKey: ["subscription"] });
     },
-    onError: (e: any) => notify({ text: e?.message || "Could not calculate reputation.", tone: "error" }),
+    onError: (e: any) => notify({ text: e?.message || "Could not calculate reputation", tone: "error" }),
   });
 
+  if (isLoading) return <PCard style={{ alignItems: "center" }}><Meta>Loading…</Meta></PCard>;
   const index = rep?.builderIndex ?? 0;
   const tier = tierOf(index);
 
   return (
-    <Section title="Builder Index" action={isOwn && index ? (calc.isPending ? "Calculating…" : "Recalculate") : undefined} onAction={() => !calc.isPending && calc.mutate()}>
+    <PCard style={{ gap: spacing.lg }}>
+      <StrongTitle icon="trophy-outline" iconColor={colors.primary}>Builder Reputation Index</StrongTitle>
       <Row center gap={spacing.lg}>
-        <View style={{ width: 72, height: 72, borderRadius: 36, borderWidth: 3, borderColor: colors.primary, backgroundColor: colors.primarySoft, alignItems: "center", justifyContent: "center" }}>
-          <Text style={{ fontSize: 26, fontFamily: fontFamily.bold, color: colors.primary }}>{index}</Text>
+        <View style={{ width: 76, height: 76, borderRadius: 38, borderWidth: 2, borderColor: "#E6D3EE", backgroundColor: "#FAF5FC", alignItems: "center", justifyContent: "center" }}>
+          <Text style={{ fontSize: 28, fontFamily: fontFamily.bold, color: colors.primary }}>{index}</Text>
         </View>
-        <View style={{ gap: 3, flex: 1 }}>
-          <Text style={{ fontSize: font.lg, fontFamily: fontFamily.bold, color: tier.color }}>{tier.label}</Text>
-          <Meta style={{ fontSize: font.sm }}>out of 100</Meta>
-          {rep?.lastCalculatedAt ? <Meta>Updated {new Date(rep.lastCalculatedAt).toLocaleDateString()}</Meta> : null}
+        <View style={{ gap: 4 }}>
+          <Pill label={tier.label} color={tier.color} style={{ paddingVertical: 2 }} />
+          <Meta>out of 100</Meta>
         </View>
+        {isOwn && (
+          <OutlineButton label={calc.isPending ? "Calculating..." : "Recalculate"} icon="refresh" disabled={calc.isPending}
+            onPress={() => calc.mutate()} style={{ marginLeft: "auto" }} />
+        )}
       </Row>
-      {(index > 0 || rep?.lastCalculatedAt) ? (
-        <View style={{ gap: spacing.md }}>
+      <View style={{ gap: spacing.md }}>
         {SCORES.map((s) => (
-          <View key={s.key} style={{ gap: 4 }}>
+          <View key={s.key} style={{ gap: 5 }}>
             <Row between>
-              <Row center gap={6}>
+              <Row center gap={spacing.sm}>
                 <Icon name={s.icon} size={15} color={s.color} />
                 <Text style={{ fontSize: font.sm, fontFamily: fontFamily.medium, color: colors.text }}>{s.label}</Text>
+                <Pressable hitSlop={8} onPress={() => setHint(hint === s.key ? null : s.key)} accessibilityLabel={`What ${s.label} means`}>
+                  <Icon name="information-circle-outline" size={14} color={colors.textTertiary} />
+                </Pressable>
               </Row>
-              <Text style={{ fontSize: font.sm, fontFamily: fontFamily.semibold, color: colors.text }}>{rep?.[s.key] ?? 0}</Text>
+              <Text style={{ fontSize: font.sm, fontFamily: fontFamily.medium, color: colors.text }}>{rep?.[s.key] ?? 0}</Text>
             </Row>
-            <Progress value={rep?.[s.key] ?? 0} color={s.color} />
-            <Meta>{s.hint}</Meta>
+            <Progress value={rep?.[s.key] ?? 0} />
+            {hint === s.key && <Meta>{s.hint}</Meta>}
           </View>
         ))}
       </View>
-      ) : !isOwn ? <Body muted>{"Not calculated yet."}</Body> : null}
-      {isOwn && !index && (
-        <View style={{ gap: spacing.sm, alignItems: "flex-start" }}>
-          <Body muted>Calculate your Builder Reputation Index to see your scores.</Body>
-          <Btn label="Calculate now · 1 credit" icon="flash" small loading={calc.isPending} onPress={() => calc.mutate()} />
+      {rep?.details ? (
+        <Text style={[mutedText, { borderTopWidth: 1, borderColor: colors.borderSubtle, paddingTop: spacing.sm }]}>
+          {rep.lastCalculatedAt ? `Last updated: ${new Date(rep.lastCalculatedAt).toLocaleDateString()}` : "Not yet calculated"}
+        </Text>
+      ) : null}
+      {!rep?.builderIndex && isOwn && (
+        <View style={{ alignItems: "center", gap: spacing.sm }}>
+          <Text style={[mutedText, { fontSize: font.sm, textAlign: "center" }]}>Calculate your Builder Reputation Index to see your scores</Text>
+          <Btn label="Calculate Now (1 credit)" icon="flash" small loading={calc.isPending} onPress={() => calc.mutate()} />
         </View>
       )}
-    </Section>
+    </PCard>
   );
 }
+

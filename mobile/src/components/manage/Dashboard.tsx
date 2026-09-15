@@ -27,15 +27,16 @@ interface Briefing {
 
 const SEVERITY: Record<string, string> = { critical: "#E11D48", important: colors.warning, suggested: `${colors.primary}88` };
 
-/** Which mobile tab answers a web tab or a handoff; the rest live on the web. */
+/** Which mobile tab answers a web tab or a handoff — the same tab set as the web now, bar the Kanban's name. */
 const TAB_FOR: Record<string, string> = {
-  kanban: "tasks", milestones: "milestones", team: "team", setup: "setup", activity: "checkins", roadmap: "roadmap",
-  strategy: "investors", personas: "tools", analytics: "tools", research: "tools",
+  kanban: "tasks", milestones: "milestones", team: "team", setup: "setup", activity: "activity", roadmap: "roadmap",
+  strategy: "strategy", personas: "personas", analytics: "analytics", research: "research", files: "files", codebase: "codebase",
+  public: "public", investors: "investors", launch: "launch", support: "support", chat: "chat", checkins: "checkins",
 };
 const HANDOFF_TAB: Record<string, string> = {
   "roadmap.nextActions": "roadmap", "roadmap.update": "roadmap", "roadmap.rebuild": "roadmap", "kanban.generate": "kanban",
   "personas.generate": "personas", "team.recommendPeople": "team", "strategy.readiness": "strategy", "strategy.pricing": "strategy",
-  "analytics.healthCheck": "analytics", "activity.checkIn": "activity",
+  "analytics.healthCheck": "analytics", "activity.checkIn": "checkins",
 };
 
 function greeting() {
@@ -158,7 +159,7 @@ export function Dashboard({ projectId, project, onNavigate }: { projectId: strin
           ) : data.recommendations.map((rec, i) => {
             const cantAfford = !isUnlimited && rec.credits > 0 && creditsRemaining < rec.credits;
             const webTab = rec.action ? HANDOFF_TAB[rec.action] : rec.tab;
-            const dest = webTab ? TAB_FOR[webTab] ?? "tools" : null;
+            const dest = webTab ? TAB_FOR[webTab] ?? webTab : null;
             return (
               <Card key={rec.id} accent={SEVERITY[rec.severity]}>
                 <Row gap={spacing.sm} style={{ alignItems: "flex-start" }}>

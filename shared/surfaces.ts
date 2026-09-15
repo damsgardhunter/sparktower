@@ -109,7 +109,7 @@ export const SURFACE_ROUTES: Record<string, string[]> = {
   leaderboard: ["/leaderboard"],
   discover: ["/discover"],
   checkIns: ["/c/", "/feedback"],
-  feed: ["/posts"],
+  feed: ["/posts", "/a/"],
   backing: ["/admin/backing"],
 };
 
@@ -136,7 +136,7 @@ export const SURFACE_API_PREFIXES: Record<string, string[]> = {
   backing: ["/api/projects/:id/backing", "/api/backing-tiers", "/api/admin/backing", "/api/backer-badges", "/api/me/badges"],
   checkIns: ["/api/check-ins", "/api/loop-events", "/api/projects/:id/check-ins"],
   discover: ["/api/discover"],
-  feed: ["/api/feed", "/api/projects/:id/comments", "/api/project-comments"],
+  feed: ["/api/feed", "/api/projects/:id/comments", "/api/project-comments", "/api/artifacts", "/api/public/artifacts"],
   matches: ["/api/matches"],
   sprints: ["/api/sprints", "/api/sprint"],
   connections: ["/api/connections"],

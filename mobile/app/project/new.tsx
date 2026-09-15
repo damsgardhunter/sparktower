@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import { Animated, Easing, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { Stack, useRouter } from "expo-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -9,6 +9,7 @@ import { useEntitlementsQuery } from "../../src/hooks/useEntitlements";
 import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
 import { Btn, ErrorNote, Field, Icon, Meta, NovaGradient, Row, errText, plain } from "../../src/components/ui";
 import { ChoicePills } from "../../src/components/ProjectFormSheet";
+import { NovaIntro } from "../../src/components/nova/NovaIntro";
 import {
   AVAILABLE_ROLES, GOAL_ICONS, NEW_PROJECT_STEPS, PROJECT_CATEGORIES, PROJECT_GOALS, PROJECT_SUBCATEGORIES, STEP_LABELS,
   isValidSubcategory, projectGoal, subcategoryQuestion, type NewProjectStep, type ProjectGoal,
@@ -45,9 +46,16 @@ function renameInText(text: string, oldName: string, newName: string): string {
   return text.replace(new RegExp(`\\b${from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi"), to);
 }
 
+const GREETING = "Hey! I'm Nova, your AI project partner. \u{1F680} I'm here to help you shape your idea into a real project plan.\n\nWhat kind of project are you thinking about building?";
+const STARTERS = ["A mobile app for students", "Turn my side hustle into a business", "An open-source developer tool"];
+type Mode = "chat" | "edit";
+
 /**
- * Create a project — the web's stepper (client/src/pages/project-create.tsx):
- * set it up (with Nova if you like), choose the goal, choose the kind, review.
+ * Create a project — the web's flow (nova-intro.tsx, then project-create.tsx):
+ * Nova's introduction, then a conversation with Nova that fills the project in
+ * as you talk. A tab at the top switches to editing it yourself — the web's
+ * stepper: set it up, choose the goal, choose the kind, review — and back, as
+ * often as you like; both edit the same draft.
  * Goal and kind are validated as a pair, here and on the server. Creating it
  * lands the owner in the project manager, where Nova's path for that goal is
  * already waiting.
@@ -60,6 +68,10 @@ export default function NewProject() {
   const { canCreatePrivate, privateLimit } = useEntitlementsQuery();
   const scroll = useRef<ScrollView>(null);
 
+  const [phase, setPhase] = useState<"intro" | "build">("intro");
+  const [mode, setMode] = useState<Mode>("chat");
+  const [initializing, setInitializing] = useState(true);
+  const chatScroll = useRef<ScrollView>(null);
   const [step, setStep] = useState<NewProjectStep>("setup");
   const [draft, setDraft] = useState<Draft>(EMPTY);
   const [edited, setEdited] = useState<string[]>([]);
@@ -68,10 +80,11 @@ export default function NewProject() {
   const [techInput, setTechInput] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  // Nova, optional: describe the idea and it fills in what you haven't typed.
-  const [novaOpen, setNovaOpen] = useState(false);
+  // Nova: describe the idea and it fills in what you haven't typed.
   const [messages, setMessages] = useState<Message[]>([]);
   const [novaInput, setNovaInput] = useState("");
+  /** What Nova's latest reply put into the draft, shown under it. */
+  const [filled, setFilled] = useState<string[]>([]);
 
   /*
    * A per-user draft, restored once and saved as you type — someone who backs
@@ -88,6 +101,8 @@ export default function NewProject() {
           const d = JSON.parse(raw);
           if (d?.draft) setDraft({ ...EMPTY, ...d.draft });
           if (Array.isArray(d?.edited)) setEdited(d.edited);
+          if (Array.isArray(d?.messages)) setMessages(d.messages.filter((m: any) => (m?.role === "user" || m?.role === "assistant") && typeof m?.content === "string"));
+          if (Array.isArray(d?.novaTitles)) setNovaTitles(d.novaTitles.map(String));
         }
       } catch { /* a corrupt draft isn't worth a crash */ }
       setRestored(true);
@@ -95,9 +110,16 @@ export default function NewProject() {
   }, [draftKey, restored]);
   useEffect(() => {
     if (!draftKey || !restored) return;
-    const t = setTimeout(() => { void writePref(draftKey, JSON.stringify({ draft, edited })).catch(() => {}); }, 400);
+    const t = setTimeout(() => { void writePref(draftKey, JSON.stringify({ draft, edited, messages, novaTitles })).catch(() => {}); }, 400);
     return () => clearTimeout(t);
-  }, [draftKey, restored, draft, edited]);
+  }, [draftKey, restored, draft, edited, messages, novaTitles]);
+
+  // "Initializing Nova…", then the greeting — as on the web.
+  useEffect(() => {
+    if (phase !== "build") return;
+    const t = setTimeout(() => setInitializing(false), 2200);
+    return () => clearTimeout(t);
+  }, [phase]);
 
   const edit = <K extends keyof Draft>(key: K, value: Draft[K]) => {
     setEdited((e) => (e.includes(key) ? e : [...e, key]));
@@ -109,7 +131,7 @@ export default function NewProject() {
       method: "POST",
       body: {
         message,
-        history: messages,
+        history: [{ role: "assistant", content: GREETING }, ...messages],
         currentProject: { title: draft.title, description: draft.description, category: draft.category, goal: draft.goal, subcategory: draft.subcategory },
         edited,
       },
@@ -117,8 +139,10 @@ export default function NewProject() {
     onSuccess: (data) => {
       setMessages((m) => [...m, { role: "assistant", content: data.reply }]);
       const u = { ...(data.projectUpdates || {}) };
-      if (!Object.keys(u).length) return;
       for (const k of edited) delete u[k];
+      const FIELD_LABELS: Record<string, string> = { title: "Name", description: "Description", category: "Category", goal: "Goal", subcategory: "Kind", techStack: "Tech stack", rolesNeeded: "Roles", teamSize: "Team size", estimatedWeeks: "Timeline", repoUrl: "Repository", liveUrl: "Live demo" };
+      setFilled(Object.keys(u).filter((k) => FIELD_LABELS[k] && !(draft.soloMode && (k === "rolesNeeded" || k === "teamSize"))).map((k) => FIELD_LABELS[k]));
+      if (!Object.keys(u).length) return;
       if (typeof u.title === "string" && u.title.trim()) setNovaTitles((t) => (t.includes(u.title) ? t : [...t, u.title.trim()]));
       setDraft((d) => {
         const next = { ...d };
@@ -143,11 +167,12 @@ export default function NewProject() {
     },
   });
 
-  const sendNova = () => {
-    const text = novaInput.trim();
+  const sendNova = (preset?: string) => {
+    const text = (preset ?? novaInput).trim();
     if (!text || chat.isPending) return;
     setMessages((m) => [...m, { role: "user", content: text }]);
-    setNovaInput("");
+    setFilled([]);
+    if (!preset) setNovaInput("");
     chat.mutate(text);
   };
 
@@ -196,10 +221,120 @@ export default function NewProject() {
     : !!draft.title.trim() && !!draft.description.trim() && isValidSubcategory(draft.goal, draft.subcategory);
   const go = (to: NewProjectStep) => { setError(null); setStep(to); scroll.current?.scrollTo({ y: 0, animated: false }); };
 
+  if (phase === "intro") {
+    return (
+      <>
+        <Stack.Screen options={{ headerShown: false }} />
+        <NovaIntro onBegin={() => setPhase("build")} onClose={() => (router.canGoBack() ? router.back() : router.replace("/(tabs)/feed" as any))} />
+      </>
+    );
+  }
+
+  // The web's readiness count: what a project needs before it's worth creating.
+  const ready = [
+    draft.title.trim(), draft.description.trim(), draft.goal && isValidSubcategory(draft.goal, draft.subcategory),
+    draft.category, draft.soloMode || draft.rolesNeeded.length > 0, draft.techStack.length > 0,
+  ].filter(Boolean).length;
+  const readyTotal = 6;
+  const reviewFromChat = () => {
+    setMode("edit");
+    const firstMissing: NewProjectStep = !draft.title.trim() || !draft.description.trim() ? "setup" : !draft.goal ? "goal" : !isValidSubcategory(draft.goal, draft.subcategory) ? "subcategory" : "review";
+    go(firstMissing);
+  };
+
   return (
     <>
-      <Stack.Screen options={{ title: "New project" }} />
-      <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+      <Stack.Screen options={{ headerShown: true, title: "New project" }} />
+      <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.canvas }} behavior={Platform.OS === "ios" ? "padding" : undefined}
+        keyboardVerticalOffset={Platform.OS === "ios" ? insets.top + 44 : 0}>
+        {/* Chat or edit — the same draft either way; it always starts with Nova. */}
+        <View style={s.modeBar}>
+          <View style={s.modeTrack}>
+            {([["chat", "Chat with Nova", "sparkles"], ["edit", "Edit myself", "create-outline"]] as const).map(([id, label, icon]) => {
+              const on = mode === id;
+              return (
+                <Pressable key={id} onPress={() => { setMode(id); if (id === "edit") setTimeout(() => scroll.current?.scrollTo({ y: 0, animated: false }), 0); }} accessibilityRole="tab" accessibilityState={{ selected: on }} testID={`mode-${id}`}
+                  style={[s.modeTab, on && s.modeTabOn]}>
+                  {on && id === "chat" ? <NovaGradient style={[StyleSheet.absoluteFill, { borderRadius: 9 }]} /> : null}
+                  <Icon name={icon} size={15} color={on ? (id === "chat" ? "#FFFFFF" : colors.primary) : colors.textSecondary} />
+                  <Text style={[s.modeText, on && { color: id === "chat" ? "#FFFFFF" : colors.primary, fontFamily: fontFamily.semibold }]}>{label}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+
+        {mode === "chat" ? (
+          <View key="chat" style={{ flex: 1 }}>
+            <View style={s.novaHeader}>
+              <NovaGradient style={s.novaAvatar}><Icon name="hardware-chip-outline" size={18} color="#FFFFFF" /></NovaGradient>
+              <View style={{ flex: 1 }}>
+                <Text style={s.novaTitle}>Nova</Text>
+                <Meta style={{ fontSize: font.xs + 1 }}>AI Project Partner</Meta>
+              </View>
+              <Pressable onPress={reviewFromChat} style={s.readyPill} accessibilityLabel="Review the draft">
+                <Text style={s.readyText}>{ready}/{readyTotal} ready</Text>
+                <Icon name="chevron-forward" size={14} color={colors.primary} />
+              </Pressable>
+            </View>
+
+            <ScrollView ref={chatScroll} style={{ flex: 1 }} contentContainerStyle={{ padding: spacing.lg, gap: spacing.md, flexGrow: 1 }}
+              keyboardShouldPersistTaps="handled" onContentSizeChange={() => chatScroll.current?.scrollToEnd({ animated: true })}>
+              {initializing ? <Initializing /> : (
+                <>
+                  {[{ role: "assistant" as const, content: GREETING }, ...messages].map((m, i) => <Bubble key={i} message={m} />)}
+                  {chat.isPending && (
+                    <View style={{ flexDirection: "row", gap: spacing.sm, alignItems: "flex-end" }}>
+                      <NovaGradient style={s.novaAvatarSm}><Icon name="hardware-chip-outline" size={13} color="#FFFFFF" /></NovaGradient>
+                      <View style={[s.bubbleNova, { paddingVertical: 14 }]}><TypingDots /></View>
+                    </View>
+                  )}
+                  {filled.length > 0 && !chat.isPending && (
+                    <Pressable onPress={reviewFromChat} style={[s.filled, { marginLeft: 36 }]}>
+                      <Icon name="checkmark-circle" size={14} color={colors.novaEmerald} />
+                      <Text style={s.filledText} numberOfLines={2}>Added to your draft: {filled.join(", ")}</Text>
+                    </Pressable>
+                  )}
+                  {messages.length === 0 && !chat.isPending && (
+                    <View style={{ gap: spacing.sm, marginTop: spacing.xs, paddingLeft: 36 }}>
+                      {STARTERS.map((q) => (
+                        <Pressable key={q} onPress={() => sendNova(q)} style={({ pressed }) => [s.starter, pressed && { opacity: 0.7 }]}>
+                          <Icon name="sparkles-outline" size={14} color={colors.primary} />
+                          <Text style={s.starterText}>{q}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  )}
+                  {(draft.title.trim() || draft.goal) && messages.length > 0 ? (
+                    <Pressable onPress={reviewFromChat} style={({ pressed }) => [s.draftCard, pressed && { opacity: 0.85 }]}>
+                      <NovaGradient style={s.bar} />
+                      <Meta style={{ fontSize: font.xs, textTransform: "uppercase", letterSpacing: 0.8 }}>Your draft</Meta>
+                      <Text style={s.optionTitle} numberOfLines={1}>{draft.title.trim() || "Untitled project"}</Text>
+                      {draft.description.trim() ? <Text style={s.optionBody} numberOfLines={2}>{draft.description.trim()}</Text> : null}
+                      <Row between center style={{ marginTop: spacing.xs }}>
+                        <Meta style={{ fontSize: font.xs + 1 }}>{draft.goal ? projectGoal(draft.goal).label : "Goal not chosen yet"}</Meta>
+                        <Text style={{ fontSize: font.sm, color: colors.primary, fontFamily: fontFamily.semibold }}>Review & create →</Text>
+                      </Row>
+                    </Pressable>
+                  ) : null}
+                </>
+              )}
+            </ScrollView>
+
+            <View style={[s.composer, { paddingBottom: spacing.sm + insets.bottom }]}>
+              <Row gap={spacing.sm} style={{ alignItems: "flex-end" }}>
+                <TextInput value={novaInput} onChangeText={setNovaInput} placeholder="Tell Nova about your project idea…" placeholderTextColor={colors.textTertiary}
+                  multiline editable={!initializing} style={s.novaInput} testID="input-chat-project" />
+                <Pressable onPress={() => sendNova()} disabled={!novaInput.trim() || chat.isPending || initializing} accessibilityLabel="Send"
+                  style={[s.send, (!novaInput.trim() || chat.isPending || initializing) && { opacity: 0.4 }]}>
+                  <Icon name="send" size={16} color="#FFFFFF" />
+                </Pressable>
+              </Row>
+              <Meta style={{ fontSize: font.xs, marginTop: 4, paddingHorizontal: 4 }}>Nova fills in the project as you talk. Uses AI credits.</Meta>
+            </View>
+          </View>
+        ) : (
+        <View key="edit" style={{ flex: 1 }}>
         {/* The stepper: done steps can be revisited, later ones wait. */}
         <View style={s.stepper}>
           {NEW_PROJECT_STEPS.map((id, i) => {
@@ -226,39 +361,6 @@ export default function NewProject() {
                 <Field label="Project name *" value={draft.title} onChangeText={(v) => edit("title", v)} placeholder="StudyBuddy Match" maxLength={120} />
                 <Field label="Description *" value={draft.description} onChangeText={(v) => edit("description", v)} multiline placeholder="What are you building, and who is it for?" />
                 <Field label="One-liner (optional)" value={draft.oneLiner} onChangeText={(v) => edit("oneLiner", v)} placeholder="Find the right study partner in minutes." maxLength={160} />
-              </View>
-
-              {/* Nova — the web's left pane, folded into a card on the phone. */}
-              <View style={s.block}>
-                <Pressable onPress={() => setNovaOpen((o) => !o)} style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
-                  <NovaGradient style={s.novaAvatar}><Icon name="hardware-chip-outline" size={18} color="#FFFFFF" /></NovaGradient>
-                  <View style={{ flex: 1 }}>
-                    <Text style={s.novaTitle}>Shape it with Nova</Text>
-                    <Meta style={{ fontSize: font.sm }}>Describe the idea; Nova suggests a name, goal, stack and roles. Uses AI credits.</Meta>
-                  </View>
-                  <Icon name={novaOpen ? "chevron-up" : "chevron-down"} size={18} color={colors.textTertiary} />
-                </Pressable>
-                {novaOpen && (
-                  <View style={{ gap: spacing.sm }}>
-                    {messages.length === 0 && (
-                      <View style={s.bubbleNova}><Text style={s.bubbleText}>Hey! I'm Nova, your AI project partner. What kind of project are you thinking about building?</Text></View>
-                    )}
-                    {messages.slice(-6).map((m, i) => (
-                      <View key={i} style={m.role === "user" ? s.bubbleUser : s.bubbleNova}>
-                        <Text style={[s.bubbleText, m.role === "user" && { color: "#FFFFFF" }]}>{plain(m.content)}</Text>
-                      </View>
-                    ))}
-                    {chat.isPending && <View style={s.bubbleNova}><Text style={[s.bubbleText, { color: colors.textTertiary }]}>Nova is thinking…</Text></View>}
-                    <Row gap={spacing.sm} style={{ alignItems: "flex-end" }}>
-                      <TextInput value={novaInput} onChangeText={setNovaInput} placeholder="Tell Nova about your idea…" placeholderTextColor={colors.textTertiary}
-                        multiline style={s.novaInput} />
-                      <Pressable onPress={sendNova} disabled={!novaInput.trim() || chat.isPending} accessibilityLabel="Send"
-                        style={[s.send, (!novaInput.trim() || chat.isPending) && { opacity: 0.4 }]}>
-                        <Icon name="send" size={16} color="#FFFFFF" />
-                      </Pressable>
-                    </Row>
-                  </View>
-                )}
               </View>
 
               <View style={s.block}>
@@ -407,8 +509,83 @@ export default function NewProject() {
             <Btn label="Create project" icon="sparkles" onPress={() => create.mutate()} disabled={!canNext} loading={create.isPending} />
           )}
         </View>
-      </View>
+        </View>
+        )}
+      </KeyboardAvoidingView>
     </>
+  );
+}
+
+function Bubble({ message }: { message: Message }) {
+  const v = useRef(new Animated.Value(0)).current;
+  useEffect(() => { Animated.timing(v, { toValue: 1, duration: 300, useNativeDriver: true }).start(); }, [v]);
+  const mine = message.role === "user";
+  return (
+    <Animated.View style={{ flexDirection: "row", gap: spacing.sm, alignItems: "flex-end", justifyContent: mine ? "flex-end" : "flex-start",
+      opacity: v, transform: [{ translateY: v.interpolate({ inputRange: [0, 1], outputRange: [8, 0] }) }] }}>
+      {!mine && <NovaGradient style={s.novaAvatarSm}><Icon name="hardware-chip-outline" size={13} color="#FFFFFF" /></NovaGradient>}
+      <View style={mine ? s.bubbleUser : s.bubbleNova}>
+        <Text style={[s.bubbleText, mine && { color: "#FFFFFF" }]}>{plain(message.content)}</Text>
+      </View>
+    </Animated.View>
+  );
+}
+
+function useBounce(delay: number) {
+  const v = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const anim = Animated.loop(Animated.sequence([
+      Animated.delay(delay),
+      Animated.timing(v, { toValue: 1, duration: 300, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.timing(v, { toValue: 0, duration: 300, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+      Animated.delay(300 - delay),
+    ]));
+    anim.start();
+    return () => anim.stop();
+  }, [v, delay]);
+  return v.interpolate({ inputRange: [0, 1], outputRange: [0, -6] });
+}
+
+function TypingDots() {
+  const ys = [useBounce(0), useBounce(150), useBounce(300)];
+  return (
+    <View style={{ flexDirection: "row", gap: 4 }}>
+      {ys.map((y, i) => <Animated.View key={i} style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: colors.novaGreen, transform: [{ translateY: y }] }} />)}
+    </View>
+  );
+}
+
+/** "Initializing Nova…" — the web chat's opening beat. */
+function Initializing() {
+  const pop = useRef(new Animated.Value(0)).current;
+  const glow = useRef(new Animated.Value(0)).current;
+  const text = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.spring(pop, { toValue: 1, stiffness: 200, damping: 15, mass: 1, delay: 200, useNativeDriver: true }).start();
+    Animated.timing(text, { toValue: 1, duration: 400, delay: 800, useNativeDriver: true }).start();
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(glow, { toValue: 1, duration: 1000, useNativeDriver: true }),
+      Animated.timing(glow, { toValue: 0, duration: 1000, useNativeDriver: true }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [pop, glow, text]);
+  return (
+    <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: spacing.lg, paddingVertical: 64 }}>
+      <Animated.View style={{ opacity: pop, transform: [{ scale: pop }] }}>
+        <Animated.View style={{ position: "absolute", top: -16, left: -16, right: -16, bottom: -16, borderRadius: 60,
+          opacity: glow.interpolate({ inputRange: [0, 1], outputRange: [0.5, 0.8] }),
+          transform: [{ scale: glow.interpolate({ inputRange: [0, 1], outputRange: [1, 1.3] }) }] }}>
+          <NovaGradient style={{ flex: 1, borderRadius: 60, opacity: 0.3 }} />
+        </Animated.View>
+        <NovaGradient style={{ width: 64, height: 64, borderRadius: 16, alignItems: "center", justifyContent: "center" }}>
+          <Icon name="hardware-chip-outline" size={32} color="#FFFFFF" />
+        </NovaGradient>
+      </Animated.View>
+      <Animated.Text style={{ opacity: text, fontSize: font.lg, fontFamily: fontFamily.medium, color: colors.text,
+        transform: [{ translateY: text.interpolate({ inputRange: [0, 1], outputRange: [10, 0] }) }] }}>Initializing Nova...</Animated.Text>
+      <Animated.View style={{ opacity: text }}><TypingDots /></Animated.View>
+    </View>
   );
 }
 
@@ -462,10 +639,25 @@ const s = StyleSheet.create({
   h2: { fontSize: font.base + 1, fontFamily: fontFamily.bold, color: colors.text },
   label: { fontSize: font.sm, fontFamily: fontFamily.semibold, color: colors.text },
   novaAvatar: { width: 38, height: 38, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+  novaAvatarSm: { width: 28, height: 28, borderRadius: 8, alignItems: "center", justifyContent: "center" },
+  modeBar: { backgroundColor: colors.surface, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
+  modeTrack: { flexDirection: "row", backgroundColor: colors.surfaceRaised, borderRadius: 12, padding: 3 },
+  modeTab: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, height: 38, borderRadius: 9, overflow: "hidden" },
+  modeTabOn: { backgroundColor: colors.surface, shadowColor: "#000", shadowOpacity: 0.08, shadowRadius: 4, shadowOffset: { width: 0, height: 1 }, elevation: 2 },
+  modeText: { fontSize: font.sm, fontFamily: fontFamily.medium, color: colors.textSecondary },
+  novaHeader: { flexDirection: "row", alignItems: "center", gap: spacing.md, backgroundColor: colors.surface, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
+  readyPill: { flexDirection: "row", alignItems: "center", gap: 2, backgroundColor: colors.primarySoft, borderRadius: radius.pill, paddingLeft: spacing.md, paddingRight: spacing.sm, paddingVertical: 6 },
+  readyText: { fontSize: font.xs + 1, color: colors.primary, fontFamily: fontFamily.semibold },
+  filled: { flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start", backgroundColor: "rgba(16,185,129,0.1)", borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: 6, maxWidth: "85%" },
+  filledText: { fontSize: font.xs + 1, color: "#047857", fontFamily: fontFamily.medium, flexShrink: 1 },
+  starter: { flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start", borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: 8 },
+  starterText: { fontSize: font.sm, color: colors.text, fontFamily: fontFamily.medium },
+  draftCard: { backgroundColor: colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.lg, paddingTop: spacing.lg + 2, gap: 4, overflow: "hidden", marginTop: spacing.sm },
+  composer: { backgroundColor: colors.surface, paddingHorizontal: spacing.md, paddingTop: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
   novaTitle: { fontSize: font.base, fontFamily: fontFamily.bold, color: colors.text },
-  bubbleNova: { alignSelf: "flex-start", maxWidth: "88%", backgroundColor: colors.surfaceRaised, borderRadius: radius.lg, borderBottomLeftRadius: 4, padding: spacing.md },
-  bubbleUser: { alignSelf: "flex-end", maxWidth: "88%", backgroundColor: colors.primary, borderRadius: radius.lg, borderBottomRightRadius: 4, padding: spacing.md },
-  bubbleText: { fontSize: font.sm, lineHeight: 19, color: colors.text, fontFamily: fontFamily.regular },
+  bubbleNova: { flexShrink: 1, maxWidth: "82%", backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.lg, borderBottomLeftRadius: 4, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
+  bubbleUser: { flexShrink: 1, maxWidth: "82%", backgroundColor: colors.primary, borderRadius: radius.lg, borderBottomRightRadius: 4, padding: spacing.md },
+  bubbleText: { fontSize: font.base - 1, lineHeight: 20, color: colors.text, fontFamily: fontFamily.regular },
   novaInput: {
     flex: 1, minHeight: 42, maxHeight: 120, borderWidth: 1, borderColor: colors.border, borderRadius: 21,
     paddingHorizontal: spacing.lg, paddingTop: 11, paddingBottom: 11, fontSize: font.sm, color: colors.text, fontFamily: fontFamily.regular,

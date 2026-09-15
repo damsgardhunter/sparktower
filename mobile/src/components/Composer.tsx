@@ -129,7 +129,17 @@ export function PostComposer({
       style={s.container}
     >
       {chrome === "screen" ? (
-        <Stack.Screen options={{ title: "Share a post", headerRight: () => postButton }} />
+        <Stack.Screen
+          options={{
+            title: "Share a post",
+            headerRight: () => postButton,
+            headerLeft: () => (
+              <Pressable onPress={onClose} hitSlop={10} accessibilityLabel="Close" style={{ marginLeft: Platform.OS === "web" ? spacing.md : 0, marginRight: spacing.sm }} testID="button-close-composer">
+                <Ionicons name="close" size={24} color={colors.textSecondary} />
+              </Pressable>
+            ),
+          }}
+        />
       ) : (
         <View style={[s.topBar, { paddingTop: insets.top + spacing.sm }]}>
           <Pressable onPress={onClose} hitSlop={10} accessibilityLabel="Close">
@@ -288,6 +298,7 @@ export function PostComposer({
         <Pressable onPress={() => setPicking(true)} style={s.tool} accessibilityLabel="Choose a project">
           <Ionicons name="rocket-outline" size={22} color={colors.textSecondary} />
         </Pressable>
+        <Text style={s.toolMeta}>@ to tag someone</Text>
         <View style={{ flex: 1 }} />
         {mentions.length > 0 && <Text style={s.toolMeta}>{mentions.length} tagged</Text>}
         {content.length > MAX_POST_LENGTH * 0.8 && <Text style={s.toolMeta}>{content.length}/{MAX_POST_LENGTH}</Text>}

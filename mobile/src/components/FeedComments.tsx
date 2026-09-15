@@ -188,15 +188,15 @@ export function FeedCommentThread({
                 )}
                 {!mine && !c.byTeam && post.projectId && (
                   c.closedByPostId ? (
-                    <View style={s.inline}><Ionicons name="checkmark-circle" size={12} color={colors.success} /><Text style={[s.count, { color: colors.success }]}>Acted on</Text></View>
+                    <View style={s.inline}><Ionicons name="checkmark-circle" size={12} color={colors.success} /><Text style={[s.count, { color: colors.success }]}>Acted on in a later update</Text></View>
                   ) : c.appliedAt ? (
-                    <View style={s.inline}><Ionicons name="list" size={12} color={colors.primary} /><Text style={[s.count, { color: colors.primary }]}>On the board</Text></View>
+                    <View style={s.inline}><Ionicons name="list" size={12} color={colors.primary} /><Text style={[s.count, { color: colors.primary }]}>On the team's board</Text></View>
                   ) : post.viewerIsTeam ? (
                     <Pressable onPress={() => apply.mutate(c.id)} disabled={apply.isPending} style={s.inline} hitSlop={6}>
                       {apply.isPending && apply.variables === c.id
                         ? <ActivityIndicator size="small" color={colors.primary} />
                         : <Ionicons name="add-circle-outline" size={13} color={colors.primary} />}
-                      <Text style={[s.action, { color: colors.primary }]}>Make a task</Text>
+                      <Text style={[s.action, { color: colors.primary }]}>Turn into a task</Text>
                     </Pressable>
                   ) : null
                 )}
@@ -310,7 +310,7 @@ export function CommentBar({
             onChangeText={setText}
             mentions={mentions}
             onMentionsChange={setMentions}
-            placeholder={replyTo ? `Reply to ${replyTo.name}…` : "Add a comment… use @ to tag"}
+            placeholder={replyTo ? `Reply to ${replyTo.name}…` : "Add a comment… use @ to tag someone"}
             maxLength={MAX_COMMENT_LENGTH}
             minHeight={40}
             autoFocus={autoFocus}

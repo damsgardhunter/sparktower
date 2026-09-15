@@ -35,7 +35,7 @@ export const LOOP_TYPE_INFO: Record<LoopType, LoopTypeInfo> = {
     type: "growth", label: "Growth loop",
     asks: "How new people find the product without you finding each of them.",
     closes: "Something a user makes or does becomes the thing the next stranger discovers.",
-    example: "Builder publishes a check-in → it's indexed and shared → a stranger lands on it → signs up → publishes their own.",
+    example: "Builder publishes a finished step as a public page → it's indexed and shared → a stranger lands on it → signs up → publishes their own.",
   },
   retention: {
     type: "retention", label: "Retention loop",

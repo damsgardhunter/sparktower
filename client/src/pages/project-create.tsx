@@ -43,6 +43,7 @@ import ReactMarkdown from "react-markdown";
 import type { Project } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 import { useUpload } from "@/hooks/use-upload";
+import { PENDING_PATH_KEY, type PendingPath } from "@shared/path-artifacts";
 import { PROJECT_GOALS, projectGoal, subcategoriesFor, isValidSubcategory, type ProjectGoal } from "@shared/goals";
 import { NEW_PROJECT_STEPS, type NewProjectStep, nextStep, prevStep, stepIndex } from "@shared/new-project-steps";
 import { useAuth } from "@/hooks/use-auth";
@@ -171,6 +172,16 @@ const STEP_LABELS: Record<NewProjectStep, string> = {
   setup: "Set up with Nova", goal: "Goal", subcategory: "Kind", review: "Create",
 };
 
+/** The goal picked on a public artifact page before signing up, used once. */
+function pendingPathGoal(): { goal?: ProjectGoal } {
+  try {
+    const raw = localStorage.getItem(PENDING_PATH_KEY);
+    if (!raw) return {};
+    const pending = JSON.parse(raw) as PendingPath;
+    return PROJECT_GOALS.some((g) => g.id === pending.goal) ? { goal: pending.goal as ProjectGoal } : {};
+  } catch { return {}; }
+}
+
 export default function ProjectCreate() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
@@ -201,7 +212,7 @@ export default function ProjectCreate() {
   // and every name Nova proposed, so a rename can be carried into its text.
   const [edited, setEdited] = useState<string[]>([]);
   const [novaTitles, setNovaTitles] = useState<string[]>([]);
-  const [projectData, setProjectData] = useState<Partial<Project>>({
+  const [projectData, setProjectData] = useState<Partial<Project>>(() => ({
     title: "",
     description: "",
     category: "",
@@ -213,7 +224,11 @@ export default function ProjectCreate() {
     repoUrl: "",
     liveUrl: "",
     soloMode: false,
-  });
+    // Someone who came from a published artifact starts on the goal they chose there.
+    ...pendingPathGoal(),
+  }));
+  // Used once: the next project starts from scratch.
+  useEffect(() => { try { localStorage.removeItem(PENDING_PATH_KEY); } catch { /* nothing to clear */ } }, []);
 
   const soloMode = !!projectData.soloMode;
 

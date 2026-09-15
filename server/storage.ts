@@ -77,6 +77,7 @@ import {
   feedReactions,
   feedComments,
   feedCommentReactions,
+  pathArtifacts,
   type FeedPost,
   type InsertFeedPost,
   type FeedComment,
@@ -233,6 +234,8 @@ export interface FeedPostWithDetails extends FeedPost {
   pathStep: { taskId: string; title: string } | null;
   /** The steps a weekly progress update shares. */
   pathWeek: { steps: { taskId: string; title: string }[] } | null;
+  /** The published artifact this post announces, when it announces one. */
+  artifact: { id: string; title: string; tags: string[]; public: boolean } | null;
 }
 
 export interface IStorage {
@@ -1542,6 +1545,9 @@ export class DatabaseStorage implements IStorage {
       ? await db.select({ id: projectKanbanTasks.id, title: projectKanbanTasks.title }).from(projectKanbanTasks).where(eq(projectKanbanTasks.id, post.entityId))
       : [];
 
+    const [artifactRow] = post.entityType === "path_artifact" && post.entityId
+      ? await db.select({ id: pathArtifacts.id, title: pathArtifacts.title, tags: pathArtifacts.tags, visibility: pathArtifacts.visibility }).from(pathArtifacts).where(eq(pathArtifacts.id, post.entityId))
+      : [];
     const weekSteps = post.entityType === "path_week"
       ? await db.select({ id: projectKanbanTasks.id, title: projectKanbanTasks.title }).from(projectKanbanTasks)
         .where(sql`${`posted:${post.id}`} = ANY(${projectKanbanTasks.tags})`)
@@ -1553,6 +1559,7 @@ export class DatabaseStorage implements IStorage {
       profile,
       pathStep: stepTask ? { taskId: stepTask.id, title: stepTask.title } : null,
       pathWeek: post.entityType === "path_week" ? { steps: weekSteps.map((t) => ({ taskId: t.id, title: t.title })) } : null,
+      artifact: artifactRow ? { id: artifactRow.id, title: artifactRow.title, tags: artifactRow.tags, public: artifactRow.visibility === "public" } : null,
       project: project ? { id: project.id, title: project.title, isPrivate: project.isPrivate } : null,
       viewerReaction,
       reactionBreakdown: breakdownRows.map((r) => ({ reaction: r.reaction, count: r.count })),

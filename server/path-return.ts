@@ -153,6 +153,11 @@ export async function lastDoneStep(projectId: string, events: { taskId: string |
  * request's own sync and created those steps twice.
  */
 async function nextOpenMilestone(projectId: string): Promise<string | null> {
+  return (await pathProgress(projectId))?.next ?? null;
+}
+
+/** The main line's progress and next milestone, read without syncing anything — safe on public, anonymous reads. */
+export async function pathProgress(projectId: string): Promise<{ done: number; total: number; next: string | null } | null> {
   const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory, capitalRoute: projects.capitalRoute }).from(projects).where(eq(projects.id, projectId));
   if (!project) return null;
   const main = mainLineMilestones(resolveTree(project.goal as ProjectGoal, project.subcategory, project.capitalRoute));
@@ -160,7 +165,12 @@ async function nextOpenMilestone(projectId: string): Promise<string | null> {
   const done = new Set(tasks.filter((t) => t.status === "done" && !(t.tags ?? []).some((x) => x.startsWith("archived:")))
     .map((t) => (t.tags ?? []).find((x) => x.startsWith("backbone:"))?.slice("backbone:".length)).filter(Boolean) as string[]);
   const present = new Set(tasks.map((t) => (t.tags ?? []).find((x) => x.startsWith("backbone:"))?.slice("backbone:".length)).filter(Boolean) as string[]);
-  return main.find((m) => present.has(m.id) && !done.has(m.id))?.title ?? null;
+  if (!present.size) return null;
+  return {
+    done: main.filter((m) => done.has(m.id)).length,
+    total: main.length,
+    next: main.find((m) => present.has(m.id) && !done.has(m.id))?.title ?? null,
+  };
 }
 
 /** Each of someone's projects with a path, what's next on it, and how long since they worked it. */

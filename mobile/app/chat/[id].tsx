@@ -86,6 +86,10 @@ export default function Chat() {
       .catch(() => {});
   }, [id, hasUnread, qc]);
 
+  // The last thing you sent says whether it's been seen, as a messenger does.
+  // Only while it's the last word in the thread — once they've replied, it plainly was.
+  const lastMineId = sorted.length && sorted[sorted.length - 1].senderId === meId ? sorted[sorted.length - 1].id : undefined;
+
   const lines = useMemo(() => {
     const out: Line[] = [];
     let lastDay = "";
@@ -227,6 +231,9 @@ export default function Chat() {
                         <Text style={s.time}>{msg.pending ? "Sending…" : clockTime(msg.createdAt)}</Text>
                         {mine && !msg.pending && (
                           <Icon name={msg.read ? "checkmark-done" : "checkmark"} size={13} color={msg.read ? colors.primary : colors.textTertiary} />
+                        )}
+                        {mine && !msg.pending && msg.id === lastMineId && (
+                          <Text style={[s.time, msg.read && { color: colors.primary }]}>{msg.read ? "Seen" : "Sent"}</Text>
                         )}
                       </View>
                     )}

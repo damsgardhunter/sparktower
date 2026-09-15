@@ -12,6 +12,7 @@
  * expected to still be true a year later.
  */
 import type { Request, RequestHandler } from "express";
+import { creditArtifactSignup } from "./artifact-routes";
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "./db";
 import { users } from "@shared/schema";
@@ -128,6 +129,8 @@ export async function stampSignupAttribution(userId: string, req: Request): Prom
       signupLandingPath: a.landingPath,
       signupParams: a.params,
     }).where(and(eq(users.id, userId), isNull(users.signupSource)));
+    // The growth loop: a signup whose first page was a published artifact is credited to it.
+    await creditArtifactSignup(userId, a.landingPath);
   } catch (err) {
     console.error("[attribution] Failed to stamp signup:", err);
   }

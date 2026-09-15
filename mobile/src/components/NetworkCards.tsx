@@ -71,13 +71,15 @@ export function ShowMore({ label, onPress }: { label: string; onPress: () => voi
 }
 
 /** A builder in the grid: cover band, photo, who, why — and one action. */
-export function PersonGridCard({ width, name, headline, avatarUrl, coverUrl, reason, score, isNew, update, onOpen, onDismiss, action }: {
+export function PersonGridCard({ width, name, headline, avatarUrl, coverUrl, reason, skills, score, isNew, update, onOpen, onDismiss, action }: {
   width: number;
   name: string;
   headline?: string | null;
   avatarUrl?: string | null;
   coverUrl?: string | null;
   reason?: string | null;
+  /** Their top skills, as the web's builder card shows them. */
+  skills?: string[];
   score?: number;
   isNew?: boolean;
   update?: ExploreUpdate;
@@ -105,7 +107,12 @@ export function PersonGridCard({ width, name, headline, avatarUrl, coverUrl, rea
               <Icon name="sparkles" size={12} color={colors.primary} />
               <Text style={n.reasonText} numberOfLines={2}>{reason}</Text>
             </View>
-          ) : <View style={{ height: 30 }} />}
+          ) : skills?.length ? null : <View style={{ height: 30 }} />}
+          {skills?.length ? (
+            <View style={[n.badgeRow, { flexWrap: "nowrap", overflow: "hidden", alignSelf: "stretch" }]}>
+              {skills.slice(0, 2).map((sk) => <Text key={sk} style={[n.rolePill, { maxWidth: (width - spacing.lg * 2) / 2 }]} numberOfLines={1}>{sk}</Text>)}
+            </View>
+          ) : null}
           <View style={n.badgeRow}>
             {score !== undefined && <Text style={n.meta}>{score}% match</Text>}
             {isNew && <NewBadge />}

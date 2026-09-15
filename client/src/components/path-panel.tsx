@@ -3,7 +3,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { WorkView, refreshPath, useFail, type WorkRow } from "@/components/path-work";
 import { MilestoneDetail } from "@/components/path-milestone";
 import { LoopTree, addableLoopTypes, type LoopTreeData } from "@/components/loop-tree";
-import { ShareStepDialog, WeeklyUpdateDialog } from "@/components/continue-path-card";
+import { ShareStepDialog, PublishArtifactDialog, WeeklyUpdateDialog } from "@/components/continue-path-card";
 import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -95,6 +95,7 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
   const [showMap, setShowMap] = useState(false);
   const [showSwitch, setShowSwitch] = useState(false);
   const [sharingStep, setSharingStep] = useState(false);
+  const [publishingStep, setPublishingStep] = useState(false);
   const [postingWeek, setPostingWeek] = useState(false);
   const { data: projectInfo } = useQuery<{ title?: string }>({ queryKey: ["/api/projects", projectId], enabled: !!projectId });
   const [open, setOpen] = useState<string | null>(null);
@@ -333,7 +334,10 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
             {data.lastDone.sharedPostId ? (
               <Link href={`/posts/${data.lastDone.sharedPostId}`} className="ml-auto text-primary hover:underline" data-testid="link-shared-step">See the feedback</Link>
             ) : (
-              <button className="ml-auto text-primary hover:underline" onClick={() => setSharingStep(true)} data-testid="button-share-finished-step">Share it for feedback</button>
+              <>
+                <button className="ml-auto text-primary hover:underline" onClick={() => setSharingStep(true)} data-testid="button-share-finished-step">Share it for feedback</button>
+                <button className="text-primary hover:underline" onClick={() => setPublishingStep(true)} data-testid="button-publish-finished-step">Publish as artifact</button>
+              </>
             )}
           </div>
         )}
@@ -345,6 +349,9 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
         )}
         {postingWeek && data.weekly && (
           <WeeklyUpdateDialog projectId={projectId} projectTitle={projectInfo?.title ?? "your project"} steps={data.weekly.steps} open onClose={() => setPostingWeek(false)} />
+        )}
+        {publishingStep && data.lastDone && (
+          <PublishArtifactDialog projectId={projectId} step={data.lastDone} open onClose={() => setPublishingStep(false)} />
         )}
         {sharingStep && data.lastDone && (
           <ShareStepDialog projectId={projectId} projectTitle={projectInfo?.title ?? "your project"} step={data.lastDone} open onClose={() => setSharingStep(false)} />

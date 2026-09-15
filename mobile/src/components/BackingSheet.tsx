@@ -97,7 +97,7 @@ export function BackingCard({ projectId, projectTitle, isOwner, notify }: {
           Set up tiers and merch and people can put money behind you. Held by SparkTower until the project is reviewed, so backers know it's safe to give.
         </Body>
         <Btn label="Set up backing" variant="outline" small icon="settings-outline" style={{ alignSelf: "flex-start" }}
-          onPress={() => router.push(`/manage/${projectId}` as any)} />
+          onPress={() => router.push(`/manage/${projectId}?tab=setup` as any)} />
       </Block>
     );
   }
@@ -155,7 +155,7 @@ export function BackingCard({ projectId, projectTitle, isOwner, notify }: {
                 </View>
                 <View style={{ alignItems: "center", gap: 2 }}>
                   <TierBadge levelKey={level.key} previews={previews} logoUrl={logoUrl} />
-                  <Text style={{ fontSize: 9, fontFamily: fontFamily.semibold, color: level.hex }}>{level.label}</Text>
+                  <Text style={{ fontSize: 9, fontFamily: fontFamily.semibold, color: level.hex }}>{level.label} badge</Text>
                 </View>
               </Pressable>
             );

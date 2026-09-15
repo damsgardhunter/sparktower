@@ -13,8 +13,10 @@ import { useQueryClient } from "@tanstack/react-query";
 import heroVideo from "@assets/Brooklyn_Tower_Tesla_Coil_Animation_1772567582595.mp4";
 
 export default function LandingPage() {
-  const [activeTab, setActiveTab] = useState("login");
-  const [showAuthModal, setShowAuthModal] = useState(false);
+  // Arriving from a public page's "start your own path" opens straight onto sign up.
+  const arrivedToSignUp = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("signup") === "1";
+  const [activeTab, setActiveTab] = useState(arrivedToSignUp ? "signup" : "login");
+  const [showAuthModal, setShowAuthModal] = useState(arrivedToSignUp);
 
   return (
     <div className="flex flex-col min-h-screen bg-white text-foreground">

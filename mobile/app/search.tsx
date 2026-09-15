@@ -5,12 +5,12 @@ import { useQuery } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api, fetchMe, readPref, writePref } from "../src/api/client";
 import { colors, font, fontFamily, radius, spacing } from "../src/theme";
-import { Avatar, Empty, Icon, IconButton, Loading, TabStrip } from "../src/components/ui";
+import { Avatar, Chip, Empty, Icon, IconButton, Loading, TabStrip } from "../src/components/ui";
 import { ConnectActions, FollowButton, useConnectionStates } from "../src/components/ConnectActions";
 import { NoticeBanner, useNotice } from "../src/components/Sheet";
 import { NetworkBlock, PersonRowItem, ProjectRowItem, ProjectTile, networkStyles } from "../src/components/NetworkCards";
 import { EXPLORE, markSeen, trackExplore } from "../src/explore";
-import { personAvatar, personName } from "../src/networkData";
+import { personAvatar, personMatches, personName, useDirectory, type DirectoryPerson } from "../src/networkData";
 
 type Scope = "all" | "people" | "projects";
 
@@ -35,6 +35,8 @@ export default function Search() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ q?: string }>();
   const [q, setQ] = useState(params.q ?? "");
+  // "More like this" lands here with a skill already typed.
+  useEffect(() => { if (typeof params.q === "string") setQ(params.q); }, [params.q]);
   const [debounced, setDebounced] = useState(q);
   const [scope, setScope] = useState<Scope>("all");
   const { notice, show, clear } = useNotice();
@@ -68,10 +70,12 @@ export default function Search() {
 
   // --- results ----------------------------------------------------------------
   const searching = debounced.length > 0;
+  // The server searches names only; the web's box promises "name, skills, or
+  // interests", so the directory it returns for an empty query is matched here too.
+  const directory = useDirectory();
   const people = useQuery({
     queryKey: ["users", "search", debounced],
-    queryFn: () => api<any[]>(`/api/users/search?q=${encodeURIComponent(debounced)}`),
-    // One letter matches nearly everyone; the server searches names and needs a little more.
+    queryFn: () => api<DirectoryPerson[]>(`/api/users/search?q=${encodeURIComponent(debounced)}`),
     enabled: debounced.length > 1 && scope !== "projects",
   });
   const projects = useQuery({
@@ -85,7 +89,43 @@ export default function Search() {
     enabled: searching && scope !== "people",
   });
 
-  const peopleRows = (people.data ?? []).filter((u) => u.id !== meId);
+  const peopleRows = useMemo(() => {
+    if (!debounced) return [] as { u: DirectoryPerson; skills: string[] }[];
+    const seen = new Set<string>();
+    const out: { u: DirectoryPerson; skills: string[] }[] = [];
+    const add = (u: DirectoryPerson, skills: string[]) => {
+      if (!u?.id || u.id === meId || seen.has(u.id)) return;
+      seen.add(u.id);
+      out.push({ u, skills });
+    };
+    // Name hits first, then skills and headlines.
+    for (const u of directory.data ?? []) {
+      const m = personMatches(u, debounced);
+      if (m.hit && personName(u, u.profile, "").toLowerCase().includes(debounced.toLowerCase())) add(u, m.skills);
+    }
+    for (const u of people.data ?? []) {
+      if (personName(u, u.profile, "")) add(u, personMatches(u, debounced).skills);
+    }
+    for (const u of directory.data ?? []) {
+      const m = personMatches(u, debounced);
+      if (m.hit) add(u, m.skills);
+    }
+    return out;
+  }, [directory.data, people.data, debounced, meId]);
+
+  // Before typing: the skills people here have most, as things to try.
+  const popularSkills = useMemo(() => {
+    const counts = new Map<string, { label: string; n: number }>();
+    for (const u of directory.data ?? []) {
+      for (const skill of u.profile?.skills ?? []) {
+        const key = skill.trim().toLowerCase();
+        if (!key) continue;
+        const cur = counts.get(key);
+        counts.set(key, { label: cur?.label ?? skill.trim(), n: (cur?.n ?? 0) + 1 });
+      }
+    }
+    return [...counts.values()].sort((a, b) => b.n - a.n).slice(0, 10).map((c) => c.label);
+  }, [directory.data]);
   const projectRows = useMemo(() => {
     const needle = debounced.toLowerCase();
     if (!needle) return [];
@@ -95,7 +135,7 @@ export default function Search() {
       .sort((a, b) => Number(!String(a.title).toLowerCase().includes(needle)) - Number(!String(b.title).toLowerCase().includes(needle)));
   }, [projects.data, debounced, meId]);
   const followedIds = new Set((followed.data ?? []).map((f: any) => f.projectId));
-  const { data: states } = useConnectionStates(peopleRows.slice(0, 40).map((u) => u.id));
+  const { data: states } = useConnectionStates(peopleRows.slice(0, 40).map((r) => r.u.id));
 
   const openPerson = (u: any, rank: number) => {
     const name = personName(u, u.profile);
@@ -121,11 +161,9 @@ export default function Search() {
       onAction={() => setScope("people")}
       flush
     >
-      {debounced.length < 2 ? (
-        <Text style={[networkStyles.rowSub, { paddingHorizontal: spacing.lg, paddingBottom: spacing.sm }]}>Keep typing to search builders by name.</Text>
-      ) : people.isLoading ? <Loading /> : !peopleRows.length ? (
-        <Text style={[networkStyles.rowSub, { paddingHorizontal: spacing.lg, paddingBottom: spacing.sm }]}>No builders named "{debounced}".</Text>
-      ) : peopleRows.slice(0, peopleLimit).map((u, i) => {
+      {(directory.isLoading && people.isLoading) ? <Loading /> : !peopleRows.length ? (
+        <Text style={[networkStyles.rowSub, { paddingHorizontal: spacing.lg, paddingBottom: spacing.sm }]}>No builders match "{debounced}". Try a skill, like design or React.</Text>
+      ) : peopleRows.slice(0, peopleLimit).map(({ u, skills }, i) => {
         const name = personName(u, u.profile);
         const meta = [u.profile?.username && `@${u.profile.username}`, u.profile?.location].filter(Boolean).join(" · ");
         return (
@@ -139,10 +177,16 @@ export default function Search() {
               onOpen={() => openPerson(u, i + 1)}
               right={
                 <View style={{ width: 112 }}>
-                  <ConnectActions block userId={u.id} name={name} headline={u.profile?.headline} connection={states?.[u.id]} notify={show} explore={{ source: "discover", rankPosition: i + 1 }} />
+                  <ConnectActions block userId={u.id} name={name} headline={u.profile?.headline} connection={states?.[u.id]} notify={show} explore={{ source: "discover", rankPosition: i + 1 }} moreLikeThis={u.profile?.skills?.[0]} />
                 </View>
               }
-            />
+            >
+              {skills.length > 0 && (
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+                  {skills.slice(0, 3).map((sk) => <Chip key={sk} label={sk} small />)}
+                </View>
+              )}
+            </PersonRowItem>
           </View>
         );
       })}
@@ -169,7 +213,7 @@ export default function Search() {
             roles={(p.rolesNeeded ?? []).slice(0, 2)}
             onOpen={() => openProject(p, i + 1)}
             action={p.ownerId === meId ? undefined : (
-              <FollowButton projectId={p.id} title={p.title} following={followedIds.has(p.id)} notify={show} explore={{ source: "discover", rankPosition: i + 1 }} />
+              <FollowButton projectId={p.id} title={p.title} following={followedIds.has(p.id)} notify={show} explore={{ source: "discover", rankPosition: i + 1 }} moreLikeThis={p.category} />
             )}
           />
         </View>
@@ -190,7 +234,7 @@ export default function Search() {
                 value={q}
                 onChangeText={setQ}
                 autoFocus
-                placeholder="Search builders and projects"
+                placeholder="Search by name, skills, or interests"
                 placeholderTextColor={colors.textTertiary}
                 returnKeyType="search"
                 autoCapitalize="none"
@@ -241,7 +285,15 @@ export default function Search() {
                   ))}
                 </>
               ) : (
-                <Empty icon="search-outline" title="Find builders and projects" body="Search people by name, or projects by title, pitch or category. What you open shows up here next time." />
+                <Empty icon="search-outline" title="Discover people" body="Find entrepreneurs and freelancers to join your next project — by name, skills, or interests. Projects by title, pitch or category." />
+              )}
+              {popularSkills.length > 0 && (
+                <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.sm, gap: spacing.sm }}>
+                  <Text style={{ color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold }}>Try searching for</Text>
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.xs }}>
+                    {popularSkills.map((skill) => <Chip key={skill} label={skill} onPress={() => setQ(skill)} />)}
+                  </View>
+                </View>
               )}
               <View style={{ height: 1, backgroundColor: colors.borderSubtle, marginTop: spacing.sm }} />
               {[

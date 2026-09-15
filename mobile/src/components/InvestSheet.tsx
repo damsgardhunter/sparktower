@@ -66,7 +66,7 @@ export function InvestCard({ projectId, notify }: { projectId: string; notify: (
       <Block title="Investment applications are off" icon="cash-outline">
         <Body muted>Open them and anyone who finds this page can apply to invest. You review every application first.</Body>
         <Btn label="Set up applications" variant="outline" small icon="settings-outline" style={{ alignSelf: "flex-start" }}
-          onPress={() => router.push(`/manage/${projectId}` as any)} />
+          onPress={() => router.push(`/manage/${projectId}?tab=investors` as any)} />
       </Block>
     );
   }

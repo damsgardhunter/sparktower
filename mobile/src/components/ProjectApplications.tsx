@@ -7,11 +7,12 @@ import { useEffect, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import * as DocumentPicker from "expo-document-picker";
+import * as WebBrowser from "expo-web-browser";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, uploadFile } from "../api/client";
 import { colors, font, fontFamily, radius, spacing } from "../theme";
-import { Avatar, Body, Btn, ErrorNote, Field, Icon, Meta, Row, errText } from "./ui";
-import { Block, Tag } from "./ProjectBits";
+import { Avatar, Body, Btn, ErrorNote, Field, Icon, Meta, Row, assetUri, errText } from "./ui";
+import { Block } from "./ProjectBits";
 import { FormGroup, ProjectFormSheet } from "./ProjectFormSheet";
 import { PRE_PROMPTED_QUESTIONS } from "../projectData";
 import type { Notice } from "./Sheet";
@@ -210,13 +211,11 @@ export function PendingApplications({ projectId, applications, questions, onEdit
     onError: (e) => notify({ text: errText(e, "Couldn't update that application."), tone: "error" }),
   });
 
+  // As on the web, the section only appears once someone has applied.
+  if (pending.length === 0) return null;
   return (
-    <Block title={pending.length ? `Applications · ${pending.length}` : "Applications"} icon="mail-unread-outline" action="Questions" onAction={onEditQuestions}>
-      {pending.length === 0 ? (
-        <Meta style={{ fontSize: font.sm }}>
-          No pending applications. {questions.length ? `Applicants answer ${questions.length} question${questions.length === 1 ? "" : "s"}.` : "Add questions for applicants to answer."}
-        </Meta>
-      ) : pending.map((app) => {
+    <Block title={`Applications · ${pending.length}`} icon="mail-unread-outline" action="Questions" onAction={onEditQuestions}>
+      {pending.map((app) => {
         const name = app.profile?.displayName || app.user?.firstName || "Applicant";
         return (
           <View key={app.id} style={{ gap: spacing.sm, paddingTop: spacing.sm, borderTopWidth: 1, borderTopColor: colors.borderSubtle }}>
@@ -236,7 +235,14 @@ export function PendingApplications({ projectId, applications, questions, onEdit
                 <Body>{a.answer}</Body>
               </View>
             ))}
-            {app.resumeUrl ? <Tag icon="document-text-outline" label="Resume attached" tone="primary" /> : null}
+            {app.resumeUrl ? (
+              <Pressable onPress={() => { void WebBrowser.openBrowserAsync(assetUri(app.resumeUrl)!).catch(() => {}); }} hitSlop={6}>
+                <Row center gap={4}>
+                  <Icon name="document-text-outline" size={14} color={colors.primary} />
+                  <Text style={{ fontSize: font.xs + 1, color: colors.primary, fontFamily: fontFamily.semibold }}>View Resume</Text>
+                </Row>
+              </Pressable>
+            ) : null}
             <Row gap={spacing.sm}>
               <Btn small label="Accept" icon="checkmark" loading={decide.isPending && decide.variables?.id === app.id && decide.variables?.verdict === "accept"}
                 onPress={() => decide.mutate({ id: app.id, verdict: "accept" })} />

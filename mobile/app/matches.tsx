@@ -4,7 +4,7 @@ import { Stack, useFocusEffect, useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../src/api/client";
 import { colors, font, fontFamily, radius, spacing } from "../src/theme";
-import { Avatar, Chip, Empty, Icon, Loading, NovaGradient, Row, Screen, timeAgo } from "../src/components/ui";
+import { Avatar, Btn, Chip, Empty, Icon, Loading, NovaGradient, Row, Screen, timeAgo } from "../src/components/ui";
 import { ConnectActions, useConnectionStates } from "../src/components/ConnectActions";
 import { NoticeBanner, useNotice } from "../src/components/Sheet";
 import { UpdateBadge, networkStyles } from "../src/components/NetworkCards";
@@ -45,7 +45,7 @@ export default function Matches() {
 
   return (
     <>
-      <Stack.Screen options={{ title: "Your matches" }} />
+      <Stack.Screen options={{ title: "AI Matches" }} />
       <Screen canvas onRefresh={matches.refetch} refreshing={matches.isRefetching} contentStyle={{ padding: 0, gap: spacing.sm }}>
         <NovaGradient style={{ padding: spacing.lg, gap: spacing.sm }}>
           <Row center gap={spacing.sm}>
@@ -53,7 +53,7 @@ export default function Matches() {
             <Text style={{ color: "#FFFFFF", fontSize: font.lg, fontFamily: fontFamily.bold }}>Collaborators picked by Nova</Text>
           </Row>
           <Text style={{ color: "#FFFFFFE6", fontSize: font.sm, fontFamily: fontFamily.regular, lineHeight: 19 }}>
-            Based on your skills, interests and projects. Finding new matches can use 1 credit on paid plans.
+            Collaborators hand-picked for you based on your skills and interests. Finding new matches can use 1 credit on paid plans.
           </Text>
           <Pressable
             onPress={() => generate.mutate()}
@@ -61,13 +61,33 @@ export default function Matches() {
             style={({ pressed }) => [{ alignSelf: "flex-start", backgroundColor: "#FFFFFF", borderRadius: radius.pill, paddingHorizontal: spacing.lg, paddingVertical: 8, flexDirection: "row", gap: 6, alignItems: "center", marginTop: 4 }, (pressed || generate.isPending) && { opacity: 0.7 }]}
           >
             <Icon name="sparkles-outline" size={16} color={colors.primary} />
-            <Text style={{ color: colors.primary, fontFamily: fontFamily.semibold, fontSize: font.sm }}>{generate.isPending ? "Finding…" : "Find new matches"}</Text>
+            <Text style={{ color: colors.primary, fontFamily: fontFamily.semibold, fontSize: font.sm }}>{generate.isPending ? "Finding…" : "Generate matches"}</Text>
           </Pressable>
         </NovaGradient>
 
+        {/* Start a sprint without leaving the page, as the web's Matches does. */}
+        <View style={{ backgroundColor: colors.surface, padding: spacing.lg, gap: spacing.md }}>
+          <Row gap={spacing.md}>
+            <View style={{ width: 40, height: 40, borderRadius: radius.sm, backgroundColor: colors.primarySoft, alignItems: "center", justifyContent: "center" }}>
+              <Icon name="timer-outline" size={20} color={colors.primary} />
+            </View>
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text style={networkStyles.rowTitle}>Start a Sprint</Text>
+              <Text style={networkStyles.rowSub}>Build something with a stranger in 24 or 72 hours — or rehearse against Nova first.</Text>
+            </View>
+          </Row>
+          <Row gap={spacing.sm}>
+            <Btn label="Find a partner" small icon="people-outline" style={{ flex: 1 }} onPress={() => router.push("/sprint/new")} />
+            <Btn label="Practice with Nova" small variant="outline" icon="hardware-chip-outline" style={{ flex: 1 }} onPress={() => router.push("/sprint/practice")} />
+          </Row>
+          <Row between>
+            <Text style={networkStyles.meta}>Matching is free. Nova's ideas and practice partner use credits.</Text>
+          </Row>
+        </View>
+
         {matches.isLoading ? <Loading /> : !rows.length ? (
           <View style={{ backgroundColor: colors.surface }}>
-            <Empty icon="person-add-outline" title="No matches yet" body="Let Nova find the best collaborators for your next project." action="Find my first match" onAction={() => generate.mutate()} />
+            <Empty icon="person-add-outline" title="No matches yet" body="Let our AI find the best collaborators for your next big project." action="Find my first match" onAction={() => generate.mutate()} />
           </View>
         ) : rows.map((m, i) => {
           const name = personName(m.matchedUser, m.matchedProfile);
@@ -95,7 +115,7 @@ export default function Matches() {
               {p.bio ? <Text style={networkStyles.rowBody} numberOfLines={2}>{p.bio}</Text> : null}
               {reasons.length > 0 && (
                 <View style={{ backgroundColor: colors.surfaceRaised, borderRadius: radius.sm, padding: spacing.md, gap: 6 }}>
-                  <Text style={{ color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.semibold }}>Why you matched</Text>
+                  <Text style={{ color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.semibold }}>Why matched</Text>
                   {reasons.map((r) => (
                     <Row key={r} gap={6}>
                       <Icon name="sparkles" size={12} color={colors.primary} />
@@ -110,7 +130,8 @@ export default function Matches() {
                 </Row>
               )}
               <Row center gap={spacing.sm} wrap>
-                <ConnectActions userId={m.matchedUserId} name={name} reason={reasons[0]} headline={p.headline} connection={connections?.[m.matchedUserId]} notify={show} explore={{ source: "discover", rankPosition: i + 1 }} />
+                <ConnectActions userId={m.matchedUserId} name={name} reason={reasons[0]} headline={p.headline} connection={connections?.[m.matchedUserId]} notify={show} explore={{ source: "discover", rankPosition: i + 1 }} moreLikeThis={p.skills?.[0]} />
+                <Btn label="Start trial sprint" small variant="outline" icon="people-outline" onPress={() => router.push(`/sprint/new?partnerId=${m.matchedUserId}`)} />
               </Row>
             </View>
           );

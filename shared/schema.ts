@@ -1073,6 +1073,38 @@ export const feedCommentReactions = pgTable("feed_comment_reactions", {
 }));
 
 /**
+ * What a finished path step produced, kept as its own thing so it can be
+ * published: a public page at /a/:id, a feed post, and a way for a stranger to
+ * start their own path from it. One per step; regenerating refreshes the body
+ * and keeps the title and tags someone chose.
+ */
+export const pathArtifacts = pgTable("path_artifacts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  taskId: varchar("task_id").notNull(),
+  backboneId: text("backbone_id"),
+  authorId: varchar("author_id").notNull().references(() => users.id),
+  title: text("title").notNull(),
+  summary: text("summary").notNull().default(""),
+  body: text("body").notNull().default(""),
+  /** For a build step: the files it produced, by path and purpose (never their contents). */
+  files: jsonb("files").$type<{ path: string; purpose?: string }[]>().default([]).notNull(),
+  tags: text("tags").array().default([]).notNull(),
+  visibility: text("visibility", { enum: ["private", "public"] }).default("private").notNull(),
+  publishedPostId: varchar("published_post_id"),
+  publishedAt: timestamp("published_at"),
+  views: integer("views").default(0).notNull(),
+  /** People who signed up having landed on this artifact first. */
+  signups: integer("signups").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  oncePerStep: unique().on(table.taskId),
+  byProject: index("path_artifacts_project_idx").on(table.projectId),
+}));
+export type PathArtifact = typeof pathArtifacts.$inferSelect;
+
+/**
  * Something that happened to someone: the hook that brings them back. A post
  * from a builder or project they follow, a comment or reply or reaction on
  * their work, a mention, a follow, a connection. In-app only — SparkTower
@@ -1091,6 +1123,8 @@ export const NOTIFICATION_KINDS = [
   "path_step_done", "next_step",
   // The weekly progress update: steps finished this week that haven't been shared yet.
   "weekly_update",
+  // The growth loop: someone joined SparkTower from a published artifact.
+  "artifact_signup",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 

@@ -4,7 +4,7 @@ import { Pressable, Text, TextInput, View, Platform } from "react-native";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
-import { Btn, Empty, Icon, IconButton, Loading, Row, Screen, timeAgo } from "../../src/components/ui";
+import { Btn, Empty, Icon, IconButton, Loading, Row, Screen, Segments, timeAgo } from "../../src/components/ui";
 import { NoticeBanner, Sheet, useNotice } from "../../src/components/Sheet";
 import { NetworkBlock, PersonRowItem, networkStyles } from "../../src/components/NetworkCards";
 import {
@@ -22,6 +22,7 @@ export default function Connections() {
   const requests = useConnectionRequests();
   const { notice, show, clear } = useNotice();
   const [q, setQ] = useState("");
+  const [sort, setSort] = useState<"recent" | "name">("recent");
   const [removing, setRemoving] = useState<{ row: ConnectionRow; name: string } | null>(null);
 
   const remove = useMutation({
@@ -40,7 +41,8 @@ export default function Connections() {
   const needle = q.trim().toLowerCase();
   const rows = (connections.data ?? [])
     .map((row) => ({ row, name: personName(row.user, row.profile) }))
-    .filter(({ row, name }) => !needle || name.toLowerCase().includes(needle) || (row.profile?.headline ?? "").toLowerCase().includes(needle));
+    .filter(({ row, name }) => !needle || name.toLowerCase().includes(needle) || (row.profile?.headline ?? "").toLowerCase().includes(needle))
+    .sort((a, b) => sort === "name" ? a.name.localeCompare(b.name) : Date.parse(b.row.createdAt) - Date.parse(a.row.createdAt));
   const pending = requests.data?.length ?? 0;
 
   return (
@@ -64,7 +66,11 @@ export default function Connections() {
         </View>
 
         <NetworkBlock title={connections.data ? `${connections.data.length} connection${connections.data.length === 1 ? "" : "s"}` : "Connections"} flush>
-          <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xs }}>
+          <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xs, gap: spacing.sm }}>
+            <Row center gap={spacing.sm}>
+              <Text style={networkStyles.meta}>Sort by</Text>
+              <Segments options={[{ value: "recent" as const, label: "Recently added" }, { value: "name" as const, label: "Name" }]} value={sort} onChange={setSort} />
+            </Row>
             <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, backgroundColor: colors.surfaceRaised, borderRadius: radius.sm, paddingHorizontal: spacing.md, height: 38 }}>
               <Icon name="search" size={16} color={colors.textTertiary} />
               <TextInput

@@ -175,3 +175,47 @@ export function tintFor(seed: string): string {
   for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
   return TILE_COLORS[h % TILE_COLORS.length];
 }
+
+// --- The directory -----------------------------------------------------------
+
+/** Everyone on SparkTower, as the web's Discover People page loads it: `/api/users/search` with an empty query. */
+export interface DirectoryPerson extends PersonLike {
+  id: string;
+  profile?: (ProfileLike & { bio?: string | null; userId?: string }) | null;
+}
+
+export const DIRECTORY_KEY = ["users", "directory"];
+
+export const useDirectory = (enabled = true) =>
+  useQuery({
+    queryKey: DIRECTORY_KEY,
+    queryFn: () => api<DirectoryPerson[]>("/api/users/search?q="),
+    enabled,
+    staleTime: 60_000,
+  });
+
+/**
+ * Whether a person fits a search, the way the web's Discover box promises:
+ * "name, skills, or interests". The server only searches names, so the rest is
+ * matched here, over the same directory it returns. Never the email.
+ */
+export function personMatches(person: DirectoryPerson, needle: string): { hit: boolean; skills: string[] } {
+  const q = needle.trim().toLowerCase();
+  if (!q) return { hit: true, skills: [] };
+  const p = person.profile ?? {};
+  const skills = (p.skills ?? []).filter((s) => s.toLowerCase().includes(q));
+  const text = [personName(person, p, ""), p.headline, p.username, p.location, p.bio].filter(Boolean).join(" ").toLowerCase();
+  return { hit: skills.length > 0 || text.includes(q), skills };
+}
+
+// --- Notification sections ------------------------------------------------------
+
+/** "Today", "This week", "Earlier" — how a long list of notifications is broken up. */
+export function notificationSection(iso: string, now = Date.now()): "Today" | "This week" | "Earlier" {
+  const date = new Date(iso).getTime();
+  const today = new Date(now);
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  if (date >= startOfToday) return "Today";
+  if (date >= startOfToday - 6 * 24 * 60 * 60 * 1000) return "This week";
+  return "Earlier";
+}

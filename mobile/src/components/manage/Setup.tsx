@@ -12,6 +12,7 @@ import { api, uploadFile } from "../../api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../theme";
 import { Body, Btn, Card, Cost, Icon, Label, ListItem, Meta, Row, assetUri } from "../ui";
 import { Area, Bubble, Line, Overline, Well, openWeb, useNotify } from "./bits";
+import { BackingSummary } from "./BackingSummary";
 import { mkey } from "./shared";
 
 const VISUAL_SLOTS = [
@@ -171,6 +172,9 @@ export function Setup({ projectId, project, isOwner }: { projectId: string; proj
         <ListItem icon="open-outline" title="View public page" subtitle="See it the way visitors do" onPress={() => router.push(`/project/${projectId}` as any)} />
         <ListItem icon="link-outline" title="Links, application questions, business plan" subtitle="Edit these on the web" onPress={() => openWeb(`/projects/${projectId}/manage`)} />
       </Card>
+
+      {/* Backing sits at the foot of Setup on the web too; owner-only. */}
+      {isOwner && <BackingSummary projectId={projectId} />}
     </View>
   );
 }

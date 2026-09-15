@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { FlatList, Pressable, RefreshControl, StyleSheet, Text, TextInput, View, Platform } from "react-native";
+import { FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, Platform } from "react-native";
 import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { api, fetchMe } from "../../src/api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
 import { Avatar, Empty, Icon, IconButton, Loading, Segments } from "../../src/components/ui";
-import { inboxTime, personAvatar, personName } from "../../src/networkData";
+import { Sheet } from "../../src/components/Sheet";
+import { inboxTime, personAvatar, personName, useConnections } from "../../src/networkData";
 
 interface Conversation {
   userId: string;
@@ -26,6 +27,9 @@ export default function Messages() {
   const router = useRouter();
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
+  const [composing, setComposing] = useState(false);
+  const [who, setWho] = useState("");
+  const connections = useConnections(composing);
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: fetchMe });
   const { data, isLoading, isRefetching, refetch } = useQuery({
     queryKey: ["conversations"],
@@ -45,20 +49,23 @@ export default function Messages() {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.surface }}>
+      <View style={s.titleRow}>
+        <Text style={s.title}>Messages</Text>
+        <IconButton name="create-outline" label="New message" color={colors.text} onPress={() => { setWho(""); setComposing(true); }} />
+      </View>
       <View style={s.toolbar}>
         <View style={s.search}>
           <Icon name="search" size={16} color={colors.textTertiary} />
           <TextInput
             value={q}
             onChangeText={setQ}
-            placeholder="Search messages"
+            placeholder="Search conversations"
             placeholderTextColor={colors.textTertiary}
             style={[s.searchInput, Platform.OS === "web" && ({ outlineWidth: 0, outlineStyle: "none" } as object)]}
             autoCapitalize="none"
             accessibilityLabel="Search conversations"
           />
         </View>
-        <IconButton name="create-outline" label="New message" color={colors.text} onPress={() => router.push("/network/connections")} />
       </View>
       <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.md, borderBottomWidth: 1, borderColor: colors.border }}>
         <Segments
@@ -82,7 +89,7 @@ export default function Messages() {
               title="No messages yet"
               body="Once you're connected with someone, you can message them from their profile or your network."
               action="Message a connection"
-              onAction={() => router.push("/network/connections")}
+              onAction={() => { setWho(""); setComposing(true); }}
             />
           )
         }
@@ -108,6 +115,9 @@ export default function Messages() {
                   <Text style={[s.preview, unread && { color: colors.text, fontFamily: fontFamily.semibold }]} numberOfLines={1}>
                     {mine ? "You: " : ""}{c.lastMessage.content}
                   </Text>
+                  {mine && !unread && (
+                    <Icon name={c.lastMessage.read ? "checkmark-done" : "checkmark"} size={15} color={c.lastMessage.read ? colors.primary : colors.textTertiary} />
+                  )}
                   {unread && (
                     <View style={s.count}>
                       <Text style={s.countText}>{c.unreadCount > 9 ? "9+" : c.unreadCount}</Text>
@@ -119,12 +129,73 @@ export default function Messages() {
           );
         }}
       />
+
+      <Sheet
+        visible={composing}
+        onClose={() => setComposing(false)}
+        title="New message"
+        subtitle="You can message people you're connected with."
+      >
+        <View style={s.sheetSearch}>
+          <Icon name="search" size={16} color={colors.textTertiary} />
+          <TextInput
+            value={who}
+            onChangeText={setWho}
+            placeholder="Type a name"
+            placeholderTextColor={colors.textTertiary}
+            style={[s.searchInput, Platform.OS === "web" && ({ outlineWidth: 0, outlineStyle: "none" } as object)]}
+            autoCapitalize="none"
+            accessibilityLabel="Search connections"
+          />
+        </View>
+        {connections.isLoading ? <Loading /> : (() => {
+          const needleWho = who.trim().toLowerCase();
+          const people = (connections.data ?? [])
+            .map((row) => ({ row, name: personName(row.user, row.profile) }))
+            .filter(({ name, row }) => !needleWho || name.toLowerCase().includes(needleWho) || (row.profile?.headline ?? "").toLowerCase().includes(needleWho));
+          if (!people.length) {
+            return (
+              <Empty
+                icon="people-outline"
+                title={needleWho ? "No connection by that name" : "No connections yet"}
+                body={needleWho ? undefined : "Connect with builders from the Network tab — once they accept, you can message each other."}
+                action={needleWho ? undefined : "Find people"}
+                onAction={() => { setComposing(false); router.push("/(tabs)/discover"); }}
+              />
+            );
+          }
+          return (
+            <View style={{ maxHeight: 360 }}>
+              <ScrollView keyboardShouldPersistTaps="handled">
+                {people.slice(0, 50).map(({ row, name }) => (
+                  <Pressable
+                    key={row.id}
+                    onPress={() => { setComposing(false); router.push(`/chat/${row.user.id}`); }}
+                    style={({ pressed }) => [s.pick, pressed && { backgroundColor: colors.surfaceRaised }]}
+                    accessibilityRole="button"
+                  >
+                    <Avatar name={name} uri={personAvatar(row.user, row.profile)} size={40} />
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={[s.name, { flex: 0 }]} numberOfLines={1}>{name}</Text>
+                      {row.profile?.headline ? <Text style={s.headline} numberOfLines={1}>{row.profile.headline}</Text> : null}
+                    </View>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
+          );
+        })()}
+      </Sheet>
     </View>
   );
 }
 
 const s = StyleSheet.create({
-  toolbar: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.sm },
+  titleRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: spacing.lg, paddingTop: spacing.md },
+  title: { color: colors.text, fontSize: font.lg, fontFamily: fontFamily.bold },
+  toolbar: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.sm },
+  sheetSearch: { flexDirection: "row", alignItems: "center", gap: spacing.sm, backgroundColor: colors.surfaceRaised, borderRadius: radius.sm, paddingHorizontal: spacing.md, height: 40 },
+  pick: { flexDirection: "row", alignItems: "center", gap: spacing.md, paddingVertical: spacing.sm, borderRadius: radius.sm },
   search: { flex: 1, flexDirection: "row", alignItems: "center", gap: spacing.sm, backgroundColor: colors.surfaceRaised, borderRadius: radius.sm, paddingHorizontal: spacing.md, height: 38 },
   searchInput: { flex: 1, color: colors.text, fontSize: font.sm, fontFamily: fontFamily.regular, paddingVertical: 0 },
   row: { flexDirection: "row", alignItems: "center", gap: spacing.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },

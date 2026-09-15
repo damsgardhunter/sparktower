@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { Image, Pressable, Text, TextInput, View } from "react-native";
 import { Stack, useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../../src/api/client";
+import * as DocumentPicker from "expo-document-picker";
+import { api, uploadFile } from "../../src/api/client";
 import { useAuth } from "../../src/auth/AuthContext";
 import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
 import {
@@ -26,12 +27,12 @@ const LEVELS: Choice<string> = [
   { value: "beginner", label: "Beginner" }, { value: "intermediate", label: "Intermediate" }, { value: "expert", label: "Expert" },
 ];
 const RISK: Choice<string> = [{ value: "low", label: "Low" }, { value: "moderate", label: "Moderate" }, { value: "high", label: "High" }];
-const SPEED: Choice<string> = [{ value: "speed", label: "Speed first" }, { value: "balanced", label: "Balanced" }, { value: "polish", label: "Polish first" }];
+const SPEED: Choice<string> = [{ value: "speed", label: "Speed First" }, { value: "balanced", label: "Balanced" }, { value: "polish", label: "Polish First" }];
 const SCHEDULE: Choice<string> = [{ value: "structured", label: "Structured" }, { value: "flexible", label: "Flexible" }, { value: "hybrid", label: "Hybrid" }];
 const CONFLICT: Choice<string> = [
   { value: "direct", label: "Direct" }, { value: "diplomatic", label: "Diplomatic" }, { value: "avoidant", label: "Avoidant" }, { value: "collaborative", label: "Collaborative" },
 ];
-const BUILDER: Choice<string> = [{ value: "long-term", label: "Long-term" }, { value: "experimental", label: "Experimenter" }, { value: "both", label: "Both" }];
+const BUILDER: Choice<string> = [{ value: "long-term", label: "Long-Term" }, { value: "experimental", label: "Experimenter" }, { value: "both", label: "Both" }];
 
 const TEXT_FIELDS = ["displayName", "username", "headline", "bio", "location", "websiteUrl", "githubUrl", "linkedinUrl"] as const;
 type Form = Record<(typeof TEXT_FIELDS)[number], string> & {
@@ -44,6 +45,7 @@ type Form = Record<(typeof TEXT_FIELDS)[number], string> & {
   scheduleStyle: string | null;
   conflictStyle: string | null;
   builderType: string | null;
+  resumeUrl: string;
 };
 
 function fromProfile(p: any, user: any): Form {
@@ -65,6 +67,7 @@ function fromProfile(p: any, user: any): Form {
     scheduleStyle: p?.scheduleStyle ?? null,
     conflictStyle: p?.conflictStyle ?? null,
     builderType: p?.builderType ?? null,
+    resumeUrl: p?.resumeUrl || "",
   };
 }
 
@@ -150,6 +153,7 @@ export default function EditProfile() {
     void qc.invalidateQueries({ queryKey: ["profile-summary"] });
     void qc.invalidateQueries({ queryKey: ["me"] });
     void qc.invalidateQueries({ queryKey: ["user"] });
+    void qc.invalidateQueries({ queryKey: ["resume-status"] });
     void refreshUser();
   };
 
@@ -167,6 +171,27 @@ export default function EditProfile() {
     onError: (e: any) => show({ text: e?.message || "Couldn't save that photo.", tone: "error" }),
   });
 
+  const resumeUpload = useMutation({
+    mutationFn: async () => {
+      const picked = await DocumentPicker.getDocumentAsync({
+        type: ["application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+        copyToCacheDirectory: true,
+      });
+      if (picked.canceled || !picked.assets?.[0]) return null;
+      const file = picked.assets[0];
+      const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
+      if (![".pdf", ".doc", ".docx"].includes(ext)) throw new Error("Please upload a PDF, DOC, or DOCX file.");
+      if (file.size && file.size > 10 * 1024 * 1024) throw new Error("That file is over 10MB.");
+      return uploadFile({ uri: file.uri, name: file.name, mimeType: file.mimeType || "application/pdf", size: file.size });
+    },
+    onSuccess: (path) => {
+      if (!path) return;
+      set("resumeUrl", path);
+      show({ text: "Resume uploaded. Save your changes to keep it.", tone: "success" });
+    },
+    onError: (e: any) => show({ text: e?.message || "Upload failed", tone: "error" }),
+  });
+
   const save = useMutation({
     mutationFn: () => {
       const f = form!;
@@ -179,6 +204,7 @@ export default function EditProfile() {
         experienceLevel: f.experienceLevel, skills: f.skills, interests: f.interests, hoursPerWeek: hours,
         riskTolerance: f.riskTolerance, speedVsPolish: f.speedVsPolish, scheduleStyle: f.scheduleStyle,
         conflictStyle: f.conflictStyle, builderType: f.builderType,
+        ...(f.resumeUrl ? { resumeUrl: f.resumeUrl } : {}),
       });
       return api("/api/profile", { method: "POST", body });
     },
@@ -193,7 +219,7 @@ export default function EditProfile() {
   return (
     <>
       <Stack.Screen options={{
-        title: "Edit profile",
+        title: "Edit Profile",
         headerRight: () => (
           <Pressable onPress={() => save.mutate()} disabled={save.isPending} hitSlop={10} style={{ paddingHorizontal: spacing.sm }}>
             <Text style={{ color: colors.primary, fontFamily: fontFamily.semibold, fontSize: font.base, opacity: save.isPending ? 0.5 : 1 }}>{save.isPending ? "Saving…" : "Save"}</Text>
@@ -227,7 +253,7 @@ export default function EditProfile() {
         </Section>
 
         <Section title="Intro">
-          <Field label="Full name *" value={form.displayName} onChangeText={(v) => set("displayName", v)} autoCapitalize="words" maxLength={80} />
+          <Field label="Full Name *" value={form.displayName} onChangeText={(v) => set("displayName", v)} autoCapitalize="words" maxLength={80} />
           <Field label="Username" value={form.username} onChangeText={(v) => set("username", v.replace(/\s/g, ""))} autoCapitalize="none" placeholder="maya" maxLength={40} />
           <Field label="Headline" value={form.headline} onChangeText={(v) => set("headline", v)} placeholder="Founder building tools for student clubs" maxLength={120} />
           <Field label="Location" value={form.location} onChangeText={(v) => set("location", v)} placeholder="City, Country" />
@@ -241,8 +267,8 @@ export default function EditProfile() {
 
         <Section title="Links">
           <Field label="Website" value={form.websiteUrl} onChangeText={(v) => set("websiteUrl", v)} autoCapitalize="none" placeholder="https://" />
-          <Field label="GitHub" value={form.githubUrl} onChangeText={(v) => set("githubUrl", v)} autoCapitalize="none" placeholder="https://github.com/…" />
-          <Field label="LinkedIn" value={form.linkedinUrl} onChangeText={(v) => set("linkedinUrl", v)} autoCapitalize="none" placeholder="https://linkedin.com/in/…" />
+          <Field label="GitHub URL" value={form.githubUrl} onChangeText={(v) => set("githubUrl", v)} autoCapitalize="none" placeholder="https://github.com/…" />
+          <Field label="LinkedIn URL" value={form.linkedinUrl} onChangeText={(v) => set("linkedinUrl", v)} autoCapitalize="none" placeholder="https://linkedin.com/in/…" />
         </Section>
 
         <Section title="Skills and interests">
@@ -250,26 +276,47 @@ export default function EditProfile() {
           <TagEditor label="Interests" values={form.interests} onChange={(v) => set("interests", v)} placeholder="e.g. EdTech" max={20} />
         </Section>
 
-        <Section title="Co-founder preferences">
+        <Section title="Co-Founder Preferences">
           <Meta style={{ marginTop: -spacing.sm, fontSize: font.sm }}>Used to match you with people who work the way you do.</Meta>
-          <Field label="Hours per week" value={form.hoursPerWeek} onChangeText={(v) => set("hoursPerWeek", v.replace(/[^0-9]/g, ""))} numeric placeholder="e.g. 20" maxLength={2} />
-          <ChoiceField label="Risk tolerance" options={RISK} value={form.riskTolerance} onChange={(v) => set("riskTolerance", v)} />
-          <ChoiceField label="Speed vs polish" options={SPEED} value={form.speedVsPolish} onChange={(v) => set("speedVsPolish", v)} />
-          <ChoiceField label="Schedule style" options={SCHEDULE} value={form.scheduleStyle} onChange={(v) => set("scheduleStyle", v)} />
-          <ChoiceField label="Conflict style" options={CONFLICT} value={form.conflictStyle} onChange={(v) => set("conflictStyle", v)} />
-          <ChoiceField label="Builder type" options={BUILDER} value={form.builderType} onChange={(v) => set("builderType", v)} />
+          <Field label="Hours/Week" value={form.hoursPerWeek} onChangeText={(v) => set("hoursPerWeek", v.replace(/[^0-9]/g, ""))} numeric placeholder="e.g. 20" maxLength={2} />
+          <ChoiceField label="Risk Tolerance" options={RISK} value={form.riskTolerance} onChange={(v) => set("riskTolerance", v)} />
+          <ChoiceField label="Speed vs Polish" options={SPEED} value={form.speedVsPolish} onChange={(v) => set("speedVsPolish", v)} />
+          <ChoiceField label="Schedule Style" options={SCHEDULE} value={form.scheduleStyle} onChange={(v) => set("scheduleStyle", v)} />
+          <ChoiceField label="Conflict Style" options={CONFLICT} value={form.conflictStyle} onChange={(v) => set("conflictStyle", v)} />
+          <ChoiceField label="Builder Type" options={BUILDER} value={form.builderType} onChange={(v) => set("builderType", v)} />
+        </Section>
+
+        <Section title="Resume">
+          <Row between>
+            <Row center gap={spacing.sm} style={{ flex: 1 }}>
+              {form.resumeUrl ? (
+                <>
+                  <Icon name="document-text-outline" size={18} color={colors.textSecondary} />
+                  <Text style={{ fontFamily: fontFamily.regular, fontSize: font.sm, color: colors.textSecondary }}>Resume uploaded</Text>
+                  <Icon name="checkmark-circle" size={18} color={colors.success} />
+                </>
+              ) : (
+                <Text style={{ fontFamily: fontFamily.regular, fontSize: font.sm, color: colors.textTertiary }}>No resume uploaded</Text>
+              )}
+            </Row>
+            <Btn small variant="outline" icon="cloud-upload-outline" label={form.resumeUrl ? "Replace" : "Upload"} loading={resumeUpload.isPending} onPress={() => resumeUpload.mutate()} />
+          </Row>
+          <Meta>PDF, DOC or DOCX, up to 10MB.</Meta>
         </Section>
 
         <View style={{ backgroundColor: colors.surface, borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.border }}>
           <ListItem icon="hand-left-outline" title="Looking for" subtitle={profile?.lookingFor?.role ? `${profile.lookingFor.role}${profile.lookingFor.isActive ? "" : " · hidden"}` : "Tell people what you need"} onPress={() => router.push("/profile/looking-for")} />
-          <ListItem icon="document-text-outline" title="Résumé"
-            subtitle={resume?.hasResume ? (resume.readable ? "Uploaded · Nova can read it" : "Uploaded, but Nova can't read it") : "Upload a résumé and let Nova fill in your experience"}
+          <ListItem icon="document-text-outline" title="Build with résumé"
+            subtitle={resume?.hasResume ? (resume.readable ? "Nova can read your résumé" : "Nova can't read your résumé") : "Let Nova fill in your experience from a résumé"}
             onPress={() => router.push("/profile-builder")} />
         </View>
 
         <View style={{ paddingHorizontal: spacing.lg, gap: spacing.sm }}>
           {error && <ErrorNote message={error} />}
-          <Btn label="Save changes" loading={save.isPending} onPress={() => { setError(null); save.mutate(); }} />
+          <Row gap={spacing.sm}>
+            <Btn label="Cancel" variant="ghost" style={{ flex: 1 }} onPress={() => (router.canGoBack() ? router.back() : router.replace("/(tabs)/profile"))} />
+            <Btn label="Save Changes" loading={save.isPending} style={{ flex: 2 }} onPress={() => { setError(null); save.mutate(); }} />
+          </Row>
         </View>
       </Screen>
       <NoticeBanner notice={notice} onDismiss={clear} />

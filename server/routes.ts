@@ -6,7 +6,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage, isTaskOnTime } from "./storage";
 import { db } from "./db";
-import { users, projectMembers, projects, userProfiles, projectDataShapes, pathWork } from "@shared/schema";
+import { users, projectMembers, projects, userProfiles, projectDataShapes, pathWork, projectDecisions, projectFiles, projectLinks } from "@shared/schema";
 import { setupAuth, isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { registerAuthRoutes } from "./replit_integrations/auth/routes";
 import { attachBearerUser, registerMobileAuthRoutes } from "./mobile-auth";
@@ -17,6 +17,7 @@ import { registerNovaBriefingRoutes } from "./nova-briefing";
 import { registerFeedbackLoopRoutes } from "./feedback-loop-routes";
 import { registerNotificationRoutes, notify, unnotify } from "./notifications";
 import { registerPathReturnRoutes, lastDoneStep, weeklyUpdateFor } from "./path-return";
+import { registerArtifactRoutes } from "./artifact-routes";
 import { ensureCreatorBadges } from "./backer-badges";
 import { registerFeedRoutes, registerProjectDiscussionRoutes, publishSystemPost, SYSTEM_POST_COPY, SYSTEM_POST_TYPES } from "./feed-routes";
 import { registerProfileRoutes } from "./profile-routes";
@@ -361,6 +362,7 @@ export async function registerRoutes(
   registerFeedbackLoopRoutes(app);
   registerNotificationRoutes(app);
   registerPathReturnRoutes(app);
+  registerArtifactRoutes(app);
   registerProfileRoutes(app);
   registerDocumentRoutes(app);
   registerCodeAuditRoutes(app);
@@ -5341,15 +5343,34 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     } catch (error) { res.status(500).json({ message: "Failed to create decision" }); }
   });
 
+  /**
+   * Decisions, files and links are addressed by their own id, so the project
+   * they belong to is looked up first: only its members may change them.
+   */
+  const memberOfOwningProject = async (table: typeof projectDecisions | typeof projectFiles | typeof projectLinks, id: string, userId: string) => {
+    const [row] = await db.select({ projectId: table.projectId }).from(table).where(eq(table.id, id));
+    if (!row) return "missing" as const;
+    return (await isProjectMember(userId, row.projectId)) ? "ok" as const : "forbidden" as const;
+  };
+  const refuse = (res: any, access: "missing" | "forbidden") =>
+    access === "missing" ? res.status(404).json({ message: "Not found" }) : res.status(403).json({ message: "Not a project member" });
+
   app.patch("/api/decisions/:id", isAuthenticated, async (req: any, res) => {
     try {
-      const decision = await storage.updateDecision(req.params.id, req.body);
+      const access = await memberOfOwningProject(projectDecisions, req.params.id, req.user.id);
+      if (access !== "ok") return refuse(res, access);
+      // Only the decision's own text and status; never who made it or which project it's in.
+      const { title, decision: text, context, status } = req.body ?? {};
+      const changes = Object.fromEntries(Object.entries({ title, decision: text, context, status }).filter(([, v]) => v !== undefined));
+      const decision = await storage.updateDecision(req.params.id, changes);
       res.json(decision);
     } catch (error) { res.status(500).json({ message: "Failed to update decision" }); }
   });
 
   app.delete("/api/decisions/:id", isAuthenticated, async (req: any, res) => {
     try {
+      const access = await memberOfOwningProject(projectDecisions, req.params.id, req.user.id);
+      if (access !== "ok") return refuse(res, access);
       await storage.deleteDecision(req.params.id);
       res.json({ success: true });
     } catch (error) { res.status(500).json({ message: "Failed to delete decision" }); }
@@ -5379,6 +5400,8 @@ Respond ONLY with valid JSON (no markdown, no code fences):
 
   app.delete("/api/files/:id", isAuthenticated, async (req: any, res) => {
     try {
+      const access = await memberOfOwningProject(projectFiles, req.params.id, req.user.id);
+      if (access !== "ok") return refuse(res, access);
       await storage.deleteProjectFile(req.params.id);
       res.json({ success: true });
     } catch (error) { res.status(500).json({ message: "Failed to delete file" }); }
@@ -5403,6 +5426,8 @@ Respond ONLY with valid JSON (no markdown, no code fences):
 
   app.delete("/api/links/:id", isAuthenticated, async (req: any, res) => {
     try {
+      const access = await memberOfOwningProject(projectLinks, req.params.id, req.user.id);
+      if (access !== "ok") return refuse(res, access);
       await storage.deleteProjectLink(req.params.id);
       res.json({ success: true });
     } catch (error) { res.status(500).json({ message: "Failed to delete link" }); }

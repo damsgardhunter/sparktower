@@ -8,15 +8,16 @@
  * The badge levels are restated from shared/backing.ts — Metro can't resolve
  * the web app's shared folder.
  */
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { Image, Pressable, ScrollView, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LinearGradient } from "expo-linear-gradient";
 import { api } from "../api/client";
 import { colors, font, fontFamily, novaGradient, radius, spacing } from "../theme";
-import { assetUri, Body, Btn, Icon, Meta, Row, Section, type IconName } from "./ui";
+import { assetUri, Body, Btn, Icon, Meta, Row, type IconName } from "./ui";
 import { Sheet, type Notice } from "./Sheet";
+import { CardTitle, OutlineButton, PCard, Pill } from "./profile/kit";
 
 // --- Restated from shared/backing.ts --------------------------------------
 
@@ -140,13 +141,13 @@ export function BadgeShowcase({ userId, isOwn, notify }: { userId: string; isOwn
   const generate = useMutation({
     mutationFn: (badgeId: string) => api(`/api/backer-badges/${badgeId}/generate`, { method: "POST" }),
     onSuccess: () => { notify({ text: "Badge made.", tone: "success" }); refresh(); },
-    onError: (e: any) => notify({ text: e?.message || "Couldn't make that badge.", tone: "error" }),
+    onError: (e: any) => notify({ text: e?.message || "Couldn't make that badge. Try again in a moment.", tone: "error" }),
   });
 
   const save = useMutation({
     mutationFn: (badgeIds: string[]) => api("/api/me/badges/showcase", { method: "PUT", body: { badgeIds } }),
-    onSuccess: () => { notify({ text: "Badges updated.", tone: "success" }); setPicking(false); refresh(); },
-    onError: (e: any) => notify({ text: e?.message || "Couldn't save that.", tone: "error" }),
+    onSuccess: () => { notify({ text: "Profile updated", tone: "success" }); setPicking(false); refresh(); },
+    onError: () => notify({ text: "Couldn't save that", tone: "error" }),
   });
 
   const hasAny = (pinned?.length ?? 0) > 0;
@@ -155,16 +156,18 @@ export function BadgeShowcase({ userId, isOwn, notify }: { userId: string; isOwn
   if (!hasAny && !isOwn) return null;
 
   return (
-    <Section title="Badges" action={isOwn && earned > 0 ? "Choose" : undefined} onAction={() => setPicking(true)}>
+    <PCard>
+      <CardTitle icon="sparkles" iconColor={colors.primary} action={isOwn && earned > 0 ? "Choose" : undefined} actionIcon="options-outline" onAction={() => setPicking(true)}>
+        Badges
+      </CardTitle>
       {isOwn && creatorsToMake > 0 && (
         <Pressable onPress={() => setPicking(true)}>
           <LinearGradient colors={[...novaGradient]} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={{ borderRadius: radius.sm, padding: 1.5 }}>
-            <View style={{ backgroundColor: colors.background, borderRadius: radius.sm - 1, padding: spacing.md, flexDirection: "row", gap: spacing.sm, alignItems: "center" }}>
-              <Icon name="sparkles" size={18} color={colors.novaEmerald} />
-              <Body style={{ flex: 1 }}>
-                <Text style={{ fontFamily: fontFamily.semibold }}>Generate your creator badge{creatorsToMake === 1 ? "" : "s"}</Text>
-                <Text style={{ color: colors.textSecondary }}> for {creatorsToMake} project{creatorsToMake === 1 ? "" : "s"} you created, in Nova's colours.</Text>
-              </Body>
+            <View style={{ backgroundColor: colors.background, borderRadius: radius.sm - 1, paddingHorizontal: spacing.md, paddingVertical: spacing.sm }}>
+              <Text style={{ fontSize: font.xs + 1, lineHeight: 18, fontFamily: fontFamily.regular, color: colors.textTertiary }}>
+                <Text style={{ fontFamily: fontFamily.semibold, color: colors.text }}>Generate your creator badge{creatorsToMake === 1 ? "" : "s"}</Text>
+                {` — ${creatorsToMake} project${creatorsToMake === 1 ? "" : "s"} you created, in Nova's colours. It's what shows next to your name.`}
+              </Text>
             </View>
           </LinearGradient>
         </Pressable>
@@ -178,22 +181,22 @@ export function BadgeShowcase({ userId, isOwn, notify }: { userId: string; isOwn
           ))}
         </Row>
       ) : earned > 0 ? (
-        <Meta style={{ fontSize: font.sm }}>You've earned {earned} badge{earned === 1 ? "" : "s"}. Pick which to show.</Meta>
+        <Meta style={{ fontSize: font.xs + 1 }}>You've earned {earned} badge{earned === 1 ? "" : "s"} — pick which to show.</Meta>
       ) : (
-        <View style={{ gap: spacing.md }}>
-          <Row gap={spacing.md}>
+        <View style={{ gap: spacing.sm }}>
+          <Row gap={spacing.sm}>
             {BADGE_LEVELS.map((l) => (
               <View key={l.key} style={{ alignItems: "center", gap: 4 }}>
-                <View style={{ width: 40, height: 40, borderRadius: 20, borderWidth: 2, borderColor: l.hex, opacity: 0.45 }} />
-                <Meta>{l.label}</Meta>
+                <View style={{ width: 40, height: 40, borderRadius: 20, borderWidth: 2, borderColor: l.hex, backgroundColor: `${l.hex}22`, opacity: 0.45 }} />
+                <Text style={{ fontSize: 9, fontFamily: fontFamily.regular, color: colors.textTertiary }}>{l.label}</Text>
               </View>
             ))}
           </Row>
-          <Body muted>
-            Create a public project and you get a creator badge in Nova's colours. Back one and you earn a badge for it:
-            bronze at ${BADGE_LEVELS[0].minCents / 100}, up to platinum at ${BADGE_LEVELS[3].minCents / 100}. Pin up to {MAX_SHOWCASE_BADGES} here.
-          </Body>
-          <Btn label="Find a project to back" icon="search" variant="outline" small style={{ alignSelf: "flex-start" }} onPress={() => router.push("/(tabs)/discover")} />
+          <Text style={{ fontSize: font.xs + 1, lineHeight: 18, fontFamily: fontFamily.regular, color: colors.textTertiary }}>
+            Create a public project and you get a creator badge in Nova's colours. Back one and you earn a badge for it — bronze at ${BADGE_LEVELS[0].minCents / 100},
+            up to platinum at ${BADGE_LEVELS[3].minCents / 100}. Nova builds the artwork from that project's logo. Pin up to {MAX_SHOWCASE_BADGES} here.
+          </Text>
+          <OutlineButton label="Find a project to back" icon="search" style={{ alignSelf: "flex-start" }} onPress={() => router.push("/(tabs)/discover")} />
         </View>
       )}
 
@@ -207,7 +210,7 @@ export function BadgeShowcase({ userId, isOwn, notify }: { userId: string; isOwn
           saving={save.isPending}
         />
       )}
-    </Section>
+    </PCard>
   );
 }
 
@@ -272,34 +275,39 @@ const PLATFORM_BADGE_ICONS: Record<string, IconName> = {
 const RARITY: Record<string, { bg: string; border: string }> = {
   common: { bg: "#F3F4F6", border: "#D1D5DB" },
   rare: { bg: "#EFF6FF", border: "#93C5FD" },
-  epic: { bg: colors.primarySoft, border: "#C4A1D6" },
+  epic: { bg: "#FAF5FF", border: "#D8B4FE" },
   legendary: { bg: "#FEFCE8", border: "#FACC15" },
 };
 
 /** Platform achievements (first project, streaks…). Nothing when none are earned. */
 export function EarnedBadges({ userId }: { userId: string }) {
+  const [open, setOpen] = useState<string | null>(null);
   const { data } = useQuery({
     queryKey: ["user-badges", userId],
     queryFn: () => api<any[]>(`/api/users/${userId}/badges`).catch(() => []),
   });
   if (!data?.length) return null;
+  const described = data.find((ub) => ub.id === open);
   return (
-    <Section title="Achievements">
-      <Row wrap gap={spacing.sm}>
+    <PCard>
+      <CardTitle>Earned Badges</CardTitle>
+      <Row wrap gap={spacing.md - 2}>
         {data.map((ub) => {
           const r = RARITY[ub.badge?.rarity] ?? RARITY.common;
           return (
-            <View key={ub.id} style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radius.sm, borderWidth: 1, backgroundColor: r.bg, borderColor: r.border }}>
+            <Pressable key={ub.id} onPress={() => setOpen(open === ub.id ? null : ub.id)}
+              style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radius.sm, borderWidth: 1, backgroundColor: r.bg, borderColor: r.border }}>
               <Icon name={PLATFORM_BADGE_ICONS[ub.badge?.icon] ?? "ribbon"} size={16} color={colors.text} />
               <View>
                 <Text style={{ fontSize: font.xs, fontFamily: fontFamily.semibold, color: colors.text }}>{ub.badge?.name}</Text>
                 <Text style={{ fontSize: 10, fontFamily: fontFamily.regular, color: colors.textTertiary, textTransform: "capitalize" }}>{ub.badge?.rarity}</Text>
               </View>
-            </View>
+            </Pressable>
           );
         })}
       </Row>
-    </Section>
+      {described?.badge?.description ? <Meta style={{ fontSize: font.xs + 1 }}>{described.badge.description}</Meta> : null}
+    </PCard>
   );
 }
 
@@ -320,39 +328,56 @@ export function BackerCredits({ userId, isOwn, notify }: { userId: string; isOwn
     mutationFn: ({ id, isAnonymous }: { id: string; isAnonymous: boolean }) =>
       api(`/api/backings/${id}/privacy`, { method: "PATCH", body: { isAnonymous } }),
     onSuccess: (_r, v) => {
-      notify({ text: v.isAnonymous ? "Hidden from the backer wall." : "Now shown on the backer wall.", tone: "success" });
+      notify({ text: v.isAnonymous ? "Hidden from the backer wall" : "Now shown on the backer wall", tone: "success" });
       void qc.invalidateQueries({ queryKey: ["me-backings"] });
       void qc.invalidateQueries({ queryKey: ["user-backings", userId] });
     },
-    onError: () => notify({ text: "Couldn't change that.", tone: "error" }),
+    onError: () => notify({ text: "Couldn't change that", tone: "error" }),
   });
 
   const visible = (mine ?? []).filter((b) => b.status === "held" || b.status === "released");
-  if (isOwn ? !visible.length && !data?.length : !data?.length) return null;
+  if (!data?.length && !visible.length) return null;
 
-  const row = (key: string, projectId: string, title: string, number: number | null | undefined, meta: string, right?: ReactNode) => (
-    <Pressable key={key} onPress={() => router.push(`/project/${projectId}`)} style={{ flexDirection: "row", gap: spacing.md, alignItems: "center" }}>
-      <View style={{ width: 40, height: 40, borderRadius: radius.sm, backgroundColor: colors.primarySoft, alignItems: "center", justifyContent: "center" }}>
-        <Icon name="heart" size={18} color={colors.primary} />
-      </View>
-      <View style={{ flex: 1 }}>
-        <Body style={{ fontFamily: fontFamily.semibold }} numberOfLines={1}>{title}</Body>
-        <Meta>{[number != null ? formatBelieverNumber(number) : null, meta].filter(Boolean).join(" · ")}</Meta>
-      </View>
-      {right}
-    </Pressable>
+  const box = { borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, padding: spacing.sm + 2, gap: 6 } as const;
+  const head = (title: string, number?: number | null) => (
+    <Row between style={{ alignItems: "flex-start" }}>
+      <Text style={{ fontSize: font.sm, fontFamily: fontFamily.semibold, color: colors.text, flexShrink: 1 }}>{title}</Text>
+      {number != null ? <Text style={{ fontSize: font.xs, fontFamily: fontFamily.medium, color: colors.textTertiary }}>{formatBelieverNumber(number)}</Text> : null}
+    </Row>
   );
 
   return (
-    <Section title="Believed in">
-      {isOwn
-        ? visible.map((b) => row(b.id, b.projectId, b.projectTitle, b.believerNumber,
-            [b.tierNameAtBacking, b.isAnonymous ? "Hidden" : "On the wall"].filter(Boolean).join(" · "),
-            <Btn small variant="ghost" label={b.isAnonymous ? "Show name" : "Hide name"} disabled={privacy.isPending}
-              onPress={() => privacy.mutate({ id: b.id, isAnonymous: !b.isAnonymous })} />))
-        : data!.map((b) => row(`${b.projectId}-${b.createdAt}`, b.projectId, b.projectTitle, b.believerNumber,
-            [b.foundingBeliever ? "Founding believer" : null, b.tierName,
-              `since ${new Date(b.createdAt).toLocaleDateString("en-US", { month: "short", year: "numeric" })}`].filter(Boolean).join(" · ")))}
-    </Section>
+    <PCard>
+      <CardTitle icon="heart" iconColor={colors.primary}>Believed in</CardTitle>
+      <View style={{ gap: spacing.sm }}>
+        {isOwn
+          ? visible.map((b) => (
+            <View key={b.id} style={box}>
+              <Pressable onPress={() => router.push(`/project/${b.projectId}`)}>{head(b.projectTitle, b.believerNumber)}</Pressable>
+              <Row between wrap>
+                <Row wrap gap={4} center>
+                  {b.tierNameAtBacking ? <Pill label={b.tierNameAtBacking} variant="secondary" /> : null}
+                  <Pill label={b.isAnonymous ? "Hidden" : "On the wall"} icon={b.isAnonymous ? "eye-off-outline" : "eye-outline"} />
+                </Row>
+                <Pressable disabled={privacy.isPending} hitSlop={6} onPress={() => privacy.mutate({ id: b.id, isAnonymous: !b.isAnonymous })}>
+                  <Text style={{ fontSize: font.xs, fontFamily: fontFamily.semibold, color: colors.textSecondary }}>{b.isAnonymous ? "Show my name" : "Hide my name"}</Text>
+                </Pressable>
+              </Row>
+            </View>
+          ))
+          : data!.map((b) => (
+            <Pressable key={`${b.projectId}-${b.createdAt}`} onPress={() => router.push(`/project/${b.projectId}`)} style={({ pressed }) => [box, pressed && { borderColor: colors.primary }]}>
+              {head(b.projectTitle, b.believerNumber)}
+              <Row wrap gap={4} center>
+                {b.foundingBeliever ? <Pill label="Founding believer" icon="star" variant="default" /> : null}
+                {b.tierName ? <Pill label={b.tierName} variant="secondary" /> : null}
+                <Text style={{ fontSize: 10, fontFamily: fontFamily.regular, color: colors.textTertiary }}>
+                  since {new Date(b.createdAt).toLocaleDateString("en-US", { month: "short", year: "numeric" })}
+                </Text>
+              </Row>
+            </Pressable>
+          ))}
+      </View>
+    </PCard>
   );
 }

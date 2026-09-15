@@ -70,19 +70,20 @@ export function FeedText({
 
 // --- Reactions -------------------------------------------------------------
 
-/** One reaction as a small filled circle, the way a professional network stacks them. */
+/** One reaction, as the website draws it: its emoji, on a white disc so a stack of them overlaps cleanly. */
 export function ReactionBadge({ reaction, size = 18, ring = true }: { reaction: string; size?: number; ring?: boolean }) {
   const def = reactionDef(reaction);
   if (!def) return null;
   return (
     <View
       style={{
-        width: size, height: size, borderRadius: size / 2, backgroundColor: def.color,
+        width: size, height: size, borderRadius: size / 2, backgroundColor: ring ? colors.surface : "transparent",
         alignItems: "center", justifyContent: "center",
-        borderWidth: ring ? 1.5 : 0, borderColor: colors.surface,
       }}
     >
-      <Ionicons name={def.icon} size={size * 0.56} color="#FFFFFF" />
+      <Text style={{ fontSize: Math.round(size * (ring ? 0.72 : 0.86)), lineHeight: Math.round(size * 0.98), textAlign: "center" }} allowFontScaling={false}>
+        {def.emoji}
+      </Text>
     </View>
   );
 }
@@ -122,7 +123,7 @@ export function ReactionPicker({
             accessibilityLabel={r.label}
             style={({ pressed }) => [s.pickerItem, current === r.reaction && { backgroundColor: colors.primarySoft }, pressed && { transform: [{ scale: 1.15 }] }]}
           >
-            <ReactionBadge reaction={r.reaction} size={34} ring={false} />
+            <ReactionBadge reaction={r.reaction} size={32} ring={false} />
             <Text style={s.pickerLabel}>{r.label}</Text>
           </Pressable>
         ))}

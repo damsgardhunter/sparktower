@@ -64,7 +64,7 @@ export const POST_TYPES: PostTypeDef[] = [
     type: "launch", label: "Launch", icon: "sparkles-outline",
     hint: "It's live. Tell everyone",
     placeholder: "StudyBuddy Match is live for anyone at three campuses. Find a study partner in under two minutes.",
-    starters: ["It's live!", "After … months, we're launching…", "You can finally try…"],
+    starters: ["It's live 🚀", "After … months, we're launching…", "You can finally try…"],
   },
   {
     type: "investor_update", label: "Investor Update", icon: "trending-up-outline",
@@ -80,15 +80,31 @@ export const QUICK_POST_TYPES = COMPOSER_POST_TYPES.slice(0, 3);
 export const postTypeDef = (type: string): PostTypeDef =>
   POST_TYPES.find((t) => t.type === type) ?? POST_TYPES[0];
 
-export interface ReactionDef { reaction: Reaction; label: string; icon: IconName; color: string }
+/**
+ * The card badge colours from shared/feed.ts `accent` (Tailwind's -600 text,
+ * a 15% tint behind it and a 30% border), as plain values.
+ */
+export const POST_TYPE_ACCENTS: Record<PostType, { text: string; bg: string; border: string }> = {
+  project_update: { text: "#2563EB", bg: "rgba(59,130,246,0.15)", border: "rgba(59,130,246,0.30)" },
+  looking_for_help: { text: "#D97706", bg: "rgba(245,158,11,0.15)", border: "rgba(245,158,11,0.30)" },
+  looking_for_cofounder: { text: "#7C3AED", bg: "rgba(139,92,246,0.15)", border: "rgba(139,92,246,0.30)" },
+  seeking_feedback: { text: "#0891B2", bg: "rgba(6,182,212,0.15)", border: "rgba(6,182,212,0.30)" },
+  milestone: { text: "#059669", bg: "rgba(16,185,129,0.15)", border: "rgba(16,185,129,0.30)" },
+  idea_validation: { text: "#CA8A04", bg: "rgba(234,179,8,0.15)", border: "rgba(234,179,8,0.30)" },
+  launch: { text: "#E11D48", bg: "rgba(244,63,94,0.15)", border: "rgba(244,63,94,0.30)" },
+  investor_update: { text: "#475569", bg: "rgba(100,116,139,0.15)", border: "rgba(100,116,139,0.30)" },
+};
+export const postTypeAccent = (type: string) => POST_TYPE_ACCENTS[type as PostType] ?? POST_TYPE_ACCENTS.project_update;
 
-/** The web shows these as emoji; the app draws each as a coloured icon badge. */
+export interface ReactionDef { reaction: Reaction; label: string; emoji: string; icon: IconName; color: string }
+
+/** The same emoji as the website, and the colour a reaction's label takes when it's yours. */
 export const REACTIONS: ReactionDef[] = [
-  { reaction: "like", label: "Like", icon: "thumbs-up", color: "#2563EB" },
-  { reaction: "celebrate", label: "Celebrate", icon: "sparkles", color: "#16A34A" },
-  { reaction: "support", label: "Support", icon: "heart", color: "#7C3AED" },
-  { reaction: "insightful", label: "Insightful", icon: "bulb", color: "#D97706" },
-  { reaction: "funny", label: "Funny", icon: "happy", color: "#E11D48" },
+  { reaction: "like", label: "Like", emoji: "👍", icon: "thumbs-up", color: "#2563EB" },
+  { reaction: "celebrate", label: "Celebrate", emoji: "🎉", icon: "sparkles", color: "#059669" },
+  { reaction: "support", label: "Support", emoji: "🙌", icon: "heart", color: "#7C3AED" },
+  { reaction: "insightful", label: "Insightful", emoji: "💡", icon: "bulb", color: "#D97706" },
+  { reaction: "funny", label: "Funny", emoji: "😄", icon: "happy", color: "#E11D48" },
 ];
 export const reactionDef = (r?: string | null): ReactionDef | undefined => REACTIONS.find((x) => x.reaction === r);
 
@@ -121,6 +137,8 @@ export interface FeedPost {
   viewerIsTeam?: boolean;
   credits?: { commentId: string; authorId: string; name: string }[];
   pathStep?: { taskId: string; title: string } | null;
+  /** A weekly progress update: the path steps it shared. */
+  pathWeek?: { steps: { taskId: string; title: string }[] } | null;
 }
 
 export interface FeedPage { posts: FeedPost[]; nextCursor: string | null; followingCount?: number }

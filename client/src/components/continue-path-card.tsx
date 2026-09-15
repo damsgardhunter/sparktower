@@ -11,7 +11,8 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { errorText } from "@/lib/api-error";
 import { MAX_ASKS } from "@shared/feedback-loop";
-import { ArrowRight, Compass, Loader2, Share2, Sparkles, User } from "lucide-react";
+import { ArrowRight, Compass, Globe, Loader2, Share2, Sparkles, User } from "lucide-react";
+import { ARTIFACT_MAX_TAGS, ARTIFACT_TITLE_MAX } from "@shared/path-artifacts";
 
 export interface NextStepItem {
   project: { id: string; title: string; logoUrl: string | null };
@@ -89,6 +90,91 @@ export function ShareStepDialog({ projectId, projectTitle, step, open, onClose }
           <Button disabled={!content.trim() || share.isPending} onClick={() => share.mutate()} data-testid="button-share-step">
             {share.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Share2 className="h-4 w-4 mr-1.5" />}Share
           </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Publishing a finished step as an artifact: Nova assembles it from the step's
+ * own answer, you give it a title people would click and a few tags, and it
+ * goes out as a public page (/a/:id) and a feed post. The public page is what
+ * gets shared; strangers who sign up from it are credited back to you.
+ */
+export function PublishArtifactDialog({ projectId, step, open, onClose }: {
+  projectId: string; step: { taskId: string; title: string }; open: boolean; onClose: () => void;
+}) {
+  const { toast } = useToast();
+  const [title, setTitle] = useState(step.title);
+  const [tags, setTags] = useState("");
+  const [ask, setAsk] = useState("");
+  const [published, setPublished] = useState<string | null>(null);
+  const draft = useQuery<{ id: string; title: string; summary: string; body: string; files: { path: string }[]; tags: string[]; visibility: string }>({
+    queryKey: ["/api/projects", projectId, "path", "artifact", step.taskId],
+    queryFn: async () => {
+      const a = await (await apiRequest("POST", `/api/projects/${projectId}/path/tasks/${step.taskId}/artifact`)).json();
+      setTitle(a.title);
+      if (a.tags?.length) setTags(a.tags.join(", "));
+      return a;
+    },
+    enabled: open,
+    retry: false,
+    staleTime: Infinity,
+  });
+  const publish = useMutation({
+    mutationFn: async () => (await apiRequest("POST", `/api/artifacts/${draft.data!.id}/publish`, {
+      title: title.trim(), tags: tags.split(/[,\s]+/).filter(Boolean), asks: ask.trim() ? [ask.trim()] : [],
+    })).json() as Promise<{ url: string; postId: string }>,
+    onSuccess: (r) => {
+      setPublished(`${window.location.origin}${r.url}`);
+      refreshNextSteps(projectId);
+    },
+    onError: (e) => toast({ title: "Couldn't publish that", description: errorText(e), variant: "destructive" }),
+  });
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md" data-testid="publish-artifact-dialog">
+        <DialogHeader>
+          <DialogTitle>{published ? "Published" : "Publish what this step produced"}</DialogTitle>
+          <DialogDescription>
+            {published ? "It has a public page anyone can open, and a post on the feed." : "A public page with a title and tags, linked back to your project and its path, plus a feed post."}
+          </DialogDescription>
+        </DialogHeader>
+        {published ? (
+          <div className="space-y-2">
+            <input readOnly value={published} className="w-full rounded-md border border-border bg-muted px-2 py-1.5 text-sm" onFocus={(e) => e.target.select()} data-testid="text-artifact-url" />
+            <div className="flex gap-3 text-sm">
+              <button className="text-primary hover:underline" onClick={() => navigator.clipboard?.writeText(published)}>Copy link</button>
+              <a href={published} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline" data-testid="link-open-artifact">Open the page</a>
+            </div>
+          </div>
+        ) : draft.isLoading ? (
+          <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-primary" /></div>
+        ) : draft.isError ? (
+          <p className="text-sm text-destructive" data-testid="text-artifact-error">{errorText(draft.error)}</p>
+        ) : draft.data && (
+          <div className="space-y-2">
+            <label className="block text-xs font-medium">Public title
+              <input className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm" value={title} maxLength={ARTIFACT_TITLE_MAX} onChange={(e) => setTitle(e.target.value)} data-testid="input-artifact-title" />
+            </label>
+            <label className="block text-xs font-medium">Tags <span className="font-normal text-muted-foreground">(up to {ARTIFACT_MAX_TAGS}, comma separated)</span>
+              <input className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm" placeholder="pricing, landing-page" value={tags} onChange={(e) => setTags(e.target.value)} data-testid="input-artifact-tags" />
+            </label>
+            <div className="rounded-md border border-border bg-muted/40 p-2 text-xs max-h-40 overflow-y-auto whitespace-pre-wrap" data-testid="artifact-preview">
+              {draft.data.body || draft.data.summary}
+              {draft.data.files.length > 0 && `\n\n${draft.data.files.length} file${draft.data.files.length === 1 ? "" : "s"} built`}
+            </div>
+            <input className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm" placeholder="Ask the feed something (optional)" value={ask} onChange={(e) => setAsk(e.target.value)} data-testid="input-artifact-ask" />
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>{published ? "Done" : "Not now"}</Button>
+          {!published && (
+            <Button disabled={!draft.data || title.trim().length < 5 || publish.isPending} onClick={() => publish.mutate()} data-testid="button-publish-artifact">
+              {publish.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe className="h-4 w-4 mr-1.5" />}Publish
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

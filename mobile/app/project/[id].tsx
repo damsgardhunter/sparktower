@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { RefreshControl, ScrollView, View } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -6,20 +6,26 @@ import { api } from "../../src/api/client";
 import { useAuth } from "../../src/auth/AuthContext";
 import { exploreContext, markSeen } from "../../src/explore";
 import { colors, spacing } from "../../src/theme";
-import { Body, Btn, Empty, H1, Icon, Loading, Meta, TabStrip, errText } from "../../src/components/ui";
+import { Body, Btn, Empty, H1, Icon, Loading, Meta, errText } from "../../src/components/ui";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
 import { ProjectHeader } from "../../src/components/ProjectHeader";
 import { InvestCard } from "../../src/components/InvestSheet";
 import { BackingCard } from "../../src/components/BackingSheet";
 import { ApplySheet, PendingApplications, QuestionsSheet, type AppQuestion } from "../../src/components/ProjectApplications";
 import {
-  DiscussionTab, FollowersTab, MediaTab, MilestonesTab, OverviewTab, PROJECT_TABS, RoadmapTab, RolesTab, TeamTab,
-  UpdatesTab, unfilledRoles, type ProjectTab,
+  DiscussionTab, FollowersTab, LinksBlock, MediaTab, MilestonesTab, OverviewTab, PROJECT_TABS, QuestionsBlock, RailVisuals,
+  RoadmapTab, RolesTab, StatsBlock, StoryboardsBlock, TeamMembersBlock, TeamTab, TechStackBlock, UpdatesTab,
+  memberName, unfilledRoles, useProjectMilestones, useProjectUpdates, type ProjectTab,
 } from "../../src/components/ProjectPageTabs";
+import { useNewFeedbackCount } from "../../src/components/project/FeedbackInbox";
+import { ScrollingTabs } from "../../src/components/project/ScrollingTabs";
 
 /**
- * A project's public page, laid out like a company page — the native
- * counterpart of client/src/pages/project-dashboard.tsx and its social tabs.
+ * A project's public page — the native counterpart of
+ * client/src/pages/project-dashboard.tsx. The web's two columns stack: the
+ * header, the social tabs, then (on Overview) what the web keeps under the
+ * tabs and in its right rail — storyboards, tech stack, links, applications,
+ * Invest, Back this project, stats, team members and application questions.
  */
 export default function ProjectDetail() {
   const { id, tab: initialTab } = useLocalSearchParams<{ id: string; tab?: ProjectTab }>();
@@ -33,6 +39,9 @@ export default function ProjectDetail() {
   const [applyOpen, setApplyOpen] = useState(false);
   const [questionsOpen, setQuestionsOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
+  const contentY = useRef(0);
+  const backingY = useRef<number | null>(null);
 
   const { data: project, isLoading, isError } = useQuery({
     queryKey: ["project", id],
@@ -68,6 +77,15 @@ export default function ProjectDetail() {
     queryFn: () => api<any[]>(`/api/projects/${id}/applications`),
     enabled: isOwner,
   });
+  const { data: updates } = useProjectUpdates(id!);
+  const { data: milestones } = useProjectMilestones(id!);
+  const { data: campaign } = useQuery({
+    queryKey: ["project", id, "backing", "public"],
+    queryFn: () => api<any>(`/api/projects/${id}/backing/public`),
+    enabled: !!id && !restricted,
+    retry: false,
+  });
+  const newFeedback = useNewFeedbackCount(id!, !!user && !restricted && !!project && (project.ownerId === user.id || members.some((m) => m.userId === user.id)));
 
   /*
    * Follow says what it wants rather than toggling, so a double tap can't undo
@@ -141,11 +159,7 @@ export default function ProjectDetail() {
   const role = isOwner ? "owner" : isMember ? "member" : "visitor";
   const applied = !!myApplications?.some((a) => a.projectId === id && a.status === "pending");
   const ownerRow = members.find((m) => m.userId === project.ownerId);
-  const owner = ownerRow ? {
-    userId: ownerRow.userId,
-    name: ownerRow.profile?.displayName || [ownerRow.user?.firstName, ownerRow.user?.lastName].filter(Boolean).join(" ") || "The founder",
-    avatarUrl: ownerRow.profile?.avatarUrl,
-  } : null;
+  const owner = ownerRow ? { userId: ownerRow.userId, name: memberName(ownerRow), avatarUrl: ownerRow.profile?.avatarUrl } : null;
   const questions = (project.applicationQuestions || []) as AppQuestion[];
   const manage = () => router.push(`/manage/${id}` as any);
   const apply = () => (applied ? notify({ text: "You've already applied. The owner will review it.", tone: "info" }) : setApplyOpen(true));
@@ -156,8 +170,15 @@ export default function ProjectDetail() {
       : t.value === "media" ? project.mediaUrls?.length || 0
       : t.value === "followers" ? follow?.count || 0
       : t.value === "discussion" ? Object.values(counts || {}).reduce((a, b) => a + b, 0)
+      : t.value === "updates" ? updates?.posts?.length || 0
+      : t.value === "milestones" ? milestones?.length || 0
       : 0;
-    return { value: t.value, label: n > 0 ? `${t.label} ${n}` : t.label };
+    return { value: t.value, label: `${t.label}${n > 0 ? ` ${n}` : ""}`, badge: t.value === "updates" && newFeedback > 0 ? `${newFeedback} new feedback` : null };
+  };
+
+  const jumpToBacking = () => {
+    const go = () => { if (backingY.current != null) scrollRef.current?.scrollTo({ y: contentY.current + backingY.current - 56, animated: true }); };
+    if (tab !== "overview") { setTab("overview"); setTimeout(go, 400); } else go();
   };
 
   return (
@@ -165,6 +186,7 @@ export default function ProjectDetail() {
       <Stack.Screen options={{ title: project.title }} />
       <View style={{ flex: 1, backgroundColor: colors.canvas }}>
         <ScrollView
+          ref={scrollRef}
           stickyHeaderIndices={[1]}
           contentContainerStyle={{ paddingBottom: spacing.xxl * 3 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
@@ -174,31 +196,39 @@ export default function ProjectDetail() {
             project={project}
             owner={owner}
             followerCount={follow?.count ?? 0}
-            memberCount={members.length}
             following={!!follow?.following}
             onFollow={() => toggleFollow.mutate(!follow?.following)}
             role={role}
             applied={applied}
             onApply={apply}
             onManage={manage}
-            onVisibility={() => router.push(`/project/visibility?id=${id}` as any)}
-            onStoryboards={() => router.push(`/project/storyboards?id=${id}` as any)}
             onOwner={() => owner && router.push(`/user/${owner.userId}` as any)}
+            onBack={campaign ? jumpToBacking : undefined}
           />
-          <TabStrip options={PROJECT_TABS.map(tabLabel)} value={tab} onChange={setTab} />
-          <View style={{ paddingTop: spacing.sm }}>
+          <ScrollingTabs options={PROJECT_TABS.map(tabLabel)} value={tab} onChange={setTab} />
+          <View style={{ paddingTop: spacing.sm, gap: spacing.sm }} onLayout={(e) => { contentY.current = e.nativeEvent.layout.y; }}>
             {tab === "overview" && (
-              <OverviewTab project={project} members={members} followerCount={follow?.count ?? 0} isOwner={isOwner} isMember={isMember}
-                onApply={apply} onManage={manage} onTab={setTab}>
+              <>
+                <OverviewTab project={project} members={members} isOwner={isOwner} isMember={isMember}
+                  onApply={apply} onManage={manage} onTab={setTab} notify={notify} />
+                {isOwner && <StoryboardsBlock projectId={id!} onOpen={() => router.push(`/project/storyboards?id=${id}` as any)} />}
+                <TechStackBlock project={project} />
+                <LinksBlock project={project} />
                 {isOwner && (
                   <PendingApplications projectId={id!} applications={applications || []} questions={questions}
                     onEditQuestions={() => setQuestionsOpen(true)} notify={notify} />
                 )}
                 <InvestCard projectId={id!} notify={notify} />
-                <BackingCard projectId={id!} projectTitle={project.title} isOwner={isOwner} notify={notify} />
-              </OverviewTab>
+                <View onLayout={(e) => { backingY.current = e.nativeEvent.layout.y; }}>
+                  <BackingCard projectId={id!} projectTitle={project.title} isOwner={isOwner} notify={notify} />
+                </View>
+                <StatsBlock project={project} members={members} followerCount={follow?.count ?? 0} />
+                <TeamMembersBlock project={project} members={members} />
+                {isOwner && <QuestionsBlock questions={questions} onEdit={() => setQuestionsOpen(true)} />}
+                <RailVisuals project={project} />
+              </>
             )}
-            {tab === "updates" && <UpdatesTab projectId={id!} isMember={isMember} />}
+            {tab === "updates" && <UpdatesTab projectId={id!} isMember={isMember} notify={notify} />}
             {tab === "roadmap" && <RoadmapTab projectId={id!} isOwner={isOwner} onManage={manage} counts={counts} />}
             {tab === "milestones" && <MilestonesTab projectId={id!} counts={counts} />}
             {tab === "team" && <TeamTab members={members} />}

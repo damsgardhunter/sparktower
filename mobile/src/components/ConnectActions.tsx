@@ -46,7 +46,7 @@ export function useConnectionStates(userIds: string[]) {
   });
 }
 
-export function ConnectActions({ userId, name, reason, headline, connection, notify, explore, block }: {
+export function ConnectActions({ userId, name, reason, headline, connection, notify, explore, block, moreLikeThis }: {
   userId: string;
   name: string;
   reason?: string | null;
@@ -56,6 +56,8 @@ export function ConnectActions({ userId, name, reason, headline, connection, not
   explore?: ExploreOrigin;
   /** One full-width button and no side note — for grid cards and search rows. */
   block?: boolean;
+  /** Their top skill: after a request, the notice offers builders like them, as the web's toast does. */
+  moreLikeThis?: string | null;
 }) {
   const router = useRouter();
   const qc = useQueryClient();
@@ -84,7 +86,11 @@ export function ConnectActions({ userId, name, reason, headline, connection, not
     mutationFn: () => api("/api/connections/request", { method: "POST", body: { userId, note: note.trim() || undefined, explore: explore && exploreContext(explore.source, explore.rankPosition) } }),
     onMutate: () => { setPending("requested"); setConnectOpen(false); },
     onSuccess: () => {
-      notify({ text: note.trim() ? `Request sent to ${name}, with your note.` : `Request sent to ${name}.`, tone: "success" });
+      notify({
+        text: note.trim() ? `Request sent to ${name}, with your note.` : `Request sent to ${name}.`,
+        tone: "success",
+        action: moreLikeThis ? { label: "More like this", onPress: () => router.push(`/search?q=${encodeURIComponent(moreLikeThis)}`) } : undefined,
+      });
       setNote("");
     },
     onError: (error: any) => {
@@ -213,14 +219,17 @@ export function ConnectActions({ userId, name, reason, headline, connection, not
 const FOLLOWED = ["followed-projects"];
 
 /** Follow in place: instant, explicit, and put back if the server says no. */
-export function FollowButton({ projectId, title, following, notify, explore }: {
+export function FollowButton({ projectId, title, following, notify, explore, moreLikeThis }: {
   projectId: string;
   title: string;
   following: boolean;
   notify: (notice: Notice) => void;
   explore?: ExploreOrigin;
+  /** The project's category: after following, the notice offers more like it. */
+  moreLikeThis?: string | null;
 }) {
   const qc = useQueryClient();
+  const router = useRouter();
   const follow = useMutation({
     mutationFn: (want: boolean) => api<{ following: boolean }>(`/api/projects/${projectId}/follow`, { method: "POST", body: { following: want, explore: explore && exploreContext(explore.source, explore.rankPosition) } }),
     onMutate: async (want) => {
@@ -234,10 +243,18 @@ export function FollowButton({ projectId, title, following, notify, explore }: {
       qc.setQueryData(FOLLOWED, context?.before);
       notify({ text: error?.message || "Couldn't update that.", tone: "error" });
     },
-    onSuccess: (_result, want) => notify({ text: want ? `Following ${title}.` : `Unfollowed ${title}.`, tone: "success" }),
+    onSuccess: (_result, want) => notify(want
+      ? {
+          text: `Following ${title}. Its updates come to your feed.`,
+          tone: "success",
+          action: moreLikeThis ? { label: "More like this", onPress: () => router.push(`/search?q=${encodeURIComponent(moreLikeThis)}`) } : undefined,
+        }
+      : { text: `Unfollowed ${title}.`, tone: "success" }),
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: FOLLOWED });
       void qc.invalidateQueries({ queryKey: ["project", projectId, "follow-status"] });
+      // The Following feed changes the moment something is followed.
+      void qc.invalidateQueries({ queryKey: ["feed"] });
     },
   });
   return (

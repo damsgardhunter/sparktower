@@ -1,13 +1,13 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
-import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
 import { Avatar, Btn, Empty, Icon, Loading, Segments, timeAgo, type IconName } from "../../src/components/ui";
 import { useConnectionStates } from "../../src/components/ConnectActions";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
-import { appHref, useInvitationActions } from "../../src/networkData";
+import { appHref, notificationSection, useConnectionRequests, useInvitationActions } from "../../src/networkData";
 
 interface NotificationItem {
   id: string;
@@ -22,11 +22,15 @@ interface NotificationItem {
   href?: string;
 }
 
-type Filter = "all" | "posts" | "network" | "projects";
+type Filter = "all" | "unread" | "posts" | "network" | "projects";
+
+type Line =
+  | { type: "section"; key: string; label: string }
+  | { type: "item"; key: string; n: NotificationItem };
 
 const POSTS = new Set(["followed_post", "comment", "reply", "post_reaction", "comment_reaction", "mention", "feedback_used"]);
 const NETWORK = new Set(["follow", "connection_request", "connection_accepted"]);
-const PROJECTS = new Set(["project_follow", "path_step_done", "next_step"]);
+const PROJECTS = new Set(["project_follow", "path_step_done", "next_step", "weekly_update", "artifact_signup"]);
 
 /** The small icon on the avatar's corner: what kind of thing happened. */
 const KIND_ICON: Record<string, { icon: IconName; color: string }> = {
@@ -42,6 +46,8 @@ const KIND_ICON: Record<string, { icon: IconName; color: string }> = {
   connection_accepted: { icon: "checkmark-circle", color: "#16A34A" },
   path_step_done: { icon: "flag", color: "#16A34A" },
   next_step: { icon: "arrow-forward-circle", color: "#D97706" },
+  weekly_update: { icon: "calendar", color: "#2563EB" },
+  artifact_signup: { icon: "sparkles", color: "#7C3AED" },
   feedback_used: { icon: "bulb", color: "#CA8A04" },
 };
 
@@ -92,12 +98,39 @@ export default function Notifications() {
 
   const all = (query.data?.pages ?? []).flatMap((p) => p.items);
   const items = all.filter((n) =>
-    filter === "all" ? true : filter === "posts" ? POSTS.has(n.kind) : filter === "network" ? NETWORK.has(n.kind) : PROJECTS.has(n.kind));
-  const unread = all.filter((n) => !n.read).length;
+    filter === "all" ? true
+      : filter === "unread" ? !n.read
+      : filter === "posts" ? POSTS.has(n.kind)
+      : filter === "network" ? NETWORK.has(n.kind)
+      : PROJECTS.has(n.kind));
+
+  // The bell's own count, from the server — not just what's loaded so far.
+  const counts = useQuery({
+    queryKey: ["notification-count"],
+    queryFn: () => api<{ count: number }>("/api/notifications/unread-count"),
+  });
+  const loadedUnread = all.filter((n) => !n.read).length;
+  const unread = Math.max(counts.data?.count ?? 0, loadedUnread);
 
   // Requests you can still answer, right in the list.
   const requesters = all.filter((n) => n.kind === "connection_request").map((n) => n.actor.id);
   const { data: states } = useConnectionStates(requesters);
+  const pendingInvites = useConnectionRequests().data?.length ?? 0;
+
+  // Today, this week, earlier — so a long list reads in pieces.
+  const lines = useMemo(() => {
+    const out: Line[] = [];
+    let last = "";
+    for (const n of items) {
+      const label = notificationSection(n.createdAt);
+      if (label !== last) {
+        out.push({ type: "section", key: `section:${label}`, label });
+        last = label;
+      }
+      out.push({ type: "item", key: n.id, n });
+    }
+    return out;
+  }, [items]);
 
   const open = (n: NotificationItem) => {
     if (!n.read) read.mutate({ ids: [n.id] });
@@ -106,18 +139,25 @@ export default function Notifications() {
 
   const header = (
     <View style={s.toolbar}>
-      <View style={{ flex: 1 }}>
-        <Segments
-          options={[
-            { value: "all" as Filter, label: "All" },
-            { value: "posts" as Filter, label: "Posts" },
-            { value: "network" as Filter, label: "Network" },
-            { value: "projects" as Filter, label: "Projects" },
-          ]}
-          value={filter}
-          onChange={setFilter}
-        />
+      <View style={s.titleRow}>
+        <Text style={s.title}>Notifications</Text>
+        {unread > 0 && (
+          <Pressable onPress={() => read.mutate({ all: true })} disabled={read.isPending} hitSlop={8} accessibilityRole="button">
+            <Text style={s.markAll}>Mark all read</Text>
+          </Pressable>
+        )}
       </View>
+      <Segments
+        options={[
+          { value: "all" as Filter, label: "All" },
+          { value: "unread" as Filter, label: unread ? `Unread (${unread > 99 ? "99+" : unread})` : "Unread" },
+          { value: "posts" as Filter, label: "Posts" },
+          { value: "network" as Filter, label: "Network" },
+          { value: "projects" as Filter, label: "Projects" },
+        ]}
+        value={filter}
+        onChange={setFilter}
+      />
     </View>
   );
 
@@ -127,45 +167,62 @@ export default function Notifications() {
     <>
       <FlatList
         style={{ flex: 1, backgroundColor: colors.canvas }}
-        data={items}
-        keyExtractor={(n) => n.id}
+        data={lines}
+        keyExtractor={(l) => l.key}
         ListHeaderComponent={
           <>
             {header}
-            {unread > 0 && (
-              <View style={s.unreadBar}>
-                <Text style={s.unreadText}>{unread} unread</Text>
-                <Pressable onPress={() => read.mutate({ all: true })} hitSlop={8} accessibilityRole="button">
-                  <Text style={s.markAll}>Mark all as read</Text>
-                </Pressable>
-              </View>
+            {pendingInvites > 0 && filter !== "posts" && filter !== "projects" && (
+              <Pressable
+                onPress={() => router.push("/network/invitations")}
+                style={({ pressed }) => [s.invites, pressed && { backgroundColor: colors.surfaceRaised }]}
+                accessibilityRole="button"
+              >
+                <View style={s.invitesIcon}><Icon name="people" size={18} color={colors.primary} /></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.invitesTitle}>Invitations</Text>
+                  <Text style={s.excerptPlain}>{pendingInvites} {pendingInvites === 1 ? "person wants" : "people want"} to connect</Text>
+                </View>
+                <Icon name="chevron-forward" size={18} color={colors.textTertiary} />
+              </Pressable>
             )}
           </>
         }
         stickyHeaderIndices={[0]}
-        refreshControl={<RefreshControl refreshing={query.isRefetching && !query.isFetchingNextPage} onRefresh={() => query.refetch()} tintColor={colors.primary} />}
+        refreshControl={<RefreshControl refreshing={query.isRefetching && !query.isFetchingNextPage} onRefresh={() => { void query.refetch(); void counts.refetch(); }} tintColor={colors.primary} />}
         onEndReachedThreshold={0.4}
         onEndReached={() => { if (query.hasNextPage && !query.isFetchingNextPage) void query.fetchNextPage(); }}
         ListFooterComponent={query.isFetchingNextPage ? <ActivityIndicator color={colors.primary} style={{ padding: spacing.lg }} /> : <View style={{ height: spacing.xxl * 2 }} />}
-        ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: colors.borderSubtle }} />}
         ListEmptyComponent={
           <View style={{ backgroundColor: colors.surface, marginTop: spacing.sm }}>
-            <Empty
-              icon="notifications-outline"
-              title={filter === "all" ? "Nothing yet" : "Nothing here yet"}
-              body="Follow builders and projects, and their progress shows up here — along with replies and reactions to what you post."
-            />
+            {filter === "unread" ? (
+              <Empty icon="checkmark-done-outline" title="You're all caught up" body="Nothing unread. New replies, reactions, follows and connections show up here." />
+            ) : (
+              <Empty
+                icon="notifications-outline"
+                title={filter === "all" ? "Nothing yet" : "Nothing here yet"}
+                body="Follow builders and projects, and their progress shows up here — along with replies and reactions to what you post."
+                action={filter === "all" ? "Find people to follow" : undefined}
+                onAction={() => router.push("/(tabs)/discover")}
+              />
+            )}
           </View>
         }
-        renderItem={({ item: n }) => {
+        renderItem={({ item: line, index }) => {
+          if (line.type === "section") {
+            return <Text style={[s.section, index === 0 && { marginTop: spacing.sm }]}>{line.label}</Text>;
+          }
+          const n = line.n;
           const kind = KIND_ICON[n.kind] ?? { icon: "notifications" as IconName, color: colors.primary };
           const bold = n.text.startsWith(n.actor.name) ? n.actor.name : "";
           const request = n.kind === "connection_request" ? states?.[n.actor.id] : undefined;
           const canAnswer = request?.state === "incoming" && !!request.connectionId;
+          const answered = n.kind === "connection_request" && (request?.state === "connected");
+          const nextIsItem = lines[index + 1]?.type === "item";
           return (
             <Pressable
               onPress={() => open(n)}
-              style={({ pressed }) => [s.row, !n.read && s.rowUnread, pressed && { backgroundColor: colors.surfaceRaised }]}
+              style={({ pressed }) => [s.row, !n.read && s.rowUnread, nextIsItem && s.rowDivider, pressed && { backgroundColor: colors.surfaceRaised }]}
               accessibilityRole="button"
               accessibilityLabel={`${n.read ? "" : "Unread. "}${n.text}`}
             >
@@ -188,6 +245,12 @@ export default function Notifications() {
                     <Btn label="Accept" small variant="outline" loading={invites.busyId === request!.connectionId} onPress={() => { invites.accept({ id: request!.connectionId!, name: n.actor.name }); if (!n.read) read.mutate({ ids: [n.id] }); }} />
                   </View>
                 )}
+                {answered && (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 }}>
+                    <Icon name="checkmark-circle" size={14} color={colors.success} />
+                    <Text style={s.excerptPlain}>Connected</Text>
+                  </View>
+                )}
               </View>
               <Text style={s.time}>{timeAgo(n.createdAt)}</Text>
             </Pressable>
@@ -200,11 +263,16 @@ export default function Notifications() {
 }
 
 const s = StyleSheet.create({
-  toolbar: { backgroundColor: colors.surface, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderBottomWidth: 1, borderColor: colors.border },
-  unreadBar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: spacing.lg, paddingVertical: 10, backgroundColor: colors.surface, marginTop: spacing.sm, borderBottomWidth: 1, borderColor: colors.borderSubtle },
-  unreadText: { color: colors.textSecondary, fontSize: font.sm, fontFamily: fontFamily.medium },
+  toolbar: { backgroundColor: colors.surface, paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.md, gap: spacing.sm, borderBottomWidth: 1, borderColor: colors.border },
+  titleRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  title: { color: colors.text, fontSize: font.lg, fontFamily: fontFamily.bold },
   markAll: { color: colors.primary, fontSize: font.sm, fontFamily: fontFamily.semibold },
+  invites: { flexDirection: "row", alignItems: "center", gap: spacing.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, backgroundColor: colors.surface, marginTop: spacing.sm },
+  invitesIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.primarySoft, alignItems: "center", justifyContent: "center" },
+  invitesTitle: { color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold },
+  section: { color: colors.textSecondary, fontSize: font.xs, fontFamily: fontFamily.semibold, textTransform: "uppercase", letterSpacing: 0.5, paddingHorizontal: spacing.lg, paddingTop: spacing.md, paddingBottom: spacing.sm },
   row: { flexDirection: "row", alignItems: "flex-start", gap: spacing.md, paddingVertical: spacing.md, paddingRight: spacing.lg, backgroundColor: colors.surface },
+  rowDivider: { borderBottomWidth: 1, borderColor: colors.borderSubtle },
   rowUnread: { backgroundColor: "#F8F1FB" },
   unreadDotCol: { width: 12, alignItems: "flex-end", paddingTop: 22 },
   unreadDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.primary },
@@ -212,5 +280,6 @@ const s = StyleSheet.create({
   text: { color: colors.text, fontSize: font.sm, lineHeight: 19, fontFamily: fontFamily.regular },
   actor: { fontFamily: fontFamily.semibold },
   excerpt: { color: colors.textSecondary, fontSize: font.sm, lineHeight: 18, fontFamily: fontFamily.regular, backgroundColor: colors.surfaceRaised, borderRadius: radius.sm, paddingHorizontal: spacing.sm, paddingVertical: 4, overflow: "hidden" },
+  excerptPlain: { color: colors.textSecondary, fontSize: font.sm, fontFamily: fontFamily.regular },
   time: { color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.regular, marginTop: 2 },
 });
