@@ -4,6 +4,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SECTION_TABS, MORE_TABS, type TabId, type TabDef } from "./tabs";
+import { useSurfaces } from "@/hooks/use-surfaces";
 
 const tabClass = (active: boolean) =>
   `relative inline-flex items-center gap-1.5 whitespace-nowrap px-2 sm:px-3 py-2.5 text-[13px] sm:text-sm font-medium transition-colors border-b-2 -mb-px outline-none focus-visible:bg-muted ${
@@ -15,7 +16,8 @@ export function SectionTabRow({ active, onSelect, isOwner }: {
   onSelect: (tab: TabId) => void;
   isOwner: boolean;
 }) {
-  const more = MORE_TABS.filter((t) => !t.ownerOnly || isOwner);
+  const { on } = useSurfaces();
+  const more = MORE_TABS.filter((t) => (!t.ownerOnly || isOwner) && (!t.surface || on(t.surface)));
   return (
     <div className="flex items-end border-b border-border" data-testid="section-tab-row">
       <div className="flex items-end min-w-0 flex-1 sm:flex-none overflow-x-auto [scrollbar-width:none]" role="tablist" aria-label="Section tabs">

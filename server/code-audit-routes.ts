@@ -12,6 +12,7 @@ import { parseModelJson, answerUnreadable } from "./ai-json";
 import type { Express, Response } from "express";
 import OpenAI from "openai";
 import { storage } from "./storage";
+import { scanSecurity, renderSecurityGaps } from "@shared/security-checks";
 import { db } from "./db";
 import { desc, eq, sql } from "drizzle-orm";
 import { codeAuditRuns } from "@shared/schema";
@@ -122,6 +123,9 @@ const AUDIT_SCHEMA = `Respond ONLY with valid JSON (no markdown, no code fences)
       "fix": "for open or not-built: the concrete change that closes it" }
   ],
   "nextThreeThings": ["the three highest-leverage things to do next, in order"],
+  "securityPlan": [
+    { "title": "a short imperative: what to change", "severity": "high"|"medium"|"low", "why": "one sentence, specific to this codebase", "fix": "the concrete change, naming the file or package", "files": ["exact path from the file tree"], "checkId": "the SECURITY CHECKS id this addresses, or omit for something the checks don't cover" }
+  ],
   "catchUpNote": "at most three short sentences, to the builder: what they've done since the last audit and where the project is heading now. Anything it says needs reconciling must also be in operations.",
   "operations": [ ... ]
 }`;
@@ -156,6 +160,7 @@ CATCHING THE PROJECT UP. Builders work ahead: they ship features without writing
 - The brief, scope and tech stack: update_project / update_scope only where the code shows the project has moved — a new direction, a feature now core, a stack that changed, a live URL. Rewrite the field in the builder's voice; don't pad it.
 - The core loops follow the product. When the code shows the product has changed direction — a loop now works differently, a new cycle has become central, an old one is gone — change them: update_loop to rewrite one (or change its kind), create_loop for a kind that isn't written, retire_loop for a loop the product no longer runs (never the last of its kind; rewrite that instead). Change a loop only on clear evidence in the code, say what changed in the steps, and never propose anything the builder REMOVED.
 - THE BOARD MUST NOT CONTRADICT THE CODE OR THE BUILDER'S STANDING NOTES. When a task or loop build step is for something the code has removed or the standing notes say is retired, propose retire_task for it with the reason (for a whole loop, retire_loop). When a task is marked done but the code has no trace of it, propose update_task back to "todo" and list it under taskReconciliation.notStarted. These wait for the builder's OK, so propose them whenever the evidence is clear — naming the drift in a risk or note without these operations is a failed audit. Never retire a path milestone (a backbone: task).
+- SECURITY BEFORE RELEASE. SECURITY CHECKS lists what the deterministic checklist found missing or partial. "securityPlan" is up to 8 fixes in priority order for THIS codebase: every release blocker (a missing high-severity check) first, then the rest that matter, then anything the checks can't see that the code shows (an unguarded admin route, a secret logged, a token in a URL) — each with the exact file and package to change. Never list a check that passed. For each release blocker also propose ONE create_task titled "Security: <what to fix>" with "priority": "high" and "tags": ["security"], unless the board already has it.
 - What's next: create_task for real gaps in the direction the builder is heading (at most 10), update_task where a task's scope changed. Milestones and roadmap phases only where they're plainly out of date.
 - A note that names a problem with no operation for it is a failed audit. If catchUpNote says the direction needs reconciling — a loop that contradicts THE BUILDER'S STANDING NOTES, two loops that are the same loop (see POSSIBLE DUPLICATE LOOPS), a brief that describes a product the code has moved away from — operations must contain the edits that reconcile it: update_loop to rewrite, retire_loop to drop a duplicate or a dead loop, update_project for the brief.
 - If nothing changed, return no operations. Never re-propose anything in DECLINED LAST TIME unless the code has changed in that exact area since.
@@ -285,6 +290,8 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
   const pathText = await renderPathForAudit(projectId).catch(() => null);
   const auditLoops = loopRead?.loops.filter((l) => l.description || l.status === "done") ?? [];
 
+  // Security before release: deterministic checks over every file, run before the model so it prioritises real gaps.
+  const security = scanSecurity(snapshot.files, { suspectedSecrets: digest.signals.suspectedSecrets });
   const completion = await getOpenAI().chat.completions.create({
     model: modelFor(ent),
     messages: [
@@ -312,6 +319,7 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
           renderFileChanges(fileChanges, since ? since.toISOString().slice(0, 10) : null),
           commits.length ? `THE COMMITS SINCE THEN (${commits.length}, newest first)\n${commits.slice(0, 60).map((c) => `- ${c.message}`).join("\n")}` : null,
           declined.length ? `DECLINED LAST TIME — the builder chose not to apply these; don't propose them again\n${declined.map((d) => `- ${d}`).join("\n")}` : null,
+          renderSecurityGaps(security),
           `THE ACTUAL CODEBASE\n${digest.prompt}`,
         ].filter(Boolean).join("\n\n"),
       },
@@ -383,6 +391,19 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
     /** Whether each written loop closes in the code, held to cited files — open ones read again, closely. */
     loops: await rereadOpenLoops(ent, auditLoops, sanitizeLoopClosures(parsed.loops, auditLoops, new Set(snapshot.files.map((f) => f.path))), snapshot.files, digest.signals.routes),
     nextThreeThings: strList(parsed.nextThreeThings, 5, 400),
+    /** The deterministic checklist, and Nova's prioritised fixes for this codebase. */
+    security: {
+      ...security,
+      plan: (Array.isArray(parsed.securityPlan) ? parsed.securityPlan : []).slice(0, 10).map((s: any) => ({
+        title: str(s?.title, 160),
+        severity: SEVERITIES.includes(s?.severity) ? s.severity : "medium",
+        why: str(s?.why, 400),
+        fix: str(s?.fix, 600),
+        // Only paths that are really in the repository.
+        files: strList(s?.files, 4, 200).filter((f: string) => snapshot.files.some((x) => x.path === f)),
+        checkId: security.checks.some((c) => c.id === s?.checkId) ? s.checkId : null,
+      })).filter((s: any) => s.title && s.fix),
+    },
     /** Scan facts the builder should see even if the model ignored them. */
     scan: {
       fileCount: digest.signals.fileCount,

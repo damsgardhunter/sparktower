@@ -2,7 +2,7 @@ import { PinnedBadges } from "@/components/pinned-badges";
 import { useQuery } from "@tanstack/react-query";
 import { PrivateBadge } from "@/components/private-badge";
 import { FounderFeed } from "@/components/founder-feed";
-import { DiscoverNewsLink } from "@/components/discover-news";
+import { useSurfaces } from "@/hooks/use-surfaces";
 import { ProfileRailCard } from "@/components/profile-rail-card";
 import { MyProjectsCard } from "@/components/my-projects-card";
 import { RailCard, RailHeader, RailDivider } from "@/components/rail-card";
@@ -32,12 +32,16 @@ export default function Home() {
     queryKey: ["/api/projects"],
   });
 
+  // The leaderboard and matches wait until the path loops are proven: shown, and fetched, only while their flags are on.
+  const { on: surfaceOn } = useSurfaces();
   const { data: leaderboard, isLoading: leaderboardLoading } = useQuery<ProjectWithStats[]>({
     queryKey: ["/api/leaderboard?sortBy=views"],
+    enabled: surfaceOn("leaderboard"),
   });
 
   const { data: matches, isLoading: matchesLoading } = useQuery<MatchWithDetails[]>({
     queryKey: ["/api/matches"],
+    enabled: surfaceOn("matches"),
   });
 
   return (
@@ -63,7 +67,6 @@ export default function Home() {
                 Create Project
               </Link>
             </Button>
-            <DiscoverNewsLink />
             <FounderFeed />
           </div>
 
@@ -78,8 +81,9 @@ export default function Home() {
             className="space-y-2 lg:sticky lg:top-5 lg:max-h-[calc(100dvh-7rem)] lg:overflow-y-auto lg:pr-1 home-rail-scroll"
             data-testid="home-rail"
           >
-            <ProfileRailCard />
+            {/* Your projects and where each is on its path lead the rail; the network cards follow, each behind its flag. */}
             <MyProjectsCard />
+            <ProfileRailCard />
 
             <RailCard>
               <RailHeader title="New projects" href="/projects" />
@@ -120,7 +124,7 @@ export default function Home() {
 
             {/* The podium, compacted. Ranked rows read faster in a rail than
                 three stacked cards did full-width. */}
-            <RailCard>
+            {surfaceOn("leaderboard") && (<RailCard>
               <RailHeader title="Top projects" href="/leaderboard" />
               {leaderboardLoading ? (
                 <div className="space-y-2 pt-1">
@@ -163,9 +167,9 @@ export default function Home() {
               ) : (
                 <p className="text-sm text-muted-foreground pt-1">Nothing on the leaderboard yet.</p>
               )}
-            </RailCard>
+            </RailCard>)}
 
-            <RailCard>
+            {surfaceOn("matches") && (<RailCard>
               <RailHeader title="People to build with" href="/matches" />
               {matchesLoading ? (
                 <div className="space-y-2 pt-1">
@@ -213,7 +217,7 @@ export default function Home() {
                   No matches yet — completing your profile is what makes these good.
                 </p>
               )}
-            </RailCard>
+            </RailCard>)}
 
             <p className="text-[11px] text-muted-foreground text-center pt-1 pb-4">
               SparkTower · built for people who ship

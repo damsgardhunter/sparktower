@@ -386,8 +386,15 @@ function detectPackageManager(files: RepoFile[]): string | null {
   if (files.some((f) => /(^|\/)pnpm-lock\.yaml$/.test(f.path))) return "pnpm";
   if (files.some((f) => /(^|\/)yarn\.lock$/.test(f.path))) return "yarn";
   if (files.some((f) => /(^|\/)bun\.lockb?$/.test(f.path))) return "bun";
-  if (files.some((f) => /(^|\/)package-lock\.json$/.test(f.path))) return "npm";
+  if (files.some((f) => /(^|\/)(package-lock|npm-shrinkwrap)\.json$/.test(f.path))) return "npm";
   return null;
+}
+
+/** Every lockfile in the tree, shallowest first — recorded by path by the ingest, never read. */
+export function lockfilesIn(files: RepoFile[]): string[] {
+  return files.map((f) => f.path)
+    .filter((p) => /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|composer\.lock|Gemfile\.lock|poetry\.lock|Cargo\.lock|go\.sum|uv\.lock|Pipfile\.lock)$/.test(p) && !p.split("/").includes("node_modules"))
+    .sort((a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b));
 }
 
 function detectServerEntry(files: RepoFile[]): string | null {
@@ -623,7 +630,7 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
     section("AUTH", authSignals.length ? authSignals.map((a) => `- ${a}`).join("\n") : "- no authentication code detected"),
     renderRouteCoverage(routeCoverage) ?? "",
     section("GUARDS AND MECHANISMS ALREADY IN CODE", guards.length ? guards.map((g) => `- ${g.name}  [${g.evidence}]`).join("\n") : "- none detected"),
-    section("LAYOUT FACTS", [`Package manager: ${packageManager ?? "unknown (no lockfile)"}`, `Server entry: ${serverEntry ?? "not recognised"}`, `Top-level: ${topLevelDirs.join(", ")}`].join("\n")),
+    section("LAYOUT FACTS", [`Package manager: ${packageManager ?? "unknown (no lockfile)"}`, `Lockfiles committed: ${lockfilesIn(files).join(", ") || "none"}`, `Server entry: ${serverEntry ?? "not recognised"}`, `Top-level: ${topLevelDirs.join(", ")}`].join("\n")),
     section("ENGINEERING SIGNALS", [
       `Tests: ${signals.testFiles} test files${signals.testFrameworks.length ? ` (${signals.testFrameworks.join(", ")})` : " — no test framework in the manifest"}`,
       `CI: ${hasCi ? "configured" : "none"}`,

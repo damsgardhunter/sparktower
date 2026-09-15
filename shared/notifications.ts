@@ -29,6 +29,7 @@ export function notificationText(n: NotificationShape): string {
     case "path_step_done": return n.projectTitle ? `${who} finished a step on ${n.projectTitle}` : `${who} finished a step on your path`;
     case "next_step": return n.projectTitle ? `Your next step on ${n.projectTitle} is ready` : "Your next step is ready";
     case "artifact_signup": return `${who} joined SparkTower from your artifact`;
+    case "invite_accepted": return n.projectTitle ? `${who} accepted your invite to ${n.projectTitle}` : `${who} accepted your invite`;
     case "weekly_update": return n.projectTitle ? `Share this week's progress on ${n.projectTitle}` : "Share this week's progress";
     case "feedback_used": return n.projectTitle ? `${who} used your feedback in an update on ${n.projectTitle}` : `${who} used your feedback in an update`;
     default: return `${who} did something`;
@@ -41,6 +42,7 @@ export function notificationHref(n: Pick<NotificationShape, "kind" | "actorId" |
   // The path lives on the project's own screen, where the next step is the first thing shown.
   if ((n.kind === "path_step_done" || n.kind === "next_step" || n.kind === "weekly_update" || n.kind === "artifact_signup") && n.projectId) return `/projects/${n.projectId}/manage`;
   if (n.kind === "project_follow" && n.projectId) return `/projects/${n.projectId}`;
+  if (n.kind === "invite_accepted" && n.projectId) return `/projects/${n.projectId}/manage?tab=team`;
   if (n.kind === "connection_request") return "/profile";
   return `/profile/${n.actorId}`;
 }

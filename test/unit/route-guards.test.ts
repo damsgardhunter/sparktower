@@ -156,6 +156,43 @@ describe("authentication on the write surface", () => {
   });
 });
 
+/**
+ * The sequencing decision (docs/decisions/0001-path-loops-first.md), enforced: every API route in
+ * a surface that waits until the wedge is proven sits behind that surface's flag, so turning it off
+ * really turns it off. The families are recognised by name, so a new route in one — a new merch
+ * endpoint, a second messages route — fails here until it's under its flag.
+ */
+const AFTER_WEDGE_FAMILIES: Record<string, RegExp> = {
+  backing: /\/(backing|backings|backing-tiers|backer-badges|merch|merch-orders|printful|payouts|donations|donate|donate-checkout)(\/|$)|\/badges\/backer|\/me\/badges|\/stripe\/connect-/,
+  storyboards: /\/(storyboards|visuals|generate-video)(\/|$)/,
+  matches: /\/(matches|recommend-people)(\/|$)/,
+  sprints: /\/sprints(\/|$)/,
+  connections: /\/connections(\/|$)/,
+  messages: /\/(messages|conversations)(\/|$)/,
+  leaderboard: /\/(leaderboard|reputation)(\/|$)/,
+  contests: /\/contests(\/|$)/,
+  communities: /\/communities(\/|$)/,
+  liveChat: /\/live-chat(\/|$)/,
+};
+
+describe("the sequencing decision", () => {
+  it("names a sequence for every surface, and an unlock condition for each that waits", () => {
+    for (const s of SURFACES) {
+      expect(["wedge", "supports", "after-wedge"], s.id).toContain(s.sequence);
+      if (s.sequence === "after-wedge") expect(s.unlocksWhen, `${s.id} says what unlocks it`).toBeTruthy();
+    }
+    expect(Object.keys(AFTER_WEDGE_FAMILIES).sort()).toEqual(SURFACES.filter((s) => s.sequence === "after-wedge").map((s) => s.id).sort());
+  });
+
+  it("puts every route of a surface that waits behind that surface's flag", () => {
+    // Nested in another surface that also waits (sprint chat under sprints) is off whenever that is.
+    const waits = new Set(SURFACES.filter((s) => s.sequence === "after-wedge").map((s) => s.id));
+    const loose = live.filter((r) => r.path.startsWith("/api/") && !r.path.startsWith("/api/admin/surfaces")).flatMap((r) =>
+      Object.entries(AFTER_WEDGE_FAMILIES).filter(([, re]) => re.test(r.path)).filter(([id]) => r.surface !== id && !waits.has(r.surface ?? "")).map(([id]) => `${label(r)} → ${id} (flag: ${r.surface ?? "none"})`));
+    expect(loose, `after-wedge routes not behind their flag — add the prefix to SURFACE_API_PREFIXES:\n  ${loose.join("\n  ")}`).toEqual([]);
+  });
+});
+
 describe("kill switches", () => {
   it("every surface that owns API routes has prefixes, and every prefix is mounted", () => {
     const mounted = new Set(cov.surfacePrefixes.map((p) => `${p.surface}|${p.prefix}`));

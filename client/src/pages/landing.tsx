@@ -11,6 +11,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { PENDING_PATH_KEY, type PendingPath } from "@shared/path-artifacts";
+import { PENDING_INVITE_KEY } from "@shared/invites";
 import heroVideo from "@assets/Brooklyn_Tower_Tesla_Coil_Animation_1772567582595.mp4";
 
 /** The artifact a visitor chose "start" or "explore" on before signing up, so the signup is credited to it. */
@@ -18,11 +19,23 @@ function pendingArtifactId(): string | undefined {
   try { return (JSON.parse(localStorage.getItem(PENDING_PATH_KEY) ?? "null") as PendingPath | null)?.fromArtifact; } catch { return undefined; }
 }
 
+/** After signing in or up: back to an invite this browser was holding, else home. */
+function afterAuthPath(): string {
+  try {
+    const token = localStorage.getItem(PENDING_INVITE_KEY);
+    if (token && /^[A-Za-z0-9_-]{43}$/.test(token)) return `/invite/${token}`;
+  } catch { /* no pending invite */ }
+  return "/";
+}
+
 export default function LandingPage() {
   // Arriving from a public page's "start your own path" opens straight onto sign up.
-  const arrivedToSignUp = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("signup") === "1";
+  const search = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+  const arrivedToSignUp = search?.get("signup") === "1";
+  // An invite link's "I have an account" opens straight onto log in.
+  const arrivedToLogIn = search?.get("login") === "1";
   const [activeTab, setActiveTab] = useState(arrivedToSignUp ? "signup" : "login");
-  const [showAuthModal, setShowAuthModal] = useState(arrivedToSignUp);
+  const [showAuthModal, setShowAuthModal] = useState(arrivedToSignUp || arrivedToLogIn);
 
   return (
     <div className="flex flex-col min-h-screen bg-white text-foreground">
@@ -365,7 +378,7 @@ function LoginForm() {
         return;
       }
       await queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
-      window.location.href = "/";
+      window.location.href = afterAuthPath();
     } catch {
       setError("Something went wrong. Please try again.");
     } finally {
@@ -474,7 +487,7 @@ function SignupForm({ onSuccess }: { onSuccess: () => void }) {
       }
       toast({ title: "Account created!", description: "You're now logged in." });
       await queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
-      window.location.href = "/";
+      window.location.href = afterAuthPath();
     } catch {
       setError("Something went wrong. Please try again.");
     } finally {

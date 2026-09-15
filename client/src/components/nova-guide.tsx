@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { formatMessage } from "@/lib/nova-format";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
@@ -129,12 +130,11 @@ function ActionCard({ action }: { action: NovaAction }) {
   );
 }
 
-function formatMessage(content: string): string {
-  return content
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\n- /g, '\n• ')
-    .replace(/\n/g, '<br/>');
-}
+/*
+ * Rendered as HTML, so escaped first: the conversation is shared by the
+ * project's team, and a message (or Nova quoting project text) containing
+ * markup must show as text, never run as script in a teammate's browser.
+ */
 
 function ChatMessages({ messages, isLoading }: { messages: NovaMessage[]; isLoading: boolean }) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -159,9 +159,10 @@ function ChatMessages({ messages, isLoading }: { messages: NovaMessage[]; isLoad
                   ? "bg-primary text-primary-foreground rounded-br-md"
                   : "bg-muted rounded-bl-md"
               }`}
-              dangerouslySetInnerHTML={{ __html: formatMessage(msg.content) }}
               data-testid={`nova-message-${msg.role}`}
-            />
+            >
+              {formatMessage(msg.content)}
+            </div>
             {msg.role === "assistant" && msg.actionsTaken && msg.actionsTaken.length > 0 && (
               <div className="mt-1 space-y-1">
                 {msg.actionsTaken.map((action: NovaAction, i: number) => (

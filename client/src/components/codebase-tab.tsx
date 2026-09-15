@@ -17,6 +17,7 @@ import {
 import { CREDIT_COSTS } from "@shared/plans";
 import { LOOP_TYPE_INFO, type LoopClosureRead } from "@shared/phase-trees";
 import { AuditCatchUp, PathChanges, refreshAfterCatchUp } from "@/components/audit-catchup";
+import { SecurityReportPanel } from "@/components/security-report";
 import type { ProjectCodeAudit } from "@shared/schema";
 import { useAuth } from "@/hooks/use-auth";
 import { useAuditStatus, quietAuditErrors, auditStageLabel, auditSourceLabel, formatElapsed, auditStatusKey } from "@/lib/audit-status";
@@ -765,6 +766,10 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
                   ))}
                 </ol>
               )}
+
+              <div className="pt-4 mt-1 border-t border-black/[0.08] dark:border-white/10">
+                <SecurityReportPanel projectId={projectId} report={findings.security} />
+              </div>
 
               <div className="divide-y divide-black/[0.08] dark:divide-white/10 border-t border-black/[0.08] dark:border-white/10">
                 {risks.length > 0 && (

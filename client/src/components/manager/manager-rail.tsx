@@ -4,6 +4,7 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import { RAIL_TABS, NOVA_GRADIENT, type TabId } from "./tabs";
+import { useSurfaces } from "@/hooks/use-surfaces";
 import { useAuditStatus, auditStageLabel } from "@/lib/audit-status";
 
 /** Icons alternate through the Nova colours. */
@@ -29,6 +30,7 @@ export function ManagerRail({ projectId, active, onSelect }: {
   active: TabId;
   onSelect: (tab: TabId) => void;
 }) {
+  const { on: surfaceOn } = useSurfaces();
   const latest = useLatestAudit(projectId);
   const lastAudit = latest ? ago(latest.appliedAt ?? latest.createdAt) : null;
   const { running: reading } = useAuditStatus(projectId);
@@ -41,7 +43,7 @@ export function ManagerRail({ projectId, active, onSelect }: {
         data-testid="manager-rail"
       >
         <p className="hidden lg:block px-2 pt-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Project</p>
-        {RAIL_TABS.map((t) => {
+        {RAIL_TABS.filter((t) => !t.surface || surfaceOn(t.surface)).map((t) => {
           const on = active === t.id;
           return (
             <button

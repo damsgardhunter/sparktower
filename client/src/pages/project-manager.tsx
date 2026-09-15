@@ -34,6 +34,7 @@ import { SectionBar } from "@/components/manager/section-bar";
 import { SectionTabRow } from "@/components/manager/more-menu";
 import { ManagerRail, useLatestAudit } from "@/components/manager/manager-rail";
 import { StartSectionDialog } from "@/components/manager/start-section-dialog";
+import { InviteCollaboratorDialog, PendingInvites } from "@/components/invite-collaborator-dialog";
 import { isTabId, tabDef, type TabId } from "@/components/manager/tabs";
 import { useSections, sectionDef, sectionFromUrl, taskInSection, sectionTag, LIVE_INTERVAL_MS, visibleTags, systemTags } from "@/lib/sections";
 import { DEFAULT_PROJECT_GOAL, isProjectGoal, type ProjectGoal } from "@shared/goals";
@@ -72,6 +73,7 @@ import { CREDIT_COSTS } from "@shared/plans";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
+import { useSurfaces } from "@/hooks/use-surfaces";
 import { useUpload } from "@/hooks/use-upload";
 
 const sectionStoreKey = (projectId: string | undefined) => `manager-section:${projectId}`;
@@ -132,6 +134,12 @@ export default function ProjectManager() {
     const t = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("tab") : null;
     return isTabId(t) ? t : "nova";
   });
+  // A tab whose surface is switched off isn't there to be on: back to the path's dashboard.
+  const { on: surfaceOn } = useSurfaces();
+  useEffect(() => {
+    const surface = tabDef(activeTab).surface;
+    if (surface && !surfaceOn(surface)) setActiveTab("nova");
+  }, [activeTab, surfaceOn]);
   /**
    * The open section: ?section= in the URL, else the one last opened here,
    * else (once the tracks load) the project's primary. Only ever chosen by
@@ -2566,7 +2574,10 @@ function TeamTab({ project, members, applications, isOwner, tasks, onUpdateMembe
           </h2>
           <p className="text-sm text-muted-foreground">{members.length} member{members.length === 1 ? "" : "s"}</p>
         </div>
+        {isOwner && !soloMode && <InviteCollaboratorDialog projectId={project.id} projectTitle={project.title} />}
       </div>
+
+      {isOwner && !soloMode && <PendingInvites projectId={project.id} />}
 
       {soloMode && (
         <Card className="border-primary/20 bg-primary/5" data-testid="card-solo-mode-notice">

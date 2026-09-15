@@ -7,6 +7,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { FeedComposer } from "@/components/feed-composer";
 import { FeedbackUsedCard } from "@/components/feedback-inbox";
 import { ContinuePathCard } from "@/components/continue-path-card";
+import { DiscoverNewsLink } from "@/components/discover-news";
+import { useSurfaces } from "@/hooks/use-surfaces";
 import { PromotionCard } from "@/components/promotion-card";
 import { useFeedPromotions } from "@/hooks/use-feed-promotions";
 import { useNotificationCounts, refreshNotifications } from "@/components/notification-bell";
@@ -84,12 +86,15 @@ export function FounderFeed({ projectId }: { projectId?: string }) {
       return res.json();
     },
   });
+  const { on: surfaceOn } = useSurfaces();
   // On the home feed only — a project's own page is that project's.
   const { promotionBefore, onSeen, onHide } = useFeedPromotions(data?.posts?.length ?? 0, !projectId);
 
   return (
     <div className="space-y-2">
+      {/* Your paths first; what's new on Discover after them, and only while Discover is on. */}
       {!projectId && <ContinuePathCard />}
+      {!projectId && surfaceOn("discover") && <DiscoverNewsLink />}
       {!projectId && <FeedbackUsedCard />}
       <FeedComposer defaultProjectId={projectId} />
 

@@ -242,6 +242,28 @@ export const projectMembers = pgTable("project_members", {
   skills: varchar("skills").array(),
 });
 
+/**
+ * An invitation to join a project (shared/invites.ts): the token itself is never
+ * stored, only its SHA-256. One use, until it expires; revocable. `email` set
+ * means only that account may accept it.
+ */
+export const projectInvites = pgTable("project_invites", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  email: text("email"),
+  role: text("role").notNull(),
+  tokenHash: text("token_hash").notNull().unique(),
+  expiresAt: timestamp("expires_at").notNull(),
+  createdById: varchar("created_by_id").notNull().references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  emailStatus: text("email_status"),
+  acceptedAt: timestamp("accepted_at"),
+  acceptedById: varchar("accepted_by_id").references(() => users.id),
+  revokedAt: timestamp("revoked_at"),
+}, (table) => ({
+  byProject: index("project_invites_project_idx").on(table.projectId, table.createdAt),
+}));
+
 export const donations = pgTable("donations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   projectId: varchar("project_id").notNull().references(() => projects.id),
@@ -1152,6 +1174,8 @@ export const NOTIFICATION_KINDS = [
   "weekly_update",
   // The growth loop: someone joined SparkTower from a published artifact.
   "artifact_signup",
+  // Someone accepted an invite to your project.
+  "invite_accepted",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 

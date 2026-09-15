@@ -20,6 +20,7 @@ import { Overline, Tag, Well, useNotify } from "../bits";
 import { LOOP_TYPE_INFO, mkey, type LoopType } from "../shared";
 import { auditStageLabel, formatElapsed, useAuditStatus } from "../../../sections";
 import { CheckRow, Choice, Input, ListLoading, PlanNote, ShortOfCredits, invalidateCredits, useCredits } from "./kit";
+import { SecurityReport } from "./SecurityReport";
 
 interface AuditListItem { id: string; source: string; sourceKind: "github" | "upload"; stage: string | null; completionPercent: number | null; summary: string | null; appliedAt: string | null; createdAt: string; operationCount: number }
 interface RepoCheck { fullName: string; ref: string; language: string | null; isPrivate: boolean; stars: number }
@@ -212,6 +213,8 @@ export function CodebaseTool({ projectId, repoUrl, isOwner }: { projectId: strin
             </View>
           </Row>
           <Text style={{ fontSize: font.sm, color: colors.textSecondary, fontFamily: fontFamily.regular, lineHeight: 20 }}>{audit.summary}</Text>
+
+          <SecurityReport projectId={projectId} security={findings.security} />
 
           {runtime && (
             <View style={{ borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, padding: spacing.sm + 2, gap: 3 }}>

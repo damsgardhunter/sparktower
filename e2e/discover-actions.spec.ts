@@ -45,7 +45,7 @@ test("cards connect with a note, message in one tap, follow instantly — and a 
   await page.getByTestId("input-connect-note").fill(note);
   await page.getByTestId("button-send-connect").click();
   await expect(page.getByTestId(`button-requested-${beaId}`)).toBeVisible();
-  await expect(page.getByText("Request sent to Bea Builder")).toBeVisible();
+  await expect(page.getByText("Request sent to Bea Builder", { exact: true })).toBeVisible();
 
   // Bea gets the note with the request, and accepts.
   const requests = (await (await bea.get("/api/connections/requests")).json()) as any[];
@@ -75,7 +75,7 @@ test("cards connect with a note, message in one tap, follow instantly — and a 
   await page.route(`**/api/projects/${projectId}/follow`, (route) =>
     route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ message: "The server fell over" }) }));
   await page.getByTestId(`button-follow-${projectId}`).click();
-  await expect(page.getByText("Couldn't update")).toBeVisible();
+  await expect(page.getByText("Couldn't update", { exact: true })).toBeVisible();
   await expect(page.getByTestId(`button-follow-${projectId}`)).toHaveText(/Following/);
 
   await beaContext.close();

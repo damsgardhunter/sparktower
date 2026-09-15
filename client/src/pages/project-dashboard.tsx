@@ -41,6 +41,7 @@ import {
 import type { Project, ProjectMember, UserProfile, User, ProjectApplication } from "@shared/schema";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
+import { useSurfaces } from "@/hooks/use-surfaces";
 import { useUpload } from "@/hooks/use-upload";
 
 type StyleOption = "professional" | "futuristic" | "funny" | "cartoon";
@@ -83,6 +84,8 @@ export default function ProjectDashboard() {
   const [generationStatus, setGenerationStatus] = useState("");
   const [useAiImages, setUseAiImages] = useState(true);
   const [storyboardLibraryOpen, setStoryboardLibraryOpen] = useState(false);
+  // Surfaces that wait until the path loops are proven show only while their flag is on.
+  const { on: surfaceOn } = useSurfaces();
   const [slideshowData, setSlideshowData] = useState<{ scenes: SceneData[]; storyboard: string; style: string } | null>(null);
   const [slideshowOpen, setSlideshowOpen] = useState(false);
   const [applyModalOpen, setApplyModalOpen] = useState(false);
@@ -388,8 +391,8 @@ export default function ProjectDashboard() {
             onManage={() => setLocation(`/projects/${projectId}/manage`)}
           />
 
-          {/* Owner-only tools stay outside the public tabs. */}
-          {isOwner && (
+          {/* Owner-only tools stay outside the public tabs. Storyboards wait for the wedge: behind their flag. */}
+          {isOwner && surfaceOn("storyboards") && (
             <section className="space-y-4 pt-2 border-t border-border/50">
               <div className="flex items-center justify-between gap-3">
                 <div className="space-y-0.5">
@@ -496,8 +499,8 @@ export default function ProjectDashboard() {
           {/* Renders nothing unless the project is running a campaign, so it
               can sit here unconditionally. Above the stats card because it's
               the one thing on this page a visitor can act on. */}
-          <InvestCard projectId={project.id} />
-          <BackingPanel projectId={project.id} projectTitle={project.title} isOwner={isOwner} />
+          {surfaceOn("investor") && <InvestCard projectId={project.id} />}
+          {surfaceOn("backing") && <BackingPanel projectId={project.id} projectTitle={project.title} isOwner={isOwner} />}
 
           {isSectionVisible(project, "stats") && (
           <Card>

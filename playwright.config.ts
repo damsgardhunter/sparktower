@@ -52,6 +52,8 @@ export default defineConfig({
       PLATFORM_REVIEWER_EMAILS: "owner@e2e.local",
       LOCAL_OBJECT_ROOT: path.resolve(import.meta.dirname, "e2e", ".objects"),
       SERVER_BASE_URL: E2E_BASE_URL,
+      // The Content Security Policy blocks, not just reports, so a browser test fails the moment the page loads something it doesn't allow.
+      CSP_ENFORCE: "1",
       // Nothing that could reach a real service.
       STRIPE_SECRET_KEY: "",
       PRINTFUL_API_KEY: "",

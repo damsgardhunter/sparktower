@@ -11,7 +11,9 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
 } from "@/components/ui/sidebar";
-import { Home, Compass, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles, MessageSquare, Handshake, ShieldCheck } from "lucide-react";
+import { Home, Compass, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles, MessageSquare, Handshake, ShieldCheck, ChevronDown } from "lucide-react";
+import { useState } from "react";
+import { PRIMARY_NAV, SECONDARY_NAV } from "@/lib/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -24,28 +26,17 @@ import { TierSwitcher } from "@/components/tier-switcher";
 import { PLAN_PRESENTATION } from "@shared/plans";
 import { useSurfaces } from "@/hooks/use-surfaces";
 
-/*
- * `surface` ties a nav item to its kill switch — an item whose surface is off
- * disappears from the sidebar. Items with no surface are always shown, which
- * is right for Home, Projects and Pricing: they aren't feature areas that can
- * be switched off.
- */
-const menuItems: { title: string; url: string; icon: typeof Home; surface?: string }[] = [
-  { title: "Home", url: "/", icon: Home },
-  { title: "Discover", url: "/discover", icon: Compass, surface: "discover" },
-  { title: "Projects", url: "/projects", icon: FolderKanban },
-  { title: "Matches", url: "/matches", icon: Users, surface: "matches" },
-  { title: "Sprints", url: "/sprints", icon: Handshake, surface: "sprints" },
-  { title: "Messages", url: "/messages", icon: MessageSquare, surface: "messages" },
-  { title: "Leaderboard", url: "/leaderboard", icon: Trophy, surface: "leaderboard" },
-  { title: "Contests and Communities", url: "/contests", icon: Trophy, surface: "contests" },
-  { title: "Pricing", url: "/pricing", icon: CreditCard },
-];
+const ICONS = { Home, FolderKanban, Compass, Users, Handshake, MessageSquare, Trophy, Medal, CreditCard };
+const MORE_OPEN_KEY = "st_nav_more_open";
 
 export function AppSidebar() {
   const [location] = useLocation();
   const { on } = useSurfaces();
-  const visibleItems = menuItems.filter((item) => !item.surface || on(item.surface));
+  // An item whose surface is switched off disappears; the path loops' own items are always there.
+  const primaryItems = PRIMARY_NAV.filter((item) => !item.surface || on(item.surface));
+  const secondaryItems = SECONDARY_NAV.filter((item) => !item.surface || on(item.surface));
+  const [moreOpen, setMoreOpen] = useState(() => { try { return localStorage.getItem(MORE_OPEN_KEY) !== "0"; } catch { return true; } });
+  const toggleMore = () => setMoreOpen((open) => { try { localStorage.setItem(MORE_OPEN_KEY, open ? "0" : "1"); } catch { /* remembered for this visit only */ } return !open; });
   const { user, logout } = useAuth();
   const displayName = user?.firstName ? `${user.firstName} ${user.lastName || ""}` : user?.email || "User";
 
@@ -53,8 +44,10 @@ export function AppSidebar() {
     tier, plan, subscription, creditsUsed, creditsLimit, creditsRemaining, isUnlimited,
   } = useEntitlements();
 
+  // Not polled for a surface that's switched off: its endpoint answers 404 then anyway.
   const { data: unreadData } = useQuery<{ count: number }>({
     queryKey: ["/api/messages/unread-count"],
+    enabled: !!user && on("messages"),
     refetchInterval: 10000,
   });
   const unreadCount = unreadData?.count || 0;
@@ -62,7 +55,7 @@ export function AppSidebar() {
   // What's new from the builders and projects you've looked at since you last opened Discover.
   const { data: discoverNews } = useQuery<{ count: number; more: boolean }>({
     queryKey: ["/api/discover/new-count"],
-    enabled: !!user,
+    enabled: !!user && on("discover"),
     refetchInterval: 60_000,
   });
   const discoverNew = discoverNews?.count ?? 0;
@@ -88,37 +81,66 @@ export function AppSidebar() {
         </div>
       </SidebarHeader>
       <SidebarContent>
+        {/* The path loops: where the work is. */}
         <SidebarGroup>
-          <SidebarGroupLabel>Navigation</SidebarGroupLabel>
+          <SidebarGroupLabel>Build</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {visibleItems.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={location === item.url}
-                    className="data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground"
-                  >
-                    <Link href={item.url} data-testid={`link-${item.title.toLowerCase()}`}>
-                      <item.icon className="h-4 w-4" />
-                      <span className="flex-1">{item.title}</span>
-                      {item.title === "Discover" && discoverNew > 0 && (
-                        <Badge variant="default" className="no-default-hover-elevate no-default-active-elevate text-xs" data-testid="badge-discover-new" title="New posts from people and projects you've looked at">
-                          {discoverNew > 99 ? "99+" : `${discoverNew}${discoverNews?.more ? "+" : ""} new`}
-                        </Badge>
-                      )}
-                      {item.title === "Messages" && unreadCount > 0 && (
-                        <Badge variant="default" className="no-default-hover-elevate no-default-active-elevate text-xs" data-testid="badge-unread-messages">
-                          {unreadCount > 99 ? "99+" : unreadCount}
-                        </Badge>
-                      )}
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
+              {primaryItems.map((item) => {
+                const Icon = ICONS[item.icon];
+                return (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton asChild isActive={location === item.url} className="data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground">
+                      <Link href={item.url} data-testid={`link-${item.title.toLowerCase()}`}>
+                        <Icon className="h-4 w-4" />
+                        <span className="flex-1">{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                );
+              })}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+        {/* Everything else: reachable, quieter, and each behind its surface flag. */}
+        {secondaryItems.length > 0 && (
+          <SidebarGroup className="pt-0" data-testid="nav-secondary">
+            <button type="button" onClick={toggleMore} className="flex items-center gap-1 px-2 h-7 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/80 hover:text-foreground" aria-expanded={moreOpen} data-testid="nav-secondary-toggle">
+              More
+              <ChevronDown className={`h-3 w-3 transition-transform ${moreOpen ? "" : "-rotate-90"}`} />
+              {!moreOpen && (unreadCount > 0 || discoverNew > 0) && <span className="ml-1 h-1.5 w-1.5 rounded-full bg-primary" aria-label="New in More" />}
+            </button>
+            {moreOpen && (
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {secondaryItems.map((item) => {
+                    const Icon = ICONS[item.icon];
+                    return (
+                      <SidebarMenuItem key={item.title}>
+                        <SidebarMenuButton asChild size="sm" isActive={location === item.url} className="text-muted-foreground data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground">
+                          <Link href={item.url} data-testid={`link-${item.title.toLowerCase()}`}>
+                            <Icon className="h-3.5 w-3.5" />
+                            <span className="flex-1 text-[13px]">{item.title}</span>
+                            {item.title === "Discover" && discoverNew > 0 && (
+                              <Badge variant="default" className="no-default-hover-elevate no-default-active-elevate text-xs" data-testid="badge-discover-new" title="New posts from people and projects you've looked at">
+                                {discoverNew > 99 ? "99+" : `${discoverNew}${discoverNews?.more ? "+" : ""} new`}
+                              </Badge>
+                            )}
+                            {item.title === "Messages" && unreadCount > 0 && (
+                              <Badge variant="default" className="no-default-hover-elevate no-default-active-elevate text-xs" data-testid="badge-unread-messages">
+                                {unreadCount > 99 ? "99+" : unreadCount}
+                              </Badge>
+                            )}
+                          </Link>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    );
+                  })}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            )}
+          </SidebarGroup>
+        )}
         {isReviewer && (
           <SidebarGroup>
             <SidebarGroupLabel>Admin</SidebarGroupLabel>

@@ -33,40 +33,62 @@ export interface SurfaceDef {
    * the toggle so the decision to enable is an informed one.
    */
   needsPeople?: number;
+  /**
+   * Where this surface sits in the sequencing decision (docs/decisions/0001-path-loops-first.md):
+   * "wedge" — the three path loops and what they can't run without; "supports" — a tool a path
+   * step asks for, or what closes a path loop; "after-wedge" — real, kept compiled and tested,
+   * but not where work goes until the wedge is proven. After-wedge surfaces sit in the secondary
+   * nav and must be behind this flag on the server and the client.
+   */
+  sequence: SurfaceSequence;
+  /** For an after-wedge surface: what has to be true before it gets new work. */
+  unlocksWhen?: string;
 }
+
+export type SurfaceSequence = "wedge" | "supports" | "after-wedge";
+
+export const SURFACE_SEQUENCE_LABEL: Record<SurfaceSequence, string> = {
+  wedge: "The wedge — the three path loops",
+  supports: "Supports a path step or closes a loop",
+  "after-wedge": "After the wedge is proven",
+};
+
+/** What "the wedge is proven" means, so an after-wedge surface can't be unlocked by feel. Proposed thresholds: the owner sets the real ones. */
+export const WEDGE_PROOF = "Path loops retain: of builders who start a path, 40% finish a step in week 2 and 25% publish a step or update in week 4, for four cohorts running.";
 
 export const SURFACES: SurfaceDef[] = [
   // --- Core: the company-building toolkit -------------------------------
-  { id: "projects",   label: "Projects & brief",     cls: "core", defaultEnabled: true, note: "The object everything else hangs off." },
-  { id: "signup",     label: "New accounts",         cls: "core", defaultEnabled: true, note: "Registration, web and mobile. Off closes the door to new people without touching anyone signed in." },
-  { id: "uploads",    label: "Uploads",              cls: "core", defaultEnabled: true, note: "Every file upload. The first thing to turn off under a storage or abuse incident." },
-  { id: "tasks",      label: "Tasks & kanban",       cls: "core", defaultEnabled: true, note: "Most-used surface in the product." },
-  { id: "milestones", label: "Milestones",           cls: "core", defaultEnabled: true, note: "In use." },
-  { id: "roadmap",    label: "Roadmap",              cls: "core", defaultEnabled: true, note: "In use." },
-  { id: "nova",       label: "Nova assistant",       cls: "core", defaultEnabled: true, note: "The differentiator; drives every other surface." },
-  { id: "codeAudit",  label: "Codebase audit",       cls: "core", defaultEnabled: true, note: "In use, and genuinely unusual." },
-  { id: "mcp",        label: "Editor bridge (MCP)",  cls: "core", defaultEnabled: true, note: "Nova over MCP, for Claude Code, Cursor and VS Code agent mode. Long-lived tokens and whole source trees arrive here — the first switch to reach for if one leaks." },
-  { id: "documents",  label: "Documents",            cls: "core", defaultEnabled: true, note: "In use." },
-  { id: "personas",   label: "Personas & research",  cls: "core", defaultEnabled: true, note: "In use." },
+  { id: "projects",   label: "Projects & brief",     cls: "core", defaultEnabled: true, note: "The object everything else hangs off.", sequence: "wedge" },
+  { id: "signup",     label: "New accounts",         cls: "core", defaultEnabled: true, note: "Registration, web and mobile. Off closes the door to new people without touching anyone signed in.", sequence: "wedge" },
+  { id: "uploads",    label: "Uploads",              cls: "core", defaultEnabled: true, note: "Every file upload. The first thing to turn off under a storage or abuse incident.", sequence: "wedge" },
+  { id: "tasks",      label: "Tasks & kanban",       cls: "core", defaultEnabled: true, note: "Most-used surface in the product.", sequence: "wedge" },
+  { id: "milestones", label: "Milestones",           cls: "core", defaultEnabled: true, note: "In use.", sequence: "wedge" },
+  { id: "roadmap",    label: "Roadmap",              cls: "core", defaultEnabled: true, note: "In use.", sequence: "supports" },
+  { id: "nova",       label: "Nova assistant",       cls: "core", defaultEnabled: true, note: "The differentiator; drives every other surface.", sequence: "wedge" },
+  { id: "codeAudit",  label: "Codebase audit",       cls: "core", defaultEnabled: true, note: "In use, and genuinely unusual.", sequence: "supports" },
+  { id: "mcp",        label: "Editor bridge (MCP)",  cls: "core", defaultEnabled: true, note: "Nova over MCP, for Claude Code, Cursor and VS Code agent mode. Long-lived tokens and whole source trees arrive here — the first switch to reach for if one leaks.", sequence: "supports" },
+  { id: "documents",  label: "Documents",            cls: "core", defaultEnabled: true, note: "In use.", sequence: "supports" },
+  { id: "personas",   label: "Personas & research",  cls: "core", defaultEnabled: true, note: "In use.", sequence: "supports" },
 
   // --- Momentum: proof the company is moving ----------------------------
-  { id: "discover",   label: "Discover",             cls: "momentum", defaultEnabled: true, note: "Where a shared link lands." },
+  { id: "discover",   label: "Discover",             cls: "momentum", defaultEnabled: true, note: "Where a shared link lands.", sequence: "supports" },
 
   // --- Later: real, but earns its place as a project matures ------------
-  { id: "investor",   label: "Investor tools",       cls: "later", defaultEnabled: true, note: "In use, and squarely on the mission." },
-  { id: "backing",    label: "Backing & merch",      cls: "later", defaultEnabled: true, note: "Real money and an escrow obligation. Pledges are held until a reviewer approves the project. Turn off here if the payment path misbehaves." },
-  { id: "launch",     label: "Launch, legal, pricing", cls: "later", defaultEnabled: true, note: "Pre-launch tooling." },
-  { id: "storyboards", label: "Storyboards & video", cls: "later", defaultEnabled: true, note: "Marketing output, including the AI visuals on project pages." },
+  { id: "investor",   label: "Investor tools",       cls: "later", defaultEnabled: true, note: "In use, and squarely on the mission.", sequence: "supports" },
+  { id: "backing",    label: "Backing & merch",      cls: "later", defaultEnabled: true, note: "Real money and an escrow obligation. Pledges are held until a reviewer approves the project. Turn off here if the payment path misbehaves.", sequence: "after-wedge", unlocksWhen: "The wedge is proven, and a project on the Fund path asks for backers." },
+  { id: "launch",     label: "Launch, legal, pricing", cls: "later", defaultEnabled: true, note: "Pre-launch tooling.", sequence: "supports" },
+  { id: "storyboards", label: "Storyboards & video", cls: "later", defaultEnabled: true, note: "Marketing output, including the AI visuals on project pages.", sequence: "after-wedge", unlocksWhen: "The wedge is proven, and published steps show builders want marketing output." },
 
   // --- Network: needs other people to mean anything ---------------------
-  { id: "feed",       label: "Feed",                 cls: "network", defaultEnabled: true,  note: "Works at small numbers — a post needs no counterpart. Highest spam surface.", needsPeople: 3 },
-  { id: "matches",    label: "Matches",              cls: "network", defaultEnabled: true,  note: "Compares profiles; thin until several people have onboarded.", needsPeople: 10 },
-  { id: "sprints",    label: "Sprints & matchmaking", cls: "network", defaultEnabled: true, note: "Needs a partner. Largest subsystem in the codebase.", needsPeople: 6 },
-  { id: "connections", label: "Connections",         cls: "network", defaultEnabled: true,  note: "Needs people to connect to.", needsPeople: 5 },
-  { id: "messages",   label: "Messages / DMs",       cls: "network", defaultEnabled: true,  note: "Highest abuse surface. Needs rate limits and reporting before wide sharing.", needsPeople: 5 },
-  { id: "leaderboard", label: "Leaderboard",         cls: "network", defaultEnabled: true,  note: "Ranks public projects; a list until there are several.", needsPeople: 8 },
-  { id: "contests",   label: "Contests",             cls: "network", defaultEnabled: true,  note: "In the main nav. Empty until the first contest is run — it needs entrants and a judge.", needsPeople: 15 },
-  { id: "liveChat",   label: "Live chat & support",  cls: "network", defaultEnabled: false, note: "Needs a team on one side and a customer on the other.", needsPeople: 4 },
+  { id: "feed",       label: "Feed",                 cls: "network", defaultEnabled: true,  note: "Works at small numbers — a post needs no counterpart. Highest spam surface.", needsPeople: 3, sequence: "wedge" },
+  { id: "matches",    label: "Matches",              cls: "network", defaultEnabled: true,  note: "Compares profiles; thin until several people have onboarded.", needsPeople: 10, sequence: "after-wedge", unlocksWhen: "The wedge is proven, and 10+ active builders a week are on paths." },
+  { id: "sprints",    label: "Sprints & matchmaking", cls: "network", defaultEnabled: true, note: "Needs a partner. Largest subsystem in the codebase.", needsPeople: 6, sequence: "after-wedge", unlocksWhen: "The wedge is proven, and builders ask for a partner to do a step with." },
+  { id: "connections", label: "Connections",         cls: "network", defaultEnabled: true,  note: "Needs people to connect to.", needsPeople: 5, sequence: "after-wedge", unlocksWhen: "The wedge is proven; follows on published steps come first." },
+  { id: "messages",   label: "Messages / DMs",       cls: "network", defaultEnabled: true,  note: "Highest abuse surface. Needs rate limits and reporting before wide sharing.", needsPeople: 5, sequence: "after-wedge", unlocksWhen: "The wedge is proven, and reporting and limits are in place for DMs." },
+  { id: "leaderboard", label: "Leaderboard",         cls: "network", defaultEnabled: true,  note: "Ranks public projects; a list until there are several.", needsPeople: 8, sequence: "after-wedge", unlocksWhen: "The wedge is proven, and there are enough public projects to rank." },
+  { id: "contests",   label: "Contests",             cls: "network", defaultEnabled: true,  note: "In the main nav. Empty until the first contest is run — it needs entrants and a judge.", needsPeople: 15, sequence: "after-wedge", unlocksWhen: "The wedge is proven, and a first contest has entrants and a judge." },
+  { id: "communities", label: "Communities",         cls: "network", defaultEnabled: true,  note: "Groups builders join; lives inside the Contests page. Empty until people join one.", needsPeople: 15, sequence: "after-wedge", unlocksWhen: "The wedge is proven, and builders on the same path want somewhere to gather." },
+  { id: "liveChat",   label: "Live chat & support",  cls: "network", defaultEnabled: false, note: "Needs a team on one side and a customer on the other.", needsPeople: 4, sequence: "after-wedge", unlocksWhen: "The wedge is proven, and a project has customers to support." },
 ];
 
 export type SurfaceId = string;
@@ -117,25 +139,26 @@ export const SURFACE_ROUTES: Record<string, string[]> = {
  */
 export const SURFACE_API_PREFIXES: Record<string, string[]> = {
   signup: ["/api/auth/register", "/api/auth/mobile/register", "/api/auth/mobile/google"],
-  uploads: ["/api/uploads", "/api/objects/upload", "/internal-local-upload"],
-  nova: ["/api/chat", "/api/projects/:id/nova", "/api/projects/:id/nova-guide", "/api/projects/:id/tasks/nova-assist", "/api/projects/:id/path/work", "/api/projects/:id/path/expand", "/api/projects/:id/path/inject", "/api/projects/:id/path/adopt", "/api/projects/:id/next-actions", "/api/projects/:id/health-check"],
+  uploads: ["/api/uploads", "/internal-local-upload"],
+  nova: ["/api/chat", "/api/projects/:id/nova", "/api/projects/:id/nova-guide", "/api/projects/:id/tasks/nova-assist", "/api/projects/:id/path/work", "/api/projects/:id/path/expand", "/api/projects/:id/path/inject", "/api/projects/:id/path/adopt", "/api/projects/:id/health-check"],
   roadmap: ["/api/projects/:id/roadmap"],
   codeAudit: ["/api/projects/:id/code-audit", "/api/code-audits"],
   mcp: ["/api/mcp", "/api/mcp-tokens"],
   documents: ["/api/projects/:id/documents", "/api/documents"],
   personas: ["/api/projects/:id/personas", "/api/projects/:id/interviews", "/api/projects/:id/experiments"],
-  investor: ["/api/investor", "/api/mock-interviews", "/api/projects/:id/investor", "/api/projects/:id/pitch", "/api/projects/:id/investment", "/api/investment-applications"],
-  launch: ["/api/projects/:id/waitlist", "/api/projects/:id/landing", "/api/projects/:id/legal", "/api/projects/:id/deploy-checklist", "/api/projects/:id/launch", "/api/projects/:id/pricing"],
-  storyboards: ["/api/storyboards", "/api/projects/:id/storyboards", "/api/generate-image", "/api/projects/:id/visuals"],
-  backing: ["/api/projects/:id/backing", "/api/backing-tiers", "/api/admin/backing", "/api/backer-badges", "/api/me/badges"],
+  investor: ["/api/mock-interviews", "/api/projects/:id/investment", "/api/investment-applications", "/api/projects/:id/investor-artifacts", "/api/projects/:id/pitch-deck", "/api/projects/:id/readiness-score", "/api/projects/:id/pitch-critique", "/api/projects/:id/pricing-analysis", "/api/projects/:id/mock-interview", "/api/investor-personas"],
+  launch: ["/api/projects/:id/waitlist", "/api/projects/:id/deploy-checklist", "/api/projects/:id/pricing", "/api/projects/:id/legal-docs", "/api/projects/:id/launch-tasks", "/api/projects/:id/support-tickets"],
+  storyboards: ["/api/storyboards", "/api/projects/:id/storyboards", "/api/projects/:id/visuals", "/api/projects/:id/generate-video"],
+  backing: ["/api/projects/:id/backing", "/api/backing-tiers", "/api/admin/backing", "/api/backer-badges", "/api/me/badges", "/api/projects/:id/merch", "/api/merch-orders", "/api/admin/printful", "/api/users/:userId/backings", "/api/backings", "/api/users/:userId/badges/backer", "/api/me/backings", "/api/payouts", "/api/stripe/connect-account", "/api/stripe/connect-onboarding", "/api/stripe/connect-dashboard", "/api/projects/:id/donations", "/api/projects/:id/donate", "/api/projects/:id/donate-checkout"],
   discover: ["/api/discover"],
   feed: ["/api/feed", "/api/projects/:id/comments", "/api/project-comments", "/api/artifacts", "/api/public/artifacts", "/api/promotions"],
-  matches: ["/api/matches"],
-  sprints: ["/api/sprints", "/api/sprint"],
+  matches: ["/api/matches", "/api/projects/:id/recommend-people"],
+  sprints: ["/api/sprints"],
   connections: ["/api/connections"],
-  messages: ["/api/messages", "/api/conversations"],
-  leaderboard: ["/api/leaderboard"],
+  messages: ["/api/messages"],
+  leaderboard: ["/api/leaderboard", "/api/reputation"],
   contests: ["/api/contests"],
+  communities: ["/api/communities"],
   liveChat: ["/api/projects/:id/live-chat"],
 };
 

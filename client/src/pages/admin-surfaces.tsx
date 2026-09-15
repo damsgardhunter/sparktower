@@ -8,7 +8,7 @@ import { useAuth } from "@/hooks/use-auth";
 import NotFound from "@/pages/not-found";
 import { Loader2, ToggleLeft, Users, AlertTriangle } from "lucide-react";
 import {
-  SURFACE_CLASS_LABEL, type SurfaceClass, type SurfaceDef,
+  SURFACE_CLASS_LABEL, SURFACE_SEQUENCE_LABEL, WEDGE_PROOF, type SurfaceClass, type SurfaceDef, type SurfaceSequence,
 } from "@shared/surfaces";
 
 type Row = SurfaceDef & { enabled: boolean };
@@ -75,6 +75,26 @@ export default function AdminSurfaces() {
         )}
       </header>
 
+      {/* The sequencing decision, where the switches are: what the work is for, and what waits. */}
+      <Card className="border-primary/40" data-testid="surface-sequencing">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">Sequencing: the path loops first</CardTitle>
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            The three path loops — Ship, Systemize, Raise — are the wedge. New work goes to them and to what they need.
+            Everything marked <span className="font-medium">after the wedge</span> stays built, tested and switchable, but sits in the secondary nav and gets no new work until this is true:
+          </p>
+          <p className="text-xs font-medium leading-relaxed" data-testid="wedge-proof">{WEDGE_PROOF}</p>
+          <p className="text-[11px] text-muted-foreground">The decision and how to revisit it: docs/decisions/0001-path-loops-first.md</p>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-1.5 text-[11px]">
+          {(["wedge", "supports", "after-wedge"] as SurfaceSequence[]).map((seq) => (
+            <span key={seq} className="rounded-full border border-border px-2 py-0.5">
+              {SURFACE_SEQUENCE_LABEL[seq]}: {rows.filter((r) => r.sequence === seq).length}
+            </span>
+          ))}
+        </CardContent>
+      </Card>
+
       {isLoading ? (
         <div className="flex justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
       ) : (
@@ -110,8 +130,12 @@ export default function AdminSurfaces() {
                         {s.enabled !== s.defaultEnabled && (
                           <Badge variant="secondary" className="text-[10px]">changed</Badge>
                         )}
+                        <Badge variant={s.sequence === "after-wedge" ? "outline" : "secondary"} className="text-[10px]" data-testid={`sequence-${s.id}`}>
+                          {s.sequence === "wedge" ? "Wedge" : s.sequence === "supports" ? "Supports the wedge" : "After the wedge"}
+                        </Badge>
                       </div>
                       <p className="text-xs text-muted-foreground leading-relaxed">{s.note}</p>
+                      {s.unlocksWhen && <p className="text-[11px] text-muted-foreground"><span className="font-medium">Unlocks when:</span> {s.unlocksWhen}</p>}
                     </div>
                     <Switch
                       checked={s.enabled}

@@ -136,3 +136,19 @@ describe("public writes that trust a credential in the request", () => {
     expect((await request(app).put("/internal-local-upload/abc123").set("x-forwarded-for", uploader).send("data")).status).toBe(429);
   });
 });
+
+describe("security headers on the real app", () => {
+  it("every response carries them — pages, the API, errors — and none says what the server runs", async () => {
+    const app = await getTestApp();
+    for (const path of ["/_health", "/api/surfaces", "/api/does-not-exist"]) {
+      const res = await request(app).get(path);
+      expect(res.headers["x-frame-options"], path).toBe("DENY");
+      expect(res.headers["x-content-type-options"], path).toBe("nosniff");
+      expect(res.headers["content-security-policy"] ?? res.headers["content-security-policy-report-only"], path).toContain("frame-ancestors 'none'");
+      expect(res.headers["x-powered-by"], path).toBeUndefined();
+    }
+    // A served logo keeps its own stricter, sandboxed policy.
+    const logo = await request(app).get("/api/promotions/replit/logo");
+    if (logo.status === 200) expect(logo.headers["content-security-policy"]).toContain("sandbox");
+  });
+});

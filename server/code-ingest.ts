@@ -49,7 +49,10 @@ export interface RepoSnapshot {
  *
  * Auditing "where the project is" means auditing what the builder wrote.
  * node_modules would swamp every signal and burn the entire byte budget on
- * dependencies, and a lockfile tells us nothing a manifest doesn't.
+ * dependencies. A lockfile's *contents* tell us nothing a manifest doesn't —
+ * but whether one exists does (it pins installs), so lockfiles are recorded by
+ * path and never read. They used to be dropped entirely, and the audit then
+ * reported a repository with committed lockfiles as having none.
  */
 const IGNORED_SEGMENTS = new Set([
   "node_modules", ".git", ".next", ".nuxt", "dist", "build", "out", "coverage",
@@ -62,11 +65,14 @@ const IGNORED_SEGMENTS = new Set([
   "__MACOSX", ".parcel-cache", ".angular", ".dart_tool", ".expo", ".expo-shared",
 ]);
 
-const IGNORED_FILES = new Set([
-  "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb",
-  "composer.lock", "Gemfile.lock", "poetry.lock", "Cargo.lock", "go.sum",
-  ".DS_Store",
+const IGNORED_FILES = new Set([".DS_Store"]);
+
+/** Recorded by path (and size) so their presence is known; their contents are never read. */
+export const LOCKFILES = new Set([
+  "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb", "bun.lock",
+  "composer.lock", "Gemfile.lock", "poetry.lock", "Cargo.lock", "go.sum", "uv.lock", "Pipfile.lock",
 ]);
+const isLockfile = (path: string) => LOCKFILES.has(path.split("/").pop() || "");
 
 /** Extensions worth reading as text. Anything else is recorded by path only. */
 const TEXT_EXTENSIONS = new Set([
@@ -165,6 +171,7 @@ export function snapshotFromFiles(
     const content = typeof raw?.content === "string" ? raw.content : undefined;
     const size = content ? Buffer.byteLength(content, "utf8") : 0;
 
+    if (isLockfile(path)) { files.push({ path, size }); continue; }
     if (content === undefined || !isTextual(path) || size > MAX_FILE_BYTES) {
       files.push({ path, size });
       skipped++;
@@ -216,6 +223,7 @@ export function snapshotFromZip(archive: Buffer, source: string): RepoSnapshot {
 
     const declared = entry.header.size;
 
+    if (isLockfile(path)) { files.push({ path, size: declared }); continue; }
     if (!isTextual(path) || declared > MAX_FILE_BYTES) {
       // Recorded so the tree is complete, but not read.
       files.push({ path, size: declared });

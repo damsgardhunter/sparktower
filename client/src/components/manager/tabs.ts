@@ -14,7 +14,8 @@ export type TabId =
   | "public" | "milestones" | "activity" | "personas" | "research" | "strategy" | "investors" | "launch" | "support"
   | "setup" | "codebase" | "team" | "chat";
 
-export interface TabDef { id: TabId; label: string; icon: LucideIcon; ownerOnly?: boolean }
+/** `surface`: the kill switch that hides the tab (shared/surfaces.ts). The path's own tabs have none. */
+export interface TabDef { id: TabId; label: string; icon: LucideIcon; ownerOnly?: boolean; surface?: string }
 
 /** Each section's own Dashboard, Roadmap, Tasks, Files and Analytics. */
 export const SECTION_TABS: TabDef[] = [
@@ -29,20 +30,20 @@ export const MORE_TABS: TabDef[] = [
   { id: "public", label: "Public Page", icon: Eye },
   { id: "milestones", label: "Milestones", icon: Flag },
   { id: "activity", label: "Activity", icon: Activity },
-  { id: "personas", label: "Personas", icon: Target },
-  { id: "research", label: "Research", icon: Beaker },
+  { id: "personas", label: "Personas", icon: Target, surface: "personas" },
+  { id: "research", label: "Research", icon: Beaker, surface: "personas" },
   { id: "strategy", label: "Strategy", icon: Crosshair },
-  { id: "investors", label: "Investors", icon: HandCoins, ownerOnly: true },
-  { id: "launch", label: "Launch", icon: Rocket },
-  { id: "support", label: "Support", icon: Headphones },
+  { id: "investors", label: "Investors", icon: HandCoins, ownerOnly: true, surface: "investor" },
+  { id: "launch", label: "Launch", icon: Rocket, surface: "launch" },
+  { id: "support", label: "Support", icon: Headphones, surface: "launch" },
 ];
 
 /** The project-wide tabs, always on the right. */
 export const RAIL_TABS: TabDef[] = [
   { id: "setup", label: "Setup", icon: LayoutDashboard },
-  { id: "codebase", label: "Codebase", icon: ScanSearch },
+  { id: "codebase", label: "Codebase", icon: ScanSearch, surface: "codeAudit" },
   { id: "team", label: "Team", icon: Users },
-  { id: "chat", label: "Chat", icon: MessageSquare },
+  { id: "chat", label: "Chat", icon: MessageSquare, surface: "liveChat" },
 ];
 
 export const ALL_TABS: TabDef[] = [...SECTION_TABS, ...MORE_TABS, ...RAIL_TABS];

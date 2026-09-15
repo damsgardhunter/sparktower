@@ -30,6 +30,10 @@ const audit = {
   capabilities: [], built: [], partial: [], missing: [], undocumented: [], risks: [],
   taskReconciliation: { looksDone: [], notStarted: [] }, milestones: [], loops: [], nextThreeThings: [],
   catchUpNote: "", operations: [],
+  securityPlan: [
+    { title: "Add security headers", severity: "high", why: "No helmet.", fix: "app.use(helmet()) in server/index.ts", files: ["server/index.ts", "server/made-up.ts"], checkId: "security-headers" },
+    { title: "No fix given", severity: "high", why: "x" },
+  ],
 };
 const files = [
   { path: "package.json", content: JSON.stringify({ name: "runs", dependencies: { express: "4" } }) },
@@ -65,6 +69,13 @@ describe("audit runs", () => {
     const after = await status();
     expect(after.running).toBeNull();
     expect(after.last).toMatchObject({ source: "worktree:my-branch", auditId: done.body.audit.id, error: null });
+
+    // Security before release: the deterministic checklist rides on the audit, and Nova's plan is kept to real files.
+    const security = done.body.audit.findings.security;
+    expect(security.checks.length).toBeGreaterThan(15);
+    expect(security.checks.find((c: any) => c.id === "security-headers").status).toBe("missing");
+    expect(typeof security.score).toBe("number");
+    expect(security.plan).toEqual([expect.objectContaining({ title: "Add security headers", files: ["server/index.ts"], checkId: "security-headers" })]);
 
     // A run whose answer can't be read ends with an error, not stuck as running.
     gate = Promise.resolve();

@@ -141,6 +141,16 @@ export const RATE_LIMITS = {
     max: 60, windowMinutes: 10,
     message: "You're following a lot of projects very quickly. Give it a minute.",
   },
+  /** Creating invites: each one can email someone who didn't ask to hear from us. Per person; each project also has a daily cap. */
+  invite: {
+    max: 20, windowMinutes: 60,
+    message: "That's a lot of invites in an hour. Try again later.",
+  },
+  /** Opening or accepting an invite link, per address or person: tokens can't be guessed, and this keeps anyone from trying. */
+  inviteLookup: {
+    max: 60, windowMinutes: 10,
+    message: "Too many invite links opened from here. Try again in a few minutes.",
+  },
   /** Applying to a project or entering a contest: each lands in someone else's queue. */
   apply: {
     max: 20, windowMinutes: 60,

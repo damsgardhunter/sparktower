@@ -20,6 +20,7 @@ import { registerRoutes } from "./routes";
 import { WebhookHandlers, WebhookVerificationError } from "./webhookHandlers";
 import { ModelResponseError } from "./ai-json";
 import { enforceRejectionLimit, countRejection, ipKey } from "./moderation";
+import { securityHeaders } from "./security-headers";
 import { stripSealedFields } from "@shared/strip-sealed";
 
 export interface CreateAppOptions {
@@ -98,6 +99,9 @@ export function log(message: string, source = "express") {
 export async function createApp(opts: CreateAppOptions): Promise<Express> {
   const { httpServer, isReady = () => true, logRequests = false } = opts;
   const app = express();
+  app.disable("x-powered-by");
+  // First, so every response — health checks, the webhook, errors — carries them.
+  app.use(securityHeaders({ production: process.env.NODE_ENV === "production", enforce: process.env.CSP_ENFORCE === "1" }));
 
   // Sealed fields and password hashes never leave the server, whatever route
   // built the payload. The hash used to be stripped only by the request logger,

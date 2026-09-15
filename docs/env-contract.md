@@ -38,6 +38,7 @@ the role on the next restart.
 | `GOOGLE_IOS_CLIENT_ID` / `GOOGLE_ANDROID_CLIENT_ID` | optional | unset | Replit Secrets |
 | `STRIPE_SECRET_KEY` / `STRIPE_PUBLISHABLE_KEY` | test-mode keys | unset — the webhook tests stub the client | Replit Stripe connector, or Secrets |
 | `PRINTFUL_API_KEY` / `PRINTFUL_STORE_ID` | optional | unset | Replit Secrets |
+| `RESEND_API_KEY` / `EMAIL_FROM` | optional — unset, invite emails are written to the server log and `GET /api/dev/outbox` instead | unset (tests always log) | Replit Secrets; `EMAIL_FROM` on a domain verified in Resend, e.g. `SparkTower <invites@yourdomain>` |
 | `GITHUB_TOKEN` | personal token, for code audits | unset | Replit Secrets |
 | `PRIVATE_OBJECT_DIR` / `PUBLIC_OBJECT_SEARCH_PATHS` | unset → local disk | unset → local disk | bucket path |
 

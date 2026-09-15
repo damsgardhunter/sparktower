@@ -19,6 +19,7 @@ import { X, Plus, Github, Linkedin, Globe, MapPin, Loader2, Upload, FileText, Ch
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { PENDING_PATH_KEY, afterOnboardingPath, type PendingPath } from "@shared/path-artifacts";
+import { PENDING_INVITE_KEY } from "@shared/invites";
 import { useUpload } from "@/hooks/use-upload";
 
 const STEPS = [
@@ -172,6 +173,10 @@ export default function Onboarding() {
       // it came from a published artifact to look at that project first.
       let pending: PendingPath | null = null;
       try { pending = JSON.parse(localStorage.getItem(PENDING_PATH_KEY) ?? "null"); } catch { /* no pending choice */ }
+      // An invite waiting in this browser comes first: that's what they signed up for.
+      let invite: string | null = null;
+      try { invite = localStorage.getItem(PENDING_INVITE_KEY); } catch { /* none */ }
+      if (invite && /^[A-Za-z0-9_-]{43}$/.test(invite)) { window.location.href = `/invite/${invite}`; return; }
       setLocation(afterOnboardingPath(pending));
     } catch (error) {
       toast({

@@ -27,6 +27,7 @@ import ContestDetail from "@/pages/contest-detail";
 import Pricing from "@/pages/pricing";
 import BackingReview from "@/pages/backing-review";
 import PublicArtifactPage from "@/pages/public-artifact";
+import InviteAcceptPage from "@/pages/invite-accept";
 import AdminPromotions from "@/pages/admin-promotions";
 import { NOVA_GRADIENT, NOVA_GRADIENT_CSS } from "@shared/backing";
 import { AnimatedTowerLogo } from "@/components/animated-tower-logo";
@@ -95,12 +96,14 @@ function Router() {
    * pointless. Checked before both the auth gate and the onboarding redirect
    * so neither can swallow it.
    */
-  const isPublicRoute = /^\/a\/[^/]+$/.test(window.location.pathname);
+  const isPublicRoute = /^\/(a|invite)\/[^/]+$/.test(window.location.pathname);
   if (isPublicRoute) {
     return (
       <Switch>
         {/* A published path artifact: the growth loop's front door. */}
         <Route path="/a/:id" component={PublicArtifactPage} />
+        {/* An invite link: who's inviting you to what, signed in or not. */}
+        <Route path="/invite/:token" component={InviteAcceptPage} />
       </Switch>
     );
   }
