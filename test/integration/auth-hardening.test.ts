@@ -43,6 +43,11 @@ describe("signing out", () => {
     expect(all.body.devicesSignedOut).toBe(1);
     expect((await other.get("/api/auth/user")).status).toBe(401);
     expect((await request(app).post("/api/auth/mobile/refresh").set("x-forwarded-for", "203.0.113.252").send({ refreshToken })).status).toBe(401);
+    // And the phone's access token, still unexpired, stops working now rather than in 15 minutes.
+    expect((await request(app).get("/api/auth/mobile/me").set("Authorization", `Bearer ${phone.body.accessToken}`)).status).toBe(401);
+    // Signing in again afterwards works as normal.
+    const again = await request(app).post("/api/auth/mobile/login").set("x-forwarded-for", "203.0.113.253").send({ email, password });
+    expect((await request(app).get("/api/auth/mobile/me").set("Authorization", `Bearer ${again.body.accessToken}`)).status).toBe(200);
   });
 });
 
@@ -87,6 +92,9 @@ describe("public writes that trust a credential in the request", () => {
     await db.update(mobileRefreshTokens).set({ revokedAt: sql`now() - interval '5 minutes'` }).where(eq(mobileRefreshTokens.tokenHash, (await import("crypto")).createHash("sha256").update(phone.refreshToken).digest("hex")));
     expect((await refresh(phone.refreshToken)).status).toBe(401);
     expect((await refresh(rotated.body.refreshToken)).status).toBe(401);
+    // The access tokens those sessions held are dead too, the copy's included.
+    expect((await request(app).get("/api/auth/mobile/me").set("Authorization", `Bearer ${rotated.body.accessToken}`)).status).toBe(401);
+    expect((await request(app).get("/api/auth/mobile/me")).status).toBe(401);
   });
 
   it("two refreshes racing with one token get one session between them", async () => {

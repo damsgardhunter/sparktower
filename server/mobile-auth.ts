@@ -21,6 +21,7 @@ import { storage } from "./storage";
 import { ensureUserProfile } from "./user-provisioning";
 import { stampSignupAttribution } from "./attribution";
 import { enforceRateLimit, ipKey } from "./moderation";
+import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 
 const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;          // 15 minutes
 const REFRESH_TOKEN_TTL_DAYS = 60;
@@ -49,6 +50,8 @@ function signAccessToken(userId: string): { token: string; expiresIn: number } {
   const payload = b64url(JSON.stringify({
     sub: userId,
     iat: now,
+    // Milliseconds, because revocation is: a token issued in the same second as "sign out everywhere" must still die.
+    iat_ms: Date.now(),
     exp: now + ACCESS_TOKEN_TTL_SECONDS,
   }));
   const body = `${header}.${payload}`;
@@ -56,8 +59,8 @@ function signAccessToken(userId: string): { token: string; expiresIn: number } {
   return { token: `${body}.${signature}`, expiresIn: ACCESS_TOKEN_TTL_SECONDS };
 }
 
-/** Returns the user id, or null when the token is invalid, tampered, or expired. */
-export function verifyAccessToken(token: string): string | null {
+/** Returns the user id and when the token was issued, or null when it's invalid, tampered, or expired. */
+export function verifyAccessToken(token: string): { userId: string; issuedAtMs: number } | null {
   const parts = token.split(".");
   if (parts.length !== 3) return null;
   const [header, payload, signature] = parts;
@@ -72,7 +75,9 @@ export function verifyAccessToken(token: string): string | null {
     const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
     if (typeof claims.sub !== "string") return null;
     if (typeof claims.exp !== "number" || claims.exp < Math.floor(Date.now() / 1000)) return null;
-    return claims.sub;
+    if (typeof claims.iat !== "number") return null;
+    // Tokens from before iat_ms existed count from the start of their second — revoked when in doubt.
+    return { userId: claims.sub, issuedAtMs: typeof claims.iat_ms === "number" ? claims.iat_ms : claims.iat * 1000 };
   } catch {
     return null;
   }
@@ -110,6 +115,8 @@ async function revokeOnReuse(tokenHash: string): Promise<void> {
   const ended = await db.update(mobileRefreshTokens).set({ revokedAt: new Date() })
     .where(and(eq(mobileRefreshTokens.userId, spent.userId), isNull(mobileRefreshTokens.revokedAt)))
     .returning({ id: mobileRefreshTokens.id });
+  // And the access tokens those sessions hold — the thief's included.
+  await db.update(users).set({ accessTokensRevokedAt: new Date() }).where(eq(users.id, spent.userId));
   console.warn(`[auth] refresh token reused for user ${spent.userId}; ended ${ended.length} mobile session(s)`);
 }
 
@@ -150,11 +157,13 @@ export const attachBearerUser: RequestHandler = async (req: any, _res, next) => 
     const header = req.headers.authorization;
     if (!header?.startsWith("Bearer ")) return next();
 
-    const userId = verifyAccessToken(header.slice(7).trim());
-    if (!userId) return next();
+    const verified = verifyAccessToken(header.slice(7).trim());
+    if (!verified) return next();
 
-    const user = await storage.getUser(userId);
+    const user = await storage.getUser(verified.userId);
     if (!user) return next();
+    // Revoked with the account's sessions (sign out everywhere, a stolen refresh token): refused before its expiry.
+    if (user.accessTokensRevokedAt && verified.issuedAtMs <= user.accessTokensRevokedAt.getTime()) return next();
 
     req.user = user;
     // Passport's isAuthenticated() checks this; make it true for token auth so
@@ -360,8 +369,8 @@ export function registerMobileAuthRoutes(app: Express) {
   });
 
   /** Current user for a Bearer token — the app's session bootstrap. */
-  app.get("/api/auth/mobile/me", async (req: any, res) => {
-    if (!req.user) return res.status(401).json({ message: "Unauthorized" });
+  // Guarded explicitly, like every other signed-in route, rather than relying on attachBearerUser having run first.
+  app.get("/api/auth/mobile/me", isAuthenticated, async (req: any, res) => {
     const profile = await storage.getUserProfile(req.user.id).catch(() => undefined);
     res.json({ user: { ...req.user, passwordHash: undefined }, profile: profile ?? null });
   });

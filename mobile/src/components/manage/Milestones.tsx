@@ -1,6 +1,8 @@
 /**
  * The project's own milestones as a timeline: create, edit, set status,
  * delete. The path's authored milestones live on the dashboard's map.
+ * Inside a section it shows the milestones whose linked cards are in that
+ * section, and the ones linked to nothing (those show everywhere).
  */
 import { useState } from "react";
 import { Alert, Platform, Pressable, Text, View } from "react-native";
@@ -10,6 +12,7 @@ import { colors, font, fontFamily, spacing } from "../../theme";
 import { Body, Btn, Card, Empty, Field, Icon, Label, Loading, Meta, Row } from "../ui";
 import { Area, Bubble, EditorSheet, Line, Tag, useNotify } from "./bits";
 import { mkey, useRefreshPath } from "./shared";
+import { sectionDef, taskInSection, type ProjectGoal } from "../../sections";
 
 const STATUS = [
   { id: "planned", label: "Planned", color: colors.info },
@@ -19,7 +22,7 @@ const STATUS = [
 
 interface Milestone { id: string; title: string; description: string | null; targetDate: string | null; status: string; order: number }
 
-export function Milestones({ projectId }: { projectId: string }) {
+export function Milestones({ projectId, goal, primary }: { projectId: string; goal: ProjectGoal; primary: ProjectGoal }) {
   const refresh = useRefreshPath(projectId);
   const { notify, fail } = useNotify();
   const [editing, setEditing] = useState<Milestone | "new" | null>(null);
@@ -29,6 +32,16 @@ export function Milestones({ projectId }: { projectId: string }) {
     queryKey: mkey(projectId, "milestones"),
     queryFn: () => api<Milestone[]>(`/api/projects/${projectId}/milestones`),
   });
+
+  // Which section a milestone is in comes from the board: the same query the Tasks tab reads.
+  const { data: tasks } = useQuery({
+    queryKey: mkey(projectId, "kanban"),
+    queryFn: () => api<{ milestoneId?: string | null; tags: string[] | null }[]>(`/api/projects/${projectId}/kanban`),
+  });
+  const inSection = (m: Milestone) => {
+    const linked = (tasks ?? []).filter((t) => t.milestoneId === m.id);
+    return linked.length === 0 || linked.some((t) => taskInSection(t.tags, goal, primary));
+  };
 
   const open = (m: Milestone | "new") => {
     setEditing(m);
@@ -59,7 +72,7 @@ export function Milestones({ projectId }: { projectId: string }) {
   });
 
   if (isLoading) return <View style={{ height: 240 }}><Loading /></View>;
-  const sorted = [...(data ?? [])].sort((a, b) => (a.targetDate && b.targetDate ? new Date(a.targetDate).getTime() - new Date(b.targetDate).getTime() : a.order - b.order));
+  const sorted = (data ?? []).filter(inSection).sort((a, b) => (a.targetDate && b.targetDate ? new Date(a.targetDate).getTime() - new Date(b.targetDate).getTime() : a.order - b.order));
 
   return (
     <View style={{ gap: spacing.md }}>
@@ -67,7 +80,7 @@ export function Milestones({ projectId }: { projectId: string }) {
         <Row between>
           <View>
             <Text style={{ fontFamily: fontFamily.bold, fontSize: font.lg, color: colors.text }}>Milestones</Text>
-            <Meta>{sorted.length} milestone{sorted.length === 1 ? "" : "s"} · {sorted.filter((m) => m.status === "completed").length} completed</Meta>
+            <Meta>{sorted.length} in {sectionDef(goal).short} · {sorted.filter((m) => m.status === "completed").length} completed</Meta>
           </View>
           <Btn small icon="add" label="New" onPress={() => open("new")} />
         </Row>

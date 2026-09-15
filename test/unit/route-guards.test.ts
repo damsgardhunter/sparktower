@@ -115,7 +115,7 @@ describe("authentication on the write surface", () => {
     expect(live.find((r) => label(r) === "POST /api/stripe/webhook")!.floor).toBe(false);
     // Under /api, no write is unlimited — not even the signed webhook, whose failed deliveries are limited per address.
     expect(cov.unlimitedWrites.filter((l) => l.includes(" /api/"))).toEqual([]);
-    expect(live.find((r) => label(r) === "POST /api/stripe/webhook")!.rateLimited).toBe(true);
+    expect(live.find((r) => label(r) === "POST /api/stripe/webhook")!.limits).toEqual(["webhookReject (failures only)"]);
   });
 
   it("the only inbound webhook is Stripe's (its signature is checked in stripe-webhook.test.ts)", () => {

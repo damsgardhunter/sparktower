@@ -180,7 +180,7 @@ export function FeedComments({ post }: {
                     <Link href={`/profile/${c.authorId}`} className="text-xs font-semibold hover:underline">{name}</Link>
                     <span className="text-[10px] text-muted-foreground">{timeAgo(c.createdAt)}</span>
                   </div>
-                  <FeedContent content={c.content} mentions={c.mentions || []} className="text-[13px]" />
+                  <FeedContent content={c.content} mentions={c.mentions || []} className="text-[14px]" />
                   {c.hidden && (
                     <p className="text-[11px] text-destructive flex items-center gap-1 mt-1"><EyeOff className="h-3 w-3" />Only you can see this — it was taken down{c.hiddenReason ? `: ${c.hiddenReason}` : "."}</p>
                   )}

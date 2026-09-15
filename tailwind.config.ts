@@ -2,7 +2,8 @@ import type { Config } from "tailwindcss";
 
 export default {
   darkMode: ["class"],
-  content: ["./client/index.html", "./client/src/**/*.{js,jsx,ts,tsx}"],
+  // shared/ too: post type accents and other class names are defined there (shared/feed.ts).
+  content: ["./client/index.html", "./client/src/**/*.{js,jsx,ts,tsx}", "./shared/**/*.ts"],
   theme: {
     extend: {
       borderRadius: {

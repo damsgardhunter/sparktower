@@ -123,9 +123,10 @@ export function FeedComposer({ defaultProjectId }: { defaultProjectId?: string }
             {QUICK_POST_TYPES.map((t) => (
               <Button
                 key={t.type}
-                variant="ghost"
+                variant="outline"
                 size="sm"
-                className="gap-1.5 text-xs h-7"
+                // The same colour the type wears on a post in the feed: blue update, amber help, violet cofounder.
+                className={`gap-1.5 text-xs h-7 border font-medium shadow-none hover:brightness-95 dark:hover:brightness-125 ${t.accent}`}
                 onClick={() => { setPostType(t.type); setOpen(true); }}
                 data-testid={`button-quick-${t.type}`}
               >

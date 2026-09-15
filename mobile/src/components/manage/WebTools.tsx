@@ -9,6 +9,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
 import { mkey } from "./shared";
+import type { ProjectGoal } from "../../sections";
 import { CodebaseTool } from "./tools/Codebase";
 import { ResearchTool } from "./tools/Research";
 import { StrategyTool } from "./tools/Strategy";
@@ -18,7 +19,8 @@ import { SupportTool } from "./tools/Support";
 
 export type WebOnlyTab = "codebase" | "research" | "strategy" | "launch" | "analytics" | "support";
 
-export function WebTools({ projectId, tab }: { projectId: string; tab: WebOnlyTab }) {
+/** `goal` is the open section: Analytics is per section, the rest are project-wide. */
+export function WebTools({ projectId, tab, goal }: { projectId: string; tab: WebOnlyTab; goal: ProjectGoal }) {
   const { user } = useAuth();
   // The manager has already loaded the project under this key; this reads the cache.
   const { data: project } = useQuery({ queryKey: mkey(projectId, "project"), queryFn: () => api<any>(`/api/projects/${projectId}`) });
@@ -28,7 +30,7 @@ export function WebTools({ projectId, tab }: { projectId: string; tab: WebOnlyTa
     case "research": return <ResearchTool projectId={projectId} />;
     case "strategy": return <StrategyTool projectId={projectId} />;
     case "launch": return <LaunchTool projectId={projectId} project={project} />;
-    case "analytics": return <AnalyticsTool projectId={projectId} />;
+    case "analytics": return <AnalyticsTool projectId={projectId} goal={goal} />;
     case "support": return <SupportTool projectId={projectId} />;
   }
 }

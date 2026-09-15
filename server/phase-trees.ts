@@ -949,8 +949,8 @@ export function auditUpdateOf(audit: { id: string; createdAt: Date; findings: un
  * complete_path_milestone), each loop with its build steps (by id, for
  * update_task and add_loop_steps), and the loops the builder removed.
  */
-export async function renderPathForAudit(projectId: string): Promise<string | null> {
-  const status = await pathStatus(projectId);
+export async function renderPathForAudit(projectId: string, goal?: ProjectGoal | null): Promise<string | null> {
+  const status = await pathStatus(projectId, goal);
   if (!status?.adopted) return null;
   const open = status.phases.filter((p) => !p.optional).flatMap((p) => p.milestones.filter((m) => !m.done).map((m) => `- ${m.id} — ${m.title}`));
   const tree = status.loopTree;

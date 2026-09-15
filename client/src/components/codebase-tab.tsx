@@ -18,6 +18,8 @@ import { CREDIT_COSTS } from "@shared/plans";
 import { LOOP_TYPE_INFO, type LoopClosureRead } from "@shared/phase-trees";
 import { AuditCatchUp, PathChanges, refreshAfterCatchUp } from "@/components/audit-catchup";
 import type { ProjectCodeAudit } from "@shared/schema";
+import { useAuth } from "@/hooks/use-auth";
+import { useAuditStatus, quietAuditErrors, auditStageLabel, auditSourceLabel, formatElapsed, auditStatusKey } from "@/lib/audit-status";
 
 interface AuditListItem {
   id: string;
@@ -46,6 +48,8 @@ interface RepoCheck {
 const IDLE_POLL_MS = 30_000;
 /** …and while a read is running. */
 const RUNNING_POLL_MS = 4_000;
+/** The three stages a run reports, in order, for the progress bar. */
+const STAGE_ORDER = ["fetching", "reading", "saving"];
 const NOVA_GRADIENT = "bg-gradient-to-r from-green-400 via-emerald-500 to-purple-500";
 
 const STAGE_STYLE: Record<string, { label: string; className: string }> = {
@@ -202,14 +206,6 @@ const change = (before: number | null | undefined, after: number | null | undefi
   return d === 0 ? null : <span className={d > 0 ? "text-emerald-600" : "text-rose-600"}>{d > 0 ? `+${d.toLocaleString()}` : d.toLocaleString()}</span>;
 };
 
-/** Staged words for a read that runs a minute or so on the server with no progress of its own. */
-function runningStage(seconds: number) {
-  if (seconds < 8) return "Fetching the code";
-  if (seconds < 25) return "Scanning routes, models and tests";
-  if (seconds < 60) return "Nova is reading it";
-  return "Matching it to your path";
-}
-
 // --- The tab -----------------------------------------------------------------
 
 export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId: string; repoUrl?: string | null; isOwner?: boolean }) {
@@ -224,7 +220,6 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingSource, setEditingSource] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
-  const [startedAt, setStartedAt] = useState<number | null>(null);
 
   /** The newest audit id this tab has seen; a different one on a poll is a read from elsewhere. */
   const seenNewest = useRef<string | null | undefined>(undefined);
@@ -253,7 +248,11 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
       const res = await apiRequest("POST", `/api/projects/${projectId}/code-audit`, payload);
       return res.json() as Promise<{ audit: ProjectCodeAudit; creditsCharged: number; autoApplied: { changes: string[]; skipped: string[] } | null }>;
     },
-    onMutate: () => setStartedAt(Date.now()),
+    onMutate: () => {
+      // The run is recorded as the request starts: look for it straight away, and leave a failure's toast to this screen.
+      quietAuditErrors(projectId, 15 * 60_000);
+      setTimeout(() => queryClient.invalidateQueries({ queryKey: auditStatusKey(projectId) }), 800);
+    },
     onSuccess: (result) => {
       seenNewest.current = result.audit.id;
       setSelectedId(null);
@@ -272,9 +271,16 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
       const { message, upgrade } = describeError(err, "The audit failed.");
       toast({ title: upgrade ? "Builder plan needed" : "Audit failed", description: message, variant: upgrade ? "default" : "destructive" });
     },
-    onSettled: () => setStartedAt(null),
+    onSettled: () => {
+      quietAuditErrors(projectId, 30_000);
+      queryClient.invalidateQueries({ queryKey: auditStatusKey(projectId) });
+    },
   });
-  const running = auditMutation.isPending || isUploading;
+  const { user } = useAuth();
+  /** The run on the server — started here, from the editor bridge or by a teammate. */
+  const status = useAuditStatus(projectId, { expectRunning: auditMutation.isPending });
+  const serverRun = status.running;
+  const running = auditMutation.isPending || isUploading || !!serverRun;
 
   // Live: fast while a read runs, a slow heartbeat otherwise, and on focus.
   const auditsQuery = useQuery<AuditListItem[]>({
@@ -435,8 +441,16 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
     );
   }
 
-  const elapsed = startedAt ? Math.max(0, Math.round((now - startedAt) / 1000)) : 0;
-  const progress = Math.min(95, Math.round(100 * (1 - Math.exp(-elapsed / 40))));
+  // Elapsed as the server counted it, ticking on between polls.
+  const elapsed = serverRun ? serverRun.elapsedSeconds + Math.max(0, Math.round((now - status.dataUpdatedAt) / 1000)) : 0;
+  const stageIndex = serverRun ? Math.max(0, STAGE_ORDER.indexOf(serverRun.stage)) : -1;
+  const runFrom = serverRun ? auditSourceLabel(serverRun.source) : null;
+  const runBy = serverRun?.startedBy
+    ? serverRun.startedBy.id === user?.id ? "You" : serverRun.startedBy.firstName || "A teammate"
+    : null;
+  const runWho = serverRun
+    ? [runBy ? `${runBy} started it` : "Started", runFrom ? `from ${runFrom}` : null].filter(Boolean).join(" ")
+    : null;
 
   const loops = (findings.loops ?? []) as LoopClosureRead[];
   const closedLoops = loops.filter((l) => l.closure === "closed").length;
@@ -500,13 +514,25 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
 
         {running && (
           <div className="space-y-1.5" data-testid="audit-running">
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-              <div className={`h-full rounded-full ${NOVA_GRADIENT} transition-all duration-1000`} style={{ width: `${isUploading ? 8 : Math.max(4, progress)}%` }} />
+            <div className="grid grid-cols-3 gap-1" aria-hidden>
+              {STAGE_ORDER.map((st, i) => (
+                <div key={st} className="h-1.5 overflow-hidden rounded-full bg-muted">
+                  <div className={`h-full rounded-full ${NOVA_GRADIENT} transition-all duration-700 ${i === stageIndex ? "animate-pulse" : ""}`} style={{ width: i < stageIndex ? "100%" : i === stageIndex ? "60%" : "0%" }} />
+                </div>
+              ))}
             </div>
-            <p className="text-xs text-muted-foreground flex items-center justify-between gap-2">
-              <span>{isUploading ? "Uploading the zip" : runningStage(elapsed)}…</span>
-              <span className="tabular-nums">{elapsed}s · usually about a minute</span>
-            </p>
+            <div className="text-xs text-muted-foreground flex items-center justify-between gap-x-3 gap-y-0.5 flex-wrap">
+              <span className="flex items-center gap-1.5 font-medium text-foreground" data-testid="audit-running-stage">
+                <LiveDot />
+                {isUploading ? "Uploading the zip" : serverRun ? auditStageLabel(serverRun.stage) : "Starting the read"}…
+              </span>
+              {serverRun && (
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <span className="truncate" data-testid="audit-running-who">{runWho}</span>
+                  <span className="tabular-nums" data-testid="audit-running-elapsed">· {formatElapsed(elapsed)}</span>
+                </span>
+              )}
+            </div>
           </div>
         )}
 

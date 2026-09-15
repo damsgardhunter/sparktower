@@ -35,8 +35,8 @@ const FREE_AI: Record<string, string> = {
 
 /** Routes that check in their own body but charge inside a helper: the helper is checked instead. */
 const CHARGED_IN_HELPER: Record<string, [file: string, fn: string]> = {
-  "POST /api/projects/:id/code-audit": ["server/code-audit-routes.ts", "runCodeAudit"],
-  "POST /api/mcp/projects/:projectId/audit": ["server/code-audit-routes.ts", "runCodeAudit"],
+  "POST /api/projects/:id/code-audit": ["server/code-audit-routes.ts", "runCodeAuditInner"],
+  "POST /api/mcp/projects/:projectId/audit": ["server/code-audit-routes.ts", "runCodeAuditInner"],
   "POST /api/projects/:id/nova/suggest": ["server/nova-assist-routes.ts", "novaSuggest"],
   "POST /api/mcp/projects/:projectId/ask": ["server/nova-assist-routes.ts", "novaSuggest"],
 };

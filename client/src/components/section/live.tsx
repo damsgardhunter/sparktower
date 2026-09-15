@@ -115,7 +115,8 @@ export function useOpenMilestoneRequests(onOpen: (backboneId: string) => void) {
     const first = (pendingOpen && Date.now() - pendingOpen.at < 5000 ? pendingOpen.id : null) ?? fromUrl;
     pendingOpen = null;
     if (first) setTimeout(() => cb.current(first), 0);
-    const listener = (e: Event) => { pendingOpen = null; cb.current((e as CustomEvent<string>).detail); };
+    // The request stays pending a few seconds: the screen hearing it may be the one the shell is about to unmount.
+    const listener = (e: Event) => cb.current((e as CustomEvent<string>).detail);
     window.addEventListener(OPEN_EVENT, listener);
     return () => window.removeEventListener(OPEN_EVENT, listener);
   }, []);

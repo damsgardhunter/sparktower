@@ -1,7 +1,9 @@
 /**
- * The task board on a phone: one column at a time behind a status control,
- * cards that move forward with a tap, and a full editor for everything the
- * web's task dialog holds.
+ * A section's task board on a phone: one column at a time behind a status
+ * control, cards that move forward with a tap, and a full editor for
+ * everything the web's task dialog holds. It shows the open section's cards
+ * and the ones on no path; a card made here is tagged to the section; the
+ * path's own bookkeeping tags are hidden and kept on save.
  */
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Platform, Pressable, Text, View } from "react-native";
@@ -11,6 +13,7 @@ import { colors, font, fontFamily, radius, spacing } from "../../theme";
 import { Avatar, Btn, Card, Cost, Empty, Field, Icon, Label, Loading, Meta, Row, Segments } from "../ui";
 import { Area, Bubble, EditorSheet, Line, Overline, Tag, useNotify } from "./bits";
 import { mkey, useRefreshPath } from "./shared";
+import { isSystemTag, sectionDef, sectionTag, taskInSection, visibleTags, type ProjectGoal } from "../../sections";
 
 export const KANBAN_COLUMNS = [
   { id: "todo", label: "To do", icon: "ellipse-outline" as const, color: colors.textTertiary },
@@ -35,17 +38,20 @@ function confirmAsk(title: string, message: string, onYes: () => void) {
   Alert.alert(title, message, [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: onYes }]);
 }
 
-export function Kanban({ projectId, members }: { projectId: string; members: Member[] }) {
+export function Kanban({ projectId, members, goal, primary }: { projectId: string; members: Member[]; goal: ProjectGoal; primary: ProjectGoal }) {
   const qc = useQueryClient();
   const refresh = useRefreshPath(projectId);
   const { notify, fail } = useNotify();
   const [column, setColumn] = useState("todo");
   const [editing, setEditing] = useState<Task | "new" | null>(null);
 
-  const { data: tasks, isLoading } = useQuery({
+  const { data: allTasks, isLoading } = useQuery({
     queryKey: mkey(projectId, "kanban"),
     queryFn: () => api<Task[]>(`/api/projects/${projectId}/kanban`),
   });
+  /** The board as this section sees it: its own cards and the ones on no path. */
+  const tasks = useMemo(() => (allTasks ?? []).filter((t) => taskInSection(t.tags, goal, primary)), [allTasks, goal, primary]);
+  const def = sectionDef(goal);
   const { data: milestones } = useQuery({
     queryKey: mkey(projectId, "milestones"),
     queryFn: () => api<any[]>(`/api/projects/${projectId}/milestones`),
@@ -61,7 +67,7 @@ export function Kanban({ projectId, members }: { projectId: string; members: Mem
     onError: (e) => fail(e),
   });
   const generate = useMutation({
-    mutationFn: () => api<any>(`/api/projects/${projectId}/kanban/ai-generate`, { method: "POST" }),
+    mutationFn: () => api<any>(`/api/projects/${projectId}/kanban/ai-generate`, { method: "POST", body: { goal } }),
     onSuccess: (r) => { refresh(); notify(r?.tasks?.length ? `Nova added ${r.tasks.length} tasks` : "Tasks generated"); },
     onError: (e) => fail(e, "Nova couldn't generate tasks."),
   });
@@ -70,9 +76,10 @@ export function Kanban({ projectId, members }: { projectId: string; members: Mem
     onSuccess: () => { refresh(); notify("Board re-ordered"); },
     onError: (e) => fail(e, "Nova couldn't re-order the board."),
   });
-  const clearDone = useMutation({
-    mutationFn: () => api(`/api/projects/${projectId}/kanban?status=done`, { method: "DELETE" }),
-    onSuccess: () => { refresh(); notify("Cleared finished tasks"); },
+  /** Clearing works on this section's own cards only; shared cards and the path's milestones stay. */
+  const clear = useMutation({
+    mutationFn: (onlyDone: boolean) => api<{ removed?: number }>(`/api/projects/${projectId}/kanban?track=${goal}${onlyDone ? "&status=done" : ""}`, { method: "DELETE" }),
+    onSuccess: (r, onlyDone) => { refresh(); notify(r?.removed != null ? `Cleared ${r.removed} task${r.removed === 1 ? "" : "s"}` : onlyDone ? "Cleared finished tasks" : `Cleared ${def.short} tasks`); },
     onError: (e) => fail(e),
   });
 
@@ -89,14 +96,16 @@ export function Kanban({ projectId, members }: { projectId: string; members: Mem
       <Card style={{ gap: spacing.sm }}>
         <Row between>
           <View>
-            <Text style={{ fontFamily: fontFamily.bold, fontSize: font.lg, color: colors.text }}>Tasks</Text>
-            <Meta>{total} total · {counts.done ?? 0} done</Meta>
+            <Text style={{ fontFamily: fontFamily.bold, fontSize: font.lg, color: colors.text }}>{def.short} tasks</Text>
+            <Meta>{total} in this section{counts.done ? ` · ${counts.done} done` : ""}</Meta>
           </View>
           <Btn small icon="add" label="New task" onPress={() => setEditing("new")} />
         </Row>
         <Row gap={spacing.sm} wrap>
           <Row center gap={4}><Btn small variant="outline" icon="sparkles" label="Generate with Nova" loading={generate.isPending} onPress={() => generate.mutate()} /><Cost credits={1} /></Row>
           {total > 1 && <Btn small variant="ghost" icon="swap-vertical" label="Order with Nova" loading={sequence.isPending} onPress={() => sequence.mutate()} />}
+          {total > 0 && <Btn small variant="ghost" icon="trash-outline" label="Clear" loading={clear.isPending && !clear.variables}
+            onPress={() => confirmAsk(`Clear ${def.short}'s tasks?`, "Removes this section's own cards. Cards shared with every section and the path's milestones stay.", () => clear.mutate(false))} />}
         </Row>
       </Card>
 
@@ -126,7 +135,7 @@ export function Kanban({ projectId, members }: { projectId: string; members: Mem
                   {!!t.dueDate && <Row center gap={3}><Icon name="calendar-outline" size={12} color={overdue ? colors.danger : colors.textTertiary} /><Meta style={overdue ? { color: colors.danger } : undefined}>{new Date(t.dueDate).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</Meta></Row>}
                   {subs.length > 0 && <Row center gap={3}><Icon name="list-outline" size={12} color={colors.textTertiary} /><Meta>{subs.filter((s) => s.done).length}/{subs.length}</Meta></Row>}
                   {t.estimateHours != null && <Meta>{t.estimateHours}h</Meta>}
-                  {(t.tags ?? []).filter((x) => !x.includes(":")).slice(0, 2).map((x) => <Meta key={x}>#{x}</Meta>)}
+                  {visibleTags(t.tags).slice(0, 2).map((x) => <Meta key={x}>#{x}</Meta>)}
                 </Row>
               </View>
               {assignee && <Avatar name={memberName(assignee)} uri={assignee.profile?.avatarUrl} size={26} />}
@@ -142,12 +151,12 @@ export function Kanban({ projectId, members }: { projectId: string; members: Mem
       })}
 
       {column === "done" && (counts.done ?? 0) > 0 && (
-        <Btn small variant="ghost" icon="trash-outline" label="Clear finished tasks" loading={clearDone.isPending}
-          onPress={() => confirmAsk("Clear finished tasks?", "Every task in Done is removed from the board.", () => clearDone.mutate())} style={{ alignSelf: "center" }} />
+        <Btn small variant="ghost" icon="trash-outline" label="Clear finished tasks" loading={clear.isPending && !!clear.variables}
+          onPress={() => confirmAsk("Clear finished tasks?", `This section's finished cards are removed from the board.`, () => clear.mutate(true))} style={{ alignSelf: "center" }} />
       )}
 
       <TaskEditor
-        projectId={projectId} task={editing} defaultStatus={column} members={members} milestones={milestones ?? []} tasks={tasks ?? []}
+        projectId={projectId} task={editing} defaultStatus={column} members={members} milestones={milestones ?? []} tasks={tasks} goal={goal}
         onClose={() => setEditing(null)}
       />
     </View>
@@ -156,8 +165,8 @@ export function Kanban({ projectId, members }: { projectId: string; members: Mem
 
 const EMPTY = { title: "", description: "", status: "todo", priority: "medium", assigneeId: "", dueDate: "", tags: [] as string[], estimateHours: "", subtasks: [] as Subtask[], milestoneId: "", blockedByTaskId: "" };
 
-function TaskEditor({ projectId, task, defaultStatus, members, milestones, tasks, onClose }: {
-  projectId: string; task: Task | "new" | null; defaultStatus: string; members: Member[]; milestones: any[]; tasks: Task[]; onClose: () => void;
+function TaskEditor({ projectId, task, defaultStatus, members, milestones, tasks, goal, onClose }: {
+  projectId: string; task: Task | "new" | null; defaultStatus: string; members: Member[]; milestones: any[]; tasks: Task[]; goal: ProjectGoal; onClose: () => void;
 }) {
   const refresh = useRefreshPath(projectId);
   const { notify, fail } = useNotify();
@@ -179,7 +188,9 @@ function TaskEditor({ projectId, task, defaultStatus, members, milestones, tasks
   const body = () => ({
     title: form.title.trim(), description: form.description || null, status: form.status, priority: form.priority,
     assigneeId: form.assigneeId || null, dueDate: /^\d{4}-\d{2}-\d{2}$/.test(form.dueDate) ? form.dueDate : null,
-    tags: form.tags, estimateHours: form.estimateHours ? parseInt(form.estimateHours, 10) || null : null,
+    // A card made inside a section belongs to it; an existing card keeps whatever section it has.
+    tags: task === "new" && !form.tags.some((t) => t.startsWith("track:")) ? [...form.tags, sectionTag(goal)] : form.tags,
+    estimateHours: form.estimateHours ? parseInt(form.estimateHours, 10) || null : null,
     subtasks: form.subtasks, milestoneId: form.milestoneId || null, blockedByTaskId: form.blockedByTaskId || null,
   });
   const save = useMutation({
@@ -273,7 +284,7 @@ function TaskEditor({ projectId, task, defaultStatus, members, milestones, tasks
       <View style={{ gap: spacing.sm }}>
         <Label>Tags</Label>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-          {form.tags.filter((x) => !x.includes(":")).map((x) => (
+          {form.tags.filter((x) => !isSystemTag(x)).map((x) => (
             <Pressable key={x} onPress={() => set({ tags: form.tags.filter((y) => y !== x) })} style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: colors.primarySoft, borderRadius: radius.pill, paddingHorizontal: 10, paddingVertical: 4 }}>
               <Text style={{ color: colors.primary, fontSize: font.xs + 1, fontFamily: fontFamily.medium }}>{x}</Text>
               <Icon name="close" size={12} color={colors.primary} />

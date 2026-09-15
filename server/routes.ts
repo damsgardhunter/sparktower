@@ -71,7 +71,7 @@ import { isOwner as isPlatformOwner } from "./platform-roles";
 import {
   instantiatePathTree, pathStatus, onPathTaskDone, createExpansion, createInjections,
   collectArtifacts, saveIntake, prefillFor, switchPath, backboneIdOf, reconcileMilestones, pathTaskContext, saveWork, chooseWork, milestoneDetail, createLoop, setBranch, extendBranch, reconcileLoops, latestWork, deleteLoop, expansionSource,
-  setLoopType, loopsForAudit, renderLoopsForPrompt, saveLoopAudit, applyLoopDrafts, listTracks, startTrack, trackState,
+  setLoopType, loopsForAudit, renderLoopsForPrompt, saveLoopAudit, applyLoopDrafts, listTracks, startTrack, trackState, renderPathForAudit,
 } from "./phase-trees";
 import { draftExpansionSteps, proposeInjections, readExistingProgress, draftArtifact, produceWork, auditLoopsAgainstCompetition, draftLoops } from "./phase-trees-nova";
 import { workKindFor, sanitizeLoopAudit, loopTypeOf, LOOP_TYPE_INFO, type WorkPayload } from "@shared/phase-trees";
@@ -2167,6 +2167,8 @@ ${PLAIN_LANGUAGE_RULES}`;
       if (!ent) return;
 
       const { message, currentTab } = req.body;
+      // The section the builder is in (Ship / Systemize / Raise): Nova answers about that path.
+      const section = isProjectGoal(req.body?.section) ? req.body.section : null;
       if (!message || typeof message !== "string") return res.status(400).json({ message: "Message is required" });
       if (message.length > 5000) return res.status(400).json({ message: "Message too long (max 5000 chars)" });
 
@@ -2186,6 +2188,17 @@ ${PLAIN_LANGUAGE_RULES}`;
 
       // The loops, and which of the five kinds are still to write, so Nova can offer to write them.
       const loopRead = await loopsForAudit(projectId).catch(() => null);
+      // Every section with its progress, and the open one's path in full, so "what's next" means this section's next.
+      const sections = await listTracks(projectId).catch(() => null);
+      const sectionLines = sections?.tracks.map((s) => `- ${s.label}${s.primary ? " (primary)" : ""}: ${s.started ? `${s.done}/${s.total} milestones${s.next ? `, next: ${s.next}` : ""}` : "not started"}`).join("\n") ?? "";
+      const openSection = section ?? sections?.primary ?? null;
+      const sectionPath = openSection ? await renderPathForAudit(projectId, openSection).catch(() => null) : null;
+      const sectionContext = sections ? `
+THE THREE SECTIONS — the project works each as its own path, side by side:
+${sectionLines}
+THE BUILDER IS IN: ${PROJECT_GOALS.find((g) => g.id === openSection)?.label ?? "the primary path"}. When they ask where they are or what to do next, answer for this section's path unless they name another. Milestone ids name their section (SHIP. / SYS. / FUND.).
+${sectionPath ?? "This section hasn't been started yet: offer to start it from the section button."}
+` : "";
       const loopsStill = loopRead ? [...loopRead.coverage.missing, ...loopRead.coverage.unwritten] : [];
       const loopContext = loopRead?.loops.length
         ? "\nTHE BUSINESS'S LOOPS (product, growth, retention, revenue, referral — all five are required; only product repeats)\n"
@@ -2222,7 +2235,8 @@ verbatim when editing an existing task, milestone or roadmap phase, and you
 must never invent one. This also includes the latest codebase audit, if one has
 been run:
 ${await buildOperableProjectState(projectId)}
-${loopContext}`;
+${loopContext}
+${sectionContext}`;
 
       const systemPrompt = `You are Nova, SparkTower's AI project partner: warm, direct, knowledgeable. You always refer to yourself as "Nova". No emojis, no "Nova here" openers — just answer.
 

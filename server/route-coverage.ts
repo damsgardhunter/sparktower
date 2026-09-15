@@ -32,6 +32,8 @@ export interface RouteCoverageRow {
   publicReason: string | null;
   /** Why a costly route is metered differently (free, charged in a helper…), from a `// metering: …` comment in the route. */
   meteringNote: string | null;
+  /** The limits the route applies itself, by name: rateLimit("x"), enforceRateLimit(…, "x"), enforceRejectionLimit(…, "x"), and "credits" for requireCredits. */
+  limits: string[];
   /** For a route that checks or charges credits, or calls a model: in what order. Null otherwise. */
   metering: MeteringFacts | null;
 }
@@ -289,6 +291,12 @@ export function buildRouteCoverage(files: RepoFile[]): RouteCoverage {
         guards,
         publicReason: /\/\/\s*public-write:\s*([^\n]+)/.exec(chunk)?.[1].trim().slice(0, 200) ?? null,
         meteringNote: /\/\/\s*metering:\s*([^\n]+)/.exec(chunk)?.[1].trim().slice(0, 200) ?? null,
+        limits: [...new Set([
+          ...[...chunk.matchAll(/\brateLimit\s*\(\s*["'`](\w+)["'`]/g)].map((m) => m[1]),
+          ...[...body.matchAll(/\benforceRateLimit\s*\([^)]*?["'`](\w+)["'`]\s*\)/g)].map((m) => m[1]),
+          ...[...body.matchAll(/\benforceRejectionLimit\s*\([^)]*?["'`](\w+)["'`]\s*\)/g)].map((m) => `${m[1]} (failures only)`),
+          ...(credits ? ["credits"] : []),
+        ])],
         metering: analyzeMetering(body),
       });
       // A ceiling against a pathological repo, not a budget: at 400 a real app
@@ -347,6 +355,18 @@ function detectCreditChokepoint(files: RepoFile[]): RouteCoverage["creditChokepo
   return null;
 }
 
+/** Every write limited by the write floor alone, grouped by file, so "which ones?" is answered in full. */
+function floorOnlyLines(c: RouteCoverage): string[] {
+  const rows = c.rows.filter((r) => r.mounted && r.write && !r.rateLimited && r.floor);
+  if (!rows.length) return [];
+  const byFile = new Map<string, string[]>();
+  for (const r of rows) byFile.set(r.file, [...(byFile.get(r.file) ?? []), `${r.method} ${r.path}`]);
+  return [
+    "  Floor-only writes, by file:",
+    ...[...byFile.entries()].sort((a, b) => b[1].length - a[1].length).map(([file, labels]) => `  - ${file} (${labels.length}): ${labels.join(", ")}`),
+  ];
+}
+
 /** When costly routes check and charge, as read from each route's own body — and where a failure's cost is tested. */
 function meteringLines(c: RouteCoverage, lst: (xs: string[]) => string, maxList: number): string[] {
   const live = c.rows.filter((r) => r.mounted && r.cost);
@@ -372,9 +392,10 @@ export function renderRouteCoverage(c: RouteCoverage | null | undefined, maxList
     `ROUTE COVERAGE (read from the source; exact): ${s.routes} routes, ${s.writes} writes, ${s.costly} costly.`,
     `- Writes behind auth: ${s.writesWithAuth}/${s.writes}. Writes without sign-in: ${lst(c.unguardedWrites)}`,
     // What each one trusts instead, as its own route says — so a public write isn't read as an unguarded one.
-    ...c.rows.filter((r) => r.mounted && r.write && !r.auth).slice(0, maxList).map((r) => `  - ${r.method} ${r.path}: ${r.publicReason ? `trusts ${r.publicReason}` : "NO REASON GIVEN"}${r.rateLimited ? "; rate-limited" : r.floor ? "; under the write floor" : "; no rate limit"} [${r.file}]`),
+    ...c.rows.filter((r) => r.mounted && r.write && !r.auth).slice(0, maxList).map((r) => `  - ${r.method} ${r.path}: ${r.publicReason ? `trusts ${r.publicReason}` : "NO REASON GIVEN"}${r.rateLimited ? `; limited by ${r.limits.join(", ") || "its own limit"}` : r.floor ? "; under the write floor" : "; no rate limit"} [${r.file}]`),
     `- Writes with their own rate limit or credit metering: ${s.writesRateLimited}/${s.writes}; limited by the global write floor alone: ${s.writesFloorOnly ?? 0}${c.writeFloor?.mounted ? ` (limitWrites, every write under /api except ${c.writeFloor.exempt.join(", ") || "nothing"})` : " (no write floor found)"}. No limit at all: ${lst(c.unlimitedWrites)}`,
-    `- Costly routes credit-metered: ${s.costlyMetered}/${s.costly}. Unmetered costly: ${lst(c.unmeteredCost)}`,
+    ...floorOnlyLines(c),
+    `- Costly routes credit-metered: ${s.costlyMetered}/${s.costly}. Not credit-metered: ${lst(c.rows.filter((r) => r.mounted && r.cost && !r.credits).map((r) => `${r.method} ${r.path} (${r.limits.length ? `limited by ${r.limits.join(", ")}` : "no limit"}) [${r.file}]`))}. Neither metered nor limited: ${lst(c.unmeteredCost)}`,
     ...meteringLines(c, lst, maxList),
     `- Behind a surface kill switch: ${s.surfaceGated}/${s.routes}${c.surfacePrefixes.length ? ` (prefixes: ${c.surfacePrefixes.map((p) => `${p.prefix}→${p.surface}`).join(", ")})` : ""}`,
     c.unmountedFiles.length ? `- Not counted: routes in files nothing imports (dead code, not live endpoints): ${c.unmountedFiles.join(", ")}` : null,

@@ -1,3 +1,4 @@
+import { Link } from "wouter";
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -131,9 +132,9 @@ export function PathChanges({ projectId, audit, limit = 6 }: {
             </span>
             <span className="min-w-0 flex-1 truncate">{row.title}</span>
             <span className="hidden sm:inline text-[11px] text-muted-foreground shrink-0">{row.kind}</span>
-            <a href={href} className="shrink-0 inline-flex items-center gap-0.5 rounded-full border border-black/[0.08] dark:border-white/10 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-primary hover:border-primary/40" data-testid="path-change-link">
+            <Link href={href} className="shrink-0 inline-flex items-center gap-0.5 rounded-full border border-black/[0.08] dark:border-white/10 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-primary hover:border-primary/40" data-testid="path-change-link">
               {row.goal ? SHORT[row.goal] : "Path"}<ArrowUpRight className="h-3 w-3" />
-            </a>
+            </Link>
           </li>
         );
       })}

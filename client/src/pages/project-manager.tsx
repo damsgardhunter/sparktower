@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useRoute, useLocation } from "wouter";
+import { useRoute, useLocation, useSearch } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -35,9 +35,7 @@ import { SectionTabRow } from "@/components/manager/more-menu";
 import { ManagerRail, useLatestAudit } from "@/components/manager/manager-rail";
 import { StartSectionDialog } from "@/components/manager/start-section-dialog";
 import { isTabId, tabDef, type TabId } from "@/components/manager/tabs";
-import {
-  useSections, sectionDef, sectionFromUrl, taskInSection, sectionTag, LIVE_INTERVAL_MS,
-} from "@/lib/sections";
+import { useSections, sectionDef, sectionFromUrl, taskInSection, sectionTag, LIVE_INTERVAL_MS, visibleTags, systemTags } from "@/lib/sections";
 import { DEFAULT_PROJECT_GOAL, isProjectGoal, type ProjectGoal } from "@shared/goals";
 import { RoadmapTab } from "@/components/roadmap-tab";
 import { NovaDashboard } from "@/components/nova-dashboard";
@@ -540,6 +538,18 @@ export default function ProjectManager() {
     return linked.length === 0 || linked.some((t) => taskInSection(t.tags as string[] | null, section, primary));
   }), [milestones, kanbanTasks, section, primary]);
 
+  // Follow the URL too: an in-app link to ?section=…&tab=… (the codebase tab's path changes, say) switches in place.
+  const search = useSearch();
+  useEffect(() => {
+    const params = new URLSearchParams(search);
+    const s = params.get("section");
+    const t = params.get("tab");
+    if (isProjectGoal(s) && s !== section) setChosenSection(s);
+    if (isTabId(t) && t !== activeTab) setActiveTab(t);
+    // Only a change in the URL should drive this; state changes write the URL below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
+
   // Keep place: the URL carries section + tab (other params left alone), and the section is remembered per project.
   useEffect(() => {
     if (!projectId) return;
@@ -694,7 +704,7 @@ export default function ProjectManager() {
           />
         )}
         {activeTab === "roadmap" && projectId && (
-          <RoadmapTab key={section} {...({ goal: section } as Record<string, unknown>)} projectId={projectId} isOwner={isOwner} />
+          <RoadmapTab key={section} projectId={projectId} isOwner={isOwner} goal={section} />
         )}
         {activeTab === "kanban" && (
           <KanbanTab
@@ -873,7 +883,7 @@ export default function ProjectManager() {
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium">Tags</label>
-              <TagInput tags={taskForm.tags} onChange={(tags) => setTaskForm(p => ({ ...p, tags }))} />
+              <TagInput tags={visibleTags(taskForm.tags)} onChange={(tags) => setTaskForm(p => ({ ...p, tags: [...systemTags(p.tags), ...tags] }))} />
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium">Subtasks</label>
@@ -926,6 +936,7 @@ export default function ProjectManager() {
         <NovaGuide
           projectId={projectId}
           currentTab={activeTab}
+          section={section}
           project={project}
           onProjectUpdate={() => {
             queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
@@ -2048,8 +2059,8 @@ function KanbanTab({
                         {blockerTask && (
                           <div className="flex items-center gap-1 text-xs text-orange-500"><Lock className="h-3 w-3" /><span className="truncate">Blocked by: {blockerTask.title}</span></div>
                         )}
-                        {((task.tags as string[]) || []).length > 0 && (
-                          <div className="flex flex-wrap gap-1">{((task.tags as string[]) || []).map((tag, i) => <Badge key={i} variant="outline" className="text-[10px] px-1.5 py-0"><Tag className="h-2.5 w-2.5 mr-0.5" />{tag}</Badge>)}</div>
+                        {visibleTags(task.tags as string[]).length > 0 && (
+                          <div className="flex flex-wrap gap-1">{visibleTags(task.tags as string[]).map((tag, i) => <Badge key={i} variant="outline" className="text-[10px] px-1.5 py-0"><Tag className="h-2.5 w-2.5 mr-0.5" />{tag}</Badge>)}</div>
                         )}
                         {subtasks.length > 0 && (
                           <div className="flex items-center gap-2">
@@ -2195,7 +2206,7 @@ function KanbanTab({
           {viewingTask && (() => {
             const subtasks = (viewingTask.subtasks as Subtask[]) || [];
             const doneSubtasks = subtasks.filter((s) => s.done).length;
-            const tags = (viewingTask.tags as string[]) || [];
+            const tags = visibleTags(viewingTask.tags as string[]);
             const blockerCandidate = viewingTask.blockedByTaskId
               ? tasks.find((t) => t.id === viewingTask.blockedByTaskId)
               : null;

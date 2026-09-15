@@ -131,8 +131,10 @@ export function useCompleteOnboarding(projectId: string) {
  * The conversation, full screen. `onboarding` is the web's overlay: the
  * welcome, the quick replies, and the ways out ("Skip setup", "I'm done").
  */
-export function NovaGuideSheet({ projectId, visible, onClose, onboarding, currentTab, initialMessage }: {
+export function NovaGuideSheet({ projectId, visible, onClose, onboarding, currentTab, initialMessage, section }: {
   projectId: string; visible: boolean; onClose: () => void; onboarding: boolean; currentTab: string;
+  /** The manager section open (ship_mvp / systemize_business / raise_funding): Nova answers about that path. */
+  section?: string;
   /** Sent as soon as the sheet opens — a quick reply tapped on the dashboard. */
   initialMessage?: string | null;
 }) {
@@ -155,7 +157,7 @@ export function NovaGuideSheet({ projectId, visible, onClose, onboarding, curren
 
   const send = useMutation({
     mutationFn: (message: string) => api<{ reply: string; actionsTaken?: { type: string; data: any }[] }>(`/api/projects/${projectId}/nova-guide`, {
-      method: "POST", body: { message, currentTab },
+      method: "POST", body: { message, currentTab, ...(section ? { section } : {}) },
     }),
     onSuccess: (r) => {
       setError(null);

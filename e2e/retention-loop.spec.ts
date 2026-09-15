@@ -23,7 +23,11 @@ test("the home screen brings you back to the next step, and a finished step can 
   // 1. Open SparkTower: the next step is at the top of the feed.
   await page.goto("/");
   await page.getByTestId("btn-skip-onboarding").click({ timeout: 5_000 }).catch(() => {});
+  // The paths are a closed dropdown on home until opened.
   const card = page.getByTestId(`continue-path-${project.id}`);
+  await expect(page.getByTestId("button-toggle-continue-path")).toBeVisible();
+  await expect(card).toHaveCount(0);
+  await page.getByTestId("button-toggle-continue-path").click();
   await expect(card).toBeVisible();
   await expect(page.getByTestId(`continue-path-next-${project.id}`)).toContainText("Product statement");
 
@@ -39,6 +43,8 @@ test("the home screen brings you back to the next step, and a finished step can 
 
   // 4. Back home: the next step has moved, and the one just finished can be shared for feedback.
   await page.goto("/");
+  // The paths are a closed dropdown on home until opened.
+  await page.getByTestId("button-toggle-continue-path").click();
   await expect(page.getByTestId(`continue-path-next-${project.id}`)).not.toContainText("Product statement");
   await page.getByTestId(`button-share-last-step-${project.id}`).click();
   await expect(page.getByTestId("share-step-dialog")).toBeVisible();

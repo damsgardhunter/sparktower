@@ -4,6 +4,7 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import { RAIL_TABS, NOVA_GRADIENT, type TabId } from "./tabs";
+import { useAuditStatus, auditStageLabel } from "@/lib/audit-status";
 
 /** Icons alternate through the Nova colours. */
 const ICON_TONE: Record<string, string> = {
@@ -30,6 +31,7 @@ export function ManagerRail({ projectId, active, onSelect }: {
 }) {
   const latest = useLatestAudit(projectId);
   const lastAudit = latest ? ago(latest.appliedAt ?? latest.createdAt) : null;
+  const { running: reading } = useAuditStatus(projectId);
 
   return (
     <div className={`rounded-2xl p-[1.5px] ${NOVA_GRADIENT}`}>
@@ -56,13 +58,28 @@ export function ManagerRail({ projectId, active, onSelect }: {
                 <t.icon className="h-[18px] w-[18px] lg:h-5 lg:w-5" />
               </span>
               <span className="lg:flex-1 lg:text-left">{t.label}</span>
-              {t.id === "codebase" && lastAudit && (
+              {t.id === "codebase" && reading && (
+                <span className="hidden lg:inline-flex items-center gap-1.5 text-[10px] font-medium text-foreground/80" title={`${auditStageLabel(reading.stage)}…`} data-testid="rail-codebase-reading">
+                  <span className="relative flex h-2 w-2">
+                    <span className={`absolute inline-flex h-full w-full rounded-full ${NOVA_GRADIENT} opacity-60 animate-ping`} />
+                    <span className={`relative inline-flex h-2 w-2 rounded-full ${NOVA_GRADIENT}`} />
+                  </span>
+                  Reading…
+                </span>
+              )}
+              {t.id === "codebase" && reading && (
+                <span className="lg:hidden absolute top-1.5 right-2 flex h-2 w-2" aria-label="Reading the code">
+                  <span className={`absolute inline-flex h-full w-full rounded-full ${NOVA_GRADIENT} opacity-60 animate-ping`} />
+                  <span className={`relative inline-flex h-2 w-2 rounded-full ${NOVA_GRADIENT}`} />
+                </span>
+              )}
+              {t.id === "codebase" && !reading && lastAudit && (
                 <span className="hidden lg:inline-flex items-center gap-1 text-[10px] text-muted-foreground" title="Last code audit" data-testid="rail-codebase-live">
                   <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
                   {lastAudit}
                 </span>
               )}
-              {t.id === "codebase" && lastAudit && (
+              {t.id === "codebase" && !reading && lastAudit && (
                 <span className="lg:hidden absolute top-1.5 right-2 h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
               )}
             </button>

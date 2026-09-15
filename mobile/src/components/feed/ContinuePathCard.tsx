@@ -1,7 +1,9 @@
 /**
  * "Continue your path" at the top of the feed — continue-path-card.tsx on the
  * web: each of your paths, the one step waiting on it, and the prompt to share
- * what you finished for feedback (one step, or the week's update).
+ * what you finished for feedback (one step, or the week's update). A project
+ * working more than one section has one item per started section, each with
+ * the section's short name and a link straight into it.
  */
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
@@ -17,6 +19,8 @@ import { Box, ProjectTile, primaryTint } from "./Box";
 
 export interface NextStepItem {
   project: { id: string; title: string; logoUrl: string | null };
+  /** The manager section this item is on (Ship / Systemize / Raise). */
+  track?: { goal: string; label: string; short: string; primary: boolean };
   phase: string;
   progress: { done: number; total: number };
   next: { id: string; title: string; actor: string; estimateMinutes: number | null; step: string | null } | null;
@@ -57,20 +61,29 @@ export function ContinuePathCard({ onNotice }: { onNotice?: (n: Notice) => void 
         const novaActs = item.next?.actor.startsWith("nova");
         const weeklyDue = !!item.weekly?.due && item.weekly.steps.length > 1;
         const est = item.next ? estimate(item.next.estimateMinutes) : null;
+        const idSuffix = item.track && !item.track.primary ? `${item.project.id}-${item.track.goal}` : item.project.id;
+        const href = item.track ? `/manage/${item.project.id}?section=${item.track.goal}` : `/manage/${item.project.id}`;
         return (
-          <View key={item.project.id} style={[s.item, idx > 0 && s.itemRule]} testID={`continue-path-${item.project.id}`}>
+          <View key={`${item.project.id}:${item.track?.goal ?? ""}`} style={[s.item, idx > 0 && s.itemRule]} testID={`continue-path-${idSuffix}`}>
             <View style={s.itemTop}>
               <ProjectTile title={item.project.title} uri={item.project.logoUrl} />
               <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={s.title} numberOfLines={1}>{item.project.title}</Text>
+                <View style={s.titleRow}>
+                  <Text style={[s.title, { flexShrink: 1 }]} numberOfLines={1}>{item.project.title}</Text>
+                  {item.track && (
+                    <View style={s.badge} accessibilityLabel={item.track.label} testID={`continue-path-section-${idSuffix}`}>
+                      <Text style={s.badgeText}>{item.track.short}</Text>
+                    </View>
+                  )}
+                </View>
                 <Text style={s.sub} numberOfLines={1}>
                   {item.phase} · {item.progress.done}/{item.progress.total} steps{item.daysSinceActivity >= 2 ? ` · away ${item.daysSinceActivity} days` : ""}
                 </Text>
               </View>
               <Pressable
-                onPress={() => router.push(`/manage/${item.project.id}` as any)}
+                onPress={() => router.push(href as any)}
                 style={({ pressed }) => [s.continue, pressed && { opacity: 0.85 }]}
-                testID={`button-continue-path-${item.project.id}`}
+                testID={`button-continue-path-${idSuffix}`}
               >
                 <Text style={s.continueText}>Continue</Text>
                 <Ionicons name="arrow-forward" size={13} color={colors.primaryText} />
@@ -78,7 +91,7 @@ export function ContinuePathCard({ onNotice }: { onNotice?: (n: Notice) => void 
             </View>
             <View style={s.track}><View style={[s.fill, { width: `${pct}%` }]} /></View>
             {item.next ? (
-              <Text style={s.next} testID={`continue-path-next-${item.project.id}`}>
+              <Text style={s.next} testID={`continue-path-next-${idSuffix}`}>
                 <Ionicons name={novaActs ? "sparkles" : "person-outline"} size={12} color={novaActs ? colors.primary : colors.text} />
                 <Text style={{ color: colors.textTertiary }}>  Next: </Text>
                 <Text style={{ fontFamily: fontFamily.medium }}>{item.next.step ?? item.next.title}</Text>
@@ -88,13 +101,13 @@ export function ContinuePathCard({ onNotice }: { onNotice?: (n: Notice) => void 
               <Text style={[s.next, { color: colors.textTertiary }]}>The main line is done — pick what's next on the project.</Text>
             )}
             {weeklyDue && (
-              <Pressable onPress={() => setWeekly(item)} style={s.share} testID={`button-weekly-update-${item.project.id}`}>
+              <Pressable onPress={() => setWeekly(item)} style={s.share} testID={`button-weekly-update-${idSuffix}`}>
                 <Ionicons name="share-social-outline" size={12} color={colors.primary} />
                 <Text style={s.shareText}>{item.weekly!.steps.length} steps finished this week — post your weekly update</Text>
               </Pressable>
             )}
             {item.lastDone && !item.lastDone.sharedPostId && !weeklyDue && (
-              <Pressable onPress={() => setSharing(item)} style={s.share} testID={`button-share-last-step-${item.project.id}`}>
+              <Pressable onPress={() => setSharing(item)} style={s.share} testID={`button-share-last-step-${idSuffix}`}>
                 <Ionicons name="share-social-outline" size={12} color={colors.primary} />
                 <Text style={s.shareText}>You finished "{item.lastDone.title}" — share it for feedback</Text>
               </Pressable>
@@ -238,6 +251,9 @@ const s = StyleSheet.create({
   itemRule: { borderTopWidth: 1, borderColor: colors.borderSubtle },
   itemTop: { flexDirection: "row", alignItems: "center", gap: 10 },
   title: { color: colors.text, fontSize: font.sm + 1, fontFamily: fontFamily.semibold },
+  titleRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  badge: { backgroundColor: colors.primarySoft, borderRadius: radius.pill, paddingHorizontal: 6, paddingVertical: 1 },
+  badgeText: { color: colors.primary, fontSize: 10, fontFamily: fontFamily.semibold },
   sub: { color: colors.textTertiary, fontSize: 11, fontFamily: fontFamily.regular },
   continue: {
     flexDirection: "row", alignItems: "center", gap: 4, height: 32, paddingHorizontal: 12, borderRadius: 6, backgroundColor: colors.primary,

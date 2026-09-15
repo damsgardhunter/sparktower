@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { ConnectEditorBar } from "@/components/editor-access";
 import { LIVE_INTERVAL_MS } from "@/lib/sections";
 import { useNow } from "./live";
+import { useAuditStatus, auditStageLabel, auditSourceLabel, formatElapsed } from "@/lib/audit-status";
 import { ago, plural, type PathStatus } from "./path-types";
 import { AlertTriangle, ArrowRight, CheckCircle2, GitCommitHorizontal, ScanSearch } from "lucide-react";
 
@@ -25,6 +26,7 @@ export function CodebaseSync({ projectId, data, onNavigate }: { projectId: strin
     staleTime: 5_000,
   });
   const latest = audits?.[0] ?? null;
+  const { running: reading, dataUpdatedAt: statusAt } = useAuditStatus(projectId);
   const update = data.auditUpdate ?? null;
   const readAt = latest?.createdAt ?? update?.at ?? data.loopTree?.closureAuditAt ?? null;
   const loops = data.loopTree?.loops ?? [];
@@ -48,10 +50,24 @@ export function CodebaseSync({ projectId, data, onNavigate }: { projectId: strin
             <p className="text-sm font-semibold tabular-nums" data-testid={f.testid}>{f.value}</p>
           </div>
         ))}
-        <Button size="sm" variant={readAt ? "outline" : "default"} className="ml-auto h-8" onClick={() => onNavigate("codebase")} data-testid="button-codebase-open">
-          <ScanSearch className="h-3.5 w-3.5 mr-1.5" />{readAt ? "Re-read code" : "Read my code"}
+        <Button size="sm" variant={readAt || reading ? "outline" : "default"} className="ml-auto h-8" onClick={() => onNavigate("codebase")} data-testid="button-codebase-open">
+          <ScanSearch className="h-3.5 w-3.5 mr-1.5" />{reading ? "Watch the read" : readAt ? "Re-read code" : "Read my code"}
         </Button>
       </div>
+
+      {reading && (
+        <div className="rounded-lg p-[1px] bg-gradient-to-r from-green-400 via-emerald-500 to-purple-500" data-testid="codebase-sync-reading">
+          <div className="rounded-[7px] bg-background flex items-center gap-2 px-3 py-2 text-xs flex-wrap">
+            <span className="relative flex h-2 w-2 shrink-0">
+              <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60 animate-ping" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-gradient-to-r from-green-400 via-emerald-500 to-purple-500" />
+            </span>
+            <span className="font-medium">Nova is reading your code…</span>
+            <span className="text-muted-foreground">{reading.stage === "reading" ? "Reading" : auditStageLabel(reading.stage)}{auditSourceLabel(reading.source) ? ` · from ${auditSourceLabel(reading.source)}` : ""}</span>
+            <span className="ml-auto tabular-nums text-muted-foreground">{formatElapsed(reading.elapsedSeconds + Math.max(0, Math.round((now - statusAt) / 1000)))}</span>
+          </div>
+        </div>
+      )}
 
       {update && (
         <div className="rounded-lg border border-primary/25 bg-primary/[0.04] divide-y divide-primary/10" data-testid="path-audit-update">

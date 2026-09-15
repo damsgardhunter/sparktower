@@ -61,7 +61,8 @@ export const POST_TYPES: PostTypeDef[] = [
       "Want to build … with me?",
     ],
     icon: "Handshake",
-    accent: "bg-violet-500/15 text-violet-600 dark:text-violet-400 border-violet-500/30",
+    // Light mode: the app's own purple (--primary, the Create Project colour). Dark mode's primary is blue, so it keeps a violet there.
+    accent: "bg-primary/10 text-primary border-primary/35 dark:bg-violet-500/15 dark:text-violet-400 dark:border-violet-500/30",
   },
   {
     type: "seeking_feedback",

@@ -3,7 +3,11 @@
  * point Nova at a GitHub repo or a .zip, read the audit (built %, stage,
  * runtime, what moved, scan facts, secrets, the catch-up, next three things,
  * loops, plan vs code, capabilities, risks and the rest), apply it to the
- * board, pick an earlier audit, and connect the live database.
+ * board, pick an earlier audit, and connect the live database. Whether Nova
+ * is reading the code right now — started here, on the web, from the editor
+ * bridge or by a teammate — comes from /code-audit/status: while one runs the
+ * tab says so and won't start another, and when it ends the audits, the path,
+ * the sections and the board are re-read.
  */
 import React, { useState } from "react";
 import { Pressable, Text, View } from "react-native";
@@ -14,6 +18,7 @@ import { colors, font, fontFamily, radius, spacing } from "../../../theme";
 import { Btn, Card, Divider, Icon, Meta, Progress, Row, type IconName } from "../../ui";
 import { Overline, Tag, Well, useNotify } from "../bits";
 import { LOOP_TYPE_INFO, mkey, type LoopType } from "../shared";
+import { auditStageLabel, formatElapsed, useAuditStatus } from "../../../sections";
 import { CheckRow, Choice, Input, ListLoading, PlanNote, ShortOfCredits, invalidateCredits, useCredits } from "./kit";
 
 interface AuditListItem { id: string; source: string; sourceKind: "github" | "upload"; stage: string | null; completionPercent: number | null; summary: string | null; appliedAt: string | null; createdAt: string; operationCount: number }
@@ -120,7 +125,9 @@ export function CodebaseTool({ projectId, repoUrl, isOwner }: { projectId: strin
   const scan = findings.scan ?? {};
   const runtime = audit?.runtime ?? null;
   const delta = audit?.delta ?? null;
-  const running = run.isPending || uploading;
+  const status = useAuditStatus(projectId, { expectRunning: run.isPending });
+  const remote = status.running;
+  const running = run.isPending || uploading || !!remote;
 
   return (
     <View style={{ gap: spacing.md }}>
@@ -130,6 +137,21 @@ export function CodebaseTool({ projectId, repoUrl, isOwner }: { projectId: strin
           <Row center gap={6}><Icon name="scan-outline" size={17} color={colors.primary} /><Text style={{ fontFamily: fontFamily.semibold, fontSize: font.lg, color: colors.text }}>Codebase audit</Text></Row>
           <Meta style={{ fontSize: font.sm, lineHeight: 19 }}>Nova reads your actual code and reconciles it with your plan — what's really built, what's missing, and which tasks are further along than your board says.</Meta>
         </View>
+        {remote && (
+          <Row center gap={spacing.sm} style={{ backgroundColor: colors.primarySoft, borderRadius: radius.sm, padding: spacing.sm + 2 }}>
+            <Icon name="scan-outline" size={16} color={colors.primary} />
+            <View style={{ flex: 1, gap: 1 }}>
+              <Text style={{ fontSize: font.sm, fontFamily: fontFamily.semibold, color: colors.primary }} testID="audit-running">Nova is reading your code…</Text>
+              <Meta>
+                {auditStageLabel(remote.stage)} · {formatElapsed(remote.elapsedSeconds)}
+                {remote.startedBy?.firstName ? ` · started by ${remote.startedBy.firstName}` : ""}
+              </Meta>
+            </View>
+          </Row>
+        )}
+        {!remote && status.last?.error && !run.isPending && (
+          <Meta style={{ color: colors.danger }}>The last code read didn't finish: {status.last.error}</Meta>
+        )}
         {!can("aiMilestones") && <PlanNote title="Codebase audits are on the Builder plan" body="Running one will tell you what to upgrade to." />}
 
         <Row center gap={6}><Icon name="logo-github" size={14} color={colors.textSecondary} /><Text style={{ fontSize: font.sm, fontFamily: fontFamily.medium, color: colors.textSecondary }}>GitHub repository</Text></Row>
@@ -155,7 +177,7 @@ export function CodebaseTool({ projectId, repoUrl, isOwner }: { projectId: strin
             <Meta>Used for this audit and never saved — you'll re-enter it next time. Create one with read-only Contents access, and revoke it when you're done.</Meta>
           </Well>
         )}
-        <Btn icon="scan-outline" label={run.isPending && !uploading ? "Nova is reading your code…" : `Audit this repository (${price})`} loading={run.isPending}
+        <Btn icon="scan-outline" label={running && !uploading ? "Nova is reading your code…" : `Audit this repository (${price})`} loading={run.isPending}
           disabled={!url.trim() || running || short} onPress={() => run.mutate({ repoUrl: url, token: token.trim() || undefined })} />
 
         <Row center gap={spacing.md}>

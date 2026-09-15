@@ -12,6 +12,9 @@ import { parseModelJson, answerUnreadable } from "./ai-json";
 import type { Express, Response } from "express";
 import OpenAI from "openai";
 import { storage } from "./storage";
+import { db } from "./db";
+import { desc, eq, sql } from "drizzle-orm";
+import { codeAuditRuns } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
 import { requireCredits, requireFeature, modelFor, coachingDirectiveFor } from "./entitlements";
@@ -179,6 +182,54 @@ ${AUDIT_SCHEMA}`;
  * Takes `res` because the entitlement checks answer on it directly; throws
  * otherwise, and the caller's handler owns the error shape.
  */
+// --- Runs: an audit while it's under way ---------------------------------------
+
+/** A run older than this that never finished (a restart mid-audit) is over, not running. */
+export const AUDIT_RUN_STALE_MS = 15 * 60_000;
+
+export type AuditRunStage = "fetching" | "reading" | "saving";
+export interface AuditRunHandle { id: string; stage: (s: AuditRunStage) => Promise<void>; finish: (outcome: { auditId?: string | null; error?: string | null }) => Promise<void> }
+
+/** Records that an audit started, so everyone looking at the project can see it running. Never throws: tracking is not the audit. */
+export async function startAuditRun(projectId: string, userId: string, source: string, stage: AuditRunStage = "fetching"): Promise<AuditRunHandle> {
+  let id = "";
+  try {
+    const [row] = await db.insert(codeAuditRuns).values({ projectId, startedById: userId, source: source.slice(0, 200), stage }).returning({ id: codeAuditRuns.id });
+    id = row.id;
+  } catch (err) { console.error("[audit-run] couldn't record the start (non-fatal):", err); }
+  let done = false;
+  return {
+    id,
+    stage: async (s) => { if (id && !done) await db.update(codeAuditRuns).set({ stage: s }).where(eq(codeAuditRuns.id, id)).catch(() => {}); },
+    finish: async ({ auditId = null, error = null }) => {
+      if (!id || done) return;
+      done = true;
+      await db.update(codeAuditRuns).set({ finishedAt: new Date(), auditId, error: error ? error.slice(0, 400) : null }).where(eq(codeAuditRuns.id, id)).catch(() => {});
+    },
+  };
+}
+
+/** What's running on a project now, and how the last run ended. */
+export async function auditRunStatus(projectId: string) {
+  // Ages are worked out by the database: its timestamps read back into JS are off by the server's timezone.
+  const rows = await db.select({
+    run: codeAuditRuns,
+    ageSeconds: sql<number>`extract(epoch from (now() - ${codeAuditRuns.startedAt}))::int`,
+  }).from(codeAuditRuns).where(eq(codeAuditRuns.projectId, projectId)).orderBy(desc(codeAuditRuns.startedAt)).limit(5);
+  const runningRow = rows.find((r) => !r.run.finishedAt && Number(r.ageSeconds) * 1000 < AUDIT_RUN_STALE_MS) ?? null;
+  const running = runningRow?.run ?? null;
+  const last = rows.find((r) => r.run.finishedAt)?.run ?? null;
+  const starter = running ? await storage.getUser(running.startedById).catch(() => undefined) : undefined;
+  return {
+    running: running ? {
+      id: running.id, source: running.source, stage: running.stage, startedAt: running.startedAt,
+      startedBy: starter ? { id: starter.id, firstName: starter.firstName ?? null } : null,
+      elapsedSeconds: Math.max(0, Number(runningRow!.ageSeconds)),
+    } : null,
+    last: last ? { id: last.id, source: last.source, finishedAt: last.finishedAt, auditId: last.auditId, error: last.error } : null,
+  };
+}
+
 export async function runCodeAudit(opts: {
   projectId: string;
   userId: string;
@@ -190,7 +241,23 @@ export async function runCodeAudit(opts: {
   repoMeta: Awaited<ReturnType<typeof import("./code-ingest").fetchRepoMeta>> | null;
   /** Used for this request only, to read commits since the last audit. Never stored. */
   githubToken?: string;
+  /** The run the route started before fetching the code; one is started here when absent. */
+  run?: AuditRunHandle;
 }): Promise<Response | void> {
+  const run = opts.run ?? await startAuditRun(opts.projectId, opts.userId, opts.snapshot.source, "reading");
+  let auditId: string | null = null;
+  try {
+    await run.stage("reading");
+    const result = await runCodeAuditInner({ ...opts, onSaved: (id) => { auditId = id; }, onStage: run.stage });
+    await run.finish(auditId ? { auditId } : { error: opts.res.statusCode >= 400 ? "Nova's read of the code couldn't be used. Try again." : "The audit didn't finish." });
+    return result;
+  } catch (err: any) {
+    await run.finish({ error: typeof err?.message === "string" ? err.message : "The audit failed." });
+    throw err;
+  }
+}
+
+async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { onSaved: (auditId: string) => void; onStage: (s: AuditRunStage) => Promise<void> }): Promise<Response | void> {
   const { projectId, userId, project, ent, res, snapshot, sourceKind, repoMeta } = opts;
   const digest = buildCodeDigest(snapshot);
   // What's new since last time, from the code itself: fingerprints, and the builder's commit messages.
@@ -368,6 +435,7 @@ export async function runCodeAudit(opts: {
   const completionPercent = Math.max(0, Math.min(100, Math.round(Number(parsed.completionPercent) || 0)));
   const delta = computeAuditDelta(previous ?? null, { id: "pending", createdAt: new Date(), completionPercent, signals: digest.signals, findings });
 
+  await opts.onStage("saving");
   const audit = await storage.createCodeAudit({
     projectId,
     createdById: userId,
@@ -403,6 +471,7 @@ export async function runCodeAudit(opts: {
     metadata: { source: snapshot.source, stage: audit.stage },
   }).catch(() => {});
 
+  opts.onSaved(audit.id);
   res.json({
     audit: autoApplied ? await storage.getCodeAudit(audit.id) : audit,
     creditsCharged: CREDIT_COSTS.codeAudit, verifiedMilestones: verified,
@@ -460,6 +529,21 @@ export async function applyAuditSections(
 }
 
 export function registerCodeAuditRoutes(app: Express) {
+  /**
+   * Whether an audit is running on the project right now — started here, from
+   * the editor bridge or by a teammate — with its stage, and how the last one
+   * ended. Cheap enough to poll every few seconds.
+   */
+  app.get("/api/projects/:id/code-audit/status", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await isMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
+      res.json(await auditRunStatus(req.params.id));
+    } catch (error) {
+      console.error("Audit status error:", error);
+      res.status(500).json({ message: "Couldn't read the audit status" });
+    }
+  });
+
   /** Audits on record, newest first. Bodies trimmed for the list view. */
   app.get("/api/projects/:id/code-audits", isAuthenticated, async (req: any, res) => {
     try {
@@ -526,6 +610,7 @@ export function registerCodeAuditRoutes(app: Express) {
    */
   app.post("/api/projects/:id/code-audit", isAuthenticated, async (req: any, res) => {
     // metering: checked here; charged in runCodeAudit only after the audit is parsed and saved (test/unit/ai-metering.test.ts holds the helper to the same order)
+    let run: AuditRunHandle | undefined;
     try {
       const userId = (req.user as any).id;
       const projectId = req.params.id;
@@ -540,6 +625,9 @@ export function registerCodeAuditRoutes(app: Express) {
       const { repoUrl, token, objectPath, fileName } = req.body as {
         repoUrl?: string; token?: string; objectPath?: string; fileName?: string;
       };
+      if (!objectPath && !repoUrl) return res.status(400).json({ message: "Give Nova a GitHub repository or a zip to audit." });
+      // Visible from the start: fetching a big repository is the slow part.
+      run = await startAuditRun(projectId, userId, objectPath ? `upload:${str(fileName, 120) || "archive.zip"}` : `github:${str(repoUrl, 200).replace(/^https?:\/\/(www\.)?github\.com\//, "")}`, "fetching");
 
       // --- ingest ----------------------------------------------------------
       let snapshot: RepoSnapshot;
@@ -574,16 +662,20 @@ export function registerCodeAuditRoutes(app: Express) {
       // Charged only once the code is in hand — a repo that can't be fetched
       // costs nothing. Kept at the route rather than inside the run, so what
       // this endpoint costs and what stops it is readable from the route table.
-      if (!(await requireCredits(res, userId, CREDIT_COSTS.codeAudit, "a codebase audit"))) return;
+      if (!(await requireCredits(res, userId, CREDIT_COSTS.codeAudit, "a codebase audit"))) { await run?.finish({ error: "Not enough credits for an audit." }); return; }
 
-      await runCodeAudit({ projectId, userId, project, ent, res, snapshot, sourceKind, repoMeta, githubToken: token?.trim() || undefined });
+      await runCodeAudit({ projectId, userId, project, ent, res, snapshot, sourceKind, repoMeta, githubToken: token?.trim() || undefined, run });
     } catch (error: any) {
       console.error("Code audit error:", error);
       // Ingest errors carry messages written for the user; keep them.
       const message = typeof error?.message === "string" && error.message.length < 400
         ? error.message
         : "The audit failed. Please try again.";
-      res.status(400).json({ message });
+      await run?.finish({ error: message });
+      if (!res.headersSent) res.status(400).json({ message });
+    } finally {
+      // Any early return after the run started (a bad upload, a URL that isn't GitHub) ends it too.
+      if (run && res.statusCode >= 400) await run.finish({ error: "The audit didn't start." });
     }
   });
 

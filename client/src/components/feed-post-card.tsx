@@ -139,14 +139,7 @@ export function FeedPostCard({ post, standalone = false }: { post: FeedPostWithD
                   {post.project.isPrivate && <PrivateBadge variant="icon" />}
                 </>
               )}
-            </div>
-            {post.profile?.headline && (
-              <p className="text-[11px] text-muted-foreground truncate">{post.profile.headline}</p>
-            )}
-            <div className="flex items-center gap-1.5 mt-0.5">
-              {standalone
-                ? <span className="text-[11px] text-muted-foreground">{new Date(post.createdAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</span>
-                : <Link href={`/posts/${post.id}`} className="text-[11px] text-muted-foreground hover:underline" title="Open this post" data-testid={`post-link-${post.id}`}>{timeAgo(post.createdAt)}</Link>}
+              {/* What kind of post, on the same line as who and which project. */}
               <Badge variant="outline" className={`text-[10px] gap-1 font-normal ${def.accent}`} data-testid={`post-type-${post.id}`}>
                 <TypeIcon name={def.icon} className="h-2.5 w-2.5" />
                 {def.label}
@@ -156,6 +149,14 @@ export function FeedPostCard({ post, standalone = false }: { post: FeedPostWithD
                   <Sparkles className="h-2.5 w-2.5" /> Auto
                 </Badge>
               )}
+            </div>
+            {post.profile?.headline && (
+              <p className="text-[11px] text-muted-foreground truncate">{post.profile.headline}</p>
+            )}
+            <div className="flex items-center gap-1.5 mt-0.5">
+              {standalone
+                ? <span className="text-[11px] text-muted-foreground">{new Date(post.createdAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</span>
+                : <Link href={`/posts/${post.id}`} className="text-[11px] text-muted-foreground hover:underline" title="Open this post" data-testid={`post-link-${post.id}`}>{timeAgo(post.createdAt)}</Link>}
             </div>
           </div>
           {isMine && (
@@ -173,11 +174,11 @@ export function FeedPostCard({ post, standalone = false }: { post: FeedPostWithD
         </div>
 
         <div className="px-4 pt-3 pb-3 space-y-3">
-        <FeedContent content={post.content} mentions={(post.mentions as FeedMention[]) || []} className="text-[13px]" />
+        <FeedContent content={post.content} mentions={(post.mentions as FeedMention[]) || []} className="text-[15px] leading-relaxed" />
 
         {/* The questions this update wants answered: what makes the feedback specific. */}
         {((post.asks as string[] | undefined)?.length ?? 0) > 0 && (
-          <div className="rounded-md border border-primary/20 bg-primary/5 p-3 space-y-1.5" data-testid={`post-asks-${post.id}`}>
+          <div className="rounded-md border border-primary/35 bg-primary/10 p-3 space-y-1.5" data-testid={`post-asks-${post.id}`}>
             <p className="text-[11px] font-semibold uppercase tracking-wide text-primary flex items-center gap-1"><HelpCircle className="h-3 w-3" />Help answer</p>
             <ol className="list-decimal pl-5 text-sm space-y-0.5">
               {(post.asks as string[]).map((a) => <li key={a}>{a}</li>)}

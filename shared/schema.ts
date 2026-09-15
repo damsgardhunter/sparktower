@@ -723,6 +723,33 @@ export const projectHealthChecks = pgTable("project_health_checks", {
  * a project that has done nothing. This is the only surface that can tell them
  * apart.
  */
+/**
+ * An audit while it runs. Reading a repository and having Nova assess it
+ * takes a minute or two, and the audit row itself is only written at the
+ * end — so without this, nobody else looking at the project (a teammate, the
+ * dashboard in another tab, the builder who started it from their editor)
+ * could tell one was under way. One row per run: started, the stage it's at,
+ * and how it ended. A run left unfinished for long (a crashed server) reads
+ * as over, not as running forever.
+ */
+export const codeAuditRuns = pgTable("code_audit_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  startedById: varchar("started_by_id").notNull().references(() => users.id),
+  /** "github:owner/repo", "upload:app.zip", "worktree:my-branch". */
+  source: text("source").notNull(),
+  /** fetching → reading → saving. */
+  stage: text("stage", { enum: ["fetching", "reading", "saving"] }).default("fetching").notNull(),
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  finishedAt: timestamp("finished_at"),
+  /** The audit it produced, when it succeeded. */
+  auditId: varchar("audit_id"),
+  /** What went wrong, in words for the builder, when it didn't. */
+  error: text("error"),
+}, (t) => [index("code_audit_runs_project_idx").on(t.projectId, t.startedAt)]);
+
+export type CodeAuditRun = typeof codeAuditRuns.$inferSelect;
+
 export const projectCodeAudits = pgTable("project_code_audits", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   projectId: varchar("project_id").notNull().references(() => projects.id),

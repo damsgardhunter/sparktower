@@ -157,8 +157,11 @@ export interface CapitalProfile {
   route: string | null;
 }
 export type PaceState = "active" | "nudge" | "decaying" | "dormant";
+export interface PathEvent { id: string; title: string; estimateMinutes: number | null; actualMinutes: number | null; projectedBefore: string | null; projectedAfter: string | null; createdAt: string }
 export interface PathStatus {
   adopted: true;
+  started?: true;
+  primary?: boolean;
   goal: ProjectGoal; subcategory: string; promise: string; target: string;
   phases: PathPhase[];
   current: { id: string; title: string; optional: boolean; step: number; of: number };
@@ -177,8 +180,20 @@ export interface PathStatus {
   pace: { state: PaceState; multiplier: number | null; mode: "date" | "range" | "none" | "pipeline"; projectedAt: string | null; projectedLow: string | null; projectedHigh: string | null; note: string; daysSinceActivity: number } | null;
   proposal: { goal: ProjectGoal; why: string }[] | null;
   capital?: CapitalProfile | null;
+  events?: PathEvent[];
 }
-export interface NoPath { adopted: false; goal: ProjectGoal; subcategory: string; promise: string; existingTasks: number; existingDone: number }
+/** A section that isn't started (`started: false`), or started on a project made before paths. */
+export interface NoPath { adopted: false; started?: boolean; goal: ProjectGoal; subcategory: string | null; promise: string; existingTasks: number; existingDone: number }
+
+/** "just now", "4m ago", "3h ago", "2d ago". */
+export function ago(iso: string | number | Date | null | undefined, now = Date.now()) {
+  if (iso == null) return "";
+  const s = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
+  if (s < 45) return "just now";
+  if (s < 3600) return `${Math.max(1, Math.round(s / 60))}m ago`;
+  if (s < 86_400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86_400)}d ago`;
+}
 
 export function estimate(minutes: number | null) {
   if (minutes == null) return "open-ended";
@@ -271,7 +286,7 @@ export const webUrl = (path: string) => `${API_URL}${path}`;
 export function useRefreshPath(projectId: string) {
   const qc = useQueryClient();
   return () => {
-    for (const key of ["path", "kanban", "briefing", "milestones", "project", "roadmap"]) {
+    for (const key of ["path", "tracks", "kanban", "briefing", "milestones", "project", "roadmap"]) {
       qc.invalidateQueries({ queryKey: ["manage", projectId, key] });
     }
     qc.invalidateQueries({ queryKey: ["subscription"] });

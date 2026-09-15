@@ -3,12 +3,12 @@
  * web's toasts), tappable answer bubbles, a full-screen editor sheet, a
  * note well, and the "open on the web" row.
  */
-import React, { createContext, useContext } from "react";
+import React, { createContext, useContext, useState } from "react";
 import { KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, Share, Text, TextInput, View, type StyleProp, type ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { NoticeBanner, useNotice, type Notice } from "../Sheet";
 import { colors, font, fontFamily, radius, spacing } from "../../theme";
-import { Btn, H2, Icon, IconButton, Meta, errText, type IconName } from "../ui";
+import { Btn, H2, Icon, IconButton, Meta, NovaGradient, errText, type IconName } from "../ui";
 import { webUrl } from "./shared";
 
 // --- Notices ----------------------------------------------------------------
@@ -185,4 +185,73 @@ export function WebToolRow({ icon, title, subtitle, path }: { icon: IconName; ti
 /** Check / empty circle, the web's CheckCircle2 and Circle. */
 export function Tick({ done, size = 18 }: { done: boolean; size?: number }) {
   return <Icon name={done ? "checkmark-circle" : "ellipse-outline"} size={size} color={done ? colors.success : colors.textTertiary} />;
+}
+
+// --- Section screens -----------------------------------------------------------
+
+/**
+ * One block of a section screen (client/src/components/section/block.tsx): a
+ * small uppercase label with an icon, an optional control on the right, and
+ * its content. Stack them with `divider` on all but the first.
+ */
+export function Block({ title, icon, right, children, divider, testID }: {
+  title: string; icon?: IconName; right?: React.ReactNode; children: React.ReactNode; divider?: boolean; testID?: string;
+}) {
+  return (
+    <View testID={testID} style={[{ gap: spacing.sm, paddingVertical: spacing.md }, divider && { borderTopWidth: 1, borderColor: colors.border }]}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, minHeight: 24 }}>
+        {icon && <Icon name={icon} size={13} color={colors.textTertiary} />}
+        <Overline>{title}</Overline>
+        {right ? <View style={{ marginLeft: "auto", flexDirection: "row", alignItems: "center", gap: 6 }}>{right}</View> : null}
+      </View>
+      {children}
+    </View>
+  );
+}
+
+/** Text that shows a line or two until asked for the rest. */
+export function Clamp({ text, lines = 2, color }: { text: string | null | undefined; lines?: number; color?: string }) {
+  const [open, setOpen] = useState(false);
+  if (!text) return null;
+  const long = text.length > lines * 80 || text.includes("\n");
+  return (
+    <View style={{ gap: 2 }}>
+      <Text numberOfLines={open ? undefined : lines} style={{ fontSize: font.sm, lineHeight: 19, color: color ?? colors.textSecondary, fontFamily: fontFamily.regular }}>{text}</Text>
+      {long && (
+        <Pressable onPress={() => setOpen(!open)} hitSlop={6}>
+          <Text style={{ fontSize: font.xs + 1, color: colors.primary, fontFamily: fontFamily.semibold }}>{open ? "Show less" : "Show more"}</Text>
+        </Pressable>
+      )}
+    </View>
+  );
+}
+
+/** A small grey pill: an icon and a few words. */
+export function Pill({ icon, label, tone }: { icon?: IconName; label: string; tone?: "primary" }) {
+  const c = tone === "primary" ? colors.primary : colors.textSecondary;
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 3, borderRadius: radius.pill, backgroundColor: tone === "primary" ? colors.primarySoft : colors.surfaceRaised, paddingHorizontal: 8, paddingVertical: 3 }}>
+      {icon && <Icon name={icon} size={11} color={c} />}
+      <Text style={{ fontSize: 11, color: c, fontFamily: tone === "primary" ? fontFamily.semibold : fontFamily.medium }}>{label}</Text>
+    </View>
+  );
+}
+
+/** Content inside a thin Nova-gradient outline — the selected section, the next step, the project row. */
+export function GradientOutline({ children, on = true, width = 1.5, rounded = radius.md, style, innerStyle }: {
+  children: React.ReactNode; on?: boolean; width?: number; rounded?: number; style?: StyleProp<ViewStyle>; innerStyle?: StyleProp<ViewStyle>;
+}) {
+  const inner = [{ borderRadius: rounded - width, backgroundColor: colors.surface, flex: 1 } as ViewStyle, innerStyle];
+  if (!on) {
+    return (
+      <View style={[{ borderRadius: rounded, padding: width, backgroundColor: colors.border }, style]}>
+        <View style={inner}>{children}</View>
+      </View>
+    );
+  }
+  return (
+    <NovaGradient style={[{ borderRadius: rounded, padding: width }, style]}>
+      <View style={inner}>{children}</View>
+    </NovaGradient>
+  );
 }

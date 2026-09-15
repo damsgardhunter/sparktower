@@ -54,7 +54,15 @@ export default function Projects() {
   const { updates, byKey } = useExploreUpdates();
 
   const followedIds = useMemo(() => new Set((followed.data ?? []).map((f) => f.projectId)), [followed.data]);
-  const pathBy = useMemo(() => new Map((nextSteps.data?.items ?? []).map((i) => [i.project.id, i])), [nextSteps.data]);
+  // One strip per project card: its primary section's item, else the first section listed for it.
+  const pathBy = useMemo(() => {
+    const byProject = new Map<string, any>();
+    for (const i of nextSteps.data?.items ?? []) {
+      const had = byProject.get(i.project.id);
+      if (!had || (!had.track?.primary && i.track?.primary)) byProject.set(i.project.id, i);
+    }
+    return byProject;
+  }, [nextSteps.data]);
 
   const source = view === "mine" ? mine.data : all.data;
   const categories = useMemo(() => Array.from(new Set((source ?? []).map((p) => p.category).filter(Boolean))) as string[], [source]);

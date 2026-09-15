@@ -51,6 +51,12 @@ export const users = pgTable("users", {
    * than whenever their session happens to expire.
    */
   suspendedAt: timestamp("suspended_at"),
+  /**
+   * Access tokens issued before this are refused, though their signature and
+   * expiry are fine: set by sign-out-everywhere and by refresh-token reuse, so
+   * a copied access token dies with the sessions instead of living out its 15 minutes.
+   */
+  accessTokensRevokedAt: timestamp("access_tokens_revoked_at"),
   suspendedReason: text("suspended_reason"),
   /*
    * Where this account came from, captured on the visitor's first page and

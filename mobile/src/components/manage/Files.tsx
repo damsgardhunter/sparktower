@@ -3,6 +3,8 @@
  * client/src/pages/project-manager.tsx: Nova documents first, then uploads,
  * a folder filter, and upload / open / delete. "New document with Nova" plans
  * one and opens the native document builder; tapping a document reopens it.
+ * Uploads belong to the open section unless shared — shared files (no
+ * section) show in all three, with a "Shared" badge.
  */
 import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
@@ -16,23 +18,28 @@ import { Btn, Card, Icon, IconButton, Loading, Meta, Row, Segments, assetUri } f
 import { Overline, Tag, useNotify } from "./bits";
 import { DocumentStartSheet } from "./tools/Documents";
 import { mkey } from "./shared";
+import { sectionDef, type ProjectGoal } from "../../sections";
 
 const FILE_FOLDERS = ["general", "design", "docs", "data"];
 
-export function Files({ projectId }: { projectId: string }) {
+export function Files({ projectId, goal }: { projectId: string; goal: ProjectGoal }) {
   const qc = useQueryClient();
   const { notify, fail } = useNotify();
   const [filter, setFilter] = useState("all");
   const [folder, setFolder] = useState("general");
   const [uploading, setUploading] = useState(false);
+  /** Add the next upload to every section instead of just this one. */
+  const [shared, setShared] = useState(false);
+  const def = sectionDef(goal);
   const [starting, setStarting] = useState(false);
   const router = useRouter();
   // Documents open in their own screen, /project/:id/documents/:docId — the same path the web and notifications use.
   const openDoc = (docId: string) => router.push(`/project/${projectId}/documents/${docId}` as any);
 
   const { data: files = [], isLoading } = useQuery({
-    queryKey: mkey(projectId, "files"),
-    queryFn: () => api<any[]>(`/api/projects/${projectId}/files`),
+    // Keeps the "files" prefix so every refresh of the files reaches each section.
+    queryKey: mkey(projectId, "files", "section", goal),
+    queryFn: () => api<any[]>(`/api/projects/${projectId}/files?track=${goal}`),
   });
   const { data: documents = [] } = useQuery({
     queryKey: mkey(projectId, "documents"),
@@ -55,10 +62,10 @@ export function Files({ projectId }: { projectId: string }) {
       const objectPath = await uploadFile({ uri: file.uri, name: file.name, mimeType: file.mimeType, size: file.size });
       await api(`/api/projects/${projectId}/files`, {
         method: "POST",
-        body: { name: file.name, url: objectPath, fileType: file.mimeType || "application/octet-stream", size: file.size ?? null, folder },
+        body: { name: file.name, url: objectPath, fileType: file.mimeType || "application/octet-stream", size: file.size ?? null, folder, track: shared ? null : goal },
       });
       await refresh();
-      notify("File uploaded.");
+      notify(shared ? "File uploaded — shared with every section." : `File uploaded to ${def.short}.`);
     } catch (e) {
       fail(e, "Upload failed.");
     } finally {
@@ -81,6 +88,13 @@ export function Files({ projectId }: { projectId: string }) {
           <Btn small icon="document-text-outline" label="New document with Nova" onPress={() => setStarting(true)} />
           <Btn small variant="outline" icon="cloud-upload-outline" label={`Upload to ${folder}`} loading={uploading} onPress={upload} />
         </Row>
+        <Pressable onPress={() => setShared(!shared)} hitSlop={4} accessibilityRole="switch" accessibilityState={{ checked: shared }} testID="toggle-upload-shared"
+          style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+          <View style={{ width: 34, height: 20, borderRadius: 10, padding: 2, backgroundColor: shared ? colors.primary : colors.border, alignItems: shared ? "flex-end" : "flex-start" }}>
+            <View style={{ width: 16, height: 16, borderRadius: 8, backgroundColor: "#FFFFFF" }} />
+          </View>
+          <Meta style={{ flex: 1 }}>{shared ? "Uploads are shared with all three sections" : `Uploads go to ${def.short} only`}</Meta>
+        </Pressable>
         <Row wrap gap={6} center>
           <Meta>Upload folder:</Meta>
           {folders.map((f) => (
@@ -121,7 +135,10 @@ export function Files({ projectId }: { projectId: string }) {
             <Card key={file.id} style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
               <Icon name="document-outline" size={20} color={colors.textTertiary} />
               <Pressable style={{ flex: 1, gap: 2 }} onPress={() => { const u = assetUri(file.url); if (u) void WebBrowser.openBrowserAsync(u).catch(() => {}); }}>
-                <Text numberOfLines={1} style={{ fontSize: font.sm, fontFamily: fontFamily.medium, color: colors.text }}>{file.name}</Text>
+                <Row center gap={6}>
+                  <Text numberOfLines={1} style={{ flexShrink: 1, fontSize: font.sm, fontFamily: fontFamily.medium, color: colors.text }}>{file.name}</Text>
+                  {!file.track && <Tag label="Shared" color={colors.textSecondary} />}
+                </Row>
                 <Meta numberOfLines={1}>
                   {[file.folder, file.uploader?.firstName || file.uploader?.email || "Unknown", new Date(file.createdAt).toLocaleDateString(), file.size ? `${(file.size / 1024).toFixed(0)}KB` : null].filter(Boolean).join(" · ")}
                 </Meta>

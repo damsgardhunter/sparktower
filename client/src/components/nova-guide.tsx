@@ -6,6 +6,8 @@ import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { IntakeView } from "@/components/path-work";
 import type { IntakeQuestion } from "@shared/phase-trees";
+import type { ProjectGoal } from "@shared/goals";
+import { sectionDef } from "@/lib/sections";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Cpu, Send, X, Loader2, CheckCircle2, ListTodo, Milestone, FileEdit, Sparkles, ChevronDown, MessageSquare, Pencil } from "lucide-react";
@@ -26,6 +28,8 @@ interface NovaAction {
 interface NovaGuideProps {
   projectId: string;
   currentTab: string;
+  /** The manager section open (Ship / Systemize / Raise): Nova answers about that path. */
+  section?: ProjectGoal;
   project: any;
   onProjectUpdate?: () => void;
 }
@@ -218,7 +222,15 @@ function NovaComposer({ value, onChange, onSend, disabled, placeholder, testId, 
   );
 }
 
-export function NovaGuide({ projectId, currentTab, project, onProjectUpdate }: NovaGuideProps) {
+/** Starters for the section's own path, used where the open tab has none of its own. */
+const SECTION_SUGGESTIONS: Record<ProjectGoal, string[]> = {
+  ship_mvp: ["What should I build next for my MVP?", "What's the smallest version I can ship?", "Where am I on my MVP path?"],
+  systemize_business: ["What should I systemize first?", "Which step still depends on me?", "Where am I on my systemize path?"],
+  raise_funding: ["Am I ready to raise?", "What do investors need to see?", "Where am I on my fundraising path?"],
+};
+
+export function NovaGuide({ projectId, currentTab, section, project, onProjectUpdate }: NovaGuideProps) {
+  const sectionLabel = section ? sectionDef(section).label : null;
   const { user } = useAuth();
   const { toast } = useToast();
   const [input, setInput] = useState("");
@@ -267,6 +279,7 @@ export function NovaGuide({ projectId, currentTab, project, onProjectUpdate }: N
       const res = await apiRequest("POST", `/api/projects/${projectId}/nova-guide`, {
         message,
         currentTab,
+        ...(section ? { section } : {}),
       });
       return res.json();
     },
@@ -341,7 +354,7 @@ export function NovaGuide({ projectId, currentTab, project, onProjectUpdate }: N
     }
   };
 
-  const suggestions = TAB_SUGGESTIONS[currentTab] || TAB_SUGGESTIONS.setup;
+  const suggestions = TAB_SUGGESTIONS[currentTab] || (section ? SECTION_SUGGESTIONS[section] : TAB_SUGGESTIONS.setup);
   const showQuickReplies = localMessages.length <= 1 && isOnboarding;
 
   /*
@@ -447,7 +460,7 @@ export function NovaGuide({ projectId, currentTab, project, onProjectUpdate }: N
                 value={input}
                 onChange={setInput}
                 onSend={() => handleSend()}
-                placeholder="Ask Nova anything about your project… (Shift+Enter for a new line)"
+                placeholder={`Ask Nova anything about ${sectionLabel ?? "your project"}… (Shift+Enter for a new line)`}
                 disabled={sendMutation.isPending}
                 testId="input-nova-message"
               />
@@ -494,7 +507,7 @@ export function NovaGuide({ projectId, currentTab, project, onProjectUpdate }: N
               </div>
               <div>
                 <h3 className="font-semibold text-sm">Nova</h3>
-                <p className="text-[10px] text-muted-foreground capitalize">Helping with: {currentTab}</p>
+                <p className="text-[10px] text-muted-foreground">Helping with: {sectionLabel ? `${sectionLabel} · ` : ""}<span className="capitalize">{currentTab === "nova" ? "dashboard" : currentTab}</span></p>
               </div>
             </div>
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setIsWidgetOpen(false)} data-testid="btn-close-widget">
@@ -531,7 +544,7 @@ export function NovaGuide({ projectId, currentTab, project, onProjectUpdate }: N
                 value={input}
                 onChange={setInput}
                 onSend={() => handleSend()}
-                placeholder="Ask Nova… (Shift+Enter for a new line)"
+                placeholder={sectionLabel ? `Ask Nova about ${sectionLabel}… (Shift+Enter for a new line)` : "Ask Nova… (Shift+Enter for a new line)"}
                 disabled={sendMutation.isPending}
                 testId="input-nova-widget"
               />

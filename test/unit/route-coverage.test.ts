@@ -47,6 +47,8 @@ describe("buildRouteCoverage", () => {
     expect(c.unmeteredCost).toEqual(["POST /api/projects/:id/free-ai"]);
     // An unmetered costly route with no stated reason is named as such in the audit's text.
     expect(renderRouteCoverage(c)).toMatch(/POST \/api\/projects\/:id\/free-ai: NO METERING REASON GIVEN/);
+    // The one costly route without credits is named, with what does limit it (here: nothing).
+    expect(renderRouteCoverage(c)).toMatch(/Not credit-metered: POST \/api\/projects\/:id\/free-ai \(no limit\)/);
     expect(c.summary).toMatchObject({ routes: 7, writes: 5, costly: 2, writesWithAuth: 4, writesRateLimited: 2, costlyMetered: 1 });
     expect(detectSurfacePrefixes([app, registry])).toEqual([{ prefix: "/api/feed", surface: "feed" }, { prefix: "/api/projects", surface: "projects" }]);
     expect(renderRouteCoverage(c)).toMatch(/Writes without sign-in: POST \/api\/open/);

@@ -12,12 +12,13 @@ const BAND_TONE: Record<CapitalProfile["band"]["id"], string> = {
   not_yet: "#E11D48", early: "#D97706", with_work: "#0284C7", strong: "#059669", very_strong: "#059669",
 };
 
-export function CapitalProfileCard({ capital }: { capital: CapitalProfile }) {
+/** `bare` drops the card, for a dashboard block that already sits on one. */
+export function CapitalProfileCard({ capital, bare }: { capital: CapitalProfile; bare?: boolean }) {
   if (!capital || capital.answered === 0) return null;
   const tone = BAND_TONE[capital.band.id] ?? colors.primary;
   const best = capital.routeFit[0];
   return (
-    <Card style={{ gap: spacing.md }}>
+    <Card style={[{ gap: spacing.md }, bare && { borderWidth: 0, padding: 0, shadowOpacity: 0, elevation: 0, backgroundColor: "transparent" }]}>
       <Row center gap={spacing.md}>
         {/* A ring without SVG: a thick tinted border, the score inside. */}
         <View style={{ width: 76, height: 76, borderRadius: 38, borderWidth: 7, borderColor: `${tone}33`, alignItems: "center", justifyContent: "center" }}>

@@ -99,3 +99,13 @@ export function sectionFromUrl(): ProjectGoal | null {
   const s = new URLSearchParams(window.location.search).get("section");
   return isProjectGoal(s) ? s : null;
 }
+
+/**
+ * Tags the path writes for itself — who acts, the milestone, the section,
+ * how it was done — are bookkeeping, not labels. Cards and forms show only
+ * the tags people added; saving keeps the rest untouched.
+ */
+const SYSTEM_TAG = /^(actor|tier|backbone|track|parent|loop|loop-type|kind|shared|expands|injected|artifact|carried|verified|archived|round|posted):/;
+export const isSystemTag = (tag: string) => SYSTEM_TAG.test(tag);
+export const visibleTags = (tags: string[] | null | undefined) => (tags ?? []).filter((t) => !isSystemTag(t));
+export const systemTags = (tags: string[] | null | undefined) => (tags ?? []).filter(isSystemTag);

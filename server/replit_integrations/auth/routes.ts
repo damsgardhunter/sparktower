@@ -7,7 +7,7 @@ import { ensureUserProfile } from "../../user-provisioning";
 import { stampSignupAttribution } from "../../attribution";
 import { enforceRateLimit, ipKey } from "../../moderation";
 import { db } from "../../db";
-import { mobileRefreshTokens } from "@shared/models/auth";
+import { mobileRefreshTokens, users } from "@shared/models/auth";
 import { and, eq, isNull, sql } from "drizzle-orm";
 /** The session cookie's name, as express-session is configured. */
 const SESSION_COOKIE = "connect.sid";
@@ -153,6 +153,8 @@ export function registerAuthRoutes(app: Express): void {
       const sessions = await db.execute(sql`DELETE FROM sessions WHERE sess->'passport'->>'user' = ${userId}`);
       const tokens = await db.update(mobileRefreshTokens).set({ revokedAt: new Date() })
         .where(and(eq(mobileRefreshTokens.userId, userId), isNull(mobileRefreshTokens.revokedAt))).returning({ id: mobileRefreshTokens.id });
+      // Access tokens already handed out stop working now, not in up to 15 minutes.
+      await db.update(users).set({ accessTokensRevokedAt: new Date() }).where(eq(users.id, userId));
       res.clearCookie(SESSION_COOKIE);
       res.json({ ok: true, sessionsEnded: Number((sessions as any).rowCount ?? 0), devicesSignedOut: tokens.length });
     } catch (err) {

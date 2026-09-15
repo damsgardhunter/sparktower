@@ -11,7 +11,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { errorText } from "@/lib/api-error";
 import { MAX_ASKS } from "@shared/feedback-loop";
-import { ArrowRight, Compass, Globe, Loader2, Share2, Sparkles, User } from "lucide-react";
+import { ArrowRight, ChevronDown, Compass, Globe, Loader2, Share2, Sparkles, User } from "lucide-react";
 import { ARTIFACT_MAX_TAGS, ARTIFACT_TITLE_MAX } from "@shared/path-artifacts";
 
 export interface NextStepItem {
@@ -253,16 +253,29 @@ export function ContinuePathCard() {
   const { data } = useQuery<{ items: NextStepItem[] }>({ queryKey: ["/api/me/next-steps"] });
   const [sharing, setSharing] = useState<NextStepItem | null>(null);
   const [weekly, setWeekly] = useState<NextStepItem | null>(null);
+  // Closed until asked for: the home screen leads with Create Project, and the paths are one click away.
+  const [open, setOpen] = useState(false);
   const items = data?.items ?? [];
   if (!items.length) return null;
 
   return (
     <>
-      <Card className="rounded-lg shadow-none border-primary/30 bg-background dark:bg-card" data-testid="continue-path-card">
+      <Button
+        variant="outline"
+        className="w-full h-11 gap-2 text-[15px] font-semibold border-primary/30 bg-background dark:bg-card"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-controls="continue-path-list"
+        data-testid="button-toggle-continue-path"
+      >
+        <Compass className="h-4 w-4 text-primary" />
+        Continue your path
+        <span className="rounded-full bg-primary/10 text-primary px-2 py-px text-[11px] font-medium" data-testid="continue-path-count">{items.length}</span>
+        <ChevronDown className={`h-4 w-4 ml-auto transition-transform ${open ? "rotate-180" : ""}`} />
+      </Button>
+      {open && (
+      <Card id="continue-path-list" className="rounded-lg shadow-none border-primary/30 bg-background dark:bg-card" data-testid="continue-path-card">
         <CardContent className="p-0 text-[13px]">
-          <p className="px-4 pt-3 pb-2 text-[11px] font-semibold uppercase tracking-wide text-primary flex items-center gap-1.5 border-b border-border/60">
-            <Compass className="h-3.5 w-3.5" /> Continue your path
-          </p>
           <ul className="divide-y divide-border/60">
             {items.map((item) => {
               const pct = item.progress.total ? Math.round((item.progress.done / item.progress.total) * 100) : 0;
@@ -315,6 +328,7 @@ export function ContinuePathCard() {
           </ul>
         </CardContent>
       </Card>
+      )}
       {weekly?.weekly && (
         <WeeklyUpdateDialog projectId={weekly.project.id} projectTitle={weekly.project.title} steps={weekly.weekly.steps} open onClose={() => setWeekly(null)} />
       )}

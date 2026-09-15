@@ -35,6 +35,8 @@ test("a week of path steps becomes an update, its feedback comes back, and the p
   const page = await builder.context.newPage();
   await page.goto("/");
   await page.getByTestId("btn-skip-onboarding").click({ timeout: 5_000 }).catch(() => {});
+  // The paths are a closed dropdown on home until opened.
+  await page.getByTestId("button-toggle-continue-path").click();
   await page.getByTestId(`button-weekly-update-${project.id}`).click();
   const dialog = page.getByTestId("weekly-update-dialog");
   await expect(dialog).toBeVisible();

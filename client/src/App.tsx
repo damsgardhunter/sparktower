@@ -1,4 +1,4 @@
-import { Switch, Route, Redirect, useLocation } from "wouter";
+import { Switch, Route, Redirect, useLocation, Link } from "wouter";
 import { useEffect } from "react";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -27,6 +27,7 @@ import Pricing from "@/pages/pricing";
 import BackingReview from "@/pages/backing-review";
 import CheckInDetail from "@/pages/check-in-detail";
 import PublicArtifactPage from "@/pages/public-artifact";
+import { NOVA_GRADIENT, NOVA_GRADIENT_CSS } from "@shared/backing";
 import { UpgradeToKeepGenerating, CheckoutReturn, BillingIssueNotice } from "@/components/upgrade-to-keep-generating";
 import { useSurfaces } from "@/hooks/use-surfaces";
 import { isPathDisabled } from "@shared/surfaces";
@@ -153,9 +154,37 @@ function Router() {
     <div className="flex h-screen w-full">
       <AppSidebar />
       <div className="flex flex-col flex-1 overflow-hidden">
-        <header className="flex items-center justify-between p-4 border-b border-border bg-background/50 backdrop-blur-sm z-10">
-          <SidebarTrigger data-testid="button-sidebar-toggle" />
-          <div className="flex items-center gap-4">
+        {/*
+          * Nova's gradient, with the logo in a semicircle hanging off its bottom
+          * edge so it can be big without making the bar tall. The lines either
+          * side are centred on the page, not between the buttons, so they sit
+          * symmetrically around the logo. White on the gradient in both themes.
+          */}
+        <header
+          className="relative z-30 flex items-center justify-between h-14 px-4 text-white [&_button]:text-white [&_button:hover]:bg-white/15"
+          style={{ backgroundImage: NOVA_GRADIENT_CSS }}
+          data-testid="app-header"
+        >
+          <SidebarTrigger className="relative z-10" data-testid="button-sidebar-toggle" />
+
+          <div className="pointer-events-none absolute inset-y-0 inset-x-14 sm:inset-x-28 grid grid-cols-[1fr_9rem_1fr] items-center">
+            <span className="hidden md:block text-center text-base lg:text-lg font-semibold tracking-[0.18em] lg:tracking-[0.3em] whitespace-nowrap drop-shadow" data-testid="text-header-left">I believe'd in them.</span>
+            <span />
+            <span className="hidden md:block text-center text-base lg:text-lg font-semibold tracking-[0.18em] lg:tracking-[0.3em] whitespace-nowrap drop-shadow" data-testid="text-header-right">They believe'd in me</span>
+          </div>
+
+          {/* The hanging semicircle: the gradient's middle colour, which is exactly what the bar is at its centre, so there's no seam. */}
+          <Link
+            href="/"
+            aria-label="SparkTower home"
+            className="absolute left-1/2 -translate-x-1/2 top-0 w-32 h-[4.75rem] rounded-b-full flex items-end justify-center pb-1 shadow-[0_6px_12px_-4px_rgba(0,0,0,0.25)]"
+            style={{ backgroundColor: NOVA_GRADIENT[1] }}
+            data-testid="header-logo-hang"
+          >
+            <img src="/favicon.png" alt="SparkTower" className="h-[4.25rem] w-[4.25rem] object-contain drop-shadow-md" data-testid="img-header-logo" />
+          </Link>
+
+          <div className="relative z-10 flex items-center gap-2">
             <NotificationBell />
             <ThemeToggle />
           </div>
@@ -164,7 +193,8 @@ function Router() {
         <BillingIssueNotice />
         <UpgradeToKeepGenerating />
         <CheckoutReturn />
-        <main className="flex-1 overflow-y-auto">
+        {/* Room for the logo hanging below the bar, so it never covers the top of a page — inside each page's own background. */}
+        <main className="flex-1 overflow-y-auto [&>*]:pt-6">
           <Switch>
             <Route path="/" component={Home} />
             <Route path="/onboarding" component={Onboarding} />

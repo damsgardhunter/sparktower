@@ -11,6 +11,7 @@ import type { ProjectGoal } from "@shared/goals";
 import { useLivePath, SyncDot, requestOpenMilestone } from "@/components/section/live";
 import { ACTOR_SHORT, estimate, NOVA_GRADIENT, type PathMilestone, type PathStatus } from "@/components/section/path-types";
 import { GitBranch, Play } from "lucide-react";
+import { useAuditStatus, auditStageLabel } from "@/lib/audit-status";
 
 export { requestOpenMilestone } from "@/components/section/live";
 
@@ -49,12 +50,13 @@ export function SectionPathStrip({ projectId, goal, onOpenMilestone, onStart }: 
     );
   }
 
-  return <Strip data={data} flash={flash} fetching={isFetching} error={isError} updatedAt={dataUpdatedAt} onOpen={onOpenMilestone ?? requestOpenMilestone} />;
+  return <Strip projectId={projectId} data={data} flash={flash} fetching={isFetching} error={isError} updatedAt={dataUpdatedAt} onOpen={onOpenMilestone ?? requestOpenMilestone} />;
 }
 
-function Strip({ data, flash, fetching, error, updatedAt, onOpen }: {
-  data: PathStatus; flash: Set<string>; fetching: boolean; error: boolean; updatedAt: number; onOpen: (id: string) => void;
+function Strip({ projectId, data, flash, fetching, error, updatedAt, onOpen }: {
+  projectId: string; data: PathStatus; flash: Set<string>; fetching: boolean; error: boolean; updatedAt: number; onOpen: (id: string) => void;
 }) {
+  const { running: reading } = useAuditStatus(projectId);
   const scroller = useRef<HTMLDivElement>(null);
   const nextId = data.next?.id ?? null;
   const { done, total } = data.mainLine;
@@ -106,8 +108,14 @@ function Strip({ data, flash, fetching, error, updatedAt, onOpen }: {
           })}
         </div>
       </div>
-      <div className="hidden sm:flex items-center px-3 shrink-0 border-l border-border">
+      <div className="hidden sm:flex flex-col justify-center items-start gap-1 px-3 shrink-0 border-l border-border">
         <SyncDot updatedAt={updatedAt} fetching={fetching} error={error} />
+        {reading && (
+          <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-foreground/80 whitespace-nowrap" title={`${auditStageLabel(reading.stage)}…`} data-testid="strip-reading-code">
+            <span className={`h-2 w-2 rounded-full ${NOVA_GRADIENT} animate-pulse`} />
+            Reading code…
+          </span>
+        )}
       </div>
     </div>
   );

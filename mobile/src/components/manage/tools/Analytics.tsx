@@ -2,16 +2,19 @@
  * Analytics — the native AnalyticsTab (client/src/pages/pm-extended-tabs.tsx)
  * with HealthCheckPanel (client/src/components/health-check-panel.tsx) above
  * it: Nova's project health read, fix-this and push-back on each finding, and
- * the activation / retention / revenue / referral event tracker.
+ * the activation / retention / revenue / referral event tracker. Metrics are
+ * per section — the open section's plus the shared ones — with one-tap
+ * starter metrics for the section (client/src/components/analytics/*).
  */
 import { useState } from "react";
-import { Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../../api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../../theme";
 import { Btn, Card, Divider, ErrorNote, Icon, Meta, Progress, Row, errText, type IconName } from "../../ui";
 import { EditorSheet, Overline, Tag, Well, useNotify } from "../bits";
 import { mkey } from "../shared";
+import { STARTER_METRICS, sectionDef, useSections, type ProjectGoal, type StarterMetric } from "../../../sections";
 import {
   AskNova, Choice, EmptyCard, Input, ListLoading, RowAction, ShortOfCredits, ToolHeader, UpgradeCard,
   invalidateCredits, useCrud, useCredits,
@@ -22,14 +25,30 @@ const CAT_COLOR: Record<string, string> = { activation: "#3B82F6", retention: "#
 const TRACKING = [{ value: "planned", label: "Planned" }, { value: "implemented", label: "Implemented" }, { value: "verified", label: "Verified" }];
 const EMPTY = { eventName: "", category: "activation", description: "" };
 
-export function AnalyticsTool({ projectId }: { projectId: string }) {
+export function AnalyticsTool({ projectId, goal }: { projectId: string; goal: ProjectGoal }) {
   const { entitlements, isLoading: entLoading } = useCredits();
   const level: string = entitlements.projectAnalytics ?? "none";
   const allowed = !entLoading && level !== "none";
-  const { items, isLoading, create, update, remove } = useCrud<any>(projectId, "analytics-events", { enabled: allowed, retry: false });
+  // Create / update / delete from the shared kit; the list is the section's own (plus shared), under the same key prefix.
+  const { create, update, remove } = useCrud<any>(projectId, "analytics-events", { enabled: false });
+  const { data: events, isLoading } = useQuery({
+    queryKey: mkey(projectId, "analytics-events", "track", goal),
+    queryFn: () => api<any[]>(`/api/projects/${projectId}/analytics-events?track=${goal}`),
+    enabled: allowed,
+    retry: false,
+    refetchInterval: 30_000,
+  });
+  const items = events ?? [];
+  const def = sectionDef(goal);
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState(EMPTY);
-  const save = () => create.mutate(form, { onSuccess: () => { setOpen(false); setForm(EMPTY); } });
+  const [form, setForm] = useState({ ...EMPTY, shared: false });
+  const save = () => create.mutate(
+    { eventName: form.eventName.trim(), category: form.category, description: form.description.trim() || undefined, track: form.shared ? null : goal },
+    { onSuccess: () => { setOpen(false); setForm({ ...EMPTY, shared: false }); } },
+  );
+  const addStarter = (m: StarterMetric) => create.mutate({ eventName: m.eventName, category: m.category, description: m.description, track: goal });
+  const names = new Set(items.map((e) => e.eventName));
+  const starters = STARTER_METRICS[goal].filter((m) => !names.has(m.eventName));
 
   if (entLoading) return <ListLoading />;
   // Analytics is a paid entitlement; the server 402s the event list on Free.
@@ -44,23 +63,39 @@ export function AnalyticsTool({ projectId }: { projectId: string }) {
 
   return (
     <View style={{ gap: spacing.md }}>
-      <HealthCheck projectId={projectId} />
+      <SectionProgress projectId={projectId} goal={goal} />
 
-      <ToolHeader title="Analytics Events">
+      <ToolHeader title={`What ${def.short} is measuring`} subtitle={items.length ? `${items.length} metric${items.length === 1 ? "" : "s"} · ${items.filter((e) => e.trackingStatus === "implemented" || e.trackingStatus === "verified").length} live` : null}>
         <Tag label={level} color={colors.textSecondary} />
       </ToolHeader>
       <Row wrap gap={spacing.sm}>
         <AskNova projectId={projectId} surface="analytics" />
         <Btn small icon="add" label="Add Event" onPress={() => setOpen(true)} />
       </Row>
-      <Meta style={{ fontSize: font.sm }}>Track activation, retention, revenue, and referral events for your product.</Meta>
+
+      {!isLoading && starters.length > 0 && (
+        <Card style={{ gap: spacing.sm }} >
+          <Overline>{items.length ? "Suggested for this section" : "Start with one"}</Overline>
+          {starters.map((m) => (
+            <Pressable key={m.eventName} disabled={create.isPending} onPress={() => addStarter(m)} testID={`starter-${m.eventName}`}
+              style={({ pressed }) => [{ flexDirection: "row", alignItems: "center", gap: spacing.sm, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm + 2 }, pressed && { opacity: 0.6 }]}>
+              <Icon name="add-circle-outline" size={18} color={colors.primary} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: font.sm, fontFamily: fontFamily.semibold, color: colors.text }}>{m.label}</Text>
+                <Meta numberOfLines={1}>{m.description}</Meta>
+              </View>
+              <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: CAT_COLOR[m.category] }} />
+            </Pressable>
+          ))}
+        </Card>
+      )}
 
       {level === "basic" && (
         <UpgradeCard inline plan="builder" title="Advanced analytics on Builder" description="Get roadmap-linked progress tracking and deeper breakdowns." />
       )}
 
       {isLoading ? <ListLoading /> : !items.length ? (
-        <EmptyCard icon="bar-chart-outline" text="No analytics events defined yet." />
+        <EmptyCard icon="bar-chart-outline" text={`No metrics for ${def.short} yet.`} />
       ) : CATEGORIES.filter((c) => grouped[c]?.length).map((cat) => (
         <View key={cat} style={{ gap: spacing.sm }}>
           <Overline>{cat}</Overline>
@@ -68,7 +103,10 @@ export function AnalyticsTool({ projectId }: { projectId: string }) {
             <Card key={ev.id} accent={CAT_COLOR[cat]} style={{ gap: spacing.sm }}>
               <Row gap={spacing.sm} style={{ alignItems: "flex-start" }}>
                 <View style={{ flex: 1, gap: 2 }}>
-                  <Text style={{ fontSize: font.sm, fontFamily: fontFamily.semibold, color: colors.text }}>{ev.eventName}</Text>
+                  <Row center gap={6}>
+                    <Text style={{ flexShrink: 1, fontSize: font.sm, fontFamily: fontFamily.semibold, color: colors.text }}>{ev.eventName}</Text>
+                    {!ev.track && <Tag label="Shared" color={colors.textSecondary} />}
+                  </Row>
                   {!!ev.description && <Meta>{ev.description}</Meta>}
                 </View>
                 <RowAction icon="close" color={colors.danger} label="Remove event" onPress={() => remove.mutate(ev.id)} />
@@ -79,13 +117,39 @@ export function AnalyticsTool({ projectId }: { projectId: string }) {
         </View>
       ))}
 
+      <HealthCheck projectId={projectId} />
+
       <EditorSheet visible={open} onClose={() => setOpen(false)} title="New Analytics Event"
         action={{ label: "Save", onPress: save, disabled: !form.eventName.trim(), loading: create.isPending }}>
         <Input label="Event Name" value={form.eventName} onChangeText={(v) => setForm({ ...form, eventName: v })} placeholder="e.g. user_signed_up" />
         <Choice label="Category" value={form.category} options={CATEGORIES.map((c) => ({ value: c as string, label: c[0].toUpperCase() + c.slice(1) }))} onChange={(v) => setForm({ ...form, category: v })} />
         <Input label="Description" value={form.description} onChangeText={(v) => setForm({ ...form, description: v })} placeholder="What does this event track?" multiline />
+        <Choice label="Which sections see it?" value={form.shared ? "shared" : "section"} options={[{ value: "section", label: `${def.short} only` }, { value: "shared", label: "All sections" }]} onChange={(v) => setForm({ ...form, shared: v === "shared" })} />
       </EditorSheet>
     </View>
+  );
+}
+
+/** The section's path at a glance: milestones done, and what's next. */
+function SectionProgress({ projectId, goal }: { projectId: string; goal: ProjectGoal }) {
+  const { data } = useSections(projectId);
+  const t = data?.tracks.find((x) => x.goal === goal);
+  if (!t) return null;
+  const pct = t.total ? Math.round(((t.done ?? 0) / t.total) * 100) : 0;
+  return (
+    <Card style={{ gap: spacing.sm }}>
+      <Overline>{sectionDef(goal).label} · progress</Overline>
+      {t.started ? (
+        <>
+          <Row between>
+            <Text style={{ fontSize: font.xl, fontFamily: fontFamily.bold, color: colors.text }}>{pct}%</Text>
+            <Meta>{t.done ?? 0}/{t.total ?? 0} milestones</Meta>
+          </Row>
+          <Progress value={pct} />
+          {!!t.next && <Meta numberOfLines={1}>Next: {t.next}</Meta>}
+        </>
+      ) : <Meta>Not started yet.</Meta>}
+    </Card>
   );
 }
 
