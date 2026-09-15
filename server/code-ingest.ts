@@ -305,6 +305,29 @@ const GITHUB_HEADERS = (token?: string) => ({
   ...(token ? { Authorization: `Bearer ${token}` } : {}),
 });
 
+/**
+ * Commit messages since a moment, newest first — the builder's own record of
+ * what they did, which is often the only one. Fails soft: an audit without
+ * commits is still an audit.
+ */
+export async function fetchCommitsSince(
+  fullName: string, branch: string, since: Date, token?: string,
+): Promise<{ sha: string; message: string; at: string }[]> {
+  try {
+    const url = `https://api.github.com/repos/${fullName}/commits?sha=${encodeURIComponent(branch)}&since=${encodeURIComponent(since.toISOString())}&per_page=100`;
+    const res = await fetch(url, { headers: GITHUB_HEADERS(token), signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return [];
+    const rows = (await res.json()) as any[];
+    return (Array.isArray(rows) ? rows : []).map((c) => ({
+      sha: String(c?.sha ?? "").slice(0, 7),
+      message: String(c?.commit?.message ?? "").split("\n")[0].slice(0, 160),
+      at: String(c?.commit?.author?.date ?? ""),
+    })).filter((c) => c.message);
+  } catch {
+    return [];
+  }
+}
+
 export interface RepoMeta {
   fullName: string;
   defaultBranch: string;

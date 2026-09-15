@@ -17,9 +17,11 @@ import {
   feedPosts, feedComments, directMessages, projects, rateLimitHits, moderationLog,
 } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
+import { recordActivity } from "./analytics";
+import { SAFETY_EVENTS } from "@shared/safety";
 import { requireReviewer } from "./platform-roles";
 import {
-  RATE_LIMITS, DUPLICATE_RULES, REPORT_TARGETS, REPORT_REASON_IDS, REPORT_NOTE_MAX,
+  RATE_LIMITS, DUPLICATE_RULES, REPORT_TARGETS, REPORT_REASON_IDS, reportDetailLabel, REPORT_NOTE_MAX,
   REPORT_STATUSES, RATE_LIMITED, MODERATION_ACTION_IDS, isActionableTarget, isReasonCode,
   reasonCodesFor, moderationReasonLabel,
   type RateLimitAction, type ReportTarget, type DuplicateRule, type RateLimitedBody, type ModerationAction,
@@ -102,6 +104,9 @@ const COUNTED: Record<RateLimitAction, CountSource[]> = {
   // Reports carry no text worth comparing, and a unique constraint on
   // (reporter, target) already stops the same person filing one twice.
   report: [{
+    table: contentReports, author: contentReports.reporterId, created: contentReports.createdAt,
+  }],
+  reportDaily: [{
     table: contentReports, author: contentReports.reporterId, created: contentReports.createdAt,
   }],
   react:  [hitSource("react")],
@@ -271,6 +276,69 @@ async function recordHit(userId: string, action: RateLimitAction): Promise<void>
 }
 
 /**
+ * Keeps refusals where the daily safety review can count them.
+ *
+ * A console line tells whoever is tailing the log; it can't tell tomorrow's
+ * reviewer that the message limit refused forty people overnight, which is
+ * the spike worth acting on. So refusals are also rows in the behaviour
+ * stream, named for the limit.
+ *
+ * Bucketed, because the thing being refused is often a flood: one row per
+ * person, limit and minute, carrying `count`. The first refusal in a minute is
+ * written at once, so a review sees it straight away; the rest of that
+ * minute's are added up and written as one row when the minute closes. Summing
+ * `count` gives the exact number refused, and a script sending a thousand
+ * requests costs the database two writes, not a thousand.
+ *
+ * Fire-and-forget: recording must never change what the refused person gets.
+ */
+interface RefusalBucket { minute: number; extra: number; row: Parameters<typeof recordActivity>[0] }
+const refusalBuckets = new Map<string, RefusalBucket>();
+const MAX_REFUSAL_BUCKETS = 10_000;
+
+function flushRefusals(before: number) {
+  for (const [key, bucket] of refusalBuckets) {
+    if (bucket.minute >= before) continue;
+    refusalBuckets.delete(key);
+    if (bucket.extra > 0) {
+      void recordActivity({ ...bucket.row, props: { ...bucket.row.props, count: bucket.extra } });
+    }
+  }
+}
+
+function recordRefusal(req: any, action: RateLimitAction, kind: "volume" | "duplicate") {
+  if (!req) return;
+  const minute = Math.floor(Date.now() / 60_000);
+  const who = req.user?.id ?? ipKey(req);
+  const key = `${who}|${action}|${kind}`;
+  const bucket = refusalBuckets.get(key);
+  if (bucket && bucket.minute === minute) { bucket.extra += 1; return; }
+  if (bucket) flushRefusals(minute);
+
+  const row = {
+    name: SAFETY_EVENTS.limitRefused,
+    // The column is a foreign key to accounts; an address-keyed refusal has none.
+    userId: req.user?.id ?? null,
+    visitorId: req.visitorId || "unknown",
+    sessionId: req.sessionId || "unknown",
+    path: req.originalUrl || req.path || "/",
+    method: req.method,
+    status: kind === "volume" ? 429 : 409,
+    userAgent: req.headers?.["user-agent"],
+    props: { action, kind } as Record<string, unknown>,
+  };
+  if (refusalBuckets.size < MAX_REFUSAL_BUCKETS) refusalBuckets.set(key, { minute, extra: 0, row });
+  void recordActivity({ ...row, props: { ...row.props, count: 1 } });
+}
+
+setInterval(() => flushRefusals(Math.floor(Date.now() / 60_000)), 15_000).unref();
+
+/** Writes every pending refusal count now. For shutdown and tests. */
+export function flushRefusalCounts(): void {
+  flushRefusals(Number.MAX_SAFE_INTEGER);
+}
+
+/**
  * The refusal, in one place, so every 429 looks the same and is logged.
  *
  * Logged at warn with the numbers, because a limit that fires is either
@@ -280,6 +348,7 @@ async function recordHit(userId: string, action: RateLimitAction): Promise<void>
  */
 function refuse(res: any, key: string, action: RateLimitAction, check: RateCheck) {
   console.warn(`[rate-limit] refused ${action} for user ${key}: ${check.used}/${check.max} in ${RATE_LIMITS[action].windowMinutes}m`);
+  recordRefusal(res.req, action, "volume");
   const body: RateLimitedBody = {
     message: RATE_LIMITS[action].message,
     code: RATE_LIMITED,
@@ -390,6 +459,7 @@ export function rateLimit(action: RateLimitAction): RequestHandler {
        * "write something different", not "try again later", and no Retry-After
        * would be honest.
        */
+      recordRefusal(req, action, "duplicate");
       return res.status(409).json({ message: rule.message, code: "duplicate_content" });
     }
 
@@ -495,7 +565,13 @@ async function snapshotOf(targetType: ReportTarget, targetId: string): Promise<{
     }
     if (targetType === "feed_post") {
       const [r] = await db.select().from(feedPosts).where(eq(feedPosts.id, targetId));
-      return r ? { text: trim((r as any).content), ownerId: (r as any).authorId, projectId: null }
+      return r ? { text: trim(r.content), ownerId: r.authorId, projectId: r.projectId ?? null }
+               : { text: null, ownerId: null, projectId: null };
+    }
+    if (targetType === "feed_comment") {
+      const [r] = await db.select({ content: feedComments.content, authorId: feedComments.authorId, projectId: feedPosts.projectId })
+        .from(feedComments).innerJoin(feedPosts, eq(feedPosts.id, feedComments.postId)).where(eq(feedComments.id, targetId));
+      return r ? { text: trim(r.content), ownerId: r.authorId, projectId: r.projectId ?? null }
                : { text: null, ownerId: null, projectId: null };
     }
     if (targetType === "project") {
@@ -545,7 +621,7 @@ export async function logModeration(entry: {
 
 export function registerModerationRoutes(app: Express) {
   /** Filing a report. Rate limited like any other write. */
-  app.post("/api/reports", isAuthenticated, rateLimit("report"), async (req: any, res) => {
+  app.post("/api/reports", isAuthenticated, rateLimit("report"), rateLimit("reportDaily"), async (req: any, res) => {
     try {
       const targetType = String(req.body?.targetType || "") as ReportTarget;
       const targetId = String(req.body?.targetId || "");
@@ -558,6 +634,10 @@ export function registerModerationRoutes(app: Express) {
       if (!(REPORT_REASON_IDS as readonly string[]).includes(reason)) {
         return res.status(400).json({ message: "Pick a reason" });
       }
+      // The second click, when the form sent one: it has to belong to the reason.
+      const detail = req.body?.detail == null || req.body.detail === "" ? null : String(req.body.detail);
+      const detailLabel = detail ? reportDetailLabel(reason, detail) : null;
+      if (detail && !detailLabel) return res.status(400).json({ message: "Pick one of the options for that reason" });
 
       const snap = await snapshotOf(targetType, targetId);
       if (snap.ownerId === req.user.id) {
@@ -570,7 +650,7 @@ export function registerModerationRoutes(app: Express) {
         targetOwnerId: snap.ownerId,
         projectId: snap.projectId,
         reason,
-        note: String(req.body?.note || "").trim().slice(0, REPORT_NOTE_MAX) || null,
+        note: [detailLabel, String(req.body?.note || "").trim().slice(0, REPORT_NOTE_MAX)].filter(Boolean).join(" — ") || null,
         snapshot: snap.text,
       }).onConflictDoNothing({
         target: [contentReports.reporterId, contentReports.targetType, contentReports.targetId],
@@ -590,6 +670,7 @@ export function registerModerationRoutes(app: Express) {
     check_in: { table: projectCheckIns, author: projectCheckIns.userId },
     comment: { table: projectComments, author: projectComments.authorId },
     feed_post: { table: feedPosts, author: feedPosts.authorId },
+    feed_comment: { table: feedComments, author: feedComments.authorId },
   };
 
   app.get("/api/admin/reports", isAuthenticated, requireReviewer, async (req: any, res) => {
@@ -636,6 +717,12 @@ export function registerModerationRoutes(app: Express) {
         targetHiddenMode: r.report.targetType === "comment" ? await commentMode(r.report.targetId) : null,
         /** Decided through `/act` (action + reason code) rather than the older buttons. */
         actionable: isActionableTarget(r.report.targetType),
+        /** Where a reported post or post comment can be read: the post's own page. */
+        targetPostId: r.report.targetType === "feed_post"
+          ? r.report.targetId
+          : r.report.targetType === "feed_comment"
+            ? (await db.select({ postId: feedComments.postId }).from(feedComments).where(eq(feedComments.id, r.report.targetId)))[0]?.postId ?? null
+            : null,
       }))));
     } catch (error) {
       console.error("Report queue error:", error);

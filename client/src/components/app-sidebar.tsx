@@ -1,3 +1,4 @@
+import { PinnedBadges } from "@/components/pinned-badges";
 import {
   Sidebar,
   SidebarContent,
@@ -10,7 +11,7 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
 } from "@/components/ui/sidebar";
-import { Inbox, Home, Compass, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles, MessageSquare, Handshake } from "lucide-react";
+import { Inbox, Home, Compass, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles, MessageSquare, Handshake, ShieldCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -59,6 +60,14 @@ export function AppSidebar() {
   });
   const unreadCount = unreadData?.count || 0;
 
+  // Reviewers get the daily safety review, badged when alerts are waiting or a review is due.
+  const isReviewer = !!user && ["reviewer", "admin"].includes((user as any).platformRole);
+  const { data: safety } = useQuery<{ reviewDue: boolean; alerts: number }>({
+    queryKey: ["/api/admin/safety/status"],
+    enabled: isReviewer,
+    refetchInterval: 5 * 60_000,
+  });
+
   const progressPercent = isUnlimited || creditsLimit <= 0
     ? 0
     : Math.min(100, (creditsUsed / creditsLimit) * 100);
@@ -98,6 +107,36 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+        {isReviewer && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Admin</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={location === "/admin/safety"}
+                    className="data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground"
+                  >
+                    <Link href="/admin/safety" data-testid="link-safety-review">
+                      <ShieldCheck className="h-4 w-4" />
+                      <span className="flex-1">Safety review</span>
+                      {safety && (safety.alerts > 0 || safety.reviewDue) && (
+                        <Badge
+                          variant={safety.alerts > 0 ? "destructive" : "secondary"}
+                          className="no-default-hover-elevate no-default-active-elevate text-xs"
+                          data-testid="badge-safety"
+                        >
+                          {safety.alerts > 0 ? safety.alerts : "Due"}
+                        </Badge>
+                      )}
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
         <SidebarGroup>
           <SidebarGroupContent>
             <div className="px-2">
@@ -154,6 +193,8 @@ export function AppSidebar() {
                 </div>
               </Link>
             </SidebarMenuButton>
+            {/* Your chosen badges under your name — outside the profile link, so each opens its own project. */}
+            <PinnedBadges userId={user?.id} size="xs" max={5} className="pl-[3.25rem] -mt-1 pb-1" />
           </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton

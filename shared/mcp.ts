@@ -148,7 +148,9 @@ export const NOVA_MCP_TOOLS: NovaMcpTool[] = [
     name: "nova_loops",
     title: "The product's loops",
     description:
-      "The loops this product runs on — the sequences someone actually repeats — and how far each has got. " +
+      "The loops this business runs on — the sequences someone actually repeats — and how far each has got. " +
+      "Every loop has a `type`: a business needs one each of `growth`, `retention`, `revenue` and `referral`, and one or more `product` loops. `coverage` lists the kinds still `missing` or `unwritten`; the core-loop milestone isn't done until both are empty. " +
+      "Each loop may carry `closure` from the latest codebase audit — `closed`, `open` (with `breaksAt` and `fix`) or `not-built` — and `competition` is Nova's latest read of the loops against competitors, with a score per loop. " +
       "`state` says which: `unwritten` (a name and nothing else), `written` (the sequence is described), then `planned`, `building`, `built` once it has steps. " +
       "Also returns `rejected`: titles the builder has already said aren't loops. Never propose one of those again, in any wording. " +
       "Read this before doing anything with the core-loop milestone — those loops are what it's asking for.",
@@ -161,8 +163,8 @@ export const NOVA_MCP_TOOLS: NovaMcpTool[] = [
     name: "nova_add_loop",
     title: "Add a loop",
     description:
-      "Record another loop under the core-loop milestone. Six is the cap — a month's work doesn't hold more. " +
-      "A loop is a sequence the same person repeats and gets something from each time, not a feature and not a one-off. " +
+      "Record another loop under the core-loop milestone. Give its `type`: only `product` loops come in more than one (up to four); a second growth, retention, revenue or referral loop is refused — rewrite the existing one instead. Eight is the cap. " +
+      "A loop is a sequence that feeds its own start again, not a feature and not a one-off; say what closes it. " +
       "Propose it to the builder in their own product's words and let them confirm; a path full of loops nobody chose is worse than an empty one.",
     readOnly: false,
     inputSchema: {
@@ -170,6 +172,7 @@ export const NOVA_MCP_TOOLS: NovaMcpTool[] = [
       properties: {
         ...projectId,
         title: { type: "string", description: "Short name, in the product's own words — \"Explore\", \"Weekly check-in\"." },
+        type: { type: "string", enum: ["product", "growth", "retention", "revenue", "referral"], description: "What kind of loop. Defaults to product." },
         description: { type: "string", description: "The 3–5 step sequence, written out: open X → see Y → do Z → come back." },
         sourceId: { type: "string", description: "The milestone the loops hang off. Defaults to this path's core-loop milestone." },
       },
@@ -335,6 +338,7 @@ export const NOVA_MCP_TOOLS: NovaMcpTool[] = [
     description:
       "The full audit: Nova reads the whole tree and reconciles it against the plan — what stage this really is, which capabilities " +
       "exist, what's missing, and which milestones the board claims but the code doesn't support. " +
+      "It also catches the project up with work done since the last audit: it records shipped work as finished tasks, closes cards the code shows are done and checks off path milestones on its own (unless the builder turned that off), and leaves brief, loop and new-task changes waiting in the web app. `autoApplied` lists what it changed. " +
       "Expensive and slow (a model reads the repository), so run it at a checkpoint, not per edit. nova_verify is the per-change tool.",
     collectsFiles: true,
     readOnly: false,

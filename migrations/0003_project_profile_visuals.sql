@@ -1,0 +1,1 @@
+ALTER TABLE "projects" ADD COLUMN "profile_visuals" jsonb DEFAULT '{}'::jsonb;

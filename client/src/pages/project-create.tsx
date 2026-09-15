@@ -1,3 +1,4 @@
+import { withoutEdited, renameInText } from "@shared/project-draft";
 import { errorText } from "@/lib/api-error";
 import { useState, useRef, useEffect } from "react";
 import { useMutation } from "@tanstack/react-query";
@@ -196,6 +197,10 @@ export default function ProjectCreate() {
   const [input, setInput] = useState("");
   const [roleSelectKey, setRoleSelectKey] = useState(0);
   const [uploadedImages, setUploadedImages] = useState<{ path: string; preview: string }[]>([]);
+  // Fields the builder changed by hand — Nova's later updates leave them alone —
+  // and every name Nova proposed, so a rename can be carried into its text.
+  const [edited, setEdited] = useState<string[]>([]);
+  const [novaTitles, setNovaTitles] = useState<string[]>([]);
   const [projectData, setProjectData] = useState<Partial<Project>>({
     title: "",
     description: "",
@@ -211,6 +216,24 @@ export default function ProjectCreate() {
   });
 
   const soloMode = !!projectData.soloMode;
+
+  /** A field the builder changed by hand: from now on it's theirs, not Nova's. */
+  const markEdited = (...keys: string[]) => setEdited((prev) => [...new Set([...prev, ...keys])]);
+  const editField = (key: keyof Project, value: unknown) => {
+    markEdited(String(key));
+    setProjectData((prev) => ({ ...prev, [key]: value }));
+  };
+
+  /**
+   * On create: if the builder renamed the project, Nova's old names come out of
+   * the description it wrote — or every later Nova step reads the old name back.
+   */
+  const withBuildersName = (data: Partial<Project>): Partial<Project> => {
+    const name = (data.title ?? "").trim();
+    let description = data.description ?? "";
+    for (const old of novaTitles) description = renameInText(description, old, name);
+    return { ...data, description };
+  };
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -236,6 +259,8 @@ export default function ProjectCreate() {
         const d = JSON.parse(raw);
         if (Array.isArray(d.messages) && d.messages.length) { setMessages(d.messages); setShowIntro(false); }
         if (d.projectData && typeof d.projectData === "object") setProjectData((prev) => ({ ...prev, ...d.projectData }));
+        if (Array.isArray(d.edited)) setEdited(d.edited.map(String));
+        if (Array.isArray(d.novaTitles)) setNovaTitles(d.novaTitles.map(String));
       }
     } catch { /* a corrupt draft is not worth a crash */ }
     setDraftRestored(true);
@@ -244,9 +269,9 @@ export default function ProjectCreate() {
   useEffect(() => {
     if (!draftKey || !draftRestored) return;
     try {
-      localStorage.setItem(draftKey, JSON.stringify({ messages, projectData, savedAt: Date.now() }));
+      localStorage.setItem(draftKey, JSON.stringify({ messages, projectData, edited, novaTitles, savedAt: Date.now() }));
     } catch { /* storage full or blocked: the page still works, it just won't remember */ }
-  }, [draftKey, draftRestored, messages, projectData]);
+  }, [draftKey, draftRestored, messages, projectData, edited, novaTitles]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -273,14 +298,24 @@ export default function ProjectCreate() {
       const res = await apiRequest("POST", "/api/chat", {
         message,
         history: messages,
+        // What the form says now, and what the builder typed themselves — so Nova
+        // uses their name for the project, not the one it suggested.
+        currentProject: {
+          title: projectData.title, description: projectData.description, category: projectData.category,
+          goal: projectData.goal, subcategory: projectData.subcategory,
+        },
+        edited,
       });
       return res.json();
     },
     onSuccess: (data) => {
       setMessages((prev) => [...prev, { role: "assistant", content: data.reply }]);
       if (data.projectUpdates) {
+        const proposed = typeof data.projectUpdates.title === "string" ? data.projectUpdates.title.trim() : "";
+        if (proposed) setNovaTitles((prev) => (prev.includes(proposed) ? prev : [...prev, proposed]));
         setProjectData((prev) => {
-          const updates = { ...data.projectUpdates };
+          // Nova never overwrites what the builder typed — the project's name above all.
+          const updates: Record<string, any> = withoutEdited(data.projectUpdates, edited);
           // Nova doesn't know about Solo Builder Mode, so don't let it
           // reintroduce roles or a bigger team behind the user's back.
           if (prev.soloMode) {
@@ -356,6 +391,7 @@ export default function ProjectCreate() {
 
   const handleAddRole = (role: string) => {
     if (projectData.rolesNeeded?.includes(role)) return;
+    markEdited("rolesNeeded");
     setProjectData((prev) => ({
       ...prev,
       rolesNeeded: [...(prev.rolesNeeded || []), role],
@@ -364,6 +400,7 @@ export default function ProjectCreate() {
   };
 
   const handleRemoveRole = (role: string) => {
+    markEdited("rolesNeeded");
     setProjectData((prev) => ({
       ...prev,
       rolesNeeded: (prev.rolesNeeded || []).filter((r) => r !== role),
@@ -562,7 +599,7 @@ export default function ProjectCreate() {
                 <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Project Title</label>
                 <Input
                   value={projectData.title || ""}
-                  onChange={(e) => setProjectData({ ...projectData, title: e.target.value })}
+                  onChange={(e) => editField("title", e.target.value)}
                   placeholder="My Awesome Project"
                   className="mt-1"
                   data-testid="input-project-title"
@@ -572,7 +609,7 @@ export default function ProjectCreate() {
                 <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Description</label>
                 <Textarea
                   value={projectData.description || ""}
-                  onChange={(e) => setProjectData({ ...projectData, description: e.target.value })}
+                  onChange={(e) => editField("description", e.target.value)}
                   placeholder="What are you building?"
                   className="mt-1 min-h-[80px]"
                   data-testid="textarea-project-description"
@@ -585,7 +622,7 @@ export default function ProjectCreate() {
                   </label>
                   <Select
                     value={projectData.category || ""}
-                    onValueChange={(val) => setProjectData({ ...projectData, category: val })}
+                    onValueChange={(val) => editField("category", val)}
                   >
                     <SelectTrigger className="mt-1" data-testid="select-project-category">
                       <SelectValue placeholder="Select..." />
@@ -650,7 +687,7 @@ export default function ProjectCreate() {
                     type="number"
                     value={projectData.teamSize ?? ""}
                     onChange={(e) =>
-                      setProjectData({ ...projectData, teamSize: e.target.value ? parseInt(e.target.value) : 1 })
+                      editField("teamSize", e.target.value ? parseInt(e.target.value) : 1)
                     }
                     className="mt-1"
                     disabled={soloMode}
@@ -666,7 +703,7 @@ export default function ProjectCreate() {
                   type="number"
                   value={projectData.estimatedWeeks ?? ""}
                   onChange={(e) =>
-                    setProjectData({ ...projectData, estimatedWeeks: e.target.value ? parseInt(e.target.value) : 4 })
+                    editField("estimatedWeeks", e.target.value ? parseInt(e.target.value) : 4)
                   }
                   className="mt-1"
                   data-testid="input-project-weeks"
@@ -723,10 +760,10 @@ export default function ProjectCreate() {
                     <Badge key={tech} variant="outline" className="text-xs flex items-center gap-1 border-purple-500/30 text-purple-600 dark:text-purple-400" data-testid={`badge-tech-${tech}`}>
                       {tech}
                       <button
-                        onClick={() => setProjectData((prev) => ({
+                        onClick={() => { markEdited("techStack"); setProjectData((prev) => ({
                           ...prev,
                           techStack: (prev.techStack || []).filter((t) => t !== tech),
-                        }))}
+                        })); }}
                         className="ml-0.5"
                         data-testid={`button-remove-tech-${tech}`}
                       >
@@ -744,6 +781,7 @@ export default function ProjectCreate() {
                       e.preventDefault();
                       const val = e.currentTarget.value.trim();
                       if (val && !(projectData.techStack || []).includes(val)) {
+                        markEdited("techStack");
                         setProjectData((prev) => ({
                           ...prev,
                           techStack: [...(prev.techStack || []), val],
@@ -810,7 +848,7 @@ export default function ProjectCreate() {
                   <SiGithub className="h-4 w-4 text-muted-foreground shrink-0" />
                   <Input
                     value={projectData.repoUrl || ""}
-                    onChange={(e) => setProjectData({ ...projectData, repoUrl: e.target.value })}
+                    onChange={(e) => editField("repoUrl", e.target.value)}
                     placeholder="https://github.com/user/repo"
                     className="text-xs h-8"
                     data-testid="input-github-url"
@@ -820,7 +858,7 @@ export default function ProjectCreate() {
                   <Globe className="h-4 w-4 text-muted-foreground shrink-0" />
                   <Input
                     value={projectData.liveUrl || ""}
-                    onChange={(e) => setProjectData({ ...projectData, liveUrl: e.target.value })}
+                    onChange={(e) => editField("liveUrl", e.target.value)}
                     placeholder="Live demo, Replit, or Colab link"
                     className="text-xs h-8"
                     data-testid="input-live-url"
@@ -878,7 +916,7 @@ export default function ProjectCreate() {
                     return (
                       <button
                         key={g.id} type="button"
-                        onClick={() => setProjectData({ ...projectData, goal: g.id, subcategory: isValidSubcategory(g.id, projectData.subcategory) ? projectData.subcategory : undefined })}
+                        onClick={() => { markEdited("goal", "subcategory"); setProjectData({ ...projectData, goal: g.id, subcategory: isValidSubcategory(g.id, projectData.subcategory) ? projectData.subcategory : undefined }); }}
                         className={`text-left rounded-md border px-3 py-2 transition-colors ${
                           active ? "border-primary bg-primary/10" : "border-border hover:bg-accent"
                         }`}
@@ -911,7 +949,7 @@ export default function ProjectCreate() {
                       return (
                         <button
                           key={sc.id} type="button"
-                          onClick={() => setProjectData({ ...projectData, subcategory: sc.id })}
+                          onClick={() => editField("subcategory", sc.id)}
                           className={`rounded-full border px-3 py-1 text-sm transition-colors ${
                             active ? "border-primary bg-primary/10 font-medium" : "border-border hover:bg-accent"
                           }`}
@@ -976,7 +1014,7 @@ export default function ProjectCreate() {
             </Button>
           ) : (
             <Button
-              onClick={() => createMutation.mutate(projectData)}
+              onClick={() => createMutation.mutate(withBuildersName(projectData))}
               disabled={!projectData.title || !projectData.description || !isValidSubcategory(projectData.goal, projectData.subcategory) || createMutation.isPending}
               data-testid="button-create-project"
             >

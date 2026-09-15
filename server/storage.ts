@@ -76,6 +76,7 @@ import {
   feedPosts,
   feedReactions,
   feedComments,
+  feedCommentReactions,
   type FeedPost,
   type InsertFeedPost,
   type FeedComment,
@@ -203,6 +204,18 @@ export interface ProjectCommentWithAuthor extends ProjectComment {
   viewerReacted: boolean;
 }
 
+/** A comment on a post, with its author, its reactions, and its place in the thread. */
+export interface FeedCommentWithDetails extends FeedComment {
+  author: User;
+  profile?: UserProfile;
+  viewerReaction: string | null;
+  reactionBreakdown: { reaction: string; count: number }[];
+  /** Taken down: only its author still gets it, with this set. */
+  hidden: boolean;
+  /** Deleted by its author while it had replies: a placeholder that holds the thread together. */
+  deleted: boolean;
+}
+
 /** A feed post with everything a card renders, resolved in one pass. */
 export interface FeedPostWithDetails extends FeedPost {
   author: User;
@@ -212,6 +225,10 @@ export interface FeedPostWithDetails extends FeedPost {
   /** The viewing user's own reaction, or null. */
   viewerReaction: string | null;
   reactionBreakdown: { reaction: string; count: number }[];
+  /** The viewer is on the post's project, so can act on its feedback. */
+  viewerIsTeam: boolean;
+  /** Feedback this update said it acted on: who gave it. */
+  credits: { commentId: string; authorId: string; name: string }[];
 }
 
 export interface IStorage {
@@ -486,7 +503,8 @@ export interface IStorage {
   getFeedPost(id: string, viewerId?: string): Promise<FeedPostWithDetails | undefined>;
   deleteFeedPost(id: string, authorId: string): Promise<boolean>;
   setFeedReaction(postId: string, userId: string, reaction: string | null): Promise<{ reactionCount: number; viewerReaction: string | null }>;
-  getFeedComments(postId: string): Promise<(FeedComment & { author: User; profile?: UserProfile })[]>;
+  getFeedComments(postId: string, viewerId?: string): Promise<FeedCommentWithDetails[]>;
+  setFeedCommentReaction(commentId: string, userId: string, reaction: string | null): Promise<{ reactionCount: number; viewerReaction: string | null }>;
   createFeedComment(data: InsertFeedComment): Promise<FeedComment>;
   deleteFeedComment(id: string, authorId: string): Promise<boolean>;
 
@@ -1507,6 +1525,15 @@ export class DatabaseStorage implements IStorage {
       .where(eq(feedReactions.postId, post.id))
       .groupBy(feedReactions.reaction);
 
+    const viewerIsTeam = !!(viewerId && project && (project.ownerId === viewerId
+      || (await db.select({ id: projectMembers.id }).from(projectMembers).where(and(eq(projectMembers.projectId, project.id), eq(projectMembers.userId, viewerId)))).length > 0));
+    const creditRows = await db
+      .select({ commentId: feedComments.id, authorId: feedComments.authorId, firstName: users.firstName, lastName: users.lastName, email: users.email, displayName: userProfiles.displayName })
+      .from(feedComments)
+      .innerJoin(users, eq(users.id, feedComments.authorId))
+      .leftJoin(userProfiles, eq(userProfiles.userId, users.id))
+      .where(eq(feedComments.closedByPostId, post.id));
+
     return {
       ...post,
       author,
@@ -1514,6 +1541,11 @@ export class DatabaseStorage implements IStorage {
       project: project ? { id: project.id, title: project.title, isPrivate: project.isPrivate } : null,
       viewerReaction,
       reactionBreakdown: breakdownRows.map((r) => ({ reaction: r.reaction, count: r.count })),
+      viewerIsTeam,
+      credits: creditRows.map((r) => ({
+        commentId: r.commentId, authorId: r.authorId,
+        name: r.displayName || [r.firstName, r.lastName].filter(Boolean).join(" ") || r.email || "Someone",
+      })),
     };
   }
 
@@ -1552,18 +1584,59 @@ export class DatabaseStorage implements IStorage {
     return { reactionCount: count, viewerReaction: reaction };
   }
 
-  async getFeedComments(postId: string) {
+  /**
+   * A post's comments, oldest first, flat — each carries `parentCommentId`, and
+   * the client builds the tree. A comment taken down is gone for everyone but
+   * its author; one its author deleted under replies stays as an empty
+   * placeholder so the replies keep their place.
+   */
+  async getFeedComments(postId: string, viewerId?: string): Promise<FeedCommentWithDetails[]> {
     const rows = await db
       .select()
       .from(feedComments)
       .where(eq(feedComments.postId, postId))
       .orderBy(asc(feedComments.createdAt));
+    const visible = rows.filter((c) => !c.hiddenAt || c.authorId === viewerId);
+    const ids = visible.map((c) => c.id);
 
-    return Promise.all(rows.map(async (c) => {
+    const breakdown = ids.length
+      ? await db.select({ commentId: feedCommentReactions.commentId, reaction: feedCommentReactions.reaction, count: sql<number>`count(*)::int` })
+        .from(feedCommentReactions).where(inArray(feedCommentReactions.commentId, ids))
+        .groupBy(feedCommentReactions.commentId, feedCommentReactions.reaction)
+      : [];
+    const mine = ids.length && viewerId
+      ? await db.select({ commentId: feedCommentReactions.commentId, reaction: feedCommentReactions.reaction })
+        .from(feedCommentReactions).where(and(inArray(feedCommentReactions.commentId, ids), eq(feedCommentReactions.userId, viewerId)))
+      : [];
+
+    return Promise.all(visible.map(async (c) => {
       const [author] = await db.select().from(users).where(eq(users.id, c.authorId));
       const profile = await this.getUserProfile(c.authorId);
-      return { ...c, author, profile };
+      const deleted = !!c.deletedAt;
+      return {
+        ...c,
+        content: deleted ? "" : c.content,
+        mentions: deleted ? [] : c.mentions,
+        author, profile,
+        viewerReaction: mine.find((m) => m.commentId === c.id)?.reaction ?? null,
+        reactionBreakdown: breakdown.filter((b) => b.commentId === c.id).map((b) => ({ reaction: b.reaction, count: b.count })),
+        hidden: !!c.hiddenAt,
+        deleted,
+      };
     }));
+  }
+
+  /** Same toggle as a post's reaction, on one comment. */
+  async setFeedCommentReaction(commentId: string, userId: string, reaction: string | null) {
+    if (reaction === null) {
+      await db.delete(feedCommentReactions).where(and(eq(feedCommentReactions.commentId, commentId), eq(feedCommentReactions.userId, userId)));
+    } else {
+      await db.insert(feedCommentReactions).values({ commentId, userId, reaction: reaction as any })
+        .onConflictDoUpdate({ target: [feedCommentReactions.commentId, feedCommentReactions.userId], set: { reaction: reaction as any } });
+    }
+    const [{ count }] = await db.select({ count: sql<number>`count(*)::int` }).from(feedCommentReactions).where(eq(feedCommentReactions.commentId, commentId));
+    await db.update(feedComments).set({ reactionCount: count }).where(eq(feedComments.id, commentId));
+    return { reactionCount: count, viewerReaction: reaction };
   }
 
   async createFeedComment(data: InsertFeedComment): Promise<FeedComment> {
@@ -1576,6 +1649,15 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteFeedComment(id: string, authorId: string): Promise<boolean> {
+    // With replies under it, the text goes and the row stays, so the thread doesn't lose its middle.
+    const [reply] = await db.select({ id: feedComments.id }).from(feedComments).where(eq(feedComments.parentCommentId, id)).limit(1);
+    if (reply) {
+      const cleared = await db.update(feedComments)
+        .set({ deletedAt: new Date(), content: "", mentions: [] })
+        .where(and(eq(feedComments.id, id), eq(feedComments.authorId, authorId), isNull(feedComments.deletedAt)))
+        .returning();
+      return cleared.length > 0;
+    }
     const deleted = await db
       .delete(feedComments)
       .where(and(eq(feedComments.id, id), eq(feedComments.authorId, authorId)))

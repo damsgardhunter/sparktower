@@ -14,8 +14,9 @@
  *  - Message appears once you're connected, opens already written from why you
  *    were matched, and sends in one tap.
  *
- * Every success is also an Explore event (shared/explore-events.ts), with the
- * page and the card's position, so the loop's numbers count these too.
+ * Every success is also an Explore event (shared/explore-events.ts), recorded
+ * by the endpoint that did it; the card's page and position ride along in the
+ * request as `explore`, so the loop's numbers count these too.
  */
 import { errorText } from "@/lib/api-error";
 import { useState } from "react";
@@ -30,10 +31,10 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { Check, Heart, Loader2, MessageSquare, UserPlus } from "lucide-react";
-import { trackExplore } from "@/lib/explore";
+import { exploreContext } from "@/lib/explore";
 import { messageTemplates } from "@/lib/message-templates";
 import { markSeen } from "@/lib/seen";
-import { EXPLORE_EVENTS, type ExploreSource } from "@shared/explore-events";
+import { type ExploreSource } from "@shared/explore-events";
 import { CONNECTION_NOTE_MAX } from "@shared/moderation";
 
 export type ConnectionStateName = "none" | "requested" | "incoming" | "connected" | "declined";
@@ -91,17 +92,17 @@ export function BuilderActions({ userId, name, reason, headline, connection, exp
   const [templateId, setTemplateId] = useState(templates[0].id);
   const [draft, setDraft] = useState(templates[0].body);
 
-  const target = { matchType: "builder" as const, targetId: userId, source: explore?.source, rankPosition: explore?.rankPosition };
+  // Sent with each action so the event its endpoint records knows where it came from.
+  const context = () => (explore ? exploreContext(explore.source, explore.rankPosition) : undefined);
   const settle = async () => {
     await qc.invalidateQueries({ queryKey: ["/api/connections/statuses"] });
     setPending(null);
   };
 
   const connect = useMutation({
-    mutationFn: async () => (await apiRequest("POST", "/api/connections/request", { userId, note: note.trim() || undefined })).json(),
+    mutationFn: async () => (await apiRequest("POST", "/api/connections/request", { userId, note: note.trim() || undefined, explore: context() })).json(),
     onMutate: () => { setPending("requested"); setConnectOpen(false); },
     onSuccess: () => {
-      if (explore) trackExplore(EXPLORE_EVENTS.connectRequest, target);
       markSeen("builder", userId);
       // The nudge: right after acting is when "more like this" is a real offer.
       toast({
@@ -141,9 +142,8 @@ export function BuilderActions({ userId, name, reason, headline, connection, exp
   });
 
   const send = useMutation({
-    mutationFn: async (content: string) => (await apiRequest("POST", `/api/messages/${userId}`, { content })).json(),
+    mutationFn: async (content: string) => (await apiRequest("POST", `/api/messages/${userId}`, { content, explore: context() })).json(),
     onSuccess: () => {
-      if (explore) trackExplore(EXPLORE_EVENTS.messageSent, target);
       markSeen("builder", userId);
       setMessageOpen(false);
       void qc.invalidateQueries({ queryKey: ["/api/messages", userId] });
@@ -254,7 +254,10 @@ export function ProjectFollowButton({ projectId, title, following, explore, more
 
   const follow = useMutation({
     mutationFn: async (want: boolean) =>
-      (await apiRequest("POST", `/api/projects/${projectId}/follow`, { following: want })).json() as Promise<{ following: boolean }>,
+      (await apiRequest("POST", `/api/projects/${projectId}/follow`, {
+        following: want,
+        explore: explore ? exploreContext(explore.source, explore.rankPosition) : undefined,
+      })).json() as Promise<{ following: boolean }>,
     // Instant: the followed list is changed now, and put back if the server refuses.
     onMutate: async (want) => {
       await qc.cancelQueries({ queryKey: FOLLOWED });
@@ -271,9 +274,6 @@ export function ProjectFollowButton({ projectId, title, following, explore, more
       if (!want) {
         toast({ title: `Unfollowed ${title}` });
         return;
-      }
-      if (explore) {
-        trackExplore(EXPLORE_EVENTS.follow, { matchType: "project", targetId: projectId, source: explore.source, rankPosition: explore.rankPosition });
       }
       markSeen("project", projectId);
       toast({
@@ -334,7 +334,7 @@ export function FollowBuilderButton({ userId, source = "profile_page" }: { userI
 
   const follow = useMutation({
     mutationFn: async (want: boolean) =>
-      (await apiRequest("POST", `/api/users/${userId}/follow`, { following: want })).json() as Promise<{ following: boolean; followers: number }>,
+      (await apiRequest("POST", `/api/users/${userId}/follow`, { following: want, explore: exploreContext(source) })).json() as Promise<{ following: boolean; followers: number }>,
     onMutate: async (want) => {
       await qc.cancelQueries({ queryKey: key });
       const before = qc.getQueryData(key);
@@ -352,7 +352,6 @@ export function FollowBuilderButton({ userId, source = "profile_page" }: { userI
         toast({ title: `Unfollowed ${name}` });
         return;
       }
-      trackExplore(EXPLORE_EVENTS.follow, { matchType: "builder", targetId: userId, source });
       markSeen("builder", userId);
       toast({
         title: `Following ${name}`,

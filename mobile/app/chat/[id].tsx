@@ -3,6 +3,7 @@ import { FlatList, KeyboardAvoidingView, Platform, StyleSheet, Text, View } from
 import { useLocalSearchParams, Stack } from "expo-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
+import { exploreContext } from "../../src/explore";
 import { useAuth } from "../../src/auth/AuthContext";
 import { colors, font, radius, spacing } from "../../src/theme";
 import { Btn, Empty, Field, Loading, Meta, Row, timeAgo } from "../../src/components/ui";
@@ -30,7 +31,7 @@ export default function Chat() {
   }, [id]);
 
   const send = useMutation({
-    mutationFn: () => api(`/api/messages/${id}`, { method: "POST", body: { content: text.trim() } }),
+    mutationFn: () => api(`/api/messages/${id}`, { method: "POST", body: { content: text.trim(), explore: exploreContext("messages") } }),
     onSuccess: () => {
       setText("");
       qc.invalidateQueries({ queryKey: ["messages", id] });

@@ -368,7 +368,35 @@ export function badgeLevelForAmount(amountCents: number): BadgeLevelDef {
   return earned ?? BADGE_LEVELS[0];
 }
 
-export const badgeLevel = (key: string) => BADGE_LEVELS.find((l) => l.key === key);
+/**
+ * Nova's gradient, as it glows behind Nova on the create-project screen:
+ * green → emerald → purple, top-left to bottom-right. The creator badge wears
+ * it, so a founder's badge reads as made with Nova, not bought.
+ */
+export const NOVA_GRADIENT = ["#4ade80", "#10b981", "#a855f7"] as const;
+export const NOVA_GRADIENT_CSS = `linear-gradient(135deg, ${NOVA_GRADIENT.join(", ")})`;
+
+/**
+ * The badge a creator holds for a project they started. Not bought, so it has
+ * no amount and is never one of the backer levels — it's how a profile says
+ * "I built this" next to "I backed that".
+ */
+export const FOUNDER_LEVEL: BadgeLevelDef = {
+  key: "founder", label: "Creator", minCents: Number.MAX_SAFE_INTEGER,
+  metal: `glossy enamel flowing in a smooth diagonal gradient from bright green (${NOVA_GRADIENT[0]}) through emerald (${NOVA_GRADIENT[1]}) to vivid purple (${NOVA_GRADIENT[2]}), top-left to bottom-right, set in a thin polished silver rim`,
+  hex: NOVA_GRADIENT[1], accentHex: NOVA_GRADIENT[2],
+};
+
+export const isCreatorBadge = (level: string) => level === FOUNDER_LEVEL.key;
+
+/** The ring around a badge: the creator badge's is Nova's gradient, a backer's is its metal. */
+export function badgeRingStyle(level: string): { background?: string; borderColor?: string } {
+  if (isCreatorBadge(level)) return { background: NOVA_GRADIENT_CSS };
+  const def = [...BADGE_LEVELS].find((l) => l.key === level);
+  return { borderColor: def?.hex ?? BADGE_LEVELS[0].hex };
+}
+
+export const badgeLevel = (key: string) => [...BADGE_LEVELS, FOUNDER_LEVEL].find((l) => l.key === key);
 
 /** How many badges someone can pin across their profile. */
 export const MAX_SHOWCASE_BADGES = 5;

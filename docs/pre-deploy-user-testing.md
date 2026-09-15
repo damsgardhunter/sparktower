@@ -20,10 +20,13 @@ inviting people; fine to deploy behind a kill switch meanwhile.
   uncommitted: unguarded writes and `/api/seed` removed, reviewer and payout
   limits, Stripe refunds and webhook secret. Commit, open a PR, and let CI go
   green.
-- [ ] **Blocker — Schema pushed to production** (`drizzle-kit push`, reviewed).
-  New since the last deploy: `user_follows`, `mcp_tokens`, `connections.note`,
+- [ ] **Blocker — Production is on migrations.** Once: `npm run db:baseline`
+  against production, then `-- --apply`, then `npm run db:migrate` (see the
+  release checklist). The check will fail if production is missing anything
+  new since the last deploy — `user_follows`, `mcp_tokens`, `connections.note`,
   `project_comments.hidden_mode`, `moderation_log.reason_code` /
-  `previous_state` / `resulting_state`, `donations.refunded_amount`.
+  `previous_state` / `resulting_state`, `donations.refunded_amount` — in which
+  case push those first (`drizzle-kit push --verbose`, reviewed), then baseline.
 - [ ] **Blocker — The moderation log trigger is in place.** After boot, run
   `UPDATE moderation_log SET reason = reason WHERE false;` then try a real row;
   a real `UPDATE` must fail with *append-only*.
@@ -60,9 +63,9 @@ Runbook: [stripe-e2e.md](stripe-e2e.md).
 - [ ] **Should — Billing portal** opens and returns to the app.
 - [ ] **Should — One real card, small amount, in live mode**, then refund it.
   Test mode can't catch a live-mode key or webhook mix-up.
-- [ ] **Decision — Backing stays off** (`backing` kill switch, off by default)
-  until someone has walked pledge → hold → release, and pledge → refund, end to
-  end in test mode.
+- [ ] **Blocker — Walk backing end to end in test mode.** Backing is now on by
+  default (`backing` kill switch): pledge → hold → release, and pledge → refund.
+  If either path misbehaves, turn it off under Admin → Surfaces before launch.
 
 ## 2. Signing in and out — every way in
 

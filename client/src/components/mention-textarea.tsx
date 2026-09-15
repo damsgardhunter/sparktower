@@ -20,7 +20,7 @@ interface MentionCandidate {
  * display-name change never breaks an old post's links.
  */
 export function MentionTextarea({
-  value, onChange, mentions, onMentionsChange, placeholder, className, maxLength, testId,
+  value, onChange, mentions, onMentionsChange, placeholder, className, maxLength, testId, autoFocus,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -30,6 +30,7 @@ export function MentionTextarea({
   className?: string;
   maxLength?: number;
   testId?: string;
+  autoFocus?: boolean;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const [query, setQuery] = useState<string | null>(null);
@@ -96,6 +97,7 @@ export function MentionTextarea({
         maxLength={maxLength}
         placeholder={placeholder}
         className={className}
+        autoFocus={autoFocus}
         data-testid={testId}
         onChange={(e) => {
           onChange(e.target.value);
@@ -164,7 +166,7 @@ export function MentionTextarea({
  * Renders post text with **bold** spans and @mentions highlighted.
  * Mentions are matched against the stored list so only real tags light up.
  */
-export function FeedContent({ content, mentions }: { content: string; mentions: FeedMention[] }) {
+export function FeedContent({ content, mentions, className = "text-sm" }: { content: string; mentions: FeedMention[]; className?: string }) {
   const names = mentions.map((m) => m.name).filter(Boolean).sort((a, b) => b.length - a.length);
   // Longest names first so "@Ann Lee" wins over "@Ann".
   const pattern = names.length
@@ -174,7 +176,7 @@ export function FeedContent({ content, mentions }: { content: string; mentions: 
   const parts = content.split(pattern).filter((p) => p !== undefined && p !== "");
 
   return (
-    <p className="text-sm leading-relaxed whitespace-pre-line break-words">
+    <p className={`${className} leading-relaxed whitespace-pre-line break-words`}>
       {parts.map((part, i) => {
         if (part.startsWith("**") && part.endsWith("**")) {
           return <strong key={i}>{part.slice(2, -2)}</strong>;

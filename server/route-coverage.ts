@@ -277,7 +277,10 @@ export function buildRouteCoverage(files: RepoFile[]): RouteCoverage {
         guards,
         metering: analyzeMetering(body),
       });
-      if (rows.length >= 400) break;
+      // A ceiling against a pathological repo, not a budget: at 400 a real app
+      // outgrew it and every route past the line silently fell out of the
+      // guard checks — the routes registered last looked like they didn't exist.
+      if (rows.length >= 2000) break;
     }
   }
 

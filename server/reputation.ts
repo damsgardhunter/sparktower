@@ -1,3 +1,4 @@
+import { productNameNote } from "@shared/project-draft";
 import { type IStorage } from "./storage";
 import OpenAI from "openai";
 
@@ -151,7 +152,7 @@ async function calculateStrategicThinking(
   if (stats.ownedProjects.length > 0) {
     try {
       const projectSummaries = stats.ownedProjects.slice(0, 5).map(p => 
-        `Title: ${p.title}\nDescription: ${p.description || "N/A"}\nCategory: ${p.category}\nProblem: ${p.problemStatement || "N/A"}\nTarget: ${p.targetUser || "N/A"}\nOne-liner: ${(p as any).oneLiner || "N/A"}\nValue Prop: ${(p as any).valueProposition || "N/A"}`
+        `${productNameNote(p.title)}\nTitle: ${p.title}\nDescription: ${p.description || "N/A"}\nCategory: ${p.category}\nProblem: ${p.problemStatement || "N/A"}\nTarget: ${p.targetUser || "N/A"}\nOne-liner: ${(p as any).oneLiner || "N/A"}\nValue Prop: ${(p as any).valueProposition || "N/A"}`
       ).join("\n---\n");
 
       const response = await getOpenAI().chat.completions.create({

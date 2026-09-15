@@ -404,3 +404,10 @@
     inset 0 1px 3px hsl(0 0% 0% / 0.2),
     0 1px 1px hsl(0 0% 0% / 0.12);
 }
+
+/* The home rail scrolls on its own; a hairline scrollbar that only shows on hover keeps it quiet. */
+.home-rail-scroll { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+.home-rail-scroll:hover { scrollbar-color: hsl(var(--muted-foreground) / 0.35) transparent; }
+.home-rail-scroll::-webkit-scrollbar { width: 6px; }
+.home-rail-scroll::-webkit-scrollbar-thumb { background: transparent; border-radius: 3px; }
+.home-rail-scroll:hover::-webkit-scrollbar-thumb { background: hsl(var(--muted-foreground) / 0.35); }

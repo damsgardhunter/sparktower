@@ -31,7 +31,7 @@ import {
   pathStatus, milestoneDetail, pathTaskContext, latestWork, saveWork, collectArtifacts,
   reconcileMilestones, refreshPace, chooseWork, createLoop, deleteLoop, createExpansion, expansionSource,
 } from "./phase-trees";
-import { workKindFor, resolveTree } from "@shared/phase-trees";
+import { workKindFor, resolveTree, loopTypeOf, LOOP_CAP } from "@shared/phase-trees";
 import { produceWork, draftExpansionSteps, draftArtifact } from "./phase-trees-nova";
 import { buildOperableProjectState, applyProjectOperations } from "./project-operations";
 import { snapshotFromFiles } from "./code-ingest";
@@ -92,7 +92,7 @@ function takeFiles(res: Response, raw: unknown): { path?: unknown; content?: unk
  * doesn't depend on anyone having answered anything.
  */
 function loopShape(project: { goal: string; subcategory: string }) {
-  const all = resolveTree(project.goal as any, project.subcategory).flatMap((p) => p.milestones);
+  const all = resolveTree(project.goal as any, project.subcategory, (project as any).capitalRoute).flatMap((p) => p.milestones);
   const fanOut = all.find((m) => m.expandsFrom);
   if (!fanOut?.expandsFrom) return null;
   return {
@@ -103,8 +103,6 @@ function loopShape(project: { goal: string; subcategory: string }) {
   };
 }
 
-/** Six loops is already a lot for one month; the cap lives in createLoop. */
-const LOOP_CAP = 6;
 
 export function registerMcpRoutes(app: Express) {
   // --- token management, from the web app ---------------------------------
@@ -345,6 +343,14 @@ export function registerMcpRoutes(app: Express) {
         ...shape,
         loops: tree?.loops ?? [],
         unassigned: tree?.unassigned ?? [],
+        /**
+         * The five kinds a business needs — growth, retention, revenue,
+         * referral, product — and which are missing or still unwritten. The
+         * core-loop milestone isn't done until both lists are empty.
+         */
+        coverage: tree?.coverage ?? null,
+        /** Nova's latest competitive read of the loops, if one has been run. */
+        competition: tree?.competition ?? null,
         /** Titles the builder has already said aren't loops. Proposing them again is the mistake to avoid. */
         rejected: status.rejectedLoops,
         remaining: Math.max(0, LOOP_CAP - (tree?.loops.length ?? 0)),
@@ -363,8 +369,9 @@ export function registerMcpRoutes(app: Express) {
       const loop = await createLoop(ctx.projectId, str(req.body?.sourceId, 40) || shape.sourceId, {
         title: str(req.body?.title, 120),
         description: str(req.body?.description, 4000),
+        type: req.body?.type,
       });
-      res.json({ taskId: loop.id, title: loop.title, description: loop.description ?? "" });
+      res.json({ taskId: loop.id, title: loop.title, description: loop.description ?? "", type: loopTypeOf(loop.tags) });
     } catch (error: any) {
       if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code, field: error.field });
       console.error("MCP loop create error:", error);
@@ -492,7 +499,7 @@ export function registerMcpRoutes(app: Express) {
         .map((t) => ({ title: t.title, description: t.description ?? "", status: t.status }));
 
       const payload = await produceWork(
-        ent, workKindFor(taskCtx.actor),
+        ent, workKindFor(taskCtx.actor, taskCtx.milestone?.work),
         { title: taskCtx.task.title, description: taskCtx.task.description ?? taskCtx.milestone?.description ?? "", tier: taskCtx.tier },
         { goal: taskCtx.project.goal, subcategory: taskCtx.project.subcategory, state, artifacts, loops, rejectedLoops: project.rejectedLoops ?? [] },
       );
@@ -645,7 +652,7 @@ export function registerMcpRoutes(app: Express) {
 
       // The same verifiers, run again for the report. Cheap, and it means the
       // agent is told why something didn't pass rather than just that it didn't.
-      const tree = resolveTree(ctx.project.goal as any, ctx.project.subcategory);
+      const tree = resolveTree(ctx.project.goal as any, ctx.project.subcategory, (ctx.project as any).capitalRoute);
       const onPath = new Set(tree.flatMap((p) => p.milestones).map((m) => m.id));
       const checks = Object.entries(VERIFIERS)
         .filter(([id]) => onPath.has(id))

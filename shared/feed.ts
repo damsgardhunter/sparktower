@@ -130,6 +130,17 @@ export const POST_TYPES: PostTypeDef[] = [
   },
 ];
 
+/**
+ * The types a person picks when writing a post. Milestones post from the
+ * project itself (a milestone landing publishes one), and asking for feedback
+ * is part of any project update now — its "What do you want feedback on?"
+ * questions — so neither needs its own button. Both stay valid types: old
+ * posts keep them, and the feed filter still finds them.
+ */
+export const COMPOSER_POST_TYPES: PostTypeDef[] = POST_TYPES.filter((t) => t.type !== "milestone" && t.type !== "seeking_feedback");
+/** The few shown on the closed composer, above the box. */
+export const QUICK_POST_TYPES: PostTypeDef[] = COMPOSER_POST_TYPES.slice(0, 3);
+
 export const POST_TYPES_BY_KEY: Record<FeedPostType, PostTypeDef> = Object.fromEntries(
   POST_TYPES.map((p) => [p.type, p])
 ) as Record<FeedPostType, PostTypeDef>;

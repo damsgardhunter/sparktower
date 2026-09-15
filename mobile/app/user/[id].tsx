@@ -47,7 +47,7 @@ export default function UserProfile() {
             </View>
           </Row>
           {id && me?.user?.id !== id && (
-            <ConnectActions userId={id} name={name} headline={p.headline} connection={states?.[id]} notify={show} />
+            <ConnectActions userId={id} name={name} headline={p.headline} connection={states?.[id]} notify={show} explore={{ source: "profile_page" }} />
           )}
         </Card>
 

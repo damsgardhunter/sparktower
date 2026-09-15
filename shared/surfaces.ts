@@ -55,9 +55,9 @@ export const SURFACES: SurfaceDef[] = [
 
   // --- Later: real, but earns its place as a project matures ------------
   { id: "investor",   label: "Investor tools",       cls: "later", defaultEnabled: true, note: "In use, and squarely on the mission." },
-  { id: "backing",    label: "Backing & merch",      cls: "later", defaultEnabled: false, note: "Real money and an escrow obligation. Off until the payment path has been walked end to end." },
+  { id: "backing",    label: "Backing & merch",      cls: "later", defaultEnabled: true, note: "Real money and an escrow obligation. Pledges are held until a reviewer approves the project. Turn off here if the payment path misbehaves." },
   { id: "launch",     label: "Launch, legal, pricing", cls: "later", defaultEnabled: true, note: "Pre-launch tooling." },
-  { id: "storyboards", label: "Storyboards & video", cls: "later", defaultEnabled: true, note: "Marketing output." },
+  { id: "storyboards", label: "Storyboards & video", cls: "later", defaultEnabled: true, note: "Marketing output, including the AI visuals on project pages." },
 
   // --- Network: needs other people to mean anything ---------------------
   { id: "feed",       label: "Feed",                 cls: "network", defaultEnabled: true,  note: "Works at small numbers — a post needs no counterpart. Highest spam surface.", needsPeople: 3 },
@@ -109,6 +109,7 @@ export const SURFACE_ROUTES: Record<string, string[]> = {
   leaderboard: ["/leaderboard"],
   discover: ["/discover"],
   checkIns: ["/c/", "/feedback"],
+  feed: ["/posts"],
   backing: ["/admin/backing"],
 };
 
@@ -129,9 +130,9 @@ export const SURFACE_API_PREFIXES: Record<string, string[]> = {
   mcp: ["/api/mcp", "/api/mcp-tokens"],
   documents: ["/api/projects/:id/documents", "/api/documents"],
   personas: ["/api/projects/:id/personas", "/api/projects/:id/interviews", "/api/projects/:id/experiments"],
-  investor: ["/api/investor", "/api/mock-interviews", "/api/projects/:id/investor", "/api/projects/:id/pitch"],
+  investor: ["/api/investor", "/api/mock-interviews", "/api/projects/:id/investor", "/api/projects/:id/pitch", "/api/projects/:id/investment", "/api/investment-applications"],
   launch: ["/api/projects/:id/waitlist", "/api/projects/:id/landing", "/api/projects/:id/legal", "/api/projects/:id/deploy-checklist", "/api/projects/:id/launch", "/api/projects/:id/pricing"],
-  storyboards: ["/api/storyboards", "/api/projects/:id/storyboards", "/api/generate-image"],
+  storyboards: ["/api/storyboards", "/api/projects/:id/storyboards", "/api/generate-image", "/api/projects/:id/visuals"],
   backing: ["/api/projects/:id/backing", "/api/backing-tiers", "/api/admin/backing", "/api/backer-badges", "/api/me/badges"],
   checkIns: ["/api/check-ins", "/api/loop-events", "/api/projects/:id/check-ins"],
   discover: ["/api/discover"],

@@ -417,7 +417,7 @@ describe("the loops a product runs on", () => {
   const loops = (app: any, token: string, projectId: string) =>
     request(app).get(`/api/mcp/projects/${projectId}/loops`).set("authorization", `Bearer ${token}`);
 
-  it("starts empty, with room and the milestone the loops hang off", async () => {
+  it("starts with the five kinds of loop as empty slots, with room for more product loops", async () => {
     const app = await getTestApp();
     const agent = await owner(app);
     const p = (await project(agent)).body;
@@ -427,8 +427,13 @@ describe("the loops a product runs on", () => {
     expect(res.status).toBe(200);
     expect(res.body.supported).toBe(true);
     expect(res.body.sourceId).toBe("SHIP.M1.2");
-    expect(res.body.loops).toEqual([]);
-    expect(res.body.remaining).toBe(6);
+    expect(res.body.loops.map((l: any) => [l.type, l.title, l.state])).toEqual([
+      ["product", "Product loop", "unwritten"], ["growth", "Growth loop", "unwritten"], ["retention", "Retention loop", "unwritten"],
+      ["revenue", "Revenue loop", "unwritten"], ["referral", "Referral loop", "unwritten"],
+    ]);
+    expect(res.body.coverage).toMatchObject({ complete: false, missing: [], unwritten: ["product", "growth", "retention", "revenue", "referral"] });
+    expect(res.body.competition).toBeNull();
+    expect(res.body.remaining).toBe(3);
   });
 
   it("records a loop and reports it as written but not yet planned", async () => {
@@ -443,28 +448,33 @@ describe("the loops a product runs on", () => {
       description: "Open Discover → view matched builders → follow or message → return for new matches.",
     });
     expect(created.status).toBe(200);
-    expect(created.body.taskId).toBeTruthy();
+    expect(created.body).toMatchObject({ type: "product" });
 
     const after = await loops(app, minted.token, p.id);
-    expect(after.body.loops).toHaveLength(1);
-    expect(after.body.loops[0]).toMatchObject({ title: "Explore", state: "written", written: true, total: 0 });
-    expect(after.body.remaining).toBe(5);
+    expect(after.body.loops).toHaveLength(6);
+    expect(after.body.loops.find((l: any) => l.title === "Explore")).toMatchObject({ type: "product", state: "written", written: true, total: 0 });
+    expect(after.body.remaining).toBe(2);
   });
 
-  it("refuses a seventh loop rather than letting a month's plan sprawl", async () => {
+  it("takes more product loops, but only one of each other kind, and caps the plan", async () => {
     const app = await getTestApp();
     const agent = await owner(app);
     const p = (await project(agent)).body;
     const minted = await tokenFor(agent);
     const auth = (r: any) => r.set("authorization", `Bearer ${minted.token}`);
 
-    for (let i = 0; i < 6; i++) {
-      const res = await auth(request(app).post(`/api/mcp/projects/${p.id}/loops`)).send({ title: `Loop ${i}` });
+    const growth = await auth(request(app).post(`/api/mcp/projects/${p.id}/loops`)).send({ title: "SEO pages", type: "growth" });
+    expect(growth.status).toBe(409);
+    expect(growth.body.code).toBe("loop_type_taken");
+    expect((await auth(request(app).post(`/api/mcp/projects/${p.id}/loops`)).send({ title: "Odd", type: "virality" })).body.code).toBe("invalid_input");
+
+    for (let i = 0; i < 3; i++) {
+      const res = await auth(request(app).post(`/api/mcp/projects/${p.id}/loops`)).send({ title: `Path ${i}`, type: "product" });
       expect(res.status).toBe(200);
     }
-    const seventh = await auth(request(app).post(`/api/mcp/projects/${p.id}/loops`)).send({ title: "One more" });
-    expect(seventh.status).toBe(409);
-    expect(seventh.body.code).toBe("loop_cap");
+    const fifth = await auth(request(app).post(`/api/mcp/projects/${p.id}/loops`)).send({ title: "One more" });
+    expect(fifth.status).toBe(409);
+    expect(fifth.body.code).toBe("loop_cap");
   });
 
   it("needs a name", async () => {
@@ -493,7 +503,12 @@ describe("the loops a product runs on", () => {
     expect(dropped.status).toBe(200);
 
     const after = await loops(app, minted.token, p.id);
-    expect(after.body.loops).toEqual([]);
+    expect(after.body.loops.map((l: any) => l.title)).not.toContain("Browse the leaderboard");
+    // The last loop of a kind isn't droppable: a business needs one of each, so a wrong one gets rewritten.
+    const growth = after.body.loops.find((l: any) => l.type === "growth");
+    const kept = await auth(request(app).delete(`/api/mcp/projects/${p.id}/loops/${growth.taskId}`));
+    expect(kept.status).toBe(409);
+    expect(kept.body.code).toBe("loop_required");
     // The judgement is kept, not just the deletion: this is what stops the
     // next read re-proposing it under slightly different words.
     expect(after.body.rejected).toContain("Browse the leaderboard");
@@ -544,8 +559,8 @@ describe("the loops a product runs on", () => {
     expect(status.body.next.backboneId).toBe("SHIP.M1.2");
     // Reading "define your core loop" without being handed the loops is
     // reading half the task.
-    expect(status.body.next.loops).toHaveLength(1);
-    expect(status.body.next.loops[0]).toMatchObject({ title: "Explore", expanded: false });
+    expect(status.body.next.loops).toHaveLength(6);
+    expect(status.body.next.loops.find((l: any) => l.title === "Explore")).toMatchObject({ expanded: false });
   });
 
   it("says plainly when a path doesn't work in loops", async () => {

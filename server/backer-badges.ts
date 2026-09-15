@@ -19,17 +19,19 @@ import {
 import { openai } from "./replit_integrations/image/client";
 import { IMAGE_MODEL } from "./aiModels";
 import { ObjectStorageService } from "./replit_integrations/object_storage";
-import { badgeLevelForAmount, badgeLevel, BADGE_LEVELS, MAX_SHOWCASE_BADGES } from "@shared/backing";
+import { badgeLevelForAmount, badgeLevel, BADGE_LEVELS, MAX_SHOWCASE_BADGES, FOUNDER_LEVEL } from "@shared/backing";
 
 /**
  * The look. Deliberately specific — "make a badge" produces a different style
  * every call, and these sit next to each other on a profile.
  */
-function badgePrompt(opts: { projectTitle: string; metal: string; hex: string; withLogo: boolean }) {
+export function badgePrompt(opts: { projectTitle: string; metal: string; hex: string; withLogo: boolean; creator?: boolean }) {
   return [
     `A collectible achievement badge rendered as a low-poly 3D object: faceted geometric surfaces,`,
     `visible polygon edges, soft studio lighting with crisp specular highlights.`,
-    `The badge is a rounded hexagonal medallion made of ${opts.metal} (${opts.hex}).`,
+    opts.creator
+      ? `The badge is a rounded hexagonal creator's medallion made of ${opts.metal}. The gradient is the whole identity of the badge: keep those three colours, in that order and direction, clearly visible across the face.`
+      : `The badge is a rounded hexagonal medallion made of ${opts.metal} (${opts.hex}).`,
     opts.withLogo
       ? `Set the supplied logo into the centre of the medallion as an embossed relief, keeping its shapes and proportions recognisable.`
       : `Emboss a simple abstract geometric emblem into the centre of the medallion.`,
@@ -83,6 +85,9 @@ export async function upsertBackerBadge(userId: string, projectId: string) {
   const [existing] = await db.select().from(backerBadges)
     .where(and(eq(backerBadges.userId, userId), eq(backerBadges.projectId, projectId)));
 
+  // A creator's founder badge isn't a pledge, and a pledge doesn't turn it into bronze.
+  if (existing?.level === FOUNDER_LEVEL.key) return existing;
+
   if (!existing) {
     const [created] = await db.insert(backerBadges).values({
       userId, projectId,
@@ -126,7 +131,7 @@ export async function renderBadgeImage(
 ): Promise<Buffer> {
   const level = badgeLevel(levelKey) ?? BADGE_LEVELS[0];
   const prompt = badgePrompt({
-    projectTitle, metal: level.metal, hex: level.hex, withLogo: !!logo,
+    projectTitle, metal: level.metal, hex: level.hex, withLogo: !!logo, creator: level.key === FOUNDER_LEVEL.key,
   });
 
   /*
@@ -238,4 +243,38 @@ export async function setShowcase(userId: string, badgeIds: string[]) {
   return db.select().from(backerBadges)
     .where(and(eq(backerBadges.userId, userId), isNotNull(backerBadges.showcaseOrder)))
     .orderBy(backerBadges.showcaseOrder);
+}
+
+/**
+ * Every project someone created gets them a Founder badge, pinned to their
+ * profile while there's room. Private projects don't: a badge is public, and
+ * its title would say what the project is. Safe to call as often as you like —
+ * it only adds what's missing, and never re-pins something the creator unpinned.
+ *
+ * No artwork is generated here: that's a model call, made when the creator
+ * asks. Until then the badge shows the project's own logo inside the founder
+ * ring, which is already recognisably theirs.
+ */
+export async function ensureCreatorBadges(userId: string): Promise<string[]> {
+  const owned = await db.select({ id: projects.id }).from(projects)
+    .where(and(eq(projects.ownerId, userId), eq(projects.isPrivate, false)));
+  if (!owned.length) return [];
+  const held = await db.select({ projectId: backerBadges.projectId, showcaseOrder: backerBadges.showcaseOrder })
+    .from(backerBadges).where(eq(backerBadges.userId, userId));
+  const missing = owned.filter((p) => !held.some((h) => h.projectId === p.id));
+  let pinned = held.filter((h) => h.showcaseOrder != null).length;
+  let nextOrder = Math.max(-1, ...held.map((h) => h.showcaseOrder ?? -1)) + 1;
+  const created: string[] = [];
+  for (const p of missing) {
+    const pin = pinned < MAX_SHOWCASE_BADGES;
+    const [row] = await db.insert(backerBadges).values({
+      userId, projectId: p.id, level: FOUNDER_LEVEL.key, totalCents: 0,
+      ...(pin ? { showcaseOrder: nextOrder } : {}),
+    }).onConflictDoNothing().returning({ id: backerBadges.id });
+    if (row) {
+      created.push(row.id);
+      if (pin) { pinned++; nextOrder++; }
+    }
+  }
+  return created;
 }

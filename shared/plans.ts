@@ -225,6 +225,11 @@ export const CREDIT_COSTS = {
    * check because it ingests and reasons over an entire repository.
    */
   codeAudit: 8,
+  /**
+   * Nova audits the five loops against the products customers already use.
+   * Priced with a surface assist: one reasoned read over the loops and brief.
+   */
+  loopAudit: 3,
   // --- Nova document builder ---
   /** Nova plans a document: pages, grid, and a headline for every block. */
   documentPlan: 5,
@@ -244,6 +249,10 @@ export const CREDIT_COSTS = {
   healthFix: 3,
   strategyRecommendation: 2,
   videoGeneration: 5,
+  /** Five images for the public project page, drawn from the logo and cover. */
+  profileVisuals: 5,
+  /** Redrawing one of those images. */
+  profileVisualSingle: 1,
   /** "What should I do next?" — ranks the 3 highest-impact actions. */
   nextActions: 3,
   /**

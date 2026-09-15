@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { ToastAction } from "@/components/ui/toast";
+import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import NotFound from "@/pages/not-found";
 import {
@@ -22,6 +24,8 @@ interface Report {
   targetHidden?: boolean | null;
   id: string;
   targetType: ReportTarget;
+  /** A post, or the post a reported comment is on. */
+  targetPostId?: string | null;
   targetId: string;
   targetOwnerId: string | null;
   projectId: string | null;
@@ -68,6 +72,7 @@ const ACTION_WORDS: Record<string, string> = {
  */
 function DecidePanel({ report, onDone }: { report: Report; onDone: () => void }) {
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const [action, setAction] = useState<ModerationAction | "">("");
   const [reasonCode, setReasonCode] = useState("");
   const [note, setNote] = useState("");
@@ -76,8 +81,14 @@ function DecidePanel({ report, onDone }: { report: Report; onDone: () => void })
   const act = useMutation({
     mutationFn: async () =>
       (await apiRequest("POST", `/api/admin/reports/${report.id}/act`, { action, reasonCode, note: note.trim() || undefined })).json(),
-    onSuccess: () => {
-      toast({ title: `${chosen?.label ?? "Done"} — ${moderationReasonLabel(reasonCode)}`, description: "Recorded in the moderation log." });
+    onSuccess: (result: { logId?: string }) => {
+      toast({
+        title: `${chosen?.label ?? "Done"} — ${moderationReasonLabel(reasonCode)}`,
+        description: "Recorded in the moderation log. Its impact shows in the safety review.",
+        action: result?.logId
+          ? <ToastAction altText="See this action's impact" onClick={() => setLocation(`/admin/safety#action-${result.logId}`)} data-testid="toast-see-impact">See impact</ToastAction>
+          : undefined,
+      });
       onDone();
     },
     onError: (e) => toast({ title: "Couldn't apply that", description: errorText(e), variant: "destructive" }),
@@ -166,6 +177,7 @@ const TABS: { id: ReportStatus; label: string }[] = [
 /** Where a reported thing lives, so a moderator can go and look at it. */
 function targetLink(r: Report): string | null {
   if (r.targetType === "check_in") return `/c/${r.targetId}`;
+  if (r.targetPostId) return `/posts/${r.targetPostId}`;
   if (r.targetType === "project") return `/projects/${r.targetId}`;
   if (r.targetType === "user") return `/profile/${r.targetId}`;
   if (r.projectId) return `/projects/${r.projectId}`;
@@ -209,6 +221,9 @@ export default function AdminReports() {
     queryClient.invalidateQueries({ queryKey: ["/api/admin/reports"] });
     queryClient.invalidateQueries({ queryKey: ["/api/admin/reports/count"] });
     queryClient.invalidateQueries({ queryKey: ["/api/admin/moderation-log"] });
+    // Every decision is an action the safety review measures and a report it no longer counts.
+    queryClient.invalidateQueries({ queryKey: ["/api/admin/safety/review"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/admin/safety/status"] });
   };
 
   const resolve = useMutation({
@@ -230,7 +245,7 @@ export default function AdminReports() {
       return res.json();
     },
     onSuccess: (r: any) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/reports"] });
+      refresh();
       toast({ title: r.hidden ? "Taken down — hidden from everyone but its author" : "Restored" });
     },
     onError: (e) => toast({ title: errorText(e), variant: "destructive" }),
@@ -264,7 +279,10 @@ export default function AdminReports() {
         </h1>
         <p className="text-sm text-muted-foreground">
           Everything people have flagged. Nothing is removed automatically — this queue is the only
-          thing that acts.
+          thing that acts.{" "}
+          <Link href="/admin/safety" className="text-primary hover:underline" data-testid="link-safety-from-reports">
+            Daily safety review →
+          </Link>
         </p>
       </header>
 

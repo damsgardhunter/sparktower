@@ -55,6 +55,30 @@ export const EXPLORE_ACTIONS: readonly ExploreEventName[] = [
 ];
 
 /**
+ * The events a client may send through `/api/track`: everything but the
+ * actions.
+ *
+ * The actions are recorded by the endpoints that perform them — the follow,
+ * connection-request and message routes — at the moment the write succeeds.
+ * Left to the clients, an action counted only where a page remembered to send
+ * it: the mobile app sent none, one web page sent an action for every chat
+ * message, and a client that was offline or blocked analytics made a real
+ * follow invisible. A client now passes only what the server can't know (see
+ * ExploreContext) with the request itself.
+ */
+export const CLIENT_EXPLORE_EVENT_NAMES: readonly ExploreEventName[] =
+  EXPLORE_EVENT_NAMES.filter((name) => !EXPLORE_ACTIONS.includes(name));
+
+/**
+ * What a client adds to a follow, connection request or message so the event
+ * the server records carries it: where it happened, the card's position, and
+ * how long after opening Discover. Sent as `explore` in the request body and
+ * held to the same boundary as a tracked event. `matchType` and `targetId`
+ * are the server's to fill in — it knows what was followed.
+ */
+export type ExploreContext = Pick<ExploreProps, "source" | "rankPosition" | "timeToActionMs">;
+
+/**
  * The funnel, in loop order, counted in sessions. Opening a profile and
  * opening a project are one step — looking closer — and the three actions are
  * another, because "which action" is a different question from "how many got

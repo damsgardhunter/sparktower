@@ -67,6 +67,7 @@ test("a reported comment is removed from the queue with a reason code, and the l
   await expect(reporterPage.getByText(text)).toBeVisible();
   await reporterPage.getByTestId(`button-report-comment-${commentId}`).click();
   await reporterPage.getByTestId("report-reason-spam").click();
+  await reporterPage.getByTestId("report-detail-selling").click();
   await reporterPage.getByTestId("input-report-note").fill("Selling followers");
   await reporterPage.getByTestId("button-submit-report").click();
   await expect(reporterPage.getByText("Thanks — we'll take a look").first()).toBeVisible();

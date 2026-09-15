@@ -1,3 +1,4 @@
+import { PinnedBadges } from "@/components/pinned-badges";
 import { isSeen } from "@/lib/seen";
 import { updateLabel, type ExploreUpdate } from "@/hooks/use-explore-updates";
 import { useAuth } from "@/hooks/use-auth";
@@ -77,6 +78,7 @@ export function UserCard({ profile, userName, matchScore, matchReasons, explore,
           {profile.headline && (
             <p className="text-sm text-secondary line-clamp-1">{profile.headline}</p>
           )}
+          <PinnedBadges userId={profile.userId} className="mt-1" />
         </div>
       </CardHeader>
       <CardContent>

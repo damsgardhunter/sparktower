@@ -1,0 +1,1 @@
+ALTER TABLE "projects" ADD COLUMN "audit_auto_apply" text DEFAULT 'safe' NOT NULL;

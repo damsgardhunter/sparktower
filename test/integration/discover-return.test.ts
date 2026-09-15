@@ -17,6 +17,7 @@ import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
 import { eq, sql } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
+import { recordActivity } from "../../server/analytics";
 import { db } from "../../server/db";
 import { activityEvents, feedPosts, projects } from "@shared/schema";
 
@@ -88,11 +89,14 @@ describe("what's new since you last looked", () => {
 describe("the repeat measure", () => {
   it("counts sessions that went open → act → back, and how many did it twice", async () => {
     const app = await getTestApp();
-    let address = 40;
-    const send = (session: string, names: string[]) => request(app).post("/api/track")
-      .set("x-forwarded-for", `203.0.113.${address++}`)
-      .set("Cookie", `st_vid=vis-${session}; st_sid=${session}`)
-      .send({ events: names.map((name) => ({ name, path: "/discover", props: { source: "discover" } })) });
+    // Written in order through the server's own recorder. The actions among
+    // these are recorded by their endpoints in the product (and refused by
+    // /api/track); this is about the counting, so the rows are laid down directly.
+    const send = async (session: string, names: string[]) => {
+      for (const name of names) {
+        await recordActivity({ name, visitorId: `vis-${session}`, sessionId: session, path: "/discover", props: { source: "discover" } });
+      }
+    };
 
     // Twice round: open, follow, back; connect, back.
     await send("ses-twice", ["explore.open_discover", "explore.follow", "explore.open_discover", "explore.return_to_discover", "explore.connect_request", "explore.open_discover", "explore.return_to_discover"]);

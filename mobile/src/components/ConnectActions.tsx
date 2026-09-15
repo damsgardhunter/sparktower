@@ -24,6 +24,10 @@ import { spacing } from "../theme";
 import { Btn, Chip, Field, Meta, Row } from "./ui";
 import { Sheet, type Notice } from "./Sheet";
 import { messageTemplates } from "../messageTemplates";
+import { exploreContext, type ExploreSource } from "../explore";
+
+/** Where an action happened, for the Explore event its endpoint records. */
+export interface ExploreOrigin { source: ExploreSource; rankPosition?: number }
 
 /** Restated from shared/moderation.ts, where the server enforces it. */
 export const CONNECTION_NOTE_MAX = 280;
@@ -41,13 +45,14 @@ export function useConnectionStates(userIds: string[]) {
   });
 }
 
-export function ConnectActions({ userId, name, reason, headline, connection, notify }: {
+export function ConnectActions({ userId, name, reason, headline, connection, notify, explore }: {
   userId: string;
   name: string;
   reason?: string | null;
   headline?: string | null;
   connection?: ConnectionState;
   notify: (notice: Notice) => void;
+  explore?: ExploreOrigin;
 }) {
   const router = useRouter();
   const qc = useQueryClient();
@@ -69,7 +74,7 @@ export function ConnectActions({ userId, name, reason, headline, connection, not
   };
 
   const connect = useMutation({
-    mutationFn: () => api("/api/connections/request", { method: "POST", body: { userId, note: note.trim() || undefined } }),
+    mutationFn: () => api("/api/connections/request", { method: "POST", body: { userId, note: note.trim() || undefined, explore: explore && exploreContext(explore.source, explore.rankPosition) } }),
     onMutate: () => { setPending("requested"); setConnectOpen(false); },
     onSuccess: () => {
       notify({ text: note.trim() ? `Request sent to ${name}, with your note.` : `Request sent to ${name}.`, tone: "success" });
@@ -99,7 +104,7 @@ export function ConnectActions({ userId, name, reason, headline, connection, not
   });
 
   const send = useMutation({
-    mutationFn: (content: string) => api(`/api/messages/${userId}`, { method: "POST", body: { content } }),
+    mutationFn: (content: string) => api(`/api/messages/${userId}`, { method: "POST", body: { content, explore: explore && exploreContext(explore.source, explore.rankPosition) } }),
     onSuccess: () => {
       setMessageOpen(false);
       notify({ text: `Sent to ${name}.`, tone: "success", action: { label: "Open chat", onPress: () => router.push(`/chat/${userId}`) } });
@@ -175,15 +180,16 @@ export function ConnectActions({ userId, name, reason, headline, connection, not
 const FOLLOWED = ["followed-projects"];
 
 /** Follow in place: instant, explicit, and put back if the server says no. */
-export function FollowButton({ projectId, title, following, notify }: {
+export function FollowButton({ projectId, title, following, notify, explore }: {
   projectId: string;
   title: string;
   following: boolean;
   notify: (notice: Notice) => void;
+  explore?: ExploreOrigin;
 }) {
   const qc = useQueryClient();
   const follow = useMutation({
-    mutationFn: (want: boolean) => api<{ following: boolean }>(`/api/projects/${projectId}/follow`, { method: "POST", body: { following: want } }),
+    mutationFn: (want: boolean) => api<{ following: boolean }>(`/api/projects/${projectId}/follow`, { method: "POST", body: { following: want, explore: explore && exploreContext(explore.source, explore.rankPosition) } }),
     onMutate: async (want) => {
       await qc.cancelQueries({ queryKey: FOLLOWED });
       const before = qc.getQueryData<{ projectId: string }[]>(FOLLOWED);

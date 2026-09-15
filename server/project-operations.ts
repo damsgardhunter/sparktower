@@ -8,6 +8,7 @@
  * described in plain language so the UI can show what actually happened rather
  * than claiming success.
  */
+import { productNameNote } from "@shared/project-draft";
 import { storage } from "./storage";
 import { renderCapabilities } from "@shared/capabilities";
 import { renderRouteCoverage } from "./route-coverage";
@@ -15,6 +16,8 @@ import { renderAuditDelta } from "@shared/audit-delta";
 import { renderRuntime } from "./runtime-probe";
 import { renderDataShape } from "@shared/data-shape";
 import { getDataShape } from "./data-shape";
+import { applyLoopDrafts, reconcileMilestones, setLoopType, createExpansion, deleteLoop } from "./phase-trees";
+import { isLoopType, resolveTree } from "@shared/phase-trees";
 
 /** One edit Nova wants to make. Shapes mirror the JSON Nova is told to emit. */
 export type ProjectOperation =
@@ -27,11 +30,16 @@ export type ProjectOperation =
   | { op: "update_phase"; id: string; title?: string; description?: string; estimatedDuration?: string; outcomes?: string[]; status?: string }
   | { op: "create_interview"; intervieweeName: string; intervieweeRole?: string; notes?: string; keyInsights?: string }
   | { op: "create_experiment"; hypothesis: string; method?: string; metrics?: string }
-  | { op: "create_pricing_tier"; name: string; price?: number; billingPeriod?: string; features?: string[]; isFeatured?: boolean };
+  | { op: "create_pricing_tier"; name: string; price?: number; billingPeriod?: string; features?: string[]; isFeatured?: boolean }
+  | { op: "create_loop"; type: string; title: string; steps: string; closes?: string }
+  | { op: "update_loop"; id: string; title?: string; steps?: string; type?: string }
+  | { op: "complete_path_milestone"; backboneId: string; evidence: string; answer?: string }
+  | { op: "add_loop_steps"; loopId: string; steps: { title: string; description?: string; done?: boolean }[] }
+  | { op: "retire_loop"; id: string; reason: string };
 
 export interface AppliedChange {
   /** Machine-readable, for the client to route an invalidation. */
-  entity: "project" | "scope" | "task" | "milestone" | "phase" | "interview" | "experiment" | "pricing";
+  entity: "project" | "scope" | "task" | "milestone" | "phase" | "interview" | "experiment" | "pricing" | "loop" | "path";
   action: "created" | "updated";
   /** A sentence the user can read: "Renamed milestone to …". */
   description: string;
@@ -47,6 +55,7 @@ export const OPERATION_SCHEMA_INSTRUCTIONS = `Each operation is one object. Vali
 { "op": "create_task", "title": "", "description": "", "priority": "low"|"medium"|"high", "estimateHours": 3, "tags": ["short label"], "milestoneId": "the milestone this is work toward, or null", "dueDate": "YYYY-MM-DD", "subtasks": [{ "title": "" }] }
 { "op": "update_task", "id": "existing task id", "title": "", "description": "", "priority": "", "status": "todo"|"in-progress"|"review"|"done", "order": 0, "blockedByTaskId": "id of a task this one waits on, or null", "estimateHours": 3, "tags": [], "milestoneId": "", "subtasks": [{ "title": "", "done": false }] }
    // "order" sorts the board ascending — send it for every task you are re-sequencing, and always put a prerequisite before the task that needs it
+   // "status": "done" on create_task records work that is already finished (e.g. found shipped in the code) — one task per feature, never per file
 { "op": "create_milestone", "title": "", "description": "", "targetDate": "YYYY-MM-DD" }
 { "op": "update_milestone", "id": "existing milestone id", "title": "", "description": "", "status": "planned"|"in-progress"|"completed", "targetDate": "YYYY-MM-DD" }
 { "op": "update_phase", "id": "existing roadmap phase id", "title": "", "description": "", "estimatedDuration": "e.g. 2 weeks", "outcomes": ["deliverable"], "status": "upcoming"|"in-progress"|"completed" }
@@ -54,6 +63,12 @@ export const OPERATION_SCHEMA_INSTRUCTIONS = `Each operation is one object. Vali
 { "op": "create_interview", "intervieweeName": "who to talk to — a role or a named person", "intervieweeRole": "", "notes": "the questions to ask, one per line", "keyInsights": "" }
 { "op": "create_experiment", "hypothesis": "a falsifiable statement", "method": "how it will be run", "metrics": "the number that decides it, with a threshold" }
 { "op": "create_pricing_tier", "name": "", "price": 0, "billingPeriod": "monthly"|"yearly"|"one-time", "features": ["short benefit"], "isFeatured": false }
+
+{ "op": "create_loop", "type": "product"|"growth"|"retention"|"revenue"|"referral", "title": "2–5 words", "steps": "1. … 2. … 3. …", "closes": "what sends the user back to step 1" }   // fills an unwritten loop of that kind, or adds one; never overwrites a written loop
+{ "op": "update_loop", "id": "existing loop task id", "title": "", "steps": "the rewritten steps", "type": "product"|"growth"|"retention"|"revenue"|"referral" }   // only when the product has clearly moved on from what the loop says
+{ "op": "complete_path_milestone", "backboneId": "e.g. SHIP.M1.5, from a backbone: tag", "evidence": "one line: what shows it's done", "answer": "the milestone's content, if it's a written one" }
+{ "op": "add_loop_steps", "loopId": "existing loop task id", "steps": [{ "title": "a 1–3h unit of building this loop", "description": "", "done": true }] }   // the loop's build steps as the code shows them; "done" for steps already built
+{ "op": "retire_loop", "id": "existing loop task id", "reason": "one line: why the product no longer runs this loop" }   // the last loop of a kind can't be retired — rewrite it with update_loop instead
 
 Only include the fields you are changing. Only ever use ids that appear in the project state you were given.`;
 
@@ -309,6 +324,8 @@ export async function buildOperableProjectState(
     project.novaNotes?.trim()
       ? `THE BUILDER'S STANDING NOTES TO NOVA (most recent intent — these override the brief, the board and the code where they disagree)\n${project.novaNotes.trim().slice(0, 2000)}`
       : null,
+    // The title is the product's name; older text below may carry a previous one.
+    productNameNote(project.title) || null,
     `STATED TECH STACK: ${(project.techStack || []).join(", ") || "(none set)"}`,
     project.repoUrl ? `REPO: ${project.repoUrl}` : "REPO: (none linked)",
     project.liveUrl ? `LIVE URL: ${project.liveUrl}` : "LIVE URL: (not deployed, or not recorded)",
@@ -359,6 +376,8 @@ export async function applyProjectOperations(
      * dozens of operations and passes a higher one.
      */
     maxOperations?: number;
+    /** Where the edits came from; an audit's recorded work is tagged so it reads as found, not claimed. */
+    source?: "audit" | "chat" | "health";
   } = {},
 ): Promise<{ changes: AppliedChange[]; skipped: string[] }> {
   const changes: AppliedChange[] = [];
@@ -461,16 +480,19 @@ export async function applyProjectOperations(
           const title = text(operation.title, 200);
           if (!title) { skipped.push("A task with no title."); break; }
           const estimate = hours(operation.estimateHours);
+          const status = TASK_STATUSES.includes(operation.status) ? operation.status : "todo";
           const created = await storage.createKanbanTask({
             projectId,
             title,
             description: text(operation.description, 2000),
-            status: TASK_STATUSES.includes(operation.status) ? operation.status : "todo",
+            status,
+            // Recorded as already finished: it happened before anyone wrote it down.
+            ...(status === "done" ? { completedAt: new Date() } : {}),
             priority: TASK_PRIORITIES.includes(operation.priority) ? operation.priority : "medium",
             assigneeId: null,
             dueDate: parseDate(operation.dueDate),
             estimateHours: estimate,
-            tags: tagList(operation.tags),
+            tags: status === "done" && opts.source === "audit" ? [...tagList(operation.tags), "from:audit"].slice(0, 8) : tagList(operation.tags),
             subtasks: subtaskList(operation.subtasks),
             // A milestone that isn't on this project would orphan the link.
             milestoneId: milestoneIds.has(operation.milestoneId) ? operation.milestoneId : null,
@@ -478,7 +500,7 @@ export async function applyProjectOperations(
           } as any);
           changes.push({
             entity: "task", action: "created",
-            description: `Added task "${title}"${estimate ? ` (~${estimate}h)` : ""}`,
+            description: status === "done" ? `Recorded finished work "${title}"` : `Added task "${title}"${estimate ? ` (~${estimate}h)` : ""}`,
             entityId: created.id,
           });
           break;
@@ -490,7 +512,10 @@ export async function applyProjectOperations(
           if (operation.title !== undefined && text(operation.title, 200)) patch.title = text(operation.title, 200);
           if (operation.description !== undefined) patch.description = text(operation.description, 1000);
           if (TASK_PRIORITIES.includes(operation.priority)) patch.priority = operation.priority;
-          if (TASK_STATUSES.includes(operation.status)) patch.status = operation.status;
+          if (TASK_STATUSES.includes(operation.status)) {
+            patch.status = operation.status;
+            if (operation.status === "done") patch.completedAt = new Date();
+          }
           if (Number.isFinite(Number(operation.order))) patch.order = Number(operation.order);
           if (operation.estimateHours !== undefined) patch.estimateHours = hours(operation.estimateHours);
           if (operation.tags !== undefined) patch.tags = tagList(operation.tags);
@@ -620,6 +645,69 @@ export async function applyProjectOperations(
             description: `Added the "${name}" tier at ${created.price}/${created.billingPeriod}`,
             entityId: created.id,
           });
+          break;
+        }
+
+        case "create_loop": {
+          if (!isLoopType(operation.type)) { skipped.push("A loop with no kind."); break; }
+          const r = await applyLoopDrafts(projectId, [{ type: operation.type, title: operation.title, steps: operation.steps, closes: operation.closes }]);
+          if (!r.written.length && !r.created.length) { skipped.push(`The ${operation.type} loop: ${r.skipped[0]?.reason ?? "nothing to write"}.`); break; }
+          changes.push({ entity: "loop", action: r.created.length ? "created" : "updated", description: `Wrote the ${operation.type} loop "${text(operation.title, 80)}"`, entityId: r.created[0] ?? r.written[0] });
+          break;
+        }
+
+        case "update_loop": {
+          const loop = ownTasks.find((t: any) => t.id === operation.id && (t.tags ?? []).includes("kind:loop"));
+          if (!loop) { skipped.push(`A loop id that isn't on this project (${operation.id}).`); break; }
+          const patch: Record<string, unknown> = {};
+          if (text(operation.title, 80)) patch.title = text(operation.title, 80);
+          if (text(operation.steps, 2000)) { patch.description = text(operation.steps, 2000); patch.status = "done"; patch.completedAt = loop.completedAt ?? new Date(); }
+          if (isLoopType(operation.type)) {
+            try { await setLoopType(projectId, loop.id, operation.type); } catch (err: any) { skipped.push(`Loop "${loop.title}": ${err?.message ?? "couldn't change its kind"}`); }
+          }
+          if (Object.keys(patch).length) await storage.updateKanbanTask(loop.id, patch as any);
+          changes.push({ entity: "loop", action: "updated", description: `Rewrote the loop "${(patch.title as string) ?? loop.title}"`, entityId: loop.id });
+          break;
+        }
+
+        case "complete_path_milestone": {
+          const id = text(operation.backboneId, 40);
+          const evidence = text(operation.evidence, 300);
+          if (!id || !evidence) { skipped.push("A path milestone with no id or no evidence."); break; }
+          const { marked } = await reconcileMilestones(projectId, [{ id, evidence, answer: text(operation.answer, 4000) || undefined }], "nova");
+          if (!marked.length) { skipped.push(`Path milestone ${id} isn't open on this project's path.`); break; }
+          changes.push({ entity: "path", action: "updated", description: `Checked off ${id} on the path: ${evidence}` });
+          break;
+        }
+
+        case "add_loop_steps": {
+          const loop = ownTasks.find((t: any) => t.id === operation.loopId && (t.tags ?? []).includes("kind:loop"));
+          if (!loop) { skipped.push(`A loop id that isn't on this project (${operation.loopId}).`); break; }
+          const project = await storage.getProject(projectId);
+          const fanOut = project ? resolveTree(project.goal as any, project.subcategory, (project as any).capitalRoute).flatMap((p) => p.milestones).find((m) => m.expandsFrom && (loop.tags ?? []).includes(`parent:${m.expandsFrom}`)) : null;
+          if (!fanOut) { skipped.push(`The loop "${loop.title}" has nowhere on the path for steps.`); break; }
+          const steps = (Array.isArray(operation.steps) ? operation.steps : []).slice(0, 8)
+            .map((st: any) => ({ title: text(st?.title, 200), description: text(st?.description, 1000), done: st?.done === true })).filter((st: any) => st.title);
+          if (!steps.length) { skipped.push(`No steps for "${loop.title}".`); break; }
+          const { created } = await createExpansion(projectId, fanOut.id, steps, { loopTaskId: loop.id, append: true });
+          const done = created.filter((_t: any, i: number) => steps[i]?.done);
+          for (const t of done) await storage.updateKanbanTask(t.id, { status: "done", completedAt: new Date() } as any);
+          changes.push({
+            entity: "loop", action: "updated", entityId: loop.id,
+            description: `Added ${created.length} build step${created.length === 1 ? "" : "s"} to "${loop.title}"${done.length ? ` (${done.length} already built)` : ""}`,
+          });
+          break;
+        }
+
+        case "retire_loop": {
+          const loop = ownTasks.find((t: any) => t.id === operation.id && (t.tags ?? []).includes("kind:loop"));
+          if (!loop) { skipped.push(`A loop id that isn't on this project (${operation.id}).`); break; }
+          try {
+            const r = await deleteLoop(projectId, loop.id);
+            changes.push({ entity: "loop", action: "updated", entityId: loop.id, description: `Retired the loop "${loop.title}"${text(operation.reason, 200) ? `: ${text(operation.reason, 200)}` : ""}${r.keptSteps ? ` (${r.keptSteps} built step${r.keptSteps === 1 ? "" : "s"} kept on the board)` : ""}` });
+          } catch (err: any) {
+            skipped.push(`Loop "${loop.title}": ${err?.message ?? "couldn't be retired"}`);
+          }
           break;
         }
 

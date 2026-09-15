@@ -2,27 +2,34 @@ import { useState } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { WorkView, refreshPath, useFail, type WorkRow } from "@/components/path-work";
 import { MilestoneDetail } from "@/components/path-milestone";
-import { LoopTree, type LoopTreeData } from "@/components/loop-tree";
+import { LoopTree, addableLoopTypes, type LoopTreeData } from "@/components/loop-tree";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ACTOR_LABEL, type Actor, type VerificationTier, type PaceState, type ProjectionMode } from "@shared/phase-trees";
+import { ACTOR_LABEL, LOOP_TYPE_INFO, type IntakeQuestion, type WorkKind, type LoopType, type Actor, type VerificationTier, type PaceState, type ProjectionMode } from "@shared/phase-trees";
 import { PROJECT_GOALS, subcategoriesFor, type ProjectGoal } from "@shared/goals";
-import { CheckCircle2, Circle, ChevronDown, ChevronUp, Loader2, Sparkles, User, GitBranch, ListTree, Plus, ArrowRightLeft, Repeat, LogOut } from "lucide-react";
+import type { CapitalProfile } from "@shared/capital";
+import { CapitalProfileCard } from "@/components/capital-profile-card";
+import { CheckCircle2, Circle, ChevronDown, ChevronUp, Loader2, Sparkles, User, GitBranch, ListTree, Plus, ArrowRightLeft, Repeat, LogOut, ScanSearch } from "lucide-react";
 
 interface PathMilestone {
   id: string; title: string; description: string; actor: Actor; estimateMinutes: number | null;
   tier: VerificationTier; done: boolean; taskId: string | null; taskStatus: string | null;
   expandsFrom?: string; steps: { done: number; total: number } | null;
+  intake?: IntakeQuestion[];
+  prefill?: "resume";
+  routeQuestion?: string;
 }
-interface Loop { taskId: string; title: string; description: string; status: string; expanded: boolean }
+interface Loop { taskId: string; title: string; description: string; status: string; expanded: boolean; type: LoopType }
 interface NextAction extends PathMilestone {
   step: { taskId: string; title: string; description: string; actor: Actor; isLoop: boolean; loop: { taskId: string; title: string } | null } | null;
   loops: Loop[];
+  missingLoopTypes?: LoopType[];
   workTaskId: string | null;
+  workKind?: WorkKind | null;
   work: WorkRow | null;
 }
 interface PathPhase {
@@ -45,9 +52,12 @@ interface PathStatus {
   loopTree: LoopTreeData | null;
   novaNotes: string;
   rejectedLoops: string[];
+  /** What the latest codebase audit changed on its own, and what it left waiting. */
+  auditUpdate?: { auditId: string; at: string; applied: string[]; appliedCount: number; pendingCount: number; pendingLoops: string[] } | null;
   pace: { state: PaceState; multiplier: number | null; mode: ProjectionMode; projectedAt: string | null; projectedLow: string | null; projectedHigh: string | null; note: string; daysSinceActivity: number } | null;
   events: { id: string; title: string; estimateMinutes: number | null; actualMinutes: number | null; projectedBefore: string | null; projectedAfter: string | null; createdAt: string }[];
   proposal: { goal: ProjectGoal; why: string }[] | null;
+  capital?: (CapitalProfile & { route: string | null }) | null;
 }
 
 const TIER_LABEL: Record<VerificationTier, string> = {
@@ -134,7 +144,7 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
     onSuccess: (r: any, b) => { refresh(); toast({ title: b.phaseId ? (b.extend ? `Extending again — round ${r.round}` : "Keep building it is. Nova works the extension now.") : "Back on the main line" }); },
     onError: fail,
   });
-  const [loopForm, setLoopForm] = useState<{ title: string; description: string } | null>(null);
+  const [loopForm, setLoopForm] = useState<{ title: string; description: string; type: LoopType } | null>(null);
   const addLoop = useMutation({
     mutationFn: (b: { backboneId: string; title: string; description: string }) => apiRequest("POST", `/api/projects/${projectId}/path/loops`, b).then((r) => r.json()),
     onSuccess: () => { setLoopForm(null); refresh(); toast({ title: "Loop added — write it down, then break it into steps" }); },
@@ -180,8 +190,38 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
   const sources = new Set(data.phases.flatMap((p) => p.milestones).map((m) => m.expandsFrom).filter(Boolean));
   const isSource = (id: string) => sources.has(id);
 
+  // On the route question, each route's fit score sits on its bubble.
+  const routeNotes = next?.routeQuestion && data.capital && data.capital.answered >= 3
+    ? { [next.routeQuestion]: Object.fromEntries(data.capital.routeFit.map((r) => [r.route, `fit ${r.score}`])) }
+    : undefined;
+
   return (
     <div className="space-y-3" data-testid="path-panel">
+      {data.capital && <CapitalProfileCard capital={data.capital} />}
+      {/* The path moved because the code did: what the last audit changed, and the direction changes it's asking about. */}
+      {data.auditUpdate && (
+        <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs space-y-1" data-testid="path-audit-update">
+          <p className="flex items-center gap-1.5 flex-wrap">
+            <ScanSearch className="h-3.5 w-3.5 text-primary shrink-0" />
+            <span className="font-medium">Updated from your codebase audit</span>
+            <span className="text-muted-foreground">{new Date(data.auditUpdate.at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>
+            {data.auditUpdate.appliedCount > 0 && <span className="text-muted-foreground">· {data.auditUpdate.appliedCount} change{data.auditUpdate.appliedCount === 1 ? "" : "s"} made</span>}
+          </p>
+          {data.auditUpdate.applied.length > 0 && (
+            <p className="text-muted-foreground">{data.auditUpdate.applied.slice(0, 3).join(" · ")}{data.auditUpdate.appliedCount > 3 ? " · …" : ""}</p>
+          )}
+          {data.auditUpdate.pendingLoops.length > 0 && (
+            <p className="text-amber-800 dark:text-amber-300" data-testid="path-audit-loop-changes">
+              Your loops may have changed: {data.auditUpdate.pendingLoops.join("; ")}.
+            </p>
+          )}
+          {data.auditUpdate.pendingCount > 0 && onNavigate && (
+            <button className="text-primary hover:underline" onClick={() => onNavigate("codebase")} data-testid="button-review-audit-changes">
+              Review {data.auditUpdate.pendingCount} waiting change{data.auditUpdate.pendingCount === 1 ? "" : "s"}
+            </button>
+          )}
+        </div>
+      )}
       {/* Pace strip */}
       <div className="flex items-center justify-between gap-3 flex-wrap text-sm">
         <div className="min-w-0">
@@ -295,6 +335,7 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
                   {next.loops.map((l) => (
                     <li key={l.taskId} className="flex items-center gap-2 flex-wrap">
                       {l.status === "done" ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" /> : <Circle className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />}
+                      <span className="text-[10px] text-muted-foreground">{LOOP_TYPE_INFO[l.type ?? "product"]?.label}</span>
                       <span>{l.title}</span>
                       {l.status !== "done" && <span className="text-xs text-muted-foreground">not written yet</span>}
                       {next.expandsFrom && !l.expanded && (
@@ -306,6 +347,11 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
                     </li>
                   ))}
                 </ul>
+                {(next.missingLoopTypes?.length ?? 0) > 0 && (
+                  <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="next-missing-loops">
+                    Still missing: {(next.missingLoopTypes ?? []).map((t) => LOOP_TYPE_INFO[t].label.toLowerCase()).join(", ")}. A business needs all five before this is done.
+                  </p>
+                )}
               </div>
             )}
             {next.step && (
@@ -319,13 +365,15 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
             {/* Nova's work on it, inline. This is what makes the actor label true. */}
             {next.workTaskId && !(next.expandsFrom && !next.steps) && !(isSource(next.id) && next.loops.length > 0 && !next.step) && (
               <div className="pt-2 border-t border-border">
-                <WorkView projectId={projectId} taskId={next.workTaskId} actor={next.step?.actor ?? next.actor} work={next.work} done={false} />
+                <WorkView projectId={projectId} taskId={next.workTaskId} actor={next.step?.actor ?? next.actor} work={next.work} done={false}
+                  intake={next.step ? undefined : next.intake} workKind={next.step ? undefined : next.workKind ?? undefined}
+                  prefill={next.step ? undefined : next.prefill} optionNotes={routeNotes} />
               </div>
             )}
 
             <div className="flex gap-2 pt-1 flex-wrap">
               {isSource(next.id) && !loopForm && (
-                <Button size="sm" variant="outline" onClick={() => setLoopForm({ title: "", description: "" })} data-testid="button-add-loop"><Plus className="h-3.5 w-3.5 mr-1.5" />Add another loop</Button>
+                <Button size="sm" variant="outline" onClick={() => { const t = next.missingLoopTypes?.[0] ?? "product"; setLoopForm({ title: next.missingLoopTypes?.length ? LOOP_TYPE_INFO[t].label : "", description: "", type: t }); }} data-testid="button-add-loop"><Plus className="h-3.5 w-3.5 mr-1.5" />{next.missingLoopTypes?.length ? `Add the ${LOOP_TYPE_INFO[next.missingLoopTypes[0]].label.toLowerCase()}` : "Add another loop"}</Button>
               )}
               {next.expandsFrom && !next.steps && next.loops.length === 0 && (
                 <Button size="sm" onClick={() => expand.mutate({ backboneId: next.id })} disabled={expand.isPending || !!draft} data-testid="button-next-expand">
@@ -343,6 +391,9 @@ export function PathPanel({ projectId, onNavigate }: { projectId: string; onNavi
             {loopForm && (
               <div className="space-y-2 pt-2 border-t border-border" data-testid="loop-form">
                 <p className="text-xs text-muted-foreground">Name the loop and, if you can, its 3–5 steps. Nova can draft the steps from the name later.</p>
+                <select className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-sm" value={loopForm.type} onChange={(e) => setLoopForm({ ...loopForm, type: e.target.value as LoopType })} data-testid="select-loop-type">
+                  {addableLoopTypes(next.loops.map((l) => ({ type: l.type ?? "product" }))).map((t) => <option key={t} value={t}>{LOOP_TYPE_INFO[t].label}</option>)}
+                </select>
                 <input className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-sm" placeholder="e.g. The feed — explore what others are building" value={loopForm.title} onChange={(e) => setLoopForm({ ...loopForm, title: e.target.value })} data-testid="input-loop-title" />
                 <Textarea rows={3} className="text-sm" placeholder="1. Open the feed 2. Read a check-in 3. React or reply 4. Follow the project" value={loopForm.description} onChange={(e) => setLoopForm({ ...loopForm, description: e.target.value })} data-testid="input-loop-description" />
                 <div className="flex gap-2">

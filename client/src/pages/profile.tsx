@@ -1,7 +1,7 @@
+import { PinnedBadges } from "@/components/pinned-badges";
 import { errorText } from "@/lib/api-error";
 import { FollowBuilderButton } from "@/components/discover-actions";
-import { trackExplore } from "@/lib/explore";
-import { EXPLORE_EVENTS } from "@shared/explore-events";
+import { exploreContext } from "@/lib/explore";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { BackerCredits } from "@/components/backer-credits";
 import { BackerBadgeShowcase } from "@/components/backer-badge-showcase";
@@ -163,11 +163,10 @@ export default function Profile() {
 
   const connectMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/connections/request", { userId });
+      const res = await apiRequest("POST", "/api/connections/request", { userId, explore: exploreContext("profile_page") });
       return res.json();
     },
     onSuccess: () => {
-      if (userId) trackExplore(EXPLORE_EVENTS.connectRequest, { matchType: "builder", targetId: userId, source: "profile_page" });
       queryClient.invalidateQueries({ queryKey: ["/api/connections/status", userId] });
       toast({ title: "Connection request sent" });
     },
@@ -419,6 +418,7 @@ export default function Profile() {
               {profile?.headline && profile?.displayName && (
                 <p className="text-sm text-muted-foreground">{profile.headline}</p>
               )}
+              <PinnedBadges userId={userId} className="pt-0.5" />
               <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground">
                 {profile?.location && (
                   <span className="flex items-center gap-1"><MapPin className="h-4 w-4" />{profile.location}</span>

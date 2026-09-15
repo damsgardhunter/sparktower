@@ -14,10 +14,12 @@ import { useAuth } from "@/hooks/use-auth";
 import { useUpload } from "@/hooks/use-upload";
 import { MentionTextarea } from "@/components/mention-textarea";
 import {
-  Loader2, ImagePlus, X, Send, Lock, FolderKanban, PenLine, AtSign,
+  Loader2, ImagePlus, X, Send, Lock, FolderKanban, PenLine, AtSign, HelpCircle, Plus, Repeat,
 } from "lucide-react";
+import { MAX_ASKS, ASK_MAX, creditLine } from "@shared/feedback-loop";
+import type { FeedbackInboxData } from "@/components/feedback-inbox";
 import * as Icons from "lucide-react";
-import { POST_TYPES, POST_TYPES_BY_KEY, MAX_POST_LENGTH, MAX_POST_MEDIA } from "@shared/feed";
+import { COMPOSER_POST_TYPES, QUICK_POST_TYPES, POST_TYPES_BY_KEY, MAX_POST_LENGTH, MAX_POST_MEDIA } from "@shared/feed";
 import type { FeedMention, FeedPostType } from "@shared/schema";
 
 /** Resolves the icon name stored in the post-type config. */
@@ -45,6 +47,9 @@ export function FeedComposer({ defaultProjectId }: { defaultProjectId?: string }
   const [mentions, setMentions] = useState<FeedMention[]>([]);
   const [projectId, setProjectId] = useState<string>(defaultProjectId || "none");
   const [mediaUrls, setMediaUrls] = useState<string[]>([]);
+  const [asks, setAsks] = useState<string[]>([]);
+  /** Feedback this update credits; null until the builder touches it, so what's done is ticked by default. */
+  const [closes, setCloses] = useState<string[] | null>(null);
 
   const { data: myProjects } = useQuery<{ id: string; title: string; isPrivate: boolean }[]>({
     queryKey: ["/api/feed/my-projects"],
@@ -59,10 +64,20 @@ export function FeedComposer({ defaultProjectId }: { defaultProjectId?: string }
   const def = POST_TYPES_BY_KEY[postType];
   const selectedProject = myProjects?.find((p) => p.id === projectId);
 
+  // Feedback the team turned into work and hasn't credited yet: this update can close the loop on it.
+  const { data: inbox } = useQuery<FeedbackInboxData>({
+    queryKey: ["/api/projects", projectId, "feedback"],
+    enabled: open && !!user && projectId !== "none",
+  });
+  const creditable = (inbox?.items ?? []).filter((i) => i.state === "applied");
+  const credited = closes ?? creditable.filter((i) => i.task?.status === "done").map((i) => i.commentId);
+
   const reset = () => {
     setContent("");
     setMentions([]);
     setMediaUrls([]);
+    setAsks([]);
+    setCloses(null);
     setOpen(false);
   };
 
@@ -74,13 +89,15 @@ export function FeedComposer({ defaultProjectId }: { defaultProjectId?: string }
         projectId: projectId === "none" ? undefined : projectId,
         mediaUrls,
         mentions,
+        ...(projectId !== "none" ? { asks: asks.filter((a) => a.trim()), closesCommentIds: credited } : {}),
       });
       return res.json();
     },
     onSuccess: () => {
-      toast({ title: "Posted", description: "Your update is on the feed." });
+      toast({ title: "Posted", description: credited.length && projectId !== "none" ? `Your update is on the feed, and ${credited.length === 1 ? "the person" : "the people"} whose feedback you used will see it.` : "Your update is on the feed." });
       reset();
       queryClient.invalidateQueries({ queryKey: ["/api/feed"] });
+      if (projectId !== "none") queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "feedback"] });
     },
     onError: (err: any) => {
       const raw = err?.message || "";
@@ -101,18 +118,9 @@ export function FeedComposer({ defaultProjectId }: { defaultProjectId?: string }
     return (
       <Card className="rounded-lg shadow-none bg-background dark:bg-card" data-testid="card-composer-collapsed">
         <CardContent className="p-3">
-          <div className="flex items-center gap-3">
-            <UserAvatar src={user.profileImageUrl} name={displayName} className="h-10 w-10 shrink-0" />
-            <button
-              onClick={() => setOpen(true)}
-              className="flex-1 text-left px-4 py-2.5 rounded-full border border-border text-sm text-muted-foreground hover:bg-accent transition-colors"
-              data-testid="button-open-composer"
-            >
-              Share what you're building…
-            </button>
-          </div>
-          <div className="flex flex-wrap gap-1.5 mt-3 pt-3 border-t border-border/50">
-            {POST_TYPES.slice(0, 5).map((t) => (
+          {/* What kind of update, first and centred: picking one opens the composer ready for it. */}
+          <div className="flex flex-wrap justify-center gap-1.5 pb-2.5 border-b border-foreground/15" data-testid="composer-quick-types">
+            {QUICK_POST_TYPES.map((t) => (
               <Button
                 key={t.type}
                 variant="ghost"
@@ -125,6 +133,16 @@ export function FeedComposer({ defaultProjectId }: { defaultProjectId?: string }
                 {t.label}
               </Button>
             ))}
+          </div>
+          <div className="flex items-center gap-3 pt-2.5">
+            <UserAvatar src={user.profileImageUrl} name={displayName} className="h-10 w-10 shrink-0" />
+            <button
+              onClick={() => setOpen(true)}
+              className="flex-1 text-left px-4 py-2.5 rounded-full border border-border text-[13px] text-muted-foreground hover:bg-accent transition-colors"
+              data-testid="button-open-composer"
+            >
+              Share what you're building…
+            </button>
           </div>
         </CardContent>
       </Card>
@@ -151,7 +169,7 @@ export function FeedComposer({ defaultProjectId }: { defaultProjectId?: string }
         <div className="space-y-2">
           <p className="text-xs font-medium text-muted-foreground">What kind of post is this?</p>
           <div className="flex flex-wrap gap-1.5">
-            {POST_TYPES.map((t) => (
+            {COMPOSER_POST_TYPES.map((t) => (
               <button
                 key={t.type}
                 onClick={() => setPostType(t.type)}
@@ -194,6 +212,52 @@ export function FeedComposer({ defaultProjectId }: { defaultProjectId?: string }
                 {starter}
               </button>
             ))}
+          </div>
+        )}
+
+        {/* A project's post: specific questions, and credit for feedback acted on. */}
+        {projectId !== "none" && (
+          <div className="space-y-2 rounded-md border border-border p-3" data-testid="composer-asks">
+            <p className="text-xs font-medium flex items-center gap-1.5"><HelpCircle className="h-3.5 w-3.5 text-primary" />What do you want feedback on?</p>
+            <p className="text-[11px] text-muted-foreground">Vague updates get vague replies. Ask up to {MAX_ASKS} specific questions — "Which headline is clearer, A or B?"</p>
+            {asks.map((a, i) => (
+              <div key={i} className="flex items-center gap-1.5">
+                <input
+                  className="flex-1 rounded-md border border-border bg-background px-2 py-1 text-sm"
+                  value={a} maxLength={ASK_MAX} placeholder={i === 0 ? "Would you sign up from this page? What stopped you?" : "Another question"}
+                  onChange={(e) => setAsks((prev) => prev.map((x, j) => (j === i ? e.target.value : x)))}
+                  data-testid={`input-ask-${i}`}
+                />
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setAsks((prev) => prev.filter((_, j) => j !== i))} data-testid={`button-remove-ask-${i}`}><X className="h-3.5 w-3.5" /></Button>
+              </div>
+            ))}
+            {asks.length < MAX_ASKS && (
+              <Button variant="ghost" size="sm" className="h-7 text-xs gap-1" onClick={() => setAsks((prev) => [...prev, ""])} data-testid="button-add-ask"><Plus className="h-3 w-3" />Add a question</Button>
+            )}
+
+            {creditable.length > 0 && (
+              <div className="pt-2 border-t border-border/50 space-y-1.5" data-testid="composer-credits">
+                <p className="text-xs font-medium flex items-center gap-1.5"><Repeat className="h-3.5 w-3.5 text-emerald-600" />Close the loop on feedback you acted on</p>
+                {creditable.map((i) => (
+                  <label key={i.commentId} className="flex items-start gap-2 text-xs cursor-pointer">
+                    <input
+                      type="checkbox" className="mt-0.5" checked={credited.includes(i.commentId)}
+                      onChange={(e) => setCloses(e.target.checked ? [...credited, i.commentId] : credited.filter((x) => x !== i.commentId))}
+                      data-testid={`checkbox-credit-${i.commentId}`}
+                    />
+                    <span>
+                      <span className="font-medium">{i.author.name}</span>: {i.content.length > 90 ? `${i.content.slice(0, 89)}…` : i.content}
+                      <span className="text-muted-foreground"> · task {i.task?.status === "done" ? "done" : "not done yet"}</span>
+                    </span>
+                  </label>
+                ))}
+                {credited.length > 0 && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Your post will say "{creditLine(creditable.filter((i) => credited.includes(i.commentId)).map((i) => i.author.name))}" and they'll see it. Say what you changed in the post itself.
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         )}
 

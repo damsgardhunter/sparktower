@@ -4,6 +4,8 @@ import { useRoute, useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { FeedComposer } from "@/components/feed-composer";
+import { FeedbackInbox, useNewFeedbackCount } from "@/components/feedback-inbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -24,7 +26,7 @@ import {
   BarChart3, AlertTriangle, CheckSquare, Square, X,
   Beaker, DollarSign, Shield, Rocket, Headphones, Crosshair,
   Eye, EyeOff, Map, Stethoscope, CalendarDays, CircleDot, Share2, Pencil, ListOrdered, ScanSearch,
-  Image as ImageIcon,
+  Image as ImageIcon, HandCoins,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { RoadmapTab } from "@/components/roadmap-tab";
@@ -45,8 +47,10 @@ import { CodebaseTab } from "@/components/codebase-tab";
 import { NovaActionButton } from "@/components/nova-action-button";
 import { NovaHandoffProvider, useNovaHandoffPending } from "@/components/nova-handoff";
 import { BackingSetup } from "@/components/backing-setup";
+import { InvestmentInbox } from "@/components/investment-inbox";
 import { CheckInList } from "@/components/check-in-list";
 import { ImageUploadField } from "@/components/image-upload-field";
+import { ProfileVisualsButton } from "@/components/profile-visuals-button";
 import { type NovaHandoff } from "@shared/nova-handoff";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -63,7 +67,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { useUpload } from "@/hooks/use-upload";
 
-type TabId = "nova" | "setup" | "public" | "roadmap" | "kanban" | "milestones" | "team" | "files" | "activity" | "personas" | "chat" | "research" | "strategy" | "launch" | "analytics" | "support" | "codebase";
+type TabId = "nova" | "setup" | "public" | "roadmap" | "kanban" | "milestones" | "team" | "files" | "activity" | "personas" | "chat" | "research" | "strategy" | "launch" | "analytics" | "support" | "codebase" | "investors";
 
 const KANBAN_COLUMNS = [
   { id: "todo" as const, label: "To Do", icon: Circle, color: "text-muted-foreground" },
@@ -110,7 +114,11 @@ export default function ProjectManager() {
   const { toast } = useToast();
   const projectId = params?.id;
 
-  const [activeTab, setActiveTab] = useState<TabId>("nova");
+  // `?tab=investors` opens straight onto a tab — the public page's "Set up applications" links there.
+  const [activeTab, setActiveTab] = useState<TabId>(() => {
+    const t = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("tab") : null;
+    return (t === "investors" ? t : "nova") as TabId;
+  });
   /**
    * The job a Nova recommendation handed to a tab, held here because
    * navigating and handing over are one decision. The destination tab claims
@@ -508,6 +516,7 @@ export default function ProjectManager() {
     { id: "personas", label: "Personas", icon: Target },
     { id: "research", label: "Research", icon: Beaker },
     { id: "strategy", label: "Strategy", icon: Crosshair },
+    { id: "investors", label: "Investors", icon: HandCoins },
     { id: "launch", label: "Launch", icon: Rocket },
     { id: "analytics", label: "Analytics", icon: BarChart3 },
     { id: "support", label: "Support", icon: Headphones },
@@ -536,7 +545,7 @@ export default function ProjectManager() {
        */}
       <div className="max-w-7xl mx-auto px-6 py-6 flex flex-col lg:flex-row gap-6 items-start">
         <nav className="w-full lg:w-48 lg:order-2 lg:sticky lg:top-24 shrink-0 flex flex-wrap lg:flex-col gap-1" aria-label="Project sections" data-testid="manager-rail">
-          {tabs.map((tab) => (
+          {tabs.filter((tab) => tab.id !== "investors" || isOwner).map((tab) => (
             <Button key={tab.id} variant={activeTab === tab.id ? "default" : "ghost"} size="sm" className="gap-2 lg:justify-start" onClick={() => setActiveTab(tab.id)} data-testid={`tab-${tab.id}`}>
               <tab.icon className="h-4 w-4" />
               {tab.label}
@@ -638,6 +647,9 @@ export default function ProjectManager() {
         )}
         {activeTab === "research" && projectId && (
           <ResearchTab projectId={projectId} />
+        )}
+        {activeTab === "investors" && projectId && isOwner && (
+          <InvestmentInbox projectId={projectId} />
         )}
         {activeTab === "strategy" && projectId && (
           <StrategyTab projectId={projectId} />
@@ -1115,6 +1127,7 @@ function SetupTab({ project, isOwner, links, isUploadingPlan, onUploadPlan, onUp
             hint="Wide banner across the top of your public page."
             testId="upload-project-cover"
           />
+          {isOwner && <ProfileVisualsButton project={project} />}
         </CardContent>
       </Card>
 
@@ -2730,7 +2743,8 @@ function ActivityTab({ activity, decisions, projectId, projectTitle, onCreateDec
   onCreateDecision: (data: any) => void; onUpdateDecision: (id: string, data: any) => void;
   onDeleteDecision: (id: string) => void;
 }) {
-  const [activeSection, setActiveSection] = useState<"feed" | "decisions" | "checkins">("feed");
+  const [activeSection, setActiveSection] = useState<"feed" | "decisions" | "checkins" | "feedback">("feed");
+  const newFeedback = useNewFeedbackCount(projectId);
 
   /*
    * Land on Check-ins when the dashboard sent us here to write one — otherwise
@@ -2757,9 +2771,11 @@ function ActivityTab({ activity, decisions, projectId, projectTitle, onCreateDec
           { id: "feed" as const, label: "Activity Feed", icon: Activity },
           { id: "decisions" as const, label: "Decision Log", icon: MessageSquare },
           { id: "checkins" as const, label: "Check-ins", icon: CheckCircle2 },
+          { id: "feedback" as const, label: "Feedback", icon: MessageSquare },
         ]).map(s => (
           <Button key={s.id} variant={activeSection === s.id ? "default" : "ghost"} size="sm" className="gap-2" onClick={() => setActiveSection(s.id)} data-testid={`section-${s.id}`}>
             <s.icon className="h-4 w-4" /> {s.label}
+            {s.id === "feedback" && newFeedback > 0 && <Badge className="h-4 px-1.5 text-[10px]">{newFeedback}</Badge>}
           </Button>
         ))}
       </div>
@@ -2829,6 +2845,13 @@ function ActivityTab({ activity, decisions, projectId, projectTitle, onCreateDec
 
       {activeSection === "checkins" && (
         <CheckInList projectId={projectId} projectTitle={projectTitle} />
+      )}
+
+      {activeSection === "feedback" && (
+        <div className="space-y-4">
+          <FeedbackInbox projectId={projectId} />
+          <FeedComposer defaultProjectId={projectId} />
+        </div>
       )}
     </div>
   );

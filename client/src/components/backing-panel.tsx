@@ -21,6 +21,7 @@ import {
 import {
   BELIEVER_TAGLINE, DIGITAL_REWARDS, TIP_PRESET_PERCENTS, MIN_PLEDGE_CENTS,
   merchProduct, formatBelieverNumber, tierForAmount, tierNeedsShipping,
+  badgeLevel, badgeLevelForAmount, BADGE_LEVELS,
   type MerchConfig,
 } from "@shared/backing";
 
@@ -32,6 +33,7 @@ interface PublicTier {
   digitalRewards: string[] | null;
   merchProducts: string[] | null;
   maxBackers: number | null;
+  badgeLevel?: string;
   claimed: number;
   soldOut: boolean;
 }
@@ -46,6 +48,8 @@ interface PublicCampaign {
     fundsHeld: boolean;
   };
   tiers: PublicTier[];
+  badgePreviews?: Record<string, string>;
+  badgeLogoUrl?: string | null;
   wall: {
     believerNumber: number | null;
     name: string;
@@ -63,6 +67,43 @@ const money = (cents: number) =>
   `$${(cents / 100).toLocaleString("en-US", {
     minimumFractionDigits: cents % 100 ? 2 : 0, maximumFractionDigits: 2,
   })}`;
+
+/**
+ * The badge a rung earns, as it will look pinned to a profile.
+ *
+ * The creator's generated preview when there is one — the same art a real
+ * badge is drawn from — otherwise the project logo inside that level's metal
+ * ring, so a campaign whose creator never clicked Preview still shows what
+ * backers are working toward.
+ */
+function TierBadge({
+  levelKey, previews, logoUrl, size = "md",
+}: {
+  levelKey: string;
+  previews: Record<string, string>;
+  logoUrl: string | null;
+  size?: "sm" | "md";
+}) {
+  const level = badgeLevel(levelKey) ?? BADGE_LEVELS[0];
+  const img = previews[level.key];
+  const box = size === "sm" ? "h-9 w-9" : "h-12 w-12";
+  return (
+    <div
+      className={`${box} shrink-0 rounded-full border-2 overflow-hidden bg-muted/30 flex items-center justify-center`}
+      style={{ borderColor: level.hex }}
+      title={`${level.label} backer badge`}
+      data-testid={`tier-badge-${level.key}`}
+    >
+      {img ? (
+        <img src={img} alt={`${level.label} badge`} className="w-full h-full object-contain" />
+      ) : logoUrl ? (
+        <img src={logoUrl} alt="" className="w-3/5 h-3/5 object-contain" />
+      ) : (
+        <Heart className="h-4 w-4" style={{ color: level.hex }} />
+      )}
+    </div>
+  );
+}
 
 /**
  * The backer's side of a campaign.
@@ -125,6 +166,8 @@ export function BackingPanel({
 
   if (!data) return null;
   const { campaign, tiers, wall } = data;
+  const previews = data.badgePreviews || {};
+  const logoUrl = data.badgeLogoUrl ?? null;
   const progress = campaign.goalCents
     ? Math.min(100, Math.round((data.raisedCents / campaign.goalCents) * 100))
     : null;
@@ -162,6 +205,13 @@ export function BackingPanel({
             <p className="text-sm leading-relaxed whitespace-pre-wrap">{campaign.story}</p>
           )}
 
+          {tiers.length > 0 && (
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Every backer earns a badge built from this project's logo to show on their profile.
+              The more you give, the rarer the metal.
+            </p>
+          )}
+
           <div className="space-y-2">
             {tiers.map((tier) => {
               const left = tier.maxBackers != null ? tier.maxBackers - tier.claimed : null;
@@ -174,6 +224,8 @@ export function BackingPanel({
                   className="w-full text-left rounded-lg border border-border/60 p-3 transition-colors hover:border-primary/60 disabled:opacity-50 disabled:hover:border-border/60"
                   data-testid={`public-tier-${tier.id}`}
                 >
+                  <div className="flex items-start gap-3">
+                  <div className="min-w-0 flex-1">
                   <div className="flex items-baseline justify-between gap-2 flex-wrap">
                     <span className="font-semibold">
                       {money(tier.amountCents)} · {tier.name}
@@ -200,6 +252,19 @@ export function BackingPanel({
                         {DIGITAL_REWARDS.find((r) => r.key === k)?.label || k}
                       </Badge>
                     ))}
+                  </div>
+                  </div>
+                  {(() => {
+                    const level = badgeLevel(tier.badgeLevel ?? "") ?? badgeLevelForAmount(tier.amountCents);
+                    return (
+                      <div className="flex flex-col items-center gap-0.5 shrink-0">
+                        <TierBadge levelKey={level.key} previews={previews} logoUrl={logoUrl} />
+                        <span className="text-[9px] font-medium" style={{ color: level.hex }}>
+                          {level.label} badge
+                        </span>
+                      </div>
+                    );
+                  })()}
                   </div>
                 </button>
               );
@@ -275,6 +340,8 @@ export function BackingPanel({
         tiers={tiers}
         initialTier={checkoutTier}
         defaultTipPercent={data.defaultTipPercent}
+        badgePreviews={previews}
+        badgeLogoUrl={logoUrl}
         refundWindowDays={data.refundWindowDays}
         onError={(m) => toast({ title: "Couldn't start that pledge", description: m, variant: "destructive" })}
       />
@@ -284,7 +351,7 @@ export function BackingPanel({
 
 function PledgeDialog({
   open, onClose, projectId, projectTitle, tiers, initialTier,
-  defaultTipPercent, refundWindowDays, onError,
+  defaultTipPercent, refundWindowDays, onError, badgePreviews, badgeLogoUrl,
 }: {
   open: boolean;
   onClose: () => void;
@@ -295,6 +362,8 @@ function PledgeDialog({
   defaultTipPercent: number;
   refundWindowDays: number;
   onError: (message: string) => void;
+  badgePreviews: Record<string, string>;
+  badgeLogoUrl: string | null;
 }) {
   const [amountInput, setAmountInput] = useState("");
   const [tipPercent, setTipPercent] = useState(defaultTipPercent);
@@ -373,6 +442,21 @@ function PledgeDialog({
               <p className="text-sm font-medium flex items-center gap-1.5">
                 <Check className="h-3.5 w-3.5 text-primary" /> You get: {earned.name}
               </p>
+
+              {/* The badge follows the amount, like the rung does — it's what
+                  the server awards from the backer's total. */}
+              {(() => {
+                const level = badgeLevelForAmount(amountCents);
+                return (
+                  <div className="flex items-center gap-2.5" data-testid="pledge-badge">
+                    <TierBadge levelKey={level.key} previews={badgePreviews} logoUrl={badgeLogoUrl} size="sm" />
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      A <span className="font-medium" style={{ color: level.hex }}>{level.label}</span> backer
+                      badge for your profile.
+                    </p>
+                  </div>
+                );
+              })()}
 
               {/*
                 * The actual artwork, not a description of it. Rendered by the

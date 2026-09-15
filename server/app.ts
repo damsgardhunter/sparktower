@@ -67,10 +67,12 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
   const { httpServer, isReady = () => true, logRequests = false } = opts;
   const app = express();
 
-  // Sealed fields never leave the server, whatever route built the payload.
+  // Sealed fields and password hashes never leave the server, whatever route
+  // built the payload. The hash used to be stripped only by the request logger,
+  // so it went out wherever logging was off.
   app.use((_req, res, next) => {
     const json = res.json.bind(res);
-    res.json = ((body: unknown) => json(stripSealedFields(body))) as typeof res.json;
+    res.json = ((body: unknown) => json(stripPasswordHash(stripSealedFields(body)))) as typeof res.json;
     next();
   });
 

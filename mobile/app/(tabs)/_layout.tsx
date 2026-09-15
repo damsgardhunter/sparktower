@@ -1,5 +1,5 @@
 import { Tabs } from "expo-router";
-import { Pressable, Text, type ColorValue } from "react-native";
+import { Pressable, Text, View, type ColorValue } from "react-native";
 import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
@@ -19,13 +19,29 @@ function TabIcon({ glyph, color }: { glyph: string; color: ColorValue }) {
   );
 }
 
-/** Header shortcut into the screens that don't warrant a tab. */
+/** Header shortcuts: notifications, with the unread count, and the screens that don't warrant a tab. */
 function HeaderLinks() {
   const router = useRouter();
+  const { data } = useQuery({
+    queryKey: ["notification-count"],
+    queryFn: () => api<{ count: number }>("/api/notifications/unread-count"),
+    refetchInterval: 30_000,
+  });
+  const unread = data?.count ?? 0;
   return (
-    <Pressable onPress={() => router.push("/more")} hitSlop={8} style={{ paddingRight: spacing.md }}>
-      <Text style={{ color: colors.textSecondary, fontSize: font.base }}>More</Text>
-    </Pressable>
+    <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md, paddingRight: spacing.md }}>
+      <Pressable onPress={() => router.push("/notifications")} hitSlop={8} accessibilityLabel={unread ? `${unread} unread notifications` : "Notifications"}>
+        <Text style={{ fontSize: 18 }}>🔔</Text>
+        {unread > 0 && (
+          <View style={{ position: "absolute", top: -4, right: -8, minWidth: 16, height: 16, borderRadius: 8, paddingHorizontal: 3, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center" }}>
+            <Text style={{ color: "#fff", fontSize: 10, fontWeight: "700" }}>{unread > 99 ? "99+" : unread}</Text>
+          </View>
+        )}
+      </Pressable>
+      <Pressable onPress={() => router.push("/more")} hitSlop={8}>
+        <Text style={{ color: colors.textSecondary, fontSize: font.base }}>More</Text>
+      </Pressable>
+    </View>
   );
 }
 

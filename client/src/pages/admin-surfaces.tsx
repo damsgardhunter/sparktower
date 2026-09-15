@@ -45,6 +45,9 @@ export default function AdminSurfaces() {
       toast({ title: `${r.label} ${r.enabled ? "on" : "off"}` });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/surfaces"] });
       queryClient.invalidateQueries({ queryKey: ["/api/surfaces"] });
+      // A switch is an action the safety review measures, and changes what it lists as off.
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/safety/review"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/safety/status"] });
     },
     onError: () => toast({ title: "Couldn't change that", variant: "destructive" }),
   });

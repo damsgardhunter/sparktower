@@ -60,8 +60,11 @@ describe("limits on reviewer actions", () => {
     expect(hide.body).toMatchObject({ code: "rate_limited", action: "review" });
     expect(Number(hide.headers["retry-after"])).toBeGreaterThan(0);
 
-    // Backing is off by default, and its kill switch answers before anything else:
-    // the money routes can't be reached at all until someone turns it on.
+    // Backing's kill switch answers before anything else: switched off, the
+    // money routes can't be reached at all until someone turns it back on.
+    await db.insert(surfaceFlags).values({ surfaceId: "backing", enabled: false } as any)
+      .onConflictDoUpdate({ target: surfaceFlags.surfaceId, set: { enabled: false } as any });
+    await loadSurfaceFlags();
     expect((await agent.post("/api/admin/backing/any-project/release").send({})).status).toBe(404);
     await db.insert(surfaceFlags).values({ surfaceId: "backing", enabled: true } as any)
       .onConflictDoUpdate({ target: surfaceFlags.surfaceId, set: { enabled: true } as any });

@@ -13,6 +13,7 @@ import type { Express, Response } from "express";
 import OpenAI from "openai";
 import { storage } from "./storage";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
+import { rateLimit } from "./moderation";
 import { requireCredits, requireFeature, modelFor, coachingDirectiveFor } from "./entitlements";
 import { CREDIT_COSTS } from "@shared/plans";
 import { formatProjectBriefForPrompt } from "@shared/project-sections";
@@ -30,7 +31,13 @@ import { computeAuditDelta } from "@shared/audit-delta";
 import { probeRuntime } from "./runtime-probe";
 import { refreshDataShape, compareWithCode } from "./data-shape";
 import { verifyMilestonesFromAudit } from "./phase-tree-verifiers";
-import { refreshPace } from "./phase-trees";
+import { refreshPace, loopsForAudit, renderLoopsForPrompt, backboneIdOf, renderPathForAudit } from "./phase-trees";
+import {
+  diffFileIndex, renderFileChanges, tidyCatchUp, summarizeCatchUp, describeOp, SAFE_SECTIONS, CATCHUP_SECTIONS,
+  type CatchUpSection, type AuditAutoApply,
+} from "@shared/audit-catchup";
+import { fetchCommitsSince } from "./code-ingest";
+import { sanitizeLoopClosures } from "@shared/phase-trees";
 
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
@@ -83,7 +90,16 @@ const AUDIT_SCHEMA = `Respond ONLY with valid JSON (no markdown, no code fences)
   "milestones": [
     { "title": "", "verdict": "complete" | "in-progress" | "not-started", "why": "one sentence citing the code" }
   ],
+  "loops": [
+    { "key": "L1 — the key from THE BUSINESS'S LOOPS",
+      "closure": "closed" | "open" | "not-built",
+      "stages": [ { "step": "each step of the loop, in order", "status": "built" | "partial" | "missing", "evidence": ["exact path from the file tree"] } ],
+      "returnPath": { "mechanism": "what brings the user (or the next user) back to the first step: the notification, email, feed item, share link, invite credit, renewal", "evidence": ["exact path"] },
+      "breaksAt": "for open or not-built: the exact step where the cycle stops, and what's missing there",
+      "fix": "for open or not-built: the concrete change that closes it" }
+  ],
   "nextThreeThings": ["the three highest-leverage things to do next, in order"],
+  "catchUpNote": "one or two sentences, to the builder: what they've done since the last audit and where the project is heading now",
   "operations": [ ... ]
 }`;
 
@@ -107,7 +123,18 @@ THE CAPABILITY INVENTORY comes first and matters most. One entry for EVERY area 
 Areas and what counts:
 ${CAPABILITY_AREAS.map((a) => `- ${a.id} (${a.label}): ${a.counts}`).join("\n")}
 
-For "operations", propose the changes that would make the board match the code: move tasks that are demonstrably finished to done, and create tasks for real gaps you found. Be conservative — only move a task to done when the evidence is unambiguous. Do not touch anything you're unsure about.
+THE LOOPS CHECK. If THE BUSINESS'S LOOPS are listed, report on EVERY one by its key (an empty "loops" array when none are listed). A loop is CLOSED only when the code carries a user through every step AND something in the code returns them — or the person they brought in — to the first step again: a notification or email that fires on the step's output, a feed that surfaces it, a share or invite link that lands a new user at the start, a subscription that renews on use. A sequence that works but ends is OPEN, and "breaksAt" names the step after which nothing brings anyone back. Judge each stage from the files: a route, a page and a table that really do the step is built; a UI with no write behind it is partial. Cite only paths in the file tree; "closed" without a cited file for every stage and for the return path will be downgraded to open. For every open or not-built loop, also propose one create-task operation titled "Close the <loop title> loop: <what's missing>".
+
+CATCHING THE PROJECT UP. Builders work ahead: they ship features without writing tasks, change direction without touching the brief, finish work without moving the card. "operations" is the set of edits that brings the WHOLE project up to date with where the code shows it is and where it's heading — as briefly as possible:
+- Start from WHAT CHANGED SINCE THE LAST AUDIT and THE COMMITS. That is what's new; the rest of the repo was already reconciled last time. On a first audit, work from the whole codebase.
+- Shipped work nobody wrote down: ONE create_task with "status": "done" per FEATURE or piece of work a person would name ("Post pages with comments and reactions"), never one per file, route or commit. Put the evidence files in its description. At most 12; group smaller things into the feature they belong to. Never record something the board already has, in any wording — if the board has it open and the code shows it's finished, update_task it to done instead.
+- Open tasks the code shows are finished: update_task to done. Only on unambiguous evidence.
+- THE PATH is what the builder's dashboard shows, so keep it true. Open milestones the code shows are reached: complete_path_milestone with the evidence. Loop build steps the code shows are built: update_task to done by the step id. A loop being built through steps its list doesn't have: add_loop_steps, marking the built ones done.
+- The brief, scope and tech stack: update_project / update_scope only where the code shows the project has moved — a new direction, a feature now core, a stack that changed, a live URL. Rewrite the field in the builder's voice; don't pad it.
+- The core loops follow the product. When the code shows the product has changed direction — a loop now works differently, a new cycle has become central, an old one is gone — change them: update_loop to rewrite one (or change its kind), create_loop for a kind that isn't written, retire_loop for a loop the product no longer runs (never the last of its kind; rewrite that instead). Change a loop only on clear evidence in the code, say what changed in the steps, and never propose anything the builder REMOVED.
+- What's next: create_task for real gaps in the direction the builder is heading (at most 10), update_task where a task's scope changed. Milestones and roadmap phases only where they're plainly out of date.
+- If nothing changed, return no operations. Never re-propose anything in DECLINED LAST TIME unless the code has changed in that exact area since.
+- THE BUILDER'S STANDING NOTES override the code's suggestions about direction.
 
 ${OPERATION_SCHEMA_INSTRUCTIONS}
 
@@ -140,12 +167,21 @@ export async function runCodeAudit(opts: {
   snapshot: RepoSnapshot;
   sourceKind: "github" | "upload" | "worktree";
   repoMeta: Awaited<ReturnType<typeof import("./code-ingest").fetchRepoMeta>> | null;
+  /** Used for this request only, to read commits since the last audit. Never stored. */
+  githubToken?: string;
 }): Promise<Response | void> {
   const { projectId, userId, project, ent, res, snapshot, sourceKind, repoMeta } = opts;
   const digest = buildCodeDigest(snapshot);
+  // What's new since last time, from the code itself: fingerprints, and the builder's commit messages.
+  const previous = await storage.getLatestCodeAudit(projectId).catch(() => undefined);
+  const fileChanges = diffFileIndex((previous?.signals as any)?.fileIndex, digest.signals.fileIndex ?? {});
+  const since = previous ? new Date(previous.createdAt) : null;
+  const branch = snapshot.source.match(/@([^@]+)$/)?.[1] ?? repoMeta?.defaultBranch ?? "main";
+  const commits = sourceKind === "github" && repoMeta && since ? await fetchCommitsSince(repoMeta.fullName, branch, since, opts.githubToken) : [];
+  const declined = ((previous?.operations as any[]) ?? []).filter((o) => o?._status === "declined").map((o) => describeOp(o)).slice(0, 40);
 
   // --- the plan, for reconciliation ------------------------------------
-  const [state, completions, milestones] = await Promise.all([
+  const [state, completions, milestones, loopRead] = await Promise.all([
     /*
      * Without the previous audit. A fresh audit has to judge the code on
      * its own merits — handed its predecessor's verdict it anchors on it
@@ -155,7 +191,10 @@ export async function runCodeAudit(opts: {
     buildOperableProjectState(projectId, { includeAudit: false }),
     storage.getProjectTaskCompletions(projectId, 40).catch(() => []),
     storage.getProjectMilestones(projectId).catch(() => []),
+    loopsForAudit(projectId).catch(() => null),
   ]);
+  const pathText = await renderPathForAudit(projectId).catch(() => null);
+  const auditLoops = loopRead?.loops.filter((l) => l.description || l.status === "done") ?? [];
 
   const completion = await getOpenAI().chat.completions.create({
     model: modelFor(ent),
@@ -173,8 +212,18 @@ export async function runCodeAudit(opts: {
             ? `TASKS THE BUILDER HAS ALREADY COMPLETED (${completions.length})\n${completions.slice(0, 30).map((c) => `- ${c.title}`).join("\n")}`
             : "TASKS ALREADY COMPLETED\nNone recorded.",
           `CURRENT BOARD AND PLAN STATE (use these ids for operations)\n${state}`,
+          auditLoops.length
+            ? `THE BUSINESS'S LOOPS (check each one closes in the code; ids are for update_loop)\n${renderLoopsForPrompt(auditLoops)}\n${auditLoops.map((l) => `${l.key} id=${l.taskId}`).join(", ")}`
+            : "THE BUSINESS'S LOOPS\nNone written yet.",
+          loopRead?.coverage.missing.length || loopRead?.coverage.unwritten.length
+            ? `LOOP KINDS NOT WRITTEN YET: ${[...(loopRead?.coverage.missing ?? []), ...(loopRead?.coverage.unwritten ?? [])].join(", ")}`
+            : null,
+          pathText,
+          renderFileChanges(fileChanges, since ? since.toISOString().slice(0, 10) : null),
+          commits.length ? `THE COMMITS SINCE THEN (${commits.length}, newest first)\n${commits.slice(0, 60).map((c) => `- ${c.message}`).join("\n")}` : null,
+          declined.length ? `DECLINED LAST TIME — the builder chose not to apply these; don't propose them again\n${declined.map((d) => `- ${d}`).join("\n")}` : null,
           `THE ACTUAL CODEBASE\n${digest.prompt}`,
-        ].join("\n\n"),
+        ].filter(Boolean).join("\n\n"),
       },
     ],
   });
@@ -241,6 +290,8 @@ export async function runCodeAudit(opts: {
       verdict: ["complete", "in-progress", "not-started"].includes(m?.verdict) ? m.verdict : "not-started",
       why: str(m?.why, 400),
     })).filter((m: any) => m.title),
+    /** Whether each written loop closes in the code, held to cited files. */
+    loops: sanitizeLoopClosures(parsed.loops, auditLoops, new Set(snapshot.files.map((f) => f.path))),
     nextThreeThings: strList(parsed.nextThreeThings, 5, 400),
     /** Scan facts the builder should see even if the model ignored them. */
     scan: {
@@ -270,8 +321,27 @@ export async function runCodeAudit(opts: {
     repo: repoMeta,
   };
 
+  // The catch-up: the audit's edits, down to what's new and worth doing.
+  const board = await storage.getProjectKanbanTasks(projectId).catch(() => []);
+  const tidied = tidyCatchUp(parsed.operations, {
+    project,
+    tasks: board.map((t) => ({ id: t.id, title: t.title, status: t.status, tags: t.tags })),
+    loops: (loopRead?.loops ?? []).map((l) => ({ id: l.taskId, title: l.title, description: l.description, type: l.type, steps: l.steps })),
+    rejectedLoops: project.rejectedLoops ?? [],
+    pathDone: new Set(board.filter((t) => t.status === "done").map((t) => backboneIdOf(t.tags)).filter(Boolean) as string[]),
+    declined,
+  });
+  (findings as any).catchUp = {
+    note: str(parsed.catchUpNote, 600),
+    summary: summarizeCatchUp(tidied.operations),
+    since: since?.toISOString() ?? null,
+    files: fileChanges ? { added: fileChanges.added.length, modified: fileChanges.modified.length, removed: fileChanges.removed.length } : null,
+    commits: { count: commits.length, recent: commits.slice(0, 8).map((c) => c.message) },
+    dropped: tidied.dropped,
+    applied: [] as string[],
+  };
+
   // The snapshot's velocity and its runtime, alongside what the code contains.
-  const previous = await storage.getLatestCodeAudit(projectId).catch(() => undefined);
   const runtime = await probeRuntime({ liveUrl: project.liveUrl, envVarNames: digest.signals.envVarNames });
   const completionPercent = Math.max(0, Math.min(100, Math.round(Number(parsed.completionPercent) || 0)));
   const delta = computeAuditDelta(previous ?? null, { id: "pending", createdAt: new Date(), completionPercent, signals: digest.signals, findings });
@@ -289,8 +359,15 @@ export async function runCodeAudit(opts: {
     delta: delta as any,
     runtime: runtime as any,
     dataShape: dataShape as any,
-    operations: (Array.isArray(parsed.operations) ? parsed.operations : []).slice(0, 60) as any,
+    operations: tidied.operations as any,
   } as any);
+
+  // What the builder lets an audit do on its own: record finished work, or everything.
+  const mode = ((project.auditAutoApply as AuditAutoApply | undefined) ?? "safe");
+  const autoSections = mode === "all" ? CATCHUP_SECTIONS.map((x) => x.id) : mode === "safe" ? [...SAFE_SECTIONS] : [];
+  const autoApplied = autoSections.length && tidied.operations.some((o) => autoSections.includes(o._section))
+    ? await applyAuditSections(audit.id, userId, ent, autoSections, { declineOthers: false }).catch((e) => { console.error("[audit] auto-apply failed:", e); return null; })
+    : null;
 
   // Code that moved is activity, and a few milestones are verified by what the audit saw.
   const verified = await verifyMilestonesFromAudit(projectId, { id: audit.id, signals: digest.signals, findings, runtime }).catch((e) => { console.error("[audit] verifiers failed:", e); return { verified: [], marked: [] }; });
@@ -304,7 +381,46 @@ export async function runCodeAudit(opts: {
     metadata: { source: snapshot.source, stage: audit.stage },
   }).catch(() => {});
 
-  res.json({ audit, creditsCharged: CREDIT_COSTS.codeAudit, verifiedMilestones: verified });
+  res.json({
+    audit: autoApplied ? await storage.getCodeAudit(audit.id) : audit,
+    creditsCharged: CREDIT_COSTS.codeAudit, verifiedMilestones: verified,
+    autoApplied: autoApplied ? { changes: autoApplied.changes.map((c) => c.description), skipped: autoApplied.skipped } : null,
+  });
+}
+
+/**
+ * Applying an audit's catch-up, a section at a time. Each edit is marked
+ * applied as it goes; with `declineOthers`, the pending ones outside the chosen
+ * sections are marked declined — which is how the next audit knows not to
+ * propose them again. The audit counts as applied once nothing is pending.
+ */
+export async function applyAuditSections(
+  auditId: string, userId: string, ent: { aiMilestones?: boolean; roadmapUpdates?: boolean },
+  sections: readonly string[], opts: { declineOthers: boolean },
+) {
+  const audit = await storage.getCodeAudit(auditId);
+  if (!audit) throw Object.assign(new Error("Audit not found"), { status: 404 });
+  const ops = ((audit.operations as any[]) ?? []).map((o) => ({ ...o }));
+  const pending = (o: any) => !o._status || o._status === "pending";
+  const chosen = ops.filter((o) => pending(o) && sections.includes(o._section ?? "plan"));
+  const { changes, skipped } = chosen.length
+    ? await applyProjectOperations(audit.projectId, userId, chosen.map(({ _section, _status, _label, ...op }) => op), {
+        canEditMilestones: ent.aiMilestones, canEditRoadmap: ent.roadmapUpdates, maxOperations: 200, source: "audit",
+      })
+    : { changes: [], skipped: [] as string[] };
+  for (const o of ops) {
+    if (!pending(o)) continue;
+    if (sections.includes(o._section ?? "plan")) o._status = "applied";
+    else if (opts.declineOthers) o._status = "declined";
+  }
+  const findings = (audit.findings as any) ?? {};
+  if (findings.catchUp) findings.catchUp.applied = [...(findings.catchUp.applied ?? []), ...changes.map((c) => c.description)].slice(-200);
+  await storage.updateCodeAudit(audit.id, {
+    operations: ops, findings,
+    ...(ops.some(pending) ? {} : { appliedAt: new Date() }),
+  } as any);
+  if (changes.length) await refreshPace(audit.projectId).catch(() => {});
+  return { changes, skipped };
 }
 
 export function registerCodeAuditRoutes(app: Express) {
@@ -423,7 +539,7 @@ export function registerCodeAuditRoutes(app: Express) {
       // this endpoint costs and what stops it is readable from the route table.
       if (!(await requireCredits(res, userId, CREDIT_COSTS.codeAudit, "a codebase audit"))) return;
 
-      await runCodeAudit({ projectId, userId, project, ent, res, snapshot, sourceKind, repoMeta });
+      await runCodeAudit({ projectId, userId, project, ent, res, snapshot, sourceKind, repoMeta, githubToken: token?.trim() || undefined });
     } catch (error: any) {
       console.error("Code audit error:", error);
       // Ingest errors carry messages written for the user; keep them.
@@ -435,10 +551,9 @@ export function registerCodeAuditRoutes(app: Express) {
   });
 
   /**
-   * Brings the board in line with the audit.
-   *
-   * Marked applied afterwards so the same audit can't be run twice, which
-   * would re-create tasks it already created.
+   * Brings the project in line with the audit: the sections the builder chose
+   * (all pending ones when none are named). Pending edits outside a named
+   * choice are declined, and the next audit won't propose them again.
    */
   app.post("/api/code-audits/:auditId/apply", isAuthenticated, async (req: any, res) => {
     try {
@@ -447,32 +562,43 @@ export function registerCodeAuditRoutes(app: Express) {
 
       const userId = (req.user as any).id;
       if (!(await isMember(userId, audit.projectId))) return res.status(403).json({ message: "Unauthorized" });
-      if (audit.appliedAt) {
-        return res.status(409).json({ message: "This audit has already been applied. Run a new one to pick up changes since." });
+      const operations = audit.operations as any[];
+      const pending = (Array.isArray(operations) ? operations : []).filter((o) => !o?._status || o._status === "pending");
+      if (!pending.length) {
+        return res.status(409).json({ message: "Nothing from this audit is waiting. Run a new one to pick up changes since." });
       }
 
       const ent = await requireFeature(res, userId, "aiMilestones", "Nova codebase audits");
       if (!ent) return;
 
-      const operations = audit.operations as unknown;
-      if (!Array.isArray(operations) || !operations.length) {
-        return res.status(400).json({ message: "This audit didn't propose any changes." });
-      }
-
-      const { changes, skipped } = await applyProjectOperations(audit.projectId, userId, operations, {
-        canEditMilestones: ent.aiMilestones,
-        canEditRoadmap: ent.roadmapUpdates,
-        maxOperations: 80,
-      });
-      if (!changes.length) {
+      const named = Array.isArray(req.body?.sections) ? req.body.sections.map(String).filter((x: string) => CATCHUP_SECTIONS.some((c) => c.id === x)) : null;
+      const sections = named ?? CATCHUP_SECTIONS.map((c) => c.id);
+      const { changes, skipped } = await applyAuditSections(audit.id, userId, ent, sections, { declineOthers: !!named });
+      if (!changes.length && pending.some((o) => sections.includes(o._section ?? "plan"))) {
         return res.status(422).json({ message: "None of those changes could be applied.", skipped });
       }
-
-      await storage.updateCodeAudit(audit.id, { appliedAt: new Date() } as any);
       res.json({ changes, skipped });
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.status) return res.status(error.status).json({ message: error.message });
       console.error("Code audit apply error:", error);
       res.status(500).json({ message: "Couldn't apply those changes" });
+    }
+  });
+
+  /** What an audit may change on its own for this project. */
+  app.put("/api/projects/:id/audit-settings", isAuthenticated, rateLimit("post"), async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      if (!(await isMember(userId, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
+      const mode = String(req.body?.autoApply ?? "");
+      if (!(["all", "safe", "off"] as const).includes(mode as AuditAutoApply)) {
+        return res.status(400).json({ message: "autoApply must be all, safe or off.", code: "invalid_input", field: "autoApply" });
+      }
+      await storage.updateProject(req.params.id, { auditAutoApply: mode } as any);
+      res.json({ autoApply: mode });
+    } catch (error) {
+      console.error("Audit settings error:", error);
+      res.status(500).json({ message: "Couldn't save that" });
     }
   });
 

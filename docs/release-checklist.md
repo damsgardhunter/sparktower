@@ -22,15 +22,29 @@ export PROD_DB="postgresql://…"                   # from Replit → Secrets �
       ```
       Branch protection requires it, but check anyway; an admin push bypasses it.
 
-- [ ] **Migrations checked.** Push the schema to production *before* the new
-      build starts serving, and read what it intends to do before saying yes:
+- [ ] **Migrations applied.** Run them against production *before* the new
+      build starts serving:
       ```sh
-      DATABASE_URL="$PROD_DB" npx drizzle-kit push --verbose
+      DATABASE_URL="$PROD_DB" npm run db:migrate
       ```
-      It prompts on anything destructive (a truncate, a dropped column). If it
-      asks, stop and think — the answer is almost never "yes" on production.
+      Each file in `migrations/` is SQL committed with the change that needed
+      it, and CI refuses a schema change without one, so what runs here is what
+      was reviewed. Read any new file before running it: `DROP`, `ALTER COLUMN
+      … TYPE` and `SET NOT NULL` are the ones that lose data or lock a table.
       Additive changes (new tables, new nullable columns) are safe to apply
       ahead of the code: the old build ignores columns it doesn't know.
+
+      **Once, on the first deploy after the switch to migrations:** production
+      was built by `drizzle-kit push` and already has everything
+      `0000_baseline.sql` creates. Record it as applied rather than running it —
+      check first, then apply, then `db:migrate` as above:
+      ```sh
+      DATABASE_URL="$PROD_DB" npm run db:baseline               # check only
+      DATABASE_URL="$PROD_DB" npm run db:baseline -- --apply
+      ```
+      If the check lists missing tables or columns, production is behind the
+      schema: bring it level with one last reviewed `drizzle-kit push
+      --verbose`, then baseline.
 
 - [ ] **Zero type errors.** `npm run typecheck` passes. There is no baseline
       any more; a new error is a red build.
@@ -105,10 +119,11 @@ in the comment.
 
 - **Code:** Replit → Deployments → previous deployment → Redeploy. Takes about
   a minute. Sessions live in Postgres, so nobody is signed out.
-- **Schema:** `drizzle-kit push` is additive unless you told it otherwise, so
-  rolling back the code without touching the schema is safe. If you *did*
-  approve something destructive, there is no automatic undo — restore from the
-  Replit database snapshot taken before the deploy (Database → Backups).
+- **Schema:** migrations only go forward. An additive one leaves the old code
+  working, so rolling back the code without touching the schema is safe. A
+  destructive one has no automatic undo — restore from the Replit database
+  snapshot taken before the deploy (Database → Backups), or write a new
+  migration that puts back what you need.
 - **Can't deploy a fix in the next ten minutes?** Turn the surface off at
   **$APP/admin/surfaces**. It reaches every instance within ten seconds and
   returns 404 for the whole route prefix, which reads as "this feature doesn't

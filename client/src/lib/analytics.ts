@@ -63,6 +63,16 @@ function flush(final = false) {
   }
 }
 
+/**
+ * Sends the queue now rather than at the end of the batch window. For events
+ * that other rows are ordered against — opening Discover has to be stored
+ * before the follow that comes seconds later, and the follow is recorded by
+ * its own endpoint the moment it happens.
+ */
+export function flushNow() {
+  flush();
+}
+
 function enqueue(event: QueuedEvent) {
   queue.push(event);
   if (queue.length >= MAX_BATCH_EVENTS) return flush();

@@ -1,0 +1,55 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1789156253882,
+      "tag": "0000_baseline",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1789408657666,
+      "tag": "0001_feedback_loop",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789418209272,
+      "tag": "0002_feed_comment_threads",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789418866683,
+      "tag": "0003_project_profile_visuals",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789420074596,
+      "tag": "0004_audit_auto_apply",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789423745376,
+      "tag": "0005_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789430087980,
+      "tag": "0006_capital_route_and_investment_applications",
+      "breakpoints": true
+    }
+  ]
+}

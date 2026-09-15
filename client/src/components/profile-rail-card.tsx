@@ -1,3 +1,4 @@
+import { PinnedBadges } from "@/components/pinned-badges";
 import { useRef } from "react";
 import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -153,6 +154,7 @@ export function ProfileRailCard() {
         {profile?.headline && (
           <p className="text-xs text-muted-foreground leading-snug mt-0.5 line-clamp-2">{profile.headline}</p>
         )}
+        <PinnedBadges userId={profile?.userId} className="mt-1.5 flex-wrap" />
         {profile?.location && (
           <p className="text-[11px] text-muted-foreground mt-1 flex items-center gap-1">
             <MapPin className="h-3 w-3 shrink-0" /> {profile.location}
@@ -195,7 +197,7 @@ export function ProfileRailCard() {
 
             <RailDivider />
             <RailRow
-              href="/profile"
+              href="/projects?view=mine"
               label="My projects"
               sublabel={`${stats.projects} owned · ${stats.tasksCompleted} tasks shipped`}
               icon={FolderKanban}

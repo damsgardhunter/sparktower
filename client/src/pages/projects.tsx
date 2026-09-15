@@ -14,7 +14,7 @@ import {
 import { useEffect, useState } from "react";
 import { openDiscover } from "@/lib/explore";
 import { Button } from "@/components/ui/button";
-import { Link, useSearch } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import type { Project, User, UserProfile } from "@shared/schema";
 import { Loader2, Search, Plus } from "lucide-react";
 
@@ -22,20 +22,32 @@ type ProjectWithDetails = Project & { owner: User; profile?: UserProfile };
 
 export default function ProjectsPage() {
   const [search, setSearch] = useState("");
+  const query = new URLSearchParams(useSearch());
+  const [, setLocation] = useLocation();
+  // `?view=mine` — your own projects, owned or joined. Where "My projects" on the home rail goes.
+  const mine = query.get("view") === "mine";
   // `?category=` — where "More like this" sends people after following a project.
-  const wantedCategory = new URLSearchParams(useSearch()).get("category");
+  const wantedCategory = query.get("category");
   const [category, setCategory] = useState(wantedCategory ?? "all");
   useEffect(() => { if (wantedCategory) setCategory(wantedCategory); }, [wantedCategory]);
   const [status, setStatus] = useState("all");
 
   // The project list is an Explore surface — see lib/explore.ts.
-  useEffect(() => { openDiscover("projects"); }, []);
+  // Your own list isn't discovery, so it isn't counted as a visit to it.
+  useEffect(() => { if (!mine) openDiscover("projects"); }, [mine]);
   const followed = useFollowedProjectIds();
   const { updates, byKey } = useExploreUpdates();
 
-  const { data: projects, isLoading } = useQuery<ProjectWithDetails[]>({
+  const { data: allProjects, isLoading: allLoading } = useQuery<ProjectWithDetails[]>({
     queryKey: ["/api/projects"],
+    enabled: !mine,
   });
+  const { data: myProjects, isLoading: mineLoading } = useQuery<ProjectWithDetails[]>({
+    queryKey: ["/api/user/projects"],
+    enabled: mine,
+  });
+  const projects = mine ? myProjects : allProjects;
+  const isLoading = mine ? mineLoading : allLoading;
 
   const filteredProjects = projects?.filter((p) => {
     const matchesSearch = p.title.toLowerCase().includes(search.toLowerCase()) ||
@@ -49,10 +61,16 @@ export default function ProjectsPage() {
 
   return (
     <div className="p-6 space-y-6 overflow-y-auto h-full pb-20">
-      <ReturnBanner updates={updates} />
+      {!mine && <ReturnBanner updates={updates} />}
       <div className="flex flex-col gap-4">
         <div className="flex items-center justify-between">
-          <h1 className="text-3xl font-bold tracking-tight">Browse Projects</h1>
+          <div className="space-y-2">
+            <h1 className="text-3xl font-bold tracking-tight">{mine ? "My Projects" : "Browse Projects"}</h1>
+            <div className="flex gap-1" role="tablist" aria-label="Which projects">
+              <Button role="tab" aria-selected={mine} size="sm" variant={mine ? "default" : "ghost"} className="h-8" onClick={() => setLocation("/projects?view=mine")} data-testid="projects-view-mine">My projects</Button>
+              <Button role="tab" aria-selected={!mine} size="sm" variant={!mine ? "default" : "ghost"} className="h-8" onClick={() => setLocation("/projects")} data-testid="projects-view-all">Browse all</Button>
+            </div>
+          </div>
           <Button asChild className="gap-2" data-testid="button-create-project-browse">
             <Link href="/projects/new">
               <Plus className="h-4 w-4" />
@@ -105,11 +123,11 @@ export default function ProjectsPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {filteredProjects?.map((project, i) => (
-            <ProjectCard key={project.id} project={project} explore={{ source: "projects", rankPosition: i + 1 }} following={followed.has(project.id)} update={byKey.get(`project:${project.id}`)} />
+            <ProjectCard key={project.id} project={project} explore={mine ? undefined : { source: "projects", rankPosition: i + 1 }} following={followed.has(project.id)} update={byKey.get(`project:${project.id}`)} />
           ))}
           {filteredProjects?.length === 0 && (
             <div className="col-span-full text-center py-12 text-secondary">
-              No projects found matching your filters.
+              {mine && !projects?.length ? "You haven't started or joined a project yet." : "No projects found matching your filters."}
             </div>
           )}
         </div>

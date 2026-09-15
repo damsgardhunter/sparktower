@@ -9,12 +9,22 @@
 import type { Express } from "express";
 import { storage } from "./storage";
 import { db } from "./db";
-import { users, userProfiles, projects, projectMembers, projectCheckIns } from "@shared/schema";
-import { eq, and, or, ilike, ne } from "drizzle-orm";
+import { users, userProfiles, projects, projectMembers, projectCheckIns, feedReactions, feedComments, feedCommentReactions } from "@shared/schema";
+import { eq, and, or, ilike, ne, desc } from "drizzle-orm";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { recordLoopEvent } from "./loop-metrics";
 import { rateLimit } from "./moderation";
 import { LOOP_EVENTS } from "@shared/loop-events";
+import { validateAsks } from "@shared/feedback-loop";
+import { closableComments, markClosed, markClosureAnswered, projectTeam } from "./feedback-loop-routes";
+import { notify, unnotify, notifyFollowersOfPost, notifyComment } from "./notifications";
+
+/** Comments on a post, each saying whether its author is on the post's project — only outsiders' count as feedback. */
+async function commentsWithTeam(post: { id: string; projectId: string | null }, viewerId?: string) {
+  const comments = await storage.getFeedComments(post.id, viewerId);
+  const team = post.projectId ? await projectTeam(post.projectId) : null;
+  return comments.map((c) => ({ ...c, byTeam: !!team?.has(c.authorId) }));
+}
 import {
   POST_TYPES, POST_TYPES_BY_KEY, REACTIONS, MAX_POST_LENGTH,
   MAX_COMMENT_LENGTH, MAX_POST_MEDIA,
@@ -76,7 +86,7 @@ export async function publishSystemPost(input: {
   entityId?: string;
 }): Promise<void> {
   try {
-    await storage.createFeedPost({
+    const post = await storage.createFeedPost({
       authorId: input.authorId,
       projectId: input.projectId,
       postType: input.postType,
@@ -87,6 +97,8 @@ export async function publishSystemPost(input: {
       entityType: input.entityType || null,
       entityId: input.entityId || null,
     });
+    // A milestone landing or a launch is exactly the progress a follower came for.
+    void notifyFollowersOfPost(post);
   } catch (err) {
     console.error("Failed to publish system feed post (non-fatal):", err);
   }
@@ -139,9 +151,13 @@ export function registerFeedRoutes(app: Express) {
   app.post("/api/feed", isAuthenticated, rateLimit("feedPost"), async (req: any, res) => {
     try {
       const userId = req.user.id;
-      const { postType, content, projectId, mediaUrls, mentions } = req.body as {
+      const { postType, content, projectId, mediaUrls, mentions, asks: rawAsks, closesCommentIds } = req.body as {
         postType?: string; content?: string; projectId?: string;
         mediaUrls?: string[]; mentions?: unknown;
+        /** Specific questions for readers (a project's progress post). */
+        asks?: unknown;
+        /** Feedback this update acted on, credited on the post and told to whoever gave it. */
+        closesCommentIds?: unknown;
       };
 
       if (!FEED_POST_TYPES.includes(postType as any)) {
@@ -161,6 +177,15 @@ export function registerFeedRoutes(app: Express) {
         if (!isMember) return res.status(403).json({ message: "You can only post for projects you're on." });
       }
 
+      // Asks and credited feedback belong to a project's progress post.
+      const asked = validateAsks(rawAsks);
+      if ("error" in asked) return res.status(400).json({ message: asked.error, code: "invalid_input", field: "asks" });
+      if (!projectId && (asked.asks.length || (Array.isArray(closesCommentIds) && closesCommentIds.length))) {
+        return res.status(400).json({ message: "Asks and credited feedback go on a post for one of your projects.", code: "invalid_input", field: "projectId" });
+      }
+      const closes = projectId ? await closableComments(projectId, closesCommentIds) : { ids: [] as string[] };
+      if ("error" in closes) return res.status(400).json({ message: closes.error, code: "invalid_input", field: "closesCommentIds" });
+
       const post = await storage.createFeedPost({
         authorId: userId,
         projectId: projectId || null,
@@ -168,8 +193,13 @@ export function registerFeedRoutes(app: Express) {
         content: content.trim(),
         mediaUrls: Array.isArray(mediaUrls) ? mediaUrls.slice(0, MAX_POST_MEDIA) : [],
         mentions: await resolveMentions(mentions),
+        asks: asked.asks,
         isSystemGenerated: false,
       });
+      await markClosed(post, closes.ids);
+      // The Explore loop's way back: people following this builder or project hear there's progress.
+      void notifyFollowersOfPost(post);
+      void notify({ recipients: ((post.mentions as FeedMention[]) ?? []).map((m) => m.userId), actorId: userId, kind: "mention", targetId: post.id, postId: post.id, projectId: post.projectId, excerpt: post.content });
 
       res.json(await storage.getFeedPost(post.id, userId));
     } catch (error) {
@@ -207,6 +237,8 @@ export function registerFeedRoutes(app: Express) {
       // Same reaction again means "take it back".
       const next = post.viewerReaction === reaction ? null : (reaction ?? null);
       const result = await storage.setFeedReaction(req.params.id, userId, next);
+      if (next) void notify({ recipients: [post.authorId], actorId: userId, kind: "post_reaction", targetId: post.id, postId: post.id, projectId: post.projectId });
+      else void unnotify({ actorId: userId, kind: "post_reaction", targetId: post.id });
       res.json(result);
     } catch (error) {
       console.error("React error:", error);
@@ -214,11 +246,50 @@ export function registerFeedRoutes(app: Express) {
     }
   });
 
+  /** One post, for its own page. Same visibility as the feed: private projects' posts only to their team. */
+  app.get("/api/feed/:id", async (req: any, res, next) => {
+    // Named sub-routes registered after this one (my-projects, mention-search, config) aren't post ids.
+    if (["config", "my-projects", "mention-search", "comments"].includes(req.params.id)) return next();
+    try {
+      const post = await storage.getFeedPost(req.params.id, req.user?.id);
+      if (!post) return res.status(404).json({ message: "Post not found" });
+      if (post.project?.isPrivate && !post.viewerIsTeam) return res.status(404).json({ message: "Post not found" });
+      res.json(post);
+    } catch (error) {
+      console.error("Post error:", error);
+      res.status(500).json({ message: "Failed to load the post" });
+    }
+  });
+
+  /** Who reacted to a post, and how: the interactions on its own page. */
+  app.get("/api/feed/:id/reactions", async (req: any, res) => {
+    try {
+      const post = await storage.getFeedPost(req.params.id, req.user?.id);
+      if (!post || (post.project?.isPrivate && !post.viewerIsTeam)) return res.status(404).json({ message: "Post not found" });
+      const rows = await db
+        .select({ userId: feedReactions.userId, reaction: feedReactions.reaction, createdAt: feedReactions.createdAt, firstName: users.firstName, lastName: users.lastName, email: users.email, displayName: userProfiles.displayName, headline: userProfiles.headline, avatarUrl: userProfiles.avatarUrl, profileImageUrl: users.profileImageUrl })
+        .from(feedReactions)
+        .innerJoin(users, eq(users.id, feedReactions.userId))
+        .leftJoin(userProfiles, eq(userProfiles.userId, users.id))
+        .where(eq(feedReactions.postId, post.id))
+        .orderBy(desc(feedReactions.createdAt))
+        .limit(200);
+      res.json(rows.map((r) => ({
+        userId: r.userId, reaction: r.reaction, createdAt: r.createdAt,
+        name: feedDisplayName(r, { displayName: r.displayName }),
+        headline: r.headline || null, avatarUrl: r.avatarUrl || r.profileImageUrl || null,
+      })));
+    } catch (error) {
+      console.error("Reactions error:", error);
+      res.status(500).json({ message: "Failed to load reactions" });
+    }
+  });
+
   app.get("/api/feed/:id/comments", async (req: any, res) => {
     try {
       const post = await storage.getFeedPost(req.params.id, req.user?.id);
       if (!post) return res.status(404).json({ message: "Post not found" });
-      res.json(await storage.getFeedComments(req.params.id));
+      res.json(await commentsWithTeam(post, req.user?.id));
     } catch (error) {
       console.error("Comments error:", error);
       res.status(500).json({ message: "Failed to load comments" });
@@ -239,18 +310,60 @@ export function registerFeedRoutes(app: Express) {
       const post = await storage.getFeedPost(req.params.id, userId);
       if (!post) return res.status(404).json({ message: "Post not found" });
 
-      await storage.createFeedComment({
+      // A reply hangs off a comment on this same post that's still there to reply to.
+      if (parentCommentId) {
+        const [parent] = await db.select({ postId: feedComments.postId, hiddenAt: feedComments.hiddenAt, deletedAt: feedComments.deletedAt })
+          .from(feedComments).where(eq(feedComments.id, String(parentCommentId)));
+        if (!parent || parent.postId !== req.params.id) return res.status(400).json({ message: "That comment isn't on this post.", code: "invalid_input", field: "parentCommentId" });
+        if (parent.hiddenAt || parent.deletedAt) return res.status(400).json({ message: "That comment is gone, so it can't be replied to.", code: "invalid_input", field: "parentCommentId" });
+      }
+
+      const created = await storage.createFeedComment({
         postId: req.params.id,
         authorId: userId,
         content: content.trim(),
         mentions: await resolveMentions(mentions),
         parentCommentId: parentCommentId || null,
       });
+      // Answering the update that used your feedback: the loop has come round again.
+      void markClosureAnswered(userId, post.id).catch(() => {});
+      void notifyComment({
+        commentId: created.id, postId: post.id, postAuthorId: post.authorId, projectId: post.projectId,
+        actorId: userId, content: created.content, parentCommentId: created.parentCommentId,
+        mentionIds: ((created.mentions as FeedMention[]) ?? []).map((m) => m.userId),
+      });
 
-      res.json(await storage.getFeedComments(req.params.id));
+      res.json(await commentsWithTeam(post, req.user?.id));
     } catch (error) {
       console.error("Create comment error:", error);
       res.status(500).json({ message: "Failed to post your comment" });
+    }
+  });
+
+  /** Reacting to a comment: the same set and the same toggle as a post. */
+  app.post("/api/feed/comments/:commentId/react", isAuthenticated, rateLimit("react"), async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const { reaction } = req.body as { reaction?: string };
+      if (reaction != null && !FEED_REACTIONS.includes(reaction as any)) {
+        return res.status(400).json({ message: `reaction must be one of: ${FEED_REACTIONS.join(", ")}` });
+      }
+      const [comment] = await db.select().from(feedComments).where(eq(feedComments.id, req.params.commentId));
+      if (!comment || comment.hiddenAt || comment.deletedAt) return res.status(404).json({ message: "Comment not found" });
+      // Only on a post the reactor can see.
+      const post = await storage.getFeedPost(comment.postId, userId);
+      if (!post || (post.project?.isPrivate && !post.viewerIsTeam)) return res.status(404).json({ message: "Comment not found" });
+
+      const [current] = await db.select({ reaction: feedCommentReactions.reaction }).from(feedCommentReactions)
+        .where(and(eq(feedCommentReactions.commentId, comment.id), eq(feedCommentReactions.userId, userId)));
+      const next = current?.reaction === reaction ? null : (reaction ?? null);
+      const result = await storage.setFeedCommentReaction(comment.id, userId, next);
+      if (next) void notify({ recipients: [comment.authorId], actorId: userId, kind: "comment_reaction", targetId: comment.id, postId: comment.postId, projectId: post.projectId, excerpt: comment.content });
+      else void unnotify({ actorId: userId, kind: "comment_reaction", targetId: comment.id });
+      res.json(result);
+    } catch (error) {
+      console.error("Comment react error:", error);
+      res.status(500).json({ message: "Failed to react" });
     }
   });
 

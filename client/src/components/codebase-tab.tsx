@@ -19,9 +19,11 @@ import { useUpload } from "@/hooks/use-upload";
 import {
   Loader2, Github, Upload, ScanSearch, CheckCircle2, AlertTriangle, XCircle,
   CircleDot, FileCode, Lock, ChevronDown, ChevronRight, Wand2, ShieldAlert,
-  Boxes, Route as RouteIcon, Database, FlaskConical, Check,
+  Boxes, Route as RouteIcon, Database, FlaskConical, Check, Repeat,
 } from "lucide-react";
 import { CREDIT_COSTS } from "@shared/plans";
+import { LOOP_TYPE_INFO, type LoopClosureRead } from "@shared/phase-trees";
+import { AuditCatchUp, refreshAfterCatchUp } from "@/components/audit-catchup";
 import type { ProjectCodeAudit } from "@shared/schema";
 
 interface AuditListItem {
@@ -156,16 +158,17 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
   const auditMutation = useMutation({
     mutationFn: async (payload: { repoUrl?: string; token?: string; objectPath?: string; fileName?: string }) => {
       const res = await apiRequest("POST", `/api/projects/${projectId}/code-audit`, payload);
-      return res.json() as Promise<{ audit: ProjectCodeAudit; creditsCharged: number }>;
+      return res.json() as Promise<{ audit: ProjectCodeAudit; creditsCharged: number; autoApplied: { changes: string[]; skipped: string[] } | null }>;
     },
     onSuccess: (result) => {
       setSelectedId(result.audit.id);
       queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "code-audits"] });
       queryClient.invalidateQueries({ queryKey: ["/api/subscription"] });
       queryClient.setQueryData(["/api/code-audits", result.audit.id], result.audit);
+      if (result.autoApplied?.changes.length) refreshAfterCatchUp(projectId, result.audit.id);
       toast({
         title: "Audit complete",
-        description: `${result.audit.stage} · ${result.audit.completionPercent}% built · ${result.creditsCharged} credits`,
+        description: `${result.audit.stage} · ${result.audit.completionPercent}% built · ${result.creditsCharged} credits${result.autoApplied?.changes.length ? ` · Nova updated ${result.autoApplied.changes.length} thing${result.autoApplied.changes.length === 1 ? "" : "s"}` : ""}`,
       });
     },
     onError: (err: any) => {
@@ -455,6 +458,8 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
               </div>
             )}
 
+            <AuditCatchUp projectId={projectId} audit={audit as any} />
+
             {findings.nextThreeThings?.length > 0 && (
               <div className="rounded-md border border-primary/40 bg-primary/5 p-3 space-y-1.5">
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-primary">Do these next</p>
@@ -465,6 +470,40 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
                   </p>
                 ))}
               </div>
+            )}
+
+            {/* --- Loops: does each one bring someone back to its first step? --- */}
+            {findings.loops?.length > 0 && (
+              <Section title="Do your loops close?" count={(findings.loops as LoopClosureRead[]).filter((l) => l.closure === "closed").length} icon={Repeat} defaultOpen>
+                <div className="space-y-2" data-testid="audit-loops">
+                  <p className="text-xs text-muted-foreground">
+                    {(findings.loops as LoopClosureRead[]).filter((l) => l.closure === "closed").length} of {findings.loops.length} close in the code. A loop is closed only when every step is built and something brings the user back to the first step.
+                  </p>
+                  {(findings.loops as LoopClosureRead[]).map((l) => (
+                    <div key={l.loopTaskId} className="rounded-md border border-border p-2.5 space-y-1.5" data-testid={`audit-loop-${l.loopTaskId}`}>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {l.closure === "closed" ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : l.closure === "open" ? <AlertTriangle className="h-3.5 w-3.5 text-amber-500" /> : <XCircle className="h-3.5 w-3.5 text-muted-foreground" />}
+                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{LOOP_TYPE_INFO[l.type]?.label ?? l.type}</span>
+                        <span className="text-sm font-medium">{l.title}</span>
+                        <Badge variant="outline" className="ml-auto text-[10px]">{l.closure === "closed" ? "closed" : l.closure === "open" ? "open" : "not built"}</Badge>
+                      </div>
+                      {l.stages.length > 0 && (
+                        <ol className="text-xs space-y-0.5 pl-5 list-decimal">
+                          {l.stages.map((st, i) => (
+                            <li key={i} className={st.status === "built" ? "" : st.status === "partial" ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground"}>
+                              {st.step} <span className="text-muted-foreground">— {st.status}{st.evidence.length ? ` · ${st.evidence.join(", ")}` : ""}</span>
+                            </li>
+                          ))}
+                        </ol>
+                      )}
+                      {l.returnPath && <p className="text-xs"><span className="font-medium">Back to step one via:</span> {l.returnPath.mechanism}{l.returnPath.evidence.length ? <span className="text-muted-foreground"> · {l.returnPath.evidence.join(", ")}</span> : null}</p>}
+                      {l.breaksAt && <p className="text-xs"><span className="font-medium">Breaks at:</span> {l.breaksAt}</p>}
+                      {l.fix && <p className="text-xs"><span className="font-medium">To close it:</span> {l.fix}</p>}
+                      {l.note && <p className="text-xs text-muted-foreground italic">{l.note}</p>}
+                    </div>
+                  ))}
+                </div>
+              </Section>
             )}
 
             {/* --- Reconciliation: the reason this exists --- */}
@@ -635,7 +674,7 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
                 <Badge variant="secondary" className="gap-1 text-[10px]">
                   <Check className="h-3 w-3" /> Applied {new Date(audit.appliedAt).toLocaleDateString()}
                 </Badge>
-              ) : (Array.isArray(audit.operations) && audit.operations.length > 0) ? (
+              ) : (!findings.catchUp && Array.isArray(audit.operations) && audit.operations.length > 0) ? (
                 <Button
                   size="sm" className="gap-1.5"
                   disabled={applyMutation.isPending}

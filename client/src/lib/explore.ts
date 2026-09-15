@@ -12,9 +12,9 @@
  * break the thing someone was actually doing.
  */
 import {
-  EXPLORE_ACTIONS, EXPLORE_EVENTS, type ExploreEventName, type ExploreProps, type ExploreSource,
+  EXPLORE_EVENTS, type ExploreContext, type ExploreEventName, type ExploreProps, type ExploreSource,
 } from "@shared/explore-events";
-import { onBeforeLeave, trackEvent } from "@/lib/analytics";
+import { flushNow, onBeforeLeave, trackEvent } from "@/lib/analytics";
 
 /** This tab has opened Discover before. sessionStorage: it lives exactly as long as the tab. */
 const OPENED_KEY = "st_explore_opened";
@@ -28,10 +28,30 @@ const impressions = new Set<string>();
 /** The last open, to ignore React's development double-mount rather than count a return. */
 let lastOpen = { source: "", at: 0 };
 
+/**
+ * One of the loop's events that only the browser sees. Not the actions:
+ * follow, connect and message are recorded by their endpoints — pass
+ * `exploreContext()` with those requests instead.
+ */
 export function trackExplore(name: ExploreEventName, props: ExploreProps = {}) {
-  const timed = EXPLORE_ACTIONS.includes(name) && openedAt ? { ...props, timeToActionMs: Date.now() - openedAt } : props;
   active = true;
-  trackEvent(name, { ...timed });
+  trackEvent(name, { ...props });
+}
+
+/**
+ * What to send as `explore` with a follow, connection request or message, so
+ * the event the server records knows the page, the card's position and how
+ * long after opening Discover this was. Anything queued goes out first, so the
+ * open that led here is stored before the action.
+ */
+export function exploreContext(source: ExploreSource, rankPosition?: number): ExploreContext {
+  active = true;
+  flushNow();
+  return {
+    source,
+    ...(rankPosition ? { rankPosition } : {}),
+    ...(openedAt ? { timeToActionMs: Date.now() - openedAt } : {}),
+  };
 }
 
 /**
@@ -56,6 +76,9 @@ export function openDiscover(source: ExploreSource) {
   openedAt = now;
   trackExplore(EXPLORE_EVENTS.openDiscover, { source });
   if (before) trackExplore(EXPLORE_EVENTS.returnToDiscover, { source });
+  // Not left in the batch: an action seconds from now is stored by its own
+  // endpoint, and the cycle count reads the open and the action in order.
+  flushNow();
 }
 
 /**

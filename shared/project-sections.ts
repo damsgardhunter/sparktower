@@ -1,3 +1,4 @@
+import { productNameNote } from "./project-draft";
 import type { Project } from "./schema";
 
 /**
@@ -157,5 +158,6 @@ export function getProjectBriefContext(project: ProjectLike): { label: string; v
 export function formatProjectBriefForPrompt(project: ProjectLike): string {
   const pairs = getProjectBriefContext(project);
   if (pairs.length === 0) return "No project brief details available.";
-  return pairs.map((p) => `${p.label}: ${p.value}`).join("\n");
+  const naming = productNameNote(project.title);
+  return (naming ? `${naming}\n` : "") + pairs.map((p) => `${p.label}: ${p.value}`).join("\n");
 }

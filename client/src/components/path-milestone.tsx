@@ -3,7 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { ACTOR_LABEL, type Actor, type VerificationTier } from "@shared/phase-trees";
+import { ACTOR_LABEL, type Actor, type VerificationTier, type IntakeQuestion, type WorkKind } from "@shared/phase-trees";
 import { WorkView, refreshPath, useFail, type WorkRow } from "@/components/path-work";
 import { CheckCircle2, Circle, Loader2, RotateCcw, Sparkles, User, Plus } from "lucide-react";
 
@@ -11,7 +11,7 @@ type How = "not-done" | "verified" | "nova-recognised" | "you-marked" | "carried
 interface TaskView { taskId: string; title: string; status: string; completedAt: string | null; how: How; actor: Actor; answer: string | null; work: WorkRow | null }
 interface Detail {
   phase: { id: string; title: string; optional: boolean };
-  milestone: { id: string; title: string; description: string; actor: Actor; estimateMinutes: number | null; tier: VerificationTier; expandsFrom?: string; sharedId?: string };
+  milestone: { id: string; title: string; description: string; actor: Actor; estimateMinutes: number | null; tier: VerificationTier; expandsFrom?: string; sharedId?: string; intake?: IntakeQuestion[]; work?: WorkKind; prefill?: "resume" };
   isSource: boolean;
   task: TaskView | null;
   loops: TaskView[];
@@ -64,7 +64,7 @@ export function MilestoneDetail({ projectId, backboneId }: { projectId: string; 
     </div>
   );
 
-  const TaskBlock = ({ t, authored, label }: { t: TaskView; authored?: string; label?: string }) => (
+  const TaskBlock = ({ t, authored, label, own }: { t: TaskView; authored?: string; label?: string; own?: boolean }) => (
     <div className="space-y-2" data-testid={`milestone-task-${t.taskId}`}>
       {label && <p className="text-sm font-medium flex items-center gap-2">{t.status === "done" ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <Circle className="h-3.5 w-3.5 text-muted-foreground/40" />}{label}</p>}
       {authored && <p className="text-sm text-muted-foreground leading-relaxed">{authored}</p>}
@@ -81,7 +81,8 @@ export function MilestoneDetail({ projectId, backboneId }: { projectId: string; 
       {!t.answer && t.status === "done" && !t.work && (
         <p className="text-xs text-muted-foreground" data-testid="milestone-empty">Nothing written here yet. "Re-evaluate where I'm at" fills this in from your brief, setup and audit where they have it; otherwise have Nova draft it.</p>
       )}
-      <WorkView projectId={projectId} taskId={t.taskId} actor={t.actor} work={t.work} done={t.status === "done"} compact />
+      <WorkView projectId={projectId} taskId={t.taskId} actor={t.actor} work={t.work} done={t.status === "done"} compact
+        intake={own ? milestone.intake : undefined} workKind={own ? milestone.work : undefined} prefill={own ? milestone.prefill : undefined} />
       <div className="flex gap-2 flex-wrap">
         {t.status === "done"
           ? <Button size="sm" variant="ghost" className="text-xs" disabled={setStatus.isPending} onClick={() => setStatus.mutate({ taskId: t.taskId, status: "todo" })} data-testid="button-reopen"><RotateCcw className="h-3 w-3 mr-1" />Reopen</Button>
@@ -92,7 +93,7 @@ export function MilestoneDetail({ projectId, backboneId }: { projectId: string; 
 
   return (
     <div className="rounded-lg border border-border p-4 space-y-4 bg-background" data-testid="milestone-detail">
-      {task ? <TaskBlock t={task} authored={milestone.description} /> : <p className="text-sm text-muted-foreground">{milestone.description}</p>}
+      {task ? <TaskBlock t={task} authored={milestone.description} own /> : <p className="text-sm text-muted-foreground">{milestone.description}</p>}
       {(loops.length > 0 || isSource) && (
         <div className="space-y-3 border-t border-border pt-3" data-testid="milestone-loops">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">Loops · {loops.filter((l) => l.status === "done").length}/{loops.length}</p>

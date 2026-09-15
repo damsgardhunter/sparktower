@@ -38,12 +38,13 @@ import { renderMerchFace, type MerchFace } from "./merch-render";
 import {
   generateBadgeArt, setShowcase, upsertBackerBadge, renderBadgeImage, projectLogoBuffer,
   badgeLogoUrl,
+  ensureCreatorBadges,
 } from "./backer-badges";
 import { ObjectStorageService } from "./replit_integrations/object_storage";
 import {
   DEFAULT_MERCH_CONFIG, DEFAULT_TIER_TEMPLATE, DIGITAL_REWARD_KEYS, MERCH_PRODUCT_KEYS,
   MIN_PLEDGE_CENTS, MAX_PLEDGE_CENTS, REFUND_WINDOW_DAYS, DEFAULT_TIP_PERCENT,
-  UNCLAIMED_PREFERENCES, MAX_SHOWCASE_BADGES, BADGE_LEVELS, platformFeeCents, creatorPayoutCents, tierForAmount,
+  UNCLAIMED_PREFERENCES, MAX_SHOWCASE_BADGES, BADGE_LEVELS, badgeLevelForAmount, platformFeeCents, creatorPayoutCents, tierForAmount,
   tierNeedsShipping, type MerchConfig,
 } from "@shared/backing";
 import { rateLimit } from "./moderation";
@@ -586,6 +587,9 @@ export function registerBackingRoutes(app: Express) {
         .where(eq(projectBackingCampaigns.projectId, projectId));
       if (!campaign?.enabled) return res.status(404).json({ message: "Not accepting backing" });
 
+      const [project] = await db.select({ logoUrl: projects.logoUrl }).from(projects)
+        .where(eq(projects.id, projectId));
+
       const tiers = await db.select().from(projectBackerTiers)
         .where(and(
           eq(projectBackerTiers.projectId, projectId),
@@ -641,8 +645,17 @@ export function registerBackingRoutes(app: Express) {
           /* Backers are told plainly that money is held and why. */
           fundsHeld: campaign.reviewStatus !== "approved",
         },
+        /*
+         * The badge each rung earns, so a backer sees what goes on their
+         * profile before they pay. The creator's previews are the same art a
+         * real badge is drawn from; where one hasn't been made, the client
+         * shows the logo in that level's metal ring instead.
+         */
+        badgePreviews: (campaign.badgePreviews as Record<string, string>) || {},
+        badgeLogoUrl: badgeLogoUrl(project?.logoUrl ?? null, campaign.merchConfig),
         tiers: tiers.map((t) => ({
           ...t,
+          badgeLevel: badgeLevelForAmount(t.amountCents).key,
           claimed: claimedByTier.get(t.id) ?? 0,
           soldOut: t.maxBackers != null && (claimedByTier.get(t.id) ?? 0) >= t.maxBackers,
         })),
@@ -1104,6 +1117,8 @@ export function registerBackingRoutes(app: Express) {
   /** Every badge someone holds, for their own management screen. */
   app.get("/api/me/badges", isAuthenticated, async (req: any, res) => {
     try {
+      // Projects started before founder badges existed get theirs the first time anyone looks.
+      await ensureCreatorBadges(req.user.id);
       const rows = await db.select({
         badge: backerBadges,
         projectTitle: projects.title,
@@ -1120,19 +1135,26 @@ export function registerBackingRoutes(app: Express) {
   });
 
   /** The badges someone has pinned. Public — that's the point of pinning. */
-  app.get("/api/users/:userId/badges/backer", async (req, res) => {
+  app.get("/api/users/:userId/badges/backer", async (req: any, res) => {
     try {
+      const userId = String(req.params.userId);
+      const self = req.user?.id === userId;
+      // A creator's founder badges appear on their profile from the start, not only after they open the picker.
+      if (self) await ensureCreatorBadges(userId);
       const rows = await db.select({
         badge: backerBadges,
         projectTitle: projects.title,
+        projectLogo: projects.logoUrl,
+        projectPrivate: projects.isPrivate,
       }).from(backerBadges)
         .innerJoin(projects, eq(projects.id, backerBadges.projectId))
         .where(and(
-          eq(backerBadges.userId, String(req.params.userId)),
+          eq(backerBadges.userId, userId),
           isNotNull(backerBadges.showcaseOrder),
         ))
         .orderBy(backerBadges.showcaseOrder);
-      res.json(rows.map((r) => ({ ...r.badge, projectTitle: r.projectTitle })));
+      // A project that went private stops showing on anyone else's view of the profile — its name is the secret.
+      res.json(rows.filter((r) => self || !r.projectPrivate).map((r) => ({ ...r.badge, projectTitle: r.projectTitle, projectLogo: r.projectLogo })));
     } catch (error) {
       console.error("Public badges error:", error);
       res.status(500).json({ message: "Failed to load badges" });

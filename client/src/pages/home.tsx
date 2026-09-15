@@ -1,3 +1,4 @@
+import { PinnedBadges } from "@/components/pinned-badges";
 import { useQuery } from "@tanstack/react-query";
 import { PrivateBadge } from "@/components/private-badge";
 import { FounderFeed } from "@/components/founder-feed";
@@ -70,8 +71,17 @@ export default function Home() {
             <FounderFeed />
           </div>
 
-          {/* --- The rail. Sticky, so it stays with you down a long feed. --- */}
-          <aside className="space-y-2 lg:sticky lg:top-5" data-testid="home-rail">
+          {/*
+            * --- The rail. Sticky, so it stays with you down a long feed. ---
+            * It's taller than the screen, and a sticky block can't scroll on its
+            * own: scrolling over it moved the feed, and the bottom of the rail
+            * was only reachable at the end of the feed. Capped to the viewport
+            * and given its own scroll, the pointer's side is the side that moves.
+            */}
+          <aside
+            className="space-y-2 lg:sticky lg:top-5 lg:max-h-[calc(100dvh-7rem)] lg:overflow-y-auto lg:pr-1 home-rail-scroll"
+            data-testid="home-rail"
+          >
             <ProfileRailCard />
             <MyProjectsCard />
 
@@ -168,31 +178,30 @@ export default function Home() {
               ) : matches && matches.length > 0 ? (
                 <div className="pt-0.5">
                   {matches.slice(0, 4).map((match) => (
-                    <Link
-                      key={match.id}
-                      href={`/profile/${match.matchedUser.id}`}
-                      className="flex items-center gap-2 -mx-3 px-3 py-1.5 hover:bg-accent transition-colors"
-                      data-testid={`rail-match-${match.id}`}
-                    >
-                      <UserAvatar
-                        src={match.matchedProfile?.avatarUrl}
-                        name={match.matchedProfile?.displayName || match.matchedUser.firstName || "Builder"}
-                        className="h-8 w-8 shrink-0"
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-sm font-medium truncate">
-                          {match.matchedProfile?.displayName || match.matchedUser.firstName || "A builder"}
+                    // The row opens the person; the badges under their name open their projects, so they sit beside the link, not inside it.
+                    <div key={match.id} className="-mx-3 px-3 py-1.5 hover:bg-accent transition-colors" data-testid={`rail-match-${match.id}`}>
+                      <Link href={`/profile/${match.matchedUser.id}`} className="flex items-center gap-2">
+                        <UserAvatar
+                          src={match.matchedProfile?.avatarUrl}
+                          name={match.matchedProfile?.displayName || match.matchedUser.firstName || "Builder"}
+                          className="h-8 w-8 shrink-0"
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-medium truncate">
+                            {match.matchedProfile?.displayName || match.matchedUser.firstName || "A builder"}
+                          </span>
+                          <span className="block text-xs text-muted-foreground truncate">
+                            {match.matchedProfile?.headline || "Builder on SparkTower"}
+                          </span>
                         </span>
-                        <span className="block text-xs text-muted-foreground truncate">
-                          {match.matchedProfile?.headline || "Builder on SparkTower"}
-                        </span>
-                      </span>
-                      {match.score !== null && match.score !== undefined && (
-                        <span className="text-xs font-semibold text-primary shrink-0 tabular-nums">
-                          {match.score}%
-                        </span>
-                      )}
-                    </Link>
+                        {match.score !== null && match.score !== undefined && (
+                          <span className="text-xs font-semibold text-primary shrink-0 tabular-nums">
+                            {match.score}%
+                          </span>
+                        )}
+                      </Link>
+                      <PinnedBadges userId={match.matchedUser.id} size="xs" max={5} className="pl-10 mt-0.5" />
+                    </div>
                   ))}
                   <RailDivider />
                   <Link

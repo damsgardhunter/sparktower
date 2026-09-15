@@ -38,7 +38,7 @@ export function ProjectCard({ project, explore, following = false, update }: Pro
     ? { matchType: "project" as const, targetId: project.id, source: explore.source, rankPosition: explore.rankPosition }
     : null;
   const impressionRef = useExploreImpression(target);
-  const ownerName = project.owner?.firstName || project.owner?.email || "Anonymous";
+  const ownerName = project.profile?.displayName || [project.owner?.firstName, project.owner?.lastName].filter(Boolean).join(" ") || project.owner?.email || "A builder";
   const ownerAvatar = project.profile?.avatarUrl;
   const soloMode = !!(project as any).soloMode;
 

@@ -11,6 +11,7 @@ import { storage } from "./storage";
 import { projects } from "@shared/schema";
 import { eq } from "drizzle-orm";
 import type { CapabilityEntry } from "@shared/capabilities";
+import { loopCoverage, type LoopClosureRead } from "@shared/phase-trees";
 import type { RuntimeFacts } from "./runtime-probe";
 import { backboneIdOf, isArchivedPath, refreshPace } from "./phase-trees";
 
@@ -24,6 +25,14 @@ export const VERIFIERS: Record<string, (a: AuditLike) => string | null> = {
   "SHIP.M1.8": (a) => a.runtime?.liveUrl?.ok || a.runtime?.health?.ok ? `live URL answers ${a.runtime?.liveUrl?.status ?? a.runtime?.health?.status} (${a.runtime?.liveUrl?.url ?? a.runtime?.health?.url})` : null,
   "SHIP.M2.4": (a) => cap(a, "auth") === "built" && cap(a, "data") === "built" ? "auth and persistence both built per the capability inventory" : null,
   "SHIP.M3.5": (a) => cap(a, "analytics") === "built" ? "analytics built per the capability inventory" : null,
+  // "Loop closes" is the builder's walk-through; the audit can confirm it when every one of the five kinds closes in code.
+  "SHIP.M2.3": (a) => {
+    const loops = (a.findings?.loops ?? []) as LoopClosureRead[];
+    const covered = loopCoverage(loops.map((l) => ({ type: l.type, written: true }))).complete;
+    return covered && loops.every((l) => l.closure === "closed")
+      ? `all ${loops.length} loops close in code: ${loops.map((l) => `${l.title} (back via ${l.returnPath?.mechanism ?? "?"})`).join("; ").slice(0, 400)}`
+      : null;
+  },
 };
 
 /**

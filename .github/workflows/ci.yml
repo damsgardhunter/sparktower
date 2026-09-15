@@ -77,6 +77,19 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # Every schema change ships with its migration. If generating from
+      # shared/schema.ts writes a new file, the schema changed and nobody ran
+      # `npm run db:generate` — the code would expect a column production
+      # never gets. Nothing here touches a database; generate only diffs files.
+      - name: Migrations match the schema
+        run: |
+          npx drizzle-kit generate
+          if [ -n "$(git status --porcelain migrations)" ]; then
+            git status --porcelain migrations
+            echo "::error::shared/schema.ts has changes with no migration. Run 'npm run db:generate' and commit migrations/."
+            exit 1
+          fi
+
       - name: Test
         run: npm test
 

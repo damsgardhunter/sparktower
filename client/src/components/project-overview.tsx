@@ -10,6 +10,7 @@ import {
   type ProjectSectionKey,
 } from "@shared/project-sections";
 import type { Project } from "@shared/schema";
+import { ProjectVisual } from "@/components/project-visual";
 
 /** Brief fields rendered as a card grid, in display order. */
 const BRIEF_CARDS: { key: ProjectSectionKey; icon: typeof Target; accent: string }[] = [
@@ -69,6 +70,7 @@ export function ProjectOverview({ project, isOwner, onManage }: ProjectOverviewP
           </p>
         </div>
       )}
+      <ProjectVisual visuals={project.profileVisuals} slot="oneLiner" />
 
       {show("mission") && (
         <section className="space-y-3" data-testid="section-overview-mission">
@@ -89,6 +91,7 @@ export function ProjectOverview({ project, isOwner, onManage }: ProjectOverviewP
           </p>
         </section>
       )}
+      <ProjectVisual visuals={project.profileVisuals} slot="about" />
 
       {briefCards.length > 0 && (
         <section className="space-y-3" data-testid="section-overview-brief">
@@ -116,6 +119,8 @@ export function ProjectOverview({ project, isOwner, onManage }: ProjectOverviewP
           </div>
         </section>
       )}
+      {/* Under the brief grid, where "What Success Looks Like" is the last card. */}
+      <ProjectVisual visuals={project.profileVisuals} slot="success" />
 
       {show("scope") && (
         <section className="space-y-3" data-testid="section-overview-scope">

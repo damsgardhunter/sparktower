@@ -46,3 +46,11 @@ describe("the event list", () => {
     expect(EXPLORE_FUNNEL[0].events).toEqual([EXPLORE_EVENTS.openDiscover]);
   });
 });
+
+describe("which Explore events a client may send", () => {
+  it("is everything but the actions, which their endpoints record", async () => {
+    const { CLIENT_EXPLORE_EVENT_NAMES, EXPLORE_ACTIONS, EXPLORE_EVENT_NAMES } = await import("@shared/explore-events");
+    for (const action of EXPLORE_ACTIONS) expect(CLIENT_EXPLORE_EVENT_NAMES).not.toContain(action);
+    expect(CLIENT_EXPLORE_EVENT_NAMES.length + EXPLORE_ACTIONS.length).toBe(EXPLORE_EVENT_NAMES.length);
+  });
+});

@@ -9,6 +9,7 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { NotificationBell } from "@/components/notification-bell";
 import LandingPage from "@/pages/landing";
 import Home from "@/pages/home";
 import Projects from "@/pages/projects";
@@ -28,9 +29,11 @@ import CheckInDetail from "@/pages/check-in-detail";
 import { useSurfaces } from "@/hooks/use-surfaces";
 import { isPathDisabled } from "@shared/surfaces";
 import FeedbackQueue from "@/pages/feedback-queue";
+import PostDetail from "@/pages/post-detail";
 import LoopMetrics from "@/pages/loop-metrics";
 import AdminSurfaces from "@/pages/admin-surfaces";
 import AdminReports from "@/pages/admin-reports";
+import AdminSafety from "@/pages/admin-safety";
 import AdminAnalytics from "@/pages/admin-analytics";
 import { installAnalytics, trackPageView } from "@/lib/analytics";
 import Messages from "@/pages/messages";
@@ -149,6 +152,7 @@ function Router() {
         <header className="flex items-center justify-between p-4 border-b border-border bg-background/50 backdrop-blur-sm z-10">
           <SidebarTrigger data-testid="button-sidebar-toggle" />
           <div className="flex items-center gap-4">
+            <NotificationBell />
             <ThemeToggle />
           </div>
         </header>
@@ -184,9 +188,11 @@ function Router() {
             <Route path="/admin/backing" component={BackingReview} />
             <Route path="/c/:id" component={CheckInDetail} />
             <Route path="/feedback" component={FeedbackQueue} />
+            <Route path="/posts/:id" component={PostDetail} />
             <Route path="/admin/loop-metrics" component={LoopMetrics} />
             <Route path="/admin/surfaces" component={AdminSurfaces} />
             <Route path="/admin/reports" component={AdminReports} />
+            <Route path="/admin/safety" component={AdminSafety} />
             <Route path="/admin/analytics" component={AdminAnalytics} />
             <Route component={NotFound} />
           </Switch>

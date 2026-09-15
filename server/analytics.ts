@@ -22,12 +22,19 @@ import {
   routePattern,
 } from "@shared/analytics";
 import { rateLimit } from "./moderation";
-import { EXPLORE_EVENT_NAMES, isExploreEvent, sanitizeExploreProps } from "@shared/explore-events";
+import { CLIENT_EXPLORE_EVENT_NAMES, isExploreEvent, sanitizeExploreProps } from "@shared/explore-events";
 
 /** Cookie holding the visitor id. Not httpOnly: the client stamps events too. */
 const VISITOR_COOKIE = "st_vid";
 const SESSION_COOKIE = "st_sid";
 const COOKIE_MAX_AGE_DAYS = 365;
+/** The same two ids, from a client without cookies (the mobile app). */
+const VISITOR_HEADER = "x-st-visitor";
+const SESSION_HEADER = "x-st-session";
+/** "1" on the first request of a visit from such a client. */
+const SESSION_START_HEADER = "x-st-session-start";
+const headerId = (v: unknown): string | null =>
+  typeof v === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(v) ? v : null;
 
 /**
  * Writes the stream doesn't want to see.
@@ -65,6 +72,31 @@ export const attachVisitor: RequestHandler = (req: any, res, next) => {
 
   try {
     const jar = readCookies(req);
+
+    /*
+     * The mobile app keeps no cookies — it signs in with a bearer token — so it
+     * names its visitor and visit in headers instead, and marks the first
+     * request of a visit. Without this every request from a phone minted a
+     * fresh visit, and "opened Discover, then followed" could never be the
+     * same session. A cookie still wins when there is one.
+     */
+    const headerVisitor = headerId(req.headers[VISITOR_HEADER]);
+    const headerSession = headerId(req.headers[SESSION_HEADER]);
+    if (!jar[VISITOR_COOKIE] && headerVisitor && headerSession) {
+      req.visitorId = headerVisitor;
+      req.sessionId = headerSession;
+      if (req.headers[SESSION_START_HEADER] === "1") {
+        void recordActivity({
+          name: ACTIVITY_EVENTS.sessionStart,
+          userId: req.user?.id ?? null,
+          visitorId: headerVisitor,
+          sessionId: headerSession,
+          path: req.originalUrl || req.path,
+          userAgent: req.headers["user-agent"],
+        });
+      }
+      return next();
+    }
 
     let visitorId = jar[VISITOR_COOKIE];
     if (!visitorId || visitorId.length > 64) {
@@ -208,9 +240,10 @@ export function registerAnalyticsIngest(app: Express) {
 
     try {
       const batch = Array.isArray(req.body?.events) ? req.body.events : [];
-      // Page views, and the Explore loop's events (shared/explore-events.ts).
-      // "Arrived" is the server's to emit — see attachVisitor.
-      const allowed = new Set<string>([ACTIVITY_EVENTS.pageView, ...EXPLORE_EVENT_NAMES]);
+      // Page views, and the Explore loop's events (shared/explore-events.ts) —
+      // except its actions, which the follow, connect and message endpoints
+      // record themselves. "Arrived" is the server's to emit — see attachVisitor.
+      const allowed = new Set<string>([ACTIVITY_EVENTS.pageView, ...CLIENT_EXPLORE_EVENT_NAMES]);
 
       for (const e of batch.slice(0, MAX_BATCH_EVENTS)) {
         const name = String(e?.name || "");

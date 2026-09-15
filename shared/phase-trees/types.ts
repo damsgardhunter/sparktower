@@ -7,6 +7,7 @@
  * Nova can name. See server/phase-trees.md for the design this encodes.
  */
 import type { ProjectGoal } from "../goals";
+import type { WorkKind } from "./work";
 
 /** Who acts. The most important rule in the system. */
 export type Actor = "nova-builds" | "nova-drafts" | "user-decides" | "user-does";
@@ -24,6 +25,29 @@ export interface Variant {
   description: string;
   /** Overrides the estimate for this type. */
   estimateMinutes?: number;
+}
+
+/**
+ * A question answered by picking, not typing. Money questions especially:
+ * "how much could you put in?" is easier to answer with a range to tap than a
+ * box to fill, and "$0" has to be one of the choices, said without judgement.
+ */
+export interface IntakeQuestion {
+  id: string;
+  prompt: string;
+  /** One line under the prompt, when the question needs it. */
+  help?: string;
+  /** "text" is a short line in their own words — used sparingly, and always optional. */
+  kind?: "choice" | "text";
+  options: { id: string; label: string }[];
+  /** Several may be picked. Single choice otherwise. */
+  multi?: boolean;
+  /** Skippable — the answer reads as "not sure" and Nova works it out. */
+  optional?: boolean;
+  /** Asked only when an earlier question in the same step has one of these answers. */
+  showIf?: { question: string; in: string[] };
+  /** For text questions. */
+  placeholder?: string;
 }
 
 export interface BackboneMilestone {
@@ -47,6 +71,29 @@ export interface BackboneMilestone {
    * injected layer expands these; the backbone carries one placeholder.
    */
   expandsFrom?: string;
+  /**
+   * Answered by tapping choices. The milestone is done when they're saved, no
+   * Nova call and no credit — Nova reads the answers on every later step.
+   */
+  intake?: IntakeQuestion[];
+  /** Where answers can be suggested from before the builder confirms them. */
+  prefill?: "resume";
+  /** The answer to this question (in `intake`) chooses the route: which route phases the path shows. */
+  routeQuestion?: string;
+  /** Done means outcomes now depend on other people: the dashboard switches to pipeline mode. */
+  inMarket?: boolean;
+  /**
+   * What Nova produces here, when the actor's default isn't it. A financial
+   * plan is "built" by Nova but is a document, not code: `plan`.
+   */
+  work?: WorkKind;
+  /**
+   * Authored text this milestone (or a variant) used to have. Tasks are
+   * written at creation and keep their text, and "the description differs
+   * from the authored one" is how an answer is recognised — so a project made
+   * before a rewrite would read its old placeholder as an answer without this.
+   */
+  supersedes?: string[];
 }
 
 export interface BackbonePhase {
@@ -57,6 +104,8 @@ export interface BackbonePhase {
   checkpoint?: string;
   /** Not on the main line: offered, never imposed. */
   optional?: boolean;
+  /** Shown only once the project has chosen this route (see BackboneMilestone.routeQuestion). */
+  route?: string;
   milestones: BackboneMilestone[];
 }
 

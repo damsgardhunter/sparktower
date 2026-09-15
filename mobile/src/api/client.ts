@@ -170,6 +170,51 @@ interface RequestOptions {
   _retried?: boolean;
 }
 
+// --- Visits ----------------------------------------------------------------
+//
+// The web app's visitor and session live in cookies, which this client doesn't
+// keep. Without them every request looked like a new visit, so "opened
+// Discover, then followed someone" could never be one session on the owner's
+// numbers. So the app names its own: a visitor id kept on the device, and a
+// visit that ends after the same 30 quiet minutes the server's cookie does.
+
+const VISITOR_KEY = "sparktower.visitorId";
+/** Matches SESSION_IDLE_MINUTES in shared/analytics.ts, where the web's visit is defined. */
+const VISIT_IDLE_MS = 30 * 60 * 1000;
+
+const newId = () =>
+  Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
+
+let visitorId: string | null = null;
+/** `announced`: the server has been told this visit started (on the first request that carries it). */
+let visit = { id: "", lastAt: 0, announced: false };
+
+/** The current visit's id, starting a new one after 30 quiet minutes. */
+export function currentVisit(): { id: string } {
+  const now = Date.now();
+  if (!visit.id || now - visit.lastAt > VISIT_IDLE_MS) visit = { id: newId(), lastAt: now, announced: false };
+  visit.lastAt = now;
+  return { id: visit.id };
+}
+
+async function visitHeaders(): Promise<Record<string, string>> {
+  if (!visitorId) {
+    visitorId = await getItem(VISITOR_KEY).catch(() => null);
+    if (!visitorId) {
+      visitorId = newId();
+      void setItem(VISITOR_KEY, visitorId).catch(() => {});
+    }
+  }
+  const { id } = currentVisit();
+  const started = !visit.announced;
+  visit.announced = true;
+  return {
+    "X-ST-Visitor": visitorId,
+    "X-ST-Session": id,
+    ...(started ? { "X-ST-Session-Start": "1" } : {}),
+  };
+}
+
 export async function api<T = any>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = "GET", body, _retried } = options;
   const token = await getAccessToken();
@@ -179,6 +224,7 @@ export async function api<T = any>(path: string, options: RequestOptions = {}): 
     headers: {
       ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(await visitHeaders()),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });

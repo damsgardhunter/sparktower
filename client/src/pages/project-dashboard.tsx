@@ -1,7 +1,6 @@
 import { errorText } from "@/lib/api-error";
 import { ToastAction } from "@/components/ui/toast";
-import { trackExplore } from "@/lib/explore";
-import { EXPLORE_EVENTS } from "@shared/explore-events";
+import { exploreContext } from "@/lib/explore";
 import { useState, useRef, useEffect } from "react";
 import { markSeen } from "@/lib/seen";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -17,6 +16,8 @@ import { MediaGallery } from "@/components/media-gallery";
 import { StoryboardSlideshow } from "@/components/storyboard-slideshow";
 import { StoryboardLibrary } from "@/components/storyboard-library";
 import { ProjectSocialTabs } from "@/components/project-social-tabs";
+import { ProjectVisual } from "@/components/project-visual";
+import { InvestCard } from "@/components/invest-card";
 import { PrivateProjectScreen } from "@/components/private-project-screen";
 import { PrivateBadge } from "@/components/private-badge";
 import { isSectionVisible, getProjectBriefContext } from "@shared/project-sections";
@@ -151,7 +152,7 @@ export default function ProjectDashboard() {
   const followKey = ["/api/projects", projectId, "follow-status"];
   const followMutation = useMutation({
     mutationFn: async (want: boolean) => {
-      const res = await apiRequest("POST", `/api/projects/${projectId}/follow`, { following: want });
+      const res = await apiRequest("POST", `/api/projects/${projectId}/follow`, { following: want, explore: exploreContext("project_page") });
       return res.json() as Promise<{ following: boolean }>;
     },
     onMutate: async (want) => {
@@ -168,9 +169,6 @@ export default function ProjectDashboard() {
       if (!want) {
         toast({ title: "Unfollowed" });
         return;
-      }
-      if (projectId) {
-        trackExplore(EXPLORE_EVENTS.follow, { matchType: "project", targetId: projectId, source: "project_page" });
       }
       toast({
         title: "Following",
@@ -316,21 +314,27 @@ export default function ProjectDashboard() {
         style={project.coverUrl ? { backgroundImage: `url(${project.coverUrl})` } : undefined}
         data-testid="project-cover"
       >
-        {/* Darkened so the title stays readable over any uploaded image. */}
+        {/*
+          * Only a light shade at the foot of an uploaded cover. It used to wash
+          * the whole bottom of the image near-white for the title's sake, which
+          * also sat behind the logo — so a transparent logo showed on white
+          * instead of on the cover. The title carries its own panel now.
+          */}
         <div className={`absolute inset-0 ${project.coverUrl
-          ? "bg-gradient-to-t from-background via-background/70 to-background/20"
+          ? "bg-gradient-to-t from-background/60 via-background/10 to-transparent"
           : "bg-gradient-to-t from-background to-transparent opacity-60"}`} />
         <div className="relative p-6 w-full max-w-5xl mx-auto flex flex-col sm:flex-row items-start sm:items-end justify-between gap-4">
           <div className="flex items-end gap-4 min-w-0 flex-1">
             {project.logoUrl && (
+              // No panel behind it: a transparent PNG stays transparent, over the cover. The shadow keeps its edges on a busy image.
               <img
                 src={project.logoUrl}
                 alt=""
-                className="h-20 w-20 rounded-xl object-contain bg-background/80 border border-border/60 p-1.5 shrink-0"
+                className="h-20 w-20 object-contain shrink-0 drop-shadow-[0_2px_6px_rgba(0,0,0,0.35)]"
                 data-testid="project-logo"
               />
             )}
-            <div className="space-y-2 min-w-0">
+            <div className={`space-y-2 min-w-0 ${project.coverUrl ? "rounded-lg bg-background/75 backdrop-blur-sm px-3 py-2" : ""}`} data-testid="project-title-panel">
               <div className="flex items-center gap-2 flex-wrap">
                 <Badge variant={project.status === "active" ? "default" : "secondary"}>{project.status}</Badge>
                 <span className="text-sm text-secondary font-medium">{project.category}</span>
@@ -492,6 +496,7 @@ export default function ProjectDashboard() {
           {/* Renders nothing unless the project is running a campaign, so it
               can sit here unconditionally. Above the stats card because it's
               the one thing on this page a visitor can act on. */}
+          <InvestCard projectId={project.id} />
           <BackingPanel projectId={project.id} projectTitle={project.title} isOwner={isOwner} />
 
           {isSectionVisible(project, "stats") && (
@@ -566,6 +571,11 @@ export default function ProjectDashboard() {
               </CardContent>
             </Card>
           )}
+
+          {/* Visitors don't see Application Questions, so for them these sit
+              at the foot of the rail in the same place. */}
+          <ProjectVisual visuals={project.profileVisuals} slot="railTop" />
+          <ProjectVisual visuals={project.profileVisuals} slot="railBottom" />
         </div>
       </div>
 

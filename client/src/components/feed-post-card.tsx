@@ -1,21 +1,24 @@
 import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
+import { ReportButton } from "@/components/report-button";
+import { FeedComments } from "@/components/feed-comments";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { UserAvatar } from "@/components/user-avatar";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
-import { MentionTextarea, FeedContent } from "@/components/mention-textarea";
+import { FeedContent } from "@/components/mention-textarea";
 import { PrivateBadge } from "@/components/private-badge";
 import {
-  Loader2, MessageSquare, Trash2, Sparkles, Send, MoreHorizontal, Lock,
+  MessageSquare, Trash2, Sparkles, HelpCircle, Repeat,
 } from "lucide-react";
+import { creditLine } from "@shared/feedback-loop";
 import * as Icons from "lucide-react";
 import {
-  POST_TYPES_BY_KEY, REACTIONS, REACTIONS_BY_KEY, MAX_COMMENT_LENGTH,
+  POST_TYPES_BY_KEY, REACTIONS, REACTIONS_BY_KEY,
 } from "@shared/feed";
 import type { FeedMention, FeedPost, FeedReaction, User, UserProfile } from "@shared/schema";
 
@@ -25,18 +28,10 @@ export interface FeedPostWithDetails extends FeedPost {
   project: { id: string; title: string; isPrivate: boolean } | null;
   viewerReaction: FeedReaction | null;
   reactionBreakdown: { reaction: string; count: number }[];
+  viewerIsTeam?: boolean;
+  credits?: { commentId: string; authorId: string; name: string }[];
 }
 
-interface CommentWithAuthor {
-  id: string;
-  postId: string;
-  authorId: string;
-  content: string;
-  mentions: FeedMention[];
-  createdAt: string;
-  author: User;
-  profile?: UserProfile;
-}
 
 function TypeIcon({ name, className }: { name: string; className?: string }) {
   const Icon = (Icons as any)[name] || Icons.Circle;
@@ -56,22 +51,36 @@ function timeAgo(date: string | Date): string {
   return new Date(date).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-export function FeedPostCard({ post }: { post: FeedPostWithDetails }) {
+/**
+ * One post. In the feed it's compact, with its comments folded; on its own
+ * page (`standalone`) the comments are open and nothing links to itself.
+ */
+export function FeedPostCard({ post, standalone = false }: { post: FeedPostWithDetails; standalone?: boolean }) {
   const { user } = useAuth();
   const { toast } = useToast();
-  const [showComments, setShowComments] = useState(false);
+  const [showComments, setShowComments] = useState(standalone);
+  const [, setLocation] = useLocation();
+
+  /*
+   * In the feed, the whole card opens the post. Anything that does something
+   * itself — a link, a button, a field, the open comments — keeps its own
+   * click, and so does selecting text. A click from a dialog this card opened
+   * (the report form) bubbles here through React's portal but isn't inside the
+   * card's own DOM, so it's ignored.
+   */
+  const openPost = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (standalone) return;
+    const target = e.target as HTMLElement;
+    if (!e.currentTarget.contains(target)) return;
+    if (target.closest("a, button, input, textarea, select, label, [role='menu'], [data-no-open]")) return;
+    if (window.getSelection()?.toString()) return;
+    setLocation(`/posts/${post.id}`);
+  };
   const [showReactionPicker, setShowReactionPicker] = useState(false);
-  const [comment, setComment] = useState("");
-  const [commentMentions, setCommentMentions] = useState<FeedMention[]>([]);
 
   const def = POST_TYPES_BY_KEY[post.postType];
   const authorName = post.profile?.displayName || post.author?.firstName || post.author?.email || "Someone";
   const isMine = user?.id === post.authorId;
-
-  const { data: comments, isLoading: commentsLoading } = useQuery<CommentWithAuthor[]>({
-    queryKey: ["/api/feed", post.id, "comments"],
-    enabled: showComments,
-  });
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["/api/feed"] });
 
@@ -84,44 +93,24 @@ export function FeedPostCard({ post }: { post: FeedPostWithDetails }) {
     onError: () => toast({ title: "Couldn't react", variant: "destructive" }),
   });
 
-  const addComment = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", `/api/feed/${post.id}/comments`, {
-        content: comment, mentions: commentMentions,
-      });
-      return res.json();
-    },
-    onSuccess: () => {
-      setComment("");
-      setCommentMentions([]);
-      queryClient.invalidateQueries({ queryKey: ["/api/feed", post.id, "comments"] });
-      invalidate();
-    },
-    onError: () => toast({ title: "Couldn't post your comment", variant: "destructive" }),
-  });
-
   const deletePost = useMutation({
     mutationFn: async () => { await apiRequest("DELETE", `/api/feed/${post.id}`); },
     onSuccess: () => { toast({ title: "Post deleted" }); invalidate(); },
     onError: () => toast({ title: "Couldn't delete the post", variant: "destructive" }),
   });
 
-  const deleteComment = useMutation({
-    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/feed/comments/${id}`); },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/feed", post.id, "comments"] });
-      invalidate();
-    },
-  });
-
   const topReactions = [...post.reactionBreakdown].sort((a, b) => b.count - a.count).slice(0, 3);
   const viewerDef = post.viewerReaction ? REACTIONS_BY_KEY[post.viewerReaction] : null;
 
   return (
-    <Card className="rounded-lg shadow-none bg-background dark:bg-card" data-testid={`feed-post-${post.id}`}>
-      <CardContent className="p-4 space-y-3">
+    <Card
+      className={`rounded-lg shadow-none bg-background dark:bg-card ${standalone ? "" : "cursor-pointer hover:border-foreground/20 transition-colors"}`}
+      onClick={openPost}
+      data-testid={`feed-post-${post.id}`}
+    >
+      <CardContent className="p-0 text-[13px]">
         {/* Author, and which project they're posting for */}
-        <div className="flex items-start gap-3">
+        <div className="flex items-start gap-3 px-4 pt-3.5 pb-2.5 border-b border-border/60">
           <Link href={`/profile/${post.authorId}`}>
             <UserAvatar
               src={post.profile?.avatarUrl || post.author?.profileImageUrl}
@@ -131,15 +120,15 @@ export function FeedPostCard({ post }: { post: FeedPostWithDetails }) {
           </Link>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5 flex-wrap">
-              <Link href={`/profile/${post.authorId}`} className="font-semibold text-sm hover:underline" data-testid={`post-author-${post.id}`}>
+              <Link href={`/profile/${post.authorId}`} className="font-semibold text-[13px] hover:underline" data-testid={`post-author-${post.id}`}>
                 {authorName}
               </Link>
               {post.project && (
                 <>
-                  <span className="text-muted-foreground text-sm">·</span>
+                  <span className="text-muted-foreground text-[13px]">·</span>
                   <Link
                     href={`/projects/${post.project.id}`}
-                    className="text-sm text-primary hover:underline flex items-center gap-1"
+                    className="text-[13px] text-primary hover:underline flex items-center gap-1"
                     data-testid={`post-project-${post.id}`}
                   >
                     {post.project.title}
@@ -149,10 +138,12 @@ export function FeedPostCard({ post }: { post: FeedPostWithDetails }) {
               )}
             </div>
             {post.profile?.headline && (
-              <p className="text-xs text-muted-foreground truncate">{post.profile.headline}</p>
+              <p className="text-[11px] text-muted-foreground truncate">{post.profile.headline}</p>
             )}
             <div className="flex items-center gap-1.5 mt-0.5">
-              <span className="text-xs text-muted-foreground">{timeAgo(post.createdAt)}</span>
+              {standalone
+                ? <span className="text-[11px] text-muted-foreground">{new Date(post.createdAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</span>
+                : <Link href={`/posts/${post.id}`} className="text-[11px] text-muted-foreground hover:underline" title="Open this post" data-testid={`post-link-${post.id}`}>{timeAgo(post.createdAt)}</Link>}
               <Badge variant="outline" className={`text-[10px] gap-1 font-normal ${def.accent}`} data-testid={`post-type-${post.id}`}>
                 <TypeIcon name={def.icon} className="h-2.5 w-2.5" />
                 {def.label}
@@ -178,7 +169,28 @@ export function FeedPostCard({ post }: { post: FeedPostWithDetails }) {
           )}
         </div>
 
-        <FeedContent content={post.content} mentions={(post.mentions as FeedMention[]) || []} />
+        <div className="px-4 pt-3 pb-3 space-y-3">
+        <FeedContent content={post.content} mentions={(post.mentions as FeedMention[]) || []} className="text-[13px]" />
+
+        {/* The questions this update wants answered: what makes the feedback specific. */}
+        {((post.asks as string[] | undefined)?.length ?? 0) > 0 && (
+          <div className="rounded-md border border-primary/20 bg-primary/5 p-3 space-y-1.5" data-testid={`post-asks-${post.id}`}>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-primary flex items-center gap-1"><HelpCircle className="h-3 w-3" />Help answer</p>
+            <ol className="list-decimal pl-5 text-sm space-y-0.5">
+              {(post.asks as string[]).map((a) => <li key={a}>{a}</li>)}
+            </ol>
+            {!isMine && (
+              <button className="text-xs text-primary hover:underline" onClick={() => setShowComments(true)} data-testid={`button-answer-asks-${post.id}`}>Answer in a comment</button>
+            )}
+          </div>
+        )}
+
+        {/* This update closes the loop on earlier feedback, and says whose. */}
+        {(post.credits?.length ?? 0) > 0 && (
+          <p className="text-xs text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5" data-testid={`post-credits-${post.id}`}>
+            <Repeat className="h-3.5 w-3.5" />{creditLine(post.credits!.map((c) => c.name))}
+          </p>
+        )}
 
         {(post.mediaUrls?.length || 0) > 0 && (
           <div className={`grid gap-2 ${post.mediaUrls!.length === 1 ? "grid-cols-1" : "grid-cols-2"}`}>
@@ -196,9 +208,11 @@ export function FeedPostCard({ post }: { post: FeedPostWithDetails }) {
           </div>
         )}
 
+        </div>
+
         {/* Reaction summary */}
         {(post.reactionCount > 0 || post.commentCount > 0) && (
-          <div className="flex items-center gap-3 text-xs text-muted-foreground pt-1">
+          <div className="flex items-center gap-3 text-[11px] text-muted-foreground px-4 pb-1.5">
             {post.reactionCount > 0 && (
               <span className="flex items-center gap-1" data-testid={`post-reactions-${post.id}`}>
                 <span className="flex -space-x-1">
@@ -210,7 +224,7 @@ export function FeedPostCard({ post }: { post: FeedPostWithDetails }) {
               </span>
             )}
             {post.commentCount > 0 && (
-              <button className="hover:underline" onClick={() => setShowComments(true)}>
+              <button className="hover:underline ml-auto" onClick={() => setShowComments(true)}>
                 {post.commentCount} comment{post.commentCount === 1 ? "" : "s"}
               </button>
             )}
@@ -218,12 +232,13 @@ export function FeedPostCard({ post }: { post: FeedPostWithDetails }) {
         )}
 
         {/* Actions */}
-        <div className="flex items-center gap-1 pt-2 border-t border-border/50">
+        <div className="mx-4 h-px bg-foreground/15" aria-hidden />
+        <div className="flex items-center gap-1 px-2 py-1">
           <div className="relative flex-1">
             <Button
               variant="ghost"
               size="sm"
-              className={`w-full gap-1.5 ${viewerDef ? viewerDef.color : "text-muted-foreground"}`}
+              className={`w-full gap-1.5 h-8 text-xs ${viewerDef ? viewerDef.color : "text-muted-foreground"}`}
               disabled={!user || react.isPending}
               onClick={() => setShowReactionPicker((v) => !v)}
               data-testid={`button-react-${post.id}`}
@@ -257,87 +272,23 @@ export function FeedPostCard({ post }: { post: FeedPostWithDetails }) {
           <Button
             variant="ghost"
             size="sm"
-            className="flex-1 gap-1.5 text-muted-foreground"
+            className="flex-1 gap-1.5 h-8 text-xs text-muted-foreground"
             onClick={() => setShowComments((v) => !v)}
             data-testid={`button-comment-${post.id}`}
           >
             <MessageSquare className="h-4 w-4" />
             Comment
           </Button>
+          {user && !isMine && (
+            <div className="flex-1 flex">
+              <ReportButton targetType="feed_post" targetId={post.id} variant="action" className="w-full" />
+            </div>
+          )}
         </div>
 
         {showComments && (
-          <div className="space-y-3 pt-2 border-t border-border/50">
-            {user && (
-              <div className="flex items-start gap-2">
-                <UserAvatar
-                  src={user.profileImageUrl}
-                  name={user.firstName || "You"}
-                  className="h-8 w-8 shrink-0 mt-0.5"
-                />
-                <div className="flex-1 space-y-1.5 min-w-0">
-                  <MentionTextarea
-                    value={comment}
-                    onChange={setComment}
-                    mentions={commentMentions}
-                    onMentionsChange={setCommentMentions}
-                    placeholder="Add a comment… use @ to tag someone"
-                    className="min-h-[60px] text-sm"
-                    maxLength={MAX_COMMENT_LENGTH}
-                    testId={`textarea-comment-${post.id}`}
-                  />
-                  {comment.trim() && (
-                    <Button
-                      size="sm"
-                      className="gap-1.5 h-7"
-                      disabled={addComment.isPending}
-                      onClick={() => addComment.mutate()}
-                      data-testid={`button-submit-comment-${post.id}`}
-                    >
-                      {addComment.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
-                      Comment
-                    </Button>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {commentsLoading ? (
-              <div className="flex justify-center py-3"><Loader2 className="h-4 w-4 animate-spin text-primary" /></div>
-            ) : (comments || []).map((c) => {
-              const cName = c.profile?.displayName || c.author?.firstName || "Someone";
-              return (
-                <div key={c.id} className="flex items-start gap-2" data-testid={`comment-${c.id}`}>
-                  <Link href={`/profile/${c.authorId}`}>
-                    <UserAvatar
-                      src={c.profile?.avatarUrl || c.author?.profileImageUrl}
-                      name={cName}
-                      className="h-8 w-8 shrink-0 mt-0.5"
-                    />
-                  </Link>
-                  <div className="flex-1 min-w-0">
-                    <div className="rounded-lg bg-muted/60 px-3 py-2">
-                      <div className="flex items-center gap-1.5">
-                        <Link href={`/profile/${c.authorId}`} className="text-xs font-semibold hover:underline">
-                          {cName}
-                        </Link>
-                        <span className="text-[10px] text-muted-foreground">{timeAgo(c.createdAt)}</span>
-                      </div>
-                      <FeedContent content={c.content} mentions={c.mentions || []} />
-                    </div>
-                    {user?.id === c.authorId && (
-                      <button
-                        className="text-[10px] text-muted-foreground hover:text-destructive mt-0.5 ml-1"
-                        onClick={() => deleteComment.mutate(c.id)}
-                        data-testid={`button-delete-comment-${c.id}`}
-                      >
-                        Delete
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+          <div className="px-4 pt-3 pb-3.5 border-t border-border/60 cursor-default" data-no-open>
+            <FeedComments post={post} />
           </div>
         )}
       </CardContent>

@@ -92,8 +92,10 @@ describe("the development upload", () => {
     const mb = Buffer.alloc(1024 * 1024);
     for (let i = 0; i <= LOCAL_UPLOAD_MAX_BYTES / mb.length; i++) put.write(mb);
     expect((await put).status).toBe(413);
-    await new Promise((r) => setTimeout(r, 50));
-    expect(existsSync(join(process.env.LOCAL_OBJECT_ROOT!, "uploads", second.id))).toBe(false);
+    // The partial file goes once its stream has closed; give that a moment rather than a guess.
+    const partial = join(process.env.LOCAL_OBJECT_ROOT!, "uploads", second.id);
+    for (let i = 0; i < 40 && existsSync(partial); i++) await new Promise((r) => setTimeout(r, 50));
+    expect(existsSync(partial)).toBe(false);
   }, 60_000);
 });
 

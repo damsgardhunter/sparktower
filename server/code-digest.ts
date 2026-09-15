@@ -12,6 +12,7 @@
  * repository always yields the same digest, and the audit's variance comes
  * from the reasoning rather than from which files got sampled.
  */
+import { fileIndexOf } from "@shared/audit-catchup";
 import type { RepoFile, RepoSnapshot } from "./code-ingest";
 import { buildRouteCoverage, renderRouteCoverage, type RouteCoverage } from "./route-coverage";
 
@@ -63,6 +64,8 @@ export interface DigestSignals {
   serverEntry: string | null;
   /** package.json scripts, names only, so a plan uses real commands. */
   scriptNames: string[];
+  /** path → content fingerprint for every file read, so the next audit knows what changed. */
+  fileIndex?: Record<string, string>;
   /** Every route with the guards on it, and the gaps. Deterministic. */
   routeCoverage: RouteCoverage;
   /** The test files by path, so a read can say what is covered instead of "no evidence". */
@@ -571,6 +574,7 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
     serverEntry,
     scriptNames: Object.keys(packageScripts).slice(0, 30),
     routeCoverage: { ...routeCoverage, rows: routeCoverage.rows.slice(0, 200) },
+    fileIndex: fileIndexOf(read),
   };
 
   // --- excerpts -----------------------------------------------------------

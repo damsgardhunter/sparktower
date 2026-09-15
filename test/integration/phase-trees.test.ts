@@ -19,6 +19,11 @@ async function owner(app: any) {
 }
 const create = (agent: any, goal: string, subcategory: string, title = "Tree Test") =>
   agent.post("/api/projects").send({ title, description: "A project that should be born with a path to walk.", category: "saas", goal, subcategory });
+/** Writes every loop on the project, so the core-loop milestone can be done. */
+async function writeLoops(agent: any, id: string) {
+  const tree = (await agent.get(`/api/projects/${id}/path`)).body.loopTree;
+  for (const l of tree.loops) await agent.patch(`/api/kanban/${l.taskId}`).send({ status: "done", description: l.description || `1. Start the ${l.type} loop 2. Finish it 3. Back to 1` });
+}
 
 describe("the backbone, as data", () => {
   it("has three paths, each with a unique id on every milestone", () => {
@@ -46,8 +51,10 @@ describe("the backbone, as data", () => {
 
     const restaurant = mainLineMilestones(resolveTree("systemize_business", "restaurant"));
     expect(restaurant.find((m) => m.id === "SYS.M2.1")!.description).toMatch(/Recipes as specs/);
-    const loan = mainLineMilestones(resolveTree("raise_funding", "loan_grant"));
-    expect(loan.find((m) => m.id === "FUND.M1.2")!.description).toMatch(/counts backward/);
+    // The funding path shows a route's phases only once that route is chosen.
+    const noRoute = resolveTree("raise_funding", "startup_equity");
+    expect(noRoute.map((p) => p.id)).toEqual(["capital-1", "capital-2"]);
+    expect(resolveTree("raise_funding", "startup_equity", "seller").map((p) => p.id)).toEqual(["capital-1", "capital-2", "seller-1", "seller-2", "seller-3", "seller-4"]);
   });
 
   it("marks every user-does milestone as something only a human can do", () => {
@@ -96,14 +103,15 @@ describe("a new project is born with its path", () => {
     const agent = await owner(app);
     const id = (await create(agent, "systemize_business", "restaurant")).body.id;
     const tasks = (await agent.get(`/api/projects/${id}/kanban`)).body;
-    const first = tasks.find((t: any) => t.tags?.includes("backbone:SYS.M1.1"));
+    const first = tasks.find((t: any) => t.tags?.includes("backbone:SYS.F1.1"));
 
     await agent.patch(`/api/kanban/${first.id}`).send({ status: "done" }).expect(200);
 
     const path = await agent.get(`/api/projects/${id}/path`);
-    expect(path.body.current).toMatchObject({ id: "week-1", step: 2, of: 5 });
-    expect(path.body.next.id).toBe("SYS.M1.2");
-    expect(path.body.next.description).toMatch(/recipe consistency/);
+    expect(path.body.current).toMatchObject({ id: "money-1", step: 2, of: 6 });
+    expect(path.body.next.id).toBe("SYS.F1.2");
+    const costs = path.body.phases[0].milestones.find((m: any) => m.id === "SYS.F1.3");
+    expect(costs.description).toMatch(/kitchen equipment/);
     expect(path.body.mainLine.done).toBe(1);
   });
 
@@ -148,7 +156,7 @@ describe("the path adapts", () => {
     const res = await agent.post(`/api/projects/${id}/path/expand`).send({ backboneId: "SHIP.M2.1" });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("artifact_missing");
-    expect(res.body.message).toMatch(/Nothing is written under "The core loop" yet/);
+    expect(res.body.message).toMatch(/Nothing is written under "The core loops" yet/);
     expect(res.body.sourceTaskId).toBeTruthy();
     const wrong = await agent.post(`/api/projects/${id}/path/expand`).send({ backboneId: "SHIP.M1.1" });
     expect(wrong.body.code).toBe("not_expandable");
@@ -201,8 +209,9 @@ describe("the path adapts", () => {
     expect(r.created[0].tags).toEqual(expect.arrayContaining(["injected:week-1", "artifact:check-in:x"]));
 
     const status = (await agent.get(`/api/projects/${id}/path`)).body;
-    expect(status.phases[0].injected).toHaveLength(3);
-    expect(status.phases[0].injectRoom).toBe(0);
+    const week1 = status.phases.find((p: any) => p.id === "week-1");
+    expect(week1.injected).toHaveLength(3);
+    expect(week1.injectRoom).toBe(0);
     const full = await agent.post(`/api/projects/${id}/path/inject`).send({ phaseId: "week-1" });
     expect(full.status).toBe(409);
     expect(full.body.code).toBe("phase_at_cap");
@@ -213,26 +222,26 @@ describe("the path adapts", () => {
     const agent = await owner(app);
     const id = (await create(agent, "ship_mvp", "saas", "Switch Test")).body.id;
     const tasks = (await agent.get(`/api/projects/${id}/kanban`)).body;
-    // Product statement is SH-01, shared with the raise path.
-    const positioning = tasks.find((t: any) => t.tags?.includes("shared:SH-01"));
-    await agent.patch(`/api/kanban/${positioning.id}`).send({ status: "done", description: "For founders who cook: a planner that reads the fridge." }).expect(200);
+    // Pricing is SH-02, shared with the systemize path.
+    const pricing = tasks.find((t: any) => t.tags?.includes("shared:SH-02"));
+    await agent.patch(`/api/kanban/${pricing.id}`).send({ status: "done", description: "$12/month, one plan, free for the first ten." }).expect(200);
 
-    const bad = await agent.post(`/api/projects/${id}/path/switch`).send({ goal: "raise_funding", subcategory: "restaurant" });
+    const bad = await agent.post(`/api/projects/${id}/path/switch`).send({ goal: "systemize_business", subcategory: "startup_equity" });
     expect(bad.status).toBe(400);
     expect(bad.body.code).toBe("subcategory_mismatch");
 
-    const res = await agent.post(`/api/projects/${id}/path/switch`).send({ goal: "raise_funding", subcategory: "startup_equity" });
+    const res = await agent.post(`/api/projects/${id}/path/switch`).send({ goal: "systemize_business", subcategory: "service" });
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ from: { goal: "ship_mvp" }, to: { goal: "raise_funding" }, carried: 1 });
+    expect(res.body).toMatchObject({ from: { goal: "ship_mvp" }, to: { goal: "systemize_business" }, carried: 1 });
 
     const project = (await agent.get(`/api/projects/${id}`)).body;
-    expect(project.goal).toBe("raise_funding");
+    expect(project.goal).toBe("systemize_business");
     const path = (await agent.get(`/api/projects/${id}/path`)).body;
-    expect(path.goal).toBe("raise_funding");
-    expect(path.phases[0].milestones[0].id).toBe("FUND.M1.1");
-    // Positioning (SH-01) arrives done; the tier 0 research (SH-06) wasn't done, so it doesn't.
+    expect(path.goal).toBe("systemize_business");
+    expect(path.phases[0].milestones[0].id).toBe("SYS.F1.1");
+    // Pricing (SH-02) arrives done; nothing else was shared and done, so nothing else does.
     const all = path.phases.flatMap((p: any) => p.milestones);
-    expect(all.filter((m: any) => m.done).map((m: any) => m.id)).toEqual(["FUND.M1.7"]);
+    expect(all.filter((m: any) => m.done).map((m: any) => m.id)).toEqual(["SYS.M4.3"]);
     const carriedTask = (await agent.get(`/api/projects/${id}/kanban`)).body.find((t: any) => t.tags?.includes("carried:ship_mvp"));
     expect(carriedTask.status).toBe("done");
     expect(carriedTask.description).toMatch(/Carried over from Ship an MVP/);
@@ -242,7 +251,7 @@ describe("the path adapts", () => {
     expect(path.mainLine.done).toBe(1);
     // Pace starts fresh, but the log of what they did before stays visible.
     expect(path.pace.multiplier).toBeNull();
-    expect(path.events.map((e: any) => e.backboneId)).toEqual(["SHIP.M1.1"]);
+    expect(path.events.map((e: any) => e.backboneId)).toEqual(["SHIP.M3.7"]);
   });
 });
 
@@ -325,6 +334,9 @@ describe("Nova works the milestone", () => {
 
     // Break the loop steps into steps: the next action is now the first step, with its own task to work.
     const { created } = await createExpansion(id, "SHIP.M2.1", [{ title: "Scan the fridge", description: "Photo to inventory." }, { title: "Plan the week", description: "" }]);
+    // The core loops aren't done by accepting a packet on the milestone: all five loops have to be written.
+    expect((await agent.get(`/api/projects/${id}/path`)).body.next.id).toBe("SHIP.M1.2");
+    await writeLoops(agent, id);
     for (const m of ["SHIP.M1.3", "SHIP.M1.4", "SHIP.M1.5", "SHIP.M1.6", "SHIP.M1.7", "SHIP.M1.8"]) {
       const marked = await agent.post(`/api/projects/${id}/path/mark`).send({ ids: [m] });
       expect(marked.status, `${m}: ${JSON.stringify(marked.body).slice(0, 200)}`).toBe(200);
@@ -407,27 +419,44 @@ describe("re-evaluating where the project is", () => {
 });
 
 describe("more than one loop", () => {
-  it("each loop is written on its own and broken into its own steps; the milestones roll up over all of them", async () => {
+  it("starts with the five kinds, takes more product loops, and rolls the milestones up over all of them", async () => {
     const app = await getTestApp();
     const agent = await owner(app);
     const id = (await create(agent, "ship_mvp", "saas", "Loops Test")).body.id;
     const { createExpansion } = await import("../../server/phase-trees");
 
-    const build = await agent.post(`/api/projects/${id}/path/loops`).send({ backboneId: "SHIP.M1.2", title: "Build", description: "1. Create project 2. Check in 3. Get feedback" });
-    expect(build.status).toBe(200);
-    expect(build.body.tags).toEqual(expect.arrayContaining(["parent:SHIP.M1.2", "kind:loop"]));
-    const feed = (await agent.post(`/api/projects/${id}/path/loops`).send({ backboneId: "SHIP.M1.2", title: "The feed" })).body;
-    expect((await agent.post(`/api/projects/${id}/path/loops`).send({ backboneId: "SHIP.M1.2", title: "" })).status).toBe(400);
+    // Born with a slot for each kind, product first.
+    const seeded = (await agent.get(`/api/projects/${id}/path/milestones/SHIP.M1.2`)).body;
+    expect(seeded.loops.map((l: any) => [l.title, l.type])).toEqual([
+      ["Product loop", "product"], ["Growth loop", "growth"], ["Retention loop", "retention"], ["Revenue loop", "revenue"], ["Referral loop", "referral"],
+    ]);
 
-    // The core loop now shows its loops, and isn't done until each is written.
+    const build = await agent.post(`/api/projects/${id}/path/loops`).send({ backboneId: "SHIP.M1.2", title: "Build", description: "1. Create project 2. Check in 3. Get feedback", type: "product" });
+    expect(build.status).toBe(200);
+    expect(build.body.tags).toEqual(expect.arrayContaining(["parent:SHIP.M1.2", "kind:loop", "loop-type:product"]));
+    const feed = (await agent.post(`/api/projects/${id}/path/loops`).send({ backboneId: "SHIP.M1.2", title: "The feed" })).body;
+    expect(feed.tags).toContain("loop-type:product");
+    expect((await agent.post(`/api/projects/${id}/path/loops`).send({ backboneId: "SHIP.M1.2", title: "" })).status).toBe(400);
+    const second = await agent.post(`/api/projects/${id}/path/loops`).send({ backboneId: "SHIP.M1.2", title: "Ads", type: "growth" });
+    expect(second.status).toBe(409);
+    expect(second.body.code).toBe("loop_type_taken");
+
+    // Retyping holds to the same rule, and the last of a kind can't be retyped away or removed.
+    const growthSlot = seeded.loops[1];
+    expect((await agent.patch(`/api/projects/${id}/path/loops/${feed.id}`).send({ type: "growth" })).body.code).toBe("loop_type_taken");
+    expect((await agent.patch(`/api/projects/${id}/path/loops/${growthSlot.taskId}`).send({ type: "product" })).body.code).toBe("loop_required");
+    expect((await agent.delete(`/api/projects/${id}/path/loops/${growthSlot.taskId}`)).body.code).toBe("loop_required");
+
+    // The core loops show every loop, and aren't done until each is written.
     const core = (await agent.get(`/api/projects/${id}/path/milestones/SHIP.M1.2`)).body;
     expect(core.isSource).toBe(true);
-    expect(core.loops.map((l: any) => l.title)).toEqual(["Build", "The feed"]);
+    expect(core.loops.map((l: any) => l.title)).toEqual(["Product loop", "Growth loop", "Retention loop", "Revenue loop", "Referral loop", "Build", "The feed"]);
     for (const m of ["SHIP.M1.1"]) await agent.post(`/api/projects/${id}/path/mark`).send({ ids: [m] });
     let status = (await agent.get(`/api/projects/${id}/path`)).body;
     expect(status.next.id).toBe("SHIP.M1.2");
-    expect(status.next.loops.map((l: any) => l.title)).toEqual(["Build", "The feed"]);
-    expect(status.next.step).toMatchObject({ taskId: build.body.id, isLoop: true });
+    expect(status.next.loops.map((l: any) => l.title)).toEqual(["Product loop", "Build", "The feed", "Growth loop", "Retention loop", "Revenue loop", "Referral loop"]);
+    expect(status.next.missingLoopTypes).toEqual([]);
+    expect(status.next.step).toMatchObject({ taskId: seeded.loops[0].taskId, isLoop: true });
 
     // Expanding without a write-up on the feed loop is refused; the build loop has one.
     const noText = await agent.post(`/api/projects/${id}/path/expand`).send({ backboneId: "SHIP.M2.1", loopTaskId: feed.id });
@@ -447,7 +476,7 @@ describe("more than one loop", () => {
     expect(manual.body.created[0].tags).toContain(`loop:${feed.id}`);
 
     const loopSteps = (await agent.get(`/api/projects/${id}/path/milestones/SHIP.M2.1`)).body;
-    expect(loopSteps.sourceLoops.map((l: any) => [l.title, l.expanded])).toEqual([["Build", true], ["The feed", true]]);
+    expect(loopSteps.sourceLoops.filter((l: any) => l.expanded).map((l: any) => l.title)).toEqual(["Build", "The feed"]);
     expect(loopSteps.steps.filter((s: any) => s.loopTaskId === feed.id).map((s: any) => s.title)).toEqual(["Open the feed", "Reply to a check-in"]);
 
     // Loop steps is done only when every step of every loop is done.
@@ -458,10 +487,15 @@ describe("more than one loop", () => {
     await agent.patch(`/api/kanban/${manual.body.created[0].id}`).send({ status: "done" });
     m21 = (await agent.get(`/api/projects/${id}/path`)).body.phases[1].milestones.find((m: any) => m.id === "SHIP.M2.1");
     expect(m21.done).toBe(true);
-    // And the next action after writing both loops moves off the core loop.
+    // Writing the two product loops isn't enough: the core loops wait for all five kinds.
     for (const l of [build.body.id, feed.id]) await agent.patch(`/api/kanban/${l}`).send({ status: "done", description: "written" });
     status = (await agent.get(`/api/projects/${id}/path`)).body;
+    expect(status.phases[0].milestones.find((m: any) => m.id === "SHIP.M1.2").done).toBe(false);
+    expect(status.loopTree.coverage.unwritten).toEqual(["growth", "retention", "revenue", "referral"]);
+    await writeLoops(agent, id);
+    status = (await agent.get(`/api/projects/${id}/path`)).body;
     expect(status.phases[0].milestones.find((m: any) => m.id === "SHIP.M1.2").done).toBe(true);
+    expect(status.loopTree).toMatchObject({ coverage: { complete: true }, competitionDue: true, competition: null });
     expect(status.next.id).toBe("SHIP.M1.3");
   });
 });
@@ -472,6 +506,7 @@ describe("keep building", () => {
     const agent = await owner(app);
     const id = (await create(agent, "ship_mvp", "saas", "Branch Test")).body.id;
     const week = (n: number) => (async () => (await agent.get(`/api/projects/${id}/path`)).body.phases.find((p: any) => p.id === `week-${n}`).milestones.map((m: any) => m.id))();
+    await writeLoops(agent, id);
 
     await agent.post(`/api/projects/${id}/path/mark`).send({ ids: await week(1) });
     let s = (await agent.get(`/api/projects/${id}/path`)).body;
@@ -493,15 +528,15 @@ describe("keep building", () => {
     expect(s.branch).toMatchObject({ phaseId: "branch-build", open: true, round: 1 });
 
     // Work through the round; branch work is pace.
-    const before = s.pace;
+    const beforeEvents = s.events.length;
     const kanban = await agent.get(`/api/projects/${id}/kanban`);
     expect(kanban.status, JSON.stringify(kanban.body).slice(0, 300)).toBe(200);
     const tasks = kanban.body;
     for (const b of ["SHIP.B.1", "SHIP.B.2", "SHIP.B.3"]) await agent.patch(`/api/kanban/${tasks.find((t: any) => t.tags?.includes(`backbone:${b}`)).id}`).send({ status: "done" });
     s = (await agent.get(`/api/projects/${id}/path`)).body;
     expect(s.next.id).toBe("SHIP.B.4");
-    expect(s.events.length).toBeGreaterThan(0);
-    expect(before.multiplier).toBeNull();
+    // Writing the loops was already effort; the branch's own work adds to it.
+    expect(s.events.length).toBeGreaterThan(beforeEvents);
     expect(s.pace.multiplier).not.toBeNull();
 
     // Extend again: the branch reopens as round 2.
@@ -523,32 +558,37 @@ describe("keep building", () => {
 });
 
 describe("the plan re-sizes for the loops you're going for", () => {
-  it("creates the loops Nova found, marks built ones done, never duplicates, and stretches the plan", async () => {
+  it("fills the empty slots with the loops Nova found, marks built ones done, never duplicates, and stretches the plan per product loop", async () => {
     const app = await getTestApp();
     const agent = await owner(app);
     const id = (await create(agent, "ship_mvp", "saas", "Resize Test")).body.id;
     const { reconcileLoops } = await import("../../server/phase-trees");
 
-    const one = (await agent.get(`/api/projects/${id}/path`)).body;
-    expect(one.plan).toMatchObject({ loops: 1, authoredDays: 28 });
-    const baseTotal = one.plan.totalMinutes;
+    const five = (await agent.get(`/api/projects/${id}/path`)).body;
+    expect(five.plan).toMatchObject({ loops: 5, productLoops: 1, authoredDays: 28 });
+    const baseTotal = five.plan.totalMinutes;
 
     await agent.post(`/api/projects/${id}/path/loops`).send({ backboneId: "SHIP.M1.2", title: "Build" });
     const r = await reconcileLoops(id, [
-      { title: "build", steps: "create → check in → feedback", state: "built", evidence: "tasks done" },
-      { title: "The feed", steps: "open → read → react → follow", state: "partly", evidence: "feed routes exist" },
-      { title: "Backing", steps: "browse → back → get updates", state: "planned", evidence: "in scope" },
+      { title: "build", steps: "create → check in → feedback", state: "built", evidence: "tasks done", type: "product" },
+      { title: "The feed", steps: "open → read → react → follow", state: "partly", evidence: "feed routes exist", type: "product" },
+      { title: "Backing", steps: "browse → back → get updates", state: "planned", evidence: "in scope", type: "product" },
+      { title: "Public check-ins", steps: "post → indexed → stranger lands → signs up", state: "partly", evidence: "", type: "growth" },
+      { title: "Paid ads", steps: "ad → click → sign up", state: "planned", evidence: "", type: "growth" },
     ]);
-    expect(r.created).toHaveLength(2);       // build matched the existing loop
-    expect(r.updated).toHaveLength(2);       // build: steps written in, and marked done
+    expect(r.created).toHaveLength(1);       // Backing: the product slot went to The feed
+    expect(r.updated).toHaveLength(4);       // build: steps and done; the product slot; the growth slot. Paid ads: growth is taken.
     const core = (await agent.get(`/api/projects/${id}/path/milestones/SHIP.M1.2`)).body;
-    expect(core.loops.map((l: any) => [l.title, l.status])).toEqual([["Build", "done"], ["The feed", "todo"], ["Backing", "todo"]]);
-    expect(core.loops[0].answer).toBe("create → check in → feedback");
+    expect(core.loops.map((l: any) => [l.title, l.type, l.status])).toEqual([
+      ["The feed", "product", "todo"], ["Public check-ins", "growth", "todo"], ["Retention loop", "retention", "todo"], ["Revenue loop", "revenue", "todo"], ["Referral loop", "referral", "todo"],
+      ["Build", "product", "done"], ["Backing", "product", "todo"],
+    ]);
+    expect(core.loops[5].answer).toBe("create → check in → feedback");
 
-    const three = (await agent.get(`/api/projects/${id}/path`)).body;
-    expect(three.plan).toMatchObject({ loops: 3, authoredDays: 42 });
-    // Loop steps is now three loops' worth: 2 × 3h more than the single-loop plan.
-    expect(three.plan.totalMinutes - baseTotal).toBe(2 * 180);
+    const seven = (await agent.get(`/api/projects/${id}/path`)).body;
+    expect(seven.plan).toMatchObject({ loops: 7, productLoops: 3, authoredDays: 42 });
+    // Loop steps is now seven loops' worth: 2 × 3h more than the five-loop plan.
+    expect(seven.plan.totalMinutes - baseTotal).toBe(2 * 180);
     // A second read of the same loops changes nothing.
     const again = await reconcileLoops(id, [{ title: "The Feed", steps: "x", state: "planned", evidence: "" }]);
     expect(again).toEqual({ created: [], updated: [] });
@@ -562,15 +602,16 @@ describe("the loop tree", () => {
     const id = (await create(agent, "ship_mvp", "saas", "Tree Test")).body.id;
     const { createExpansion, reconcileLoops, saveWork } = await import("../../server/phase-trees");
 
-    expect((await agent.get(`/api/projects/${id}/path`)).body.loopTree).toBeNull();
+    let tree = (await agent.get(`/api/projects/${id}/path`)).body.loopTree;
+    expect(tree).toMatchObject({ sourceId: "SHIP.M1.2", fanOutId: "SHIP.M2.1", competitionDue: false, closureAuditAt: null });
+    expect(tree.loops.map((l: any) => [l.type, l.state])).toEqual([["product", "unwritten"], ["growth", "unwritten"], ["retention", "unwritten"], ["revenue", "unwritten"], ["referral", "unwritten"]]);
     await reconcileLoops(id, [
       { title: "Build", steps: "create → check in → feedback", state: "built", evidence: "" },
       { title: "The feed", steps: "open → read → react", state: "partly", evidence: "" },
       { title: "Backing", steps: "", state: "planned", evidence: "" },
     ]);
-    let tree = (await agent.get(`/api/projects/${id}/path`)).body.loopTree;
-    expect(tree).toMatchObject({ sourceId: "SHIP.M1.2", fanOutId: "SHIP.M2.1" });
-    expect(tree.loops.map((l: any) => [l.title, l.state, l.written])).toEqual([["Build", "written", true], ["The feed", "written", true], ["Backing", "unwritten", false]]);
+    tree = (await agent.get(`/api/projects/${id}/path`)).body.loopTree;
+    expect(tree.loops.slice(0, 3).map((l: any) => [l.title, l.state, l.written])).toEqual([["Build", "written", true], ["The feed", "written", true], ["Backing", "unwritten", false]]);
 
     const feed = tree.loops[1];
     const { created } = await createExpansion(id, "SHIP.M2.1", [{ title: "Open the feed", description: "" }, { title: "React", description: "" }], { loopTaskId: feed.taskId });
@@ -588,6 +629,20 @@ describe("the loop tree", () => {
     const w = await saveWork(id, created[1].id, { kind: "template", intro: "", template: "x", whatNovaDid: "", whatIsLeft: "" });
     expect((await agent.get(`/api/projects/${id}/path/work/${created[1].id}`)).body.work.id).toBe(w.id);
     expect((await agent.get(`/api/projects/${id}/path/work/00000000-0000-0000-0000-000000000000`)).status).toBe(404);
+
+    // The latest codebase audit's closure verdicts land on their loops.
+    const { db } = await import("../../server/db");
+    const { projectCodeAudits, projects } = await import("@shared/schema");
+    const { eq } = await import("drizzle-orm");
+    const [proj] = await db.select({ ownerId: projects.ownerId }).from(projects).where(eq(projects.id, id));
+    const build = tree.loops[0];
+    await db.insert(projectCodeAudits).values({ projectId: id, createdById: proj.ownerId, source: "github:x/y@main", sourceKind: "github", findings: { loops: [
+      { loopTaskId: build.taskId, title: "Build", type: "product", closure: "open", stages: [], returnPath: null, breaksAt: "Feedback never notifies the builder", fix: "Email on comment" },
+    ] } as any } as any);
+    tree = (await agent.get(`/api/projects/${id}/path`)).body.loopTree;
+    expect(tree.closureAuditAt).toBeTruthy();
+    expect(tree.loops[0].closure).toMatchObject({ closure: "open", breaksAt: "Feedback never notifies the builder" });
+    expect(tree.loops[1].closure).toBeNull();
   });
 });
 
@@ -602,9 +657,10 @@ describe("a wrong loop can be removed", () => {
       { title: "Weekly check-in", steps: "post → get comments → post again", state: "built", evidence: "" },
       { title: "Explore the feed", steps: "open → read → react → follow", state: "partly", evidence: "" },
     ]);
-    expect(r.created).toHaveLength(2);
+    expect(r).toMatchObject({ created: [expect.any(String)], updated: expect.arrayContaining([expect.any(String)]) });
+    const products = (t: any) => t.loops.filter((l: any) => l.type === "product").map((l: any) => l.title);
     let tree = (await agent.get(`/api/projects/${id}/path`)).body.loopTree;
-    expect(tree.loops.map((l: any) => l.title)).toEqual(["Weekly check-in", "Explore the feed"]);
+    expect(products(tree)).toEqual(["Weekly check-in", "Explore the feed"]);
 
     // The second one was a feature after all. Give it steps, finish one, then remove it.
     const feed = tree.loops[1];
@@ -614,10 +670,12 @@ describe("a wrong loop can be removed", () => {
     expect(del.status).toBe(200);
     expect(del.body).toEqual({ removedSteps: 1, keptSteps: 1 });
     tree = (await agent.get(`/api/projects/${id}/path`)).body.loopTree;
-    expect(tree.loops.map((l: any) => l.title)).toEqual(["Weekly check-in"]);
+    expect(products(tree)).toEqual(["Weekly check-in"]);
     expect(tree.unassigned.map((u: any) => u.title)).toEqual(["Open"]);
     expect((await agent.delete(`/api/projects/${id}/path/loops/${feed.taskId}`)).status).toBe(404);
-    expect((await agent.get(`/api/projects/${id}/path`)).body.plan.loops).toBe(1);
+    expect((await agent.get(`/api/projects/${id}/path`)).body.plan).toMatchObject({ loops: 5, productLoops: 1 });
+    // The one product loop left can't go.
+    expect((await agent.delete(`/api/projects/${id}/path/loops/${tree.loops[0].taskId}`)).body.code).toBe("loop_required");
 
     // Removed means removed: the next read can't bring it back, even renamed — until the builder adds it by hand.
     const { reconcileLoops: again } = await import("../../server/phase-trees");
@@ -626,7 +684,7 @@ describe("a wrong loop can be removed", () => {
       { title: "Back a project", steps: "browse → back → get updates", state: "planned", evidence: "" },
     ]);
     expect(back.created).toHaveLength(1);
-    expect((await agent.get(`/api/projects/${id}/path`)).body.loopTree.loops.map((l: any) => l.title)).toEqual(["Weekly check-in", "Back a project"]);
+    expect(products((await agent.get(`/api/projects/${id}/path`)).body.loopTree)).toEqual(["Weekly check-in", "Back a project"]);
     await agent.post(`/api/projects/${id}/path/loops`).send({ backboneId: "SHIP.M1.2", title: "Explore the feed" }).expect(200);
     expect((await agent.get(`/api/projects/${id}`)).body.rejectedLoops).toEqual([]);
   });

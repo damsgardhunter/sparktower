@@ -10,6 +10,7 @@ import { SkillBadge } from "@/components/skill-badge";
 import { MediaGallery } from "@/components/media-gallery";
 import { FeedPostCard, type FeedPostWithDetails } from "@/components/feed-post-card";
 import { FeedComposer } from "@/components/feed-composer";
+import { FeedbackInbox, useNewFeedbackCount } from "@/components/feedback-inbox";
 import { ProjectDiscussion, CommentCount } from "@/components/project-discussion";
 import { ProjectOverview } from "@/components/project-overview";
 import {
@@ -147,6 +148,9 @@ export function ProjectSocialTabs({
     }
   };
 
+  // The team's count of feedback they haven't read, on the Updates tab where it lives.
+  const newFeedback = useNewFeedbackCount(project.id, isMember);
+
   return (
     <div className="space-y-6">
       {/* Wrapping tab bar so every section stays reachable on any width. */}
@@ -166,6 +170,9 @@ export function ProjectSocialTabs({
               {t.label}
               {count !== null && count > 0 && (
                 <Badge variant="secondary" className="ml-0.5 h-4 px-1.5 text-[10px]">{count}</Badge>
+              )}
+              {t.id === "updates" && newFeedback > 0 && (
+                <Badge className="ml-0.5 h-4 px-1.5 text-[10px]" data-testid="badge-new-feedback">{newFeedback} new feedback</Badge>
               )}
             </Button>
           );
@@ -208,6 +215,7 @@ export function ProjectSocialTabs({
 
       {tab === "updates" && (
         <div className="space-y-4">
+          {isMember && <FeedbackInbox projectId={project.id} />}
           {isMember && <FeedComposer defaultProjectId={project.id} />}
           {updatesLoading ? (
             <div className="space-y-3">{[...Array(2)].map((_, i) => <Skeleton key={i} className="h-40 rounded-xl" />)}</div>

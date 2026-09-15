@@ -23,11 +23,16 @@ export const SHIP_TREE: PathTree = {
           },
         },
         {
-          id: "SHIP.M1.2", title: "The core loop", actor: "nova-drafts", estimateMinutes: 20, tier: "artifact",
-          description: "The highest-variance milestone in the path; everything downstream orders off it. The 3–5 step sequence that delivers value.",
+          id: "SHIP.M1.2", title: "The core loops", actor: "nova-drafts", estimateMinutes: 45, tier: "artifact",
+          description: "The highest-variance milestone in the path; everything downstream orders off it. A business runs on five loops, each a 3–5 step sequence whose last step restarts its first: product (what a user repeats — add more than one if the product has several), growth (how strangers find it), retention (why they come back), revenue (how use becomes money) and referral (how users bring users). Once all five are written, Nova audits them against the competition.",
+          supersedes: [
+            "The highest-variance milestone in the path; everything downstream orders off it. The 3–5 step sequence that delivers value.",
+            "The loop at two scales: moment-to-moment (seconds — what the player does over and over) and session (minutes — what makes a session feel complete). Week 2 builds moment-to-moment first: a game whose second-to-second action isn't fun can't be rescued by content.",
+            "The visitor path: land, understand, act. Usually three steps.",
+          ],
           variants: {
-            game: { description: "The loop at two scales: moment-to-moment (seconds — what the player does over and over) and session (minutes — what makes a session feel complete). Week 2 builds moment-to-moment first: a game whose second-to-second action isn't fun can't be rescued by content." },
-            website: { description: "The visitor path: land, understand, act. Usually three steps." },
+            game: { description: "Five loops. Product at two scales — moment-to-moment (seconds: what the player does over and over) and session (minutes: what makes a session feel complete) — then growth (clips, streams, word of mouth), retention (why they play tomorrow), revenue (premium, demo-to-paid, or free-to-play) and referral (bringing a friend in). Week 2 builds moment-to-moment first: a game whose second-to-second action isn't fun can't be rescued by content." },
+            website: { description: "Five loops. Product is the visitor path — land, understand, act — then growth (how a visitor arrives), retention (why they return), revenue (what they pay for, or what earns) and referral (why they send it on). Short loops are fine; missing ones are not." },
           },
         },
         {
@@ -87,7 +92,8 @@ export const SHIP_TREE: PathTree = {
         },
         {
           id: "SHIP.M2.3", title: "Loop closes", actor: "user-does", estimateMinutes: 30, tier: "claimed",
-          description: "Complete the full loop yourself, start to finish, without touching the database. The first moment the thing is real.",
+          description: "Complete every loop yourself, start to finish, without touching the database — and check each one brings you back to its first step. The first moment the thing is real. A codebase audit that finds all five closed confirms it.",
+          supersedes: ["Complete the full loop yourself, start to finish, without touching the database. The first moment the thing is real."],
         },
         {
           id: "SHIP.M2.4", title: "Persistence and auth", actor: "nova-builds", estimateMinutes: h(2), tier: "verified",

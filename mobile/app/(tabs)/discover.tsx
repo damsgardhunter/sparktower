@@ -10,6 +10,7 @@ import {
 import { buildDiscoverFeed, timeAgo, type FeedItem } from "../../src/discoverFeed";
 import { ConnectActions, FollowButton, useConnectionStates, type ConnectionState } from "../../src/components/ConnectActions";
 import { NoticeBanner, useNotice, type Notice } from "../../src/components/Sheet";
+import { EXPLORE, openDiscover, trackExplore } from "../../src/explore";
 
 type Mode = "people" | "looking";
 
@@ -116,6 +117,8 @@ export default function Discover() {
   // shows up — and the banner with it — without anyone having to pull.
   const firstFocus = useRef(true);
   useFocusEffect(useCallback(() => {
+    // Every time Discover comes into view is an open; in the same visit, a return.
+    openDiscover();
     if (firstFocus.current) { firstFocus.current = false; return; }
     void qc.invalidateQueries({ queryKey: ["matches"] });
     void qc.invalidateQueries({ queryKey: ["projects", "discover"] });
@@ -214,20 +217,28 @@ export default function Discover() {
             />
           ) : (
             <View style={{ gap: spacing.sm }}>
-              {feed.items.map((item) => item.kind === "builder" ? (
+              {feed.items.map((item, index) => item.kind === "builder" ? (
                 <BuilderCard
                   key={item.key}
                   item={item}
+                  rank={index + 1}
                   connection={connections?.[item.userId]}
                   notify={show}
-                  onOpen={() => router.push(`/user/${item.userId}`)}
+                  onOpen={() => {
+                    trackExplore(EXPLORE.openProfile, { matchType: "builder", targetId: item.userId, rankPosition: index + 1, source: "discover" });
+                    router.push(`/user/${item.userId}`);
+                  }}
                 />
               ) : (
                 <ProjectCard
                   key={item.key}
                   item={item}
+                  rank={index + 1}
                   notify={show}
-                  onOpen={() => router.push(`/project/${item.projectId}`)}
+                  onOpen={() => {
+                    trackExplore(EXPLORE.openProject, { matchType: "project", targetId: item.projectId, rankPosition: index + 1, source: "discover" });
+                    router.push(`/project/${item.projectId}`);
+                  }}
                 />
               ))}
             </View>
@@ -273,8 +284,8 @@ type BuilderItem = Extract<FeedItem, { kind: "builder" }>;
 type ProjectItem = Extract<FeedItem, { kind: "project" }>;
 
 /** A matched builder: who, why, when — and Connect or Message without leaving the feed. */
-function BuilderCard({ item, connection, notify, onOpen }: {
-  item: BuilderItem; connection?: ConnectionState; notify: (notice: Notice) => void; onOpen: () => void;
+function BuilderCard({ item, rank, connection, notify, onOpen }: {
+  item: BuilderItem; rank: number; connection?: ConnectionState; notify: (notice: Notice) => void; onOpen: () => void;
 }) {
   return (
     <Card onPress={onOpen} accent={item.isNew ? colors.primary : undefined}>
@@ -295,14 +306,14 @@ function BuilderCard({ item, connection, notify, onOpen }: {
           {item.skills.map((s) => <Chip key={s} label={s} small />)}
         </Row>
       )}
-      <ConnectActions userId={item.userId} name={item.name} reason={item.reason} headline={item.headline} connection={connection} notify={notify} />
+      <ConnectActions userId={item.userId} name={item.name} reason={item.reason} headline={item.headline} connection={connection} notify={notify} explore={{ source: "discover", rankPosition: rank }} />
     </Card>
   );
 }
 
 /** A project: what it is, why it's here, when it appeared — and Follow in place. */
-function ProjectCard({ item, notify, onOpen }: {
-  item: ProjectItem; notify: (notice: Notice) => void; onOpen: () => void;
+function ProjectCard({ item, rank, notify, onOpen }: {
+  item: ProjectItem; rank: number; notify: (notice: Notice) => void; onOpen: () => void;
 }) {
   return (
     <Card onPress={onOpen} accent={item.isNew ? colors.primary : colors.accent}>
@@ -319,7 +330,7 @@ function ProjectCard({ item, notify, onOpen }: {
         </Row>
       )}
       <Row gap={spacing.sm}>
-        <FollowButton projectId={item.projectId} title={item.title} following={item.following} notify={notify} />
+        <FollowButton projectId={item.projectId} title={item.title} following={item.following} notify={notify} explore={{ source: "discover", rankPosition: rank }} />
         <Btn label="Open" small variant="outline" onPress={onOpen} />
       </Row>
     </Card>

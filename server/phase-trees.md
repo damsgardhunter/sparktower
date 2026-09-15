@@ -12,8 +12,8 @@ path-backbone-v2, shipping-variants, and funding-path-v1.
 | Path | Promise | Target |
 | --- | --- | --- |
 | **Ship an MVP** | Get a first version in front of real people and learn from what they do | 4 weeks |
-| **Systemize a business** | Turn something that already works into something that runs without you in every step | 4 weeks |
-| **Raise funding** | Get the story, the numbers and the plan into a shape that gets backed | 4 weeks to in-market |
+| **Systemize a business** | Get the money right first, then build a business that runs without you in every step | 4 weeks to a financing plan, 8 to owner-independence tested |
+| **Raise funding** | Know how fundable you are, pick the route to the money, and build it out step by step | 2 weeks to a capital profile and route, then the route's roadmap |
 
 A project picks exactly one at creation. Paths connect rather than compete — most projects walk
 two or three of them over a year, and the tree is designed so work carries across.
@@ -134,14 +134,45 @@ rewordings. User picks or edits.
 
 *Feeds the landing page, store copy, and every pitch later.*
 
-**M1.2 — The core loop** · `nova-drafts` · 20m
+**M1.2 — The core loops** · `nova-drafts` · 45m
 The highest-variance milestone in the path. Everything downstream orders off it.
-- `app` `saas` — the 3–5 step sequence that delivers value.
-- `game` — the loop at two scales: **moment-to-moment** (seconds — what the player does over and
+
+A product with one loop is a product, not a business. Every project writes **five loops**, each a
+3–5 step sequence whose last step restarts its first (a sequence that ends is a funnel):
+
+- **Product** — what one kind of user does over and over and gets value from each time. The only
+  kind that repeats: a product with several modes (SparkTower's three paths) has a product loop per
+  mode, up to four.
+- **Growth** — how strangers find it without the builder finding each one.
+- **Retention** — why someone who used it once comes back next week.
+- **Revenue** — how use turns into money, and money into more use.
+- **Referral** — how a user deliberately brings in another, who can then bring in the next.
+
+New projects start with the five as empty slots. The milestone is done when all five kinds exist and
+every loop is written. The last loop of a kind can't be removed — only rewritten. Eight loops is the
+cap: the four business loops and up to four product loops. Only product loops stretch the plan (a
+week each past the first); the other four are what weeks 3 and 4 already budget for.
+
+Variants:
+- `app` `saas` — as above.
+- `game` — product at two scales: **moment-to-moment** (seconds — what the player does over and
   over) and **session** (minutes — what makes a session feel complete). Week 2 builds
   moment-to-moment first. A game whose second-to-second action isn't fun cannot be rescued by
   content, and building it first makes that discoverable in week 2 instead of week 4.
-- `website` — the visitor path: land, understand, act. Usually 3 steps.
+- `website` — product is the visitor path: land, understand, act. Usually 3 steps.
+
+**Competitive audit.** Once all five are written, Nova audits them against the products the
+builder's customers already use: names the competitors, says how each runs the equivalent loop, and
+scores every loop 0–100 for how likely it is to keep turning (strong 70+, competitive 45–69, weak
+under 45), with the step most likely to break and the one change that would raise the score.
+From the model's knowledge, not a live scan — the page says so. Stale once a loop is added or
+replaced.
+
+**Closure check.** Every codebase audit reads the written loops and reports each as `closed`,
+`open` or `not-built`, stage by stage with cited files, plus the return path — the notification,
+feed, link, invite or renewal that brings someone back to step one. "Closed" without a real file for
+every stage and for the return path is downgraded to open. When all five kinds close, the audit
+verifies M2.x — Loop closes.
 
 **M1.3 — Scope cut** · `nova-drafts` → `user-decides` · 25m
 Nova generates the full feature list the vision implies, then splits it into **in the month**
@@ -318,13 +349,87 @@ the numbers said. Deferred roadmap becomes next month's scope if continuing.
 
 # Part 3 — Systemize a business
 
-**Target: four weeks to owner-independence tested.** Most of the work is documentation and
-handoff that Nova can draft, which is what makes the month realistic.
+**Money first.** Starting or buying a business is mostly a money problem before it's an
+operations one, so the path opens with four weeks that end in a financing plan someone could act
+on, then the four operating weeks. **Target: four weeks to a financing plan, eight to
+owner-independence tested.**
 
 **Verification is Evidence tier**, not Verified — no codebase to check. Projections show as
 ranges, and Nova leans harder on the weekly check-in narrative.
 
-## Week 1 — See it clearly
+### Two mechanics the money weeks add
+
+- **Answered by tapping** (`intake` on a milestone). Money questions are asked as ranges to tap,
+  never a box to fill: "$0 — starting from nothing" is the first choice, and "I don't know" is a
+  real answer that the next step works out. Saving marks the step done, costs nothing, and the
+  answers become the step's written answer, which Nova reads on every later step. Answers can be
+  changed. `POST /api/projects/:id/path/intake`.
+- **Plans** (`work: "plan"`). Nova builds a document, not code: headline figures, the tables
+  behind them (sources and uses, month-by-month cash, a checklist), the reasoning with the
+  arithmetic, what it assumed, what's weak, dated actions, and who to check it with. Accepting it
+  writes a compact version as the answer; **Add these to my tasks** puts its actions on the board
+  once (`POST /api/projects/:id/path/work/:workId/tasks`). Nova never promises approval, funding or
+  success — the plan's strength is that every gap it finds has a dated step against it.
+
+Projects that were on this path before the money weeks existed get them the next time the path
+is read (`syncPathTree`), without touching anything they'd done.
+
+## Money week 1 — Know your numbers
+
+**F1.1 — Where you stand** · `user-decides` · tap · 5m
+Cash you could put in today (from $0), free money each month, credit range (including "never
+checked"), starting / buying / running, industry experience, and anything that could back a loan.
+
+**F1.2 — How much you need** · `user-decides` · tap · 5m
+How much you're looking to raise ("I don't know — work it out for me" first) and when.
+
+**F1.3 — Startup costs and the raise** · `nova-builds` · plan · 45m
+Sources and uses with realistic ranges plus working capital, and the raise that covers it. Works
+the number out if they didn't know it; checks it if they did.
+- `restaurant` — build-out, kitchen equipment, POS, licences (liquor), deposits, opening
+  inventory, pre-opening payroll, 3–6 months of working capital.
+
+**F1.4 — Unit economics** · `nova-builds` · plan · 45m
+What one sale earns, what the month costs, break-even volume, arithmetic shown.
+- `restaurant` — average check, covers by daypart, food and labour %, prime cost, occupancy,
+  break-even covers.
+- `service` — rate, utilisation, delivery cost, margin per client. `retail` — AOV, margin, turns.
+
+**F1.5 — Cash flow before profit** · `nova-builds` · plan · 45m
+Month by month to profit: ramp, losing months, lowest cash point, and how each is covered.
+
+**F1.6 — Lock the base case** · `user-decides` · 10m
+Cautious, likely, stretch — each with raise, break-even month and lowest cash. Every later step
+uses the one picked.
+
+## Money week 2 — Where the money comes from
+
+**F2.1 — Your equity** · plan · 30m — the injection lenders expect, what counts, the gap and how
+to close it.
+**F2.2 — SBA loan readiness** · plan · 45m — 7(a) / 504 / Microloan fit, and a met / not yet /
+unknown checklist against their answers.
+**F2.3 — Seller financing** · plan · 30m — seller notes when buying; landlord, equipment-vendor,
+franchisor and supplier financing when starting new.
+**F2.4 — Investor structure** · plan · 45m — friends and family, silent partners, profit share
+with a preferred return, revenue-based financing; ownership and control; securities flagged.
+
+## Money week 3 — Become financeable
+
+**F3.1 — Gap scan** · plan · 30m — every weakness a lender would see, ranked by what it blocks.
+**F3.2 — Financeability plan** · plan · 45m — dated actions that close each gap, built for $0
+and low credit: credit repair, a savings target, industry experience, a lender relationship,
+proving demand smaller first (`restaurant` — pop-ups, a food truck, catering, a shared kitchen).
+**F3.3 — Deal structure** · plan · 45m — buying: price from earnings, sources and uses, loan +
+seller note + equity, payments and coverage. Starting: which source pays for what.
+
+## Money week 4 — Your roadmap
+
+**F4.1 — Pick your roadmap** · tap · 2m — 90 days (weekly), 1 year (monthly), 3 years (quarterly).
+**F4.2 — Your money roadmap** · plan · 45m — at that length: what gets done, the money milestone it
+reaches, and how you'll know.
+**F4.3 — Take the first step** · `user-does` · 30m — the first action on it, done this week.
+
+## Week 5 — See it clearly
 
 **M1.1 — Time capture** · `user-does` · 10m/day
 Nova prompts once daily and categorizes the response. Deliberately tiny — a full time audit is
@@ -345,7 +450,7 @@ rate, plus what it blocks.
 
 **M1.5 — Pick the first three** · `user-decides` · 10m
 
-## Week 2 — Write it down
+## Week 6 — Write it down
 
 Nova writes; the owner corrects. This is the week that would otherwise never happen, because
 nobody writes their own SOPs.
@@ -366,7 +471,7 @@ Someone else follows one unaided. Every question they have to ask is a gap.
 
 **M2.5 — Close the gaps** · `nova-drafts` · 30m
 
-## Week 3 — Instrument and delegate
+## Week 7 — Instrument and delegate
 
 **M3.1 — Operating metrics** · `nova-drafts` · 20m
 Nova proposes the three to five numbers that matter for this business shape.
@@ -393,7 +498,7 @@ Nova costs all three against the bottleneck ranking.
 **M3.8 — First handoff** · `user-does` · variable
 One process, one person, SOP attached.
 
-## Week 4 — Remove the owner
+## Week 8 — Remove the owner
 
 **M4.1 — Automate the top two repetitive tasks** · `nova-builds` · 2–3h
 - `restaurant` — ordering triggers, scheduling, prep lists.
@@ -418,219 +523,83 @@ Deeper systemizing, or Raise funding to finance growth.
 
 # Part 4 — Raise funding
 
-**Target: four weeks to in-market.** Closing takes longer and depends on people outside the user's
-control. The path promises what it can deliver — plan done, evidence gathered, route live — and
-says so at week 1 rather than letting people discover it at week 4.
+**Two weeks everyone walks, then a route they choose.** Week 1 is who the person is to a funder —
+the capital profile and its fundability score. Week 2 is every way the money could come — the
+capital map — and the choice of route: **debt, seller financing, investors, a hybrid stack, or
+self-funding**. Only the chosen route's four phases appear, each a real roadmap from where the
+person stands today to money in the bank. Code: `shared/phase-trees/fund.ts`, `shared/capital.ts`.
 
-## Routes vs. types
+Old projects on the previous 4-week funding tree have those steps archived (`archived:retired`)
+the next time the path loads: the work stays on the board, the path stops counting it.
 
-The subcategory (`startup_equity` · `local_community` · `loan_grant`) is the **goal**. Routes are
-the **methods**, and Nova usually stacks two or three toward the goal.
+## Week 1 — Your capital profile
 
-| Route | Fits | Realistic minimum |
-| --- | --- | --- |
-| `presale` | Anything with a deliverable | Something concrete to promise |
-| `community` | Local, visible, story-driven | A story and a face |
-| `merch` | Anything with a following | An audience, however small |
-| `revenue` | Service, food, anything sellable now | Ability to deliver at small scale |
-| `grant` | Local, sector-specific, nonprofit-adjacent | Complete plan, eligibility |
-| `loan` | Has collateral, credit, or a co-signer | Plan with quoted costs |
-| `equity` | Scalable, high-growth | Plan plus a demonstrable product |
+All tapped, free, and read by every later step. Questions only ask what applies: business-history
+details appear only if they've owned one.
 
-Nova never presents "you don't qualify" as an endpoint. Every situation has a live route.
+- **C1.1 — Why you want to own a business** — why (income, wealth, freedom, legacy, grow and sell,
+  community, passion), how (start, buy, franchise, grow), involvement, how long.
+- **C1.2 — Your money today** — cash (from $0), credit (including "not sure"), household income,
+  monthly debt payments, other assets.
+- **C1.3 — Your experience** — years in the industry, most senior role, people managed, P&L.
+- **C1.4 — Your business history** — owned before? If so: what it did (one short line — the only
+  text field), industry, how long, best-year revenue, profit, people, customers, what it owned, where
+  it is now. **Fill from my résumé** suggests answers from owner, founder, proprietor, self-employed
+  or franchisee roles on their profile (`businessHistoryFromResume`) — never revenue or profit, which
+  résumés don't carry, and nothing saved until they confirm.
+- **C1.5 — Your capital goal** — amount ("work it out" first), what it buys, when, equity they'd
+  give up, debt they'd take, ownership they want to keep.
+- **C1.6 — Your capital profile** · plan — Nova's read, built on the score.
 
-**Route selection inputs**, gathered conversationally at path start, never as a form: what exists
-today · money available · credit position · audience · timeline · business shape.
+### The fundability score
 
-## Evidence, cheapest first
+Deterministic (`capitalProfile`), the same for the same answers, shown on the dashboard as soon as
+anything is answered. Seven parts, 100 points: **cash for the raise** 20 (share of the raise from
+their own cash), **credit** 20, **income against debt** 15 (penalised past 36% and 50%
+debt-to-income), **assets** 10, **industry experience** 15, **business track record** 15, **a clear
+goal** 5. Unanswered counts as nothing. Bands: under 40 not fundable yet, 40 early, 60 fundable with
+work, 75 strong, 90 very strong. Every part below its max says what raises it.
 
-**Nothing here is a prerequisite.** Any route is available at any time. Evidence changes how
-strong the case is, and Nova's job is maximum case strength for minimum user effort.
+**Route fit**, 0–100 per route, weighted from the same parts and capped by the lines people draw:
+debt is capped at 15 for "no debt"; seller financing at 25 unless they're buying (and 20 with no
+debt); investors at 15 for no equity or 100% ownership; self-funding at 25 for raises of $1M+ with
+under half in cash. Hybrid is the average of the two strongest — never better than the best alone.
+It measures how a funder would likely see them today — never the odds of approval, and Nova is told
+to use these exact numbers.
 
-**The default is that Nova gathers it.** The user should never be handed a research assignment
-they could have paid someone to do.
+## Week 2 — Your capital map
 
-**Tier 0 — Nova does it. Zero user effort.**
-Comparable revenue for similar businesses nearby. Local demographics and foot traffic. Industry
-cost benchmarks — food cost %, labor %, rent as a share of revenue. Equipment pricing. Competitor
-pricing from public menus and sites. Break-even modeling at realistic capacity.
-*Takes a plan from guessed to researched on day one, while the user watches.*
+- **C2.1 — Your capital map** · plan — every route against the profile: how much it could cover, what
+  it costs (interest, equity, control, time), what it asks, the fit, what would change it.
+- **C2.2 — Choose your route** · tap — the bubbles show each route's fit. Saving sets
+  `projects.capital_route`; the route's phases appear. Switching archives the old route's tasks
+  (`archived:route-<id>`) and restores them as they were on return.
 
-**Tier 1 — One afternoon. Calls and emails Nova drafts.**
-Real rent quotes on two or three spaces. Supplier price sheet. Insurance quote. Permit costs from
-the city. Nova writes the emails and call scripts; the user sends and dials.
-*Highest score-per-hour in the system. Guessed becomes quoted.*
+## The routes — four phases each
 
-**Tier 2 — Something they'd enjoy doing anyway.**
-For food: cook for twelve people, collect reactions on a one-page form Nova generates. That's a
-dinner party, not a business operation, and it's the restaurant's version of a product demo.
-Photos of the food. A one-page site with email signup that Nova builds.
-*Be blunt about the value here: a loan officer or investor who tastes the food and sees a coherent
-cost model is most of the way there. The food is the evidence.*
-
-**Tier 3 — Real operation. Optional, never required.**
-Catering, market stall, pop-up. Genuinely heavy — permits, health inspection, certification,
-insurance. Nova presents it as one option, names the actual requirements up front, and never
-positions it as something that has to happen first. Some people want this. Most don't need it.
-
-**Credit building** runs as a parallel background thread when relevant. Slow, mostly waiting,
-never blocking, its own quiet display.
-
-## The business plan
-
-Nova builds it. The user answers questions conversationally and makes decisions; Nova writes
-every section, generates the financials, and keeps it current as evidence arrives.
-
-**Sections:** concept · market and location · customers · competition · offering and pricing ·
-operations · team · startup costs · financial projections · funding ask and use · risks
-
-**Living document, not a milestone.** Every piece of evidence gathered anywhere in the product
-updates it and re-scores it automatically. That coupling is what makes the score feel earned.
-
-## Plan strength score
-
-**Measures the strength of the plan. Not the odds of the business succeeding.** This has to be
-visible in the product, not buried. A number that reads as a success prediction will send someone
-toward their savings on an estimate no software can honestly make. The working frame: *how strong
-is your case, and what would make it stronger.*
-
-### Five sub-scores, always shown separately
-
-**1. Completeness** — sections present and specific. Cheap to raise, and it should be.
-
-**2. Internal consistency** — do the numbers agree. Machine-checkable, immediately useful. Nova
-flags contradictions specifically: *seating 40 with 200 covers a day means 5 turns, high for dinner.*
-
-**3. Evidence backing** — share of load-bearing assumptions with external support. Every number is
-tagged guessed · researched · quoted · measured. The core of the score.
-
-**4. Assumption risk** — Nova names the two or three assumptions that break the model if wrong by
-30%. High risk isn't failure; unexamined risk is.
-
-**5. Viability math** — break-even at achievable volume, runway before profitability, what happens
-at 70% of projection.
-
-### Bands
-
-| Band | What it takes |
+| Route | Phases |
 | --- | --- |
-| 0–40 | Sections written |
-| 40–65 | Complete, consistent, tier 0 research — most users reach this on day one |
-| 65–85 | Tier 1 evidence — real quotes on the numbers the plan rests on. An afternoon of calls |
-| 85+ | Tier 2 or 3 — demonstrated demand: a tasting, signups, or real sales |
+| **Debt** | Get lender-ready (credit plan, personal financial statement, equity injection, collateral and guarantees, documents) · Pick the right loan (options, sizing and coverage, choose) · Build the package (plan, projections, sources and uses, request summary) · Apply and close (lender list, outreach, **apply**, compare offers, close) |
+| **Seller** | Find the right business (criteria, sourcing, owner letter, screen ten) · Value it and check it (valuation, diligence list, red flags) · Structure the deal (note terms, structures, LOI, **make the offer**) · Close and take over (financing gap, transition, closing checklist, first 90 days) |
+| **Investors** | Be investable (ownership math, structure, raising legally, data room) · Materials (deck, one-pager, model, use of funds) · Pipeline (investor list, warm intros, outreach, **open investment applications**) · Meetings to money (hard questions, **take the meetings**, terms, close) |
+| **Hybrid** | Design the stack (stack, choose, sequence) · Equity layer (partner terms, operating agreement outline, open applications, **secure commitments**) · Debt and seller layers (loan package, seller note, coverage across the stack) · Close together (timeline, conditions, reporting) |
+| **Self-funded** | Your runway (personal runway, keep an income, smallest version that earns) · Earn before you spend (presales, first offer, lean costs, **sell the first ten**) · Reinvest and grow (rules, milestones, retirement money carefully) · Build fundability as you go (business credit, books, re-check your score) |
 
-**Writing better cannot move the score.** Only evidence does. The bands are set so a user who lets
-Nova research and makes a few phone calls lands in the mid-eighties — quoted costs, real
-comparables, honest break-even math. That is a plan you can walk into a bank with. Tier 3 is for
-people who want it, not a ceiling everyone must clear.
+Milestones in **bold** are `inMarket`: once one is done the dashboard switches to pipeline mode,
+because outcomes depend on other people from there.
 
-### Presentation rules
+## Investment applications
 
-- Always paired with the top three actions that would raise it most, with point gain for each
-- Never a verdict. Always a state with a next move
-- Movement is the story: 34 to 61 in three weeks
-- Sub-scores visible by default; composite is a summary, not the headline
-- **Never** as a probability of success, and never quiet when the viability math doesn't work
-
-## Week 1 — Situation and foundation
-
-**M1.1 — Situation read** · `nova-drafts` · 20m
-Conversational. What exists, money, credit, audience, timeline, shape.
-
-**M1.2 — Route stack** · `nova-drafts` → `user-decides` · 20m
-Nova proposes two or three routes toward the user's goal with the case for each.
-
-**M1.3 — Tier 0 research** · `nova-builds` · 1h, mostly unattended
-Nova gathers comparables, benchmarks, demographics, competitor pricing. User watches it populate.
-
-**M1.4 — Plan v1 generated** · `nova-builds` · 1h
-Full draft from the situation read plus tier 0 research. First score appears here.
-
-**M1.5 — Financial model** · `nova-builds` · 1h
-Driver-based. User adjusts drivers; Nova handles the math.
-
-**M1.6 — Read the score** · `nova-drafts` · 15m
-Sub-scores, the top three actions, and what each is worth.
-
-**M1.7 — Positioning statement** · `nova-drafts` · 10m
-The one line the deck, the page and every conversation open with. Shared milestone `SH-01`:
-carried across from Ship if it exists there; otherwise Nova drafts three from the situation read
-and the user picks.
-
-## Week 2 — Evidence and materials
-
-**M2.1 — Tier 1 outreach pack** · `nova-drafts` · 30m
-Emails and call scripts for rent, suppliers, insurance, permits. Ready to send.
-
-**M2.2 — Make the calls** · `user-does` · 2–3h
-The afternoon that moves the score most.
-
-**M2.3 — Plan updated with quotes** · `nova-builds` · auto
-Guessed becomes quoted. Score moves. This is the moment the system proves itself.
-
-**M2.4 — Assumption risk pass** · `nova-drafts` · 30m
-Nova names what breaks the model and drafts the mitigation for each.
-
-**M2.5 — Materials** · `nova-builds` · 2h
-Route-dependent: deck for `equity`, application pack for `loan_grant`, campaign page and story for
-`local_community`.
-
-**M2.6 — The five hard questions** · `nova-drafts` · 30m
-Generated from the actual weak spots in the numbers, not a generic list. Nova drafts answers;
-user sharpens.
-
-## Week 3 — Set up the route
-
-**M3.1 — Showcase page** · `nova-builds` · 45m
-Pulls from the plan, build progress, and check-ins automatically, so it stays current without
-maintenance. For build-path users the pace history is the most compelling thing on it — a public
-record of someone shipping.
-
-**M3.2 — Route setup** · `nova-builds` · 1–2h
-`presale` — founding-member pricing, gift cards, prepaid packages, deposit preorders.
-`community` — campaign page, tiers, story.
-`merch` — existing setup.
-`revenue` — what can be sold *now*, at small scale, before the full thing exists. Catering before
-the restaurant, consulting before the SaaS, paid beta before launch. Usually the fastest cash and
-the best evidence, and the most overlooked option.
-`grant` `loan` — application pack, submission checklist, deadline calendar.
-`equity` — target list of 40–60, warm intro mapping, tiered so practice targets come first.
-
-**M3.3 — Tier 2 evidence, if wanted** · `user-does` · variable
-The tasting, the signup page, the photos.
-
-**M3.4 — Score check before going out** · `nova-drafts` · 15m
-Last chance to raise it cheaply. Nova names anything still guessed that could be quoted today.
-
-## Week 4 — In market
-
-**M4.1 — Launch the route** · `user-does` · 2h
-Send, submit, publish, open presales.
-
-**M4.2 — Response log** · `nova-drafts` · ongoing
-Nova structures notes after every meeting, call, or rejection.
-
-**M4.3 — Objection tracking** · `nova-drafts` · ongoing
-What keeps coming up.
-
-**M4.4 — Revise from objections** · `nova-builds` · 1–2h
-Materials and plan updated. Score recalculates.
-
-**M4.5 — Pipeline view** · `nova-drafts` · 30m
-
-> **Past week 4 the dashboard switches from date projection to pipeline mode.** Outcomes now
-> depend on third parties, and projecting a date would be dishonest. Pipeline mode tracks
-> conversations, stages, and follow-ups instead — and the 7-day absence clock keeps running,
-> since momentum is the thing that fails here.
-
-## Deadline mode — `loan_grant`
-
-Grant and loan applications have fixed dates, so this type inverts the model: Nova counts
-**backward from the deadline** rather than forward from pace. Same optimism, different arithmetic.
-The dashboard shows days remaining and whether current pace clears the submission date, and the
-scope lever becomes which optional sections to include rather than which features to cut.
-
----
+The first half of investors reaching founders (`shared/investment.ts`, `server/investment-routes.ts`).
+The founder writes the ask (headline, raising, smallest check, instruments, use of funds) and opens
+applications under **Investors** in the project manager; a private project can't. The public page
+shows **Invest in this project**; a signed-in investor applies with amount, instrument, investor
+type, accredited status, a message, optional phone and LinkedIn, and consent to share their contact.
+One open application per investor per project. The founder's inbox shows each with the investor's
+contact and marks it reviewing, want to talk, or declined, with a private note; the investor sees the
+status and can withdraw, which hides their contact again. Every screen says it plainly: an
+application to talk, not an investment — no money moves through SparkTower and nothing is an offer
+or sale of securities.
 
 # Part 5 — How the paths connect
 

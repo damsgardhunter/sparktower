@@ -140,6 +140,16 @@ export const projects = pgTable("projects", {
    */
   activeBranch: text("active_branch"),
   /**
+   * On the funding path, the route to the money the builder chose: debt,
+   * seller, investor, hybrid or self. Decides which route phases the path
+   * shows. Set by answering "Choose your route"; null until then.
+   */
+  capitalRoute: text("capital_route"),
+  /** Whether the public project page takes applications to invest. Off until the owner opens it. */
+  investmentOpen: boolean("investment_open").default(false).notNull(),
+  /** The ask shown to would-be investors. InvestmentAsk — see shared/investment.ts. */
+  investmentAsk: jsonb("investment_ask"),
+  /**
    * Loops the builder removed, by name. A removed loop is a standing
    * instruction: Nova never proposes it again, however loudly the code or
    * the brief still talk about it.
@@ -152,6 +162,12 @@ export const projects = pgTable("projects", {
    * board: it is the most recent thing the builder said.
    */
   novaNotes: text("nova_notes"),
+  /**
+   * What an audit may change without asking: "all", "safe" (only record work
+   * the code shows is finished — shipped work, closed tasks, path milestones),
+   * or "off". See shared/audit-catchup.ts.
+   */
+  auditAutoApply: text("audit_auto_apply", { enum: ["all", "safe", "off"] }).default("safe").notNull(),
   /**
    * Where the project's own data lives, for the audit's data-shape read:
    * a sealed (encrypted) read-only Postgres connection string, or "self"
@@ -175,6 +191,12 @@ export const projects = pgTable("projects", {
    */
   logoUrl: text("logo_url"),
   coverUrl: text("cover_url"),
+  /**
+   * AI images placed beside the brief on the public page, drawn from the logo
+   * and cover. Shape: { [slot]: objectPath } — see shared/project-visuals.ts.
+   * Written only by its own generation route.
+   */
+  profileVisuals: jsonb("profile_visuals").default({}),
   liveUrl: text("live_url"),
   repoUrl: text("repo_url"),
   businessPlanUrl: text("business_plan_url"),
@@ -983,6 +1005,10 @@ export const feedPosts = pgTable("feed_posts", {
   /** Denormalized so the feed doesn't need a count per post per render. */
   reactionCount: integer("reaction_count").default(0).notNull(),
   commentCount: integer("comment_count").default(0).notNull(),
+  /** The specific questions a progress post asks its readers (0–4). Vague posts get vague feedback. */
+  asks: jsonb("asks").$type<string[]>().default([]).notNull(),
+  /** When the project's team last read the feedback on this post; comments after it are new. */
+  feedbackSeenAt: timestamp("feedback_seen_at"),
   editedAt: timestamp("edited_at"),
   /** Taken down by a reviewer: hidden from every read, with who and why. Null means visible. */
   hiddenAt: timestamp("hidden_at"),
@@ -1009,8 +1035,80 @@ export const feedComments = pgTable("feed_comments", {
   content: text("content").notNull(),
   mentions: jsonb("mentions").default([]),
   parentCommentId: varchar("parent_comment_id"),
+  /**
+   * The feedback loop on a project's post: a teammate turned this comment into
+   * work (a task), and a later update from the project said it acted on it.
+   * The commenter hears about that once, then `closureSeenAt` is stamped.
+   */
+  appliedAt: timestamp("applied_at"),
+  appliedById: varchar("applied_by_id"),
+  appliedTaskId: varchar("applied_task_id"),
+  closedByPostId: varchar("closed_by_post_id"),
+  closureSeenAt: timestamp("closure_seen_at"),
+  /** Denormalized like the post's, so a thread doesn't count per comment per render. */
+  reactionCount: integer("reaction_count").default(0).notNull(),
+  /** Taken down by a reviewer: hidden from everyone but its author, with who and why. */
+  hiddenAt: timestamp("hidden_at"),
+  hiddenById: varchar("hidden_by_id"),
+  hiddenReason: text("hidden_reason"),
+  /**
+   * Deleted by its author while it had replies. The text goes; the row stays
+   * so the replies under it keep their place in the thread.
+   */
+  deletedAt: timestamp("deleted_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  byPost: index("feed_comments_post_idx").on(table.postId, table.createdAt),
+}));
+
+/** Reactions on a comment: the same set as on posts, one per person per comment. */
+export const feedCommentReactions = pgTable("feed_comment_reactions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  commentId: varchar("comment_id").notNull().references(() => feedComments.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  reaction: text("reaction", { enum: FEED_REACTIONS }).default("like").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  oneReactionPerUser: unique().on(table.commentId, table.userId),
+}));
+
+/**
+ * Something that happened to someone: the hook that brings them back. A post
+ * from a builder or project they follow, a comment or reply or reaction on
+ * their work, a mention, a follow, a connection. In-app only — SparkTower
+ * sends no email or push — so this is what the bell and the "new since you
+ * last looked" counts read.
+ *
+ * One row per (recipient, actor, kind, target): a second reaction from the
+ * same person refreshes the row rather than stacking a duplicate.
+ */
+export const NOTIFICATION_KINDS = [
+  "followed_post", "comment", "reply", "post_reaction", "comment_reaction", "mention",
+  "follow", "project_follow", "connection_request", "connection_accepted",
+  // The build loop's last step: a project credited your feedback in an update.
+  "feedback_used",
+] as const;
+export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
+
+export const notifications = pgTable("notifications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  recipientId: varchar("recipient_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  actorId: varchar("actor_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  kind: text("kind", { enum: NOTIFICATION_KINDS }).notNull(),
+  /** What it's about: a post, a comment, a project, a user, a connection. */
+  targetId: varchar("target_id").notNull(),
+  /** The post to open, when there is one. */
+  postId: varchar("post_id"),
+  projectId: varchar("project_id"),
+  /** A line of what was said, taken at the time. */
+  excerpt: text("excerpt"),
+  readAt: timestamp("read_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  byRecipient: index("notifications_recipient_idx").on(table.recipientId, table.createdAt),
+  oncePerThing: unique().on(table.recipientId, table.actorId, table.kind, table.targetId),
+}));
+export type Notification = typeof notifications.$inferSelect;
 
 /** A user tagged in a post or comment, captured at write time. */
 export interface FeedMention {
@@ -1236,7 +1334,8 @@ export const pathWork = pgTable("path_work", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   taskId: varchar("task_id").notNull(),
-  kind: text("kind", { enum: ["options", "build", "template"] }).notNull(),
+  /** "loop-audit" is Nova's competitive read of the loops, kept on the core-loop task; not a work packet. */
+  kind: text("kind", { enum: ["options", "build", "template", "plan", "intake", "loop-audit"] }).notNull(),
   payload: jsonb("payload").notNull(),
   chosenIndex: integer("chosen_index"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -1327,6 +1426,41 @@ export const activityEvents = pgTable("activity_events", {
  * is worked as one list, and a moderator triaging by severity doesn't care
  * whether the offending object was a comment or a project.
  */
+/**
+ * Someone asking to invest in a project, through its public page.
+ *
+ * An application to talk, not an investment: no money moves through
+ * SparkTower, and nothing here is an offer or sale of securities. It carries
+ * what the founder needs to decide whether to reply — how much, in what form,
+ * who the investor is — and the investor's consent to share their contact.
+ */
+export const investmentApplications = pgTable("investment_applications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  investorId: varchar("investor_id").notNull().references(() => users.id),
+  /** One of INVESTMENT_AMOUNTS. */
+  amount: text("amount").notNull(),
+  /** One of INVESTMENT_INSTRUMENTS. */
+  instrument: text("instrument").notNull(),
+  /** One of INVESTOR_TYPES. */
+  investorType: text("investor_type").notNull(),
+  /** "yes", "no" or "unsure" — whether they're an accredited investor. */
+  accredited: text("accredited").notNull(),
+  message: text("message").notNull(),
+  phone: text("phone"),
+  linkedinUrl: text("linkedin_url"),
+  status: text("status", { enum: ["new", "reviewing", "accepted", "declined", "withdrawn"] }).default("new").notNull(),
+  /** The founder's private note. */
+  ownerNote: text("owner_note"),
+  reviewedAt: timestamp("reviewed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [
+  index("investment_applications_project_idx").on(t.projectId, t.createdAt),
+  index("investment_applications_investor_idx").on(t.investorId, t.createdAt),
+]);
+export type InvestmentApplication = typeof investmentApplications.$inferSelect;
+
 export const contentReports = pgTable("content_reports", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   reporterId: varchar("reporter_id").notNull().references(() => users.id),
@@ -1616,6 +1750,12 @@ export const insertProjectBase = createInsertSchema(projects).omit({
   createdAt: true,
   // Sealed; set only through its own route, never by a plain project patch.
   dataSource: true,
+  // Generated images; set by POST /api/projects/:id/visuals, never patched in.
+  profileVisuals: true,
+  // Chosen on the path, and opened from the investment settings — each through its own route.
+  capitalRoute: true,
+  investmentOpen: true,
+  investmentAsk: true,
 }).extend({
   // Re-required here: the column's DB default is for backfill, not for
   // letting a new project skip the question.

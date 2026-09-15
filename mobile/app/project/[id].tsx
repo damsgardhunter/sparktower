@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter, Stack } from "expo-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
+import { exploreContext } from "../../src/explore";
 import { colors, font, radius, spacing, postTypeColors } from "../../src/theme";
 import {
   Avatar, Body, Btn, Card, Chip, Empty, ErrorNote, H1, H2, Label, Loading,
@@ -56,9 +57,14 @@ export default function ProjectDetail() {
     enabled: !!id,
   });
 
+  // Sends the state it wants, not a toggle, so a double tap can't undo itself.
   const toggleFollow = useMutation({
-    mutationFn: () => api(`/api/projects/${id}/follow`, { method: "POST" }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["project", id, "follow-status"] }),
+    mutationFn: (want: boolean) =>
+      api(`/api/projects/${id}/follow`, { method: "POST", body: { following: want, explore: exploreContext("project_page") } }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["project", id, "follow-status"] });
+      qc.invalidateQueries({ queryKey: ["followed-projects"] });
+    },
   });
 
   if (isLoading) return <Loading />;
@@ -102,7 +108,7 @@ export default function ProjectDetail() {
               variant={follow?.following ? "primary" : "outline"}
               small
               loading={toggleFollow.isPending}
-              onPress={() => toggleFollow.mutate()}
+              onPress={() => toggleFollow.mutate(!follow?.following)}
             />
           </Row>
         </View>

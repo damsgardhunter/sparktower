@@ -24,8 +24,13 @@
  * real column types and real defaults, can reproduce.
  */
 import { applyModerationLogRules } from "../../server/moderation-log-rules";
-import { execFileSync } from "child_process";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { migrate } from "drizzle-orm/node-postgres/migrator";
+import path from "path";
 import pg from "pg";
+
+/** Relative to the repository root, which is where both test runners start. */
+const MIGRATIONS_FOLDER = path.resolve("migrations");
 
 /**
  * Where the tests point.
@@ -66,6 +71,37 @@ function databaseName(target: string): string {
 }
 
 /**
+ * The last line of defence before anything destructive.
+ *
+ * `testDatabaseUrl` makes the test database the default, but it trusts
+ * TEST_DATABASE_URL verbatim — so a mistyped or copy-pasted value would point
+ * the suite at a real database, and nothing downstream would notice. This
+ * checks the name itself, not how it was arrived at.
+ */
+const TEST_DATABASE_SUFFIXES = ["_test", "_e2e"];
+
+function assertTestDatabaseName(name: string): void {
+  if (!TEST_DATABASE_SUFFIXES.some((s) => name.endsWith(s))) {
+    throw new Error(
+      `Refusing to touch database "${name}": test databases must end in ` +
+      `${TEST_DATABASE_SUFFIXES.join(" or ")}. Check TEST_DATABASE_URL.`,
+    );
+  }
+}
+
+/**
+ * The same check, asked of the server rather than parsed from the URL: a
+ * pooler or service alias can make the two disagree, and the server's answer
+ * is the one that counts.
+ */
+async function assertConnectedToTestDatabase(client: pg.Client): Promise<void> {
+  const { rows: [current] } = await client.query<{ name: string }>(
+    "SELECT current_database() AS name",
+  );
+  assertTestDatabaseName(current.name);
+}
+
+/**
  * Creates the test database if it isn't there.
  *
  * `CREATE DATABASE` can't run inside a transaction and has no `IF NOT EXISTS`
@@ -91,19 +127,64 @@ export async function ensureTestDatabase(suffix = "_test"): Promise<string> {
 }
 
 /**
- * Applies the current schema.
+ * Empties `public` of everything a migration could create.
  *
- * `drizzle-kit push` rather than a migration folder, because this project has
- * no migrations — push against the schema file is how the real database is
- * built, so it is also how the test one should be. Against a database this
- * empty there is nothing destructive to confirm, so it runs without prompting.
+ * Not `DROP SCHEMA public`: on PG14 and earlier the schema belongs to the
+ * superuser, so the app's own role can't drop it. And not `DROP OWNED BY`,
+ * which CI can't use — it runs as the superuser, whose objects the system
+ * depends on. So the objects are named one by one, as `truncateAll` does.
+ * Tables go in a single CASCADE statement, which removes their serial
+ * sequences, indexes, and any views on them without needing an order.
  */
-export function applySchema(databaseUrl: string): void {
-  execFileSync("npx", ["drizzle-kit", "push"], {
-    env: { ...process.env, DATABASE_URL: databaseUrl },
-    stdio: "pipe",
-    encoding: "utf8",
-  });
+async function dropEverythingInPublic(client: pg.Client): Promise<void> {
+  const list = async (sql: string) =>
+    (await client.query<{ name: string }>(sql)).rows.map((r) => r.name).join(", ");
+
+  const tables = await list(
+    `SELECT 'public.' || quote_ident(tablename) AS name FROM pg_tables WHERE schemaname = 'public'`,
+  );
+  if (tables) await client.query(`DROP TABLE ${tables} CASCADE`);
+
+  const sequences = await list(`
+    SELECT 'public.' || quote_ident(sequence_name) AS name
+    FROM information_schema.sequences WHERE sequence_schema = 'public'
+  `);
+  if (sequences) await client.query(`DROP SEQUENCE ${sequences} CASCADE`);
+
+  // Enums and domains; a table's own row type went with the table.
+  const types = await list(`
+    SELECT 'public.' || quote_ident(t.typname) AS name
+    FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+    WHERE n.nspname = 'public' AND t.typtype IN ('e', 'd')
+  `);
+  if (types) await client.query(`DROP TYPE ${types} CASCADE`);
+}
+
+/**
+ * Brings the schema up to date by running the migrations production runs.
+ *
+ * Only the pending ones: rebuilding from empty on every run would pull the
+ * tables out from under anyone else's run against the same database — two
+ * sessions, or a watch-mode suite beside a one-off. CI starts from an empty
+ * database every time, so building from zero is still proven there.
+ *
+ * A test database that predates the migrations — built by `drizzle-kit push`,
+ * so it has tables but no record of any migration — is emptied once first;
+ * otherwise the baseline would fail on its first CREATE TABLE.
+ */
+export async function applySchema(databaseUrl: string): Promise<void> {
+  const client = new pg.Client({ connectionString: databaseUrl });
+  await client.connect();
+  try {
+    await assertConnectedToTestDatabase(client);
+    const { rows: [bookkeeping] } = await client.query<{ t: string | null }>(
+      "SELECT to_regclass('drizzle.__drizzle_migrations')::text AS t",
+    );
+    if (!bookkeeping.t) await dropEverythingInPublic(client);
+    await migrate(drizzle(client), { migrationsFolder: MIGRATIONS_FOLDER });
+  } finally {
+    await client.end();
+  }
 }
 
 /**
@@ -131,6 +212,8 @@ export async function truncateAll(databaseUrl: string): Promise<void> {
   const client = new pg.Client({ connectionString: databaseUrl });
   await client.connect();
   try {
+    await assertConnectedToTestDatabase(client);
+
     const { rows } = await client.query<{ name: string }>(`
       SELECT quote_ident(tablename) AS name
       FROM pg_tables

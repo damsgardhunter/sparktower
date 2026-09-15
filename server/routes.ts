@@ -1,3 +1,4 @@
+import { productNameNote } from "@shared/project-draft";
 import { paidSubscription } from "@shared/subscriptions";
 import { registerStripeHealthRoutes } from "./stripe-health";
 import { ROADMAP_DEPTHS, DEFAULT_ROADMAP_DEPTH, MAX_ROADMAP_PHASES, roadmapDepth, depthForRevision, type RoadmapDepth } from "@shared/roadmap";
@@ -5,7 +6,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage, isTaskOnTime } from "./storage";
 import { db } from "./db";
-import { users, projectMembers, projects, userProfiles, projectDataShapes } from "@shared/schema";
+import { users, projectMembers, projects, userProfiles, projectDataShapes, pathWork } from "@shared/schema";
 import { setupAuth, isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { registerAuthRoutes } from "./replit_integrations/auth/routes";
 import { attachBearerUser, registerMobileAuthRoutes } from "./mobile-auth";
@@ -13,11 +14,19 @@ import { registerObjectStorageRoutes, ObjectStorageService, ObjectNotFoundError 
 import { registerSprintRoutes } from "./sprint-routes";
 import { registerInvestorRoutes } from "./investor-routes";
 import { registerNovaBriefingRoutes } from "./nova-briefing";
+import { registerFeedbackLoopRoutes } from "./feedback-loop-routes";
+import { registerNotificationRoutes, notify, unnotify } from "./notifications";
+import { ensureCreatorBadges } from "./backer-badges";
 import { registerFeedRoutes, registerProjectDiscussionRoutes, publishSystemPost, SYSTEM_POST_COPY, SYSTEM_POST_TYPES } from "./feed-routes";
 import { registerProfileRoutes } from "./profile-routes";
 import { registerDocumentRoutes } from "./document-routes";
 import { registerCodeAuditRoutes } from "./code-audit-routes";
 import { registerBackingRoutes } from "./backing-routes";
+import { registerSafetyRoutes } from "./safety-routes";
+import { registerInvestmentRoutes } from "./investment-routes";
+import { recordExploreAction } from "./explore-actions";
+import { EXPLORE_EVENTS } from "@shared/explore-events";
+import { registerProjectVisualRoutes } from "./project-visuals";
 import { registerCheckInRoutes } from "./check-in-routes";
 import { registerSurfaceRoutes, requireSurface } from "./surfaces";
 import { registerModerationRoutes, blockSuspended, rateLimit, limitWrites } from "./moderation";
@@ -59,10 +68,11 @@ import { safeDbUrl, refreshDataShape, getDataShape } from "./data-shape";
 import { isOwner as isPlatformOwner } from "./platform-roles";
 import {
   instantiatePathTree, pathStatus, onPathTaskDone, createExpansion, createInjections,
-  collectArtifacts, switchPath, backboneIdOf, reconcileMilestones, pathTaskContext, saveWork, chooseWork, milestoneDetail, createLoop, setBranch, extendBranch, reconcileLoops, latestWork, deleteLoop, expansionSource,
+  collectArtifacts, saveIntake, prefillFor, switchPath, backboneIdOf, reconcileMilestones, pathTaskContext, saveWork, chooseWork, milestoneDetail, createLoop, setBranch, extendBranch, reconcileLoops, latestWork, deleteLoop, expansionSource,
+  setLoopType, loopsForAudit, renderLoopsForPrompt, saveLoopAudit, applyLoopDrafts,
 } from "./phase-trees";
-import { draftExpansionSteps, proposeInjections, readExistingProgress, draftArtifact, produceWork } from "./phase-trees-nova";
-import { workKindFor } from "@shared/phase-trees";
+import { draftExpansionSteps, proposeInjections, readExistingProgress, draftArtifact, produceWork, auditLoopsAgainstCompetition, draftLoops } from "./phase-trees-nova";
+import { workKindFor, sanitizeLoopAudit, loopTypeOf, LOOP_TYPE_INFO, type WorkPayload } from "@shared/phase-trees";
 import { resolveTree, treeFor } from "@shared/phase-trees";
 import { parseModelJson, answerUnreadable, ModelResponseError } from "./ai-json";
 
@@ -188,7 +198,7 @@ function generateFallbackScenes(style: string): { prompt: string; caption: strin
 /** Action types Nova is allowed to trigger from a reply. */
 const NOVA_ACTION_TYPES = new Set([
   "update_project", "update_scope", "create_tasks", "create_milestones", "complete_onboarding",
-  "edit_project",
+  "edit_project", "remember", "write_loops",
 ]);
 
 /**
@@ -347,6 +357,8 @@ export async function registerRoutes(
   registerNovaBriefingRoutes(app);
   registerFeedRoutes(app);
   registerProjectDiscussionRoutes(app);
+  registerFeedbackLoopRoutes(app);
+  registerNotificationRoutes(app);
   registerProfileRoutes(app);
   registerDocumentRoutes(app);
   registerCodeAuditRoutes(app);
@@ -365,7 +377,10 @@ export async function registerRoutes(
 
   registerSurfaceRoutes(app);
   registerModerationRoutes(app);
+  registerSafetyRoutes(app);
+  registerInvestmentRoutes(app);
   registerBackingRoutes(app);
+  registerProjectVisualRoutes(app);
   registerCheckInRoutes(app);
 
   // User Profile
@@ -472,6 +487,22 @@ export async function registerRoutes(
       if (!(await requireCredits(res, userId, CREDIT_COSTS.novaChat, "Nova chat"))) return;
 
       const { message, history = [] } = req.body;
+      /*
+       * What the builder's form says now. They may have renamed the project or
+       * rewritten a field; those are theirs. Without this Nova only saw the
+       * conversation, kept using the name it suggested, and sent it back —
+       * overwriting the builder's own.
+       */
+      const current = req.body?.currentProject && typeof req.body.currentProject === "object" ? req.body.currentProject : null;
+      const edited: string[] = Array.isArray(req.body?.edited) ? req.body.edited.map(String).slice(0, 20) : [];
+      const currentTitle = current?.title ? String(current.title).trim().slice(0, 120) : "";
+      const formNote = current ? [
+        "THE BUILDER'S FORM, RIGHT NOW. It's authoritative: it overrides anything you suggested earlier.",
+        ...(["title", "description", "category", "goal", "subcategory"] as const)
+          .map((k) => (current[k] ? `${k}: ${String(current[k]).slice(0, 600)}` : null)).filter(Boolean),
+        currentTitle ? `The project is called "${currentTitle}". Use that name — never a name you suggested before.` : null,
+        edited.length ? `The builder edited these themselves: ${edited.join(", ")}. Keep their wording, and leave them out of <project_update>.` : null,
+      ].filter(Boolean).join("\n") : null;
       if (!message) return res.status(400).json({ message: "Message is required" });
 
       const systemPrompt = `You are Nova, SparkTower's AI project partner. You have a friendly, knowledgeable personality. You always refer to yourself as "Nova" and use an encouraging, collaborative tone.
@@ -525,6 +556,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
 
       const messages = [
         { role: "system" as const, content: systemPrompt },
+        ...(formNote ? [{ role: "system" as const, content: formNote }] : []),
         ...history.map((m: any) => ({ role: m.role as "user" | "assistant", content: m.content })),
         { role: "user" as const, content: message }
       ];
@@ -552,6 +584,8 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       if (block) {
         try {
           projectUpdates = parseModelJson(block[1], "project update");
+          // The builder's fields stay theirs, whatever Nova sends.
+          if (projectUpdates) for (const key of edited) delete projectUpdates[key];
         } catch (err) {
           console.warn("[ai] chat: unreadable <project_update>, reply kept without it:", String((err as Error)?.message ?? err));
         }
@@ -630,6 +664,8 @@ Only include fields you have enough info to fill. Start empty if needed.`;
 
     // Announce it on the founder feed. Private projects stay off the feed.
     if (!project.isPrivate) {
+      // The founder badge: a profile says "I built this" the moment the project exists.
+      void ensureCreatorBadges(ownerId).catch((e) => console.error("[badges] founder badge failed:", e));
       void publishSystemPost({
         authorId: ownerId,
         projectId: project.id,
@@ -769,8 +805,17 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       // An explicit `following` sets the state, so a retry or a double tap
       // can't undo itself; without one it toggles, as older clients expect.
       const want = typeof req.body?.following === "boolean" ? req.body.following : !following;
-      if (want && !following) await storage.followProject(userId, projectId);
-      if (!want && following) await storage.unfollowProject(userId, projectId);
+      if (want && !following) {
+        await storage.followProject(userId, projectId);
+        // Only a new follow is the loop's action — not a repeat, not an unfollow.
+        recordExploreAction(req, EXPLORE_EVENTS.follow, { matchType: "project", targetId: projectId });
+        const project = await storage.getProject(projectId);
+        if (project) void notify({ recipients: [project.ownerId], actorId: userId, kind: "project_follow", targetId: projectId, projectId });
+      }
+      if (!want && following) {
+        await storage.unfollowProject(userId, projectId);
+        void unnotify({ actorId: userId, kind: "project_follow", targetId: projectId });
+      }
       res.json({ following: want });
     } catch (error) {
       console.error("Follow error:", error);
@@ -781,8 +826,8 @@ Only include fields you have enough info to fill. Start empty if needed.`;
   /**
    * Following a builder: one-way, instant, nothing asked of them. An explicit
    * `following` sets the state, so a retry or a double tap can't undo itself;
-   * without one it toggles. Limited like any per-request action, since a
-   * follow notifies nobody but is still a write someone could script.
+   * without one it toggles. Limited like any per-request action: a follow
+   * notifies the builder, so a scripted one is a way to ping a stranger.
    */
   app.post("/api/users/:id/follow", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
@@ -792,8 +837,15 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       if (!(await storage.getUser(target))) return res.status(404).json({ message: "No such builder." });
       const following = await storage.isFollowingUser(me, target);
       const want = typeof req.body?.following === "boolean" ? req.body.following : !following;
-      if (want && !following) await storage.followUser(me, target);
-      if (!want && following) await storage.unfollowUser(me, target);
+      if (want && !following) {
+        await storage.followUser(me, target);
+        recordExploreAction(req, EXPLORE_EVENTS.follow, { matchType: "builder", targetId: target });
+        void notify({ recipients: [target], actorId: me, kind: "follow", targetId: target });
+      }
+      if (!want && following) {
+        await storage.unfollowUser(me, target);
+        void unnotify({ actorId: me, kind: "follow", targetId: target });
+      }
       res.json({ following: want, followers: await storage.getUserFollowerCount(target) });
     } catch (error) {
       console.error("Follow user error:", error);
@@ -1911,7 +1963,7 @@ ${PLAIN_LANGUAGE_RULES}`;
           content: `You are a UX research expert. Generate a realistic customer persona for the given project. You MUST respond with ONLY a valid JSON object (no markdown, no code fences) with these fields: name (string), age (number), occupation (string), bio (string, 2-3 sentences), goals (array of 3 strings), painPoints (array of 3 strings), quote (string, a memorable quote from this persona), avatarDescription (string, brief physical/style description for illustration).`
         }, {
           role: "user",
-          content: `Project: "${project.title}"\nDescription: ${project.description}\nCategory: ${project.category}\n${req.body.context ? `Additional context: ${req.body.context}` : ""}`
+          content: `${productNameNote(project.title)}\nProject: "${project.title}"\nDescription: ${project.description}\nCategory: ${project.category}\n${req.body.context ? `Additional context: ${req.body.context}` : ""}`
         }],
         temperature: 0.9,
       });
@@ -1980,7 +2032,7 @@ ${PLAIN_LANGUAGE_RULES}`;
           content: `You are a talent matching expert. Given a project's needs and a list of users, recommend the top 5 most suitable people. You MUST respond with ONLY a valid JSON object (no markdown, no code fences) with a "recommendations" array, each with: userId (string), reason (string, 1-2 sentences explaining why they're a good fit), matchStrength ("strong"/"moderate"/"good").`
         }, {
           role: "user",
-          content: `Project: "${project.title}"\nDescription: ${project.description}\nRoles Needed: ${(project.rolesNeeded || []).join(", ")}\nTech Stack: ${(project.techStack || []).join(", ")}\n\nAvailable Users:\n${JSON.stringify(profileSummaries)}`
+          content: `${productNameNote(project.title)}\nProject: "${project.title}"\nDescription: ${project.description}\nRoles Needed: ${(project.rolesNeeded || []).join(", ")}\nTech Stack: ${(project.techStack || []).join(", ")}\n\nAvailable Users:\n${JSON.stringify(profileSummaries)}`
         }],
         temperature: 0.7,
       });
@@ -2110,6 +2162,14 @@ ${PLAIN_LANGUAGE_RULES}`;
 
       const history = await storage.getNovaGuideMessages(projectId);
 
+      // The loops, and which of the five kinds are still to write, so Nova can offer to write them.
+      const loopRead = await loopsForAudit(projectId).catch(() => null);
+      const loopsStill = loopRead ? [...loopRead.coverage.missing, ...loopRead.coverage.unwritten] : [];
+      const loopContext = loopRead?.loops.length
+        ? "\nTHE BUSINESS'S LOOPS (product, growth, retention, revenue, referral — all five are required; only product repeats)\n"
+          + renderLoopsForPrompt(loopRead.loops) + "\n"
+          + (loopsStill.length ? "Still to write: " + loopsStill.join(", ") + "." : "All five kinds are written.")
+        : "";
       const projectContext = `
 PROJECT CONTEXT:
 - Title: ${project.title}
@@ -2139,7 +2199,8 @@ WHAT'S IN THE PROJECT RIGHT NOW — these are the real ids; you must use them
 verbatim when editing an existing task, milestone or roadmap phase, and you
 must never invent one. This also includes the latest codebase audit, if one has
 been run:
-${await buildOperableProjectState(projectId)}`;
+${await buildOperableProjectState(projectId)}
+${loopContext}`;
 
       const systemPrompt = `You are Nova, SparkTower's AI project partner: warm, direct, knowledgeable. You always refer to yourself as "Nova". No emojis, no "Nova here" openers — just answer.
 
@@ -2234,6 +2295,10 @@ Available actions:
 7. remember: Save something the builder told you that should hold from now on — a correction to the brief, something being removed, what the loops or the wedge really are. It goes to the top of every future Nova prompt and outranks the brief and the board. Send the FULL updated note (it replaces the previous one); keep it under 1500 characters, one line per fact.
    <nova_action>{"type": "remember", "data": {"notes": "Check-ins are being removed; they are not a loop or the wedge. The loops are the three paths: Ship an MVP, Systemize a business, Raise funding."}}</nova_action>
 
+8. write_loops: Write the builder's business loops for them, when they ask you to (or say yes to your offer). Each loop is 3–5 steps in their product's own words, ending with the step that sends the user back to the start, plus what closes it. Send one entry per loop you're writing; an unwritten loop of that kind is filled in, a kind the project doesn't have yet is added, and a loop that's already written is left alone (to change one of those, use edit_project on its task). Product loops can be several; the other four kinds are one each.
+   <nova_action>{"type": "write_loops", "data": {"loops": [{"type": "product|growth|retention|revenue|referral", "title": "2–5 words", "steps": "1. … 2. … 3. …", "closes": "what sends the user back to step 1"}]}}</nova_action>
+   If THE BUSINESS'S LOOPS show kinds still to write, you may offer once to write them; don't write loops nobody asked for.
+
 6. edit_project: Change things that already exist — reword a milestone, retitle
    a task, rewrite a roadmap phase and its outcomes, move something's status.
    Use this whenever the user asks you to fix, reword, rename, re-scope,
@@ -2301,6 +2366,18 @@ RULES:
               if (Object.keys(updateData).length > 0) {
                 await storage.updateProject(projectId, updateData);
                 actionsTaken.push({ type: "update_project", data: updateData });
+              }
+              break;
+            }
+            case "write_loops": {
+              if (Array.isArray(action.data?.loops) && action.data.loops.length) {
+                const r = await applyLoopDrafts(projectId, action.data.loops);
+                if (r.written.length || r.created.length) {
+                  const titles = (await storage.getProjectKanbanTasks(projectId)).filter((t) => [...r.written, ...r.created].includes(t.id)).map((t) => t.title);
+                  actionsTaken.push({ type: "write_loops", data: { count: titles.length, loops: titles, skipped: r.skipped } });
+                } else if (r.skipped.length) {
+                  actionsTaken.push({ type: "write_loops", data: { count: 0, loops: [], skipped: r.skipped } });
+                }
               }
               break;
             }
@@ -2662,7 +2739,7 @@ RULES:
       if (!project) return res.status(404).json({ message: "Project not found" });
 
       const built = await instantiatePathTree(projectId, project.goal as any, project.subcategory, { keepRoadmap: true });
-      const backbone = resolveTree(project.goal as any, project.subcategory).filter((p) => !p.optional).flatMap((p) => p.milestones)
+      const backbone = resolveTree(project.goal as any, project.subcategory, (project as any).capitalRoute).filter((p) => !p.optional).flatMap((p) => p.milestones)
         .map((m) => ({ id: m.id, title: m.title, description: m.description }));
 
       let recognised: { id: string; evidence: string; answer?: string }[] = [];
@@ -2673,7 +2750,7 @@ RULES:
         if (!ent) return;
         const state = await buildOperableProjectState(projectId, { includeIds: false, includeAudit: true });
         const ship = project.goal === "ship_mvp";
-        const known = ship ? (await storage.getProjectKanbanTasks(projectId)).filter((t) => t.tags?.includes("kind:loop") && t.tags?.includes("parent:SHIP.M1.2")).map((t) => t.title) : [];
+        const known = ship ? (await storage.getProjectKanbanTasks(projectId)).filter((t) => t.tags?.includes("kind:loop") && t.tags?.includes("parent:SHIP.M1.2") && !!t.description?.trim()).map((t) => `${t.title} (${loopTypeOf(t.tags)})`) : [];
         const result = await readExistingProgress(ent, backbone, state, { findLoops: ship, knownLoops: known, rejectedLoops: project.rejectedLoops ?? [] });
         recognised = result.done; read = result.read;
         if (ship && result.loops.length) {
@@ -2732,7 +2809,8 @@ RULES:
       if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
       const ctx = await pathTaskContext(projectId, String(req.body?.taskId ?? ""));
       if (!ctx) return res.status(400).json({ message: "That task isn't on this project's path.", code: "not_on_path" });
-      const kind = workKindFor(ctx.actor);
+      const kind = workKindFor(ctx.actor, ctx.milestone?.work);
+      if (kind === "intake") return res.status(400).json({ message: "This step is answered by choosing — tap your answers.", code: "invalid_input" });
       const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova working on a milestone");
       if (!ent) return;
       const [state, artifacts] = await Promise.all([
@@ -2741,10 +2819,14 @@ RULES:
       ]);
       const all = await storage.getProjectKanbanTasks(projectId);
       const loops = all.filter((t) => t.tags?.includes("kind:loop") && !t.tags.some((x) => x.startsWith("archived:")))
-        .map((t) => ({ title: t.title, description: t.description ?? "", status: t.status }));
+        .map((t) => ({ title: t.title, description: t.description ?? "", status: t.status, type: loopTypeOf(t.tags) }));
       const full = await storage.getProject(projectId);
+      // A loop's task carries its name and (maybe) its steps; what the kind asks for rides along so Nova writes that kind.
+      const loopKind = ctx.task.tags?.includes("kind:loop") ? LOOP_TYPE_INFO[loopTypeOf(ctx.task.tags)] : null;
       const payload = await produceWork(ent, kind,
-        { title: ctx.task.title, description: ctx.task.description ?? ctx.milestone?.description ?? "", tier: ctx.tier },
+        loopKind
+          ? { title: `${loopKind.label}: ${ctx.task.title}`, description: `Write this ${loopKind.label.toLowerCase()} as 3–5 steps in the product's own words. ${loopKind.asks} It closes when: ${loopKind.closes} For example: ${loopKind.example} Give each option a 2–5 word name as its title.${ctx.task.description?.trim() ? `\n\nWhat's written so far: ${ctx.task.description.trim()}` : ""}`, tier: ctx.tier }
+          : { title: ctx.task.title, description: ctx.task.description ?? ctx.milestone?.description ?? "", tier: ctx.tier },
         { goal: ctx.project.goal, subcategory: ctx.project.subcategory, state, artifacts, loops, rejectedLoops: full?.rejectedLoops ?? [] });
       const row = await saveWork(projectId, ctx.task.id, payload);
       await storage.deductCredits(userId, CREDIT_COSTS.taskAssist);
@@ -2767,6 +2849,66 @@ RULES:
     } catch (error) {
       console.error("Path work read error:", error);
       res.status(500).json({ message: "Couldn't read that" });
+    }
+  });
+
+  /** Suggested answers for a step — the business history from your résumé. Nothing is saved. */
+  app.get("/api/projects/:id/path/prefill/:taskId", isAuthenticated, async (req: any, res) => {
+    try {
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      res.json(await prefillFor(req.params.id, req.params.taskId, (req.user as any).id));
+    } catch (error: any) {
+      if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
+      console.error("Path prefill error:", error);
+      res.status(500).json({ message: "Couldn't read your profile" });
+    }
+  });
+
+  /** Tapped answers to a step's questions. Free: no model runs. */
+  app.post("/api/projects/:id/path/intake", isAuthenticated, rateLimit("post"), async (req: any, res) => {
+    try {
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const result = await saveIntake(req.params.id, String(req.body?.taskId ?? ""), req.body?.answers);
+      res.json({ answers: result.answers, summary: result.summary, workId: result.work.id, route: result.route });
+    } catch (error: any) {
+      if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code, field: error.field });
+      console.error("Path intake error:", error);
+      res.status(500).json({ message: "Couldn't save your answers" });
+    }
+  });
+
+  /**
+   * A plan's actions onto the board as tasks, so the steps it names get done
+   * and tracked like any other work. Each lands once: adding again skips any
+   * already there from this plan.
+   */
+  app.post("/api/projects/:id/path/work/:workId/tasks", isAuthenticated, rateLimit("post"), async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+      if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
+      const [row] = await db.select().from(pathWork).where(and(eq(pathWork.id, String(req.params.workId)), eq(pathWork.projectId, projectId)));
+      if (!row) return res.status(404).json({ message: "That plan isn't on this project." });
+      const payload = row.payload as WorkPayload;
+      if (payload.kind !== "plan" || !payload.actions.length) return res.status(400).json({ message: "That work has no actions to add.", code: "invalid_input" });
+      const tag = `from-work:${row.id}`;
+      const existing = (await storage.getProjectKanbanTasks(projectId)).filter((t) => t.tags?.includes(tag)).map((t) => t.title);
+      const created: string[] = [];
+      let order = Date.now() % 100000;
+      for (const action of payload.actions) {
+        if (existing.includes(action.title)) continue;
+        await storage.createKanbanTask({
+          projectId, title: action.title,
+          description: [action.detail, action.when ? `When: ${action.when}` : "", action.moves ? `Moves: ${action.moves}` : ""].filter(Boolean).join("\n"),
+          status: "todo", priority: "medium", order: order++,
+          tags: [tag, "kind:plan-action"],
+        } as any);
+        created.push(action.title);
+      }
+      res.json({ created, skipped: payload.actions.length - created.length });
+    } catch (error) {
+      console.error("Plan tasks error:", error);
+      res.status(500).json({ message: "Couldn't add those tasks" });
     }
   });
 
@@ -2810,8 +2952,9 @@ RULES:
           const ent = await requireCredits(res, userId, CREDIT_COSTS.novaGuide, "Nova drafting your answer");
           if (!ent) return;
           const state = await buildOperableProjectState(projectId, { includeIds: false, includeAudit: true });
-          const draft = await draftArtifact(ent, loopTaskId
-            ? { title: `The ${src.source!.title} loop`, description: "The 3–5 step sequence that delivers value in this loop." }
+          const kind = loopTaskId ? LOOP_TYPE_INFO[loopTypeOf(src.source!.tags)] : null;
+          const draft = await draftArtifact(ent, kind
+            ? { title: `${kind.label}: ${src.source!.title}`, description: `The 3–5 step sequence of this ${kind.label.toLowerCase()} — ${kind.asks} It must close: ${kind.closes} For example: ${kind.example}` }
             : src.authored!, state);
           await storage.deductCredits(userId, CREDIT_COSTS.novaGuide);
           return res.json({ draft, sourceTitle: src.sourceTitle, sourceTaskId: src.source?.id ?? null });
@@ -2861,12 +3004,111 @@ RULES:
   app.post("/api/projects/:id/path/loops", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      const loop = await createLoop(req.params.id, String(req.body?.backboneId ?? "SHIP.M1.2"), { title: req.body?.title, description: req.body?.description });
+      const loop = await createLoop(req.params.id, String(req.body?.backboneId ?? "SHIP.M1.2"), { title: req.body?.title, description: req.body?.description, type: req.body?.type });
       res.json(loop);
     } catch (error: any) {
       if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code, field: error.field });
       console.error("Path loop error:", error);
       res.status(500).json({ message: "Couldn't add that loop" });
+    }
+  });
+
+  /**
+   * Nova writes loops for the builder. With `loopTaskIds`, just those (each
+   * must still be unwritten); without, every unwritten loop plus any kind the
+   * project doesn't have yet. Loops already written are never touched.
+   */
+  app.post("/api/projects/:id/path/loops/write", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+      if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
+      const read = await loopsForAudit(projectId);
+      if (!read?.sourceTask) return res.status(400).json({ message: "This path doesn't work in loops.", code: "not_expandable" });
+      const asked = Array.isArray(req.body?.loopTaskIds) ? req.body.loopTaskIds.map(String).slice(0, 12) : null;
+      const isWritten = (l: typeof read.loops[number]) => l.status === "done" || !!l.description;
+      const toWrite = read.loops.filter((l) => !isWritten(l) && (!asked || asked.includes(l.taskId)));
+      const missingTypes = asked ? [] : read.coverage.missing;
+      if (!toWrite.length && !missingTypes.length) {
+        return res.status(400).json({ message: asked ? "Those loops are already written. Rewrite one yourself, or clear it first." : "Every loop is already written.", code: "nothing_to_write" });
+      }
+
+      const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova writing your loops");
+      if (!ent) return;
+      const state = await buildOperableProjectState(projectId, { includeIds: false, includeAudit: true });
+      let drafts: Awaited<ReturnType<typeof draftLoops>>;
+      try {
+        drafts = await draftLoops(ent, { state, loops: renderLoopsForPrompt(read.loops), missingTypes, toWrite: toWrite.map((l) => l.key) });
+      } catch (err) {
+        if (err instanceof ModelResponseError) return answerUnreadable(res, err, "loops");
+        throw err;
+      }
+      const byKey = new Map(read.loops.map((l) => [l.key, l]));
+      const result = await applyLoopDrafts(projectId, drafts.map((d) => {
+        const slot = d.key ? byKey.get(String(d.key).trim()) : undefined;
+        return { ...d, type: slot?.type ?? d.type, loopTaskId: slot?.taskId ?? null };
+      }), { only: asked ? toWrite.map((l) => l.taskId) : null });
+      if (!result.written.length && !result.created.length) return answerUnreadable(res, new ModelResponseError("loops"), "loops");
+      await storage.deductCredits(userId, CREDIT_COSTS.taskAssist);
+      res.json({ ...result, creditsCharged: CREDIT_COSTS.taskAssist });
+    } catch (error: any) {
+      if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
+      console.error("Loop write error:", error);
+      res.status(500).json({ message: "Nova couldn't write those loops" });
+    }
+  });
+
+  /** Saying what kind of loop one is: growth, retention, revenue, referral or product. */
+  app.patch("/api/projects/:id/path/loops/:taskId", isAuthenticated, rateLimit("post"), async (req: any, res) => {
+    try {
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      res.json(await setLoopType(req.params.id, req.params.taskId, req.body?.type));
+    } catch (error: any) {
+      if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code, field: error.field });
+      console.error("Path loop type error:", error);
+      res.status(500).json({ message: "Couldn't change that loop" });
+    }
+  });
+
+  /**
+   * Nova audits the loops against the competition: who customers use today,
+   * how those products run the same loop, and a score for how likely each of
+   * this project's loops is to keep turning. Only once all five kinds are
+   * written — an audit of empty slots would score the blank, not the business.
+   */
+  app.post("/api/projects/:id/path/loops/audit", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+      if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      const read = await loopsForAudit(projectId);
+      if (!read?.sourceTask) return res.status(400).json({ message: "This path doesn't work in loops.", code: "not_expandable" });
+      if (!read.coverage.complete) {
+        const still = [...read.coverage.missing, ...read.coverage.unwritten].map((t) => LOOP_TYPE_INFO[t].label.toLowerCase());
+        return res.status(400).json({ message: `Write every loop first — still to do: ${still.join(", ")}.`, code: "loops_incomplete", missing: read.coverage.missing, unwritten: read.coverage.unwritten });
+      }
+
+      const ent = await requireCredits(res, userId, CREDIT_COSTS.loopAudit, "Nova auditing your loops");
+      if (!ent) return;
+      const brief = [formatProjectBriefForPrompt(project), project.novaNotes ? `THE BUILDER'S STANDING NOTES (these outrank the brief)\n${project.novaNotes}` : ""].filter(Boolean).join("\n\n");
+      let result: Awaited<ReturnType<typeof auditLoopsAgainstCompetition>>;
+      try {
+        result = await auditLoopsAgainstCompetition(ent, brief, renderLoopsForPrompt(read.loops));
+      } catch (err) {
+        if (err instanceof ModelResponseError) return answerUnreadable(res, err, "loop audit");
+        throw err;
+      }
+      const audit = sanitizeLoopAudit(result.parsed, read.loops);
+      if (!audit.loops.length) return answerUnreadable(res, new ModelResponseError("loop audit"), "loop audit");
+      const saved = await saveLoopAudit(projectId, read.sourceTask.id, { ...audit, model: result.model });
+      await storage.deductCredits(userId, CREDIT_COSTS.loopAudit);
+      res.json({ ...saved, creditsCharged: CREDIT_COSTS.loopAudit });
+    } catch (error: any) {
+      if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
+      console.error("Loop audit error:", error);
+      res.status(500).json({ message: "Couldn't audit the loops" });
     }
   });
 
@@ -5184,7 +5426,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
           content: `You are Nova, SparkTower's AI project assistant. Generate a concise weekly progress summary for a project. Be specific and actionable. Format with markdown headers and bullet points.`
         }, {
           role: "user",
-          content: `Project: "${project?.title}"\nDescription: ${project?.description}\n\nTask Status: ${JSON.stringify(taskSummary)}\nRecent Tasks: ${JSON.stringify(tasks.slice(0, 10).map(t => ({ title: t.title, status: t.status, priority: t.priority })))}\nMilestones: ${JSON.stringify(milestones.map(m => ({ title: m.title, status: m.status, targetDate: m.targetDate })))}\nRecent Check-ins: ${JSON.stringify(checkIns.slice(0, 5).map(ci => ({ goal: ci.goal, proof: ci.proof, blocker: ci.blocker, nextStep: ci.nextStep })))}\nRecent Activity: ${JSON.stringify(activity.slice(0, 10).map(a => a.action))}\n\nGenerate a progress summary covering: accomplishments, current focus, blockers, and next steps.`
+          content: `${productNameNote(project?.title)}\nProject: "${project?.title}"\nDescription: ${project?.description}\n\nTask Status: ${JSON.stringify(taskSummary)}\nRecent Tasks: ${JSON.stringify(tasks.slice(0, 10).map(t => ({ title: t.title, status: t.status, priority: t.priority })))}\nMilestones: ${JSON.stringify(milestones.map(m => ({ title: m.title, status: m.status, targetDate: m.targetDate })))}\nRecent Check-ins: ${JSON.stringify(checkIns.slice(0, 5).map(ci => ({ goal: ci.goal, proof: ci.proof, blocker: ci.blocker, nextStep: ci.nextStep })))}\nRecent Activity: ${JSON.stringify(activity.slice(0, 10).map(a => a.action))}\n\nGenerate a progress summary covering: accomplishments, current focus, blockers, and next steps.`
         }],
         temperature: 0.7,
       });
@@ -5219,7 +5461,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
           content: `You are Nova, SparkTower's AI project assistant. Analyze a project and detect gaps, missing pieces, or potential risks. You MUST respond with ONLY a valid JSON object (no markdown, no code fences) with a "gaps" array, each with: category (string: "missing", "risk", "suggestion"), title (string), description (string), severity ("high"/"medium"/"low").`
         }, {
           role: "user",
-          content: `Project: "${project?.title}"\nDescription: ${project?.description}\nRoles Needed: ${(project?.rolesNeeded || []).join(", ")}\nTech Stack: ${(project?.techStack || []).join(", ")}\n\nTeam: ${members.length} members with roles: ${members.map(m => m.role).join(", ")}\nTasks: ${tasks.length} total (${tasks.filter(t => t.status === "done").length} done, ${tasks.filter(t => t.status === "todo").length} todo)\nMilestones: ${milestones.length} (${milestones.filter(m => m.status === "completed").length} completed)\nFiles: ${files.length}\nHas business plan: ${!!project?.businessPlanUrl}\nHas problem statement: ${!!project?.problemStatement}\n\nAnalyze and flag any gaps.`
+          content: `${productNameNote(project?.title)}\nProject: "${project?.title}"\nDescription: ${project?.description}\nRoles Needed: ${(project?.rolesNeeded || []).join(", ")}\nTech Stack: ${(project?.techStack || []).join(", ")}\n\nTeam: ${members.length} members with roles: ${members.map(m => m.role).join(", ")}\nTasks: ${tasks.length} total (${tasks.filter(t => t.status === "done").length} done, ${tasks.filter(t => t.status === "todo").length} todo)\nMilestones: ${milestones.length} (${milestones.filter(m => m.status === "completed").length} completed)\nFiles: ${files.length}\nHas business plan: ${!!project?.businessPlanUrl}\nHas problem statement: ${!!project?.problemStatement}\n\nAnalyze and flag any gaps.`
         }],
         temperature: 0.7,
       });
@@ -5330,6 +5572,8 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       // An optional hello, capped: it's text going to someone who hasn't agreed to hear from you yet.
       const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, CONNECTION_NOTE_MAX) || null : null;
       const conn = await storage.sendConnectionRequest(requesterId, receiverId, note);
+      recordExploreAction(req, EXPLORE_EVENTS.connectRequest, { matchType: "builder", targetId: String(receiverId) });
+      if (conn?.id && conn.status === "pending") void notify({ recipients: [String(receiverId)], actorId: requesterId, kind: "connection_request", targetId: conn.id, excerpt: note });
       res.json(conn);
     } catch (error: any) {
       if (error.message === "Connection already exists") {
@@ -5348,6 +5592,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       if (existing.receiverId !== userId) return res.status(403).json({ message: "Only the receiver can accept a connection request" });
       if (existing.status !== "pending") return res.status(400).json({ message: "Connection is not pending" });
       const conn = await storage.acceptConnection(req.params.id);
+      void notify({ recipients: [existing.requesterId], actorId: userId, kind: "connection_accepted", targetId: existing.id });
       res.json(conn);
     } catch (error) {
       console.error("Accept connection error:", error);
@@ -5498,6 +5743,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       }
 
       const msg = await storage.sendDirectMessage(senderId, receiverId, content.trim());
+      recordExploreAction(req, EXPLORE_EVENTS.messageSent, { matchType: "builder", targetId: receiverId });
       res.json(msg);
     } catch (error) {
       console.error("Send message error:", error);
@@ -5624,7 +5870,12 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   app.get("/api/user/projects", isAuthenticated, async (req: any, res) => {
     try {
       const userProjectsList = await storage.getUserProjects((req.user as any).id);
-      res.json(userProjectsList);
+      // Cards name the owner; without it every project read as "Anonymous".
+      const owners = new Map<string, { owner: any; profile: any }>();
+      for (const ownerId of new Set(userProjectsList.map((p) => p.ownerId))) {
+        owners.set(ownerId, { owner: await storage.getUser(ownerId), profile: await storage.getUserProfile(ownerId) });
+      }
+      res.json(userProjectsList.map((p) => ({ ...p, owner: owners.get(p.ownerId)?.owner ?? null, profile: owners.get(p.ownerId)?.profile ?? null })));
     } catch (error) {
       console.error("Get user projects error:", error);
       res.status(500).json({ message: "Failed to get user projects" });

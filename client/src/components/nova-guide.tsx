@@ -4,6 +4,8 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
+import { IntakeView } from "@/components/path-work";
+import type { IntakeQuestion } from "@shared/phase-trees";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Cpu, Send, X, Loader2, CheckCircle2, ListTodo, Milestone, FileEdit, Sparkles, ChevronDown, MessageSquare, Pencil } from "lucide-react";
@@ -80,6 +82,7 @@ function ActionCard({ action }: { action: NovaAction }) {
     edit_project: "Edited Your Project",
     complete_onboarding: "Setup Complete",
     remember: "Nova will keep this in mind",
+    write_loops: "Wrote Your Loops",
   };
   const Icon = icons[action.type] || Sparkles;
   const label = labels[action.type] || action.type;
@@ -99,6 +102,10 @@ function ActionCard({ action }: { action: NovaAction }) {
     // Nova returns a sentence per change; showing them is the only way the
     // user can tell what it actually touched.
     details = (action.data.changes || []).map((c: any) => c.description).join(" · ");
+  } else if (action.type === "write_loops") {
+    details = action.data.count
+      ? `${action.data.count} loop${action.data.count === 1 ? "" : "s"}: ${(action.data.loops || []).join(", ")}`
+      : `Nothing written: ${(action.data.skipped || []).map((x: any) => x.reason).join("; ")}`;
   } else if (action.type === "remember") {
     details = action.data.notes;
   } else if (action.type === "update_scope") {
@@ -337,6 +344,23 @@ export function NovaGuide({ projectId, currentTab, project, onProjectUpdate }: N
   const suggestions = TAB_SUGGESTIONS[currentTab] || TAB_SUGGESTIONS.setup;
   const showQuickReplies = localMessages.length <= 1 && isOnboarding;
 
+  /*
+   * A business starts with money. On the systemize path Nova's first question
+   * isn't "what would you like to focus on" — it's where you stand, asked as
+   * the same bubbles as the path's first step, so answering here answers that.
+   */
+  // The funding path opens the same way, on why they want to own a business.
+  const FIRST_STEP: Record<string, string> = { systemize_business: "SYS.F1.1", raise_funding: "FUND.C1.1" };
+  const firstStepId = FIRST_STEP[project?.goal ?? ""];
+  const moneyFirst = isOnboarding && !!firstStepId && localMessages.length <= 1;
+  const { data: pathForMoney } = useQuery<{ adopted: boolean; next?: { id: string; workTaskId: string | null; intake?: IntakeQuestion[] } | null }>({
+    queryKey: ["/api/projects", projectId, "path"],
+    enabled: moneyFirst,
+  });
+  const moneyStep = moneyFirst && pathForMoney?.adopted && pathForMoney.next?.id === firstStepId && pathForMoney.next.workTaskId && pathForMoney.next.intake?.length
+    ? { taskId: pathForMoney.next.workTaskId, questions: pathForMoney.next.intake }
+    : null;
+
   if (isOnboarding) {
     return (
       <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4" data-testid="nova-onboarding-overlay">
@@ -363,9 +387,40 @@ export function NovaGuide({ projectId, currentTab, project, onProjectUpdate }: N
             </div>
           </div>
 
-          <ChatMessages messages={localMessages} isLoading={sendMutation.isPending} />
+          {moneyStep ? (
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4" data-testid="nova-money-first">
+              {project?.goal === "raise_funding" ? (
+                <div className="rounded-lg bg-muted/50 p-4 space-y-2 text-sm leading-relaxed">
+                  <p className="font-semibold">Let's find the money for your business.</p>
+                  <p>
+                    I'm Nova. First I'll get to know what you want from owning a business and where you stand, then build
+                    your capital profile — with a score for how fundable you are today and exactly what raises it — and map
+                    every route to the money.
+                  </p>
+                  <p>Start with why. Pick everything that's true.</p>
+                </div>
+              ) : (
+                <div className="rounded-lg bg-muted/50 p-4 space-y-2 text-sm leading-relaxed">
+                  <p className="font-semibold">Starting a business can be scary, but you're not doing it alone.</p>
+                  <p>
+                    I'm Nova. The first thing that decides what's possible is money, so that's where we start —
+                    what it'll cost, where it comes from, and what gets you there, even from zero.
+                  </p>
+                  <p>
+                    Tap the ranges that fit you. There are no wrong answers, and <span className="font-medium">$0</span> is a real starting point.
+                  </p>
+                </div>
+              )}
+              <IntakeView
+                projectId={projectId} taskId={moneyStep.taskId} questions={moneyStep.questions}
+                work={null} done={false} onSaved={handleCompleteOnboarding}
+              />
+            </div>
+          ) : (
+            <ChatMessages messages={localMessages} isLoading={sendMutation.isPending} />
+          )}
 
-          {showQuickReplies && (
+          {showQuickReplies && !moneyStep && (
             <div className="px-4 pb-2 flex flex-wrap gap-2">
               {QUICK_REPLIES.map((qr, i) => (
                 <Button

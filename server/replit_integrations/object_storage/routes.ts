@@ -105,8 +105,10 @@ export function registerObjectStorageRoutes(app: Express): void {
         received += chunk.length;
         if (received > LOCAL_UPLOAD_MAX_BYTES && !res.headersSent) {
           req.unpipe(writeStream);
+          // Removed once the stream has closed: deleting first let a write
+          // still in flight recreate the partial file afterwards.
+          writeStream.once("close", () => { void fsPromises.rm(filePath, { force: true }); });
           writeStream.destroy();
-          void fsPromises.rm(filePath, { force: true });
           res.status(413).json({ error: "File too large" });
           req.resume(); // Drain the rest, so the client reads the answer rather than a reset.
         }

@@ -9,10 +9,11 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Sparkles, Crown, Settings2, ImageIcon, Search } from "lucide-react";
+import { Loader2, Sparkles, Crown, Settings2, Search } from "lucide-react";
 import {
-  badgeLevel, formatBelieverNumber, MAX_SHOWCASE_BADGES, BADGE_LEVELS,
+  badgeLevel, formatBelieverNumber, MAX_SHOWCASE_BADGES, BADGE_LEVELS, isCreatorBadge, NOVA_GRADIENT_CSS,
 } from "@shared/backing";
+import { BadgeMedal } from "@/components/pinned-badges";
 
 interface BackerBadgeRow {
   id: string;
@@ -23,37 +24,25 @@ interface BackerBadgeRow {
   believerNumber: number | null;
   foundingBeliever: boolean;
   imageUrl: string | null;
+  /** Shown inside the ring until the artwork is made — a founder badge starts this way. */
+  projectLogo?: string | null;
   status: "pending" | "ready" | "failed";
   showcaseOrder: number | null;
 }
 
-/** The metal ring around each badge, so the level reads without the artwork. */
-function levelStyle(level: string) {
-  const def = badgeLevel(level);
-  return {
-    borderColor: def?.hex ?? "#a8672a",
-    boxShadow: `0 0 0 1px ${def?.accentHex ?? "#e0a15e"}33 inset`,
-  };
-}
-
 function BadgeTile({ badge, size = "md" }: { badge: BackerBadgeRow; size?: "sm" | "md" }) {
   const def = badgeLevel(badge.level);
-  const px = size === "sm" ? "h-14 w-14" : "h-20 w-20";
+  const px = size === "sm" ? "h-14 w-14 text-[48px]" : "h-20 w-20 text-[64px]";
 
   return (
-    <div className="flex flex-col items-center gap-1 min-w-0">
-      <div
-        className={`${px} rounded-full border-2 overflow-hidden bg-muted/40 flex items-center justify-center shrink-0`}
-        style={levelStyle(badge.level)}
-        title={`${def?.label ?? badge.level} · ${badge.projectTitle}`}
-      >
-        {badge.imageUrl
-          ? <img src={badge.imageUrl} alt="" className="w-full h-full object-contain" />
-          : <ImageIcon className="h-5 w-5 text-muted-foreground/50" />}
-      </div>
+    <div className="flex flex-col items-center gap-1 min-w-0" title={`${def?.label ?? badge.level} · ${badge.projectTitle}`}>
+      <BadgeMedal level={badge.level} imageUrl={badge.imageUrl} projectTitle={badge.projectTitle} className={px} />
       <span className="text-[10px] text-center leading-tight max-w-[5.5rem] truncate">
         {badge.projectTitle}
       </span>
+      {isCreatorBadge(badge.level) && (
+        <span className="text-[9px] font-semibold bg-clip-text text-transparent" style={{ backgroundImage: NOVA_GRADIENT_CSS }}>Creator</span>
+      )}
       {badge.believerNumber != null && (
         <span className="text-[9px] font-mono text-muted-foreground">
           {formatBelieverNumber(badge.believerNumber)}
@@ -125,6 +114,7 @@ export function BackerBadgeShowcase({ userId, isOwnProfile }: { userId: string; 
 
   const hasAny = (pinned?.length ?? 0) > 0;
   const earned = mine?.length ?? 0;
+  const creatorsToMake = (mine ?? []).filter((b) => isCreatorBadge(b.level) && b.status !== "ready").length;
 
   /*
    * A visitor sees nothing when nothing is pinned — an empty showcase isn't
@@ -139,7 +129,7 @@ export function BackerBadgeShowcase({ userId, isOwnProfile }: { userId: string; 
       <Card className="border-border/50" data-testid="badge-showcase">
         <CardHeader className="flex flex-row items-center justify-between space-y-0 gap-2">
           <CardTitle className="text-sm font-semibold uppercase text-muted-foreground flex items-center gap-2">
-            <Sparkles className="h-3.5 w-3.5 text-primary" /> Believer badges
+            <Sparkles className="h-3.5 w-3.5 text-primary" /> Badges
           </CardTitle>
           {isOwnProfile && earned > 0 && (
             <Button
@@ -152,9 +142,23 @@ export function BackerBadgeShowcase({ userId, isOwnProfile }: { userId: string; 
           )}
         </CardHeader>
         <CardContent>
+          {isOwnProfile && creatorsToMake > 0 && (
+            <button
+              className="mb-3 w-full rounded-md p-[1.5px] text-left"
+              style={{ background: NOVA_GRADIENT_CSS }}
+              onClick={() => setPicking(true)}
+              data-testid="button-make-creator-badges"
+            >
+              <span className="block rounded-[5px] bg-background px-3 py-2 text-xs">
+                <span className="font-semibold">Generate your creator badge{creatorsToMake === 1 ? "" : "s"}</span>
+                <span className="text-muted-foreground"> — {creatorsToMake} project{creatorsToMake === 1 ? "" : "s"} you created, in Nova's colours. It's what shows next to your name.</span>
+              </span>
+            </button>
+          )}
           {hasAny ? (
             <div className="flex flex-wrap gap-3">
               {pinned!.map((b) => (
+                // Founder or backer, the ring's colour and the label under it say which.
                 <Link key={b.id} href={`/projects/${b.projectId}`} data-testid={`pinned-badge-${b.id}`}>
                   <BadgeTile badge={b} />
                 </Link>
@@ -181,7 +185,7 @@ export function BackerBadgeShowcase({ userId, isOwnProfile }: { userId: string; 
                 ))}
               </div>
               <p className="text-xs text-muted-foreground leading-relaxed">
-                Back a project and you earn a badge for it — bronze at ${BADGE_LEVELS[0].minCents / 100},
+                Create a public project and you get a creator badge in Nova's colours. Back one and you earn a badge for it — bronze at ${BADGE_LEVELS[0].minCents / 100},
                 up to platinum at ${BADGE_LEVELS[3].minCents / 100}. Nova builds the artwork from that
                 project's logo. Pin up to {MAX_SHOWCASE_BADGES} here.
               </p>
@@ -275,9 +279,13 @@ function BadgePicker({
                   <div className="min-w-0 flex-1 space-y-1">
                     <p className="text-sm font-medium truncate">{b.projectTitle}</p>
                     <div className="flex flex-wrap items-center gap-1">
-                      <Badge variant="outline" className="text-[10px]" style={{ borderColor: def?.hex }}>
-                        {def?.label ?? b.level}
-                      </Badge>
+                      {isCreatorBadge(b.level) ? (
+                        <Badge className="text-[10px] border-0 text-white" style={{ background: NOVA_GRADIENT_CSS }}>Creator</Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-[10px]" style={{ borderColor: def?.hex }}>
+                          {def?.label ?? b.level}
+                        </Badge>
+                      )}
                       {b.foundingBeliever && (
                         <Badge className="text-[10px] gap-1"><Crown className="h-2.5 w-2.5" /> Founding</Badge>
                       )}
@@ -294,7 +302,7 @@ function BadgePicker({
                       >
                         {generatingId === b.id
                           ? <><Loader2 className="h-3 w-3 animate-spin" /> Making it…</>
-                          : <><Sparkles className="h-3 w-3" /> {b.status === "failed" ? "Try again" : "Make the artwork"}</>}
+                          : <><Sparkles className="h-3 w-3" /> {b.status === "failed" ? "Try again" : isCreatorBadge(b.level) ? "Generate creator badge" : "Make the artwork"}</>}
                       </Button>
                     )}
                   </div>

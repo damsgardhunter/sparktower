@@ -5,26 +5,62 @@ or message → come back later and do it again.
 
 ## Events
 
-Nine, in `shared/explore-events.ts`. They ride the behaviour stream — sent by
-the browser through `/api/track` with the page views, stored in
-`activity_events` — and are separate from the check-in loop's events in
-`shared/loop-events.ts`, which stay a small fixed set on purpose.
+Nine, in `shared/explore-events.ts`, stored in `activity_events` and separate
+from the check-in loop's events in `shared/loop-events.ts`, which stay a small
+fixed set on purpose. Six are sent by the client through `/api/track` — only it
+sees a page open, a card on screen, a tap, or the app being left. The three
+actions are recorded by the endpoints that perform them (below), and
+`/api/track` refuses them, so an action can't be missed or claimed twice.
 
 | Event | Fired when |
 | --- | --- |
 | `explore.open_discover` | Discover, Matches or the project list opens |
 | `explore.view_match_card` | a builder or project card is at least half on screen — once per card per visit to the page |
 | `explore.open_profile` / `explore.open_project` | a card is clicked on one of those pages |
-| `explore.follow` | a project is followed (not unfollowed — the endpoint toggles) |
-| `explore.connect_request` | a connection request succeeds |
-| `explore.message_sent` | a message sends |
+| `explore.follow` | a builder or project is newly followed — not a repeat, not an unfollow (recorded by the server) |
+| `explore.connect_request` | a connection request succeeds (recorded by the server) |
+| `explore.message_sent` | a message sends (recorded by the server) |
 | `explore.return_to_discover` | Discover opens again in a tab that already opened it |
 | `explore.session_end` | the tab is left after anything happened in the loop |
 
-Five properties, and nothing else is stored: `matchType` (builder / project),
+Five properties, and nothing else is stored (on an action, `matchType` and
+`targetId` come from the server; the client adds the rest as `explore` in the
+request body): `matchType` (builder / project),
 `targetId`, `rankPosition` (from 1), `source` (which page), and
 `timeToActionMs` (on actions only: milliseconds since Discover opened in that
 tab). The server drops unknown keys and out-of-range values.
+
+## The action step: endpoints
+
+Follow, connect and message are the loop's success path. Each endpoint records
+its event when the write succeeds, in the requester's visit, via
+`recordExploreAction` in `server/explore-actions.ts`:
+
+| Action | Endpoint | Event | Clients |
+| --- | --- | --- | --- |
+| Follow a project | `POST /api/projects/:id/follow` `{ following: true, explore? }` | `explore.follow` (project) | web cards and project page; app Discover cards and project screen |
+| Follow a builder | `POST /api/users/:id/follow` `{ following: true, explore? }` | `explore.follow` (builder) | web profile |
+| Connect | `POST /api/connections/request` `{ userId, note?, explore? }` | `explore.connect_request` | web cards and profile; app Discover cards and builder screen |
+| Message | `POST /api/messages/:userId` `{ content, explore? }` — connected people only | `explore.message_sent` | web cards and messages; app cards and chat |
+
+Around them: `GET /api/connections/statuses` (where you stand with everyone on
+a page), `POST /api/connections/:id/accept`, `GET /api/users/:id/follow-status`,
+`GET /api/projects/:id/follow-status`, `GET /api/user/followed-projects`. A
+refused action (a message before they accept, a second request) records nothing.
+
+**One visit, web or app.** The web app's visit is the `st_sid` cookie. The
+mobile app keeps no cookies, so it sends `X-ST-Visitor`, `X-ST-Session` (a visit
+ends after 30 quiet minutes, as the cookie does) and `X-ST-Session-Start` on a
+visit's first request; the server uses them when there's no cookie. Opening
+Discover is sent at once, not batched, so it's stored before an action seconds
+later and the cycle count reads them in order.
+
+**Tests.** `test/integration/explore-loop.test.ts` (each endpoint records its
+event with sanitized context; the tracker can't claim one; app headers join the
+visit; the funnel, time to first action, repeat rate and a full cycle),
+`test/integration/discover-actions.test.ts`, and in a real browser
+`e2e/explore-loop.spec.ts` (open → follow from a card → return, counted as one
+cycle on the owner's dashboard) and `e2e/discover-actions.spec.ts`.
 
 ## Success signals
 
@@ -40,7 +76,7 @@ On the owner's analytics page, under **Explore loop**, from
 
 ## Checking it by hand
 
-1. Run the app and open Discover (or Matches, or Projects).
+1. Run the app (or the mobile app) and open Discover (or Matches, or Projects).
 2. Scroll the cards, open a profile, send a connection request or a message.
 3. Go back to Discover.
 4. As the owner, open the analytics page: the Explore loop card counts that

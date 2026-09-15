@@ -51,6 +51,11 @@ export const RATE_LIMITS = {
     max: 10, windowMinutes: 60,
     message: "You've filed several reports. We'll look at those first.",
   },
+  /** Under the hourly limit: a steady trickle of reports all day is a campaign, not a person reading the feed. */
+  reportDaily: {
+    max: 25, windowMinutes: 24 * 60,
+    message: "You've sent a lot of reports today. We'll work through those before taking more from you.",
+  },
   react: {
     max: 60, windowMinutes: 10,
     message: "You're reacting very quickly. Give it a minute.",
@@ -211,13 +216,14 @@ export type DuplicateAction = keyof typeof DUPLICATE_RULES;
 
 // --- Reports ------------------------------------------------------------
 
-export const REPORT_TARGETS = ["check_in", "comment", "feed_post", "project", "user"] as const;
+export const REPORT_TARGETS = ["check_in", "comment", "feed_post", "feed_comment", "project", "user"] as const;
 export type ReportTarget = (typeof REPORT_TARGETS)[number];
 
 export const REPORT_TARGET_LABEL: Record<ReportTarget, string> = {
   check_in: "Check-in",
   comment: "Comment",
   feed_post: "Post",
+  feed_comment: "Comment",
   project: "Project",
   user: "Person",
 };
@@ -238,6 +244,41 @@ export const REPORT_REASONS = [
 ] as const;
 
 export type ReportReason = (typeof REPORT_REASONS)[number]["id"];
+
+/**
+ * The second click: a little more precise than the reason, still short. Picked
+ * after the reason on the report form, and recorded with the report so the
+ * queue can tell "targets me" from "targets someone else" without reading.
+ */
+export const REPORT_REASON_DETAILS: Record<ReportReason, { id: string; label: string }[]> = {
+  spam: [
+    { id: "selling", label: "Selling or advertising something" },
+    { id: "repeated", label: "The same post over and over" },
+    { id: "scam_link", label: "A link to a scam or malware" },
+  ],
+  abuse: [
+    { id: "targets_me", label: "It's aimed at me" },
+    { id: "targets_other", label: "It's aimed at someone else" },
+    { id: "hate", label: "Hate based on who someone is" },
+  ],
+  misleading: [
+    { id: "fake_project", label: "The project or progress is made up" },
+    { id: "impersonation", label: "Pretending to be someone else" },
+    { id: "fraud", label: "Asking for money under false pretences" },
+  ],
+  inappropriate: [
+    { id: "sexual", label: "Sexual content" },
+    { id: "violent", label: "Violence or gore" },
+  ],
+  other: [
+    { id: "off_topic", label: "Not about building anything" },
+    { id: "private_info", label: "Shares someone's private information" },
+    { id: "something_else", label: "Something else — I'll explain" },
+  ],
+};
+
+export const reportDetailLabel = (reason: string, detail: string): string | null =>
+  (REPORT_REASON_DETAILS as Record<string, { id: string; label: string }[]>)[reason]?.find((d) => d.id === detail)?.label ?? null;
 export const REPORT_REASON_IDS = REPORT_REASONS.map((r) => r.id);
 
 export const reportReasonLabel = (id: string): string =>

@@ -119,7 +119,7 @@ export function BackingSetup({ projectId, projectTitle }: { projectId: string; p
   const [campaignForm, setCampaignForm] = useState({ headline: "", story: "", goal: "" });
   const [campaignDirty, setCampaignDirty] = useState(false);
 
-  const { data, isLoading } = useQuery<BackingSetup>({
+  const { data, isLoading, isError } = useQuery<BackingSetup>({
     queryKey: ["/api/projects", projectId, "backing"],
     enabled: !!projectId,
   });
@@ -253,7 +253,26 @@ export function BackingSetup({ projectId, projectTitle }: { projectId: string; p
   if (isLoading) {
     return <div className="flex justify-center py-10"><Loader2 className="h-5 w-5 animate-spin text-primary" /></div>;
   }
-  if (!data) return null;
+  /*
+   * The server answers 404 for the whole area while the backing kill switch
+   * is off. Rendering nothing here is how donations, merch and badges once
+   * "disappeared" from Setup with no clue why — say what's going on instead.
+   */
+  if (isError || !data) {
+    return (
+      <Card data-testid="backing-setup-unavailable">
+        <CardContent className="p-4 space-y-1">
+          <p className="text-sm font-medium flex items-center gap-2">
+            <Heart className="h-4 w-4 text-primary" /> Backing, merch &amp; badges
+          </p>
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            Backing isn't available right now — it's switched off for the whole site. An admin can
+            turn it back on under Admin → Surfaces.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
 
   const { campaign, tiers, merchConfig, payouts, signals } = data;
   const config: MerchConfig = { ...DEFAULT_MERCH_CONFIG, ...merchConfig };

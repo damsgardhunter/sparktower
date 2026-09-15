@@ -5,8 +5,15 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { FeedComposer } from "@/components/feed-composer";
+import { FeedbackUsedCard } from "@/components/feedback-inbox";
+import { useNotificationCounts, refreshNotifications } from "@/components/notification-bell";
+import { apiRequest } from "@/lib/queryClient";
 import { FeedPostCard, type FeedPostWithDetails } from "@/components/feed-post-card";
-import { Heart, Loader2, Newspaper, Users } from "lucide-react";
+import { Heart, Loader2, Newspaper, Users, SlidersHorizontal, ChevronDown, X } from "lucide-react";
+import {
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuLabel,
+  DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 import * as Icons from "lucide-react";
 import { POST_TYPES } from "@shared/feed";
 import type { FeedPostType } from "@shared/schema";
@@ -54,6 +61,18 @@ export function FounderFeed({ projectId }: { projectId?: string }) {
   const cursor = pages[pages.length - 1];
   if (cursor) params.set("before", cursor);
 
+  /*
+   * New from people you follow, counted on the server — so the prompt to look
+   * is the same on every device. Opening Following reads them.
+   */
+  const { data: counts } = useNotificationCounts();
+  const newFromFollowing = projectId ? 0 : counts?.followedPosts ?? 0;
+  useEffect(() => {
+    if (scope === "following" && newFromFollowing > 0) {
+      apiRequest("POST", "/api/notifications/read", { kind: "followed_post" }).then(refreshNotifications).catch(() => {});
+    }
+  }, [scope, newFromFollowing]);
+
   const { data, isLoading, isFetching } = useQuery<FeedPage>({
     queryKey: ["/api/feed", { filter, projectId, cursor, scope }],
     queryFn: async () => {
@@ -65,59 +84,83 @@ export function FounderFeed({ projectId }: { projectId?: string }) {
 
   return (
     <div className="space-y-2">
+      {!projectId && <FeedbackUsedCard />}
       <FeedComposer defaultProjectId={projectId} />
 
-      {!projectId && (
-        <div className="flex gap-1.5" role="tablist" aria-label="Whose posts">
-          {([["everyone", "Everyone", Users], ["following", "Following", Heart]] as const).map(([value, label, Icon]) => (
-            <Button
-              key={value}
-              role="tab"
-              aria-selected={scope === value}
-              variant={scope === value ? "default" : "ghost"}
-              size="sm"
-              className="h-8 gap-1.5"
-              onClick={() => { setScope(value); setPages([]); }}
-              data-testid={`feed-scope-${value}`}
-            >
-              <Icon className="h-3.5 w-3.5" /> {label}
-            </Button>
-          ))}
-        </div>
-      )}
-
       {/*
-        * Filters get their own container, tinted to the page rather than the
-        * card surface. Sitting loose between the composer and the posts they
-        * read as a third feed item; recessed a shade, they read as a control
-        * strip — and every chip is the same height, so the rows line up.
+        * One line: whose posts on the left, and a small Filter at the end that
+        * opens the post types. Eight chips across two rows took more room than
+        * the choice was worth.
         */}
-      <div className="rounded-lg border border-border bg-muted/60 dark:bg-muted/40 px-2.5 py-2">
-        <div className="flex flex-wrap gap-1.5">
-          <Button
-            variant={filter === "all" ? "default" : "outline"}
-            size="sm"
-            className={`h-7 text-xs gap-1.5 rounded-full px-3 ${filter === "all" ? "btn-glossy border-0 text-primary-foreground" : "bg-background"}`}
-            onClick={() => { setFilter("all"); setPages([]); }}
-            data-testid="filter-all"
-          >
-            <Newspaper className="h-3.5 w-3.5" /> Everything
-          </Button>
-          {POST_TYPES.map((t) => (
-            <Button
-              key={t.type}
-              variant={filter === t.type ? "default" : "outline"}
-              size="sm"
-              className={`h-7 text-xs gap-1.5 rounded-full px-3 ${filter === t.type ? "btn-glossy border-0 text-primary-foreground" : "bg-background"}`}
-              onClick={() => { setFilter(t.type); setPages([]); }}
-              data-testid={`filter-${t.type}`}
+      <div className="flex items-center gap-1 py-0.5" data-testid="feed-filter-bar">
+        {!projectId && (
+          <div className="flex gap-0.5" role="tablist" aria-label="Whose posts">
+            {([["everyone", "Everyone", Users], ["following", "Following", Heart]] as const).map(([value, label, Icon]) => (
+              <Button
+                key={value}
+                role="tab"
+                aria-selected={scope === value}
+                variant={scope === value ? "secondary" : "ghost"}
+                size="sm"
+                className="h-7 gap-1.5 text-xs px-2.5"
+                onClick={() => { setScope(value); setPages([]); }}
+                data-testid={`feed-scope-${value}`}
+              >
+                <Icon className="h-3.5 w-3.5" /> {label}
+                {value === "following" && newFromFollowing > 0 && scope !== "following" && (
+                  <span className="ml-0.5 rounded-full bg-primary text-primary-foreground text-[10px] px-1.5 leading-4" data-testid="following-new-count">{newFromFollowing}</span>
+                )}
+              </Button>
+            ))}
+          </div>
+        )}
+        <span className="flex-1 h-px bg-foreground/15 mx-2" aria-hidden />
+        <div className="flex items-center gap-1">
+          {filter !== "all" && (
+            <button
+              className="text-[11px] text-primary hover:underline flex items-center gap-0.5"
+              onClick={() => { setFilter("all"); setPages([]); }}
+              data-testid="filter-clear"
             >
-              <TypeIcon name={t.icon} className="h-3.5 w-3.5" />
-              {t.label}
-            </Button>
-          ))}
+              {POST_TYPES.find((t) => t.type === filter)?.label} <X className="h-3 w-3" />
+            </button>
+          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="text-[11px] text-muted-foreground hover:text-foreground flex items-center gap-0.5 px-1.5 py-1 rounded" data-testid="button-feed-filter">
+                <SlidersHorizontal className="h-3 w-3" /> Filter <ChevronDown className="h-3 w-3" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuLabel className="text-[11px] text-muted-foreground font-normal">Show posts</DropdownMenuLabel>
+              <DropdownMenuRadioGroup value={filter} onValueChange={(v) => { setFilter(v as FeedPostType | "all"); setPages([]); }}>
+                <DropdownMenuRadioItem value="all" className="text-xs gap-2" data-testid="filter-all">
+                  <Newspaper className="h-3.5 w-3.5" /> Everything
+                </DropdownMenuRadioItem>
+                <DropdownMenuSeparator />
+                {POST_TYPES.map((t) => (
+                  <DropdownMenuRadioItem key={t.type} value={t.type} className="text-xs gap-2" data-testid={`filter-${t.type}`}>
+                    <TypeIcon name={t.icon} className="h-3.5 w-3.5" /> {t.label}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
+
+      {/* The way back into the loop: progress from people you follow, since you last looked. */}
+      {!projectId && scope === "everyone" && newFromFollowing > 0 && (
+        <button
+          className="w-full rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-[13px] text-left flex items-center gap-2 hover:bg-primary/10"
+          onClick={() => { setScope("following"); setPages([]); }}
+          data-testid="button-new-from-following"
+        >
+          <Heart className="h-3.5 w-3.5 text-primary shrink-0" />
+          <span><span className="font-semibold">{newFromFollowing} new update{newFromFollowing === 1 ? "" : "s"}</span> from people and projects you follow since you last looked</span>
+          <span className="ml-auto text-xs text-primary">See them</span>
+        </button>
+      )}
 
       {isLoading ? (
         <div className="space-y-2">

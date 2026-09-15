@@ -74,11 +74,12 @@ describe("the surface registry", () => {
     }
   });
 
-  it("keeps the surfaces that handle money or need a crowd off by default", () => {
+  it("ships backing on, and keeps the surfaces that need a crowd off by default", () => {
     const defaults = defaultSurfaceMap();
-    // Backing holds real money in escrow and has never had a pledge walked
-    // end to end; the rest need people the site does not have yet.
-    expect(defaults.backing).toBe(false);
+    // Backing holds real money in escrow; pledges stay held until a reviewer
+    // approves, and the switch turns the whole area off at runtime. The rest
+    // need people the site does not have yet.
+    expect(defaults.backing).toBe(true);
     expect(defaults.games).toBe(false);
   });
 });

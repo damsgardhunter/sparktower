@@ -161,12 +161,22 @@ Four endpoints, all under the same guards as the rest:
 
 | | |
 | --- | --- |
-| `GET .../loops` | the loops, each with a `state` — `unwritten`, `written`, `planned`, `building`, `built` — plus the rejected titles and how many more will fit |
-| `POST .../loops` | record another one (six is the cap) |
-| `DELETE .../loops/:taskId` | "not a loop" |
+| `GET .../loops` | the loops, each with a `type` and a `state` — `unwritten`, `written`, `planned`, `building`, `built` — plus `coverage` (kinds missing or unwritten), `competition` (Nova's latest competitive read), each loop's `closure` from the latest audit, the rejected titles and how many more will fit |
+| `POST .../loops` | record another one, with its `type` (only `product` repeats; eight is the cap) |
+| `DELETE .../loops/:taskId` | "not a loop" — refused (`loop_required`) for the last loop of its kind |
 | `POST .../loops/:taskId/steps` | break one into the steps that build it |
 
 Three things worth knowing about them.
+
+**Every business has five kinds of loop.** A ship path is born with a
+`product`, `growth`, `retention`, `revenue` and `referral` loop, each an empty
+slot. Only product loops come in more than one (up to four); a second loop of
+another kind is `loop_type_taken`, and the core-loops milestone isn't done until
+every kind exists and every loop is written. When Nova's read finds a loop, it
+fills the empty slot of that kind rather than adding beside it. Once all five
+are written, `POST /api/projects/:id/path/loops/audit` (web app, metered as
+`loopAudit`) has Nova score each against the competition; every codebase audit,
+including the bridge's, reports whether each written loop *closes* in the code.
 
 **`rejected` is the load-bearing field.** Removing a loop isn't a delete, it's
 a judgement: the title goes on the project's rejected list, and
@@ -271,7 +281,8 @@ from the route table, which is what `test/unit/route-guards.test.ts` checks.
 
 ## Deploying the schema
 
-`mcp_tokens` is a new table: `npm run db:push`.
+`mcp_tokens` is a new table, created by the baseline migration:
+`npm run db:migrate`.
 
 ## The coding model
 

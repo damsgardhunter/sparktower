@@ -1,5 +1,4 @@
-import { trackExplore } from "@/lib/explore";
-import { EXPLORE_EVENTS } from "@shared/explore-events";
+import { exploreContext } from "@/lib/explore";
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -186,11 +185,10 @@ function ChatPanel({
 
   const sendMutation = useMutation({
     mutationFn: async (content: string) => {
-      const res = await apiRequest("POST", `/api/messages/${userId}`, { content });
+      const res = await apiRequest("POST", `/api/messages/${userId}`, { content, explore: exploreContext("messages") });
       return res.json();
     },
     onSuccess: () => {
-      if (userId) trackExplore(EXPLORE_EVENTS.messageSent, { matchType: "builder", targetId: userId, source: "messages" });
       queryClient.invalidateQueries({ queryKey: ["/api/messages", userId] });
       queryClient.invalidateQueries({ queryKey: ["/api/messages/conversations"] });
       queryClient.invalidateQueries({ queryKey: ["/api/messages/unread-count"] });

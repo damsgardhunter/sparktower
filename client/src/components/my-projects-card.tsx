@@ -76,7 +76,7 @@ export function MyProjectsCard() {
   return (
     <>
       <RailCard>
-        <RailHeader title="Your projects" href="/projects" />
+        <RailHeader title="Your projects" href="/projects?view=mine" />
         <div className="space-y-2.5 pt-1">
           {sorted.map((p) => (
             <div key={p.id} className="space-y-1.5" data-testid={`rail-project-${p.id}`}>
