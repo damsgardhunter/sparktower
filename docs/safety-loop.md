@@ -5,7 +5,7 @@ back tomorrow and start from what changed.
 
 | Step | Where | Evidence |
 | --- | --- | --- |
-| Review reports, rate-limit hits and loop metrics — together | `/admin/safety` (`client/src/pages/admin-safety.tsx`), `GET /api/admin/safety/review` (`server/safety-routes.ts`) | `test/integration/safety-loop.test.ts`, `e2e/safety-review.spec.ts` |
+| Review reports, rate-limit hits and content volume — together | `/admin/safety` (`client/src/pages/admin-safety.tsx`), `GET /api/admin/safety/review` (`server/safety-routes.ts`) | `test/integration/safety-loop.test.ts`, `e2e/safety-review.spec.ts` |
 | Take a moderation action (remove, shadow-hide, ban, suspend, switch a surface off) | `/admin/reports`, `/admin/surfaces`; `server/moderation.ts`, `server/surfaces.ts` — every action is a row in the append-only `moderation_log` | `e2e/moderation-loop.spec.ts`, `test/integration/write-floor.test.ts` |
 | Monitor impact | Per action, `GET /api/admin/safety/impact/:logId`; shown on the review under **What recent actions did**, and one click from the queue (**See impact** on the decision's notice) | `test/integration/safety-loop.test.ts`, `e2e/safety-review.spec.ts` |
 | Repeat | The review's checklist, `POST /api/admin/safety/review`, recorded as `safety_review_completed` in the moderation log; the next review covers the time since it | `test/integration/safety-loop.test.ts`, `e2e/safety-review.spec.ts` |
@@ -23,14 +23,13 @@ One page, loaded by one request:
 - **Rate limits** — per limit, how many people it refused in the window and the
   window before, how many it allowed in the last day, and whether it's spiking
   (at least 5 refusals and at least double).
-- **Loop health** — posts, comments and messages against the window before, plus
-  the check-in loop's week: check-ins posted, feedback within SLA, D7 retention.
+- **Content** — posts, comments and messages against the window before.
 - **What recent actions did** — every moderation action in the last 7 days, with
   its impact (below).
 - **Switched off** — surfaces currently off.
-- **The checklist** — reports triaged, spikes looked at, impact checked, loop
-  metrics checked, switched-off surfaces reconsidered. **Complete review** needs
-  all five and takes an optional note for the next reviewer.
+- **The checklist** — reports triaged, spikes looked at, impact checked,
+  switched-off surfaces reconsidered. **Complete review** needs all four and
+  takes an optional note for the next reviewer.
 
 The window is the time since the last completed review — at least 24 hours, at
 most 7 days — compared with the same span before it. The sidebar's **Safety

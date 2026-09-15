@@ -348,57 +348,6 @@
   filter: brightness(1.07) saturate(1.05);
 }
 
-/*
- * The check-in button.
- *
- * Green on hover, and it stays green — the point is to make the weekly habit
- * the most inviting thing on the page, so the colour arrives as a deliberate
- * settle rather than an instant flip. `--checkin` is defined here rather than
- * taken from the theme's accent because "posted" wants to read as done, and
- * that meaning is the same in both themes.
- */
-.btn-checkin {
-  --checkin: 152 58% 38%;
-  --checkin-fg: 0 0% 100%;
-  transition:
-    background-color 320ms cubic-bezier(.22,.61,.36,1),
-    border-color 320ms cubic-bezier(.22,.61,.36,1),
-    color 220ms ease,
-    box-shadow 320ms ease;
-}
-
-.btn-checkin:hover,
-.btn-checkin:focus-visible {
-  background-color: hsl(var(--checkin));
-  border-color: hsl(var(--checkin));
-  color: hsl(var(--checkin-fg));
-  box-shadow: 0 1px 10px hsl(var(--checkin) / 0.35);
-}
-
-/*
- * A slow breath while a check-in is actually due, and only then. An animation
- * that ran all the time would become wallpaper within a day and stop meaning
- * anything.
- */
-.btn-checkin[data-due="true"] {
-  animation: checkin-breathe 3.2s ease-in-out infinite;
-}
-
-@keyframes checkin-breathe {
-  0%, 100% { box-shadow: 0 0 0 0 hsl(152 58% 38% / 0.35); }
-  50%      { box-shadow: 0 0 0 5px hsl(152 58% 38% / 0); }
-}
-
-/* Once it's hovered the breathing stops — the invitation has been accepted. */
-.btn-checkin[data-due="true"]:hover {
-  animation: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .btn-checkin { transition: background-color 120ms linear, color 120ms linear; }
-  .btn-checkin[data-due="true"] { animation: none; }
-}
-
 .btn-glossy:active {
   filter: brightness(0.97);
   box-shadow:
@@ -412,3 +361,36 @@
 .home-rail-scroll::-webkit-scrollbar { width: 6px; }
 .home-rail-scroll::-webkit-scrollbar-thumb { background: transparent; border-radius: 3px; }
 .home-rail-scroll:hover::-webkit-scrollbar-thumb { background: hsl(var(--muted-foreground) / 0.35); }
+
+/*
+ * The header logo's lightning (components/animated-tower-logo.tsx), one loop:
+ * fade in on the dome → hold → shoot outward, fading as they leave the
+ * semicircle → bare tower → again. Each bolt's --bolt-dx/--bolt-dy is its own
+ * direction, so they all leave along the line they point.
+ */
+@keyframes tower-bolt-shoot {
+  0%   { opacity: 0; transform: translate(0, 0); }
+  14%  { opacity: 1; transform: translate(0, 0); }
+  34%  { opacity: 1; transform: translate(0, 0); animation-timing-function: cubic-bezier(0.55, 0, 0.9, 0.55); }
+  52%  { opacity: 1; }
+  68%  { opacity: 0; transform: translate(var(--bolt-dx), var(--bolt-dy)); }
+  100% { opacity: 0; transform: translate(var(--bolt-dx), var(--bolt-dy)); }
+}
+
+.tower-bolt {
+  animation: tower-bolt-shoot 3.6s linear infinite;
+  will-change: transform, opacity;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tower-bolt { animation: none; opacity: 1; }
+}
+
+/* The featured contest card: a slow sheen across it. */
+@keyframes featured-shine {
+  0%, 60% { transform: translateX(0) skewX(-20deg); }
+  100% { transform: translateX(450%) skewX(-20deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  [class*="animate-[featured-shine"] { animation: none; }
+}

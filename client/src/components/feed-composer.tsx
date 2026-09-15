@@ -14,8 +14,9 @@ import { useAuth } from "@/hooks/use-auth";
 import { useUpload } from "@/hooks/use-upload";
 import { MentionTextarea } from "@/components/mention-textarea";
 import {
-  Loader2, ImagePlus, X, Send, Lock, FolderKanban, PenLine, AtSign, HelpCircle, Plus, Repeat,
+  Loader2, ImagePlus, X, Send, Lock, FolderKanban, PenLine, AtSign, HelpCircle, Plus, Repeat, Sparkles,
 } from "lucide-react";
+import { CREDIT_COSTS } from "@shared/plans";
 import { MAX_ASKS, ASK_MAX, creditLine } from "@shared/feedback-loop";
 import type { FeedbackInboxData } from "@/components/feedback-inbox";
 import * as Icons from "lucide-react";
@@ -60,6 +61,39 @@ export function FeedComposer({ defaultProjectId }: { defaultProjectId?: string }
     onSuccess: (response) => setMediaUrls((prev) => [...prev, response.objectPath].slice(0, MAX_POST_MEDIA)),
     onError: (error) => toast({ title: "Upload failed", description: errorText(error), variant: "destructive" }),
   });
+
+  /*
+   * Nova draws an image for the post: the post is the subject, the project's
+   * logo and brief (when the post is on one) come second. It lands in the
+   * post's media like an upload, and only publishing posts it.
+   */
+  const generateImage = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/feed/image", {
+        content, postType, projectId: projectId === "none" ? undefined : projectId,
+      });
+      return res.json() as Promise<{ url: string; usedLogo: boolean; creditsCharged: number }>;
+    },
+    onSuccess: (data) => {
+      setMediaUrls((prev) => [...prev, data.url].slice(0, MAX_POST_MEDIA));
+      queryClient.invalidateQueries({ queryKey: ["/api/subscription"] });
+      toast({ title: "Image added", description: data.usedLogo ? "Drawn from your post, with your project's logo in the mix." : "Drawn from your post." });
+    },
+    onError: (error) => toast({ title: "Couldn't make an image", description: errorText(error), variant: "destructive" }),
+  });
+  const [brokenMedia, setBrokenMedia] = useState<string[]>([]);
+  /** Always clickable: a disabled button with no reason looks broken, so say what's missing instead. */
+  const requestImage = () => {
+    if (content.trim().length < 12) {
+      toast({ title: "Write your post first", description: "The image is drawn from what your post says — a sentence or two is enough." });
+      return;
+    }
+    if (mediaUrls.length >= MAX_POST_MEDIA) {
+      toast({ title: `Posts can have up to ${MAX_POST_MEDIA} images`, description: "Remove one to add another." });
+      return;
+    }
+    generateImage.mutate();
+  };
 
   const def = POST_TYPES_BY_KEY[postType];
   const selectedProject = myProjects?.find((p) => p.id === projectId);
@@ -262,11 +296,17 @@ export function FeedComposer({ defaultProjectId }: { defaultProjectId?: string }
           </div>
         )}
 
-        {mediaUrls.length > 0 && (
+        {(mediaUrls.length > 0 || generateImage.isPending) && (
           <div className="grid grid-cols-3 gap-2">
             {mediaUrls.map((url, i) => (
               <div key={url} className="relative aspect-video rounded-md overflow-hidden bg-muted">
-                <img src={url} alt="" className="h-full w-full object-cover" />
+                {brokenMedia.includes(url) ? (
+                  <div className="h-full w-full flex flex-col items-center justify-center gap-1 p-2 text-center text-[11px] text-muted-foreground" data-testid={`media-broken-${i}`}>
+                    <ImagePlus className="h-4 w-4" />Couldn't load this image — remove it and try again
+                  </div>
+                ) : (
+                  <img src={url} alt="" className="h-full w-full object-cover" onError={() => setBrokenMedia((b) => (b.includes(url) ? b : [...b, url]))} />
+                )}
                 <button
                   onClick={() => setMediaUrls((prev) => prev.filter((u) => u !== url))}
                   className="absolute top-1 right-1 rounded-full bg-background/90 p-1 hover:bg-background"
@@ -276,6 +316,14 @@ export function FeedComposer({ defaultProjectId }: { defaultProjectId?: string }
                 </button>
               </div>
             ))}
+            {generateImage.isPending && (
+              <div className="relative aspect-video rounded-md overflow-hidden p-[1.5px] bg-gradient-to-br from-green-400 via-emerald-500 to-purple-500" data-testid="post-image-generating">
+                <div className="h-full w-full rounded-[5px] bg-muted flex flex-col items-center justify-center gap-1 text-muted-foreground animate-pulse">
+                  <Sparkles className="h-4 w-4 text-primary" />
+                  <span className="text-[11px]">Drawing…</span>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -309,6 +357,19 @@ export function FeedComposer({ defaultProjectId }: { defaultProjectId?: string }
           >
             {isUploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImagePlus className="h-3.5 w-3.5" />}
             Photo
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 gap-1.5 text-xs"
+            disabled={generateImage.isPending}
+            onClick={requestImage}
+            title={content.trim().length < 12 ? "Write your post first — the image is drawn from it" : projectId !== "none" ? "Nova draws an image from your post, with your project's logo and brief in the mix" : "Nova draws an image from your post"}
+            data-testid="button-generate-image"
+          >
+            {generateImage.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 text-primary" />}
+            Generate image
+            <span className="text-muted-foreground">· {CREDIT_COSTS.postImage} cr</span>
           </Button>
           <input
             ref={fileRef}

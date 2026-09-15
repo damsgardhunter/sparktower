@@ -36,8 +36,6 @@ import {
   type InsertProjectActivityLog,
   type ProjectDecision,
   type InsertProjectDecision,
-  type ProjectCheckIn,
-  type InsertProjectCheckIn,
   type ProjectFile,
   type InsertProjectFile,
   type ProjectLink,
@@ -109,17 +107,8 @@ import {
   type InsertHealthFindingFeedback,
   projectActivityLog,
   projectDecisions,
-  projectCheckIns,
   projectFiles,
   projectLinks,
-  type GameLeaderboardEntry,
-  type InsertGameLeaderboardEntry,
-  type TypingRace,
-  type InsertTypingRace,
-  type TypingRacePlayer,
-  type InsertTypingRacePlayer,
-  type SignalNoiseGame,
-  type InsertSignalNoiseGame,
   type WaitlistEntry,
   type InsertWaitlistEntry,
   type ProjectInterview,
@@ -165,10 +154,6 @@ import {
   sprintCompatibilityReports,
   sprintMatchmakingQueue,
   type SprintMatchmakingQueueEntry,
-  gameLeaderboard,
-  typingRaces,
-  typingRacePlayers,
-  signalNoiseGames,
   projectWaitlistEntries,
   projectInterviews,
   projectExperiments,
@@ -454,10 +439,6 @@ export interface IStorage {
   updateDecision(id: string, data: Partial<InsertProjectDecision>): Promise<ProjectDecision>;
   deleteDecision(id: string): Promise<void>;
 
-  // Check-ins
-  getProjectCheckIns(projectId: string): Promise<(ProjectCheckIn & { user: User; profile?: UserProfile })[]>;
-  createCheckIn(data: InsertProjectCheckIn): Promise<ProjectCheckIn>;
-
   // Files
   getProjectFiles(projectId: string): Promise<(ProjectFile & { uploader: User })[]>;
   createProjectFile(data: InsertProjectFile): Promise<ProjectFile>;
@@ -534,26 +515,6 @@ export interface IStorage {
   deleteStoryboard(id: string, userId: string): Promise<boolean>;
   updateUserStripeInfo(userId: string, data: { stripeCustomerId?: string; stripeSubscriptionId?: string; subscriptionTier?: string }): Promise<User>;
 
-  // Game Leaderboard
-  createLeaderboardEntry(data: InsertGameLeaderboardEntry): Promise<GameLeaderboardEntry>;
-  getGameLeaderboard(gameType: string, limit?: number): Promise<(GameLeaderboardEntry & { user: User; profile?: UserProfile })[]>;
-
-
-  // Typing
-  createTypingRace(data: InsertTypingRace): Promise<TypingRace>;
-  getTypingRace(id: string): Promise<TypingRace | undefined>;
-  updateTypingRace(id: string, data: Partial<TypingRace>): Promise<TypingRace>;
-  getWaitingTypingRaces(): Promise<TypingRace[]>;
-  createTypingRacePlayer(data: InsertTypingRacePlayer): Promise<TypingRacePlayer>;
-  getTypingRacePlayers(raceId: string): Promise<(TypingRacePlayer & { user: User; profile?: UserProfile })[]>;
-  updateTypingRacePlayer(id: string, data: Partial<TypingRacePlayer>): Promise<TypingRacePlayer>;
-
-  // Signal/Noise
-  createSignalNoiseGame(data: InsertSignalNoiseGame): Promise<SignalNoiseGame>;
-  getSignalNoiseGame(id: string): Promise<SignalNoiseGame | undefined>;
-  updateSignalNoiseGame(id: string, data: Partial<SignalNoiseGame>): Promise<SignalNoiseGame>;
-  getUserSignalNoiseHistory(userId: string, limit?: number): Promise<SignalNoiseGame[]>;
-
   // Co-Founder Sprints
   createSprint(data: InsertCofounderSprint): Promise<CofounderSprint>;
   getSprint(id: string): Promise<CofounderSprint | undefined>;
@@ -594,13 +555,13 @@ export interface IStorage {
     memberProjects: ProjectMember[];
     milestones: { total: number; completed: number };
     tasks: { total: number; done: number; onTime: number };
-    checkIns: number;
+    /** Project update and milestone posts the user wrote on the feed about a project. */
+    projectUpdates: number;
     followedProjects: number;
     donationsReceived: number;
     applicationsSubmitted: number;
     activityLogCount: number;
     contestWins: number;
-    bestGameScores: { gameType: string; score: number }[];
   }>;
 }
 
@@ -1080,10 +1041,9 @@ export class DatabaseStorage implements IStorage {
    * Awards a badge, or does nothing if the badge doesn't exist or the user
    * already has it.
    *
-   * Badges are a cosmetic side effect of finishing a game or hitting a
-   * milestone, and callers award them by hard-coded id. An unknown id used to
+   * Badges are a cosmetic side effect of hitting a milestone, and callers award them by hard-coded id. An unknown id used to
    * raise a foreign-key error that failed the whole request — losing the
-   * player's score over a decoration. Returns null instead.
+   * request's real work over a decoration. Returns null instead.
    */
   async awardBadge(userId: string, badgeId: string): Promise<UserBadge | null> {
     const badge = await this.getBadge(badgeId);
@@ -2441,21 +2401,6 @@ export class DatabaseStorage implements IStorage {
     await db.delete(projectDecisions).where(eq(projectDecisions.id, id));
   }
 
-  // --- Check-ins ---
-  async getProjectCheckIns(projectId: string): Promise<(ProjectCheckIn & { user: User; profile?: UserProfile })[]> {
-    const checkIns = await db.select().from(projectCheckIns).where(eq(projectCheckIns.projectId, projectId)).orderBy(desc(projectCheckIns.createdAt));
-    return await Promise.all(checkIns.map(async (ci) => {
-      const [user] = await db.select().from(users).where(eq(users.id, ci.userId));
-      const [profile] = await db.select().from(userProfiles).where(eq(userProfiles.userId, ci.userId));
-      return { ...ci, user, profile };
-    }));
-  }
-
-  async createCheckIn(data: InsertProjectCheckIn): Promise<ProjectCheckIn> {
-    const [checkIn] = await db.insert(projectCheckIns).values(data).returning();
-    return checkIn;
-  }
-
   // --- Files ---
   async getProjectFiles(projectId: string): Promise<(ProjectFile & { uploader: User })[]> {
     const files = await db.select().from(projectFiles).where(eq(projectFiles.projectId, projectId)).orderBy(desc(projectFiles.createdAt));
@@ -2497,81 +2442,6 @@ export class DatabaseStorage implements IStorage {
   async updateProjectMember(projectId: string, userId: string, data: { timezone?: string; availability?: string; hoursPerWeek?: number; skills?: string[] }): Promise<ProjectMember> {
     const [member] = await db.update(projectMembers).set(data).where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId))).returning();
     return member;
-  }
-
-  // === GAME METHODS ===
-
-  async createLeaderboardEntry(data: InsertGameLeaderboardEntry): Promise<GameLeaderboardEntry> {
-    const [entry] = await db.insert(gameLeaderboard).values(data).returning();
-    return entry;
-  }
-
-  async getGameLeaderboard(gameType: string, limit: number = 50): Promise<(GameLeaderboardEntry & { user: User; profile?: UserProfile })[]> {
-    const entries = await db.select().from(gameLeaderboard).where(eq(gameLeaderboard.gameType, gameType as typeof gameLeaderboard.$inferSelect.gameType)).orderBy(desc(gameLeaderboard.score)).limit(limit);
-    return await Promise.all(entries.map(async (e) => {
-      const [user] = await db.select().from(users).where(eq(users.id, e.userId));
-      const [profile] = await db.select().from(userProfiles).where(eq(userProfiles.userId, e.userId));
-      return { ...e, user, profile };
-    }));
-  }
-
-  // --- Typing ---
-  async createTypingRace(data: InsertTypingRace): Promise<TypingRace> {
-    const [race] = await db.insert(typingRaces).values(data).returning();
-    return race;
-  }
-
-  async getTypingRace(id: string): Promise<TypingRace | undefined> {
-    const [race] = await db.select().from(typingRaces).where(eq(typingRaces.id, id));
-    return race;
-  }
-
-  async updateTypingRace(id: string, data: Partial<TypingRace>): Promise<TypingRace> {
-    const [race] = await db.update(typingRaces).set(data).where(eq(typingRaces.id, id)).returning();
-    return race;
-  }
-
-  async getWaitingTypingRaces(): Promise<TypingRace[]> {
-    return db.select().from(typingRaces).where(eq(typingRaces.status, "waiting")).orderBy(desc(typingRaces.createdAt));
-  }
-
-  async createTypingRacePlayer(data: InsertTypingRacePlayer): Promise<TypingRacePlayer> {
-    const [player] = await db.insert(typingRacePlayers).values(data).returning();
-    return player;
-  }
-
-  async getTypingRacePlayers(raceId: string): Promise<(TypingRacePlayer & { user: User; profile?: UserProfile })[]> {
-    const players = await db.select().from(typingRacePlayers).where(eq(typingRacePlayers.raceId, raceId));
-    return await Promise.all(players.map(async (p) => {
-      const [user] = await db.select().from(users).where(eq(users.id, p.userId));
-      const [profile] = await db.select().from(userProfiles).where(eq(userProfiles.userId, p.userId));
-      return { ...p, user, profile };
-    }));
-  }
-
-  async updateTypingRacePlayer(id: string, data: Partial<TypingRacePlayer>): Promise<TypingRacePlayer> {
-    const [player] = await db.update(typingRacePlayers).set(data).where(eq(typingRacePlayers.id, id)).returning();
-    return player;
-  }
-
-  // --- Signal/Noise ---
-  async createSignalNoiseGame(data: InsertSignalNoiseGame): Promise<SignalNoiseGame> {
-    const [game] = await db.insert(signalNoiseGames).values(data).returning();
-    return game;
-  }
-
-  async getSignalNoiseGame(id: string): Promise<SignalNoiseGame | undefined> {
-    const [game] = await db.select().from(signalNoiseGames).where(eq(signalNoiseGames.id, id));
-    return game;
-  }
-
-  async updateSignalNoiseGame(id: string, data: Partial<SignalNoiseGame>): Promise<SignalNoiseGame> {
-    const [game] = await db.update(signalNoiseGames).set(data).where(eq(signalNoiseGames.id, id)).returning();
-    return game;
-  }
-
-  async getUserSignalNoiseHistory(userId: string, limit: number = 20): Promise<SignalNoiseGame[]> {
-    return db.select().from(signalNoiseGames).where(eq(signalNoiseGames.userId, userId)).orderBy(desc(signalNoiseGames.createdAt)).limit(limit);
   }
 
   async getUserReputation(userId: string): Promise<UserReputation | undefined> {
@@ -2625,7 +2495,6 @@ export class DatabaseStorage implements IStorage {
     
     let totalMilestones = 0, completedMilestones = 0;
     let totalTasks = 0, doneTasks = 0, onTimeTasks = 0;
-    let checkInCount = 0;
     
     for (const pid of [...new Set(allProjectIds)]) {
       const milestones = await db.select().from(projectMilestones).where(eq(projectMilestones.projectId, pid));
@@ -2638,11 +2507,24 @@ export class DatabaseStorage implements IStorage {
       doneTasks += userTasks.filter(t => t.status === "done").length;
       // Judged against when the task was actually finished, not against now.
       onTimeTasks += userTasks.filter(t => isTaskOnTime(t)).length;
-      
-      const checkIns = await db.select().from(projectCheckIns).where(and(eq(projectCheckIns.projectId, pid), eq(projectCheckIns.userId, userId)));
-      checkInCount += checkIns.length;
     }
     
+    /*
+     * Posting progress about a project is what weekly check-ins used to count
+     * toward: the user's own project update and milestone posts, still visible.
+     * The system's posts are left out — they echo milestones already counted.
+     */
+    const [{ projectUpdates }] = await db
+      .select({ projectUpdates: sql<number>`count(*)::int` })
+      .from(feedPosts)
+      .where(and(
+        eq(feedPosts.authorId, userId),
+        eq(feedPosts.isSystemGenerated, false),
+        sql`${feedPosts.projectId} is not null`,
+        inArray(feedPosts.postType, ["project_update", "milestone"]),
+        isNull(feedPosts.hiddenAt),
+      ));
+
     const follows = await db.select().from(projectFollows).where(eq(projectFollows.userId, userId));
     
     let donationsReceived = 0;
@@ -2666,14 +2548,6 @@ export class DatabaseStorage implements IStorage {
       if (sorted.length > 0 && sorted[0].userId === userId) contestWins++;
     }
     
-    const gameScores = await db.select().from(gameLeaderboard).where(eq(gameLeaderboard.userId, userId));
-    const bestByType = new Map<string, number>();
-    for (const gs of gameScores) {
-      const current = bestByType.get(gs.gameType) || 0;
-      if (gs.score > current) bestByType.set(gs.gameType, gs.score);
-    }
-    const bestGameScores = Array.from(bestByType.entries()).map(([gameType, score]) => ({ gameType, score }));
-    
     /*
      * Execution credit is the greater of what's on the board now and what was
      * banked before tasks were deleted, so tidying a board never costs score.
@@ -2693,13 +2567,12 @@ export class DatabaseStorage implements IStorage {
       memberProjects: memberRecords,
       milestones: { total: totalMilestones, completed: completedMilestones },
       tasks: { total: effectiveTotal, done: effectiveDone, onTime: effectiveOnTime },
-      checkIns: checkInCount,
+      projectUpdates,
       followedProjects: follows.length,
       donationsReceived,
       applicationsSubmitted: applications.length,
       activityLogCount,
       contestWins,
-      bestGameScores,
     };
   }
   // Co-Founder Sprint Storage

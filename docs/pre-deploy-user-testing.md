@@ -32,7 +32,7 @@ inviting people; fine to deploy behind a kill switch meanwhile.
   a real `UPDATE` must fail with *append-only*.
 - [ ] **Blocker — Production database timezone is UTC** (`SHOW timezone;`).
   Locally it's `America/Chicago`, which is why times read about 5 hours off
-  here. If production isn't UTC, check-in weeks and "new since you looked"
+  here. If production isn't UTC, weekly-update weeks and "new since you looked"
   drift the same way.
 - [ ] **Blocker — New environment variables set** (not yet in
   [env-contract.md](env-contract.md)):
@@ -153,7 +153,7 @@ Guide: [editor-bridge.md](editor-bridge.md).
 ## 8. Watch people use it
 
 - [ ] **Should — Three people who've never seen it**, from sign-up to their
-  first post or check-in, with no help from you. Write down every hesitation.
+  first post, with no help from you. Write down every hesitation.
   The board already has "Watch three people use it" and "Fix the top three
   frictions" waiting for this.
 

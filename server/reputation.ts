@@ -41,7 +41,7 @@ export async function calculateUserReputation(userId: string, storage: IStorage)
     execution: {
       milestoneCompletion: stats.milestones.total > 0 ? Math.round((stats.milestones.completed / stats.milestones.total) * 100) : 0,
       deadlinesMet: stats.tasks.total > 0 ? Math.round((stats.tasks.onTime / Math.max(stats.tasks.done, 1)) * 100) : 0,
-      sprintConsistency: stats.checkIns,
+      sprintConsistency: stats.projectUpdates,
       projectCompletionRate: stats.ownedProjects.length > 0 ? Math.round((stats.ownedProjects.filter(p => p.status === "completed").length / stats.ownedProjects.length) * 100) : 0,
     },
     contribution: {
@@ -58,7 +58,6 @@ export async function calculateUserReputation(userId: string, storage: IStorage)
     },
     strategicThinking: {
       contestWins: stats.contestWins,
-      bestGameScores: stats.bestGameScores,
     },
   };
 
@@ -88,7 +87,7 @@ function calculateExecution(stats: Awaited<ReturnType<IStorage["getReputationSta
     score += onTimeRate * 25;
   }
 
-  const sprintScore = Math.min(stats.checkIns / 10, 1) * 20;
+  const sprintScore = Math.min(stats.projectUpdates / 10, 1) * 20;
   score += sprintScore;
 
   if (stats.ownedProjects.length > 0) {
@@ -143,11 +142,6 @@ async function calculateStrategicThinking(
   let fromModel = false;
 
   score += Math.min(stats.contestWins / 3, 1) * 25;
-
-  if (stats.bestGameScores.length > 0) {
-    const avgScore = stats.bestGameScores.reduce((sum, g) => sum + g.score, 0) / stats.bestGameScores.length;
-    score += Math.min(avgScore / 1000, 1) * 25;
-  }
 
   if (stats.ownedProjects.length > 0) {
     try {

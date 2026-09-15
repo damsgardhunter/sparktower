@@ -9,12 +9,10 @@
 import type { Express } from "express";
 import { storage } from "./storage";
 import { db } from "./db";
-import { users, userProfiles, projects, projectMembers, projectCheckIns, feedReactions, feedComments, feedCommentReactions } from "@shared/schema";
+import { users, userProfiles, projects, projectMembers, feedReactions, feedComments, feedCommentReactions } from "@shared/schema";
 import { eq, and, or, ilike, ne, desc } from "drizzle-orm";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
-import { recordLoopEvent } from "./loop-metrics";
 import { rateLimit } from "./moderation";
-import { LOOP_EVENTS } from "@shared/loop-events";
 import { EXPLORE_EVENTS } from "@shared/explore-events";
 import { recordExploreAction } from "./explore-actions";
 import { markStepsShared, shareableSteps } from "./path-return";
@@ -257,7 +255,8 @@ export function registerFeedRoutes(app: Express) {
       }
 
       const post = await storage.getFeedPost(req.params.id, userId);
-      if (!post) return res.status(404).json({ message: "Post not found" });
+      // A private project's post doesn't exist for anyone outside its team — not to read, react to or comment on.
+      if (!post || (post.project?.isPrivate && !post.viewerIsTeam)) return res.status(404).json({ message: "Post not found" });
 
       // Same reaction again means "take it back".
       const next = post.viewerReaction === reaction ? null : (reaction ?? null);
@@ -313,7 +312,7 @@ export function registerFeedRoutes(app: Express) {
   app.get("/api/feed/:id/comments", async (req: any, res) => {
     try {
       const post = await storage.getFeedPost(req.params.id, req.user?.id);
-      if (!post) return res.status(404).json({ message: "Post not found" });
+      if (!post || (post.project?.isPrivate && !post.viewerIsTeam)) return res.status(404).json({ message: "Post not found" });
       res.json(await commentsWithTeam(post, req.user?.id));
     } catch (error) {
       console.error("Comments error:", error);
@@ -333,7 +332,7 @@ export function registerFeedRoutes(app: Express) {
       }
 
       const post = await storage.getFeedPost(req.params.id, userId);
-      if (!post) return res.status(404).json({ message: "Post not found" });
+      if (!post || (post.project?.isPrivate && !post.viewerIsTeam)) return res.status(404).json({ message: "Post not found" });
 
       // A reply hangs off a comment on this same post that's still there to reply to.
       if (parentCommentId) {
@@ -495,12 +494,10 @@ export function registerFeedRoutes(app: Express) {
  */
 export function registerProjectDiscussionRoutes(app: Express) {
   /*
-   * What a comment can hang off. `check_in` is what closes step 5 of the
-   * weekly loop — "received feedback when >=1 comment" — and it's the only
-   * target an outsider is expected to use, since a check-in permalink is
-   * shared with people who aren't on the project.
+   * What a comment can hang off. Check-ins were retired: comments already
+   * filed against one stay in the table, but nothing new can target one.
    */
-  const TARGETS = ["milestone", "project", "roadmap_phase", "check_in"] as const;
+  const TARGETS = ["milestone", "project", "roadmap_phase"] as const;
 
   /** Can this viewer see the project at all? Private ones are members-only. */
   async function canView(projectId: string, viewerId?: string): Promise<boolean> {
@@ -572,16 +569,6 @@ export function registerProjectDiscussionRoutes(app: Express) {
         }
       }
 
-      // Same for a check-in — otherwise a comment could be filed against one
-      // project while pointing at another project's check-in.
-      if (targetType === "check_in") {
-        const [checkIn] = await db.select({ projectId: projectCheckIns.projectId })
-          .from(projectCheckIns).where(eq(projectCheckIns.id, targetId));
-        if (!checkIn || checkIn.projectId !== req.params.id) {
-          return res.status(404).json({ message: "Check-in not found on this project" });
-        }
-      }
-
       await storage.createProjectComment({
         projectId: req.params.id,
         authorId: userId,
@@ -591,15 +578,6 @@ export function registerProjectDiscussionRoutes(app: Express) {
         mentions: await resolveMentions(mentions),
         parentCommentId: parentCommentId || null,
       });
-
-      if (targetType === "check_in") {
-        // Step 5 of the weekly loop. Recorded here rather than inferred from
-        // the comments table so the 24-hour SLA has a real timestamp.
-        void recordLoopEvent({
-          name: LOOP_EVENTS.commentCreated,
-          userId, projectId: req.params.id, checkInId: targetId,
-        });
-      }
 
       res.json(await storage.getProjectComments(req.params.id, { targetType: targetType!, targetId }, userId));
     } catch (error) {

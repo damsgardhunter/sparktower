@@ -40,12 +40,6 @@ export default function More() {
     retry: false,
   });
 
-  const { data: queue } = useQuery({
-    queryKey: ["needs-feedback"],
-    queryFn: () => api<any[]>("/api/check-ins/queue/needs-feedback"),
-    enabled: on("checkIns"),
-  });
-
   const name = me?.profile?.displayName
     || [me?.user?.firstName, me?.user?.lastName].filter(Boolean).join(" ")
     || me?.user?.email || "You";
@@ -116,11 +110,7 @@ export default function More() {
         <Group title="Build">
           {on("sprints") && <MenuRow icon="people" title="Sprints" subtitle="Co-founder trial sprints and matchmaking" onPress={() => go("/(tabs)/sprints")} testID="more-sprints" />}
           {on("sprints") && <MenuRow icon="school" title="Practice sprint" subtitle="Rehearse the whole sprint with Nova" tint={colors.novaEmerald} onPress={() => go("/sprint/practice")} />}
-          {on("checkIns") && (
-            <MenuRow icon="file-tray-full" title="Needs feedback" subtitle="Builders who asked for a read on their week"
-              tint={colors.warning} badge={queue?.length ? (queue.length > 99 ? "99+" : queue.length) : null}
-              onPress={() => go("/feedback")} testID="more-feedback" />
-          )}
+          {on("contests") && <MenuRow icon="ribbon" title="Contests and Communities" subtitle="Compete, and join people building like you" tint="#E11D48" onPress={() => go("/contests")} testID="more-contests" />}
           <MenuRow icon="document-text" title="Build my profile" subtitle="Let Nova read your résumé" tint={colors.info} onPress={() => go("/profile-builder")} />
           <MenuRow icon="options" title="Profile details" subtitle="Skills, interests and co-founder preferences" tint={colors.info} onPress={() => go("/welcome")} />
         </Group>
@@ -128,8 +118,6 @@ export default function More() {
         <Group title="Community">
           {on("matches") && <MenuRow icon="people-circle" title="Matches" subtitle="Builders who fit what you're looking for" tint={colors.primary} onPress={() => go("/matches")} testID="more-matches" />}
           {on("leaderboard") && <MenuRow icon="trophy" title="Leaderboard" subtitle="Builder Index and top projects" tint="#CA8A04" onPress={() => go("/(tabs)/leaderboard")} testID="more-leaderboard" />}
-          {on("contests") && <MenuRow icon="ribbon" title="Contests" subtitle="Compete, build and earn badges" tint="#E11D48" onPress={() => go("/contests")} />}
-          {on("games") && <MenuRow icon="game-controller" title="Games" subtitle="Typing Arena and Signal vs. Noise" tint={colors.novaPurple} onPress={() => go("/games")} />}
           {on("messages") && <MenuRow icon="chatbubbles" title="Messages" subtitle="Your conversations" tint={colors.info} onPress={() => go("/(tabs)/messages")} />}
         </Group>
 
@@ -140,7 +128,6 @@ export default function More() {
               onPress={() => go("/admin/safety")} testID="more-safety" />
             <MenuRow icon="flag" title="Reports" subtitle="What people reported, and what was done" tint={colors.danger} onPress={() => go("/admin/reports")} testID="more-reports" />
             <MenuRow icon="cash" title="Backing review" subtitle="Campaigns waiting on a decision and payouts" tint={colors.warning} onPress={() => go("/admin/backing")} />
-            <MenuRow icon="pulse" title="Loop metrics" subtitle="Whether the weekly loops are closing" tint={colors.info} onPress={() => go("/admin/loop-metrics")} />
             <MenuRow icon="toggle" title="Surfaces" subtitle="Kill switches for each feature area" tint={colors.textSecondary} onPress={() => go("/admin/surfaces")} />
             {access?.owner && <MenuRow icon="analytics" title="Analytics" subtitle="Visits, signups and what people do" tint={colors.novaPurple} onPress={() => go("/admin/analytics")} />}
           </Group>

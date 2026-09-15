@@ -65,14 +65,14 @@ describe("pace", () => {
     expect(computePace({ ...base, completions: c, tier: "artifact", pipeline: true }).mode).toBe("pipeline");
   });
 
-  it("a check-in alone counts as activity", () => {
+  it("an update post alone counts as activity", () => {
     const r = computePace({ ...base, createdAt: daysAgo(40), completions: [{ at: daysAgo(20), estimateMinutes: 60 }], activityDates: [daysAgo(2)] });
     expect(r.state).toBe("active");
   });
 });
 
 describe("injected tasks", () => {
-  const artifacts = [{ label: "milestone:SHIP.M1.2", kind: "milestone" as const, text: "The loop" }, { label: "check-in:1", kind: "check-in" as const, text: "Shipped" }];
+  const artifacts = [{ label: "milestone:SHIP.M1.2", kind: "milestone" as const, text: "The loop" }, { label: "update:1", kind: "update" as const, text: "Shipped" }];
 
   it("admits only proposals that name a real artifact", () => {
     const { admitted, dropped } = admitInjections([
@@ -85,7 +85,7 @@ describe("injected tasks", () => {
   });
 
   it("caps a phase at three, counting what is already there", () => {
-    const five = Array.from({ length: 5 }, (_, i) => ({ title: `T${i}`, description: "", artifact: "check-in:1" }));
+    const five = Array.from({ length: 5 }, (_, i) => ({ title: `T${i}`, description: "", artifact: "update:1" }));
     expect(admitInjections(five, artifacts, 0).admitted).toHaveLength(INJECT_CAP_PER_PHASE);
     expect(admitInjections(five, artifacts, 2).admitted).toHaveLength(1);
     expect(admitInjections(five, artifacts, 3).admitted).toHaveLength(0);
@@ -93,7 +93,7 @@ describe("injected tasks", () => {
   });
 
   it("keeps estimates whole and within a sitting", () => {
-    const { admitted } = admitInjections([{ title: "Big", description: "", artifact: "check-in:1", estimateHours: 40 }, { title: "None", description: "", artifact: "check-in:1" }], artifacts, 0);
+    const { admitted } = admitInjections([{ title: "Big", description: "", artifact: "update:1", estimateHours: 40 }, { title: "None", description: "", artifact: "update:1" }], artifacts, 0);
     expect(admitted.map((a) => a.estimateHours)).toEqual([8, 1]);
   });
 });

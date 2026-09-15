@@ -11,7 +11,7 @@ export const INJECT_CAP_PER_PHASE = 3;
 export interface Artifact {
   /** The exact label Nova must name to justify a task. */
   label: string;
-  kind: "milestone" | "check-in" | "decision";
+  kind: "milestone" | "update" | "decision";
   text: string;
 }
 
@@ -72,7 +72,7 @@ const loopTokens = (s: string) => new Set(s.split(" ").map((w) => w.replace(/s$/
 /**
  * True when two normalised loop names share at least half of the shorter
  * one's meaningful words. A removed loop stays removed under a new name:
- * "post a weekly check-in and get feedback" and "ship weekly check-ins on a
+ * "post a weekly update and get feedback" and "ship weekly updates on a
  * project" are the same loop, and that is the test — not the exact title.
  */
 export function loopsAlike(a: string, b: string): boolean {

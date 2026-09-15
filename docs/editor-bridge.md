@@ -180,8 +180,8 @@ including the bridge's, reports whether each written loop *closes* in the code.
 
 **`rejected` is the load-bearing field.** Removing a loop isn't a delete, it's
 a judgement: the title goes on the project's rejected list, and
-`reconcileLoops` matches against it loosely, so "post a weekly check-in and get
-feedback" doesn't come back as "ship weekly check-ins on a project". Anything
+`reconcileLoops` matches against it loosely, so "post a weekly update and get
+feedback" doesn't come back as "ship weekly updates on a project". Anything
 proposing loops has to read that list first. The tool description says so in as
 many words, because a model that re-proposes what someone just rejected is the
 specific failure this list exists to prevent.

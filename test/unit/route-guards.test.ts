@@ -32,8 +32,6 @@ const label = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
  */
 const FLOOR_ONLY_ALLOWED: Record<string, string> = {
   "POST /api/auth/logout-all": "ends every session; signed-in only",
-  "PATCH /api/check-ins/:id": "author-only edit of an existing row",
-  "DELETE /api/check-ins/:id": "author-only delete",
   "PATCH /api/documents/:docId": "member-only edit of an existing row",
   "DELETE /api/documents/:docId": "member-only delete",
   "DELETE /api/feed/:id": "author-only delete",
@@ -54,7 +52,7 @@ const FLOOR_ONLY_ALLOWED: Record<string, string> = {
   "DELETE /api/mcp-tokens/:id": "owner-only revoke of one's own token; refusing it is the harm",
 };
 
-const SENSITIVE = /^\/api\/(auth|feed|projects\/:id\/comments|project-comments|uploads|objects\/upload|messages|conversations|chat|projects\/:id\/nova|projects\/:id\/tasks\/nova-assist|projects\/:id\/path|reports|check-ins|projects\/:id\/check-ins|documents|projects\/:id\/documents|generate-image|sprints|mock-interviews|storyboards|projects\/:id\/(live-chat|waitlist|interviews|health-findings)|me\/badges|projects\/:id\/backing|mcp|mcp-tokens)/;
+const SENSITIVE = /^\/api\/(auth|feed|projects\/:id\/comments|project-comments|uploads|objects\/upload|messages|conversations|chat|projects\/:id\/nova|projects\/:id\/tasks\/nova-assist|projects\/:id\/path|reports|documents|projects\/:id\/documents|generate-image|sprints|mock-interviews|storyboards|projects\/:id\/(live-chat|waitlist|interviews|health-findings)|me\/badges|projects\/:id\/backing|mcp|mcp-tokens)/;
 
 describe("rate limits on the abuse-prone surface", () => {
   it("every write under a sensitive family has its own limit or metering, or a written reason for the floor alone", () => {
@@ -71,7 +69,7 @@ describe("rate limits on the abuse-prone surface", () => {
   });
 
   it("auth attempts, uploads and beacons are limited without a user", () => {
-    for (const p of ["POST /api/auth/login", "POST /api/auth/register", "POST /api/auth/mobile/login", "POST /api/auth/mobile/register", "POST /api/auth/mobile/refresh", "POST /api/uploads/request-url", "POST /api/track", "POST /api/loop-events"]) {
+    for (const p of ["POST /api/auth/login", "POST /api/auth/register", "POST /api/auth/mobile/login", "POST /api/auth/mobile/register", "POST /api/auth/mobile/refresh", "POST /api/uploads/request-url", "POST /api/track"]) {
       const row = live.find((r) => label(r) === p);
       expect(row, p).toBeTruthy();
       expect(row!.rateLimited, `${p} has no limit`).toBe(true);
@@ -143,7 +141,6 @@ describe("authentication on the write surface", () => {
     "POST /api/logout": "must work with an expired session; refuses cross-site requests",
     "POST /api/stripe/webhook": "Stripe's signature is the credential; failed deliveries limited per address",
     "POST /api/track": "anonymous analytics beacons; limited per address",
-    "POST /api/loop-events": "anonymous loop beacons; limited per address",
     "PUT /internal-local-upload/:id": "development only; the issued, single-use id is the credential, size-capped",
   };
 
@@ -184,7 +181,7 @@ describe("kill switches", () => {
     expect(gated("/api/projects/:id/documents/plan")).toBe("documents");
     expect(gated("/api/mock-interviews/:id/finish")).toBe("investor");
     expect(gated("/api/sprints")).toBe("sprints");
-    expect(gated("/api/projects/:id/check-ins")).toBe("checkIns");
+    expect(gated("/api/contests/:id/join")).toBe("contests");
     expect(gated("/api/projects/:id/backing/checkout")).toBe("backing");
     // Sign-in is never behind a switch: nobody gets locked out by an incident elsewhere.
     expect(gated("/api/auth/login")).toBeNull();

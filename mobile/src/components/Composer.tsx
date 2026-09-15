@@ -112,12 +112,35 @@ export function PostComposer({
     }
   };
 
+  /*
+   * Nova draws an image for the post: the post is the subject, the project's
+   * logo and brief (when the post is on one) come second. It joins the post's
+   * photos, and only posting publishes it. 2 credits, charged only when an
+   * image comes back.
+   */
+  const [drawing, setDrawing] = useState(false);
+  const [drewNote, setDrewNote] = useState<string | null>(null);
+  const generateImage = async () => {
+    if (content.trim().length < 12) { setError("Write your post first — the image is drawn from it."); return; }
+    setError(null); setDrewNote(null); setDrawing(true);
+    try {
+      const r = await api<{ url: string; usedLogo: boolean }>("/api/feed/image", { method: "POST", body: { content, postType, projectId } });
+      setMediaUrls((prev) => [...prev, r.url].slice(0, MAX_POST_MEDIA));
+      setDrewNote(r.usedLogo ? "Image drawn from your post, with your project's logo in the mix." : "Image drawn from your post.");
+      void qc.invalidateQueries({ queryKey: ["subscription"] });
+    } catch (e) {
+      setError(errText(e, "Couldn't make an image right now. Nothing was charged."));
+    } finally {
+      setDrawing(false);
+    }
+  };
+
   const tagSomeone = () => {
     setContent((c) => (c && !c.endsWith(" ") && !c.endsWith("\n") ? `${c} @` : `${c}@`));
     inputRef.current?.focus();
   };
 
-  const canPost = !!content.trim() && !publish.isPending && !uploading;
+  const canPost = !!content.trim() && !publish.isPending && !uploading && !drawing;
   const postButton = (
     <Btn label="Post" small disabled={!canPost} loading={publish.isPending} onPress={() => publish.mutate()} style={{ minWidth: 64, marginRight: Platform.OS === "web" ? spacing.md : 0 }} />
   );
@@ -201,7 +224,7 @@ export function PostComposer({
           </View>
         )}
 
-        {mediaUrls.length > 0 && (
+        {(mediaUrls.length > 0 || drawing) && (
           <View style={s.mediaRow}>
             {mediaUrls.map((url) => (
               <View key={url} style={s.thumb}>
@@ -211,8 +234,15 @@ export function PostComposer({
                 </Pressable>
               </View>
             ))}
+            {drawing && (
+              <View testID="post-image-generating" style={[s.thumb, { alignItems: "center", justifyContent: "center", borderWidth: 1.5, borderColor: colors.novaEmerald, backgroundColor: colors.primarySoft, gap: 4 }]}>
+                <ActivityIndicator size="small" color={colors.primary} />
+                <Text style={{ fontSize: 11, color: colors.primary, fontFamily: fontFamily.medium }}>Drawing…</Text>
+              </View>
+            )}
           </View>
         )}
+        {drewNote && !drawing ? <Text style={{ fontSize: 12, color: colors.textTertiary, fontFamily: fontFamily.regular, paddingHorizontal: spacing.lg }}>{drewNote}</Text> : null}
 
         {/* A project's post: specific questions, and credit for feedback acted on */}
         {projectId && (
@@ -291,6 +321,12 @@ export function PostComposer({
       <View style={[s.toolbar, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
         <Pressable onPress={addPhoto} disabled={uploading || mediaUrls.length >= MAX_POST_MEDIA} style={s.tool} accessibilityLabel="Add a photo">
           {uploading ? <ActivityIndicator size="small" color={colors.primary} /> : <Ionicons name="image-outline" size={23} color={mediaUrls.length >= MAX_POST_MEDIA ? colors.textTertiary : colors.textSecondary} />}
+        </Pressable>
+        <Pressable onPress={generateImage} disabled={drawing || mediaUrls.length >= MAX_POST_MEDIA} testID="button-generate-image"
+          style={[s.tool, { flexDirection: "row", width: undefined, paddingHorizontal: 10, gap: 4, opacity: content.trim().length < 12 || mediaUrls.length >= MAX_POST_MEDIA ? 0.45 : 1 }]}
+          accessibilityLabel="Generate an image from your post (2 credits)">
+          {drawing ? <ActivityIndicator size="small" color={colors.primary} /> : <Ionicons name="sparkles" size={20} color={colors.primary} />}
+          <Text style={{ fontSize: 13, color: colors.primary, fontFamily: fontFamily.semibold }}>Image</Text>
         </Pressable>
         <Pressable onPress={tagSomeone} style={s.tool} accessibilityLabel="Tag someone">
           <Ionicons name="at" size={23} color={colors.textSecondary} />

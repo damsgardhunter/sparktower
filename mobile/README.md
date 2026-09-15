@@ -31,15 +31,14 @@ call is verified against the live server.
 | Practice sprint | `sprint/practice` | 3-idea picker |
 | Other profiles | `user/[id]` | Public profile + "looking for" |
 | Chat thread | `chat/[id]` | Polling, read receipts |
-| Games hub | `games` | Top score per game |
-| Typing Arena | `games/typing` | Lobby, live opponents, per-char feedback |
-| Signal vs. Noise | `games/signal-noise` | One card at a time, 10 scenarios |
+| Contests | `contests` | Empty for now — no contests running |
 | Plans | `pricing` | Usage + plan comparison |
 | More | `more` | Overflow menu |
 | Not found | `+not-found` | |
 
-**Contests** (`contests`) still exists and works via a deep link, but it's out
-of the More menu — same as the web sidebar, while the page is on hold.
+**Contests** (`contests`) sits in the More menu's Build group. It is
+intentionally empty for now. Check-ins, the Needs feedback queue and the games
+arena are retired.
 
 **Notes on the ports:**
 
@@ -49,9 +48,6 @@ of the More menu — same as the web sidebar, while the page is on hold.
   review what Nova extracted before it overwrites your profile.
 - **Storyboard frames** stream from an owner-checked route, so the `<Image>`
   requests carry the Bearer token as a header rather than being public URLs.
-- **Typing Arena** turns off autocorrect, autocapitalisation, and spellcheck.
-  On a phone they'd silently rewrite what you typed and wreck the accuracy
-  score.
 
 **Not verified:** nothing has been run on a device or simulator. It typechecks
 and bundles for both platforms, which catches import and type errors, but no
@@ -209,7 +205,6 @@ app/
   sprint/practice.tsx
   user/[id].tsx         other builders' profiles
   chat/[id].tsx
-  games/index.tsx  games/typing.tsx  games/signal-noise.tsx
   contests.tsx  pricing.tsx  more.tsx
 src/
   api/client.ts         fetch wrapper, tokens, refresh, uploadFile()

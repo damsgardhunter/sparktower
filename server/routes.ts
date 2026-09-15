@@ -6,7 +6,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage, isTaskOnTime } from "./storage";
 import { db } from "./db";
-import { users, projectMembers, projects, userProfiles, projectDataShapes, pathWork, projectDecisions, projectFiles, projectLinks, projectKanbanTasks } from "@shared/schema";
+import { users, projectMembers, projects, userProfiles, projectDataShapes, pathWork, projectDecisions, projectFiles, projectLinks, projectKanbanTasks, feedPosts } from "@shared/schema";
 import { setupAuth, isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { registerAuthRoutes } from "./replit_integrations/auth/routes";
 import { attachBearerUser, registerMobileAuthRoutes } from "./mobile-auth";
@@ -18,6 +18,7 @@ import { registerFeedbackLoopRoutes } from "./feedback-loop-routes";
 import { registerNotificationRoutes, notify, unnotify } from "./notifications";
 import { registerPathReturnRoutes, lastDoneStep, weeklyUpdateFor } from "./path-return";
 import { registerArtifactRoutes } from "./artifact-routes";
+import { registerPromotionRoutes } from "./promotion-routes";
 import { ensureCreatorBadges } from "./backer-badges";
 import { registerFeedRoutes, registerProjectDiscussionRoutes, publishSystemPost, SYSTEM_POST_COPY, SYSTEM_POST_TYPES } from "./feed-routes";
 import { registerProfileRoutes } from "./profile-routes";
@@ -29,7 +30,7 @@ import { registerInvestmentRoutes } from "./investment-routes";
 import { recordExploreAction } from "./explore-actions";
 import { EXPLORE_EVENTS } from "@shared/explore-events";
 import { registerProjectVisualRoutes } from "./project-visuals";
-import { registerCheckInRoutes } from "./check-in-routes";
+import { registerPostImageRoutes } from "./post-image-routes";
 import { registerSurfaceRoutes, requireSurface } from "./surfaces";
 import { registerModerationRoutes, blockSuspended, rateLimit, limitWrites } from "./moderation";
 import { attachVisitor, captureWrites, registerAnalyticsIngest } from "./analytics";
@@ -38,6 +39,7 @@ import { captureAttribution } from "./attribution";
 import { registerNovaAssistRoutes } from "./nova-assist-routes";
 import { registerMcpRoutes } from "./mcp-routes";
 import { registerDiscoverRoutes } from "./discover-routes";
+import { registerCommunityRoutes, seedCommunities } from "./community-routes";
 import { CONNECTION_NOTE_MAX } from "@shared/moderation";
 import {
   applyProjectOperations, buildOperableProjectState, renderLatestAudit,
@@ -46,7 +48,7 @@ import {
 import { insertUserProfileSchema, insertProjectSchema, insertProjectBase, insertDonationSchema, insertContestSchema, insertProjectLiveChatMessageSchema, insertWaitlistEntrySchema, insertInterviewSchema, insertExperimentSchema, insertPricingTierSchema, insertAnalyticsEventSchema, insertLegalDocSchema, insertDeployChecklistItemSchema, insertSupportTicketSchema, insertLaunchTaskSchema, type StoryboardScene } from "@shared/schema";
 import { z } from "zod";
 import OpenAI from "openai";
-import { eq, ne, and, sql, inArray } from "drizzle-orm";
+import { eq, ne, and, sql, inArray, desc, isNull } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { calculateUserReputation } from "./reputation";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
@@ -364,7 +366,11 @@ export async function registerRoutes(
   registerFeedbackLoopRoutes(app);
   registerNotificationRoutes(app);
   registerPathReturnRoutes(app);
+  registerCommunityRoutes(app);
+  // The starter communities exist before anyone can open the page. Non-fatal: the list is just shorter without them.
+  await seedCommunities().catch((err) => console.error("[communities] seed failed (non-fatal):", err));
   registerArtifactRoutes(app);
+  registerPromotionRoutes(app);
   registerProfileRoutes(app);
   registerDocumentRoutes(app);
   registerCodeAuditRoutes(app);
@@ -387,7 +393,7 @@ export async function registerRoutes(
   registerInvestmentRoutes(app);
   registerBackingRoutes(app);
   registerProjectVisualRoutes(app);
-  registerCheckInRoutes(app);
+  registerPostImageRoutes(app);
 
   // User Profile
   app.get("/api/profile", isAuthenticated, async (req: any, res) => {
@@ -2268,7 +2274,7 @@ READABILITY (this is a narrow chat panel):
 - Short paragraphs of one to three sentences. Under 150 words unless they asked for detail.
 - Bullets only for real lists, never nested. No headings, no horizontal rules, no tables.
 - One thing per message. If several changes are needed, do them and summarise in two lines; don't narrate each step.
-- Say what you did in plain words ("Rewrote three tasks so none mentions weekly check-ins"), not what you are "going to" do.
+- Say what you did in plain words ("Rewrote three tasks so none mentions the old onboarding flow"), not what you are "going to" do.
 
 GUIDED ONBOARDING FLOW (for new projects):
 1. Welcome them warmly, acknowledge their project "${project.title}"
@@ -2329,7 +2335,7 @@ Available actions:
    <nova_action>{"type": "complete_onboarding", "data": {}}</nova_action>
 
 7. remember: Save something the builder told you that should hold from now on — a correction to the brief, something being removed, what the loops or the wedge really are. It goes to the top of every future Nova prompt and outranks the brief and the board. Send the FULL updated note (it replaces the previous one); keep it under 1500 characters, one line per fact.
-   <nova_action>{"type": "remember", "data": {"notes": "Check-ins are being removed; they are not a loop or the wedge. The loops are the three paths: Ship an MVP, Systemize a business, Raise funding."}}</nova_action>
+   <nova_action>{"type": "remember", "data": {"notes": "The old onboarding quiz is being removed; it is not a loop or the wedge. The loops are the three paths: Ship an MVP, Systemize a business, Raise funding."}}</nova_action>
 
 8. write_loops: Write the builder's business loops for them, when they ask you to (or say yes to your offer). Each loop is 3–5 steps in their product's own words, ending with the step that sends the user back to the start, plus what closes it. Send one entry per loop you're writing; an unwritten loop of that kind is filled in, a kind the project doesn't have yet is added, and a loop that's already written is left alone (to change one of those, use edit_project on its task). Product loops can be several; the other four kinds are one each.
    <nova_action>{"type": "write_loops", "data": {"loops": [{"type": "product|growth|retention|revenue|referral", "title": "2–5 words", "steps": "1. … 2. … 3. …", "closes": "what sends the user back to step 1"}]}}</nova_action>
@@ -2347,8 +2353,8 @@ RULES:
 - NEVER write an id in your visible reply. Ids exist so you can put them inside
   a <nova_action> block; in prose they are meaningless noise to the user. Refer
   to a task, milestone or phase by its TITLE. Write "your board already has
-  *Walk the weekly check-in loop*" — never "4103bb02-1319-4fbf-a110-bc57d7a0eaee
-  (in-progress): Walk the weekly check-in loop".
+  *Walk the project update loop*" — never "4103bb02-1319-4fbf-a110-bc57d7a0eaee
+  (in-progress): Walk the project update loop".
 - ALWAYS wrap an action in <nova_action>...</nova_action>. Never put the action
   JSON in a code fence, and never print it as plain text — wrap it.
 - Never tell the user something was saved unless you emitted the action for it
@@ -2528,7 +2534,7 @@ RULES:
        * Unlike the document builder, the chat genuinely needs ids in its
        * context — that's how it addresses an existing task in an action block.
        * So the temptation can't be removed, only the result: replies were
-       * coming back as "4103bb02-1319-4fbf-…: Walk the weekly check-in loop".
+       * coming back as "4103bb02-1319-4fbf-…: Walk the project update loop".
        * Runs after action extraction so the action JSON, which legitimately
        * contains ids, is already out of the string.
        */
@@ -2816,7 +2822,7 @@ RULES:
   /**
    * Putting a project that predates paths onto its path. The tree is built
    * around the roadmap it already has, then Nova reads the tasks, audit and
-   * check-ins and marks what is already done, so the dashboard starts where
+   * update posts and marks what is already done, so the dashboard starts where
    * the project actually is rather than at week 1, step 1.
    */
   app.post("/api/projects/:id/path/adopt", isAuthenticated, async (req: any, res) => {
@@ -3312,7 +3318,7 @@ RULES:
       if (phase.injectRoom <= 0) return res.status(409).json({ message: "This phase already has three of Nova's additions. Finish those first.", code: "phase_at_cap" });
       const artifacts = await collectArtifacts(projectId);
       if (artifacts.length === 0) {
-        return res.status(400).json({ message: "Nothing to ground a task in yet. Finish a milestone with a written answer, or post a check-in, and Nova will have something to work from.", code: "no_artifacts" });
+        return res.status(400).json({ message: "Nothing to ground a task in yet. Finish a milestone with a written answer, or post an update about the project, and Nova will have something to work from.", code: "no_artifacts" });
       }
       const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova path additions");
       if (!ent) return;
@@ -5479,10 +5485,6 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     } catch (error) { res.status(500).json({ message: "Failed to delete decision" }); }
   });
 
-  // --- Check-ins ---
-  // Check-ins now live in server/check-in-routes.ts — the loop needs a public
-  // permalink, validation and week identity, which outgrew two inline handlers.
-
   // --- Project Files ---
   app.get("/api/projects/:id/files", isAuthenticated, async (req: any, res) => {
     try {
@@ -5559,7 +5561,12 @@ Respond ONLY with valid JSON (no markdown, no code fences):
 
       const project = await storage.getProject(req.params.id);
       const tasks = await storage.getProjectKanbanTasks(req.params.id);
-      const checkIns = await storage.getProjectCheckIns(req.params.id);
+      // The project's own update posts are its written record of progress.
+      const updates = await db.select({ postType: feedPosts.postType, content: feedPosts.content, createdAt: feedPosts.createdAt })
+        .from(feedPosts)
+        .where(and(eq(feedPosts.projectId, req.params.id), eq(feedPosts.isSystemGenerated, false), isNull(feedPosts.hiddenAt)))
+        .orderBy(desc(feedPosts.createdAt))
+        .limit(5);
       const activity = await storage.getProjectActivity(req.params.id, 30);
       const milestones = await storage.getProjectMilestones(req.params.id);
 
@@ -5578,7 +5585,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
           content: `You are Nova, SparkTower's AI project assistant. Generate a concise weekly progress summary for a project. Be specific and actionable. Format with markdown headers and bullet points.`
         }, {
           role: "user",
-          content: `${productNameNote(project?.title)}\nProject: "${project?.title}"\nDescription: ${project?.description}\n\nTask Status: ${JSON.stringify(taskSummary)}\nRecent Tasks: ${JSON.stringify(tasks.slice(0, 10).map(t => ({ title: t.title, status: t.status, priority: t.priority })))}\nMilestones: ${JSON.stringify(milestones.map(m => ({ title: m.title, status: m.status, targetDate: m.targetDate })))}\nRecent Check-ins: ${JSON.stringify(checkIns.slice(0, 5).map(ci => ({ goal: ci.goal, proof: ci.proof, blocker: ci.blocker, nextStep: ci.nextStep })))}\nRecent Activity: ${JSON.stringify(activity.slice(0, 10).map(a => a.action))}\n\nGenerate a progress summary covering: accomplishments, current focus, blockers, and next steps.`
+          content: `${productNameNote(project?.title)}\nProject: "${project?.title}"\nDescription: ${project?.description}\n\nTask Status: ${JSON.stringify(taskSummary)}\nRecent Tasks: ${JSON.stringify(tasks.slice(0, 10).map(t => ({ title: t.title, status: t.status, priority: t.priority })))}\nMilestones: ${JSON.stringify(milestones.map(m => ({ title: m.title, status: m.status, targetDate: m.targetDate })))}\nRecent Updates: ${JSON.stringify(updates.map(u => ({ type: u.postType, content: u.content.slice(0, 600) })))}\nRecent Activity: ${JSON.stringify(activity.slice(0, 10).map(a => a.action))}\n\nGenerate a progress summary covering: accomplishments, current focus, blockers, and next steps.`
         }],
         temperature: 0.7,
       });
@@ -6282,422 +6289,6 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       console.error("Sync subscription error:", error);
       res.status(500).json({ message: "Failed to sync subscription" });
     }
-  });
-
-  // ============================================
-  // GAMES
-  // ============================================
-
-  const TYPING_PROMPTS = [
-    { category: "Startup Pitch", text: "Our platform connects freelance developers with early-stage startups, enabling rapid prototyping through AI-assisted code generation and real-time collaboration tools." },
-    { category: "Startup Pitch", text: "We are building a marketplace for sustainable packaging solutions, helping e-commerce brands reduce their carbon footprint while maintaining premium unboxing experiences." },
-    { category: "Product Spec", text: "The dashboard shall display real-time analytics including user retention rates, conversion funnels, and revenue metrics with customizable date ranges and export functionality." },
-    { category: "Product Spec", text: "Authentication module must support OAuth 2.0 with Google, GitHub, and Apple providers, implementing secure token refresh and session management with configurable expiry." },
-    { category: "Code Snippet", text: "async function fetchUserData(userId: string): Promise<UserProfile> { const response = await fetch(`/api/users/${userId}`); if (!response.ok) throw new Error('Failed to fetch user'); return response.json(); }" },
-    { category: "Code Snippet", text: "const calculateMetrics = (data: DataPoint[]) => data.reduce((acc, point) => ({ total: acc.total + point.value, count: acc.count + 1, average: (acc.total + point.value) / (acc.count + 1) }), { total: 0, count: 0, average: 0 });" },
-    { category: "Problem Statement", text: "Small business owners spend an average of twelve hours per week on manual bookkeeping tasks that could be automated, leading to delayed financial insights and increased error rates." },
-    { category: "Problem Statement", text: "Remote teams struggle with asynchronous communication across time zones, resulting in delayed decisions, duplicated work, and decreased team cohesion over extended periods." },
-    { category: "Technical Explanation", text: "WebSocket connections maintain a persistent bidirectional communication channel between the client and server, enabling real-time data transfer without the overhead of repeated HTTP handshakes." },
-    { category: "Technical Explanation", text: "Database indexing creates a sorted reference structure that dramatically reduces query execution time by allowing the engine to locate rows without scanning entire tables sequentially." },
-    { category: "Mission Statement", text: "We empower creators and builders to transform their ideas into reality by providing intelligent tools, collaborative workspaces, and a supportive community of innovators." },
-    { category: "Mission Statement", text: "Our mission is to democratize access to artificial intelligence by building intuitive interfaces that allow non-technical users to leverage machine learning in their daily workflows." },
-    { category: "Feature Description", text: "The drag-and-drop kanban board allows project managers to organize tasks across customizable columns, assign team members, set priority levels, and track progress with automated status updates." },
-    { category: "Feature Description", text: "Real-time collaboration enables multiple users to simultaneously edit documents with cursor presence indicators, inline comments, version history, and conflict resolution mechanisms." },
-    { category: "Value Proposition", text: "Save forty percent of your development time with our AI-powered code review tool that catches bugs, suggests optimizations, and ensures consistent coding standards across your entire team." },
-    { category: "Value Proposition", text: "Our analytics platform transforms raw data into actionable insights within minutes, not days, giving product teams the confidence to make data-driven decisions at startup speed." },
-    { category: "User Story", text: "As a project manager, I want to receive automated weekly progress reports so that I can quickly identify blocked tasks and reallocate resources without scheduling additional status meetings." },
-    { category: "User Story", text: "As a new user, I want a guided onboarding experience that helps me set up my profile, connect with relevant peers, and discover projects matching my skills within five minutes." },
-    { category: "Architecture Decision", text: "We chose a microservices architecture to enable independent scaling of the payment processing and notification services, which experience vastly different load patterns during peak usage periods." },
-    { category: "Architecture Decision", text: "The team decided to implement event sourcing for the order management system, providing a complete audit trail and enabling temporal queries to reconstruct system state at any point in time." },
-  ];
-
-  const SIGNAL_NOISE_SCENARIOS = [
-    {
-      scenario: "MVP Launch Priorities",
-      difficulty: "beginner",
-      description: "You are launching an MVP next week. What matters most right now?",
-      cards: [
-        { id: "1", text: "User reports onboarding confusion after first step", isSignal: true },
-        { id: "2", text: "Add dark mode before launch", isSignal: false },
-        { id: "3", text: "Retention dropped 18% after signup step", isSignal: true },
-        { id: "4", text: "Redesign logo for extra polish", isSignal: false },
-        { id: "5", text: "Server latency increasing during peak hours", isSignal: true },
-        { id: "6", text: "Competitor launched a new color scheme", isSignal: false },
-        { id: "7", text: "Payment flow has a 12% drop-off rate", isSignal: true },
-        { id: "8", text: "Add social media share buttons", isSignal: false },
-        { id: "9", text: "Critical security vulnerability in auth", isSignal: true },
-        { id: "10", text: "Refactor CSS to use new naming convention", isSignal: false },
-        { id: "11", text: "Core API endpoint returns 500 for 3% of requests", isSignal: true },
-        { id: "12", text: "Update favicon to match brand guidelines", isSignal: false },
-      ],
-    },
-    {
-      scenario: "Fundraising Data Room",
-      difficulty: "intermediate",
-      description: "You are preparing for a Series A pitch. Which metrics matter to investors?",
-      cards: [
-        { id: "1", text: "Monthly recurring revenue grew 15% MoM for 6 months", isSignal: true },
-        { id: "2", text: "Office has great natural lighting", isSignal: false },
-        { id: "3", text: "Net promoter score is 72", isSignal: true },
-        { id: "4", text: "Team uses the latest MacBook Pros", isSignal: false },
-        { id: "5", text: "Customer acquisition cost decreased 30% this quarter", isSignal: true },
-        { id: "6", text: "Website was redesigned last month", isSignal: false },
-        { id: "7", text: "LTV:CAC ratio is 4.2x", isSignal: true },
-        { id: "8", text: "Company softball team won the league", isSignal: false },
-        { id: "9", text: "Churn rate is 2.1% monthly", isSignal: true },
-        { id: "10", text: "Brand new conference room furniture", isSignal: false },
-        { id: "11", text: "Pipeline shows $2M in qualified leads", isSignal: true },
-        { id: "12", text: "Team completed a hackathon last weekend", isSignal: false },
-        { id: "13", text: "Gross margin is 78%", isSignal: true },
-        { id: "14", text: "CEO keynoted at a local meetup", isSignal: false },
-      ],
-    },
-    {
-      scenario: "Feature Prioritization Sprint",
-      difficulty: "intermediate",
-      description: "Your backlog has 15 items. Ship the ones that move the needle.",
-      cards: [
-        { id: "1", text: "Fix checkout bug causing 8% cart abandonment", isSignal: true },
-        { id: "2", text: "Add animated loading spinners", isSignal: false },
-        { id: "3", text: "Implement search functionality users request daily", isSignal: true },
-        { id: "4", text: "Rewrite test suite to use newer framework", isSignal: false },
-        { id: "5", text: "Add email notifications for order status changes", isSignal: true },
-        { id: "6", text: "Migrate from tabs to spaces in codebase", isSignal: false },
-        { id: "7", text: "Build API integration that 40% of users asked for", isSignal: true },
-        { id: "8", text: "Add confetti animation on successful signup", isSignal: false },
-        { id: "9", text: "Optimize database queries causing 3s page loads", isSignal: true },
-        { id: "10", text: "Rename internal variables to follow new convention", isSignal: false },
-        { id: "11", text: "Add password reset flow (currently manual process)", isSignal: true },
-        { id: "12", text: "Add custom cursor on hover effects", isSignal: false },
-      ],
-    },
-    {
-      scenario: "Incident Response Triage",
-      difficulty: "advanced",
-      description: "Your app is experiencing issues. Identify the critical alerts from the noise.",
-      cards: [
-        { id: "1", text: "Database CPU at 95% and climbing", isSignal: true },
-        { id: "2", text: "A user requested dark mode via support ticket", isSignal: false },
-        { id: "3", text: "Error rate spiked from 0.1% to 5.2% in 10 minutes", isSignal: true },
-        { id: "4", text: "SSL certificate expires in 45 days", isSignal: false },
-        { id: "5", text: "Memory leak detected in worker process", isSignal: true },
-        { id: "6", text: "New blog post got shared on social media", isSignal: false },
-        { id: "7", text: "Payment webhook failures increasing exponentially", isSignal: true },
-        { id: "8", text: "One user reports font looks different on Firefox", isSignal: false },
-        { id: "9", text: "Queue depth reached 10,000 unprocessed jobs", isSignal: true },
-        { id: "10", text: "Competitor announced a new feature on Twitter", isSignal: false },
-        { id: "11", text: "API response times exceeded SLA thresholds", isSignal: true },
-        { id: "12", text: "Marketing email had a typo in footer", isSignal: false },
-        { id: "13", text: "Disk usage at 92% on primary data volume", isSignal: true },
-        { id: "14", text: "Junior developer pushed directly to main branch", isSignal: false },
-        { id: "15", text: "Load balancer health checks failing for 2 nodes", isSignal: true },
-      ],
-    },
-    {
-      scenario: "Hiring Pipeline Review",
-      difficulty: "beginner",
-      description: "You are reviewing candidates for a senior engineer role. Focus on what predicts success.",
-      cards: [
-        { id: "1", text: "Candidate has 8 years building production systems", isSignal: true },
-        { id: "2", text: "Candidate has a cool GitHub profile picture", isSignal: false },
-        { id: "3", text: "Candidate led a team of 5 through a major migration", isSignal: true },
-        { id: "4", text: "Candidate uses a standing desk", isSignal: false },
-        { id: "5", text: "Candidate has contributed to popular open source projects", isSignal: true },
-        { id: "6", text: "Candidate has 10K Twitter followers", isSignal: false },
-        { id: "7", text: "Candidate explains complex topics clearly in writing", isSignal: true },
-        { id: "8", text: "Candidate went to an Ivy League school", isSignal: false },
-        { id: "9", text: "Candidate built and shipped 3 side projects", isSignal: true },
-        { id: "10", text: "Candidate uses the latest JavaScript framework", isSignal: false },
-        { id: "11", text: "References describe candidate as collaborative and reliable", isSignal: true },
-        { id: "12", text: "Candidate has a personal website with animations", isSignal: false },
-      ],
-    },
-    {
-      scenario: "Product Analytics Deep Dive",
-      difficulty: "advanced",
-      description: "Your product metrics dashboard has dozens of charts. Which ones inform your next move?",
-      cards: [
-        { id: "1", text: "Day-7 retention is 23% and declining week over week", isSignal: true },
-        { id: "2", text: "Page views increased 5% (from bot traffic)", isSignal: false },
-        { id: "3", text: "Feature adoption rate for new editor is 45% in first week", isSignal: true },
-        { id: "4", text: "Average session duration is 4.2 minutes (unchanged)", isSignal: false },
-        { id: "5", text: "Power users generate 80% of all content created", isSignal: true },
-        { id: "6", text: "Bounce rate on marketing page is 62% (industry average)", isSignal: false },
-        { id: "7", text: "Activation rate dropped from 35% to 22% after redesign", isSignal: true },
-        { id: "8", text: "Total registered users passed 50,000 milestone", isSignal: false },
-        { id: "9", text: "Users who complete onboarding have 3x higher retention", isSignal: true },
-        { id: "10", text: "Email open rate is 28% (up from 27%)", isSignal: false },
-        { id: "11", text: "Support ticket volume doubled after latest release", isSignal: true },
-        { id: "12", text: "Social media mentions increased by 12 this week", isSignal: false },
-        { id: "13", text: "Revenue per user increased 18% among enterprise tier", isSignal: true },
-      ],
-    },
-    {
-      scenario: "Customer Feedback Triage",
-      difficulty: "intermediate",
-      description: "You have 100+ pieces of customer feedback. Find the patterns that matter.",
-      cards: [
-        { id: "1", text: "15 users report the same export bug this week", isSignal: true },
-        { id: "2", text: "One user wants the app in Comic Sans", isSignal: false },
-        { id: "3", text: "Enterprise customer threatens to churn over missing SSO", isSignal: true },
-        { id: "4", text: "User suggests adding a virtual pet to the dashboard", isSignal: false },
-        { id: "5", text: "NPS dropped 12 points in the latest survey", isSignal: true },
-        { id: "6", text: "Someone left a one-word review saying 'nice'", isSignal: false },
-        { id: "7", text: "3 out of 5 churned users cite slow performance", isSignal: true },
-        { id: "8", text: "A user wants custom emoji reactions", isSignal: false },
-        { id: "9", text: "Support tickets about billing increased 200%", isSignal: true },
-        { id: "10", text: "One user submitted feedback entirely in haiku", isSignal: false },
-        { id: "11", text: "Users spend 3x more time on feature they hate than feature they like", isSignal: true },
-        { id: "12", text: "A user asked if the app works on a smart fridge", isSignal: false },
-      ],
-    },
-    {
-      scenario: "Security Audit Findings",
-      difficulty: "advanced",
-      description: "A security audit returned 20 findings. Prioritize what to fix immediately.",
-      cards: [
-        { id: "1", text: "SQL injection vulnerability in search endpoint", isSignal: true },
-        { id: "2", text: "Login page has a minor CSS alignment issue", isSignal: false },
-        { id: "3", text: "API keys stored in plaintext in environment variables", isSignal: true },
-        { id: "4", text: "Error messages use slightly different font weights", isSignal: false },
-        { id: "5", text: "Cross-site scripting possible in user-generated content", isSignal: true },
-        { id: "6", text: "Favicon not optimized for all browser sizes", isSignal: false },
-        { id: "7", text: "No rate limiting on authentication endpoints", isSignal: true },
-        { id: "8", text: "Admin panel uses a different shade of blue", isSignal: false },
-        { id: "9", text: "User sessions do not expire after password change", isSignal: true },
-        { id: "10", text: "About page has an outdated team photo", isSignal: false },
-        { id: "11", text: "File upload allows arbitrary file types without validation", isSignal: true },
-        { id: "12", text: "Footer copyright year says 2024", isSignal: false },
-        { id: "13", text: "CORS policy allows requests from any origin", isSignal: true },
-      ],
-    },
-    {
-      scenario: "Startup Pivot Decision",
-      difficulty: "advanced",
-      description: "Your B2C product is struggling. Which signals suggest a pivot to B2B?",
-      cards: [
-        { id: "1", text: "Enterprise customers have 10x lower churn than consumers", isSignal: true },
-        { id: "2", text: "Your office plant is thriving", isSignal: false },
-        { id: "3", text: "Average deal size with businesses is $5K/month vs $9/month B2C", isSignal: true },
-        { id: "4", text: "A competitor raised funding last month", isSignal: false },
-        { id: "5", text: "3 companies asked for custom integrations unprompted", isSignal: true },
-        { id: "6", text: "Your social media following grew by 200", isSignal: false },
-        { id: "7", text: "B2C acquisition cost exceeds 12-month LTV", isSignal: true },
-        { id: "8", text: "New coffee machine in the office", isSignal: false },
-        { id: "9", text: "Inbound leads from companies requesting demos doubled", isSignal: true },
-        { id: "10", text: "Weekend hackathon produced cool demo features", isSignal: false },
-        { id: "11", text: "Top 5% of users (all businesses) drive 70% of revenue", isSignal: true },
-        { id: "12", text: "Team wore matching t-shirts at a conference", isSignal: false },
-      ],
-    },
-    {
-      scenario: "Team Performance Review",
-      difficulty: "intermediate",
-      description: "You are evaluating team health. Which metrics indicate real performance issues?",
-      cards: [
-        { id: "1", text: "Sprint velocity declined 30% over 3 sprints", isSignal: true },
-        { id: "2", text: "Team Slack channel has fewer emoji reactions this week", isSignal: false },
-        { id: "3", text: "Code review turnaround time increased from 4h to 2 days", isSignal: true },
-        { id: "4", text: "Someone brought donuts less often", isSignal: false },
-        { id: "5", text: "Bug escape rate tripled after the last two deployments", isSignal: true },
-        { id: "6", text: "Standup meetings run 2 minutes longer on average", isSignal: false },
-        { id: "7", text: "Two senior engineers updated their LinkedIn profiles this week", isSignal: true },
-        { id: "8", text: "The team Spotify playlist has not been updated", isSignal: false },
-        { id: "9", text: "On-call incidents woke up the same person 5 times this month", isSignal: true },
-        { id: "10", text: "Team lunch preferences changed from Thai to Mexican", isSignal: false },
-        { id: "11", text: "Technical debt items in backlog grew from 15 to 45", isSignal: true },
-        { id: "12", text: "Team meme channel has been quiet", isSignal: false },
-      ],
-    },
-  ];
-
-  const ROLE_STATS: Record<string, { health: number; attack: number; defense: number; range: number; visibility: number }> = {
-    commander: { health: 80, attack: 5, defense: 15, range: 1, visibility: 8 },
-    warrior: { health: 120, attack: 25, defense: 10, range: 1, visibility: 2 },
-    strategist: { health: 70, attack: 15, defense: 5, range: 3, visibility: 4 },
-    scout: { health: 60, attack: 10, defense: 5, range: 1, visibility: 6 },
-    engineer: { health: 90, attack: 8, defense: 20, range: 1, visibility: 3 },
-  };
-
-  function getStartPositions(teamId: number, size: number, playerIndex: number) {
-    if (teamId === 1) return { x: playerIndex % 3, y: Math.floor(playerIndex / 3) };
-    return { x: size - 1 - (playerIndex % 3), y: size - 1 - Math.floor(playerIndex / 3) };
-  }
-
-  // --- Game Leaderboard ---
-  app.get("/api/games/leaderboard/:gameType", async (req, res) => {
-    try {
-      const leaderboard = await storage.getGameLeaderboard(req.params.gameType, 50);
-      res.json(leaderboard);
-    } catch (error) { res.status(500).json({ message: "Failed to get leaderboard" }); }
-  });
-
-
-
-
-
-
-
-  // --- Typing Arena ---
-  app.post("/api/games/typing/create", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = (req.user as any).id;
-      const prompt = TYPING_PROMPTS[Math.floor(Math.random() * TYPING_PROMPTS.length)];
-      const race = await storage.createTypingRace({ promptText: prompt.text, promptCategory: prompt.category, maxPlayers: 6 });
-      await storage.createTypingRacePlayer({ raceId: race.id, userId, status: "waiting" });
-      const players = await storage.getTypingRacePlayers(race.id);
-      res.json({ ...race, players });
-    } catch (error) { console.error("Create typing race error:", error); res.status(500).json({ message: "Failed to create race" }); }
-  });
-
-  app.get("/api/games/typing/lobby", async (_req, res) => {
-    try {
-      const races = await storage.getWaitingTypingRaces();
-      const enriched = await Promise.all(races.map(async (r) => {
-        const players = await storage.getTypingRacePlayers(r.id);
-        return { ...r, players, playerCount: players.length };
-      }));
-      res.json(enriched);
-    } catch (error) { res.status(500).json({ message: "Failed to get lobby" }); }
-  });
-
-  app.post("/api/games/typing/:id/join", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = (req.user as any).id;
-      const race = await storage.getTypingRace(req.params.id);
-      if (!race || race.status !== "waiting") return res.status(400).json({ message: "Race not available" });
-      const players = await storage.getTypingRacePlayers(race.id);
-      if (players.find(p => p.userId === userId)) return res.status(400).json({ message: "Already in race" });
-      if (players.length >= race.maxPlayers) return res.status(400).json({ message: "Race is full" });
-      await storage.createTypingRacePlayer({ raceId: race.id, userId, status: "waiting" });
-      const updatedPlayers = await storage.getTypingRacePlayers(race.id);
-      res.json({ ...race, players: updatedPlayers });
-    } catch (error) { res.status(500).json({ message: "Failed to join race" }); }
-  });
-
-  app.post("/api/games/typing/:id/start", isAuthenticated, async (req: any, res) => {
-    try {
-      const race = await storage.getTypingRace(req.params.id);
-      if (!race || race.status !== "waiting") return res.status(400).json({ message: "Cannot start" });
-      const updated = await storage.updateTypingRace(race.id, { status: "active", startedAt: new Date() });
-      const players = await storage.getTypingRacePlayers(race.id);
-      for (const p of players) { await storage.updateTypingRacePlayer(p.id, { status: "racing" }); }
-      const updatedPlayers = await storage.getTypingRacePlayers(race.id);
-      res.json({ ...updated, players: updatedPlayers });
-    } catch (error) { res.status(500).json({ message: "Failed to start race" }); }
-  });
-
-  app.get("/api/games/typing/:id", async (req, res) => {
-    try {
-      const race = await storage.getTypingRace(req.params.id);
-      if (!race) return res.status(404).json({ message: "Race not found" });
-      const players = await storage.getTypingRacePlayers(race.id);
-      res.json({ ...race, players });
-    } catch (error) { res.status(500).json({ message: "Failed to get race" }); }
-  });
-
-  app.post("/api/games/typing/:id/progress", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = (req.user as any).id;
-      const race = await storage.getTypingRace(req.params.id);
-      if (!race || race.status !== "active") return res.status(400).json({ message: "Race not active" });
-      const players = await storage.getTypingRacePlayers(race.id);
-      const player = players.find(p => p.userId === userId);
-      if (!player || player.status !== "racing") return res.status(400).json({ message: "Not racing" });
-      await storage.updateTypingRacePlayer(player.id, {
-        wpm: req.body.wpm || 0, accuracy: req.body.accuracy || 0,
-        progress: req.body.progress || 0, charsTyped: req.body.charsTyped || 0,
-        errors: req.body.errors || 0,
-      });
-      res.json({ success: true });
-    } catch (error) { res.status(500).json({ message: "Failed to update progress" }); }
-  });
-
-  app.post("/api/games/typing/:id/finish", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = (req.user as any).id;
-      const race = await storage.getTypingRace(req.params.id);
-      if (!race || race.status !== "active") return res.status(400).json({ message: "Race not active" });
-      const players = await storage.getTypingRacePlayers(race.id);
-      const player = players.find(p => p.userId === userId);
-      if (!player || player.status !== "racing") return res.status(400).json({ message: "Not racing" });
-      const wpm = req.body.wpm || 0;
-      const accuracy = req.body.accuracy || 0;
-      const finishTimeMs = req.body.finishTimeMs || 0;
-      const score = Math.round(wpm * (accuracy / 100) * 10);
-      await storage.updateTypingRacePlayer(player.id, { wpm, accuracy, progress: 100, charsTyped: req.body.charsTyped || race.promptText.length, finishTimeMs, status: "finished", score });
-      await storage.createLeaderboardEntry({ gameType: "typing", userId, score, metadata: { wpm, accuracy, finishTimeMs, category: race.promptCategory } });
-      const existingBadges = await storage.getUserBadges(userId);
-      if (!existingBadges.find((b: any) => b.badgeId === "badge-typing-first")) { await storage.awardBadge(userId, "badge-typing-first"); }
-      if (wpm >= 80 && !existingBadges.find((b: any) => b.badgeId === "badge-typing-speed")) { await storage.awardBadge(userId, "badge-typing-speed"); }
-      if (accuracy === 100 && !existingBadges.find((b: any) => b.badgeId === "badge-typing-perfect")) { await storage.awardBadge(userId, "badge-typing-perfect"); }
-      const allPlayers = await storage.getTypingRacePlayers(race.id);
-      const allFinished = allPlayers.every(p => p.status === "finished" || p.status === "dnf");
-      if (allFinished) { await storage.updateTypingRace(race.id, { status: "finished" }); }
-      res.json({ score, wpm, accuracy, finishTimeMs });
-    } catch (error) { console.error("Finish typing race error:", error); res.status(500).json({ message: "Failed to finish race" }); }
-  });
-
-  // --- Signal vs. Noise ---
-  app.get("/api/games/signal-noise/scenarios", async (_req, res) => {
-    res.json(SIGNAL_NOISE_SCENARIOS.map(s => ({ scenario: s.scenario, difficulty: s.difficulty, description: s.description, cardCount: s.cards.length })));
-  });
-
-  app.post("/api/games/signal-noise/start", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = (req.user as any).id;
-      const scenarioName = req.body.scenario;
-      const scenario = SIGNAL_NOISE_SCENARIOS.find(s => s.scenario === scenarioName) || SIGNAL_NOISE_SCENARIOS[Math.floor(Math.random() * SIGNAL_NOISE_SCENARIOS.length)];
-      const shuffledCards = [...scenario.cards].sort(() => Math.random() - 0.5);
-      const game = await storage.createSignalNoiseGame({ userId, scenario: scenario.scenario, difficulty: scenario.difficulty as "beginner" | "intermediate" | "advanced", cards: shuffledCards, decisions: [] });
-      res.json(game);
-    } catch (error) { console.error("Start signal noise error:", error); res.status(500).json({ message: "Failed to start game" }); }
-  });
-
-  app.post("/api/games/signal-noise/:id/decide", isAuthenticated, async (req: any, res) => {
-    try {
-      const game = await storage.getSignalNoiseGame(req.params.id);
-      if (!game || game.completedAt) return res.status(400).json({ message: "Game not active" });
-      const { cardId, choice, timeMs } = req.body;
-      const cards = game.cards as any[];
-      const card = cards.find((c: any) => c.id === cardId);
-      if (!card) return res.status(400).json({ message: "Card not found" });
-      const correct = (choice === "keep" && card.isSignal) || (choice === "discard" && !card.isSignal);
-      const decisions = [...(game.decisions as any[]), { cardId, choice, correct, timeMs }];
-      const updated = await storage.updateSignalNoiseGame(game.id, { decisions });
-      res.json({ correct, decisions });
-    } catch (error) { res.status(500).json({ message: "Failed to record decision" }); }
-  });
-
-  app.post("/api/games/signal-noise/:id/complete", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = (req.user as any).id;
-      const game = await storage.getSignalNoiseGame(req.params.id);
-      if (!game || game.completedAt) return res.status(400).json({ message: "Game not active" });
-      const decisions = game.decisions as any[];
-      const correctCount = decisions.filter((d: any) => d.correct).length;
-      const accuracy = decisions.length > 0 ? Math.round((correctCount / decisions.length) * 100) : 0;
-      const avgReactionMs = decisions.length > 0 ? Math.round(decisions.reduce((s: number, d: any) => s + (d.timeMs || 0), 0) / decisions.length) : 0;
-      let streak = 0; let maxStreak = 0;
-      for (const d of decisions) { if (d.correct) { streak++; maxStreak = Math.max(maxStreak, streak); } else { streak = 0; } }
-      const difficultyMultiplier = game.difficulty === "advanced" ? 1.5 : game.difficulty === "intermediate" ? 1.2 : 1;
-      const score = Math.round(correctCount * 10 * difficultyMultiplier + maxStreak * 5 + Math.max(0, (5000 - avgReactionMs) / 50));
-      const updated = await storage.updateSignalNoiseGame(game.id, { score, streak: maxStreak, accuracy, avgReactionMs, completedAt: new Date(), decisions });
-      await storage.createLeaderboardEntry({ gameType: "signal", userId, score, metadata: { scenario: game.scenario, difficulty: game.difficulty, accuracy, streak: maxStreak, avgReactionMs } });
-      const existingBadges = await storage.getUserBadges(userId);
-      if (!existingBadges.find((b: any) => b.badgeId === "badge-signal-first")) { await storage.awardBadge(userId, "badge-signal-first"); }
-      if (maxStreak >= 10 && !existingBadges.find((b: any) => b.badgeId === "badge-signal-streak")) { await storage.awardBadge(userId, "badge-signal-streak"); }
-      if (accuracy >= 90 && game.difficulty === "advanced" && !existingBadges.find((b: any) => b.badgeId === "badge-signal-ace")) { await storage.awardBadge(userId, "badge-signal-ace"); }
-      res.json(updated);
-    } catch (error) { console.error("Complete signal noise error:", error); res.status(500).json({ message: "Failed to complete game" }); }
-  });
-
-  app.get("/api/games/signal-noise/:id", async (req, res) => {
-    try {
-      const game = await storage.getSignalNoiseGame(req.params.id);
-      if (!game) return res.status(404).json({ message: "Game not found" });
-      res.json(game);
-    } catch (error) { res.status(500).json({ message: "Failed to get game" }); }
   });
 
   return httpServer;

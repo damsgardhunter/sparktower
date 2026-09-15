@@ -227,7 +227,7 @@ export function stripIdFragments(content: string, knownIds: string[]): string {
   return content
     /*
      * The shape chat actually produced:
-     *   "• 4103bb02-1319-4fbf-… (in-progress): *Walk the check-in loop*"
+     *   "• 4103bb02-1319-4fbf-… (in-progress): *Walk the project update loop*"
      * Removing just the id would leave "•  (in-progress): *…*" behind, so the
      * whole id-plus-separator prefix goes and the title carries the line.
      */

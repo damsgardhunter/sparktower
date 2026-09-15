@@ -505,7 +505,7 @@ const SCORES: { key: string; label: string; icon: IconName; color: string; hint:
   { key: "executionScore", label: "Execution", icon: "flash", color: "#F59E0B", hint: "Based on milestones completed, deadlines met, sprint consistency, and project completion rate" },
   { key: "contributionScore", label: "Contribution", icon: "people", color: "#3B82F6", hint: "Based on projects involved in, tasks completed, projects followed, and solo build completions" },
   { key: "marketSignalScore", label: "Market Signal", icon: "trending-up", color: "#10B981", hint: "Based on donations received, project applications, build log engagement, and external traction" },
-  { key: "strategicThinkingScore", label: "Strategic Thinking", icon: "bulb", color: "#A855F7", hint: "Based on contest wins, game scores, and AI evaluation of project strategies" },
+  { key: "strategicThinkingScore", label: "Strategic Thinking", icon: "bulb", color: "#A855F7", hint: "Based on contest wins and AI evaluation of project strategies" },
 ];
 
 function tierOf(score: number) {

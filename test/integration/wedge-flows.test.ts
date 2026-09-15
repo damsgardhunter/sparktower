@@ -8,7 +8,7 @@
  * accounts and remembering which one you're signed into.
  *
  * The membership rules the tests below pin down:
- *   - a check-in may only be posted by the project's owner or a member
+ *   - an update may only be posted for a project by its owner or a member
  *   - a private project is invisible to everyone else, and 404s rather than
  *     403s so its existence isn't confirmed
  *   - a comment must belong to the project it claims to be on
@@ -45,12 +45,16 @@ const aProject = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-const aCheckIn = (overrides: Record<string, unknown> = {}) => ({
-  goal: "Get the meal planner generating a full week",
-  proof: "Shipped the generator and wired it to the fridge inventory screen",
-  nextStep: "Add a shopping list export",
+const anUpdate = (projectId: string, overrides: Record<string, unknown> = {}) => ({
+  postType: "project_update",
+  projectId,
+  content: "Shipped the meal planner's week generator and wired it to the fridge inventory screen.",
   ...overrides,
 });
+
+/** The posts people wrote on a project — not the ones the system publishes for it (like its launch). */
+const projectPostIds = async (agent: any, projectId: string) =>
+  ((await agent.get(`/api/feed?projectId=${projectId}`)).body.posts as any[]).filter((p) => !p.isSystemGenerated).map((p) => p.id);
 
 describe("create a project", () => {
   it("succeeds for a signed-in user and comes back on their list", async () => {
@@ -143,42 +147,32 @@ describe("create a project", () => {
   });
 });
 
-describe("post a check-in", () => {
+describe("post an update", () => {
   it("attaches to the project and is listed on it", async () => {
     const app = await getTestApp();
     const { agent } = await signedIn(app, "Owner");
 
     const project = await agent.post("/api/projects").send(aProject());
-    const checkIn = await agent
-      .post(`/api/projects/${project.body.id}/check-ins`)
-      .send(aCheckIn({ visibility: "public" }));
+    const post = await agent.post("/api/feed").send(anUpdate(project.body.id));
 
-    expect(checkIn.status).toBe(200);
-    expect(checkIn.body.projectId).toBe(project.body.id);
-    expect(checkIn.body.goal).toBe("Get the meal planner generating a full week");
-
-    const listed = await agent.get(`/api/projects/${project.body.id}/check-ins`);
-    const ids = (Array.isArray(listed.body) ? listed.body : listed.body.checkIns ?? [])
-      .map((c: any) => c.id);
-    expect(ids).toContain(checkIn.body.id);
+    expect(post.status).toBe(200);
+    expect(post.body.projectId).toBe(project.body.id);
+    expect(post.body.content).toContain("week generator");
+    expect(await projectPostIds(agent, project.body.id)).toContain(post.body.id);
   });
 
-  it("rejects a check-in from someone who is not on the project", async () => {
+  it("rejects an update from someone who is not on the project", async () => {
     const app = await getTestApp();
     const owner = await signedIn(app, "Owner");
     const stranger = await signedIn(app, "Stranger");
 
     const project = await owner.agent.post("/api/projects").send(aProject());
 
-    const attempt = await stranger.agent
-      .post(`/api/projects/${project.body.id}/check-ins`)
-      .send(aCheckIn());
+    const attempt = await stranger.agent.post("/api/feed").send(anUpdate(project.body.id));
     expect(attempt.status).toBe(403);
 
     // And nothing was written despite the refusal.
-    const listed = await owner.agent.get(`/api/projects/${project.body.id}/check-ins`);
-    const rows = Array.isArray(listed.body) ? listed.body : listed.body.checkIns ?? [];
-    expect(rows).toHaveLength(0);
+    expect(await projectPostIds(owner.agent, project.body.id)).toHaveLength(0);
   });
 
   it("validates the fields rather than storing a half-written update", async () => {
@@ -186,78 +180,81 @@ describe("post a check-in", () => {
     const { agent } = await signedIn(app, "Owner");
     const project = await agent.post("/api/projects").send(aProject());
 
-    const tooThin = await agent
-      .post(`/api/projects/${project.body.id}/check-ins`)
-      .send({ goal: "hi", proof: "", nextStep: "" });
-    expect(tooThin.status).toBe(422);
-    expect(tooThin.body.errors).toBeTruthy();
+    expect((await agent.post("/api/feed").send(anUpdate(project.body.id, { content: "   " }))).status).toBe(400);
+    expect((await agent.post("/api/feed").send(anUpdate(project.body.id, { postType: "check_in" }))).status).toBe(400);
+    expect(await projectPostIds(agent, project.body.id)).toHaveLength(0);
   });
 });
 
-describe("comment on a check-in", () => {
+describe("comment on an update", () => {
   it("is created and can be read back", async () => {
     const app = await getTestApp();
     const owner = await signedIn(app, "Owner");
     const reader = await signedIn(app, "Reader");
 
     const project = await owner.agent.post("/api/projects").send(aProject());
-    const checkIn = await owner.agent
-      .post(`/api/projects/${project.body.id}/check-ins`)
-      .send(aCheckIn({ visibility: "public", needsFeedback: true }));
+    const post = await owner.agent.post("/api/feed").send(anUpdate(project.body.id, { asks: ["How would you keep the inventory current?"] }));
 
     // Someone who isn't on the project can still comment — a public project is
     // open to feedback, which is the entire point of asking for it.
-    const comment = await reader.agent.post(`/api/projects/${project.body.id}/comments`).send({
-      targetType: "check_in",
-      targetId: checkIn.body.id,
+    const comment = await reader.agent.post(`/api/feed/${post.body.id}/comments`).send({
       content: "The fridge inventory idea is the interesting half — how do you keep it current?",
     });
     expect(comment.status).toBe(200);
 
-    const thread = await request(app)
-      .get(`/api/projects/${project.body.id}/comments`)
-      .query({ targetType: "check_in", targetId: checkIn.body.id });
+    const thread = await request(app).get(`/api/feed/${post.body.id}/comments`);
     expect(thread.status).toBe(200);
 
-    const contents = (Array.isArray(thread.body) ? thread.body : []).map((c: any) => c.content);
+    const contents = (Array.isArray(thread.body) ? thread.body : thread.body.comments ?? []).map((c: any) => c.content);
     expect(contents.some((c: string) => c.includes("fridge inventory idea"))).toBe(true);
   });
 
-  it("refuses a comment aimed at another project's check-in", async () => {
+  it("refuses a comment aimed at another project's milestone", async () => {
     const app = await getTestApp();
     const owner = await signedIn(app, "Owner");
 
     const projectA = await owner.agent.post("/api/projects").send(aProject({ title: "Project A" }));
     const projectB = await owner.agent.post("/api/projects").send(aProject({ title: "Project B" }));
 
-    const checkInOnA = await owner.agent
-      .post(`/api/projects/${projectA.body.id}/check-ins`)
-      .send(aCheckIn({ visibility: "public" }));
+    const milestoneOnA = await owner.agent.post(`/api/projects/${projectA.body.id}/milestones`).send({ title: "Fifty people plan a week" });
+    expect(milestoneOnA.status).toBe(200);
 
     /*
-     * Filed against B, pointing at A's check-in. Without the ownership check
+     * Filed against B, pointing at A's milestone. Without the ownership check
      * this writes a comment that shows up on neither thread properly and
      * attributes discussion to the wrong project.
      */
     const crossed = await owner.agent.post(`/api/projects/${projectB.body.id}/comments`).send({
-      targetType: "check_in",
-      targetId: checkInOnA.body.id,
+      targetType: "milestone",
+      targetId: milestoneOnA.body.id,
       content: "This comment is pointed at the wrong project on purpose.",
     });
     expect(crossed.status).toBe(404);
+  });
+
+  it("refuses a comment aimed at a retired check-in", async () => {
+    const app = await getTestApp();
+    const owner = await signedIn(app, "Owner");
+    const project = await owner.agent.post("/api/projects").send(aProject());
+    const res = await owner.agent.post(`/api/projects/${project.body.id}/comments`).send({
+      targetType: "check_in", targetId: "any-old-check-in", content: "Commenting on something that no longer exists.",
+    });
+    expect(res.status).toBe(400);
   });
 
   it("refuses an anonymous commenter", async () => {
     const app = await getTestApp();
     const owner = await signedIn(app, "Owner");
     const project = await owner.agent.post("/api/projects").send(aProject());
-    const checkIn = await owner.agent
-      .post(`/api/projects/${project.body.id}/check-ins`)
-      .send(aCheckIn({ visibility: "public" }));
+    const post = await owner.agent.post("/api/feed").send(anUpdate(project.body.id));
 
     await request(app)
+      .post(`/api/feed/${post.body.id}/comments`)
+      .send({ content: "Drive-by comment." })
+      .expect(401);
+    await request(app)
       .post(`/api/projects/${project.body.id}/comments`)
-      .send({ targetType: "check_in", targetId: checkIn.body.id, content: "Drive-by comment." })
+      .send({ targetType: "project", targetId: project.body.id, content: "Drive-by comment." })
       .expect(401);
   });
 });
@@ -309,8 +306,8 @@ describe("private projects", () => {
       .send(aProject({ title: "Quiet Project", isPrivate: true }));
     const id = project.body.id;
 
-    const checkIn = await stranger.agent.post(`/api/projects/${id}/check-ins`).send(aCheckIn());
-    expect(checkIn.status).toBe(403);
+    const post = await stranger.agent.post("/api/feed").send(anUpdate(id));
+    expect(post.status).toBe(403);
 
     const comment = await stranger.agent.post(`/api/projects/${id}/comments`).send({
       targetType: "project",
@@ -320,7 +317,7 @@ describe("private projects", () => {
     expect(comment.status).toBe(404);
 
     // The owner is unaffected by any of it.
-    const ownerCheckIn = await owner.agent.post(`/api/projects/${id}/check-ins`).send(aCheckIn());
-    expect(ownerCheckIn.status).toBe(200);
+    const ownerPost = await owner.agent.post("/api/feed").send(anUpdate(id));
+    expect(ownerPost.status).toBe(200);
   });
 });

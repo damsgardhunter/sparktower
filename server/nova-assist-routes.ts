@@ -42,7 +42,7 @@ const str = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
 const SURFACE_GUIDANCE: Record<NovaSurfaceId, string> = {
   milestones: `You are working on this project's MILESTONES.
 
-A milestone is a checkpoint with an observable definition of done — not a phase of work and not a task. Good: "50 builders have posted a second weekly check-in". Bad: "Build the feed".
+A milestone is a checkpoint with an observable definition of done — not a phase of work and not a task. Good: "50 builders have posted a second project update". Bad: "Build the feed".
 
 Create milestones with create_milestone and give each a real definition of done in its description. Attach the tasks that serve it with update_task's milestoneId. Set target dates only when the project's own dates justify one; an invented deadline is worse than none.`,
 

@@ -28,7 +28,7 @@ async function person(app: any, first: string) {
   return { agent, id: res.body.id as string };
 }
 
-/** An author with a comment on their own public check-in, a stranger, and a reviewer. */
+/** An author with a comment on their own public project, a stranger, and a reviewer. */
 async function scene(app: any, content = "You're an idiot and this project is a joke") {
   const author = await person(app, "Author");
   const stranger = await person(app, "Stranger");
@@ -37,11 +37,8 @@ async function scene(app: any, content = "You're an idiot and this project is a 
 
   const project = await author.agent.post("/api/projects").send({ title: "Loop", description: "A project with a comment that gets reported and moderated.", category: "saas", goal: "ship_mvp", subcategory: "saas" });
   const projectId = project.body.id as string;
-  const checkIn = await author.agent.post(`/api/projects/${projectId}/check-ins`).send({ goal: "Ship the thing", proof: "Shipped it, honestly", nextStep: "Tell people", needsFeedback: true, visibility: "public" });
-  expect(checkIn.status).toBe(200);
-  const checkInId = checkIn.body.id as string;
-  const url = `/api/projects/${projectId}/comments?targetType=check_in&targetId=${checkInId}`;
-  expect((await author.agent.post(`/api/projects/${projectId}/comments`).send({ targetType: "check_in", targetId: checkInId, content })).status).toBeLessThan(300);
+  const url = `/api/projects/${projectId}/comments?targetType=project&targetId=${projectId}`;
+  expect((await author.agent.post(`/api/projects/${projectId}/comments`).send({ targetType: "project", targetId: projectId, content })).status).toBeLessThan(300);
   const commentId = ((await author.agent.get(url)).body as any[]).find((c) => c.content === content).id as string;
 
   const sees = async (who: { agent: request.SuperAgentTest }) => ((await who.agent.get(url)).body as any[]).some((c) => c.id === commentId);
@@ -51,7 +48,7 @@ async function scene(app: any, content = "You're an idiot and this project is a 
     return queue.find((r) => r.targetId === commentId);
   };
   const audit = async () => (await mod.agent.get(`/api/admin/moderation-log?targetType=comment&targetId=${commentId}`)).body as any[];
-  return { app, author, stranger, mod, commentId, checkInId, sees, report, audit };
+  return { app, author, stranger, mod, commentId, projectId, sees, report, audit };
 }
 
 describe("the comment moderation loop", () => {

@@ -12,10 +12,6 @@ import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { getUserEntitlements } from "./entitlements";
 import { CREDIT_COSTS, roadmapRebuildCost } from "@shared/plans";
 import { PROJECT_SECTIONS, sectionHasContent } from "@shared/project-sections";
-import { weekStartOf } from "@shared/check-in";
-import { db } from "./db";
-import { projectCheckIns } from "@shared/schema";
-import { and, desc, eq } from "drizzle-orm";
 import type { NovaHandoff } from "@shared/nova-handoff";
 
 /** Where the action button sends the user, and what it costs. */
@@ -159,48 +155,6 @@ export function registerNovaBriefingRoutes(app: Express) {
       });
 
       const recs: NovaRecommendation[] = [];
-
-      /*
-       * --- This week's check-in ---
-       *
-       * The highest-weight recommendation there is, because the weekly loop is
-       * the product and every other suggestion here is downstream of it. It
-       * only appears when this week's is actually missing, so it disappears
-       * the moment it's done rather than nagging.
-       */
-      const weekStart = weekStartOf();
-      const [thisWeek] = await db.select({ id: projectCheckIns.id })
-        .from(projectCheckIns)
-        .where(and(
-          eq(projectCheckIns.projectId, projectId),
-          eq(projectCheckIns.userId, userId),
-          eq(projectCheckIns.weekStart, weekStart),
-        ));
-
-      if (!thisWeek) {
-        const [last] = await db.select({ nextStep: projectCheckIns.nextStep })
-          .from(projectCheckIns)
-          .where(and(
-            eq(projectCheckIns.projectId, projectId),
-            eq(projectCheckIns.userId, userId),
-          ))
-          .orderBy(desc(projectCheckIns.weekStart))
-          .limit(1);
-
-        recs.push({
-          id: "weekly-check-in",
-          title: "You haven't checked in this week",
-          detail: last?.nextStep
-            ? `Last week you said you'd ${last.nextStep.charAt(0).toLowerCase()}${last.nextStep.slice(1)}`
-            : "Goal, proof, blocker, next step. Under two minutes, and it gets a link you can share.",
-          actionLabel: "Write this week's check-in",
-          credits: 0,
-          tab: "activity",
-          action: "activity.checkIn",
-          weight: 100,
-          severity: "important",
-        });
-      }
 
       // --- Brief gaps: cheapest, highest-leverage fix, and it's free ---
       const missingBrief = PROJECT_SECTIONS

@@ -293,7 +293,6 @@ export default function LandingPage() {
                 <li>AI Matching</li>
                 <li>Co-Founder Sprints</li>
                 <li>Project Dashboard</li>
-                <li>Games Arena</li>
                 <li>Leaderboard</li>
               </ul>
             </div>

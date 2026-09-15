@@ -204,9 +204,13 @@ const TABS: { id: ReportStatus; label: string }[] = [
   { id: "dismissed", label: "Dismissed" },
 ];
 
+/** Check-ins were retired; reports filed against them still exist. */
+const isRetiredTarget = (r: Report) => (r.targetType as string) === "check_in";
+
 /** Where a reported thing lives, so a moderator can go and look at it. */
 function targetLink(r: Report): string | null {
-  if (r.targetType === "check_in") return `/c/${r.targetId}`;
+  // Check-ins are retired: old reports keep their snapshot but have nowhere to link.
+  if (isRetiredTarget(r)) return null;
   if (r.targetPostId) return `/posts/${r.targetPostId}`;
   if (r.targetType === "project") return `/projects/${r.targetId}`;
   if (r.targetType === "user") return `/profile/${r.targetId}`;
@@ -359,7 +363,7 @@ export default function AdminReports() {
                     <div className="min-w-0 space-y-1">
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <Badge variant="outline" className="text-[10px]">
-                          {REPORT_TARGET_LABEL[r.targetType]}
+                          {isRetiredTarget(r) ? "Check-in (retired)" : (REPORT_TARGET_LABEL[r.targetType] ?? r.targetType)}
                         </Badge>
                         <Badge className="text-[10px]">{reportReasonLabel(r.reason)}</Badge>
                         {r.targetHiddenMode && (

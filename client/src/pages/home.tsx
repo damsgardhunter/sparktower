@@ -47,14 +47,8 @@ export default function Home() {
           {/* --- The feed --- */}
           <div className="min-w-0 space-y-2">
             {/*
-              * Starting a project is what sits at the top of the feed.
-              *
-              * A check-in button lived here for a while, on the reasoning that
-              * the weekly loop is what the page should ask for. It isn't the
-              * right trade: this bar is the entry point for the whole product,
-              * and someone with nothing to check in on has no use for it. The
-              * check-in shortcuts belong on the project cards in the rail,
-              * where they sit next to the project they act on.
+              * Starting a project is what sits at the top of the feed: this bar
+              * is the entry point for the whole product.
               *
               * Full-width rather than a heading plus a button, so it doesn't
               * cost a row of vertical space above the composer.

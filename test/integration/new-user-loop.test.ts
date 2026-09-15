@@ -1,7 +1,7 @@
 /**
  * The whole path a new person takes, in order, in one session.
  *
- * Signup → profile → onboarding → project → check-in → the shared permalink.
+ * Signup → profile → onboarding → project → an update post → its shared page.
  *
  * Each step is covered elsewhere in pieces, and each piece passing is not the
  * same claim as this one. What breaks a first run is almost never a handler in
@@ -15,7 +15,10 @@
  */
 import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
+import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
+import { db } from "../../server/db";
+import { projects } from "@shared/schema";
 
 afterAll(async () => {
   await closeTestApp();
@@ -77,35 +80,32 @@ describe("a new user can get all the way through the loop", () => {
     const projectId = project.body.id;
     expect(projectId).toBeTruthy();
 
-    // --- Post the first check-in ---------------------------------------
-    const checkIn = await agent.post(`/api/projects/${projectId}/check-ins`).send({
-      goal: "Get the meal planner generating a full week",
-      proof: "Shipped the generator and wired it to the fridge inventory screen",
-      nextStep: "Add a shopping list export",
-      visibility: "public",
-      needsFeedback: true,
+    // --- Post the first update -----------------------------------------
+    const post = await agent.post("/api/feed").send({
+      postType: "project_update",
+      projectId,
+      content: "Shipped the meal planner's week generator and wired it to the fridge inventory screen.",
+      asks: ["Would you use a shopping list export?"],
     });
-    expect(checkIn.status).toBe(200);
-    const checkInId = checkIn.body.id;
-    expect(checkInId).toBeTruthy();
+    expect(post.status).toBe(200);
+    const postId = post.body.id;
+    expect(postId).toBeTruthy();
 
     // --- It comes back on the project ----------------------------------
-    const listed = await agent.get(`/api/projects/${projectId}/check-ins`);
+    const listed = await agent.get(`/api/feed?projectId=${projectId}`);
     expect(listed.status).toBe(200);
-    const ids = (Array.isArray(listed.body) ? listed.body : listed.body.checkIns ?? [])
-      .map((c: any) => c.id);
-    expect(ids).toContain(checkInId);
+    expect(listed.body.posts.map((p: any) => p.id)).toContain(postId);
 
     // --- And the shared link works for a stranger -----------------------
     //
     // The whole point of the loop's last step. Fetched with a bare client, no
     // cookie jar: someone who has never heard of this site opening a link.
-    const stranger = await request(app).get(`/api/check-ins/${checkInId}`);
+    const stranger = await request(app).get(`/api/feed/${postId}`);
     expect(stranger.status).toBe(200);
-    expect(stranger.body.goal).toBe("Get the meal planner generating a full week");
+    expect(stranger.body.content).toContain("week generator");
   });
 
-  it("keeps an unlisted check-in out of a stranger's hands", async () => {
+  it("keeps a private project's update out of a stranger's hands", async () => {
     const app = await getTestApp();
     const agent = request.agent(app);
 
@@ -118,44 +118,42 @@ describe("a new user can get all the way through the loop", () => {
       description: "Something being worked on without an audience yet.",
       category: "saas", goal: "ship_mvp", subcategory: "saas",
     });
+    const projectId = project.body.id;
 
-    const checkIn = await agent.post(`/api/projects/${project.body.id}/check-ins`).send({
-      goal: "Work out whether this idea is worth continuing",
-      proof: "Wrote up the two versions and picked the smaller one",
-      nextStep: "Build the smaller one",
-      // The default, stated here because it is the thing under test.
-      visibility: "unlisted",
-      /*
-       * Asked for, deliberately. The queue filters on `needsFeedback = true`
-       * AND `visibility = 'public'`, so leaving this false would keep the row
-       * out via the wrong condition — the test would pass identically with the
-       * visibility guard deleted, which is the same as not testing it. With
-       * this true, visibility is the only thing holding it back.
-       */
-      needsFeedback: true,
+    const post = await agent.post("/api/feed").send({
+      postType: "project_update", projectId,
+      content: "Wrote up the two versions and picked the smaller one to build first.",
     });
-    expect(checkIn.status).toBe(200);
-    const id = checkIn.body.id;
+    expect(post.status).toBe(200);
+    const id = post.body.id;
 
     /*
-     * Unlisted means "reachable by anyone holding the link, listed nowhere" —
-     * so a stranger with the link is *allowed*. What must not happen is it
-     * turning up somewhere they could have found it without one.
+     * The control first: while the project is public the post is reachable
+     * and listed — otherwise the assertions below could be satisfied by a
+     * post that never went anywhere.
      */
-    const direct = await request(app).get(`/api/check-ins/${id}`);
-    expect(direct.status).toBe(200);
+    expect((await request(app).get(`/api/feed/${id}`)).status).toBe(200);
+    expect((await request(app).get(`/api/feed?projectId=${projectId}`)).body.posts.map((p: any) => p.id)).toContain(id);
 
-    const queue = await request(app).get("/api/check-ins/queue/needs-feedback");
-    const listedIds = (Array.isArray(queue.body) ? queue.body : queue.body?.checkIns ?? [])
-      .map((c: any) => c.id);
-    expect(listedIds).not.toContain(id);
+    // Private projects are a paid plan; set the flag directly, it is the thing under test.
+    await db.update(projects).set({ isPrivate: true }).where(eq(projects.id, projectId));
 
-    // And the control: the same check-in, made public, does reach the queue —
-    // otherwise the assertion above could be satisfied by an empty queue.
-    await agent.patch(`/api/check-ins/${id}`).send({ visibility: "public" });
-    const publicQueue = await request(app).get("/api/check-ins/queue/needs-feedback");
-    const publicIds = (Array.isArray(publicQueue.body) ? publicQueue.body : publicQueue.body?.checkIns ?? [])
-      .map((c: any) => c.id);
-    expect(publicIds).toContain(id);
+    // Not by its link, and not turning up anywhere a stranger could find it.
+    expect((await request(app).get(`/api/feed/${id}`)).status).toBe(404);
+    expect((await request(app).get(`/api/feed?projectId=${projectId}`)).body.posts.map((p: any) => p.id)).not.toContain(id);
+    expect((await request(app).get("/api/feed?limit=50")).body.posts.map((p: any) => p.id)).not.toContain(id);
+
+    // Nor its comments or reactions: a signed-in stranger with the id can't read, comment or react.
+    const outsider = request.agent(app);
+    await outsider.post("/api/auth/register").set("x-forwarded-for", "198.51.100.199").send({ email: newEmail(), password, firstName: "Outside" });
+    expect((await outsider.get(`/api/feed/${id}/comments`)).status).toBe(404);
+    expect((await request(app).get(`/api/feed/${id}/comments`)).status).toBe(404);
+    expect((await outsider.post(`/api/feed/${id}/comments`).send({ content: "Found your private post." })).status).toBe(404);
+    expect((await outsider.post(`/api/feed/${id}/react`).send({ reaction: "like" })).status).toBe(404);
+
+    // The team still sees it, and can still talk on it.
+    expect((await agent.get(`/api/feed/${id}`)).status).toBe(200);
+    expect((await agent.post(`/api/feed/${id}/comments`).send({ content: "Team note on the private update." })).status).toBe(200);
+    expect((await agent.get(`/api/feed/${id}/comments`)).body.some((c: any) => c.content === "Team note on the private update.")).toBe(true);
   });
 });

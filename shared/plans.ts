@@ -253,16 +253,10 @@ export const CREDIT_COSTS = {
   profileVisuals: 5,
   /** Redrawing one of those images. */
   profileVisualSingle: 1,
+  /** One image for a feed post, drawn from the post (and the project's logo and brief, when it's on a project). */
+  postImage: 2,
   /** "What should I do next?" — ranks the 3 highest-impact actions. */
   nextActions: 3,
-  /**
-   * Nova drafting a weekly check-in.
-   *
-   * Priced low on purpose: this is the assist on the habit the whole product
-   * depends on, and a cost someone weighs up each week is a cost that stops
-   * them checking in.
-   */
-  checkInDraft: 1,
   /**
    * Full roadmap rebuild. Priced as a range because cost scales with how much
    * project context has to be re-planned; see roadmapRebuildCost().

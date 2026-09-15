@@ -147,7 +147,7 @@ export function DocumentStartDialog({
             <Input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="e.g. Write the 1-page weekly check-in loop spec"
+              placeholder="e.g. Write the 1-page onboarding flow spec"
               data-testid="input-doc-start-title"
             />
           </div>

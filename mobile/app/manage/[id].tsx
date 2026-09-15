@@ -32,12 +32,12 @@ import { isProjectGoal, sectionDef, useScreenFocused, useSections, type ProjectG
 /** Paths whose first screen is the money step's bubbles on the dashboard, not the chat (nova-guide.tsx). */
 const MONEY_FIRST = new Set(["systemize_business", "raise_funding"]);
 
-/** Older links and the web's ids: `?tab=kanban`, `?tab=nova`, and the home rail's `?tab=checkins`. */
-const ALIAS: Record<string, { tab: Tab; sub?: "checkins" }> = {
-  nova: { tab: "dashboard" }, kanban: { tab: "tasks" }, checkins: { tab: "activity", sub: "checkins" }, tools: { tab: "codebase" },
+/** Older links and the web's ids: `?tab=kanban`, `?tab=nova`, and the retired `?tab=checkins` (now Activity). */
+const ALIAS: Record<string, { tab: Tab; sub?: "feedback" }> = {
+  nova: { tab: "dashboard" }, kanban: { tab: "tasks" }, checkins: { tab: "activity" }, tools: { tab: "codebase" },
 };
 
-const resolve = (t?: string | null): { tab: Tab; sub?: "checkins" } =>
+const resolve = (t?: string | null): { tab: Tab; sub?: "feedback" } =>
   !t ? { tab: "dashboard" } : ALIAS[t] ?? (ALL_TABS.some((x) => x.value === t) ? { tab: t as Tab } : { tab: "dashboard" });
 
 const sectionPrefKey = (projectId: string) => `manager-section.${projectId}`;

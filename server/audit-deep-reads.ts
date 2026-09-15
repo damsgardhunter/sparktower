@@ -58,7 +58,7 @@ export function rowsForArea(area: CapabilityArea, cov: RouteCoverage, max = 140)
   const pick = area === "rateLimiting" ? rows.filter((r) => r.write || r.cost)
     : area === "auth" ? rows.filter((r) => r.write || r.privileged)
     : area === "ai" ? rows.filter((r) => r.cost)
-    : area === "moderation" ? rows.filter((r) => /report|moderat|admin|ban|suspend|hide|comment|feed|check-in/i.test(r.path))
+    : area === "moderation" ? rows.filter((r) => /report|moderat|admin|ban|suspend|hide|comment|feed/i.test(r.path))
     : area === "deploy" ? rows.filter((r) => r.surface || /health|surfaces|admin/i.test(r.path))
     : [];
   if (!pick.length) return null;

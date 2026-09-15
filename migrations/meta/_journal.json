@@ -85,6 +85,27 @@
       "when": 1789477628202,
       "tag": "0011_code_audit_runs",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1789486413436,
+      "tag": "0012_promotion_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1789486437701,
+      "tag": "0013_communities",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1789488783569,
+      "tag": "0014_promotion_sources",
+      "breakpoints": true
     }
   ]
 }

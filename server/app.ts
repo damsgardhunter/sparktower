@@ -207,6 +207,15 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
 
   await registerRoutes(httpServer, app);
 
+  /*
+   * An API path nothing answers is a 404 in JSON — not the web app's HTML,
+   * which the page-serving catch-all mounted after this would otherwise send
+   * with a 200, so a retired or mistyped endpoint looked like it worked.
+   */
+  app.use("/api", (_req: Request, res: Response) => {
+    res.status(404).json({ message: "Not found", code: "not_found" });
+  });
+
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     if (res.headersSent) return next(err);
 

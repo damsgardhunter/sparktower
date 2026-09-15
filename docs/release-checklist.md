@@ -105,8 +105,8 @@ in the comment.
       Then open **$APP/profile** and confirm your avatar and a project cover
       image render — that proves `PRIVATE_OBJECT_DIR` and the serving route.
 
-- [ ] **The wedge.** Post a check-in on a real project, copy its link, open it
-      in a private window. That is the whole product; if it works, most things
+- [ ] **The wedge.** Post an update on a real project, publish a finished step,
+      copy its link (`/a/<id>`), open it in a private window. That is the whole product; if it works, most things
       do.
 
 - [ ] **Your console.** Open **$APP/admin/analytics** — it loads and shows you

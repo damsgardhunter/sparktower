@@ -13,7 +13,7 @@ import { and, desc, eq, gte, inArray, sql, type SQL } from "drizzle-orm";
 import type { PgTable, PgColumn } from "drizzle-orm/pg-core";
 import { db } from "./db";
 import {
-  contentReports, users, userProfiles, projectCheckIns, projectComments,
+  contentReports, users, userProfiles, projectComments,
   feedPosts, feedComments, directMessages, projects, rateLimitHits, moderationLog,
 } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
@@ -21,7 +21,7 @@ import { recordActivity } from "./analytics";
 import { SAFETY_EVENTS } from "@shared/safety";
 import { requireReviewer } from "./platform-roles";
 import {
-  RATE_LIMITS, DUPLICATE_RULES, REPORT_TARGETS, REPORT_REASON_IDS, reportDetailLabel, REPORT_NOTE_MAX,
+  RATE_LIMITS, DUPLICATE_RULES, REPORT_TARGETS, RETIRED_REPORT_TARGETS, REPORT_REASON_IDS, reportDetailLabel, REPORT_NOTE_MAX,
   REPORT_STATUSES, RATE_LIMITED, MODERATION_ACTION_IDS, isActionableTarget, isReasonCode,
   reasonCodesFor, moderationReasonLabel, isUndoReasonCode, UNDOABLE_ACTIONS, sameModeratedState,
   type RateLimitAction, type ReportTarget, type DuplicateRule, type RateLimitedBody, type ModerationAction,
@@ -67,18 +67,6 @@ const hitSource = (action: RateLimitAction): CountSource => ({
  * routes write to two is not a limit.
  */
 const COUNTED: Record<RateLimitAction, CountSource[]> = {
-  checkIn: [{
-    table: projectCheckIns, author: projectCheckIns.userId, created: projectCheckIns.createdAt,
-    content: sql<string>`${projectCheckIns.goal} || ' ' || ${projectCheckIns.proof} || ' ' || ${projectCheckIns.nextStep}`,
-    /*
-     * Earlier weeks only. Posting this week's check-in is an upsert — a builder
-     * fixing a typo re-sends the same text and must not be told it duplicates
-     * itself. Comparing against `date_trunc` rather than a JS week boundary
-     * keeps both sides of the comparison inside the database, for the same
-     * reason the windows below do.
-     */
-    scope: sql`${projectCheckIns.weekStart} < date_trunc('week', now())`,
-  }],
   comment: [
     {
       table: projectComments, author: projectComments.authorId, created: projectComments.createdAt,
@@ -451,7 +439,6 @@ export async function isDuplicate(
 
 /** Where each action's text sits on the request body. */
 const DUPLICATE_TEXT: Partial<Record<RateLimitAction, (body: any) => string>> = {
-  checkIn:  (b) => [b?.goal, b?.proof, b?.nextStep].filter(Boolean).join(" "),
   comment:  (b) => String(b?.content ?? ""),
   feedPost: (b) => String(b?.content ?? ""),
   message:  (b) => String(b?.content ?? ""),
@@ -576,12 +563,6 @@ async function snapshotOf(targetType: ReportTarget, targetId: string): Promise<{
 }> {
   const trim = (v: string | null | undefined) => (v ?? "").slice(0, 1000) || null;
   try {
-    if (targetType === "check_in") {
-      const [r] = await db.select().from(projectCheckIns).where(eq(projectCheckIns.id, targetId));
-      return r
-        ? { text: trim(`${r.goal}\n\n${r.proof}\n\nNext: ${r.nextStep}`), ownerId: r.userId, projectId: r.projectId }
-        : { text: null, ownerId: null, projectId: null };
-    }
     if (targetType === "comment") {
       const [r] = await db.select().from(projectComments).where(eq(projectComments.id, targetId));
       return r ? { text: trim(r.content), ownerId: r.authorId, projectId: r.projectId }
@@ -691,7 +672,6 @@ export function registerModerationRoutes(app: Express) {
 
   /** The moderation queue. */
   const TAKEDOWN_TABLES: Record<string, { table: any; author: any }> = {
-    check_in: { table: projectCheckIns, author: projectCheckIns.userId },
     comment: { table: projectComments, author: projectComments.authorId },
     feed_post: { table: feedPosts, author: feedPosts.authorId },
     feed_comment: { table: feedComments, author: feedComments.authorId },
@@ -702,8 +682,8 @@ export function registerModerationRoutes(app: Express) {
       const status = (REPORT_STATUSES as readonly string[]).includes(String(req.query.status))
         ? String(req.query.status) as (typeof REPORT_STATUSES)[number]
         : "open";
-      // Optionally one kind of content: `?type=comment`.
-      const kind = (REPORT_TARGETS as readonly string[]).includes(String(req.query.type)) ? String(req.query.type) : null;
+      // Optionally one kind of content: `?type=comment`. Retired kinds still filter the reports filed before they went.
+      const kind = ([...REPORT_TARGETS, ...RETIRED_REPORT_TARGETS] as readonly string[]).includes(String(req.query.type)) ? String(req.query.type) : null;
       const rows = await db.select({
         report: contentReports,
         reporterName: sql<string>`coalesce(reporter_profile.display_name, reporter.first_name)`,

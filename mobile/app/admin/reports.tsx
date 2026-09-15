@@ -14,7 +14,7 @@ import {
 // --- shared/moderation.ts, restated ----------------------------------------
 
 const TARGET_LABEL: Record<string, string> = {
-  check_in: "Check-in", comment: "Comment", feed_post: "Post", feed_comment: "Comment", project: "Project", user: "Person",
+  check_in: "Check-in (retired)", comment: "Comment", feed_post: "Post", feed_comment: "Comment", project: "Project", user: "Person",
 };
 const REPORT_REASONS: Record<string, string> = {
   spam: "Spam or advertising", abuse: "Harassment or abuse", misleading: "Misleading or fake",
@@ -78,7 +78,8 @@ interface Report {
 
 /** Where a reported thing lives in the app, so a moderator can go and look at it. */
 function targetRoute(r: Report): string | null {
-  if (r.targetType === "check_in") return `/check-in/${r.targetId}`;
+  // Check-ins are retired: old reports keep their label but have nowhere to go.
+  if (r.targetType === "check_in") return null;
   if (r.targetPostId) return `/post/${r.targetPostId}`;
   if (r.targetType === "project") return `/project/${r.targetId}`;
   if (r.targetType === "user") return `/user/${r.targetId}`;

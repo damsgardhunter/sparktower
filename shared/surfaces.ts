@@ -50,7 +50,6 @@ export const SURFACES: SurfaceDef[] = [
   { id: "personas",   label: "Personas & research",  cls: "core", defaultEnabled: true, note: "In use." },
 
   // --- Momentum: proof the company is moving ----------------------------
-  { id: "checkIns",   label: "Weekly check-ins",     cls: "momentum", defaultEnabled: true, note: "The retention loop. Public permalinks — needs moderation before wide sharing." },
   { id: "discover",   label: "Discover",             cls: "momentum", defaultEnabled: true, note: "Where a shared link lands." },
 
   // --- Later: real, but earns its place as a project matures ------------
@@ -66,11 +65,8 @@ export const SURFACES: SurfaceDef[] = [
   { id: "connections", label: "Connections",         cls: "network", defaultEnabled: true,  note: "Needs people to connect to.", needsPeople: 5 },
   { id: "messages",   label: "Messages / DMs",       cls: "network", defaultEnabled: true,  note: "Highest abuse surface. Needs rate limits and reporting before wide sharing.", needsPeople: 5 },
   { id: "leaderboard", label: "Leaderboard",         cls: "network", defaultEnabled: true,  note: "Ranks public projects; a list until there are several.", needsPeople: 8 },
-  { id: "contests",   label: "Contests",             cls: "network", defaultEnabled: false, note: "Needs entrants and a judge. Nothing has ever been run.", needsPeople: 15 },
+  { id: "contests",   label: "Contests",             cls: "network", defaultEnabled: true,  note: "In the main nav. Empty until the first contest is run — it needs entrants and a judge.", needsPeople: 15 },
   { id: "liveChat",   label: "Live chat & support",  cls: "network", defaultEnabled: false, note: "Needs a team on one side and a customer on the other.", needsPeople: 4 },
-
-  // --- Off --------------------------------------------------------------
-  { id: "games",      label: "Games",                cls: "off", defaultEnabled: false, note: "Sidelined — pulls attention with nothing downstream of it." },
 ];
 
 export type SurfaceId = string;
@@ -96,19 +92,17 @@ export const SURFACE_CLASS_LABEL: Record<SurfaceClass, string> = {
 /**
  * Client routes each surface owns.
  *
- * Used to filter the router and the nav. Paths are prefixes — `/games` covers
- * `/games/typing/:id` — so a new sub-route can't accidentally escape the flag
+ * Used to filter the router and the nav. Paths are prefixes — `/sprints` covers
+ * `/sprints/:id` — so a new sub-route can't accidentally escape the flag
  * it belongs to.
  */
 export const SURFACE_ROUTES: Record<string, string[]> = {
-  games: ["/games"],
   contests: ["/contests"],
   sprints: ["/sprints"],
   matches: ["/matches"],
   messages: ["/messages"],
   leaderboard: ["/leaderboard"],
   discover: ["/discover"],
-  checkIns: ["/c/", "/feedback"],
   feed: ["/posts", "/a/"],
   backing: ["/admin/backing"],
 };
@@ -134,9 +128,8 @@ export const SURFACE_API_PREFIXES: Record<string, string[]> = {
   launch: ["/api/projects/:id/waitlist", "/api/projects/:id/landing", "/api/projects/:id/legal", "/api/projects/:id/deploy-checklist", "/api/projects/:id/launch", "/api/projects/:id/pricing"],
   storyboards: ["/api/storyboards", "/api/projects/:id/storyboards", "/api/generate-image", "/api/projects/:id/visuals"],
   backing: ["/api/projects/:id/backing", "/api/backing-tiers", "/api/admin/backing", "/api/backer-badges", "/api/me/badges"],
-  checkIns: ["/api/check-ins", "/api/loop-events", "/api/projects/:id/check-ins"],
   discover: ["/api/discover"],
-  feed: ["/api/feed", "/api/projects/:id/comments", "/api/project-comments", "/api/artifacts", "/api/public/artifacts"],
+  feed: ["/api/feed", "/api/projects/:id/comments", "/api/project-comments", "/api/artifacts", "/api/public/artifacts", "/api/promotions"],
   matches: ["/api/matches"],
   sprints: ["/api/sprints", "/api/sprint"],
   connections: ["/api/connections"],
@@ -144,7 +137,6 @@ export const SURFACE_API_PREFIXES: Record<string, string[]> = {
   leaderboard: ["/api/leaderboard"],
   contests: ["/api/contests"],
   liveChat: ["/api/projects/:id/live-chat"],
-  games: ["/api/games"],
 };
 
 /** True when a path belongs to a surface that's currently off. */

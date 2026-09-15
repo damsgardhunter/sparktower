@@ -112,7 +112,7 @@ export function Line({ value, onChangeText, placeholder, maxLength, numeric }: {
 
 // --- Full-screen editor -------------------------------------------------------
 
-/** A page-sized modal with a close button and a pinned primary action — task and check-in editors. */
+/** A page-sized modal with a close button and a pinned primary action — task editors. */
 export function EditorSheet({
   visible, onClose, title, subtitle, children, action, footer,
 }: {

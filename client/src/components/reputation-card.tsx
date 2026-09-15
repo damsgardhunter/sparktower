@@ -46,7 +46,7 @@ const SCORE_CONFIG = [
     icon: Brain,
     color: "text-purple-500",
     bgColor: "bg-purple-500",
-    tooltip: "Based on contest wins, game scores, and AI evaluation of project strategies",
+    tooltip: "Based on contest wins and AI evaluation of project strategies",
   },
 ];
 

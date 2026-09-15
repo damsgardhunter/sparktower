@@ -61,7 +61,7 @@ describe("sprint review and contests", () => {
   it("tells a signed-in user they've joined a contest", async () => {
     const app = await getTestApp();
     const me = await person(app, "Racer");
-    // Contests ship switched off; turn them on for this test, and back after.
+    // Contests ship on, but a flag row can switch them off; pin them on for this test, and clear it after.
     const setContests = async (enabled: boolean) => {
       await db.insert(surfaceFlags).values({ surfaceId: "contests", enabled } as any).onConflictDoUpdate({ target: surfaceFlags.surfaceId, set: { enabled } as any });
       await loadSurfaceFlags();

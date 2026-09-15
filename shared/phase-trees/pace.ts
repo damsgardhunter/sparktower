@@ -17,7 +17,7 @@ export interface PaceInput {
   createdAt: Date;
   /** Backbone completions: when, and how big the authored estimate was. */
   completions: { at: Date; estimateMinutes: number }[];
-  /** Any other sign of life — check-ins count as activity. */
+  /** Any other sign of life — update posts and code that moved count as activity. */
   activityDates: Date[];
   /** Authored estimate minutes still open on the main line. */
   remainingMinutes: number;
@@ -71,7 +71,7 @@ export function computePace(input: PaceInput): PaceResult {
   }
   if (tier === "claimed") {
     return { state, daysSinceActivity, multiplier: null, mode: "none", projectedAt: null, projectedLow: null, projectedHigh: null,
-      note: "This path runs on your word, so Nova reads your check-ins rather than projecting a date." };
+      note: "This path runs on your word, so Nova reads your updates rather than projecting a date." };
   }
   if (remainingMinutes <= 0) {
     return { state, daysSinceActivity, multiplier: null, mode: tier === "verified" ? "date" : "range", projectedAt: now, projectedLow: now, projectedHigh: now,

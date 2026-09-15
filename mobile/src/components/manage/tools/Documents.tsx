@@ -48,7 +48,7 @@ export function DocumentStartSheet({ projectId, visible, onClose, onCreated }: {
       }>
       {!can("aiMilestones") && <PlanNote title="The document builder is on the Builder plan" body="Have a look around — starting one will tell you what to upgrade to." />}
       {error ? <ErrorNote message={error} /> : null}
-      <Input label="What's the document? *" value={title} onChangeText={setTitle} placeholder="e.g. Write the 1-page weekly check-in loop spec" />
+      <Input label="What's the document? *" value={title} onChangeText={setTitle} placeholder="e.g. Write the 1-page onboarding spec" />
       <Input label="What has to be in it?" value={description} onChangeText={setDescription} multiline rows={5}
         placeholder="The more specific the better — exact sections, what's explicitly out of scope, what you'll measure against." />
       <View style={{ gap: spacing.xs }}>

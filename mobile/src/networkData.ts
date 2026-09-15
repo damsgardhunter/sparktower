@@ -146,7 +146,6 @@ export function appHref(webHref: string | null | undefined, actorId: string): st
   const href = webHref || "";
   let m: RegExpExecArray | null;
   if ((m = /^\/posts\/([^/?#]+)/.exec(href))) return `/post/${m[1]}`;
-  if ((m = /^\/c\/([^/?#]+)/.exec(href))) return `/c/${m[1]}`;
   if ((m = /^\/a\/([^/?#]+)/.exec(href))) return `/a/${m[1]}`;
   if ((m = /^\/projects\/([^/?#]+)\/documents\/([^/?#]+)/.exec(href))) return `/project/${m[1]}/documents/${m[2]}`;
   if ((m = /^\/projects\/([^/?#]+)\/manage/.exec(href))) return `/manage/${m[1]}`;

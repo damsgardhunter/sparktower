@@ -2,8 +2,7 @@
  * The website home's rail, folded into the top of the phone's feed.
  *
  * On a desktop these sit beside the posts (client/src/pages/home.tsx): your
- * profile card, your projects with the week's check-in, and "new since you last
- * looked". A phone has one column, so they stack above the composer — each
+ * profile card, your projects, and "new since you last looked". A phone has one column, so they stack above the composer — each
  * compact, and each hidden when it has nothing to say, the way the web's are.
  */
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
@@ -189,33 +188,31 @@ export function FeedbackUsedCard() {
 
 // --- Your projects ---------------------------------------------------------
 
-interface ProjectStatus {
+interface MyProject {
   id: string;
   title: string;
   logoUrl: string | null;
   views: number;
-  checkedIn: boolean;
-  streak: number;
 }
 
 /**
- * my-projects-card.tsx: your projects with the week's check-in in reach, the
- * ones still owed first. Side-scrolling on the phone so it costs one row.
+ * Your projects, most recently touched first, with a way into each one's
+ * workspace. Side-scrolling on the phone so it costs one row.
  */
 export function MyProjectsCard() {
   const router = useRouter();
   const { data } = useQuery({
-    queryKey: ["check-in-status"],
-    queryFn: () => api<{ weekStart: string; projects: ProjectStatus[] }>("/api/me/check-in-status"),
+    queryKey: ["my-projects"],
+    queryFn: () => api<MyProject[]>("/api/user/projects"),
   });
   if (!data) return null;
-  const projects = [...data.projects].sort((a, b) => Number(a.checkedIn) - Number(b.checkedIn));
+  const projects = data;
 
   if (!projects.length) {
     return (
       <Box>
         <BoxHeader title="Your projects" />
-        <Text style={s.emptyCopy}>Start one, then post a check-in each week — what you aimed for, what shipped, what's next.</Text>
+        <Text style={s.emptyCopy}>Start one, then post updates as you build — what shipped, what's next, and what you want feedback on.</Text>
         <Pressable onPress={() => router.push("/project/new" as any)} style={[s.outlineBtn, { alignSelf: "stretch", marginTop: spacing.sm }]} testID="rail-create-project">
           <Ionicons name="add" size={15} color={colors.text} />
           <Text style={s.outlineBtnText}>Create project</Text>
@@ -238,29 +235,19 @@ export function MyProjectsCard() {
                 <Text style={s.projectTitle} numberOfLines={1}>{p.title}</Text>
                 <View style={s.projectMeta}>
                   <Ionicons name="eye-outline" size={11} color={colors.textTertiary} />
-                  <Text style={s.projectMetaText}>{p.views.toLocaleString()}</Text>
-                  {p.streak > 0 && (
-                    <>
-                      <Ionicons name="flame" size={11} color={colors.warning} />
-                      <Text style={[s.projectMetaText, { color: colors.warning }]}>{p.streak}w</Text>
-                    </>
-                  )}
+                  <Text style={s.projectMetaText}>{(p.views ?? 0).toLocaleString()}</Text>
                 </View>
               </View>
             </Pressable>
-            <View style={s.projectActions}>
-              <Pressable
-                onPress={() => router.push(`/manage/${p.id}?tab=checkins` as any)}
-                style={[s.checkIn, p.checkedIn ? s.checkInDone : s.checkInDue]}
-                testID={`rail-checkin-${p.id}`}
-              >
-                <Ionicons name={p.checkedIn ? "checkmark" : "create-outline"} size={12} color={p.checkedIn ? colors.textSecondary : colors.text} />
-                <Text style={[s.checkInText, p.checkedIn && { color: colors.textSecondary }]}>{p.checkedIn ? "Checked in" : "Check in"}</Text>
-              </Pressable>
-              <Pressable onPress={() => router.push(`/manage/${p.id}` as any)} style={s.gear} accessibilityLabel="Manage project" testID={`rail-manage-${p.id}`}>
-                <Ionicons name="settings-outline" size={13} color={colors.textSecondary} />
-              </Pressable>
-            </View>
+            <Pressable
+              onPress={() => router.push(`/manage/${p.id}` as any)}
+              style={[s.outlineBtn, { alignSelf: "stretch", height: 28 }]}
+              accessibilityLabel="Manage project"
+              testID={`rail-manage-${p.id}`}
+            >
+              <Ionicons name="settings-outline" size={12} color={colors.textSecondary} />
+              <Text style={s.outlineBtnText}>Manage</Text>
+            </Pressable>
           </View>
         ))}
       </ScrollView>
@@ -307,10 +294,4 @@ const s = StyleSheet.create({
   projectTitle: { color: colors.text, fontSize: font.sm + 1, fontFamily: fontFamily.medium },
   projectMeta: { flexDirection: "row", alignItems: "center", gap: 3, marginTop: 1 },
   projectMetaText: { color: colors.textTertiary, fontSize: 11, fontFamily: fontFamily.regular, marginRight: 5 },
-  projectActions: { flexDirection: "row", gap: 6 },
-  checkIn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4, height: 28, borderRadius: 6 },
-  checkInDue: { borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
-  checkInDone: {},
-  checkInText: { color: colors.text, fontSize: 11, fontFamily: fontFamily.medium },
-  gear: { width: 30, height: 28, alignItems: "center", justifyContent: "center", borderRadius: 6 },
 });

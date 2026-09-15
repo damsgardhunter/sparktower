@@ -55,7 +55,7 @@ Completion evidence varies by type, and projection confidence has to vary with i
 | **Evidence** | Dated upload, photo, signed doc, quote | `restaurant` `retail` `service` |
 | **Claimed** | User marks done | Outreach, conversations, decisions |
 
-Below Verified, Nova leans on check-in narrative rather than presenting pace arithmetic with
+Below Verified, Nova leans on the builder's update posts rather than presenting pace arithmetic with
 more precision than it has. Hard date for Verified, range for Evidence, no projection for Claimed.
 
 ## Pace model
@@ -76,7 +76,7 @@ here's what moves it back.
 | Condition | Effect |
 | --- | --- |
 | Active, any pace | Date holds or improves. Never regresses. |
-| No activity or check-in, 7 days | Soft nudge. Date unchanged. |
+| No activity or update post, 7 days | Soft nudge. Date unchanged. |
 | 8–14 days | Pace decays gently toward pre-absence baseline. |
 | 15+ days | Dormant. Re-entry recalculates fresh, no carried penalty. |
 
@@ -355,7 +355,7 @@ on, then the four operating weeks. **Target: four weeks to a financing plan, eig
 owner-independence tested.**
 
 **Verification is Evidence tier**, not Verified — no codebase to check. Projections show as
-ranges, and Nova leans harder on the weekly check-in narrative.
+ranges, and Nova leans harder on the weekly update posts.
 
 ### Two mechanics the money weeks add
 

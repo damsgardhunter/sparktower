@@ -88,7 +88,7 @@ export default function AdminSafety() {
   if (isNotFound(error)) return <NotFoundScreen title="Safety review" />;
 
   const go = (path: string) => router.push(path as any);
-  const links: [string, string][] = [["Reports queue", "/admin/reports"], ["Surfaces", "/admin/surfaces"], ["Loop metrics", "/admin/loop-metrics"]];
+  const links: [string, string][] = [["Reports queue", "/admin/reports"], ["Surfaces", "/admin/surfaces"]];
   if (access?.owner) links.push(["Analytics", "/admin/analytics"]);
 
   return (
@@ -104,7 +104,7 @@ export default function AdminSafety() {
             <Text style={{ color: colors.text, fontSize: font.xl, fontFamily: fontFamily.bold }}>Daily safety review</Text>
           </View>
           <Text style={meta}>
-            Reports, rate limits and loop health together, what your recent actions did, and a checklist that records the pass.
+            Reports, rate limits and activity together, what your recent actions did, and a checklist that records the pass.
             {data ? (data.lastReview
               ? ` Covering the last ${hoursLabel(data.windowHours)} — since ${data.lastReview.by ?? "someone"}'s review ${hoursLabel(data.lastReview.hoursAgo)} ago.`
               : ` Covering the last ${hoursLabel(data.windowHours)}. No review has been recorded yet.`) : ""}
@@ -133,14 +133,9 @@ export default function AdminSafety() {
                 )}
               </TitledCard>
 
-              <TitledCard icon="pulse" title="Loop health (7 days)" action={<Btn label="Details" small variant="ghost" onPress={() => go("/admin/loop-metrics")} />}>
+              <TitledCard icon="pulse" title="Activity">
                 <View style={{ flexDirection: "row", gap: spacing.sm }}>
                   <StatBox label="Posts, comments, messages" value={data.content.inWindow} delta={<Delta now={data.content.inWindow} before={data.content.before} goodWhen="up" />} />
-                  <StatBox label="Check-ins posted" value={data.loops?.submitted ?? "—"} />
-                </View>
-                <View style={{ flexDirection: "row", gap: spacing.sm }}>
-                  <StatBox label="Feedback within SLA" value={data.loops?.feedbackSlaPercent != null ? `${data.loops.feedbackSlaPercent}%` : "—"} />
-                  <StatBox label="D7 retention" value={data.loops?.d7Percent != null ? `${data.loops.d7Percent}%` : "—"} />
                 </View>
               </TitledCard>
 

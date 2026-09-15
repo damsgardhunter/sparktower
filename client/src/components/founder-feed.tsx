@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Link, useSearch } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { FeedComposer } from "@/components/feed-composer";
 import { FeedbackUsedCard } from "@/components/feedback-inbox";
 import { ContinuePathCard } from "@/components/continue-path-card";
+import { PromotionCard } from "@/components/promotion-card";
+import { useFeedPromotions } from "@/hooks/use-feed-promotions";
 import { useNotificationCounts, refreshNotifications } from "@/components/notification-bell";
 import { apiRequest } from "@/lib/queryClient";
 import { FeedPostCard, type FeedPostWithDetails } from "@/components/feed-post-card";
@@ -82,6 +84,8 @@ export function FounderFeed({ projectId }: { projectId?: string }) {
       return res.json();
     },
   });
+  // On the home feed only — a project's own page is that project's.
+  const { promotionBefore, onSeen, onHide } = useFeedPromotions(data?.posts?.length ?? 0, !projectId);
 
   return (
     <div className="space-y-2">
@@ -212,9 +216,17 @@ export function FounderFeed({ projectId }: { projectId?: string }) {
         </Card>
       ) : (
         <div className="space-y-2">
-          {data!.posts.map((post) => (
-            <FeedPostCard key={post.id} post={post} />
-          ))}
+          {/* Featured tools woven through the posts: usually one first, then one every few posts. */}
+          {data!.posts.map((post, i) => {
+            const promo = promotionBefore(i);
+            return (
+              <Fragment key={post.id}>
+                {promo && <PromotionCard promotion={promo.promotion} slot={promo.slot} onSeen={onSeen} onHide={onHide} />}
+                <FeedPostCard post={post} />
+              </Fragment>
+            );
+          })}
+          {(() => { const promo = promotionBefore(data!.posts.length); return promo && <PromotionCard promotion={promo.promotion} slot={promo.slot} onSeen={onSeen} onHide={onHide} />; })()}
 
           {data!.nextCursor && (
             <Button

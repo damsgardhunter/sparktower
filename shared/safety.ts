@@ -2,7 +2,7 @@
  * The admin safety loop: review the signals, act, see what the action did,
  * and come back tomorrow.
  *
- *   Review reports, rate-limit refusals and loop metrics → take an action
+ *   Review reports, rate-limit refusals and content volume → take an action
  *   (remove, ban, switch a surface off) → watch its impact → the next daily
  *   review starts from what changed since this one.
  *
@@ -27,7 +27,6 @@ export const CONTENT_WRITE_PATTERNS = [
   "/api/feed",
   "/api/feed/:id/comments",
   "/api/projects/:id/comments",
-  "/api/projects/:id/check-ins",
   "/api/messages/:id",
 ] as const;
 
@@ -53,7 +52,6 @@ export const SAFETY_CHECKLIST = [
   { id: "reports", label: "Open reports triaged", detail: `Nothing left open longer than ${STALE_REPORT_HOURS} hours.` },
   { id: "limits", label: "Rate-limit spikes looked at", detail: "A spike is a script, a raid, or a limit set too tight — decide which." },
   { id: "impact", label: "Impact of recent actions checked", detail: "Each action did what it was for, and nothing it wasn't." },
-  { id: "loops", label: "Loop metrics checked for a drop", detail: "A takedown or switch shouldn't have cost the loop its people." },
   { id: "surfaces", label: "Switched-off surfaces reconsidered", detail: "Anything off still needs to be off." },
 ] as const;
 

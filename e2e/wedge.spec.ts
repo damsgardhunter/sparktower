@@ -2,9 +2,9 @@
  * The wedge, in a browser.
  *
  * Two journeys. The builder's: sign up, make a project, post the first
- * check-in. The receiver's: someone with no account opens the shared link and
- * reads it. Between them that is the whole product; if both pass, most things
- * do.
+ * update about it. The receiver's: someone with no account opens a step the
+ * builder shared and reads it. Between them that is the whole product; if
+ * both pass, most things do.
  *
  * Onboarding is completed through the API rather than clicked through. It is
  * seven steps of profile detail that have nothing to do with the wedge, and a
@@ -43,7 +43,7 @@ async function signUp(page: Page, first = "Casey") {
   return email;
 }
 
-test("a new builder signs up, creates a project, and posts the first check-in", async ({ page }) => {
+test("a new builder signs up, creates a project, and posts the first update", async ({ page }) => {
   await signUp(page);
 
   // Home, with the create-project bar at the top of the feed.
@@ -82,7 +82,7 @@ test("a new builder signs up, creates a project, and posts the first check-in", 
   await expect(page).toHaveURL(/step=review/);
   await expect(page.getByTestId("project-review")).toContainText("Weeknight Recipes");
   await page.getByTestId("button-create-project").click();
-  // Creating a project lands on its manage page, which is where check-ins live.
+  // Creating a project lands on its manage page.
   await page.waitForURL(/\/projects\/[0-9a-f-]{36}\/manage/, { timeout: 15_000 });
   const projectId = page.url().match(/\/projects\/([0-9a-f-]{36})/)![1];
 
@@ -110,34 +110,30 @@ test("a new builder signs up, creates a project, and posts the first check-in", 
   await expect(page.getByTestId("input-repo-url")).toBeVisible();
 
   /*
-   * The first check-in, from the home rail. Each of your projects gets a
-   * "Check in" shortcut there — the manage page has a check-in list too, but
-   * it sits behind a tab that defaults elsewhere, and the shortcut is the
-   * path the product actually pushes you down.
+   * The first update, from the composer at the top of the home feed: pick the
+   * kind of post, say what shipped, and put it on this project.
    */
+  const content = `Shipped the meal planner's week generator ${Date.now()}`;
   await page.goto("/");
-  await page.getByRole("button", { name: /^\s*check in\s*$/i }).first().click();
-  await page.getByTestId("input-checkin-goal").fill("Get the meal planner generating a full week");
-  await page.getByTestId("input-checkin-proof").fill(
-    "Shipped the generator and wired it to the fridge inventory screen",
-  );
-  await page.getByTestId("input-checkin-next").fill("Add a shopping list export");
-  await page.getByTestId("button-publish-checkin").click();
+  await page.getByTestId("button-quick-project_update").click();
+  await page.getByTestId("textarea-post-content").fill(content);
+  await page.getByTestId("select-post-project").click();
+  await page.getByRole("option", { name: "Weeknight Recipes" }).click();
+  await page.getByTestId("button-publish-post").click();
 
   // It exists, attached to this project, readable back through the API the
   // page itself uses.
   await expect.poll(async () => {
-    const res = await page.request.get(`/api/projects/${projectId}/check-ins`);
+    const res = await page.request.get(`/api/feed?projectId=${projectId}`);
     const body = await res.json();
-    const rows = Array.isArray(body) ? body : body.checkIns ?? [];
-    return rows.some((c: any) => c.goal === "Get the meal planner generating a full week");
+    return (body.posts ?? []).some((p: any) => p.content === content && p.postType === "project_update");
   }, { timeout: 10_000 }).toBe(true);
 
-  // And the composer is gone — the page moved on rather than sitting open.
-  await expect(page.getByTestId("button-publish-checkin")).toBeHidden();
+  // And the composer closed — the page moved on rather than sitting open.
+  await expect(page.getByTestId("card-composer")).toBeHidden();
 });
 
-test("someone with no account opens a shared check-in and reads it", async ({ page, browser }) => {
+test("someone with no account opens a shared step and reads it", async ({ page, browser }) => {
   // Set up the artifact as a builder, entirely through the API: the browser
   // part of this journey is the stranger's.
   await signUp(page, "Sender");
@@ -148,31 +144,31 @@ test("someone with no account opens a shared check-in and reads it", async ({ pa
       category: "saas", goal: "ship_mvp", subcategory: "saas",
     },
   })).json();
-  const checkIn = await (await page.request.post(`/api/projects/${project.id}/check-ins`, {
-    data: {
-      goal: "Decide whether the smaller version is the right one",
-      proof: "Wrote up both versions and shipped the smaller one to three people",
-      nextStep: "Ask those three what confused them",
-      visibility: "public",
-      needsFeedback: true,
-    },
-  })).json();
-  expect(checkIn.id).toBeTruthy();
+  const tasks = await (await page.request.get(`/api/projects/${project.id}/kanban`)).json();
+  const step = tasks.find((t: any) => (t.tags ?? []).includes("backbone:SHIP.M1.1"));
+  expect((await page.request.patch(`/api/kanban/${step.id}`, {
+    data: { status: "done", description: "Plan a week of dinners from what's already in your fridge." },
+  })).ok()).toBeTruthy();
+  const artifact = await (await page.request.post(`/api/projects/${project.id}/path/tasks/${step.id}/artifact`)).json();
+  expect(artifact.id).toBeTruthy();
+  const published = await page.request.post(`/api/artifacts/${artifact.id}/publish`, {
+    data: { title: "The one-line product statement", asks: ["Is it clear who it's for?"] },
+  });
+  expect(published.ok()).toBeTruthy();
+  const { url } = await published.json();
 
   // A fresh context: no cookies, no account, just a link somebody sent them.
   const stranger = await browser.newContext();
   const strangerPage = await stranger.newPage();
   try {
-    await strangerPage.goto(`/c/${checkIn.id}`);
-    await expect(strangerPage.getByTestId("text-goal")).toHaveText(
-      "Decide whether the smaller version is the right one",
-    );
-    await expect(strangerPage.getByTestId("text-proof")).toContainText("shipped the smaller one");
-    await expect(strangerPage.getByTestId("text-next-step")).toContainText("Ask those three");
+    await strangerPage.goto(url);
+    await expect(strangerPage.getByTestId("text-artifact-title")).toHaveText("The one-line product statement");
+    await expect(strangerPage.getByTestId("text-artifact-body")).toContainText("fridge");
+    await expect(strangerPage.getByTestId("artifact-project")).toContainText("Quiet Project");
     // The share control is there for them to pass it on.
-    await expect(strangerPage.getByTestId("button-copy-link")).toBeVisible();
+    await expect(strangerPage.getByTestId("button-copy-artifact-link")).toBeVisible();
     // And nothing asked them to sign in to read it.
-    expect(strangerPage.url()).toContain(`/c/${checkIn.id}`);
+    expect(strangerPage.url()).toContain(url);
   } finally {
     await stranger.close();
   }

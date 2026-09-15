@@ -5,9 +5,8 @@ message, or comment on their progress → come back later and do it again.
 
 ## Events
 
-Ten, in `shared/explore-events.ts`, stored in `activity_events` and separate
-from the check-in loop's events in `shared/loop-events.ts`, which stay a small
-fixed set on purpose. Six are sent by the client through `/api/track` — only it
+Ten, in `shared/explore-events.ts`, stored in `activity_events` under their own
+names. Six are sent by the client through `/api/track` — only it
 sees a page open, a card on screen, a tap, or the app being left. The four
 actions are recorded by the endpoints that perform them (below), and
 `/api/track` refuses them, so an action can't be missed or claimed twice.

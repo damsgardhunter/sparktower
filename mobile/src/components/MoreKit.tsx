@@ -1,6 +1,6 @@
 /**
  * Small building blocks for the "More" side of the app — the menu, sprints,
- * leaderboard, plans, contests, games and the review queues. They sit on top
+ * leaderboard, plans, contests and the review queues. They sit on top
  * of ui.tsx and only exist where several of those screens would otherwise
  * restate the same layout.
  */
@@ -19,9 +19,9 @@ export function useSurfaces() {
     staleTime: 5 * 60_000,
     retry: false,
   });
-  // Shipped defaults for the two that start off (shared/surfaces.ts), so an
-  // outage doesn't advertise them.
-  const enabled = data?.enabled ?? { contests: false, games: false, liveChat: false };
+  // Shipped defaults for the one that starts off (shared/surfaces.ts), so an
+  // outage doesn't advertise it.
+  const enabled = data?.enabled ?? { liveChat: false };
   return { isLoading, loaded: !!data, on: (id: string) => enabled[id] !== false };
 }
 
@@ -252,10 +252,3 @@ export const humanize = (id?: string | null) =>
 
 /** A surface is switched off on the server: say so instead of showing an error. */
 export const isSwitchedOff = (err: any) => err?.status === 404 || err?.status === 403 || err?.body?.code === "surface_off";
-
-/** "Week of 8 September" — shared/check-in.ts weekLabel. */
-export function weekLabel(weekStart: string): string {
-  const d = new Date(weekStart);
-  if (Number.isNaN(d.getTime())) return "";
-  return `Week of ${d.toLocaleDateString("en-GB", { day: "numeric", month: "long", timeZone: "UTC" })}`;
-}

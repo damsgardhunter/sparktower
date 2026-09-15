@@ -2,7 +2,7 @@
  * The project manager's data shapes and constants.
  *
  * The app doesn't import the repo's `shared/` folder, so the parts of
- * shared/phase-trees, shared/capital, shared/investment and shared/check-in
+ * shared/phase-trees, shared/capital and shared/investment
  * the manager needs are restated here. When those change, change these.
  */
 import { useQueryClient } from "@tanstack/react-query";
@@ -233,42 +233,6 @@ export const INVESTMENT_DISCLAIMER =
 export const labelOf = (list: { id: string; label: string }[], id: string | null | undefined) =>
   list.find((x) => x.id === id)?.label ?? id ?? "";
 export interface InvestmentAsk { headline: string; amount: string | null; minimum: string | null; instruments: string[]; useOfFunds: string }
-
-// --- Check-ins (shared/check-in.ts) ----------------------------------------
-
-export const CHECK_IN_LIMITS = {
-  goal: { min: 5, max: 120 }, proof: { min: 10, max: 400 }, blocker: { min: 0, max: 300 }, nextStep: { min: 5, max: 140 },
-} as const;
-const PROOF_KEYWORDS = ["shipped", "launched", "released", "deployed", "merged", "published", "fixed", "built", "added", "wrote", "recorded", "demo", "live", "signed", "sold", "interviewed", "tested", "migrated", "opened"];
-const NON_VERB_OPENERS = ["the", "a", "an", "my", "our", "their", "his", "her", "its", "this", "that", "these", "those", "i", "we", "it", "there", "in", "on", "for", "to", "at", "by", "with", "about", "maybe", "hopefully", "probably", "still", "just", "more", "some"];
-export type CheckInDraft = { goal: string; proof: string; blocker: string; nextStep: string };
-export function validateCheckIn(d: CheckInDraft): Partial<Record<keyof CheckInDraft, string>> {
-  const e: Partial<Record<keyof CheckInDraft, string>> = {};
-  const len = (v: string) => (v ?? "").trim().length;
-  const L = CHECK_IN_LIMITS;
-  const gl = len(d.goal);
-  if (gl < L.goal.min) e.goal = `Say what you were aiming for this week — at least ${L.goal.min} characters.`;
-  else if (gl > L.goal.max) e.goal = `Keep the goal to one sentence (${gl}/${L.goal.max}).`;
-  else if ((d.goal.match(/[.!?](\s|$)/g) || []).length > 1) e.goal = "One sentence. Put the detail in Proof.";
-  const pl = len(d.proof);
-  const url = /https?:\/\/\S+\.\S+|\b\S+\.(com|org|net|io|dev|app|co|ai|xyz|sh|me)\b/i.test(d.proof);
-  if (pl < L.proof.min) e.proof = `Name something that exists now — at least ${L.proof.min} characters.`;
-  else if (pl > L.proof.max) e.proof = `Trim the proof (${pl}/${L.proof.max}).`;
-  else if (!url && !PROOF_KEYWORDS.some((k) => new RegExp(`\\b${k}`, "i").test(d.proof))) e.proof = "Link it, or say what shipped — \"launched\", \"merged\", \"wrote\", and so on.";
-  if (len(d.blocker) > L.blocker.max) e.blocker = `Keep the blocker short (${len(d.blocker)}/${L.blocker.max}).`;
-  const nl = len(d.nextStep);
-  const first = d.nextStep.trim().toLowerCase().split(/[\s,]+/)[0]?.replace(/[^a-z']/g, "");
-  if (nl < L.nextStep.min) e.nextStep = `One concrete thing you'll do next — at least ${L.nextStep.min} characters.`;
-  else if (nl > L.nextStep.max) e.nextStep = `One step, not a plan (${nl}/${L.nextStep.max}).`;
-  else if (!first || NON_VERB_OPENERS.includes(first)) e.nextStep = "Start with a verb — \"Ship…\", \"Interview…\", \"Write…\".";
-  return e;
-}
-export const weekLabel = (weekStart: string | null | undefined) => {
-  if (!weekStart) return "";
-  const d = new Date(weekStart);
-  if (Number.isNaN(d.getTime())) return "";
-  return `Week of ${d.toLocaleDateString("en-GB", { day: "numeric", month: "long", timeZone: "UTC" })}`;
-};
 
 // --- Sharing what the path produced (shared/feedback-loop.ts, shared/path-artifacts.ts) ---
 

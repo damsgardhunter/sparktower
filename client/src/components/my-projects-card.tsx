@@ -1,41 +1,22 @@
-import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link, useLocation } from "wouter";
+import { Link } from "wouter";
 import { RailCard, RailHeader } from "@/components/rail-card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CheckInComposer } from "@/components/check-in-composer";
-import { Eye, Plus, Check, Flame, Settings2, PenLine } from "lucide-react";
-
-interface ProjectStatus {
-  id: string;
-  title: string;
-  logoUrl: string | null;
-  views: number;
-  checkedIn: boolean;
-  checkIn: { id: string; goal: string } | null;
-  lastNextStep: string | null;
-  streak: number;
-}
+import type { NextStepItem } from "@/components/continue-path-card";
+import type { Project } from "@shared/schema";
+import { Eye, Plus, Settings2 } from "lucide-react";
 
 /**
- * Your projects, on the home page, with the week's check-in in reach.
+ * Your projects, on the home rail, each with the next step on its path.
  *
- * The loop only works if the prompt to write one is where you land. Before
- * this, a check-in was six clicks inside a project's Manage screen and the
- * landing page pointed at discovery rails instead — so the habit the product
- * is built on was the hardest thing on it to do.
- *
- * Projects needing a check-in sort to the top, and their button breathes until
- * it's done.
+ * The list comes from your projects; the next step comes from the same
+ * next-steps feed "Continue your path" uses, matched by project. A project
+ * with no started path just links to its manage page.
  */
 export function MyProjectsCard() {
-  const [, setLocation] = useLocation();
-  const [composingFor, setComposingFor] = useState<string | null>(null);
-
-  const { data, isLoading } = useQuery<{ weekStart: string; projects: ProjectStatus[] }>({
-    queryKey: ["/api/me/check-in-status"],
-  });
+  const { data: projects, isLoading } = useQuery<Project[]>({ queryKey: ["/api/user/projects"] });
+  const { data: steps } = useQuery<{ items: NextStepItem[] }>({ queryKey: ["/api/me/next-steps"] });
 
   if (isLoading) {
     return (
@@ -49,16 +30,15 @@ export function MyProjectsCard() {
     );
   }
 
-  const projects = data?.projects ?? [];
+  const list = projects ?? [];
 
-  if (projects.length === 0) {
+  if (list.length === 0) {
     return (
       <RailCard>
         <RailHeader title="Your projects" />
         <div className="pt-1 space-y-2">
           <p className="text-xs text-muted-foreground leading-relaxed">
-            Start one, then post a check-in each week — what you aimed for, what shipped,
-            what's next.
+            Start a project and Nova lays out the path to ship it.
           </p>
           <Button asChild size="sm" variant="outline" className="w-full gap-1.5">
             <Link href="/projects/new" data-testid="rail-create-project">
@@ -70,81 +50,65 @@ export function MyProjectsCard() {
     );
   }
 
-  // Anything still owed this week comes first; the rest is history.
-  const sorted = [...projects].sort((a, b) => Number(a.checkedIn) - Number(b.checkedIn));
+  // The primary section's item for each project, else its first.
+  const nextByProject = new Map<string, NextStepItem>();
+  for (const item of steps?.items ?? []) {
+    const existing = nextByProject.get(item.project.id);
+    if (!existing || (item.track?.primary && !existing.track?.primary)) nextByProject.set(item.project.id, item);
+  }
+
+  // Projects with a path, most recently worked first (the feed's order), then the rest.
+  const order = new Map((steps?.items ?? []).map((it, i) => [it.project.id, i] as const));
+  const sorted = [...list].sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity));
 
   return (
-    <>
-      <RailCard>
-        <RailHeader title="Your projects" href="/projects?view=mine" />
-        <div className="space-y-2.5 pt-1">
-          {sorted.map((p) => (
-            <div key={p.id} className="space-y-1.5" data-testid={`rail-project-${p.id}`}>
-              <div className="flex items-start gap-2">
-                {p.logoUrl ? (
-                  <img
-                    src={p.logoUrl} alt=""
-                    className="h-8 w-8 rounded-md object-contain border border-border/60 bg-background p-0.5 shrink-0"
-                  />
-                ) : (
-                  <div className="h-8 w-8 rounded-md bg-muted flex items-center justify-center shrink-0 text-[11px] font-semibold text-muted-foreground">
-                    {p.title.slice(0, 2).toUpperCase()}
-                  </div>
-                )}
-                <div className="min-w-0 flex-1">
-                  <Link
-                    href={`/projects/${p.id}`}
-                    className="text-sm font-medium leading-tight hover:underline block truncate"
-                  >
-                    {p.title}
-                  </Link>
-                  <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                    <span className="flex items-center gap-1 tabular-nums">
-                      <Eye className="h-3 w-3" />{p.views.toLocaleString()}
-                    </span>
-                    {p.streak > 0 && (
-                      <span className="flex items-center gap-1 text-amber-600 dark:text-amber-500">
-                        <Flame className="h-3 w-3" />{p.streak}w
-                      </span>
-                    )}
-                  </div>
+    <RailCard>
+      <RailHeader title="Your projects" href="/projects?view=mine" />
+      <div className="space-y-2.5 pt-1">
+        {sorted.slice(0, 5).map((p) => {
+          const item = nextByProject.get(p.id);
+          const nextLabel = item?.next ? (item.next.step ?? item.next.title) : null;
+          return (
+            <div key={p.id} className="flex items-start gap-2" data-testid={`rail-project-${p.id}`}>
+              {p.logoUrl ? (
+                <img
+                  src={p.logoUrl} alt=""
+                  className="h-8 w-8 rounded-md object-contain border border-border/60 bg-background p-0.5 shrink-0"
+                />
+              ) : (
+                <div className="h-8 w-8 rounded-md bg-muted flex items-center justify-center shrink-0 text-[11px] font-semibold text-muted-foreground">
+                  {p.title.slice(0, 2).toUpperCase()}
                 </div>
-              </div>
-
-              <div className="flex gap-1.5">
-                <Button
-                  size="sm" variant={p.checkedIn ? "ghost" : "outline"}
-                  className="btn-checkin flex-1 h-7 text-[11px] gap-1"
-                  data-due={p.checkedIn ? "false" : "true"}
-                  onClick={() => setComposingFor(p.id)}
-                  data-testid={`rail-checkin-${p.id}`}
+              )}
+              <div className="min-w-0 flex-1">
+                <Link
+                  href={`/projects/${p.id}`}
+                  className="text-sm font-medium leading-tight hover:underline block truncate"
                 >
-                  {p.checkedIn
-                    ? <><Check className="h-3 w-3" /> Checked in</>
-                    : <><PenLine className="h-3 w-3" /> Check in</>}
-                </Button>
-                <Button
-                  size="sm" variant="ghost"
-                  className="h-7 px-2 text-[11px]"
-                  onClick={() => setLocation(`/projects/${p.id}/manage`)}
-                  title="Manage project"
-                  data-testid={`rail-manage-${p.id}`}
-                >
-                  <Settings2 className="h-3 w-3" />
-                </Button>
+                  {p.title}
+                </Link>
+                <p className="text-[11px] text-muted-foreground truncate" data-testid={`rail-project-next-${p.id}`}>
+                  {nextLabel
+                    ? <>Next: <span className="text-foreground">{nextLabel}</span></>
+                    : item
+                      ? "Main line done"
+                      : <span className="inline-flex items-center gap-1 tabular-nums"><Eye className="h-3 w-3" />{(p.views ?? 0).toLocaleString()}</span>}
+                </p>
               </div>
+              <Button
+                asChild size="sm" variant="ghost"
+                className="h-7 w-7 p-0 shrink-0"
+                title="Manage project"
+                data-testid={`rail-manage-${p.id}`}
+              >
+                <Link href={item?.track ? `/projects/${p.id}/manage?section=${item.track.goal}` : `/projects/${p.id}/manage`}>
+                  <Settings2 className="h-3.5 w-3.5" />
+                </Link>
+              </Button>
             </div>
-          ))}
-        </div>
-      </RailCard>
-
-      {composingFor && (
-        <CheckInComposer
-          projectId={composingFor}
-          open
-          onClose={() => setComposingFor(null)}
-        />
-      )}
-    </>
+          );
+        })}
+      </div>
+    </RailCard>
   );
 }

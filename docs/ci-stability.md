@@ -45,10 +45,10 @@ cancelled) were the same script's first attempt; the failure was the
 ## Why the suite is deterministic
 
 There is no injected clock, deliberately. Every time window — rate limits,
-loop metrics, analytics summaries — is computed inside Postgres with
+pace, analytics summaries — is computed inside Postgres with
 `now() - interval`, in the database's own clock, in 17 places; there are zero
 comparisons of a JavaScript `Date` against a database timestamp. Date logic
 in unit tests uses fixed instants and never calls `Date.now()`. No test
-sleeps to cross a window. The rate-limit, moderation-drill and check-in
+sleeps to cross a window. The rate-limit, moderation-drill and (since retired) check-in
 suites were also run three times consecutively locally on the same code:
 20/20 each time.

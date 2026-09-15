@@ -2,7 +2,7 @@
  * The build loop: publish a progress post → get feedback → apply it → the
  * next post says what was acted on, and the people who gave it hear so.
  *
- * Built on feed posts rather than check-ins (which are being retired). A
+ * Built on feed posts (weekly check-ins were retired). A
  * project's post can carry up to four specific asks; comments on it from
  * outside the team are the feedback. Each comment moves through:
  *

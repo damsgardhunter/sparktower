@@ -36,7 +36,6 @@ interface Review {
   reports: { open: number; oldestOpenHours: number | null; newInWindow: number; newBefore: number; byReason: { reason: string; count: number }[] };
   limits: { action: string; refused: number; refusedBefore: number; spike: boolean; allowedLast24h: number | null; rule: string | null }[];
   content: { inWindow: number; before: number };
-  loops: { completionPercent: number | null; feedbackSlaPercent: number | null; d7Percent: number | null; submitted: number } | null;
   surfacesOff: { id: string; label: string }[];
   actions: ActionImpact[];
 }
@@ -197,8 +196,6 @@ export default function AdminSafety() {
           <span className="text-muted-foreground">·</span>
           <Link href="/admin/surfaces" className="text-primary hover:underline">Surfaces</Link>
           <span className="text-muted-foreground">·</span>
-          <Link href="/admin/loop-metrics" className="text-primary hover:underline">Loop metrics</Link>
-          <span className="text-muted-foreground">·</span>
           <Link href="/admin/analytics" className="text-primary hover:underline">Analytics</Link>
         </div>
       </header>
@@ -245,14 +242,10 @@ export default function AdminSafety() {
               )}
             </Section>
 
-            {/* -------------------------------------------------------------- loops */}
-            <Section icon={Activity} title="Loop health (7 days)" testId="safety-loops"
-              action={<Button asChild size="sm" variant="outline" className="h-7 text-xs"><Link href="/admin/loop-metrics">Details</Link></Button>}>
+            {/* ----------------------------------------------------------- content */}
+            <Section icon={Activity} title="Activity" testId="safety-activity">
               <div className="grid grid-cols-2 gap-2">
                 <Stat label="Posts, comments, messages" value={data.content.inWindow} delta={<Delta now={data.content.inWindow} before={data.content.before} goodWhen="up" />} />
-                <Stat label="Check-ins posted" value={data.loops?.submitted ?? "—"} />
-                <Stat label="Feedback within SLA" value={data.loops?.feedbackSlaPercent != null ? `${data.loops.feedbackSlaPercent}%` : "—"} />
-                <Stat label="D7 retention" value={data.loops?.d7Percent != null ? `${data.loops.d7Percent}%` : "—"} />
               </div>
             </Section>
           </div>

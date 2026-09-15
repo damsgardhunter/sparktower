@@ -37,7 +37,7 @@ function imageType(buf: Buffer): "image/png" | "image/jpeg" | "image/webp" | nul
 }
 
 /** Reads an uploaded image, or null when it isn't one the model can take. */
-async function readReference(url: string | null, name: string) {
+export async function readReference(url: string | null, name: string) {
   if (!url?.startsWith("/objects/")) return null;
   const buffer = await new ObjectStorageService()
     .readObjectBuffer(url, 15 * 1024 * 1024)

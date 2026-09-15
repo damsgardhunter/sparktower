@@ -14,14 +14,14 @@ import {
 
 describe("isPathDisabled", () => {
   it("blocks the surface's own path and everything under it", () => {
-    const off = { games: false };
-    expect(isPathDisabled("/games", off)).toBe(true);
-    expect(isPathDisabled("/games/typing", off)).toBe(true);
-    expect(isPathDisabled("/games/typing/abc-123", off)).toBe(true);
+    const off = { sprints: false };
+    expect(isPathDisabled("/sprints", off)).toBe(true);
+    expect(isPathDisabled("/sprints/practice", off)).toBe(true);
+    expect(isPathDisabled("/sprints/abc-123/review", off)).toBe(true);
   });
 
   it("leaves an enabled surface alone", () => {
-    expect(isPathDisabled("/games/typing", { games: true })).toBe(false);
+    expect(isPathDisabled("/sprints/practice", { sprints: true })).toBe(false);
   });
 
   it("treats a surface missing from the map as on", () => {
@@ -31,8 +31,8 @@ describe("isPathDisabled", () => {
      * be slow or fail; if an absent key read as "off", every gated page would
      * flash a 404 on load before the flags arrived.
      */
-    expect(isPathDisabled("/games", {})).toBe(false);
-    expect(isPathDisabled("/games", { games: undefined as any })).toBe(false);
+    expect(isPathDisabled("/sprints", {})).toBe(false);
+    expect(isPathDisabled("/sprints", { sprints: undefined as any })).toBe(false);
   });
 
   it("does not block an unrelated path", () => {
@@ -43,16 +43,22 @@ describe("isPathDisabled", () => {
   });
 
   it("does not let a prefix swallow a different top-level route", () => {
-    // "/c/" for check-ins must not catch "/contests" — the trailing slash in
-    // the prefix is what keeps them apart, and it is easy to remove.
-    expect(isPathDisabled("/contests", { checkIns: false, contests: true })).toBe(false);
-    expect(isPathDisabled("/c/abc123", { checkIns: false })).toBe(true);
+    // "/a/" for shared artifacts must not catch "/admin/..." — the trailing
+    // slash in the prefix is what keeps them apart, and it is easy to remove.
+    expect(isPathDisabled("/admin/reports", { feed: false })).toBe(false);
+    expect(isPathDisabled("/a/abc123", { feed: false })).toBe(true);
   });
 
   it("gates every prefix a surface claims", () => {
-    // checkIns owns two unrelated paths; a partial implementation that only
-    // handled the first would leave the feedback queue reachable.
-    expect(isPathDisabled("/feedback", { checkIns: false })).toBe(true);
+    // feed owns two unrelated paths; a partial implementation that only
+    // handled the first would leave shared artifacts reachable.
+    expect(isPathDisabled("/posts/abc", { feed: false })).toBe(true);
+    expect(isPathDisabled("/a/abc", { feed: false })).toBe(true);
+  });
+
+  it("gates the contests page with the contests switch", () => {
+    expect(isPathDisabled("/contests", { contests: false })).toBe(true);
+    expect(isPathDisabled("/contests", { contests: true })).toBe(false);
   });
 });
 
@@ -74,12 +80,20 @@ describe("the surface registry", () => {
     }
   });
 
-  it("ships backing on, and keeps the surfaces that need a crowd off by default", () => {
+  it("ships backing and contests on, and keeps live chat off by default", () => {
     const defaults = defaultSurfaceMap();
     // Backing holds real money in escrow; pledges stay held until a reviewer
-    // approves, and the switch turns the whole area off at runtime. The rest
-    // need people the site does not have yet.
+    // approves, and the switch turns the whole area off at runtime.
     expect(defaults.backing).toBe(true);
-    expect(defaults.games).toBe(false);
+    // Contests took the retired Needs feedback page's place in the nav.
+    expect(defaults.contests).toBe(true);
+    expect(defaults.liveChat).toBe(false);
+  });
+
+  it("no longer registers the retired surfaces", () => {
+    for (const id of ["checkIns", "games"]) {
+      expect(SURFACES.some((s) => s.id === id)).toBe(false);
+      expect(id in SURFACE_ROUTES).toBe(false);
+    }
   });
 });

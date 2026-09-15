@@ -43,8 +43,8 @@ function AuthGate() {
     if (loading) return;
     const inAuthGroup = segments[0] === "(auth)";
     const inOnboarding = (segments[0] as string) === "welcome";
-    // Shared links the web shows signed out: a check-in permalink and a published artifact.
-    const onPublicPage = ["a", "c", "check-in"].includes(segments[0] as string);
+    // Shared links the web shows signed out: a published artifact.
+    const onPublicPage = ["a"].includes(segments[0] as string);
 
     if (!user) {
       if (!inAuthGroup && !onPublicPage) router.replace("/(auth)/sign-in");

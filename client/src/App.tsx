@@ -23,17 +23,17 @@ import Onboarding from "@/pages/onboarding";
 import DocumentBuilder from "@/pages/document-builder";
 import Profile from "@/pages/profile";
 import Contests from "@/pages/contests";
+import ContestDetail from "@/pages/contest-detail";
 import Pricing from "@/pages/pricing";
 import BackingReview from "@/pages/backing-review";
-import CheckInDetail from "@/pages/check-in-detail";
 import PublicArtifactPage from "@/pages/public-artifact";
+import AdminPromotions from "@/pages/admin-promotions";
 import { NOVA_GRADIENT, NOVA_GRADIENT_CSS } from "@shared/backing";
+import { AnimatedTowerLogo } from "@/components/animated-tower-logo";
 import { UpgradeToKeepGenerating, CheckoutReturn, BillingIssueNotice } from "@/components/upgrade-to-keep-generating";
 import { useSurfaces } from "@/hooks/use-surfaces";
 import { isPathDisabled } from "@shared/surfaces";
-import FeedbackQueue from "@/pages/feedback-queue";
 import PostDetail from "@/pages/post-detail";
-import LoopMetrics from "@/pages/loop-metrics";
 import AdminSurfaces from "@/pages/admin-surfaces";
 import AdminReports from "@/pages/admin-reports";
 import AdminSafety from "@/pages/admin-safety";
@@ -41,8 +41,6 @@ import AdminAnalytics from "@/pages/admin-analytics";
 import { installAnalytics, trackPageView } from "@/lib/analytics";
 import Messages from "@/pages/messages";
 import ProjectManager from "@/pages/project-manager";
-import TypingArena from "@/pages/games/typing-arena";
-import SignalNoise from "@/pages/games/signal-noise";
 import Sprints from "@/pages/sprints";
 import SprintMatchmaking from "@/pages/sprint-matchmaking";
 import SprintDashboard from "@/pages/sprint-dashboard";
@@ -92,16 +90,15 @@ function Router() {
   /*
    * Routes that work with no account at all.
    *
-   * A check-in permalink is the artifact the weekly loop produces — it gets
-   * sent to people who have never heard of SparkTower, and bouncing them to a
-   * landing page would make the whole share step pointless. Checked before
-   * both the auth gate and the onboarding redirect so neither can swallow it.
+   * A published path artifact gets sent to people who have never heard of
+   * SparkTower, and bouncing them to a landing page would make the share step
+   * pointless. Checked before both the auth gate and the onboarding redirect
+   * so neither can swallow it.
    */
-  const isPublicRoute = /^\/(c|a)\/[^/]+$/.test(window.location.pathname);
+  const isPublicRoute = /^\/a\/[^/]+$/.test(window.location.pathname);
   if (isPublicRoute) {
     return (
       <Switch>
-        <Route path="/c/:id" component={CheckInDetail} />
         {/* A published path artifact: the growth loop's front door. */}
         <Route path="/a/:id" component={PublicArtifactPage} />
       </Switch>
@@ -177,11 +174,12 @@ function Router() {
           <Link
             href="/"
             aria-label="SparkTower home"
-            className="absolute left-1/2 -translate-x-1/2 top-0 w-32 h-[4.75rem] rounded-b-full flex items-end justify-center pb-1 shadow-[0_6px_12px_-4px_rgba(0,0,0,0.25)]"
+            className="absolute left-1/2 -translate-x-1/2 top-0 w-32 h-[4.75rem] rounded-b-full overflow-hidden flex items-end justify-center pb-1 shadow-[0_6px_12px_-4px_rgba(0,0,0,0.25)]"
             style={{ backgroundColor: NOVA_GRADIENT[1] }}
             data-testid="header-logo-hang"
           >
-            <img src="/favicon.png" alt="SparkTower" className="h-[4.25rem] w-[4.25rem] object-contain drop-shadow-md" data-testid="img-header-logo" />
+            {/* The semicircle clips the bolts, so they disappear through its edge. */}
+            <AnimatedTowerLogo height={68} className="drop-shadow-md" />
           </Link>
 
           <div className="relative z-10 flex items-center gap-2">
@@ -210,11 +208,8 @@ function Router() {
             <Route path="/matches" component={Matches} />
             <Route path="/leaderboard" component={Leaderboard} />
             <Route path="/discover" component={Discover} />
-            {/* Hidden from nav, still reachable by direct link. */}
             <Route path="/contests" component={Contests} />
-            <Route path="/games/typing/:id" component={TypingArena} />
-            <Route path="/games/typing" component={TypingArena} />
-            <Route path="/games/signal-noise" component={SignalNoise} />
+            <Route path="/contests/:slug" component={ContestDetail} />
             <Route path="/sprints" component={Sprints} />
             <Route path="/sprints/new" component={SprintMatchmaking} />
             <Route path="/sprints/practice" component={SprintPractice} />
@@ -224,14 +219,12 @@ function Router() {
             {/* Reviewer-only. The page itself renders NotFound for anyone
                 else, matching what the API tells them. */}
             <Route path="/admin/backing" component={BackingReview} />
-            <Route path="/c/:id" component={CheckInDetail} />
-            <Route path="/feedback" component={FeedbackQueue} />
             <Route path="/posts/:id" component={PostDetail} />
-            <Route path="/admin/loop-metrics" component={LoopMetrics} />
             <Route path="/admin/surfaces" component={AdminSurfaces} />
             <Route path="/admin/reports" component={AdminReports} />
             <Route path="/admin/safety" component={AdminSafety} />
             <Route path="/admin/analytics" component={AdminAnalytics} />
+            <Route path="/admin/promotions" component={AdminPromotions} />
             <Route component={NotFound} />
           </Switch>
         </main>

@@ -25,7 +25,6 @@ export const NOVA_HANDOFF_TABS = {
   "strategy.readiness": "strategy",
   "strategy.pricing": "strategy",
   "analytics.healthCheck": "analytics",
-  "activity.checkIn": "activity",
 } as const;
 
 export type NovaHandoff = keyof typeof NOVA_HANDOFF_TABS;

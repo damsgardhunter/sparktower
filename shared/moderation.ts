@@ -18,10 +18,6 @@ export interface RateLimit {
 }
 
 export const RATE_LIMITS = {
-  checkIn: {
-    max: 12, windowMinutes: 60,
-    message: "That's a lot of check-ins at once. Try again in a few minutes.",
-  },
   comment: {
     max: 20, windowMinutes: 10,
     message: "Slow down a moment — you can comment again shortly.",
@@ -229,15 +225,6 @@ const HOUR = 60;
 const DAY = 60 * 24;
 
 export const DUPLICATE_RULES = {
-  /*
-   * Aimed at last week's check-in reposted word for word to keep a streak
-   * alive. That's not a check-in, and the honesty of this number is the one
-   * thing the whole product is judged on.
-   */
-  checkIn: {
-    max: 1, windowMinutes: 30 * DAY, minLength: 40,
-    message: "That's word for word a check-in you've already posted. A quiet week is worth saying plainly — but say it as it was.",
-  },
   comment: {
     max: 2, windowMinutes: 6 * HOUR, minLength: 20,
     message: "You've left that same comment a few times already. Add something new to it and it'll go through.",
@@ -265,11 +252,26 @@ export type DuplicateAction = keyof typeof DUPLICATE_RULES;
 
 // --- Reports ------------------------------------------------------------
 
-export const REPORT_TARGETS = ["check_in", "comment", "feed_post", "feed_comment", "project", "user"] as const;
+/** What a new report can be filed against. */
+export const REPORT_TARGETS = ["comment", "feed_post", "feed_comment", "project", "user"] as const;
 export type ReportTarget = (typeof REPORT_TARGETS)[number];
 
-export const REPORT_TARGET_LABEL: Record<ReportTarget, string> = {
-  check_in: "Check-in",
+/**
+ * Targets of features that were retired. No new report can name one, but
+ * reports filed before the feature went still sit in the table, and the
+ * admin queue has to list them rather than choke on an unknown kind.
+ */
+export const RETIRED_REPORT_TARGETS = ["check_in"] as const;
+export type RetiredReportTarget = (typeof RETIRED_REPORT_TARGETS)[number];
+
+/** Any target a stored report can carry: current or retired. */
+export type StoredReportTarget = ReportTarget | RetiredReportTarget;
+
+export const isRetiredReportTarget = (t: string): t is RetiredReportTarget =>
+  (RETIRED_REPORT_TARGETS as readonly string[]).includes(t);
+
+export const REPORT_TARGET_LABEL: Record<StoredReportTarget, string> = {
+  check_in: "Check-in (retired)",
   comment: "Comment",
   feed_post: "Post",
   feed_comment: "Comment",

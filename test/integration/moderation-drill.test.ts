@@ -14,7 +14,7 @@ import request from "supertest";
 import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { db } from "../../server/db";
-import { users, moderationLog } from "@shared/schema";
+import { users, moderationLog, contentReports } from "@shared/schema";
 import { RATE_LIMITS } from "@shared/moderation";
 
 afterAll(async () => { await closeTestApp(); });
@@ -154,38 +154,76 @@ describe("takedown", () => {
     const stranger = await signedIn(app, "Stranger");
     const mod = await reviewer(app);
 
-    const project = await author.agent.post("/api/projects").send({ title: "Takedown", description: "A project whose check-in will be taken down and restored.", category: "saas", goal: "ship_mvp", subcategory: "saas" });
-    const checkIn = await author.agent.post(`/api/projects/${project.body.id}/check-ins`).send({ goal: "Ship the thing", proof: "Shipped it, honestly", nextStep: "Tell people", needsFeedback: true, visibility: "public" });
-    expect(checkIn.status).toBe(200);
-    const id = checkIn.body.id;
-    expect((await stranger.agent.get(`/api/check-ins/${id}`)).status).toBe(200);
+    const project = await author.agent.post("/api/projects").send({ title: "Takedown", description: "A project whose update will be taken down and restored.", category: "saas", goal: "ship_mvp", subcategory: "saas" });
+    const post = await author.agent.post("/api/feed").send({ postType: "project_update", projectId: project.body.id, content: "Shipped it, honestly. Tell people about the thing." });
+    expect(post.status).toBe(200);
+    const id = post.body.id;
+    const listedFor = async (who: any) => ((await who.get(`/api/feed?projectId=${project.body.id}`)).body.posts as any[]).some((p) => p.id === id);
+    expect((await stranger.agent.get(`/api/feed/${id}`)).status).toBe(200);
+    expect(await listedFor(request(app))).toBe(true);
 
-    await stranger.agent.post("/api/reports").send({ targetType: "check_in", targetId: id, reason: "spam", note: "Not a real update" }).expect(200);
+    await stranger.agent.post("/api/reports").send({ targetType: "feed_post", targetId: id, reason: "spam", note: "Not a real update" }).expect(200);
     const queue = (await mod.agent.get("/api/admin/reports")).body;
     const report = queue.find((r: any) => r.targetId === id);
     expect(report.targetHidden).toBe(false);
 
     // Needs a reason; a wrong kind of target is refused plainly.
-    expect((await mod.agent.post(`/api/admin/content/check_in/${id}/hide`).send({})).body.code).toBe("invalid_input");
+    expect((await mod.agent.post(`/api/admin/content/feed_post/${id}/hide`).send({})).body.code).toBe("invalid_input");
     expect((await mod.agent.post(`/api/admin/content/user/${author.userId}/hide`).send({ reason: "x" })).body.code).toBe("not_takedownable");
-    expect((await stranger.agent.post(`/api/admin/content/check_in/${id}/hide`).send({ reason: "x" })).status).toBe(404);
+    expect((await stranger.agent.post(`/api/admin/content/feed_post/${id}/hide`).send({ reason: "x" })).status).toBe(404);
 
-    const hide = await mod.agent.post(`/api/admin/content/check_in/${id}/hide`).send({ reason: "Spam" });
+    const hide = await mod.agent.post(`/api/admin/content/feed_post/${id}/hide`).send({ reason: "Spam" });
     expect(hide.status).toBe(200);
-    // Gone from the page, the project's list and the feedback queue for a stranger; the author still sees it.
-    expect((await stranger.agent.get(`/api/check-ins/${id}`)).status).toBe(404);
-    expect((await request(app).get(`/api/check-ins/${id}`)).status).toBe(404);
-    expect((await author.agent.get(`/api/projects/${project.body.id}/check-ins`)).body.some((c: any) => c.id === id)).toBe(false);
-    expect(((await request(app).get("/api/check-ins/queue/needs-feedback")).body as any[]).some((c: any) => c.id === id)).toBe(false);
-    expect((await author.agent.get(`/api/check-ins/${id}`)).status).toBe(200);
+    // Gone from its page and the project's feed for a stranger; the author still sees it.
+    expect((await stranger.agent.get(`/api/feed/${id}`)).status).toBe(404);
+    expect((await request(app).get(`/api/feed/${id}`)).status).toBe(404);
+    expect(await listedFor(stranger.agent)).toBe(false);
+    expect(await listedFor(request(app))).toBe(false);
+    expect((await author.agent.get(`/api/feed/${id}`)).status).toBe(200);
     expect((await mod.agent.get("/api/admin/reports")).body.find((r: any) => r.targetId === id).targetHidden).toBe(true);
 
-    const restore = await mod.agent.post(`/api/admin/content/check_in/${id}/restore`).send({});
+    const restore = await mod.agent.post(`/api/admin/content/feed_post/${id}/restore`).send({});
     expect(restore.status).toBe(200);
-    expect((await stranger.agent.get(`/api/check-ins/${id}`)).status).toBe(200);
+    expect((await stranger.agent.get(`/api/feed/${id}`)).status).toBe(200);
 
     const log = (await mod.agent.get("/api/admin/moderation-log")).body;
     const actions = (Array.isArray(log) ? log : log.entries ?? []).filter((e: any) => e.targetId === id).map((e: any) => e.action);
     expect(actions).toEqual(expect.arrayContaining(["content_hidden", "content_restored"]));
+  });
+});
+
+describe("retired check-ins", () => {
+  it("still lists reports filed against a check-in, but takes no new reports or comments on one", async () => {
+    const app = await getTestApp();
+    const author = await signedIn(app, "Author");
+    const stranger = await signedIn(app, "Stranger");
+    const mod = await reviewer(app);
+    const project = await author.agent.post("/api/projects").send({ title: "Retired", description: "A project from before check-ins were retired.", category: "saas", goal: "ship_mvp", subcategory: "saas" });
+    const projectId = project.body.id as string;
+
+    // A report from before the retirement, as it sits in the table.
+    const legacyId = `legacy-${Date.now()}`;
+    const [legacy] = await db.insert(contentReports).values({
+      reporterId: stranger.userId, targetType: "check_in", targetId: legacyId, targetOwnerId: author.userId,
+      projectId, reason: "spam", snapshot: "Goal: ship\n\nProof: shipped",
+    } as any).returning();
+
+    const all = await mod.agent.get("/api/admin/reports");
+    expect(all.status).toBe(200);
+    expect(all.body.find((r: any) => r.id === legacy.id)).toMatchObject({ targetType: "check_in", snapshot: "Goal: ship\n\nProof: shipped" });
+    const onlyRetired = await mod.agent.get("/api/admin/reports?type=check_in");
+    expect(onlyRetired.status).toBe(200);
+    expect((onlyRetired.body as any[]).map((r) => r.targetType)).toEqual(expect.arrayContaining(["check_in"]));
+    expect((onlyRetired.body as any[]).every((r) => r.targetType === "check_in")).toBe(true);
+    // Its content can't be taken down any more (there's nothing left that shows it), but the report can still be closed.
+    expect((await mod.agent.post(`/api/admin/content/check_in/${legacyId}/hide`).send({ reason: "Spam" })).body.code).toBe("not_takedownable");
+
+    const newReport = await stranger.agent.post("/api/reports").send({ targetType: "check_in", targetId: "anything", reason: "spam" });
+    expect(newReport.status).toBe(400);
+    const comment = await stranger.agent.post(`/api/projects/${projectId}/comments`).send({ targetType: "check_in", targetId: "anything", content: "Late to the party." });
+    expect(comment.status).toBe(400);
+    // The check-in routes themselves are gone.
+    expect((await request(app).get("/api/check-ins/queue/needs-feedback")).status).toBe(404);
+    expect((await author.agent.post(`/api/projects/${projectId}/check-ins`).send({ goal: "x", proof: "y", nextStep: "z" })).status).toBe(404);
   });
 });

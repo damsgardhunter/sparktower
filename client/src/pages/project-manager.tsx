@@ -53,10 +53,9 @@ import { NovaTaskPlanner } from "@/components/nova-task-planner";
 import { DocumentStartDialog, looksLikeDocumentTask } from "@/components/document-start-dialog";
 import { CodebaseTab } from "@/components/codebase-tab";
 import { NovaActionButton } from "@/components/nova-action-button";
-import { NovaHandoffProvider, useNovaHandoffPending } from "@/components/nova-handoff";
+import { NovaHandoffProvider } from "@/components/nova-handoff";
 import { BackingSetup } from "@/components/backing-setup";
 import { InvestmentInbox } from "@/components/investment-inbox";
-import { CheckInList } from "@/components/check-in-list";
 import { ImageUploadField } from "@/components/image-upload-field";
 import { ProfileVisualsButton } from "@/components/profile-visuals-button";
 import { type NovaHandoff } from "@shared/nova-handoff";
@@ -67,7 +66,7 @@ import {
 import type {
   Project, ProjectMember, UserProfile, User, ProjectKanbanTask,
   ProjectPersona, ProjectMilestone, ProjectFile, ProjectLink, ProjectDocument,
-  ProjectDecision, ProjectCheckIn, ProjectActivityLog,
+  ProjectDecision, ProjectActivityLog,
 } from "@shared/schema";
 import { CREDIT_COSTS } from "@shared/plans";
 import { Label } from "@/components/ui/label";
@@ -246,11 +245,6 @@ export default function ProjectManager() {
 
   const { data: decisions } = useQuery<(ProjectDecision & { user: User })[]>({
     queryKey: ["/api/projects", projectId, "decisions"],
-    enabled: !!projectId && activeTab === "activity",
-  });
-
-  const { data: checkIns } = useQuery<(ProjectCheckIn & { user: User; profile?: UserProfile })[]>({
-    queryKey: ["/api/projects", projectId, "check-ins"],
     enabled: !!projectId && activeTab === "activity",
   });
 
@@ -437,11 +431,6 @@ export default function ProjectManager() {
   const deleteDecisionMutation = useMutation({
     mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/decisions/${id}`); },
     onSuccess: () => { toast({ title: "Decision deleted" }); queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "decisions"] }); },
-  });
-
-  const createCheckInMutation = useMutation({
-    mutationFn: async (data: any) => { const res = await apiRequest("POST", `/api/projects/${projectId}/check-ins`, data); return res.json(); },
-    onSuccess: () => { toast({ title: "Check-in submitted" }); queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "check-ins"] }); },
   });
 
   const createFileMutation = useMutation({
@@ -2856,18 +2845,8 @@ function ActivityTab({ activity, decisions, projectId, projectTitle, onCreateDec
   onCreateDecision: (data: any) => void; onUpdateDecision: (id: string, data: any) => void;
   onDeleteDecision: (id: string) => void;
 }) {
-  const [activeSection, setActiveSection] = useState<"feed" | "decisions" | "checkins" | "feedback">("feed");
+  const [activeSection, setActiveSection] = useState<"feed" | "decisions" | "feedback">("feed");
   const newFeedback = useNewFeedbackCount(projectId);
-
-  /*
-   * Land on Check-ins when the dashboard sent us here to write one — otherwise
-   * the handoff opens a composer behind the Feed tab, which reads as the page
-   * having ignored the click.
-   */
-  const pendingHandoff = useNovaHandoffPending();
-  useEffect(() => {
-    if (pendingHandoff === "activity.checkIn") setActiveSection("checkins");
-  }, [pendingHandoff]);
   const [showDecisionForm, setShowDecisionForm] = useState(false);
   const [decisionForm, setDecisionForm] = useState({ title: "", decision: "", context: "" });
 
@@ -2883,7 +2862,6 @@ function ActivityTab({ activity, decisions, projectId, projectTitle, onCreateDec
         {([
           { id: "feed" as const, label: "Activity Feed", icon: Activity },
           { id: "decisions" as const, label: "Decision Log", icon: MessageSquare },
-          { id: "checkins" as const, label: "Check-ins", icon: CheckCircle2 },
           { id: "feedback" as const, label: "Feedback", icon: MessageSquare },
         ]).map(s => (
           <Button key={s.id} variant={activeSection === s.id ? "default" : "ghost"} size="sm" className="gap-2" onClick={() => setActiveSection(s.id)} data-testid={`section-${s.id}`}>
@@ -2953,10 +2931,6 @@ function ActivityTab({ activity, decisions, projectId, projectTitle, onCreateDec
             </Card>
           )) : !showDecisionForm && <p className="text-sm text-muted-foreground">No decisions logged yet.</p>}
         </div>
-      )}
-
-      {activeSection === "checkins" && (
-        <CheckInList projectId={projectId} projectTitle={projectTitle} />
       )}
 
       {activeSection === "feedback" && (

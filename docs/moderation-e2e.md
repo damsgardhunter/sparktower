@@ -1,11 +1,12 @@
 # Moderation, end to end (comments)
 
-The loop for one content type — comments on projects and check-ins:
+The loop for one content type — comments on projects (and their milestones and roadmap phases):
 
 **create → report → queue → decide (action + reason code) → visibility changes → audit entry**
 
 Everything here is live code. The automated version of this runbook is
-`e2e/moderation-loop.spec.ts` (browser) and
+`e2e/moderation-loop.spec.ts` (browser: the reviewer's queue, decision,
+history and undo; the report itself is filed through the API) and
 `test/integration/moderation-loop.test.ts` (API); the manual version is below.
 
 ## The pieces
@@ -61,18 +62,19 @@ Add your address and restart, or for a local account:
 UPDATE users SET platform_role = 'reviewer' WHERE email = 'you@example.com';
 ```
 
-1. **Create.** As builder A, open one of your check-ins (`/c/<id>`) and post a
-   comment.
-2. **Report.** As builder B, open the same check-in, click the flag on the
-   comment, pick a reason, add a note, and submit.
+1. **Create.** As builder A, post a comment on your own project
+   (`POST /api/projects/<id>/comments` with `targetType: "project"`).
+2. **Report.** As builder B, report the comment
+   (`POST /api/reports` with `targetType: "comment"`, a reason, and a note).
 3. **Queue.** As the reviewer, open `/admin/reports` → **Open** →
    **Comments**. The report shows the reason, the note, and a snapshot of
    the comment.
 4. **Decide.** Choose **Remove** and a reason code, add a note, and click
    **Apply**. Apply stays disabled until both are chosen. The report leaves
    Open.
-5. **Visibility.** As B, reload the check-in: the comment is gone. For a
-   shadow-hide, A still sees it and B doesn't.
+5. **Visibility.** As B, read the project's comments
+   (`GET /api/projects/<id>/comments?targetType=project&targetId=<id>`): the
+   comment is gone. For a shadow-hide, A still sees it and B doesn't.
 6. **Audit.** Under **Actioned**, the report's **History** shows the action,
    the code, the reviewer and the time. Or query it:
 
@@ -122,11 +124,19 @@ Hidden content is filtered where it is read, not only flagged:
 
 | Content | Read path | Filter |
 |---|---|---|
-| Project and check-in comments | `server/storage.ts` (`commentVisibleTo`, the project comments list), `GET /api/projects/:id/comments` | `hiddenAt IS NULL`, or the author for a shadow-hide |
+| Project comments | `server/storage.ts` (`commentVisibleTo`, the project comments list), `GET /api/projects/:id/comments` | `hiddenAt IS NULL`, or the author for a shadow-hide |
 | Feed posts | `server/storage.ts` (`getFeedPosts`: `isNull(feedPosts.hiddenAt)`; `getFeedPost`: 404 unless author) | same |
 | Feed comments | `server/storage.ts` (`getFeedComments`: hidden kept only for its author) and `server/feed-routes.ts` (no replies or reactions on hidden) | same |
-| Check-ins | `server/check-in-routes.ts` (`GET /api/check-ins/:id` 404 unless author; lists `isNull(projectCheckIns.hiddenAt)`) | same |
 | Suspended accounts | `blockSuspended` in `server/moderation.ts` (writes refused with `account_suspended`) | — |
+
+## Retired check-ins
+
+Weekly check-ins were retired. Reports filed against one before that still
+load in `/admin/reports` (target `check_in`, labelled "Check-in (retired)" by
+`REPORT_TARGET_LABEL`, filterable with `?type=check_in`) and can still be
+decided, but `POST /api/reports` refuses a new `check_in` target, comments
+can't target one, and there is no takedown for one (`not_takedownable`).
+Proof: `test/integration/moderation-drill.test.ts` ("retired check-ins").
 
 ## Reviewer console routes
 

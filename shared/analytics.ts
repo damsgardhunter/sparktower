@@ -1,12 +1,7 @@
 /**
  * The behaviour stream: what people actually do on the site, as they do it.
  *
- * Separate from `shared/loop-events.ts` on purpose. That file is five names
- * chosen because five specific numbers in the spec need them, and it stays
- * small so those numbers stay trustworthy. This is the opposite kind of thing —
- * broad, high volume, and read by a person watching rather than by a metric.
- * Mixing them would mean every new event risked moving a number the product is
- * judged on.
+ * Broad, high volume, and read by a person watching rather than by a metric.
  *
  * Two sources, and between them they cover the whole surface:
  *
@@ -57,7 +52,7 @@ export const MAX_BATCH_EVENTS = 40;
 
 /**
  * Paths carry ids; a stream grouped by raw path has one row per project and no
- * useful totals. Normalising to a pattern — `/api/projects/:id/check-ins` —
+ * useful totals. Normalising to a pattern — `/api/projects/:id/comments` —
  * makes "what do people do here" answerable with a GROUP BY.
  *
  * Stored at write time, because the pattern is a fact about the request. The
@@ -98,11 +93,8 @@ const ACTION_LABELS: { method?: string; pattern: RegExp; label: string }[] = [
   { method: "POST", pattern: /^\/api\/profile$/, label: "Set up their profile" },
 
   // The loop
-  { method: "POST", pattern: /^\/api\/projects\/:id\/check-ins\/draft$/, label: "Asked Nova to draft a check-in" },
-  { method: "POST", pattern: /^\/api\/projects\/:id\/check-ins$/, label: "Published a check-in" },
   { method: "POST", pattern: /^\/api\/projects\/:id\/comments$/, label: "Commented on a project" },
   { method: "POST", pattern: /^\/api\/feed\/:id\/comments$/, label: "Commented on a post" },
-  { method: "POST", pattern: /^\/api\/check-ins\/:id\/share$/, label: "Shared a check-in" },
 
   // Building
   { method: "POST", pattern: /^\/api\/projects$/, label: "Created a project" },
@@ -159,10 +151,9 @@ export function pageLabel(path: string): string {
     "/matches": "Matches",
     "/messages": "Messages",
     "/leaderboard": "Leaderboard",
-    "/feedback": "Feedback queue",
+    "/contests": "Contests and Communities",
     "/pricing": "Pricing",
     "/onboarding": "Onboarding",
-    "/c/:id": "A shared check-in",
   };
   return named[p] ?? p;
 }

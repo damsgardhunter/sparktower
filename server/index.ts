@@ -4,12 +4,12 @@ import { createServer } from "http";
 import { networkInterfaces } from "os";
 import { runMigrations } from "stripe-replit-sync";
 import { getStripeSync, isStripeConfigured } from "./stripeClient";
-import { ensureGameBadges } from "./badge-seed";
 import { syncPlatformRoles } from "./platform-roles";
 import { backfillMissingProfiles } from "./user-provisioning";
 import { loadSurfaceFlags, startSurfaceFlagRefresh } from "./surfaces";
 import { startBackingJobs } from "./backing-jobs";
 import { startAnalyticsJobs } from "./analytics";
+import { startPromotionJobs } from "./promotion-sync";
 import { startModerationJobs } from "./moderation";
 import { checkMerchFonts } from "./merch-render";
 import { serveStatic } from "./static";
@@ -65,9 +65,6 @@ let appReady = false;
     console.error("Stripe init failed (non-fatal):", stripeErr);
   }
 
-  // Game badges are referenced by hard-coded id, so their rows have to exist.
-  await ensureGameBadges();
-
   // Feature kill switches, read before any route can be hit, then re-read on a
   // timer so a toggle reaches every instance rather than only the one that
   // served it — this deploys to autoscale.
@@ -94,6 +91,7 @@ let appReady = false;
   // running several server processes is safe.
   startBackingJobs();
   startAnalyticsJobs();
+  startPromotionJobs();
   startModerationJobs();
 
   const app = await createApp({

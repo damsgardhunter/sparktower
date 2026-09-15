@@ -32,12 +32,12 @@ const SEVERITY: Record<string, string> = { critical: "#E11D48", important: color
 const TAB_FOR: Record<string, string> = {
   kanban: "tasks", milestones: "milestones", team: "team", setup: "setup", activity: "activity", roadmap: "roadmap",
   strategy: "strategy", personas: "personas", analytics: "analytics", research: "research", files: "files", codebase: "codebase",
-  public: "public", investors: "investors", launch: "launch", support: "support", chat: "chat", checkins: "checkins",
+  public: "public", investors: "investors", launch: "launch", support: "support", chat: "chat",
 };
 const HANDOFF_TAB: Record<string, string> = {
   "roadmap.nextActions": "roadmap", "roadmap.update": "roadmap", "roadmap.rebuild": "roadmap", "kanban.generate": "kanban",
   "personas.generate": "personas", "team.recommendPeople": "team", "strategy.readiness": "strategy", "strategy.pricing": "strategy",
-  "analytics.healthCheck": "analytics", "activity.checkIn": "checkins",
+  "analytics.healthCheck": "analytics",
 };
 
 const FIRST_STEP: Partial<Record<ProjectGoal, string>> = { systemize_business: "SYS.F1.1", raise_funding: "FUND.C1.1" };

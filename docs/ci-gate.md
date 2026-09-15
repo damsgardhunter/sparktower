@@ -7,7 +7,7 @@ requires these status checks by job name, so the names in
 | Job | What it proves |
 | --- | --- |
 | `server-web` | lint clean, **zero** type errors, the API and unit suites against a real Postgres |
-| `e2e` | the browser journeys (sign up → project → path → check-in; a stranger reads a shared check-in) |
+| `e2e` | the browser journeys (sign up → project → path → first update; a stranger reads a shared step) |
 | `secrets` | gitleaks over the full history, every run, whatever the trigger |
 | `mobile` | the Expo app typechecks |
 | `packages` | the MCP server and the VS Code extension build, the MCP bundle runs with its workspace dependency removed, and the extension packages into a .vsix |

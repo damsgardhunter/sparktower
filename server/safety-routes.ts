@@ -20,7 +20,6 @@ import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { requireReviewer } from "./platform-roles";
 import { logModeration, rateLimit } from "./moderation";
 import { surfaceMap } from "./surfaces";
-import { loopMetrics } from "./loop-metrics";
 import { ACTIVITY_EVENTS } from "@shared/analytics";
 import { SURFACES, SURFACE_API_PREFIXES } from "@shared/surfaces";
 import { RATE_LIMITS } from "@shared/moderation";
@@ -217,20 +216,6 @@ export async function safetyReview({ withImpact = true }: { withImpact?: boolean
   const flags = surfaceMap();
   const surfacesOff = SURFACES.filter((s) => flags[s.id] === false).map((s) => ({ id: s.id, label: s.label }));
 
-  // The check-in loop's headline numbers, over the last week.
-  let loops: { completionPercent: number | null; feedbackSlaPercent: number | null; d7Percent: number | null; submitted: number } | null = null;
-  if (withImpact) try {
-    const m: any = await loopMetrics(7);
-    loops = {
-      completionPercent: m.funnel?.completionPercent ?? null,
-      feedbackSlaPercent: m.feedbackSla?.percent ?? null,
-      d7Percent: m.retention?.d7?.percent ?? null,
-      submitted: Number(m.funnel?.submitted ?? 0),
-    };
-  } catch (err) {
-    console.error("[safety] Loop metrics unavailable:", err);
-  }
-
   const recent = rowsOf<{ id: string }>(await db.execute(sql`
     SELECT id FROM ${moderationLog}
     WHERE action <> ${SAFETY_REVIEW_ACTION} AND created_at >= now() - interval '7 days'
@@ -265,7 +250,6 @@ export async function safetyReview({ withImpact = true }: { withImpact?: boolean
     },
     limits,
     content: { inWindow: contentNow, before: contentBefore },
-    loops,
     surfacesOff,
     actions,
   };

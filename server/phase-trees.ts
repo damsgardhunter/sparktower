@@ -11,10 +11,10 @@
  * Called once, at creation. Re-running would duplicate the tree; the roadmap
  * container's presence is the guard.
  */
-import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db } from "./db";
 import { storage } from "./storage";
-import { projects, projectKanbanTasks, projectCheckIns, projectRoadmaps, pathPace, pathPaceEvents, pathWork, projectCodeAudits, projectTracks } from "@shared/schema";
+import { projects, projectKanbanTasks, feedPosts, projectRoadmaps, pathPace, pathPaceEvents, pathWork, projectCodeAudits, projectTracks } from "@shared/schema";
 import {
   resolveTree, treeFor, mainLineMilestones, computePace, admitInjections, NEXT_PATHS, loopsAlike, splitMergedPaths,
   type ResolvedMilestone, type Artifact, type InjectionProposal, type PaceState, type WorkPayload, type Actor,
@@ -377,7 +377,7 @@ async function pathTasks(projectId: string, goal?: ProjectGoal) {
 
 /**
  * Recalculates pace and writes it down. Called on every sign of effort
- * (a backbone task done, a check-in) and lazily on read, so absence decays
+ * (a backbone task done, an update posted) and lazily on read, so absence decays
  * the date without anyone having to trigger it. With `effort` it also logs
  * the recalculation event the builder can scroll back through.
  */
@@ -401,7 +401,12 @@ export async function refreshPace(projectId: string, effort?: {
   const completions = tasks
     .filter((t) => t.status === "done" && t.completedAt && !carried(t) && (backboneIdOf(t.tags) || parentOf(t.tags) || injectedPhaseOf(t.tags)))
     .map((t) => ({ at: new Date(t.completedAt!), estimateMinutes: minutesOf(t) }));
-  const checkIns = await db.select({ at: projectCheckIns.createdAt }).from(projectCheckIns).where(eq(projectCheckIns.projectId, projectId));
+  // Posting an update about the project is a sign of life; the system's own posts echo events
+  // already counted. Its age is worked out by the database: its timestamps read back into JS
+  // are off by the server's timezone.
+  const [lastPost] = await db.select({ ageSeconds: sql<number | null>`extract(epoch from (now() - max(${feedPosts.createdAt})))::float8` })
+    .from(feedPosts).where(and(eq(feedPosts.projectId, projectId), eq(feedPosts.isSystemGenerated, false), isNull(feedPosts.hiddenAt)));
+  const postActivity = lastPost?.ageSeconds != null ? [new Date(Date.now() - Number(lastPost.ageSeconds) * 1000)] : [];
   // Code evidence: an audit whose delta shows the code moved is a day of activity.
   const audits = await db.select({ at: projectCodeAudits.createdAt, delta: projectCodeAudits.delta }).from(projectCodeAudits).where(eq(projectCodeAudits.projectId, projectId));
   const codeActivity = audits.filter((a) => (a.delta as any)?.changed).map((a) => new Date(a.at));
@@ -417,7 +422,7 @@ export async function refreshPace(projectId: string, effort?: {
 
   const result = computePace({
     now: new Date(), createdAt: new Date(project.createdAt), completions,
-    activityDates: [...checkIns.map((c) => new Date(c.at)), ...codeActivity],
+    activityDates: [...postActivity, ...codeActivity],
     remainingMinutes: Math.max(0, totalMinutes - doneMinutes), totalMinutes,
     authoredDays: plan.authoredDays,
     tier: tree.defaultTier, pipeline: inMarket,
@@ -662,8 +667,8 @@ export async function reconcileLoops(projectId: string, foundRaw: { title: strin
   const existing = tasks.filter((t) => parentOf(t.tags) === sourceBackboneId && isLoop(t.tags));
   const [proj] = await db.select({ rejected: projects.rejectedLoops }).from(projects).where(eq(projects.id, projectId));
   const rejected = (proj?.rejected ?? []).map(norm);
-  // A removed loop stays removed under a new name: "post a weekly check-in and
-  // get feedback" and "ship weekly check-ins on a project" share most of their
+  // A removed loop stays removed under a new name: "post a weekly update and
+  // get feedback" and "ship weekly updates on a project" share most of their
   // words, and that is the test — not the exact title.
   const isRejected = (title: string) => rejected.some((r) => r && loopsAlike(r, norm(title)));
   const created: string[] = [];
@@ -819,7 +824,7 @@ export async function extendBranch(projectId: string, phaseId: string, goal?: Pr
 
 /**
  * Marks backbone milestones done on evidence that predates the path: a
- * project's existing tasks, audits and check-ins, read by Nova, or the
+ * project's existing tasks, audits and update posts, read by Nova, or the
  * builder saying so. Counted as progress, not as pace — the work happened
  * before the path was watching.
  */
@@ -1078,7 +1083,7 @@ export async function milestoneDetail(projectId: string, backboneId: string) {
   };
 }
 
-/** The artifacts Nova may ground an injected task in: written answers, check-ins, decisions. */
+/** The artifacts Nova may ground an injected task in: written answers, update posts, decisions. */
 export async function collectArtifacts(projectId: string): Promise<Artifact[]> {
   const goal = await trackState(projectId);
   if (!goal) return [];
@@ -1103,8 +1108,11 @@ export async function collectArtifacts(projectId: string): Promise<Artifact[]> {
     if (profile.answered > 0) out.push({ label: "capital-profile", kind: "milestone", text: renderCapitalProfile(profile).slice(0, 2000) });
     if (funding.capitalRoute) out.push({ label: "capital-route", kind: "milestone", text: `Chosen route: ${CAPITAL_ROUTES.find((r) => r.id === funding.capitalRoute)?.label ?? funding.capitalRoute}` });
   }
-  const checkIns = await storage.getProjectCheckIns(projectId).catch(() => []);
-  for (const c of checkIns.slice(0, 4)) out.push({ label: `check-in:${c.id}`, kind: "check-in", text: `Goal: ${c.goal}. Proof: ${c.proof}. Next: ${c.nextStep ?? ""}`.slice(0, 600) });
+  // The project's latest update posts: what the builder has written, in public, that they did.
+  const updates = await db.select({ id: feedPosts.id, content: feedPosts.content }).from(feedPosts)
+    .where(and(eq(feedPosts.projectId, projectId), eq(feedPosts.isSystemGenerated, false), isNull(feedPosts.hiddenAt)))
+    .orderBy(desc(feedPosts.createdAt)).limit(4);
+  for (const u of updates) out.push({ label: `update:${u.id}`, kind: "update", text: u.content.slice(0, 600) });
   const decisions = await storage.getProjectDecisions(projectId).catch(() => []);
   for (const d of decisions.slice(0, 4)) out.push({ label: `decision:${d.id}`, kind: "decision", text: `${(d as any).title ?? ""}: ${(d as any).description ?? (d as any).rationale ?? ""}`.slice(0, 600) });
   return out;

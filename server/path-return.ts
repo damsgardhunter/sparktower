@@ -20,7 +20,7 @@ import { projects, projectMembers, feedPosts, projectKanbanTasks } from "@shared
 import { pathStatus, listTracks } from "./phase-trees";
 import { mainLineMilestones, resolveTree } from "@shared/phase-trees";
 import type { ProjectGoal } from "@shared/goals";
-import { weekStartOf } from "@shared/check-in";
+import { weekStartOf } from "@shared/weeks";
 import { notify } from "./notifications";
 
 /** Away this many days with a step waiting, and the path sends one nudge for that step. */

@@ -8,7 +8,7 @@
  * day they're written and quietly wrong from the next route onwards.
  *
  * Everything here is fire-and-forget. Analytics failing must never fail the
- * request it was watching: losing a row is nothing, losing someone's check-in
+ * request it was watching: losing a row is nothing, losing someone's post
  * because the stream hiccuped is the product.
  */
 import type { Express, RequestHandler } from "express";
@@ -22,9 +22,8 @@ import {
   routePattern,
 } from "@shared/analytics";
 import { rateLimit } from "./moderation";
-import { sweepLoopEvents } from "./loop-metrics";
-import { LOOP_EVENTS_RETENTION_DAYS } from "@shared/loop-events";
 import { CLIENT_EXPLORE_EVENT_NAMES, isExploreEvent, sanitizeExploreProps } from "@shared/explore-events";
+import { PROMO_EVENT_NAMES, sanitizePromoProps } from "@shared/promotions";
 
 /** Cookie holding the visitor id. Not httpOnly: the client stamps events too. */
 const VISITOR_COOKIE = "st_vid";
@@ -246,12 +245,15 @@ export function registerAnalyticsIngest(app: Express) {
       // Page views, and the Explore loop's events (shared/explore-events.ts) —
       // except its actions, which the follow, connect and message endpoints
       // record themselves. "Arrived" is the server's to emit — see attachVisitor.
-      const allowed = new Set<string>([ACTIVITY_EVENTS.pageView, ...CLIENT_EXPLORE_EVENT_NAMES]);
+      // And featured tools' impressions, clicks and video plays (shared/promotions.ts).
+      const allowed = new Set<string>([ACTIVITY_EVENTS.pageView, ...CLIENT_EXPLORE_EVENT_NAMES, ...PROMO_EVENT_NAMES]);
 
       for (const e of batch.slice(0, MAX_BATCH_EVENTS)) {
         const name = String(e?.name || "");
         if (!allowed.has(name)) continue;
         const path = String(e?.path || "/").slice(0, 500);
+        const promo = PROMO_EVENT_NAMES.includes(name) ? sanitizePromoProps(e?.props) : null;
+        if (PROMO_EVENT_NAMES.includes(name) && !promo) continue;
 
         await recordActivity({
           name,
@@ -263,7 +265,7 @@ export function registerAnalyticsIngest(app: Express) {
           userAgent: req.headers["user-agent"],
           // An Explore event keeps its five properties and nothing else; see
           // sanitizeExploreProps for why that's the boundary.
-          props: isExploreEvent(name) ? { ...sanitizeExploreProps(e?.props) } : {
+          props: promo ? { ...promo } : isExploreEvent(name) ? { ...sanitizeExploreProps(e?.props) } : {
             ...(typeof e?.title === "string" ? { title: e.title.slice(0, 200) } : {}),
             ...(Number.isFinite(e?.msOnPage) ? { msOnPage: Math.round(e.msOnPage) } : {}),
           },
@@ -276,22 +278,20 @@ export function registerAnalyticsIngest(app: Express) {
 }
 
 /**
- * Sweeps rows past their retention windows.
+ * Sweeps rows past their retention window.
  *
- * Both event streams grow without a natural ceiling — every page anyone opens,
- * every loop beacon, signed in or not — so each gets an expiry rather than an
- * assumption that someone will notice: activity events after RETENTION_DAYS,
- * loop events after LOOP_EVENTS_RETENTION_DAYS (longer, because the loop
- * metrics page reads a year back). `project_analytics_events` isn't a stream —
- * it's a creator's list of metric definitions — so it has no expiry.
+ * The event stream grows without a natural ceiling — every page anyone opens,
+ * signed in or not — so it gets an expiry rather than an assumption that
+ * someone will notice: activity events after RETENTION_DAYS.
+ * `project_analytics_events` isn't a stream — it's a creator's list of metric
+ * definitions — so it has no expiry.
  */
-export async function sweepExpiredEvents(): Promise<{ activity: number; loop: number }> {
+export async function sweepExpiredEvents(): Promise<{ activity: number }> {
   const result = await db.delete(activityEvents).where(
     sql`${activityEvents.createdAt} < now() - interval '${sql.raw(String(RETENTION_DAYS))} days'`,
   );
   const activity = (result as any)?.rowCount ?? 0;
-  const loop = await sweepLoopEvents();
-  return { activity, loop };
+  return { activity };
 }
 
 export function startAnalyticsJobs(): void {
@@ -299,7 +299,6 @@ export function startAnalyticsJobs(): void {
     try {
       const n = await sweepExpiredEvents();
       if (n.activity > 0) console.log(`[analytics] Swept ${n.activity} activity event(s) past ${RETENTION_DAYS} days.`);
-      if (n.loop > 0) console.log(`[analytics] Swept ${n.loop} loop event(s) past ${LOOP_EVENTS_RETENTION_DAYS} days.`);
     } catch (err) {
       console.error("[analytics] Retention sweep failed:", err);
     }

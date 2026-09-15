@@ -171,7 +171,7 @@ export const NOVA_MCP_TOOLS: NovaMcpTool[] = [
       type: "object",
       properties: {
         ...projectId,
-        title: { type: "string", description: "Short name, in the product's own words — \"Explore\", \"Weekly check-in\"." },
+        title: { type: "string", description: "Short name, in the product's own words — \"Explore\", \"Weekly update\"." },
         type: { type: "string", enum: ["product", "growth", "retention", "revenue", "referral"], description: "What kind of loop. Defaults to product." },
         description: { type: "string", description: "The 3–5 step sequence, written out: open X → see Y → do Z → come back." },
         sourceId: { type: "string", description: "The milestone the loops hang off. Defaults to this path's core-loop milestone." },

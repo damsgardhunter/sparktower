@@ -101,7 +101,6 @@ export default function Feed() {
       qc.invalidateQueries({ queryKey: ["notification-count"] }),
       qc.invalidateQueries({ queryKey: ["profile-summary"] }),
       qc.invalidateQueries({ queryKey: NEXT_STEPS_KEY }),
-      qc.invalidateQueries({ queryKey: ["check-in-status"] }),
       qc.invalidateQueries({ queryKey: ["feedback-used"] }),
     ]);
     setRefreshing(false);

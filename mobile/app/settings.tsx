@@ -16,7 +16,7 @@ const HELP = [
   { icon: "rocket" as const, q: "Projects", a: "Start one from the + button. Nova turns the idea into a brief, a roadmap and the roles you need." },
   { icon: "flash" as const, q: "Credits", a: "Nova's work — chat, roadmaps, reports — costs credits. Your plan sets how many you get each month." },
   { icon: "people" as const, q: "Sprints", a: "A 24 or 72 hour trial build with a possible co-founder, or a practice run with Nova." },
-  { icon: "chatbox-ellipses" as const, q: "Check-ins and feedback", a: "Post what shipped each week. Ask for a read and it lands in Needs feedback for other builders." },
+  { icon: "chatbox-ellipses" as const, q: "Updates and feedback", a: "Post what shipped as an update and add the questions you want answered. Replies land in your project's Feedback inbox." },
   { icon: "flag" as const, q: "Reporting", a: "Every post, comment and profile has a report option. A person reads every report." },
 ];
 

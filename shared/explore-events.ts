@@ -11,10 +11,8 @@
  * long it takes to do something (time to first action), and whether they come
  * back (repeat rate).
  *
- * These ride the behaviour stream (`activity_events`, via `/api/track`), not
- * `shared/loop-events.ts`. That file is the check-in loop's five numbers and is
- * kept small on purpose; this is a second loop with its own names, and mixing
- * them would put the check-in metrics one typo away from moving.
+ * These ride the behaviour stream (`activity_events`, via `/api/track`), under
+ * their own names so a new event elsewhere can't move these numbers.
  *
  * Shared, so the server's allow-list and the browser's calls can't disagree
  * about a name — a mismatch there is an event that's sent, answered 202, and

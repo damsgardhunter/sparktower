@@ -186,6 +186,33 @@ describe("the path adapts", () => {
     expect(again.steps).toEqual({ done: 2, total: 2 });
   });
 
+  it("counts a project's update posts as activity and as artifacts Nova can ground in", async () => {
+    const app = await getTestApp();
+    const agent = await owner(app);
+    const id = (await create(agent, "ship_mvp", "saas", "Update Test")).body.id;
+    const { db } = await import("../../server/db");
+    const { projects } = await import("@shared/schema");
+    const { eq, sql } = await import("drizzle-orm");
+    const { refreshPace, collectArtifacts } = await import("../../server/phase-trees");
+    // A month with nothing: the path has gone quiet.
+    await db.update(projects).set({ createdAt: sql`now() - interval '30 days'` } as any).where(eq(projects.id, id));
+    expect((await refreshPace(id))!.state).toBe("dormant");
+    expect((await collectArtifacts(id)).some((a) => a.kind === "update")).toBe(false);
+
+    const post = await agent.post("/api/feed").send({ postType: "project_update", projectId: id, content: "Shipped the intake form to the first five customers." });
+    expect(post.status).toBeLessThan(300);
+    const postId = post.body.id ?? post.body.post?.id;
+    expect(postId).toBeTruthy();
+
+    // Posting an update is a sign of life, measured on the database's clock.
+    const pace = (await refreshPace(id))!;
+    expect(pace.state).toBe("active");
+    expect(pace.daysSinceActivity).toBeLessThan(1);
+    expect(await collectArtifacts(id)).toEqual(expect.arrayContaining([
+      { label: `update:${postId}`, kind: "update", text: "Shipped the intake form to the first five customers." },
+    ]));
+  });
+
   it("injected tasks are capped per phase and must name an artifact", async () => {
     const app = await getTestApp();
     const agent = await owner(app);
@@ -196,17 +223,17 @@ describe("the path adapts", () => {
     expect(empty.body.code).toBe("no_artifacts");
 
     const { createInjections } = await import("../../server/phase-trees");
-    const artifacts = [{ label: "check-in:x", kind: "check-in" as const, text: "Shipped the intake form" }];
+    const artifacts = [{ label: "update:x", kind: "update" as const, text: "Shipped the intake form" }];
     const r = await createInjections(id, "week-1", [
-      { title: "Wire intake to the CRM", description: "", artifact: "check-in:x", estimateHours: 2 },
+      { title: "Wire intake to the CRM", description: "", artifact: "update:x", estimateHours: 2 },
       { title: "Ungrounded", description: "", artifact: "nope" },
-      { title: "Two", description: "", artifact: "check-in:x" },
-      { title: "Three", description: "", artifact: "check-in:x" },
-      { title: "Four", description: "", artifact: "check-in:x" },
+      { title: "Two", description: "", artifact: "update:x" },
+      { title: "Three", description: "", artifact: "update:x" },
+      { title: "Four", description: "", artifact: "update:x" },
     ], artifacts);
     expect(r.created.map((t: any) => t.title)).toEqual(["Wire intake to the CRM", "Two", "Three"]);
     expect(r.dropped).toEqual([{ title: "Ungrounded", reason: "no artifact named" }, { title: "Four", reason: "phase is at its cap" }]);
-    expect(r.created[0].tags).toEqual(expect.arrayContaining(["injected:week-1", "artifact:check-in:x"]));
+    expect(r.created[0].tags).toEqual(expect.arrayContaining(["injected:week-1", "artifact:update:x"]));
 
     const status = (await agent.get(`/api/projects/${id}/path`)).body;
     const week1 = status.phases.find((p: any) => p.id === "week-1");

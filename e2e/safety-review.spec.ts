@@ -47,16 +47,12 @@ test("a reviewer acts on a report, sees what it did, and records the daily revie
 
   // A reported comment, set up through the API.
   const project = await author.api.post("/api/projects", {
-    data: { title: "Safety Target", description: "A project whose check-in draws a comment that gets reported.", category: "saas", goal: "ship_mvp", subcategory: "saas" },
+    data: { title: "Safety Target", description: "A project that draws a comment that gets reported.", category: "saas", goal: "ship_mvp", subcategory: "saas" },
   });
   const projectId = (await project.json()).id as string;
-  const checkIn = await author.api.post(`/api/projects/${projectId}/check-ins`, {
-    data: { goal: "Ship the thing", proof: "Shipped it, honestly", nextStep: "Tell people", needsFeedback: true, visibility: "public" },
-  });
-  const checkInId = (await checkIn.json()).id as string;
   const text = `Cheap followers at spam.example ${stamp()}`;
-  expect((await author.api.post(`/api/projects/${projectId}/comments`, { data: { targetType: "check_in", targetId: checkInId, content: text } })).ok()).toBeTruthy();
-  const comments = (await (await author.api.get(`/api/projects/${projectId}/comments?targetType=check_in&targetId=${checkInId}`)).json()) as any[];
+  expect((await author.api.post(`/api/projects/${projectId}/comments`, { data: { targetType: "project", targetId: projectId, content: text } })).ok()).toBeTruthy();
+  const comments = (await (await author.api.get(`/api/projects/${projectId}/comments?targetType=project&targetId=${projectId}`)).json()) as any[];
   const commentId = comments.find((c) => c.content === text).id as string;
   expect((await reporter.api.post("/api/reports", { data: { targetType: "comment", targetId: commentId, reason: "spam" } })).ok()).toBeTruthy();
 
@@ -90,7 +86,7 @@ test("a reviewer acts on a report, sees what it did, and records the daily revie
   // 3. The checklist: complete only once everything is ticked.
   const complete = page.getByTestId("button-complete-review");
   await expect(complete).toBeDisabled();
-  for (const id of ["reports", "limits", "impact", "loops", "surfaces"]) await page.getByTestId(`check-${id}`).click();
+  for (const id of ["reports", "limits", "impact", "surfaces"]) await page.getByTestId(`check-${id}`).click();
   await page.getByTestId("input-review-note").fill("Removed link spam; nothing else moving.");
   await complete.click();
   await expect(page.getByText("Review recorded").first()).toBeVisible();

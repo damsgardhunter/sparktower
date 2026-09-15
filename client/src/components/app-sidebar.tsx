@@ -11,7 +11,7 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
 } from "@/components/ui/sidebar";
-import { Inbox, Home, Compass, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles, MessageSquare, Handshake, ShieldCheck } from "lucide-react";
+import { Home, Compass, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles, MessageSquare, Handshake, ShieldCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -38,8 +38,7 @@ const menuItems: { title: string; url: string; icon: typeof Home; surface?: stri
   { title: "Sprints", url: "/sprints", icon: Handshake, surface: "sprints" },
   { title: "Messages", url: "/messages", icon: MessageSquare, surface: "messages" },
   { title: "Leaderboard", url: "/leaderboard", icon: Trophy, surface: "leaderboard" },
-  { title: "Contests", url: "/contests", icon: Trophy, surface: "contests" },
-  { title: "Needs feedback", url: "/feedback", icon: Inbox, surface: "checkIns" },
+  { title: "Contests and Communities", url: "/contests", icon: Trophy, surface: "contests" },
   { title: "Pricing", url: "/pricing", icon: CreditCard },
 ];
 

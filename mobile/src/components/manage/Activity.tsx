@@ -1,7 +1,7 @@
 /**
  * Activity — the native counterpart of ActivityTab in
  * client/src/pages/project-manager.tsx: the activity feed, the decision log,
- * weekly check-ins, and feedback on the project's updates.
+ * and feedback on the project's updates.
  */
 import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
@@ -11,11 +11,10 @@ import { colors, font, fontFamily, spacing } from "../../theme";
 import { Avatar, Body, Btn, Card, Field, IconButton, Loading, Meta, Row, Segments } from "../ui";
 import { Composer } from "../Composer";
 import { FeedbackInbox, useNewFeedbackCount } from "../project/FeedbackInbox";
-import { CheckIns } from "./CheckIns";
 import { Tag, useNotify } from "./bits";
 import { mkey } from "./shared";
 
-type Section = "feed" | "decisions" | "checkins" | "feedback";
+type Section = "feed" | "decisions" | "feedback";
 
 const DECISION_COLOR: Record<string, string> = { proposed: "#1D4ED8", accepted: "#15803D", revisited: "#A16207" };
 const NEXT_STATUS: Record<string, string> = { proposed: "accepted", accepted: "revisited", revisited: "proposed" };
@@ -29,7 +28,6 @@ export function Activity({ projectId, projectTitle, initialSection }: { projectI
         options={[
           { value: "feed", label: "Activity Feed" },
           { value: "decisions", label: "Decision Log" },
-          { value: "checkins", label: "Check-ins" },
           { value: "feedback", label: newFeedback > 0 ? `Feedback · ${newFeedback}` : "Feedback" },
         ]}
         value={section}
@@ -37,7 +35,6 @@ export function Activity({ projectId, projectTitle, initialSection }: { projectI
       />
       {section === "feed" && <Feed projectId={projectId} />}
       {section === "decisions" && <Decisions projectId={projectId} />}
-      {section === "checkins" && <CheckIns projectId={projectId} projectTitle={projectTitle} />}
       {section === "feedback" && <Feedback projectId={projectId} />}
     </View>
   );

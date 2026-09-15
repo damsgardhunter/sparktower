@@ -968,7 +968,7 @@ export const projectComments = pgTable("project_comments", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   projectId: varchar("project_id").notNull().references(() => projects.id),
   authorId: varchar("author_id").notNull().references(() => users.id),
-  targetType: text("target_type", { enum: ["milestone", "project", "roadmap_phase", "check_in"] }).notNull(),
+  targetType: text("target_type", { enum: ["milestone", "project", "roadmap_phase"] }).notNull(),
   targetId: varchar("target_id").notNull(),
   content: text("content").notNull(),
   mentions: jsonb("mentions").default([]),
@@ -1204,80 +1204,6 @@ export const projectDecisions = pgTable("project_decisions", {
 });
 
 /**
- * One weekly check-in — the artifact the whole loop is built around.
- *
- * The fields are the spec's, not a general-purpose status update: a goal you
- * set, proof it happened, what's in the way, and the single next step. The old
- * shape (did / doing / blockers) had nowhere to put proof and nowhere to put a
- * next step, which is what broke steps 3 through 6 of the loop.
- */
-export const projectCheckIns = pgTable("project_check_ins", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
-  userId: varchar("user_id").notNull().references(() => users.id),
-  /**
-   * Monday of the week this covers, at UTC midnight.
-   *
-   * Part of the check-in's identity — it's in the public page's heading — so
-   * it's stored rather than derived from `createdAt`, which would move the
-   * week for anyone reading from a different timezone.
-   */
-  weekStart: timestamp("week_start").notNull(),
-  /** 5-120 chars, one sentence. */
-  goal: text("goal").notNull(),
-  /** 10-400 chars, must carry a link or name something shipped. */
-  proof: text("proof").notNull(),
-  /** Optional — plenty of good weeks have nothing in the way. */
-  blocker: text("blocker"),
-  /** 5-140 chars, starts with a verb. Carried into next week's composer. */
-  nextStep: text("next_step").notNull(),
-  /**
-   * Unlisted by default: reachable by anyone holding the link, listed nowhere.
-   * "Too public → posting anxiety" is the loop's first named risk, so going
-   * public is a decision the builder makes, not a default they discover.
-   */
-  visibility: text("visibility", { enum: ["unlisted", "public"] })
-    .default("unlisted").notNull(),
-  /** Set when a builder asks for feedback, which routes it to the queue. */
-  needsFeedback: boolean("needs_feedback").default(false).notNull(),
-  /** Taken down by a reviewer: hidden from every read, with who and why. Null means visible. */
-  hiddenAt: timestamp("hidden_at"),
-  hiddenById: varchar("hidden_by_id"),
-  hiddenReason: text("hidden_reason"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (table) => ({
-  /** One check-in per person per project per week. */
-  onePerWeek: unique().on(table.projectId, table.userId, table.weekStart),
-}));
-
-/**
- * The loop's event stream.
- *
- * Separate from `project_analytics_events`, which is a creator-managed list of
- * metric definitions rather than telemetry — conflating the two is how the
- * spec's numbers ended up unmeasurable while a table called "analytics" sat
- * there looking like it held them.
- *
- * Append-only and deliberately narrow. `sessionId` is what links a composer
- * opening to the check-in it produced, which is the only way time-to-post can
- * be computed at all.
- */
-export const loopEvents = pgTable("loop_events", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  /** One of LOOP_EVENTS — see shared/loop-events.ts. */
-  name: text("name").notNull(),
-  /** Null for events from someone who isn't signed in. */
-  userId: varchar("user_id").references(() => users.id),
-  projectId: varchar("project_id").references(() => projects.id),
-  checkInId: varchar("check_in_id"),
-  /** Correlates `started` with `submitted` for one composing session. */
-  sessionId: varchar("session_id"),
-  /** Anything a specific metric needs and nothing more. */
-  props: jsonb("props").default({}),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
-
-/**
  * Every moderation action, appended and never edited.
  *
  * Reports and suspensions are mutable rows — a report gets resolved, a
@@ -1342,10 +1268,8 @@ export const rateLimitHits = pgTable("rate_limit_hits", {
 /**
  * The behaviour stream — every write the API takes and every page anyone opens.
  *
- * Kept apart from `loop_events` deliberately: that table is five names feeding
- * the numbers the product is judged on, and it stays small so they stay
- * trustworthy. This one is high volume and read by a person watching the site,
- * not by a metric. See shared/analytics.ts.
+ * High volume and read by a person watching the site, not by a metric. See
+ * shared/analytics.ts.
  *
  * No request body is ever written here. A row says someone sent a message; it
  * never says what the message was.
@@ -1538,6 +1462,39 @@ export type InvestmentApplication = typeof investmentApplications.$inferSelect;
  * into JS, which shifts by the server's timezone.
  */
 /**
+ * Communities people join around what they're building — AI builders, SaaS
+ * founders, first-time founders. Listed under Contests and Communities; the
+ * starting set is seeded by slug at boot (server/community-routes.ts), so
+ * editing a seed's copy updates it without duplicating the community.
+ */
+export const communities = pgTable("communities", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  slug: text("slug").notNull().unique(),
+  name: text("name").notNull(),
+  tagline: text("tagline").notNull(),
+  description: text("description").notNull().default(""),
+  /** A lucide icon name the clients map to a glyph. */
+  icon: text("icon").notNull().default("users"),
+  /** Hex accent for the card. */
+  color: text("color").notNull().default("#9745B5"),
+  /** Display order in the list. */
+  sort: integer("sort").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const communityMembers = pgTable("community_members", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  communityId: varchar("community_id").notNull().references(() => communities.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  joinedAt: timestamp("joined_at").defaultNow().notNull(),
+}, (t) => [
+  unique("community_members_community_user").on(t.communityId, t.userId),
+  index("community_members_user_idx").on(t.userId),
+]);
+
+export type Community = typeof communities.$inferSelect;
+
+/**
  * The paths a project works besides its primary one.
  *
  * A project runs all three sections side by side — Ship an MVP, Systemize the
@@ -1714,7 +1671,7 @@ export const projectPricingTiers = pgTable("project_pricing_tiers", {
  * (client/src/components/analytics/analytics-tab.tsx →
  * GET/POST/PATCH/DELETE /api/projects/:id/analytics-events). Definitions, not
  * telemetry: nothing is emitted into it, and it's empty until a creator adds
- * one. The event streams are `activity_events` and `loop_events`, both swept.
+ * one. The event stream is `activity_events`, which is swept.
  */
 export const projectAnalyticsEvents = pgTable("project_analytics_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -1772,7 +1729,130 @@ export const projectLaunchTasks = pgTable("project_launch_tasks", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
-// === GAME TABLES ===
+// ===========================================================================
+// Retired — kept so existing data isn't dropped; no code reads or writes these.
+//
+// Weekly check-ins (and their Needs feedback queue), the check-in loop's event
+// stream, and the games arena were retired. Their tables stay defined here so
+// `drizzle-kit generate` doesn't emit a DROP for rows people already wrote.
+// There are no insert schemas or types for them on purpose: nothing should
+// start using them again. Dropping them is a deliberate, separate migration.
+// ===========================================================================
+
+/**
+ * One weekly check-in — the artifact the whole loop is built around.
+ *
+ * The fields are the spec's, not a general-purpose status update: a goal you
+ * set, proof it happened, what's in the way, and the single next step. The old
+ * shape (did / doing / blockers) had nowhere to put proof and nowhere to put a
+ * next step, which is what broke steps 3 through 6 of the loop.
+ */
+export const projectCheckIns = pgTable("project_check_ins", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  /**
+   * Monday of the week this covers, at UTC midnight.
+   *
+   * Part of the check-in's identity — it's in the public page's heading — so
+   * it's stored rather than derived from `createdAt`, which would move the
+   * week for anyone reading from a different timezone.
+   */
+  weekStart: timestamp("week_start").notNull(),
+  /** 5-120 chars, one sentence. */
+  goal: text("goal").notNull(),
+  /** 10-400 chars, must carry a link or name something shipped. */
+  proof: text("proof").notNull(),
+  /** Optional — plenty of good weeks have nothing in the way. */
+  blocker: text("blocker"),
+  /** 5-140 chars, starts with a verb. Carried into next week's composer. */
+  nextStep: text("next_step").notNull(),
+  /**
+   * Unlisted by default: reachable by anyone holding the link, listed nowhere.
+   * "Too public → posting anxiety" is the loop's first named risk, so going
+   * public is a decision the builder makes, not a default they discover.
+   */
+  visibility: text("visibility", { enum: ["unlisted", "public"] })
+    .default("unlisted").notNull(),
+  /** Set when a builder asked for feedback (the retired Needs feedback queue). */
+  needsFeedback: boolean("needs_feedback").default(false).notNull(),
+  /** Taken down by a reviewer: hidden from every read, with who and why. Null means visible. */
+  hiddenAt: timestamp("hidden_at"),
+  hiddenById: varchar("hidden_by_id"),
+  hiddenReason: text("hidden_reason"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /** One check-in per person per project per week. */
+  onePerWeek: unique().on(table.projectId, table.userId, table.weekStart),
+}));
+
+/**
+ * What an admin has set for one featured tool in the feed (shared/promotions.ts
+ * holds the catalog): its video, referral link and perk, a "what's new"
+ * headline, a logo, and whether it's shown. A catalog entry with no row here is
+ * shown as it is, without video or offer.
+ */
+export const promotionSettings = pgTable("promotion_settings", {
+  promotionId: varchar("promotion_id").primaryKey(),
+  headline: text("headline"),
+  videoUrl: text("video_url"),
+  referralUrl: text("referral_url"),
+  logoUrl: text("logo_url"),
+  perk: text("perk"),
+  /** The company's YouTube channel, when its site doesn't link one (or links the wrong one). */
+  youtubeChannelUrl: text("youtube_channel_url"),
+  active: boolean("active").default(true).notNull(),
+  updatedById: varchar("updated_by_id").references(() => users.id),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+/**
+ * What the daily sync read from a company's own public pages
+ * (server/promotion-sync.ts): its logo, stored here and served from our origin
+ * so viewers never load it from theirs, and a recent embeddable video from the
+ * YouTube channel its site links. An admin's settings take precedence.
+ */
+export const promotionSources = pgTable("promotion_sources", {
+  promotionId: varchar("promotion_id").primaryKey(),
+  logoData: text("logo_data"),
+  logoContentType: text("logo_content_type"),
+  logoSourceUrl: text("logo_source_url"),
+  youtubeChannelId: text("youtube_channel_id"),
+  videoId: text("video_id"),
+  videoTitle: text("video_title"),
+  videoPublishedAt: timestamp("video_published_at"),
+  fetchedAt: timestamp("fetched_at"),
+  error: text("error"),
+});
+
+/**
+ * The loop's event stream.
+ *
+ * Separate from `project_analytics_events`, which is a creator-managed list of
+ * metric definitions rather than telemetry — conflating the two is how the
+ * spec's numbers ended up unmeasurable while a table called "analytics" sat
+ * there looking like it held them.
+ *
+ * Append-only and deliberately narrow. `sessionId` is what links a composer
+ * opening to the check-in it produced, which is the only way time-to-post can
+ * be computed at all.
+ */
+export const loopEvents = pgTable("loop_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  /** A `check_in.*` event name from the retired loop instrumentation. */
+  name: text("name").notNull(),
+  /** Null for events from someone who isn't signed in. */
+  userId: varchar("user_id").references(() => users.id),
+  projectId: varchar("project_id").references(() => projects.id),
+  checkInId: varchar("check_in_id"),
+  /** Correlates `started` with `submitted` for one composing session. */
+  sessionId: varchar("session_id"),
+  /** Anything a specific metric needs and nothing more. */
+  props: jsonb("props").default({}),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// Games arena
 
 export const gameLeaderboard = pgTable("game_leaderboard", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -2035,11 +2115,6 @@ export const insertProjectDecisionSchema = createInsertSchema(projectDecisions).
   createdAt: true,
 });
 
-export const insertProjectCheckInSchema = createInsertSchema(projectCheckIns).omit({
-  id: true,
-  createdAt: true,
-});
-
 export const insertProjectFileSchema = createInsertSchema(projectFiles).omit({
   id: true,
   createdAt: true,
@@ -2243,39 +2318,6 @@ export const insertSprintKanbanTaskSchema = createInsertSchema(sprintKanbanTasks
 export const insertSprintBehavioralMetricsSchema = createInsertSchema(sprintBehavioralMetrics).omit({ id: true, updatedAt: true });
 export const insertSprintCompatibilityReportSchema = createInsertSchema(sprintCompatibilityReports).omit({ id: true, generatedAt: true });
 
-// Game insert schemas
-export const insertGameLeaderboardSchema = createInsertSchema(gameLeaderboard).omit({
-  id: true,
-  createdAt: true,
-});
-
-export const insertTacticsGameSchema = createInsertSchema(tacticsGames).omit({
-  id: true,
-  createdAt: true,
-});
-
-export const insertTacticsPlayerSchema = createInsertSchema(tacticsPlayers).omit({
-  id: true,
-});
-
-export const insertTacticsMoveSchema = createInsertSchema(tacticsMoves).omit({
-  id: true,
-});
-
-export const insertTypingRaceSchema = createInsertSchema(typingRaces).omit({
-  id: true,
-  createdAt: true,
-});
-
-export const insertTypingRacePlayerSchema = createInsertSchema(typingRacePlayers).omit({
-  id: true,
-});
-
-export const insertSignalNoiseGameSchema = createInsertSchema(signalNoiseGames).omit({
-  id: true,
-  createdAt: true,
-});
-
 // Types
 export type UserProfile = typeof userProfiles.$inferSelect;
 export type InsertUserProfile = z.infer<typeof insertUserProfileSchema>;
@@ -2353,8 +2395,6 @@ export type ProjectActivityLog = typeof projectActivityLog.$inferSelect;
 export type InsertProjectActivityLog = z.infer<typeof insertProjectActivityLogSchema>;
 export type ProjectDecision = typeof projectDecisions.$inferSelect;
 export type InsertProjectDecision = z.infer<typeof insertProjectDecisionSchema>;
-export type ProjectCheckIn = typeof projectCheckIns.$inferSelect;
-export type InsertProjectCheckIn = z.infer<typeof insertProjectCheckInSchema>;
 export type ProjectFile = typeof projectFiles.$inferSelect;
 export type InsertProjectFile = z.infer<typeof insertProjectFileSchema>;
 export type ProjectLink = typeof projectLinks.$inferSelect;
@@ -2363,20 +2403,6 @@ export type ProjectChatMessage = typeof projectChatMessages.$inferSelect;
 export type InsertProjectChatMessage = z.infer<typeof insertProjectChatMessageSchema>;
 export type ProjectLiveChatMessage = typeof projectLiveChatMessages.$inferSelect;
 export type InsertProjectLiveChatMessage = z.infer<typeof insertProjectLiveChatMessageSchema>;
-export type GameLeaderboardEntry = typeof gameLeaderboard.$inferSelect;
-export type InsertGameLeaderboardEntry = z.infer<typeof insertGameLeaderboardSchema>;
-export type TacticsGame = typeof tacticsGames.$inferSelect;
-export type InsertTacticsGame = z.infer<typeof insertTacticsGameSchema>;
-export type TacticsPlayer = typeof tacticsPlayers.$inferSelect;
-export type InsertTacticsPlayer = z.infer<typeof insertTacticsPlayerSchema>;
-export type TacticsMove = typeof tacticsMoves.$inferSelect;
-export type InsertTacticsMove = z.infer<typeof insertTacticsMoveSchema>;
-export type TypingRace = typeof typingRaces.$inferSelect;
-export type InsertTypingRace = z.infer<typeof insertTypingRaceSchema>;
-export type TypingRacePlayer = typeof typingRacePlayers.$inferSelect;
-export type InsertTypingRacePlayer = z.infer<typeof insertTypingRacePlayerSchema>;
-export type SignalNoiseGame = typeof signalNoiseGames.$inferSelect;
-export type InsertSignalNoiseGame = z.infer<typeof insertSignalNoiseGameSchema>;
 export type WaitlistEntry = typeof projectWaitlistEntries.$inferSelect;
 export type InsertWaitlistEntry = z.infer<typeof insertWaitlistEntrySchema>;
 export type ProjectInterview = typeof projectInterviews.$inferSelect;

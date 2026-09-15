@@ -53,7 +53,7 @@ Respond ONLY with JSON: {"tasks":[{"title":"","description":"","artifact":"<exac
 }
 
 /**
- * Reads a project's existing state — tasks done, audit, check-ins — against
+ * Reads a project's existing state — tasks done, audit, docs — against
  * the backbone and says which milestones are already done, each with the
  * evidence. Only ids from the backbone are accepted; the caller checks.
  */
@@ -62,7 +62,7 @@ export async function readExistingProgress(ent: UserEntitlements, backbone: { id
     model: modelFor(ent),
     messages: [
       { role: "system", content: `You are Nova, placing a project that already exists onto its path. ${coachingDirectiveFor(ent)}
-You are given the path's milestones and the project's real state: its brief fields, scope, tech stack, tasks (with status), milestones, roadmap, latest codebase audit and check-ins. Decide which path milestones are ALREADY DONE on that evidence. Be generous where the evidence is concrete (a deployed URL, a finished task that clearly is the milestone, an audit that says the thing exists, a brief field that is the milestone's content) and strict where it is absent — never mark something done because it "probably" is.
+You are given the path's milestones and the project's real state: its brief fields, scope, tech stack, tasks (with status), milestones, roadmap and latest codebase audit. Decide which path milestones are ALREADY DONE on that evidence. Be generous where the evidence is concrete (a deployed URL, a finished task that clearly is the milestone, an audit that says the thing exists, a brief field that is the milestone's content) and strict where it is absent — never mark something done because it "probably" is.
 For each done milestone, also write out its ANSWER: the milestone's actual content as the project already states it — the product statement from the brief's one-liner or value proposition, the stack from the stated tech stack or the audit, the scope cut from the scope lists, the data model from the audit's schema, the deploy from the live URL. Quote and assemble from the sources; do not invent. If the sources hold nothing for it, leave "answer" empty and say so in the evidence.
 ${opts.findLoops ? `
 Also identify the business's LOOPS. A business runs on five kinds, and you report each kind in "type":
@@ -73,7 +73,7 @@ If THE BUILDER'S OWN DOCS appear in the state, they are the primary source for l
 If THE BUILDER'S STANDING NOTES appear, obey them over everything else: if they say something is being removed or is not a loop, it is not a loop.
 ${opts.rejectedLoops?.length ? `The builder has REMOVED these as not loops — never propose them again, under any name, and do not fold them into another loop: ${opts.rejectedLoops.join("; ")}.` : ""}
 Work it out in two passes before answering. First, list the kinds of user the product has (e.g. builder, backer, reviewer, visitor). Second, for each kind, ask what they come back to do repeatedly — that is their loop; a kind of user with nothing to come back for has no loop. Then check every candidate against the test above and drop the ones that fail.
-Name each loop in 2–5 words by what the user is doing ("Ship an MVP", "Explore builders", "Back a project", "Share a check-in") — the steps go in "steps", never in the title. One user per loop. Keep loops SEPARATE: never fold two cycles for different users or motivations into one entry, and never pad the product loops. State on the evidence — "built" (the cycle works end to end), "partly", or "planned". ${opts.knownLoops?.length ? `Loops ALREADY RECORDED — do not list these again, under any name, and do not fold them into new ones; only return loops that are missing from this list (a kind already recorded doesn't need reporting again, except product loops, which can be several): ${opts.knownLoops.join("; ")}.` : ""}` : ""}
+Name each loop in 2–5 words by what the user is doing ("Ship an MVP", "Explore builders", "Back a project", "Post an update") — the steps go in "steps", never in the title. One user per loop. Keep loops SEPARATE: never fold two cycles for different users or motivations into one entry, and never pad the product loops. State on the evidence — "built" (the cycle works end to end), "partly", or "planned". ${opts.knownLoops?.length ? `Loops ALREADY RECORDED — do not list these again, under any name, and do not fold them into new ones; only return loops that are missing from this list (a kind already recorded doesn't need reporting again, except product loops, which can be several): ${opts.knownLoops.join("; ")}.` : ""}` : ""}
 Respond ONLY with JSON: {"done":[{"id":"<milestone id>","evidence":"<one line>","answer":"<the content, or empty>"}]${opts.findLoops ? `,"loops":[{"type":"product|growth|retention|revenue|referral","title":"","steps":"","state":"built|partly|planned","evidence":"one line"}]` : ""},"read":"<two sentences: where this project actually is and what the next real step is>"}` },
       { role: "user", content: `PATH MILESTONES\n${backbone.map((m) => `${m.id} — ${m.title}: ${m.description}`).join("\n")}\n\nPROJECT STATE\n${state.slice(0, 24000)}` },
     ],
