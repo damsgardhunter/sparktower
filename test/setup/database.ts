@@ -81,6 +81,18 @@ function databaseName(target: string): string {
 const TEST_DATABASE_SUFFIXES = ["_test", "_e2e"];
 
 function assertTestDatabaseName(name: string): void {
+  /*
+   * Nothing here should ever run against a live system, whatever the database
+   * is called. A production process has no reason to drop or truncate a schema,
+   * so the environment is a refusal on its own — checked before the name, so a
+   * database that happens to end in "_test" on a production host is still safe.
+   */
+  if (process.env.NODE_ENV === "production" && process.env.ALLOW_DESTRUCTIVE_TEST_DB !== "yes-really") {
+    throw new Error(
+      `Refusing to touch database "${name}": this is a production process. ` +
+      "Test database helpers are for test runs; nothing in production should be dropping or truncating a schema.",
+    );
+  }
   if (!TEST_DATABASE_SUFFIXES.some((s) => name.endsWith(s))) {
     throw new Error(
       `Refusing to touch database "${name}": test databases must end in ` +
@@ -88,6 +100,9 @@ function assertTestDatabaseName(name: string): void {
     );
   }
 }
+
+/** The name check alone, for the test that holds these guards to their word. */
+export const assertTestDatabaseNameForTests = assertTestDatabaseName;
 
 /**
  * The same check, asked of the server rather than parsed from the URL: a
