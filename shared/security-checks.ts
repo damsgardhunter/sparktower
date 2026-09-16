@@ -859,14 +859,30 @@ export function scanSecurity(allFiles: SourceFile[], extra: { suspectedSecrets?:
     const authenticated = files
       .filter((f) => !NOT_APP_CODE.test(f.path) && /\b(spf|dkim|dmarc)\b/i.test(f.content ?? ""))
       .map((f) => f.path);
+    /*
+     * The records live in DNS, so writing them down is all a repository can
+     * normally show — which is why this check used to stop at "partial" and
+     * say so. But a *checked* result can be written down too: a dated row in
+     * an evidence table, from a script that asked the real DNS. When one
+     * exists, read it, and believe what it says in both directions. A row
+     * recording that nothing is published is worth more than the document
+     * that describes what ought to be.
+     */
+    const rows = authenticated.flatMap((p2) =>
+      (files.find((f) => f.path === p2)?.content ?? "").split("\n")
+        .filter((line) => /^\s*\|/.test(line) && /\b20\d\d-\d\d-\d\d\b/.test(line)));
+    const checkedMissing = rows.some((line) => /\bMISSING\b/i.test(line));
+    const checkedPublished = rows.some((line) => /\bp=(none|quarantine|reject)\b/i.test(line) && !/\bMISSING\b/i.test(line));
     add({
       id: "email-authentication", label: "The sending domain is authenticated (SPF, DKIM, DMARC)", category: "operations", severity: "medium",
-      status: !sendsEmail.length ? "n/a" : authenticated.length ? "partial" : "missing",
+      status: !sendsEmail.length ? "n/a" : checkedPublished ? "pass" : checkedMissing ? "missing" : authenticated.length ? "partial" : "missing",
       detail: !sendsEmail.length ? "This codebase doesn't send email."
-        : authenticated.length ? "SPF/DKIM/DMARC are written down; the records themselves live in DNS and can't be read from here."
+        : checkedPublished ? "SPF, DKIM and DMARC were checked against DNS and are published; the dated result is in the repository."
+        : checkedMissing ? "Somebody checked DNS and recorded the result: the records are NOT published. Mail from this domain is unauthenticated."
+        : authenticated.length ? "SPF/DKIM/DMARC are written down; whether they're published in DNS hasn't been checked and recorded."
         : "The app sends email and nothing records SPF, DKIM or DMARC for the sending domain.",
       why: "Unauthenticated mail lands in spam — including the verification and invite links people are waiting for — and leaves the domain open to anyone sending as you.",
-      fix: "Publish SPF and DKIM for the sending domain, then DMARC at p=none until the reports are clean and p=quarantine after. Note the records in the repository so the next person knows they exist.",
+      fix: "Publish SPF and DKIM for the sending domain, then DMARC at p=none until the reports are clean and p=quarantine after. Then check them against DNS and record the dated result: node scripts/check-email-auth.mjs, pasted into docs/ops/email-authentication.md.",
       evidence: authenticated.slice(0, 2),
     });
   }

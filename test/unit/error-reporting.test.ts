@@ -7,6 +7,7 @@
  * restraint.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { FAKE_STRIPE_LIVE_KEY } from "../helpers/fake-secrets";
 import { reportError, redact, resetErrorReporting } from "../../server/error-reporting";
 
 const originalWebhook = process.env.ERROR_WEBHOOK_URL;
@@ -55,7 +56,7 @@ describe("what a report carries", () => {
 
   it("takes the credentials and addresses out of the message", () => {
     expect(redact("no user for casey@example.com")).toBe("no user for <email>");
-    expect(redact("Stripe refused sk_live_abcd1234efgh")).toBe("Stripe refused <key>");
+    expect(redact(`Stripe refused ${FAKE_STRIPE_LIVE_KEY}`)).toBe("Stripe refused <key>");
     expect(redact("bad header Bearer eyJhbGciOi.payloadpayload.sig")).toMatch(/Bearer <token>|<jwt>/);
     expect(redact("connect postgresql://user:pw@host/db failed")).toBe("connect <connection-string> failed");
     // A long hex run is a session id, a token, or a hash — never something to ship.

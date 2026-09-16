@@ -91,9 +91,19 @@ export PROD_DB="postgresql://…"                   # from Replit → Secrets �
 - [ ] **SPF, DKIM and DMARC are published** for the domain in `EMAIL_FROM`, and
       the row at the bottom of [ops/email-authentication.md](ops/email-authentication.md)
       is filled in. Until they are, verification links and invites land in spam
-      and anybody can send mail as you. Check end to end rather than by `dig`:
-      send yourself an invite at a Gmail address and confirm `SPF: PASS`,
-      `DKIM: PASS`, `DMARC: PASS` in "show original".
+      and anybody can send mail as you.
+      ```sh
+      node scripts/check-email-auth.mjs        # must exit 0; prints the row for the table
+      ```
+      Then check end to end, which DNS alone can't prove: send yourself an
+      invite at a Gmail address and confirm `SPF: PASS`, `DKIM: PASS`,
+      `DMARC: PASS` in "show original".
+
+      **As of 2026-09-16 this fails at the first step:** `sparktower.app` does
+      not resolve (NXDOMAIN) — the domain isn't registered, so there is no zone
+      to publish into, and `security@sparktower.app` in `SECURITY.md` and
+      `/.well-known/security.txt` reaches nobody. Register the domain, or
+      change what the repository publishes, before launch.
 
 ## 3. Deploy
 

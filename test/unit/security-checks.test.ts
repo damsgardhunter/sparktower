@@ -420,4 +420,25 @@ describe("the checks added for accounts, supply chain and operations", () => {
     // No email at all: not a question for this codebase.
     expect(verdict("email-authentication", [app]).status).toBe("n/a");
   });
+
+  it("a dated check beats a description, whichever way it went", () => {
+    const mailer = srv('import nodemailer from "nodemailer";\nawait sendEmail({ to });', "server/email.ts");
+    const describes = "SPF, DKIM and DMARC for the sending domain.\n| date | domain | SPF |\n| — | — | — |\n";
+    // A document with an empty table is still only a description.
+    expect(verdict("email-authentication", [app, mailer, { path: "docs/ops/mail.md", content: describes }]).status).toBe("partial");
+
+    // Somebody asked DNS and wrote down that nothing is there. That's worse than unknown, and it says so.
+    const found = `${describes}| 2026-09-16 | example.com | MISSING | MISSING | MISSING | scripts/check-email-auth.mjs |`;
+    expect(verdict("email-authentication", [app, mailer, { path: "docs/ops/mail.md", content: found }]).status).toBe("missing");
+
+    // And when they're really published, the same row is the proof.
+    const live = `${describes}| 2026-09-16 | example.com | published | resend | p=quarantine | scripts/check-email-auth.mjs |`;
+    expect(verdict("email-authentication", [app, mailer, { path: "docs/ops/mail.md", content: live }]).status).toBe("pass");
+
+    // Backups read the same way: a rehearsal has a date on it or it didn't happen.
+    const empty = { path: "docs/ops/backups.md", content: "Restore from the nightly backup.\n| date | how long |\n| — | — |" };
+    expect(verdict("backups", [app, empty]).status).toBe("partial");
+    const done = { path: "docs/ops/backups.md", content: `${empty.content}\n| 2026-09-16 | 22 minutes | nothing |` };
+    expect(verdict("backups", [app, done]).status).toBe("pass");
+  });
 });
