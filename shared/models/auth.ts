@@ -78,6 +78,13 @@ export const users = pgTable("users", {
   mfaLastStep: integer("mfa_last_step"),
   /** One-time recovery codes, SHA-256 hashed; a used one is removed. */
   mfaRecoveryCodes: text("mfa_recovery_codes").array(),
+  /**
+   * When the subscription state this account carries was decided — the Stripe
+   * event's own timestamp, not ours. Stripe makes no promise about delivery
+   * order, so an older event arriving after a newer one would otherwise
+   * downgrade a live plan or bring a cancelled one back (server/webhookHandlers.ts).
+   */
+  subscriptionEventAt: timestamp("subscription_event_at"),
   suspendedReason: text("suspended_reason"),
   /**
    * When this address was confirmed by someone who can read mail sent to it.

@@ -337,6 +337,57 @@ describe("refunds", () => {
   });
 });
 
+describe("events that arrive in the wrong order", () => {
+  /*
+   * Stripe promises delivery, not order: a retry of an older subscription
+   * event can land after a newer one. Applying whichever arrived last would
+   * downgrade a live plan, or hand a cancelled one back. The event's own
+   * `created` decides instead.
+   *
+   * These use status changes rather than plan changes on purpose: reading a
+   * tier asks Stripe for the price, and this suite makes no network calls.
+   */
+  const at = (iso: string) => Math.floor(Date.parse(iso) / 1000);
+  const statusEvent = (id: string, customer: string, status: string, created: number) => ({
+    id, object: "event", type: "customer.subscription.updated", created,
+    data: { object: { id: "sub_test_123", customer, status } },
+  });
+  const setTier = (id: string, tier: string) => db.update(users).set({ subscriptionTier: tier }).where(eq(users.id, id));
+
+  it("ignores an event older than the state the account already carries", async () => {
+    const app = await getTestApp();
+    const { user, customerId } = await aPaidUser();
+
+    // Cancelled on the 2nd.
+    expect((await deliver(app, { id: "evt_cancel_now", object: "event", type: "customer.subscription.deleted", created: at("2026-03-02T12:00:00Z"), data: { object: { id: "sub_test_123", customer: customerId } } })).status).toBe(200);
+    expect(await tierOf(user.id)).toBe("free");
+
+    // A retry of an "active" update from the 1st turns up afterwards: acknowledged, and it changes nothing.
+    expect((await deliver(app, statusEvent("evt_stale_active", customerId, "active", at("2026-03-01T09:00:00Z")))).status).toBe(200);
+    expect(await tierOf(user.id), "a stale event must not hand a cancelled plan back").toBe("free");
+
+    // Something genuinely newer still applies: this one is from the 3rd.
+    await setTier(user.id, "pro");
+    expect((await deliver(app, statusEvent("evt_fresh_pastdue", customerId, "past_due", at("2026-03-03T09:00:00Z")))).status).toBe(200);
+    expect(await tierOf(user.id)).toBe("free");
+
+    // And one from between the two is ignored, whatever it says.
+    await setTier(user.id, "pro");
+    expect((await deliver(app, statusEvent("evt_stale_pastdue", customerId, "past_due", at("2026-03-02T23:00:00Z")))).status).toBe(200);
+    expect(await tierOf(user.id), "an event older than the applied one changes nothing").toBe("pro");
+  });
+
+  it("applies an event with no timestamp, and marks the state as of now", async () => {
+    const app = await getTestApp();
+    const { user, customerId } = await aPaidUser();
+    const eventAt = async () => (await db.select({ at: users.subscriptionEventAt }).from(users).where(eq(users.id, user.id)))[0].at;
+    expect(await eventAt()).toBeNull();
+    expect((await deliver(app, { id: "evt_no_created", object: "event", type: "customer.subscription.deleted", data: { object: { id: "sub_test_123", customer: customerId } } })).status).toBe(200);
+    expect(await tierOf(user.id)).toBe("free");
+    expect(await eventAt()).toBeTruthy();
+  });
+});
+
 describe("partial refunds, and refunds from outside the platform", () => {
   /** Stripe's charge.refunded: the charge's running refunded total, and whether that's all of it. */
   const refunded = (id: string, pi: string, amountRefunded: number, inFull: boolean, refundId: string) => ({

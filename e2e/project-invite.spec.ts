@@ -75,5 +75,47 @@ test("an owner invites a collaborator by link; a stranger opens it signed out, s
   // The owner's list shows it accepted.
   await page.reload();
   await expect(page.getByTestId("pending-invites")).toContainText("accepted");
+
+  /*
+   * And the loop comes round. Joining lands on the work, not the member list:
+   * the welcome names the project, the path's next step is right there, the
+   * new member does one and publishes it — and the page they just made is
+   * where they're asked to bring the next person in.
+   */
+  // A brand-new account meets onboarding on the way in; the welcome has to survive that.
+  await expect(guest).toHaveURL(/\/onboarding$|\/projects\//, { timeout: 15_000 });
+  if (new URL(guest.url()).pathname === "/onboarding") {
+    expect((await stranger.request.post("/api/profile/complete-onboarding", { data: { displayName: "Ian Invitee", headline: "Engineer", bio: "Joined from an invite." } })).ok()).toBeTruthy();
+    await guest.goto(`/projects/${project.id}/manage`);
+  }
+  await guest.getByTestId("btn-skip-onboarding").click({ timeout: 10_000 }).catch(() => {});
+  const welcome = guest.getByTestId("just-joined");
+  await expect(welcome).toContainText(project.title);
+  await welcome.getByTestId("button-joined-next-step").click();
+  await expect(guest.getByTestId("just-joined")).toHaveCount(0);
+
+  // A step of the team's path, done by the person who just arrived.
+  await expect(guest.getByTestId("next-action-title")).toBeVisible();
+  await guest.getByTestId("button-next-write").click();
+  await guest.getByTestId("input-next-answer").fill("Weeknight dinners planned from what's already in the fridge.");
+  await guest.getByTestId("button-next-save-done").click();
+  await expect(guest.getByTestId("path-last-done")).toBeVisible();
+
+  // Inviting reaches another person, so it needs a confirmed address — the same gate the owner passed.
+  await verifyEmail(stranger.request, inviteeEmail);
+
+  // Publishing it offers the invite, wired to the same dialog the owner used.
+  await guest.getByTestId("button-publish-finished-step").click();
+  const publish = guest.getByTestId("publish-artifact-dialog");
+  await publish.getByTestId("input-artifact-title").fill("What we're building, in one line");
+  await publish.getByTestId("button-publish-artifact").click();
+  await expect(publish.getByTestId("text-artifact-url")).toBeVisible();
+  await publish.getByTestId("button-invite-collaborator").click();
+  const theirInvite = guest.getByTestId("invite-dialog");
+  await theirInvite.getByTestId("button-create-invite").click();
+  const nextLink = await theirInvite.getByTestId("invite-link").inputValue();
+  expect(nextLink).toMatch(/\/invite\/[A-Za-z0-9_-]{43}$/);
+  expect(nextLink).not.toBe(link);
+
   await Promise.all([ownerContext.close(), stranger.close()]);
 });

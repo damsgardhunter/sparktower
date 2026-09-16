@@ -75,6 +75,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { useSurfaces } from "@/hooks/use-surfaces";
 import { useUpload } from "@/hooks/use-upload";
+import { JOINED_PROJECT_KEY } from "@shared/invites";
 
 const sectionStoreKey = (projectId: string | undefined) => `manager-section:${projectId}`;
 function storedSection(projectId: string | undefined): ProjectGoal | null {
@@ -537,6 +538,18 @@ export default function ProjectManager() {
 
   // Follow the URL too: an in-app link to ?section=…&tab=… (the codebase tab's path changes, say) switches in place.
   const search = useSearch();
+  // Arrived from an invite (client/src/pages/invite-accept.tsx). Shown once, then the URL is tidied.
+  const [justJoined, setJustJoined] = useState(() => {
+    if (typeof window === "undefined") return false;
+    if (new URLSearchParams(window.location.search).get("joined") === "1") return true;
+    // A new account goes through onboarding between accepting and arriving, so the URL is long gone by now.
+    try { return localStorage.getItem(JOINED_PROJECT_KEY) === projectId; } catch { return false; }
+  });
+  // Shown once: from here they're a member like anyone else.
+  useEffect(() => {
+    if (!justJoined) return;
+    try { localStorage.removeItem(JOINED_PROJECT_KEY); } catch { /* nothing to clear */ }
+  }, [justJoined]);
   useEffect(() => {
     const params = new URLSearchParams(search);
     const s = params.get("section");
@@ -649,6 +662,26 @@ export default function ProjectManager() {
         */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-5 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_14rem] lg:grid-rows-[auto_1fr] gap-x-6 gap-y-3 sm:gap-y-4">
         <div className="min-w-0 space-y-3 sm:space-y-4 lg:col-start-1 lg:row-start-1">
+          {/*
+            * The first thirty seconds of being on a team. Without this, joining
+            * landed on a member list: nothing to do, nothing to take. The path's
+            * next step is below this banner, and the person who was just invited
+            * is the likeliest person to invite the next one.
+            */}
+          {justJoined && (
+            <div className="rounded-lg border border-primary/40 bg-primary/5 p-4 space-y-2" data-testid="just-joined">
+              <p className="font-semibold">You're on {project.title}.</p>
+              <p className="text-sm text-muted-foreground">
+                The team's path is below, with the next step at the top — pick one up, and it becomes something you can publish.
+              </p>
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <Button size="sm" onClick={() => { setActiveTab("nova"); setJustJoined(false); }} data-testid="button-joined-next-step">See the next step</Button>
+                {!(project as any).soloMode && <InviteCollaboratorDialog projectId={project.id} projectTitle={project.title} />}
+                <Button size="sm" variant="ghost" onClick={() => setJustJoined(false)} data-testid="button-joined-dismiss">Dismiss</Button>
+              </div>
+            </div>
+          )}
+
           <SectionBar tracks={sectionsData?.tracks} selected={section} onSelect={selectSection} />
 
           <SectionTabRow active={activeTab} onSelect={setActiveTab} isOwner={isOwner} />

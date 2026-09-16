@@ -148,6 +148,13 @@
       "when": 1789525369881,
       "tag": "0020_post_author_delete",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1789529022960,
+      "tag": "0021_subscription_event_order",
+      "breakpoints": true
     }
   ]
 }

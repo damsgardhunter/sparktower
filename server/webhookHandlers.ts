@@ -149,21 +149,42 @@ export class WebhookHandlers {
     const [user] = await db.select().from(users).where(eq(users.stripeCustomerId, subscription.customer));
     if (!user) return;
 
+    /*
+     * Stripe promises delivery, not order. A retry of "upgraded to builder"
+     * can land after "upgraded to pro", and a retry of any update can land
+     * after a cancellation — so the event's own timestamp decides, not the
+     * order it happened to arrive in. An older one is ignored; the ledger
+     * already handles the same event twice.
+     */
+    const eventAt = WebhookHandlers.eventTime(event);
+    if (eventAt && user.subscriptionEventAt && eventAt < user.subscriptionEventAt) {
+      console.log(`[stripe] Ignoring ${type} for user ${user.id}: ${eventAt.toISOString()} is older than the state it carries (${user.subscriptionEventAt.toISOString()}).`);
+      return;
+    }
+    const stamp = { subscriptionEventAt: eventAt ?? new Date() };
+
     if (type === 'customer.subscription.deleted') {
-      await db.update(users).set({ subscriptionTier: 'free', stripeSubscriptionId: null }).where(eq(users.id, user.id));
+      await db.update(users).set({ subscriptionTier: 'free', stripeSubscriptionId: null, ...stamp }).where(eq(users.id, user.id));
       console.log(`Subscription canceled for user ${user.id}, reverted to free tier`);
       return;
     }
     if (type === 'customer.subscription.created' || type === 'customer.subscription.updated') {
       const status = subscription.status;
       if (!isPaidSubscriptionStatus(status)) {
-        await db.update(users).set({ subscriptionTier: 'free', stripeSubscriptionId: subscription.id }).where(eq(users.id, user.id));
+        await db.update(users).set({ subscriptionTier: 'free', stripeSubscriptionId: subscription.id, ...stamp }).where(eq(users.id, user.id));
         return;
       }
       const tier = await WebhookHandlers.tierForSubscription(subscription);
       await applyTier(user.id, tier, subscription.id);
+      await db.update(users).set(stamp).where(eq(users.id, user.id));
       console.log(`Subscription updated for user ${user.id}: tier=${tier}`);
     }
+  }
+
+  /** A Stripe event's own clock: `created` is seconds since the epoch. */
+  static eventTime(event: any): Date | null {
+    const seconds = Number(event?.created);
+    return Number.isFinite(seconds) && seconds > 0 ? new Date(seconds * 1000) : null;
   }
 
   static async handleCheckoutCompleted(event: any): Promise<void> {

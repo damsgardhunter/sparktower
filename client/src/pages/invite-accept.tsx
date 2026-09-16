@@ -7,7 +7,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Loader2, UserPlus } from "lucide-react";
-import { PENDING_INVITE_KEY } from "@shared/invites";
+import { JOINED_PROJECT_KEY, PENDING_INVITE_KEY } from "@shared/invites";
 
 interface InviteView {
   status: "pending" | "accepted" | "revoked" | "expired";
@@ -52,7 +52,18 @@ export default function InviteAcceptPage() {
     mutationFn: async () => (await apiRequest("POST", `/api/invites/${encodeURIComponent(token)}/accept`)).json() as Promise<{ projectId: string }>,
     onSuccess: ({ projectId }) => {
       try { localStorage.removeItem(PENDING_INVITE_KEY); } catch { /* nothing to clear */ }
-      window.location.href = `/projects/${projectId}/manage?tab=team`;
+      /*
+       * The work, not the member list. Landing on the team tab told a new
+       * collaborator who else was here and nothing about what to do; the
+       * manage page opens on the path, with the welcome and the next step
+       * (client/src/pages/project-manager.tsx).
+       *
+       * Left in storage as well as the URL because a brand-new account is sent
+       * through onboarding first, and the query string doesn't survive the
+       * detour — which is exactly the person this is for.
+       */
+      try { localStorage.setItem(JOINED_PROJECT_KEY, projectId); } catch { /* the banner just won't show */ }
+      window.location.href = `/projects/${projectId}/manage?joined=1`;
     },
     onError: (e) => setJoinError(errorText(e)),
   });

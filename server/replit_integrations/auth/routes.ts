@@ -6,7 +6,7 @@ import passport from "passport";
 import bcrypt from "bcryptjs";
 import { ensureUserProfile } from "../../user-provisioning";
 import { stampSignupAttribution } from "../../attribution";
-import { enforceRateLimit, ipKey } from "../../moderation";
+import { enforceRateLimit, ipKey, rateLimit } from "../../moderation";
 import { db } from "../../db";
 import { mobileRefreshTokens, users } from "@shared/models/auth";
 import { mfaEnabledFor, mfaRequiredFor } from "../../mfa";
@@ -174,7 +174,9 @@ export function registerAuthRoutes(app: Express): void {
    * refresh token. For a lost phone or a shared computer. The current
    * session goes too, so the caller ends signed out.
    */
-  app.post("/api/auth/logout-all", isAuthenticated, async (req: any, res) => {
+  // Its own limit, not just the write floor: one call deletes every session row for the account and
+  // revokes every device token, and a script calling it in a loop is a way to make the database work.
+  app.post("/api/auth/logout-all", isAuthenticated, rateLimit("session"), async (req: any, res) => {
     const userId = req.user.id;
     try {
       const sessions = await db.execute(sql`DELETE FROM sessions WHERE sess->'passport'->>'user' = ${userId}`);

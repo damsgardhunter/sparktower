@@ -7,8 +7,14 @@ back tomorrow and start from what changed.
 | --- | --- | --- |
 | Review reports, rate-limit hits and content volume — together | `/admin/safety` (`client/src/pages/admin-safety.tsx`), `GET /api/admin/safety/review` (`server/safety-routes.ts`) | `test/integration/safety-loop.test.ts`, `e2e/safety-review.spec.ts` |
 | Take a moderation action (remove, shadow-hide, ban, suspend, switch a surface off) | `/admin/reports`, `/admin/surfaces`; `server/moderation.ts`, `server/surfaces.ts` — every action is a row in the append-only `moderation_log` | `e2e/moderation-loop.spec.ts`, `test/integration/write-floor.test.ts` |
+| Decide any reported content from the queue itself — a comment, a feed post, a feed comment — with the same reason codes, the same log entry (`<type>_<action>`) and the same undo. Shadow-hiding is refused where the content has no hidden mode. A report about a project or an account is still handled with the takedown and suspend buttons, which do more than hide one row | `ACTIONABLE_TARGETS` (`shared/moderation.ts`), `POST /api/admin/reports/:id/act`, `TAKEDOWN_TABLES` (`server/moderation.ts`) | `test/integration/moderation-loop.test.ts` ("a reported feed post, decided from the queue") |
+| Undo a decision — on the phone as well as the web | `POST /api/admin/moderation-log/:id/undo`; `client/src/pages/admin-reports.tsx`, `mobile/app/admin/reports.tsx` (history with **Undo this**) | `test/integration/moderation-loop.test.ts`, `test/unit/mobile-restatements.test.ts` (the phone's restated codes match the server's) |
 | Monitor impact | Per action, `GET /api/admin/safety/impact/:logId`; shown on the review under **What recent actions did**, and one click from the queue (**See impact** on the decision's notice) | `test/integration/safety-loop.test.ts`, `e2e/safety-review.spec.ts` |
 | Repeat | The review's checklist, `POST /api/admin/safety/review`, recorded as `safety_review_completed` in the moderation log; the next review covers the time since it | `test/integration/safety-loop.test.ts`, `e2e/safety-review.spec.ts` |
+
+## The log
+
+Append-only in the database, not by convention (`server/moderation-log-rules.ts`): a trigger refuses every UPDATE and DELETE, whoever sends them. Production also gets a statement trigger against TRUNCATE, which is the way round a row trigger; it is deliberately not applied anywhere else, because the test suites reset their databases exactly that way. Dropping a trigger needs the same privilege as truncating, so this stops the accidental wipe and the careless script rather than a determined owner. `test/integration/moderation-log-rules.test.ts` applies both shapes to a throwaway table and checks each.
 
 ## The daily review
 

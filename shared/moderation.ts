@@ -405,7 +405,13 @@ export const REPORT_NOTE_MAX = 500;
  * The content types the queue can act on directly. Comments first; other
  * types still use the older hide/restore and suspend buttons.
  */
-export const ACTIONABLE_TARGETS = ["comment"] as const satisfies readonly ReportTarget[];
+/**
+ * Report types a reviewer decides from the queue itself, rather than with the
+ * buttons on the content. Every kind of content that can be taken down is
+ * here; a report about a whole project or an account is still handled with the
+ * takedown and suspend buttons, which do more than hide one row.
+ */
+export const ACTIONABLE_TARGETS = ["comment", "feed_post", "feed_comment"] as const satisfies readonly ReportTarget[];
 export const isActionableTarget = (t: string): boolean => (ACTIONABLE_TARGETS as readonly string[]).includes(t);
 
 /** What a reviewer can do about a reported comment. */
@@ -469,6 +475,12 @@ export const UNDOABLE_ACTIONS: Record<string, string> = {
   comment_shadow_hide: "comment_restore",
   comment_ban: "comment_restore",
   comment_dismiss: "report_reopened",
+  feed_post_remove: "feed_post_restore",
+  feed_post_ban: "feed_post_restore",
+  feed_post_dismiss: "report_reopened",
+  feed_comment_remove: "feed_comment_restore",
+  feed_comment_ban: "feed_comment_restore",
+  feed_comment_dismiss: "report_reopened",
   content_hidden: "content_restored",
   content_restored: "content_hidden",
   suspend: "reinstate",
@@ -477,6 +489,9 @@ export const UNDOABLE_ACTIONS: Record<string, string> = {
 
 /** Decisions undone by putting a user account back as it was, rather than a comment or a report. */
 export const ACCOUNT_UNDO_ACTIONS: readonly string[] = ["suspend", "reinstate"];
+/** Only content with a hidden *mode* can be shadow-hidden; everything else is removed or left alone. */
+export const SHADOW_HIDEABLE: readonly string[] = ["comment"];
+
 /** Decisions undone by putting a piece of content back as it was. */
 export const CONTENT_UNDO_ACTIONS: readonly string[] = ["content_hidden", "content_restored"];
 

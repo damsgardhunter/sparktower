@@ -23,7 +23,7 @@ import { SAFETY_EVENTS } from "@shared/safety";
 import { requireReviewer } from "./platform-roles";
 import {
   RATE_LIMITS, DUPLICATE_RULES, REPORT_TARGETS, RETIRED_REPORT_TARGETS, REPORT_REASON_IDS, reportDetailLabel, REPORT_NOTE_MAX,
-  REPORT_STATUSES, RATE_LIMITED, DUPLICATE_CONTENT, type DuplicateContentBody, MODERATION_ACTION_IDS, isActionableTarget, isReasonCode,
+  REPORT_STATUSES, RATE_LIMITED, DUPLICATE_CONTENT, type DuplicateContentBody, MODERATION_ACTION_IDS, isActionableTarget, isReasonCode, SHADOW_HIDEABLE,
   reasonCodesFor, moderationReasonLabel, isUndoReasonCode, UNDOABLE_ACTIONS, sameModeratedState,
   ACCOUNT_UNDO_ACTIONS, CONTENT_UNDO_ACTIONS, failsClosed, LIMIT_UNAVAILABLE, LIMIT_UNAVAILABLE_RETRY_SECONDS, type LimitUnavailableBody,
   type RateLimitAction, type ReportTarget, type DuplicateRule, type RateLimitedBody, type ModerationAction,
@@ -893,21 +893,25 @@ export function registerModerationRoutes(app: Express) {
         const [report] = await tx.select().from(contentReports)
           .where(eq(contentReports.id, String(req.params.id))).for("update");
         if (!report) return { status: 404, body: { message: "Report not found" } };
-        if (!isActionableTarget(report.targetType)) {
-          return { status: 400, body: { message: "Only comments are decided here so far. Use the buttons on the report.", code: "not_actionable" } };
+        const t = TAKEDOWN_TABLES[String(report.targetType)];
+        if (!isActionableTarget(report.targetType) || !t) {
+          return { status: 400, body: { message: "That kind of report is decided with the buttons on it, not from the queue.", code: "not_actionable" } };
+        }
+        // Only content with a hidden mode can be shadow-hidden; a post is removed or left alone.
+        if (action === "shadow_hide" && !SHADOW_HIDEABLE.includes(String(report.targetType))) {
+          return { status: 400, body: { message: "This kind of content can't be shadow-hidden. Remove it or dismiss the report.", code: "invalid_input", field: "action" } };
         }
         if (report.status !== "open") {
           return { status: 409, body: { message: "This report has already been decided.", code: "already_resolved", reportStatus: report.status } };
         }
 
-        const [comment] = await tx.select().from(projectComments)
-          .where(eq(projectComments.id, report.targetId)).for("update");
-        if (!comment && action !== "dismiss") {
-          return { status: 404, body: { message: "That comment no longer exists. Dismiss the report instead.", code: "target_gone" } };
+        const [target] = await tx.select().from(t.table).where(eq(t.table.id, report.targetId)).for("update");
+        if (!target && action !== "dismiss") {
+          return { status: 404, body: { message: "That content no longer exists. Dismiss the report instead.", code: "target_gone" } };
         }
-        const [author] = comment
+        const [author] = target
           ? await tx.select({ id: users.id, platformRole: users.platformRole, suspendedAt: users.suspendedAt, suspendedReason: users.suspendedReason })
-            .from(users).where(eq(users.id, comment.authorId))
+            .from(users).where(eq(users.id, target.authorId))
           : [];
         if (action === "ban") {
           if (!author) return { status: 404, body: { message: "The author's account no longer exists.", code: "target_gone" } };
@@ -915,20 +919,21 @@ export function registerModerationRoutes(app: Express) {
           if (author.platformRole !== "user") return { status: 400, body: { message: "Reviewers can't be banned from here.", code: "invalid_input" } };
         }
 
-        const commentState = (c: typeof comment | undefined) => c
-          ? { hiddenAt: c.hiddenAt, hiddenMode: c.hiddenMode, hiddenById: c.hiddenById, hiddenReason: c.hiddenReason }
+        const hasMode = SHADOW_HIDEABLE.includes(String(report.targetType));
+        const targetState = (c: any) => c
+          ? { hiddenAt: c.hiddenAt, hiddenById: c.hiddenById, hiddenReason: c.hiddenReason, ...(hasMode ? { hiddenMode: c.hiddenMode } : {}) }
           : null;
         const authorState = (a: { suspendedAt: Date | null; suspendedReason: string | null }) =>
           ({ suspendedAt: a.suspendedAt, suspendedReason: a.suspendedReason });
         const label = moderationReasonLabel(reasonCode);
 
-        let commentAfter = commentState(comment);
+        let targetAfter = targetState(target);
         if (action !== "dismiss") {
-          const [updated] = await tx.update(projectComments).set({
-            hiddenAt: new Date(), hiddenMode: action === "shadow_hide" ? "shadow" : "removed",
-            hiddenById: req.user.id, hiddenReason: label,
-          }).where(eq(projectComments.id, comment!.id)).returning();
-          commentAfter = commentState(updated);
+          const [updated] = await tx.update(t.table).set({
+            hiddenAt: new Date(), hiddenById: req.user.id, hiddenReason: label,
+            ...(hasMode ? { hiddenMode: action === "shadow_hide" ? "shadow" : "removed" } : {}),
+          }).where(eq(t.table.id, target.id)).returning();
+          targetAfter = targetState(updated);
         }
         let authorAfter: ReturnType<typeof authorState> | null = null;
         if (action === "ban") {
@@ -943,21 +948,27 @@ export function registerModerationRoutes(app: Express) {
         }).where(eq(contentReports.id, report.id));
 
         const [entry] = await tx.insert(moderationLog).values({
-          action: `comment_${action}`,
+          // comment_remove, feed_post_remove, … — the type it was, and what was done.
+          action: `${report.targetType}_${action}`,
           actorId: req.user.id,
-          targetUserId: comment?.authorId ?? report.targetOwnerId,
-          targetType: "comment",
+          targetUserId: target?.authorId ?? report.targetOwnerId,
+          targetType: report.targetType,
           targetId: report.targetId,
           reason: note,
           reasonCode,
+          /*
+           * `target` is the general name; `comment` is written too so entries
+           * made before the queue handled posts keep reading the same way, and
+           * so does anything that looked for it.
+           */
           previousState: {
             report: { status: report.status },
-            comment: commentState(comment),
+            target: targetState(target), comment: targetState(target),
             ...(action === "ban" ? { author: authorState(author!) } : {}),
           },
           resultingState: {
             report: { status: reportStatus },
-            comment: commentAfter,
+            target: targetAfter, comment: targetAfter,
             ...(authorAfter ? { author: authorAfter } : {}),
           },
           details: { reportId: report.id, reportReason: report.reason },
@@ -1001,11 +1012,17 @@ export function registerModerationRoutes(app: Express) {
         return res.status(outcome.status).json(outcome.body);
       }
 
-      // Past the branch above, only queue decisions remain: a comment, and the report it was decided from.
-      if (!undoAction || entry.targetType !== "comment" || !reportId) {
+      // Past the branch above, only queue decisions remain: the content it was about, and the report it was decided from.
+      const undoTable = TAKEDOWN_TABLES[String(entry.targetType)];
+      if (!undoAction || !undoTable || !reportId) {
         return res.status(400).json({ message: "Only decisions made from the report queue can be undone here.", code: "not_undoable" });
       }
-      const before = (entry.previousState ?? {}) as { report?: { status: string }; comment?: Record<string, any> | null; author?: Record<string, any> };
+      const dismissal = entry.action.endsWith("_dismiss");
+      const banned = entry.action.endsWith("_ban");
+      const undoHasMode = SHADOW_HIDEABLE.includes(String(entry.targetType));
+      // Entries written before the queue handled posts say `comment`; newer ones say `target`.
+      const stateBefore = (v: any) => v?.target ?? v?.comment;
+      const before = (entry.previousState ?? {}) as { report?: { status: string }; comment?: Record<string, any> | null; target?: Record<string, any> | null; author?: Record<string, any> };
       const after = (entry.resultingState ?? {}) as typeof before;
 
       const outcome = await db.transaction(async (tx) => {
@@ -1019,29 +1036,33 @@ export function registerModerationRoutes(app: Express) {
           return { status: 409, body: { message: "The report has changed since this decision, so it can't be undone as it was.", code: "state_changed", field: "report" } };
         }
 
-        const [comment] = await tx.select().from(projectComments).where(eq(projectComments.id, entry.targetId!)).for("update");
-        const commentNow = comment ? { hiddenAt: comment.hiddenAt, hiddenMode: comment.hiddenMode, hiddenById: comment.hiddenById, hiddenReason: comment.hiddenReason } : null;
-        if (entry.action !== "comment_dismiss") {
-          if (!comment) return { status: 404, body: { message: "That comment no longer exists.", code: "target_gone" } };
-          if (!sameModeratedState(after.comment, commentNow)) {
-            return { status: 409, body: { message: "The comment has changed since this decision, so it can't be undone as it was.", code: "state_changed", field: "comment" } };
+        const [content] = await tx.select().from(undoTable.table).where(eq(undoTable.table.id, entry.targetId!)).for("update");
+        const contentNow = content
+          ? { hiddenAt: content.hiddenAt, hiddenById: content.hiddenById, hiddenReason: content.hiddenReason, ...(undoHasMode ? { hiddenMode: content.hiddenMode } : {}) }
+          : null;
+        if (!dismissal) {
+          if (!content) return { status: 404, body: { message: "That content no longer exists.", code: "target_gone" } };
+          if (!sameModeratedState(stateBefore(after), contentNow)) {
+            // The field names what changed — "comment", "feed_post" — as the queue and the client know it.
+            return { status: 409, body: { message: "The content has changed since this decision, so it can't be undone as it was.", code: "state_changed", field: entry.targetType } };
           }
         }
-        const [author] = entry.action === "comment_ban" && entry.targetUserId
+        const [author] = banned && entry.targetUserId
           ? await tx.select({ suspendedAt: users.suspendedAt, suspendedReason: users.suspendedReason }).from(users).where(eq(users.id, entry.targetUserId)).for("update")
           : [];
-        if (entry.action === "comment_ban" && (!author || !sameModeratedState(after.author, author))) {
+        if (banned && (!author || !sameModeratedState(after.author, author))) {
           return { status: 409, body: { message: "The author's account has changed since the ban, so it can't be undone from here.", code: "state_changed", field: "author" } };
         }
 
         const date = (v: unknown) => (v ? new Date(String(v)) : null);
-        let commentRestored = commentNow;
-        if (entry.action !== "comment_dismiss" && before.comment !== undefined) {
-          const [c] = await tx.update(projectComments).set({
-            hiddenAt: date(before.comment?.hiddenAt), hiddenMode: before.comment?.hiddenMode ?? null,
-            hiddenById: before.comment?.hiddenById ?? null, hiddenReason: before.comment?.hiddenReason ?? null,
-          } as any).where(eq(projectComments.id, comment!.id)).returning();
-          commentRestored = { hiddenAt: c.hiddenAt, hiddenMode: c.hiddenMode, hiddenById: c.hiddenById, hiddenReason: c.hiddenReason };
+        const wanted = stateBefore(before);
+        let contentRestored = contentNow;
+        if (!dismissal && wanted !== undefined) {
+          const [c] = await tx.update(undoTable.table).set({
+            hiddenAt: date(wanted?.hiddenAt), hiddenById: wanted?.hiddenById ?? null, hiddenReason: wanted?.hiddenReason ?? null,
+            ...(undoHasMode ? { hiddenMode: wanted?.hiddenMode ?? null } : {}),
+          } as any).where(eq(undoTable.table.id, content!.id)).returning();
+          contentRestored = { hiddenAt: c.hiddenAt, hiddenById: c.hiddenById, hiddenReason: c.hiddenReason, ...(undoHasMode ? { hiddenMode: c.hiddenMode } : {}) };
         }
         let authorRestored: Record<string, unknown> | null = null;
         if (author && before.author) {
@@ -1055,9 +1076,9 @@ export function registerModerationRoutes(app: Express) {
 
         const [logged] = await tx.insert(moderationLog).values({
           action: undoAction, actorId: req.user.id, targetUserId: entry.targetUserId,
-          targetType: "comment", targetId: entry.targetId, reason: note, reasonCode,
-          previousState: { report: { status: report.status }, comment: commentNow, ...(author ? { author } : {}) },
-          resultingState: { report: { status: reportStatus }, comment: commentRestored, ...(authorRestored ? { author: authorRestored } : {}) },
+          targetType: entry.targetType, targetId: entry.targetId, reason: note, reasonCode,
+          previousState: { report: { status: report.status }, target: contentNow, comment: contentNow, ...(author ? { author } : {}) },
+          resultingState: { report: { status: reportStatus }, target: contentRestored, comment: contentRestored, ...(authorRestored ? { author: authorRestored } : {}) },
           details: { undoes: entry.id, undoneAction: entry.action, reportId: report.id },
         }).returning();
         return { status: 200, body: { ok: true, logId: logged.id, undoes: entry.id, reportStatus } };

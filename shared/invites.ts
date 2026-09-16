@@ -55,3 +55,10 @@ export function maskEmail(email: string): string {
 
 /** Where a pending invite waits through sign up and onboarding in this browser. */
 export const PENDING_INVITE_KEY = "st_pending_invite";
+
+/**
+ * The project someone has just joined, so the manage page can welcome them and
+ * point at the next step. Set when an invite is accepted, read and cleared
+ * once — it outlives the redirect through onboarding that a new account takes.
+ */
+export const JOINED_PROJECT_KEY = "st_joined_project";

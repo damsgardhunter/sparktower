@@ -1,10 +1,10 @@
 import { useState } from "react";
-import { Text, TextInput, View } from "react-native";
+import { Pressable, Text, TextInput, View } from "react-native";
 import { Stack, useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
-import { Btn, Card, Empty, Loading, Screen, Segments, errText } from "../../src/components/ui";
+import { Btn, Card, Empty, ErrorNote, Loading, Screen, Segments, errText } from "../../src/components/ui";
 import { PageIntro, Pill } from "../../src/components/MoreKit";
 import { NoticeBanner, Sheet, useNotice, type Notice } from "../../src/components/Sheet";
 import {
@@ -43,13 +43,32 @@ const REASON_CODES = [
 const reasonCodesFor = (action: ModerationAction) =>
   REASON_CODES.filter((r) => r.kind === (action === "dismiss" ? "dismissal" : "violation")).map((r) => ({ id: r.id as string, label: r.label }));
 const moderationReasonLabel = (id: string | null | undefined) =>
-  REASON_CODES.find((r) => r.id === id)?.label ?? (id || "No reason code");
+  REASON_CODES.find((r) => r.id === id)?.label
+  ?? UNDO_REASON_CODES.find((r) => r.id === id)?.label
+  ?? (id || "No reason code");
 
-/** How a log entry reads in the history list. */
+/** How a log entry reads in the history list. Posts and comments are decided the same way. */
 const ACTION_WORDS: Record<string, string> = {
   comment_remove: "Removed", comment_shadow_hide: "Shadow-hidden", comment_ban: "Author banned, comment removed",
   comment_dismiss: "Dismissed", content_hidden: "Taken down", content_restored: "Restored",
+  comment_restore: "Put back",
+  feed_post_remove: "Post removed", feed_post_ban: "Author banned, post removed", feed_post_dismiss: "Dismissed", feed_post_restore: "Post put back",
+  feed_comment_remove: "Comment removed", feed_comment_ban: "Author banned, comment removed", feed_comment_dismiss: "Dismissed", feed_comment_restore: "Comment put back",
+  report_reopened: "Reopened", suspend: "Account suspended", reinstate: "Account reinstated",
 };
+
+/** shared/moderation.ts, restated: which decisions can be put back, and why someone would. */
+const UNDOABLE_ACTIONS: Record<string, string> = {
+  comment_remove: "comment_restore", comment_shadow_hide: "comment_restore", comment_ban: "comment_restore", comment_dismiss: "report_reopened",
+  feed_post_remove: "feed_post_restore", feed_post_ban: "feed_post_restore", feed_post_dismiss: "report_reopened",
+  feed_comment_remove: "feed_comment_restore", feed_comment_ban: "feed_comment_restore", feed_comment_dismiss: "report_reopened",
+  content_hidden: "content_restored", content_restored: "content_hidden", suspend: "reinstate", reinstate: "suspend",
+};
+const UNDO_REASON_CODES = [
+  { id: "reviewer_error", label: "Reviewer's mistake" },
+  { id: "appeal_upheld", label: "Appeal upheld" },
+  { id: "new_context", label: "New context changed the call" },
+] as const;
 
 type Status = "open" | "actioned" | "dismissed";
 const TABS: { value: Status; label: string }[] = [
@@ -365,21 +384,62 @@ function DecideSheet({ report, onClose, onDone, show }: { report: Report; onClos
 }
 
 /** What has been done to one reported thing, from the moderation log. */
+/**
+ * What was decided, and — for the reviewer who got it wrong — putting it back.
+ *
+ * The web has had undo since the queue did; the phone showed the history and
+ * left you to find a laptop. Same endpoint, same reason codes, same rule: once
+ * per decision, and only while nothing has changed since.
+ */
 function History({ targetType, targetId }: { targetType: string; targetId: string }) {
+  const qc = useQueryClient();
+  const [undoing, setUndoing] = useState<string | null>(null);
+  const [reasonCode, setReasonCode] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const { data } = useQuery({
     queryKey: ["admin-moderation-log", targetType, targetId],
     queryFn: () => api<any[]>(`/api/admin/moderation-log?targetType=${encodeURIComponent(targetType)}&targetId=${encodeURIComponent(targetId)}`).catch(() => []),
   });
+  const undo = useMutation({
+    mutationFn: (id: string) => api(`/api/admin/moderation-log/${id}/undo`, { method: "POST", body: { reasonCode } }),
+    onSuccess: () => {
+      setUndoing(null);
+      setError(null);
+      qc.invalidateQueries({ queryKey: ["admin-moderation-log"] });
+      qc.invalidateQueries({ queryKey: ["admin-reports"] });
+    },
+    onError: (e) => setError(errText(e, "Couldn't undo that. Nothing was changed.")),
+  });
+  // An entry another entry already undoes can't be undone again.
+  const undone = new Set((data ?? []).map((e: any) => e.details?.undoes).filter(Boolean));
   if (!data?.length) return null;
   return (
     <View style={{ borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border, padding: spacing.sm, gap: 4 }}>
       <Text style={text.over}>History</Text>
       {data.map((e) => (
-        <Text key={e.id} style={[text.small, { color: colors.text }]}>
-          <Text style={{ fontFamily: fontFamily.semibold }}>{ACTION_WORDS[e.action] ?? e.action}</Text>
-          {" · "}{moderationReasonLabel(e.reasonCode)}{" · "}{e.actorName ?? "a reviewer"}{" · "}{new Date(e.createdAt).toLocaleString()}
-          {e.reason ? <Text style={{ color: colors.textTertiary }}> — “{e.reason}”</Text> : null}
-        </Text>
+        <View key={e.id} style={{ gap: 4 }}>
+          <Text style={[text.small, { color: colors.text }]}>
+            <Text style={{ fontFamily: fontFamily.semibold }}>{ACTION_WORDS[e.action] ?? e.action}</Text>
+            {" · "}{moderationReasonLabel(e.reasonCode)}{" · "}{e.actorName ?? "a reviewer"}{" · "}{new Date(e.createdAt).toLocaleString()}
+            {e.reason ? <Text style={{ color: colors.textTertiary }}> — “{e.reason}”</Text> : null}
+          </Text>
+          {UNDOABLE_ACTIONS[e.action] && !undone.has(e.id) && (
+            undoing === e.id ? (
+              <View style={{ gap: 6, paddingBottom: spacing.xs }}>
+                {error && <ErrorNote message={error} />}
+                <ChoiceList options={UNDO_REASON_CODES as any} value={reasonCode as any} onChange={(v) => setReasonCode(v)} disabled={undo.isPending} />
+                <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                  <Btn label="Cancel" variant="outline" small style={{ flex: 1 }} onPress={() => { setUndoing(null); setError(null); }} />
+                  <Btn label="Undo it" small style={{ flex: 1 }} disabled={!reasonCode} loading={undo.isPending} onPress={() => undo.mutate(e.id)} testID={`undo-confirm-${e.id}`} />
+                </View>
+              </View>
+            ) : (
+              <Pressable onPress={() => { setUndoing(e.id); setReasonCode(""); setError(null); }} testID={`undo-${e.id}`}>
+                <Text style={[text.small, { color: colors.primary, fontFamily: fontFamily.semibold }]}>Undo this</Text>
+              </Pressable>
+            )
+          )}
+        </View>
       ))}
     </View>
   );

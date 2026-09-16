@@ -31,7 +31,6 @@ const label = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
  * a line here. Removing a line here when the route gains its own limit.
  */
 const FLOOR_ONLY_ALLOWED: Record<string, string> = {
-  "POST /api/auth/logout-all": "ends every session; signed-in only",
   "PATCH /api/documents/:docId": "member-only edit of an existing row",
   "DELETE /api/documents/:docId": "member-only delete",
   "DELETE /api/feed/:id": "author-only delete",

@@ -11,6 +11,7 @@
  * only as a hash, single use, expiring, revocable.
  */
 import type { Express, Request } from "express";
+import { pathProgress } from "./path-return";
 import crypto from "node:crypto";
 import { and, count, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { db } from "./db";
@@ -223,6 +224,20 @@ export function registerInviteRoutes(app: Express) {
       if (outcome.status === 200 && (outcome as any).notifyOwner) {
         const p = (outcome as any).notifyOwner;
         await notify({ recipients: [p.ownerId], actorId: req.user.id, kind: "invite_accepted", targetId: `${p.id}:${req.user.id}`, projectId: p.id, excerpt: outcome.body.role as string }).catch(() => {});
+        /*
+         * And the person who just joined gets their own way back in. The
+         * welcome banner on the project is one screen away from being closed
+         * and never seen again; this sits in their bell on every device and
+         * opens the section the next step is on, which is the whole point of
+         * joining. Without it, a collaborator who shuts the tab has nothing
+         * bringing them back.
+         */
+        const path = await pathProgress(p.id).catch(() => null);
+        await notify({
+          recipients: [req.user.id], actorId: req.user.id, allowSelf: true, once: true,
+          kind: "next_step", targetId: `${p.id}:${path?.nextId ?? "start"}`,
+          projectId: p.id, excerpt: path?.next ?? `Pick up a step on ${p.title}`,
+        }).catch(() => {});
       }
       res.status(outcome.status).json(outcome.body);
     } catch (error) {

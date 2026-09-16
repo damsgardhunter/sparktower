@@ -6348,9 +6348,17 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         limit: 10,
       });
 
+      /*
+       * This read is Stripe's answer as of now, so it also sets the mark that
+       * makes webhook events older than it no-ops (server/webhookHandlers.ts):
+       * a delayed "you're on builder" mustn't undo what the account just
+       * confirmed with Stripe directly.
+       */
+      const syncedAt = { subscriptionEventAt: new Date() };
       const sub = paidSubscription(subscriptions.data);
       if (!sub) {
         await storage.updateUserStripeInfo(userId, { subscriptionTier: "free", stripeSubscriptionId: undefined });
+        await db.update(users).set(syncedAt).where(eq(users.id, userId));
         return res.json({ tier: "free" });
       }
       const priceId = sub.items.data[0]?.price?.id;
@@ -6358,6 +6366,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         // Price metadata, else product metadata — as checkout reads it. A tier that can't be read changes nothing.
         const tier = await tierForPrice(priceId);
         const { refilled } = await applyTier(userId, tier, sub.id);
+        await db.update(users).set(syncedAt).where(eq(users.id, userId));
         return res.json({ tier, refilled });
       }
 

@@ -174,7 +174,7 @@ async function nextOpenMilestone(projectId: string): Promise<string | null> {
 }
 
 /** The main line's progress and next milestone, read without syncing anything — safe on public, anonymous reads. */
-export async function pathProgress(projectId: string): Promise<{ done: number; total: number; next: string | null } | null> {
+export async function pathProgress(projectId: string): Promise<{ done: number; total: number; next: string | null; nextId: string | null } | null> {
   const [project] = await db.select({ goal: projects.goal, subcategory: projects.subcategory, capitalRoute: projects.capitalRoute }).from(projects).where(eq(projects.id, projectId));
   if (!project) return null;
   const main = mainLineMilestones(resolveTree(project.goal as ProjectGoal, project.subcategory, project.capitalRoute));
@@ -183,10 +183,13 @@ export async function pathProgress(projectId: string): Promise<{ done: number; t
     .map((t) => (t.tags ?? []).find((x) => x.startsWith("backbone:"))?.slice("backbone:".length)).filter(Boolean) as string[]);
   const present = new Set(tasks.map((t) => (t.tags ?? []).find((x) => x.startsWith("backbone:"))?.slice("backbone:".length)).filter(Boolean) as string[]);
   if (!present.size) return null;
+  const nextMilestone = main.find((m) => present.has(m.id) && !done.has(m.id)) ?? null;
   return {
     done: main.filter((m) => done.has(m.id)).length,
     total: main.length,
-    next: main.find((m) => present.has(m.id) && !done.has(m.id))?.title ?? null,
+    next: nextMilestone?.title ?? null,
+    /** The milestone's id, for a link that opens the section it's on (shared/notifications.ts). */
+    nextId: nextMilestone?.id ?? null,
   };
 }
 

@@ -13,19 +13,20 @@ import { Textarea } from "@/components/ui/textarea";
 import { WorkView, refreshPath, useFail } from "@/components/path-work";
 import { addableLoopTypes } from "@/components/loop-tree";
 import { ShareStepDialog, PublishArtifactDialog, WeeklyUpdateDialog } from "@/components/continue-path-card";
+import { InviteCollaboratorDialog } from "@/components/invite-collaborator-dialog";
 import { LowCreditsNotice } from "@/components/upgrade-to-keep-generating";
 import { sectionDef } from "@/lib/sections";
 import { LOOP_TYPE_INFO, type LoopType } from "@shared/phase-trees";
 import { PATH_FOCUS } from "@shared/notifications";
 import { Chip, Clamp } from "./block";
 import { ACTOR_SHORT, TIER_SHORT, estimate, NOVA_GRADIENT, type PathStatus } from "./path-types";
-import { CheckCircle2, Circle, Clock, ListTree, Loader2, Plus, ShieldCheck, Sparkles, User, Share2, Globe, PartyPopper, ArrowRight, ListChecks } from "lucide-react";
+import { CheckCircle2, Circle, Clock, ListTree, Loader2, Plus, ShieldCheck, Sparkles, User, Share2, Globe, PartyPopper, ArrowRight, ListChecks, UserPlus } from "lucide-react";
 
 export function NextStep({ projectId, data, onNavigate }: { projectId: string; data: PathStatus; onNavigate: (tab: string) => void }) {
   const { toast } = useToast();
   const fail = useFail();
   const refresh = () => refreshPath(projectId);
-  const { data: projectInfo } = useQuery<{ title?: string }>({ queryKey: ["/api/projects", projectId], enabled: !!projectId });
+  const { data: projectInfo } = useQuery<{ title?: string; soloMode?: boolean | null }>({ queryKey: ["/api/projects", projectId], enabled: !!projectId });
   const title = projectInfo?.title ?? "your project";
   const [sharingStep, setSharingStep] = useState(false);
   const [publishingStep, setPublishingStep] = useState(false);
@@ -87,6 +88,21 @@ export function NextStep({ projectId, data, onNavigate }: { projectId: string; d
           )}
         </div>
       )}
+      {/*
+        * Finishing something is when bringing in the next person is a real
+        * thought rather than an interruption: the work just showed what's
+        * needed next. Anyone on the team can invite (server/invite-routes.ts),
+        * so this is the means as well as the moment — and the loop's last leg,
+        * which otherwise ends with whoever the owner happened to invite first.
+        */}
+      {data.lastDone && !projectInfo?.soloMode && (
+        <div className="flex items-center gap-2 text-xs flex-wrap" data-testid="path-invite-next">
+          <span className="text-muted-foreground">Need someone for what's next?</span>
+          <InviteCollaboratorDialog projectId={projectId} projectTitle={title} trigger={
+            <button className="text-primary hover:underline flex items-center gap-1" data-testid="button-invite-from-path"><UserPlus className="h-3 w-3" />Invite a collaborator</button>
+          } />
+        </div>
+      )}
       {data.weekly?.due && data.weekly.steps.length > 1 && (
         <div className="flex items-center gap-2 text-xs flex-wrap" data-testid="path-weekly-update">
           <span className="text-muted-foreground">{data.weekly.steps.length} steps done this week, not shared</span>
@@ -94,7 +110,7 @@ export function NextStep({ projectId, data, onNavigate }: { projectId: string; d
         </div>
       )}
       {postingWeek && data.weekly && <WeeklyUpdateDialog projectId={projectId} projectTitle={title} steps={data.weekly.steps} open onClose={() => setPostingWeek(false)} />}
-      {publishingStep && data.lastDone && <PublishArtifactDialog projectId={projectId} step={data.lastDone} open onClose={() => setPublishingStep(false)} />}
+      {publishingStep && data.lastDone && <PublishArtifactDialog projectId={projectId} projectTitle={title} step={data.lastDone} open onClose={() => setPublishingStep(false)} />}
       {sharingStep && data.lastDone && <ShareStepDialog projectId={projectId} projectTitle={title} step={data.lastDone} open onClose={() => setSharingStep(false)} />}
     </>
   );

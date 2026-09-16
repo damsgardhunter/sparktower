@@ -141,6 +141,65 @@ describe("the comment moderation loop", () => {
   });
 });
 
+describe("a reported feed post, decided from the queue", () => {
+  /*
+   * The queue used to decide comments and nothing else: a reported post sat
+   * there marked "not actionable", and the reviewer had to go and find the
+   * post to use the takedown button — a different route, a different record,
+   * and no report closed at the end of it. Same decision, same log entry, same
+   * undo, whatever was reported.
+   */
+  it("removes the post, closes the report, and undoes back to exactly what was there", async () => {
+    const app = await getTestApp();
+    const author = await person(app, "Poster");
+    const stranger = await person(app, "Reader");
+    const mod = await person(app, "Reviewer");
+    await db.update(users).set({ platformRole: "reviewer" }).where(eq(users.id, mod.id));
+    await passMfa(mod.agent);
+
+    const content = `Buy followers cheap at spam.example ${Date.now()}`;
+    const posted = await author.agent.post("/api/feed").send({ postType: "project_update", content });
+    expect(posted.status).toBe(200);
+    const postId = posted.body.id as string;
+
+    expect((await stranger.agent.post("/api/reports").send({ targetType: "feed_post", targetId: postId, reason: "spam", note: "Spam" })).status).toBe(200);
+    const queued = ((await mod.agent.get("/api/admin/reports?status=open&type=feed_post")).body as any[]).find((r) => r.targetId === postId);
+    expect(queued, "the report is in the queue").toBeTruthy();
+    // It says it can be decided here, which is what puts the buttons in front of the reviewer.
+    expect(queued.actionable).toBe(true);
+
+    // A post has no shadow mode: that's refused rather than silently doing something else.
+    const shadow = await mod.agent.post(`/api/admin/reports/${queued.id}/act`).send({ action: "shadow_hide", reasonCode: "spam" });
+    expect(shadow.status).toBe(400);
+    expect(shadow.body.code).toBe("invalid_input");
+
+    const acted = await mod.agent.post(`/api/admin/reports/${queued.id}/act`).send({ action: "remove", reasonCode: "spam", note: "Link spam" });
+    expect(acted.status, JSON.stringify(acted.body)).toBe(200);
+    expect(acted.body.reportStatus).toBe("actioned");
+
+    // Gone from the feed, and the report is closed.
+    const feed = await stranger.agent.get("/api/feed?limit=50");
+    expect((feed.body.posts ?? []).some((p: any) => p.id === postId)).toBe(false);
+    expect(((await mod.agent.get("/api/admin/reports?status=open&type=feed_post")).body as any[]).some((r) => r.targetId === postId)).toBe(false);
+
+    // One entry, naming the post and what was done to it, with the state before.
+    const log = (await mod.agent.get(`/api/admin/moderation-log?targetType=feed_post&targetId=${postId}`)).body as any[];
+    expect(log).toHaveLength(1);
+    expect(log[0]).toMatchObject({ action: "feed_post_remove", targetType: "feed_post", targetId: postId, reasonCode: "spam", reason: "Link spam" });
+    expect(log[0].previousState.target.hiddenAt).toBeNull();
+    expect(log[0].resultingState.target.hiddenAt).toBeTruthy();
+
+    // And undone from the log, like a comment: the post is back, the report is open again.
+    const undone = await mod.agent.post(`/api/admin/moderation-log/${log[0].id}/undo`).send({ reasonCode: "reviewer_error", note: "Not spam after all" });
+    expect(undone.status, JSON.stringify(undone.body)).toBe(200);
+    expect((await stranger.agent.get("/api/feed?limit=50")).body.posts.some((p: any) => p.id === postId)).toBe(true);
+    const reopened = ((await mod.agent.get("/api/admin/reports?status=open&type=feed_post")).body as any[]).find((r) => r.targetId === postId);
+    expect(reopened).toBeTruthy();
+    // Once: the second attempt is refused, not repeated.
+    expect((await mod.agent.post(`/api/admin/moderation-log/${log[0].id}/undo`).send({ reasonCode: "reviewer_error" })).status).toBe(409);
+  });
+});
+
 describe("the log", () => {
   it("refuses edits and deletes in the database itself", async () => {
     const s = await scene(await getTestApp());

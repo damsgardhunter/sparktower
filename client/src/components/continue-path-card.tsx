@@ -13,6 +13,7 @@ import { errorText } from "@/lib/api-error";
 import { MAX_ASKS } from "@shared/feedback-loop";
 import { ArrowRight, ChevronDown, Compass, Globe, Loader2, Share2, Sparkles, User } from "lucide-react";
 import { ARTIFACT_MAX_TAGS, ARTIFACT_TITLE_MAX } from "@shared/path-artifacts";
+import { InviteCollaboratorDialog } from "@/components/invite-collaborator-dialog";
 
 export interface NextStepItem {
   project: { id: string; title: string; logoUrl: string | null };
@@ -104,8 +105,8 @@ export function ShareStepDialog({ projectId, projectTitle, step, open, onClose }
  * goes out as a public page (/a/:id) and a feed post. The public page is what
  * gets shared; strangers who sign up from it are credited back to you.
  */
-export function PublishArtifactDialog({ projectId, step, open, onClose }: {
-  projectId: string; step: { taskId: string; title: string }; open: boolean; onClose: () => void;
+export function PublishArtifactDialog({ projectId, projectTitle, step, open, onClose }: {
+  projectId: string; projectTitle?: string; step: { taskId: string; title: string }; open: boolean; onClose: () => void;
 }) {
   const { toast } = useToast();
   const [title, setTitle] = useState(step.title);
@@ -149,6 +150,15 @@ export function PublishArtifactDialog({ projectId, step, open, onClose }: {
             <div className="flex gap-3 text-sm">
               <button className="text-primary hover:underline" onClick={() => navigator.clipboard?.writeText(published)}>Copy link</button>
               <a href={published} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline" data-testid="link-open-artifact">Open the page</a>
+            </div>
+            {/*
+              * The loop's other half. A page worth sharing is the best moment to
+              * ask someone in — the invite goes out with something finished
+              * attached to it, rather than an empty project.
+              */}
+            <div className="border-t border-border pt-3 space-y-2">
+              <p className="text-sm text-muted-foreground">Someone who'd want to work on this with you?</p>
+              <InviteCollaboratorDialog projectId={projectId} projectTitle={projectTitle ?? "this project"} />
             </div>
           </div>
         ) : draft.isLoading ? (
