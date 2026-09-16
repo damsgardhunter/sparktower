@@ -64,6 +64,24 @@ describe("the close read of an open loop", () => {
     expect(paths.length).toBeLessThanOrEqual(3);
   });
 
+  it("doesn't crown a document that shares a couple of ordinary words with the title", () => {
+    /*
+     * This is how the rule above broke: a runbook about connecting a domain
+     * contained "something" and "entirely", scored as the loop's own doc, and
+     * its cited paths displaced the first pass's evidence at the front of the
+     * read. A doc has to say something about the loop's steps, or be headed
+     * with its name, before it counts as being about it.
+     */
+    const { docs } = pickLoopEvidence({ title: "Something unrelated entirely", description: "" }, files);
+    expect(docs).toEqual([]);
+    // A real loop with real steps still finds its doc — the rule didn't just turn the feature off.
+    const real = pickLoopEvidence({
+      title: "Admin: review safety signals and act on reports",
+      description: "Review reports/rate-limit hits/loop metrics → take moderation action (remove/ban/flag surface) → monitor impact → repeat",
+    }, files);
+    expect(real.docs[0]).toBe("docs/safety-loop.md");
+  });
+
   it("reads a loop's own doc over a long plan that mentions every loop's words", () => {
     const growth = pickLoopEvidence({ title: "Publish path artifact", type: "growth", description: "Finish a Path Step and click Generate Artifact → Publish to Feed with public title + tags + link back to Project/Path → public indexable URL → stranger signs up → publishes their own" }, files);
     expect(growth.docs[0]).toBe("docs/growth-loop.md");

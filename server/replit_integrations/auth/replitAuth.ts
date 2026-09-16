@@ -11,6 +11,44 @@ import bcrypt from "bcryptjs";
 import { sessionSecret } from "../../secrets";
 import { isDeleted } from "../../account-data";
 
+/** The host part of a configured URL — "https://sparktower.app/" → "sparktower.app". */
+function hostOf(url: string | undefined): string | null {
+  const value = url?.trim();
+  if (!value) return null;
+  try { return new URL(/^https?:\/\//.test(value) ? value : `https://${value}`).host.toLowerCase(); }
+  catch { return null; }
+}
+
+/**
+ * Where Google sends somebody back to, which has to be the host they started
+ * on: the session cookie is set on that host and no other, so a callback on the
+ * wrong one signs them in somewhere they aren't looking and returns them to the
+ * site signed out — with nothing in the log about it.
+ *
+ * In order:
+ *
+ *  - `AUTH_HOST`, so the callback can be pointed at a LAN address while testing
+ *    with other people on the same wifi. Without it this used to be hard-wired
+ *    to localhost, and localhost on a tester's phone is the tester's phone.
+ *  - `PUBLIC_URL`, the site's real address once there's a custom domain. This
+ *    is the one that was missing: a deployment answering as sparktower.app was
+ *    still sending people back to the platform's own hostname.
+ *  - the platform's hostname, then localhost.
+ *
+ * Whatever comes out, the matching redirect URI has to exist in the Google
+ * console — see docs/ops/custom-domain.md.
+ */
+export function googleCallbackUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const domain =
+    env.AUTH_HOST ||
+    hostOf(env.PUBLIC_URL) ||
+    env.REPLIT_DOMAINS?.split(",")[0] ||
+    `localhost:${env.PORT || "5001"}`;
+  // Anything on the local network is plain http; only a real domain is https.
+  const isLocal = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(domain);
+  return `${isLocal ? "http" : "https"}://${domain}/api/auth/google/callback`;
+}
+
 export function getSession() {
   const sessionTtlSeconds = 7 * 24 * 60 * 60;
   const sessionTtlMs = sessionTtlSeconds * 1000;
@@ -89,30 +127,12 @@ export async function setupAuth(app: Express) {
   );
 
   if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
-    const defaultPort = process.env.PORT || "5001";
-    /*
-     * AUTH_HOST first, so the callback can be pointed at a LAN address while
-     * testing with other people on the same wifi.
-     *
-     * Without it this is hard-wired to localhost, and localhost on a tester's
-     * phone is the tester's phone — Google sends them back to a callback that
-     * doesn't exist and sign-in dies with no useful error. Set it to the
-     * address the boot log prints, e.g. AUTH_HOST=10.0.0.56:5001, and add the
-     * matching redirect URI in the Google Cloud console.
-     */
-    const domain =
-      process.env.AUTH_HOST ||
-      process.env.REPLIT_DOMAINS?.split(",")[0] ||
-      `localhost:${defaultPort}`;
-    // Anything on the local network is plain http; only a real domain is https.
-    const isLocal = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(domain);
-    const protocol = isLocal ? "http" : "https";
     passport.use(
       new GoogleStrategy(
         {
           clientID: process.env.GOOGLE_CLIENT_ID,
           clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-          callbackURL: `${protocol}://${domain}/api/auth/google/callback`,
+          callbackURL: googleCallbackUrl(),
           /* So a new account can be stamped with the link that brought them. */
           passReqToCallback: true,
         },
@@ -155,11 +175,13 @@ export async function setupAuth(app: Express) {
         }
       )
     );
-    // Debug: log the configured Google callback URL (does not include secrets)
-    try {
-      // eslint-disable-next-line no-console
-      console.log("Google OAuth callback URL:", `${protocol}://${domain}/api/auth/google/callback`);
-    } catch (e) {}
+    /*
+     * Printed at boot because the failure it prevents is invisible: a callback
+     * on the wrong host signs people in somewhere they aren't looking. This is
+     * the string that has to appear verbatim in the Google console. No secrets
+     * in it.
+     */
+    console.log("Google OAuth callback URL:", googleCallbackUrl());
   }
 }
 

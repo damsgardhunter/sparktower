@@ -128,9 +128,18 @@ export function pickLoopEvidence(
       const name = f.path.toLowerCase().split("/").pop()!;
       const namedForKind = !!loop.type && name === `${loop.type}-loop.md`;
       const about = (headingHits >= 0.99 ? 1.5 : headingHits >= 0.5 ? 0.5 : 0) + (namedForKind && hitsTitle ? 1 : 0);
-      return { f, about, score: (titleWords.length ? hitsTitle / titleWords.length : 0) * 2 + (stepWords.length ? hitsSteps / stepWords.length : 0) + about };
+      return { f, about, hitsSteps, score: (titleWords.length ? hitsTitle / titleWords.length : 0) * 2 + (stepWords.length ? hitsSteps / stepWords.length : 0) + about };
     })
-    .filter((d) => d.score >= 1.2)
+    /*
+     * Enough score, and not by coincidence. Title words alone are cheap: a
+     * short title shares two ordinary words with any long document, and then
+     * that document's cited paths lead the read — ahead of what the first pass
+     * actually found. (A runbook about connecting a domain was picked this way,
+     * off "something" and "entirely", and its paths displaced the evidence.)
+     * So a doc must also say something about the loop's *steps*, or be headed
+     * with the loop's own name / named for its kind, which is what `about` is.
+     */
+    .filter((d) => d.score >= 1.2 && (d.about > 0 || d.hitsSteps > 0))
     .sort((a, b) => b.score - a.score);
   // A second doc only when it's about this loop nearly as much as the first; a
   // plan that mentions every loop in passing crowds out the one that maps this one.
