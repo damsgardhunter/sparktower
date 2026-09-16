@@ -16,11 +16,18 @@ services:
   - type: web
     name: sparktower
     runtime: node
-    plan: starter # the free plan sleeps, and a sleeping process runs no background jobs
+    # Not the free plan (it sleeps, and a sleeping process runs no background
+    # jobs), and not the 512MB one: the client build peaks around 1.05GB in a
+    # single process — measured, not guessed — so 512MB dies mid-build with an
+    # out-of-memory that reads like a broken repository. 2GB builds comfortably.
+    plan: standard
     region: oregon
     branch: main
     buildCommand: npm ci && npm run build
-    startCommand: node dist/index.cjs
+    # `npm run start` rather than `node dist/index.cjs`: the script sets
+    # NODE_ENV=production itself, so the app can't come up in development mode
+    # because one environment variable went missing.
+    startCommand: npm run start
     # The app answers this before it has finished booting, on purpose, so a
     # deploy isn't failed by a probe that arrives during startup work.
     healthCheckPath: /_health
