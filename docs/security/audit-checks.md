@@ -94,6 +94,8 @@ _Total: 35 checks._
 
 The model never sees the repository — it sees a digest (`server/code-digest.ts`), and every list in it has a size limit. That is fine until a clipped list reads as a complete one: an audit of this codebase was handed 90 routes of 434 under a header saying "(120)" and reported working features as "not evidenced in the provided files", three times, about code that was there.
 
+Two more things it couldn't see, both since added: **what runs at boot** (an audit reported the moderation log's TRUNCATE protection as possibly-never-applied, because the call sits at line 90 of the entry file and the excerpt stopped at 70 — the boot sequence is now lifted out and listed in order), and **what's in the rest of a long file** (an excerpt of a 1,200-line file stops mid-route, which reads as a doubt about the code; each excerpt is now followed by an index of the exports and routes that follow, with line numbers to ask for).
+
 So the digest now says what it is: how many files exist, how many were read, how many appear as excerpts (opening lines, ~26 files), that lists are clipped where they say so, and that absence from it is not absence from the code. Counts are of what was **found**, not what fitted; the route list points at the ROUTE COVERAGE table, which holds every route with its guards. `test/unit/digest-honesty.test.ts` fails if a header ever again prints a cap as a total.
 
 ## What this codebase fails today

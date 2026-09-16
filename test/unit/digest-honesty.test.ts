@@ -53,6 +53,53 @@ describe("what the digest says about itself", () => {
     expect(digest.prompt).not.toMatch(/… and \d+ more not listed here/);
   });
 
+  it("says what the server does on the way up, so 'is that rule applied in production?' is answerable", () => {
+    /*
+     * An audit reported the moderation log's TRUNCATE protection as
+     * possibly-never-applied, because the call is at line 90 of the entry file
+     * and the excerpt stopped at 70. The question is about the boot sequence,
+     * so the boot sequence is lifted out of the file.
+     */
+    const digest = buildCodeDigest(snapshotFromFiles([
+      { path: "package.json", content: JSON.stringify({ name: "x", dependencies: { express: "4" } }) },
+      {
+        path: "server/index.ts",
+        content: [
+          'import express from "express";',
+          ...Array.from({ length: 80 }, (_, i) => `// filler line ${i}`),
+          "await runMigrations(pool);",
+          'console.log("started");',
+          "await applyModerationLogRules((q) => pool.query(q));",
+          "app.listen(5000);",
+        ].join("\n"),
+      },
+    ] as any, "test"));
+
+    expect(digest.prompt).toContain("WHAT RUNS AT BOOT (as server/index.ts calls it, in order)");
+    expect(digest.prompt).toMatch(/- \d+: applyModerationLogRules\(\)/);
+    expect(digest.prompt).toMatch(/- \d+: runMigrations\(\)/);
+    // Logging isn't a step.
+    expect(digest.prompt).not.toMatch(/- \d+: console\.log\(\)/);
+  });
+
+  it("indexes the part of a long file the excerpt stopped short of", () => {
+    const body = [
+      'import express from "express";',
+      ...Array.from({ length: 80 }, (_, i) => `const filler${i} = ${i};`),
+      'app.post("/api/admin/users/:id/suspend", requireReviewer, handler);',
+      "export function enforceRateLimit() {}",
+    ].join("\n");
+    const digest = buildCodeDigest(snapshotFromFiles([
+      { path: "package.json", content: JSON.stringify({ name: "x", dependencies: { express: "4" } }) },
+      { path: "server/moderation.ts", content: body },
+    ] as any, "test"));
+
+    // The excerpt stops; the index carries on, with line numbers to ask for.
+    expect(digest.prompt).toMatch(/The remaining \d+ lines hold:/);
+    expect(digest.prompt).toMatch(/\d+: POST \/api\/admin\/users\/:id\/suspend/);
+    expect(digest.prompt).toMatch(/\d+: export function enforceRateLimit/);
+  });
+
   it("holds a real API's worth of routes and tables, not a fraction of one", () => {
     // 461 routes and 104 tables is this repository, the day the caps were found.
     const digest = buildCodeDigest(bigRepo(461, 104));

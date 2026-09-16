@@ -472,6 +472,61 @@ function excerpt(file: RepoFile, maxLines: number): string {
   return meaningful.join("\n");
 }
 
+/**
+ * What's in the rest of a file the excerpt stopped short of.
+ *
+ * An excerpt is the opening lines, and a 6,000-line routes file is a hundred
+ * decisions past them. An audit reading one said the file was "truncated
+ * mid-way through POST /api/admin/users/:id/suspend, so any logging or
+ * enforcement in the remainder can't be confirmed" — a true statement about
+ * the digest that reads as a doubt about the code.
+ *
+ * So a long file also gets an index of itself: what it exports and what it
+ * registers, with line numbers. Not the code — enough to know what's there and
+ * what to ask for.
+ */
+function outline(file: RepoFile, fromLine: number, max = 60): string {
+  const lines = (file.content || "").split("\n");
+  const found: string[] = [];
+  for (let i = fromLine; i < lines.length; i++) {
+    const line = lines[i];
+    const route = /\b(?:app|router)\.(get|post|put|patch|delete|use)\s*\(\s*[`'"]([^`'"]+)[`'"]/.exec(line);
+    if (route) { found.push(`${i + 1}: ${route[1].toUpperCase()} ${route[2]}`); }
+    else {
+      const symbol = /^export\s+(?:async\s+)?(function|const|class|interface|type)\s+(\w+)/.exec(line);
+      if (symbol) found.push(`${i + 1}: export ${symbol[1]} ${symbol[2]}`);
+    }
+    if (found.length >= max) { found.push(`… more, past line ${i + 1}`); break; }
+  }
+  return found.join("\n");
+}
+
+/**
+ * What the server does on the way up, in the order its entry file does it.
+ *
+ * "Is that rule actually applied in production?" is a question about the boot
+ * sequence, and the boot sequence lives past the opening lines of the entry
+ * file — so an audit that couldn't see it reported a database rule as
+ * possibly-never-applied. This lifts the calls out.
+ */
+function bootSequence(files: RepoFile[]): { entry: string; steps: string[] } | null {
+  const entry = files.find((f) => /^(server|src|api)\/(index|main|server)\.[cm]?[jt]s$/.test(f.path) && f.content)
+    ?? files.find((f) => /^(index|main|server)\.[cm]?[jt]s$/.test(f.path) && f.content);
+  if (!entry) return null;
+  const steps: string[] = [];
+  const lines = entry.content!.split("\n");
+  for (let i = 0; i < lines.length && steps.length < 40; i++) {
+    // A call made for its effect at startup: `await loadSurfaceFlags()`, `applyModerationLogRules(...)`, `app.listen(...)`.
+    const m = /^\s{0,6}(?:await\s+)?((?:\w+\.)?\w+)\s*\(/.exec(lines[i]);
+    if (!m) continue;
+    const name = m[1];
+    // Control flow and logging aren't steps; what the server *does* is.
+    if (/^(if|for|while|switch|catch|return|require|function|try)$/.test(name) || /^(console|process|JSON|Math|Object|Array)\./.test(name)) continue;
+    steps.push(`${i + 1}: ${name}()`);
+  }
+  return { entry: entry.path, steps };
+}
+
 export interface CodeDigest {
   signals: DigestSignals;
   /** The prompt-ready text. */
@@ -627,10 +682,11 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
   const excerptBudget = 26;
   const rest = ranked.filter(({ file }) => !guardPaths.has(file.path)).slice(0, Math.max(10, excerptBudget - guardFiles.length));
   const excerpts = [
-    ...guardFiles.map((file) => ({ path: file.path, lines: (file.content!.match(/\n/g)?.length ?? 0) + 1, body: excerpt(file, 70) })),
-    ...rest.map(({ file }) => ({ path: file.path, lines: (file.content!.match(/\n/g)?.length ?? 0) + 1, body: excerpt(file, 45) })),
+    ...guardFiles.map((file) => ({ path: file.path, lines: (file.content!.match(/\n/g)?.length ?? 0) + 1, body: excerpt(file, 70), full: file.content! })),
+    ...rest.map(({ file }) => ({ path: file.path, lines: (file.content!.match(/\n/g)?.length ?? 0) + 1, body: excerpt(file, 45), full: file.content! })),
   ];
   const excerptCount = excerpts.length;
+  const boot = bootSequence(read);
 
   // --- the prompt ---------------------------------------------------------
   const section = (title: string, body: string) => `## ${title}\n${body}`;
@@ -690,8 +746,15 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
         : "No committed credentials detected.",
     ].join("\n")),
     section("FILE TREE", buildTree(files)),
-    section("SOURCE EXCERPTS (opening lines of the most revealing files)",
-      excerpts.map((e) => `### ${e.path} (${e.lines} lines)\n\`\`\`\n${e.body}\n\`\`\``).join("\n\n")),
+    boot && boot.steps.length
+      ? section(`WHAT RUNS AT BOOT (as ${boot.entry} calls it, in order)`, boot.steps.map((l) => `- ${l}`).join("\n"))
+      : "",
+    section("SOURCE EXCERPTS (opening lines of the most revealing files, then an index of what follows)",
+      excerpts.map((e) => {
+        const shown = e.body.split("\n").length;
+        const rest = e.lines > shown ? outline({ path: e.path, content: e.full } as RepoFile, shown) : "";
+        return `### ${e.path} (${e.lines} lines)\n\`\`\`\n${e.body}\n\`\`\`${rest ? `\nThe remaining ${e.lines - shown} lines hold:\n\`\`\`\n${rest}\n\`\`\`` : ""}`;
+      }).join("\n\n")),
     readme?.content ? section("README", text(readme.content, 3000)) : "",
     productDocs.length
       ? section(`THE BUILDER'S OWN DOCS (${productDocs.length} files that describe loops, journeys or the plan — what they MEAN to build; check it against what the code shows)`,
