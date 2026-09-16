@@ -85,8 +85,38 @@ It is **not** where this deploys: the host is Render, and
 so the deploy is reproducible instead of being a page of clicks somebody once
 did.
 
-Render → **New → Blueprint** → point it at this repository. It reads
-`render.yaml` and prompts for the values marked `sync: false`.
+**Which kind of service: Web Service.** Not a Static Site — that serves files
+from a CDN with no Node process, so every `/api/*` route would 404. Not a
+Private Service (unreachable from the internet), not a Background Worker (can't
+take HTTP), not a Cron Job (short-lived). One Web Service runs the API, serves
+the built client, and holds the background loops.
+
+Two ways in, same result:
+
+- **Blueprints → New Blueprint Instance**, pointed at this repository. It reads
+  [`render.yaml`](../../render.yaml) and prompts for the values marked
+  `sync: false`. Prefer this: the settings are in the repo, so the next person
+  doesn't have to guess what you typed.
+- **New → Web Service**, if you'd rather fill the form. The fields:
+
+  | Field | Value |
+  |---|---|
+  | Language / runtime | Node |
+  | Branch | `main` |
+  | Build command | `npm ci && npm run build` |
+  | Start command | `node dist/index.cjs` |
+  | Health check path | `/_health` |
+  | Instance type | Starter or above — **not Free** (see below) |
+  | Auto-deploy | on |
+
+  Node's version comes from `engines` in `package.json` (20.x), which is what
+  CI builds and tests on. `PORT` is set by Render and read by the server; don't
+  set it yourself.
+
+**Postgres:** your `DATABASE_URL` already points at a database, and Render is
+happy to talk to it. Only click **New Postgres** if you want to move it here —
+in which case dump, restore, and repoint `DATABASE_URL` before the first boot,
+because the migrations run against whatever it names.
 
 Two requirements that come from the code, not from Render:
 
