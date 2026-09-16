@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
@@ -26,7 +26,12 @@ const SELECT = "h-9 w-full rounded-md border border-input bg-background px-2 tex
  * ends in a link to copy — whether or not an email went out — because email
  * is the part that can be slow or not set up, and the link is what works.
  */
-export function InviteCollaboratorDialog({ projectId, projectTitle }: { projectId: string; projectTitle: string }) {
+export function InviteCollaboratorDialog({ projectId, projectTitle, trigger }: {
+  projectId: string;
+  projectTitle: string;
+  /** A different way in — the path's "need someone for what's next?" line, say. Defaults to the button. */
+  trigger?: ReactNode;
+}) {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState("");
@@ -55,9 +60,13 @@ export function InviteCollaboratorDialog({ projectId, projectTitle }: { projectI
 
   return (
     <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) reset(); }}>
-      <Button size="sm" className="gap-1.5" onClick={() => setOpen(true)} data-testid="button-invite-collaborator">
-        <UserPlus className="h-4 w-4" /> Invite collaborator
-      </Button>
+      {trigger
+        ? <span onClick={() => setOpen(true)} className="contents">{trigger}</span>
+        : (
+          <Button size="sm" className="gap-1.5" onClick={() => setOpen(true)} data-testid="button-invite-collaborator">
+            <UserPlus className="h-4 w-4" /> Invite collaborator
+          </Button>
+        )}
       <DialogContent className="max-w-md" data-testid="invite-dialog">
         <DialogHeader>
           <DialogTitle>{created ? "Invite ready" : `Invite someone to ${projectTitle}`}</DialogTitle>

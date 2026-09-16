@@ -90,6 +90,12 @@ Every check has unit tests for both the flagged and the clean shape (`test/unit/
 
 _Total: 35 checks._
 
+## What the audit is shown
+
+The model never sees the repository — it sees a digest (`server/code-digest.ts`), and every list in it has a size limit. That is fine until a clipped list reads as a complete one: an audit of this codebase was handed 90 routes of 434 under a header saying "(120)" and reported working features as "not evidenced in the provided files", three times, about code that was there.
+
+So the digest now says what it is: how many files exist, how many were read, how many appear as excerpts (opening lines, ~26 files), that lists are clipped where they say so, and that absence from it is not absence from the code. Counts are of what was **found**, not what fitted; the route list points at the ROUTE COVERAGE table, which holds every route with its guards. `test/unit/digest-honesty.test.ts` fails if a header ever again prints a cap as a total.
+
 ## What this codebase fails today
 
 - `csrf` is partial by design: same-origin checks cover state changes, with no per-form token.

@@ -190,8 +190,22 @@ function findFile(files: RepoFile[], predicate: (p: string) => boolean): RepoFil
     .sort((a, b) => a.path.split("/").length - b.path.split("/").length)[0];
 }
 
+/**
+ * A list the reader can trust: what's shown, and what isn't.
+ *
+ * A clipped list that doesn't say it's clipped reads as a complete one, and
+ * an audit told "these are the routes" concludes that everything else is
+ * missing. Every capped section below goes through this.
+ */
+function listing(items: string[], limit: number, found = items.length, where = ""): string {
+  const shown = items.slice(0, limit);
+  const hidden = found - shown.length;
+  if (hidden <= 0) return shown.join("\n");
+  return [...shown, `- … and ${hidden} more not listed here${where ? ` — ${where}` : ""}. This list is clipped, not complete: absence from it is not evidence of absence.`].join("\n");
+}
+
 /** Extracts routes from the shapes web frameworks actually use. */
-function detectRoutes(files: RepoFile[]): RouteSignal[] {
+function detectRoutes(files: RepoFile[]): RouteSignal[] & { found?: number } {
   const routes: RouteSignal[] = [];
   const seen = new Set<string>();
   /*
@@ -199,9 +213,18 @@ function detectRoutes(files: RepoFile[]): RouteSignal[] {
    * in three fixtures was listed three times, which crowded out real routes
    * and made a library's test server look like the application's API.
    */
+  /*
+   * The cap used to be 120, and the section header printed the capped number
+   * as if it were the total. An audit reading it concluded there were 120
+   * routes and that anything it couldn't see "isn't evidenced in the provided
+   * files" — about a codebase with four times that many. The limit is now high
+   * enough to hold a real API, and `detectRoutes.found` says how many there
+   * were so the reader is told when a list has been clipped.
+   */
   const push = (label: string, file: string) => {
-    if (seen.has(label) || routes.length >= 120) return;
+    if (seen.has(label)) return;
     seen.add(label);
+    if (routes.length >= 600) return;
     routes.push({ label, file });
   };
 
@@ -249,16 +272,18 @@ function detectRoutes(files: RepoFile[]): RouteSignal[] {
       }
     }
   }
-  return routes;
+  return Object.assign(routes, { found: seen.size });
 }
 
 /** Extracts persisted entities from the common schema formats. */
-function detectDataModels(files: RepoFile[]): { name: string; file: string }[] {
+function detectDataModels(files: RepoFile[]): { name: string; file: string }[] & { found?: number } {
   const models: { name: string; file: string }[] = [];
   const seen = new Set<string>();
   const push = (name: string, file: string) => {
-    if (!name || seen.has(name) || models.length >= 100) return;
+    if (!name || seen.has(name)) return;
     seen.add(name);
+    // A schema with 104 tables was reported as 100: enough to make a table look absent.
+    if (models.length >= 300) return;
     models.push({ name, file });
   };
 
@@ -290,7 +315,7 @@ function detectDataModels(files: RepoFile[]): { name: string; file: string }[] {
     // TypeORM / Sequelize decorators
     for (const m of content.matchAll(/@Entity\s*\([^)]*\)\s*(?:export\s+)?class\s+(\w+)/g)) push(m[1], path);
   }
-  return models;
+  return Object.assign(models, { found: seen.size });
 }
 
 export function detectSecrets(files: RepoFile[]): { file: string; hint: string }[] {
@@ -564,7 +589,8 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
     routes,
     dataModels,
     testFiles: testFileList.length,
-    testFilePaths: testFileList.map((f) => f.path).sort().slice(0, 80),
+    // Every test file: a reader asking "is this tested anywhere?" gets a wrong answer from a clipped list.
+    testFilePaths: testFileList.map((f) => f.path).sort().slice(0, 400),
     testFrameworks: [...testFrameworks],
     hasCi, hasDocker,
     hasReadme: !!readme,
@@ -604,6 +630,7 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
     ...guardFiles.map((file) => ({ path: file.path, lines: (file.content!.match(/\n/g)?.length ?? 0) + 1, body: excerpt(file, 70) })),
     ...rest.map(({ file }) => ({ path: file.path, lines: (file.content!.match(/\n/g)?.length ?? 0) + 1, body: excerpt(file, 45) })),
   ];
+  const excerptCount = excerpts.length;
 
   // --- the prompt ---------------------------------------------------------
   const section = (title: string, body: string) => `## ${title}\n${body}`;
@@ -613,6 +640,20 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
     snapshot.truncated
       ? `> Note: the archive was larger than the analysis budget, so this is a partial view (${signals.readCount} of ${signals.fileCount} files read).`
       : "",
+    /*
+     * What this digest is, before anything in it is read.
+     *
+     * Every section below has a size limit, and a clipped list reads exactly
+     * like a complete one. An audit given 90 of 461 routes concluded the other
+     * 371 didn't exist — and reported working features as unevidenced. The
+     * numbers here are the real ones, and the rule for reading them is stated
+     * rather than assumed.
+     */
+    section("HOW TO READ THIS", [
+      `This is a digest of ${signals.fileCount} files, not the codebase. ${signals.readCount} were read; ${excerptCount} appear as excerpts (opening lines only, not whole files).`,
+      "Lists are clipped where they say so, and the ROUTE COVERAGE table is the complete route inventory — use it, not the route list, to decide whether an endpoint exists.",
+      "Nothing here being absent means it is absent from the code. If a judgement depends on a file you cannot see, say what you would need to look at instead of reporting the feature as missing or unevidenced.",
+    ].join("\n")),
     section("SIZE", [
       `${signals.fileCount} files (${signals.readCount} read), roughly ${signals.linesOfCode.toLocaleString()} lines of code`,
       `Languages: ${languages.map((l) => `${l.name} (${l.files} files, ${l.lines} lines)`).join(", ") || "none detected"}`,
@@ -622,13 +663,13 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
       ? signals.stack.map((s) => `- ${s.name}  [${s.evidence}]`).join("\n")
       : "- nothing recognisable"),
     Object.keys(packageScripts).length
-      ? section("SCRIPTS", Object.entries(packageScripts).slice(0, 20).map(([k, v]) => `- ${k}: ${text(v, 160)}`).join("\n"))
+      ? section("SCRIPTS", listing(Object.entries(packageScripts).map(([k, v]) => `- ${k}: ${text(v, 160)}`), 20))
       : "",
-    section(`ROUTES AND PAGES FOUND IN CODE (${routes.length})`, routes.length
-      ? routes.slice(0, 90).map((r) => `- ${r.label}  [${r.file}]`).join("\n")
+    section(`ROUTES AND PAGES FOUND IN CODE (${(routes as any).found ?? routes.length} found)`, routes.length
+      ? listing(routes.map((r) => `- ${r.label}  [${r.file}]`), 240, (routes as any).found ?? routes.length, "every write is in the ROUTE COVERAGE table below, with its guards")
       : "- none detected. Either this isn't a web app, or nothing is wired up yet."),
-    section(`PERSISTED DATA MODELS (${dataModels.length})`, dataModels.length
-      ? dataModels.slice(0, 60).map((m) => `- ${m.name}  [${m.file}]`).join("\n")
+    section(`PERSISTED DATA MODELS (${(dataModels as any).found ?? dataModels.length} found)`, dataModels.length
+      ? listing(dataModels.map((m) => `- ${m.name}  [${m.file}]`), 160, (dataModels as any).found ?? dataModels.length)
       : "- none detected. There is no schema, or it isn't in a recognised format."),
     section("AUTH", authSignals.length ? authSignals.map((a) => `- ${a}`).join("\n") : "- no authentication code detected"),
     renderRouteCoverage(routeCoverage) ?? "",

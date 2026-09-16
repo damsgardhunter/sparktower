@@ -187,7 +187,13 @@ export function renderAudit(audit: any, dataShape?: any): string {
         ].join("\n")]
       : []),
     ...((audit.signals as any)?.testFilePaths?.length
-      ? [`TEST FILES (${(audit.signals as any).testFiles}): ${(audit.signals as any).testFilePaths.join(", ")}`]
+      ? [(() => {
+        const paths: string[] = (audit.signals as any).testFilePaths;
+        const shown = paths.slice(0, 150);
+        // Says what it isn't showing: a clipped list of test files reads as "this isn't tested".
+        const more = paths.length - shown.length;
+        return `TEST FILES (${(audit.signals as any).testFiles}): ${shown.join(", ")}${more > 0 ? ` … and ${more} more not listed` : ""}`;
+      })()]
       : []),
     ...((audit.signals as any)?.productDocs?.length
       ? [`THE BUILDER'S OWN DOCS (from the repo, ${(audit.signals as any).productDocs.length} files about loops, journeys or the plan)\n${(audit.signals as any).productDocs.slice(0, 6).map((d: any, i: number) => `### ${d.path}\n${String(d.excerpt).slice(0, i === 0 ? 4000 : 1500)}`).join("\n\n")}`]

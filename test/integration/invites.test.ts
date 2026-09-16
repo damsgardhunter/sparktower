@@ -123,6 +123,31 @@ describe("project invites", () => {
     expect((await owner3.agent.post(`/api/projects/${solo.id}/invites`).send({})).body.code).toBe("solo_project");
   });
 
+  it("gives the person who just joined their own way back to the work", async () => {
+    const app = await getTestApp();
+    const owner = await person(app, "Host");
+    const joiner = await person(app, "Newcomer");
+    const project = (await owner.agent.post("/api/projects").send({ title: "Onboarding Loop", description: "A project someone joins and then picks up a step on.", category: "saas", goal: "ship_mvp", subcategory: "saas" })).body;
+
+    const invite = await owner.agent.post(`/api/projects/${project.id}/invites`).send({ email: joiner.email, role: "Engineer" });
+    expect(invite.status).toBe(201);
+    expect((await joiner.agent.post(`/api/invites/${tokenOf(invite.body.url)}/accept`).send({})).status).toBe(200);
+    await new Promise((r) => setTimeout(r, 400));
+
+    // The owner hears someone joined; the person who joined gets the step, not a welcome they can close and forget.
+    const theirs = (await joiner.agent.get("/api/notifications")).body.items as any[];
+    const back = theirs.find((n) => n.kind === "next_step" && n.project?.id === project.id);
+    expect(back, "a new collaborator needs something that brings them back").toBeTruthy();
+    // It opens the section the step is on, with the Next Step card in view (shared/notifications.ts).
+    expect(back.href).toMatch(new RegExp(`^/projects/${project.id}/manage\\?section=ship_mvp&tab=nova&focus=SHIP\\.`));
+    expect(back.excerpt).toBeTruthy();
+
+    const owners = (await owner.agent.get("/api/notifications")).body.items as any[];
+    expect(owners.some((n) => n.kind === "invite_accepted" && n.project?.id === project.id)).toBe(true);
+    // The owner isn't told to start their own project, and the joiner isn't told they joined themselves.
+    expect(owners.some((n) => n.kind === "next_step" && n.project?.id === project.id)).toBe(false);
+  });
+
   it("lets whoever joined bring in the next person, but not take back someone else's invite", async () => {
     const app = await getTestApp();
     const owner = await person(app, "Lead");
