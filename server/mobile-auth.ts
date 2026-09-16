@@ -23,9 +23,10 @@ import { isDeleted } from "./account-data";
 import { ACCESS_TOKEN_KEY_LABEL, mobileTokenKey } from "./secrets";
 import { ensureUserProfile } from "./user-provisioning";
 import { stampSignupAttribution } from "./attribution";
-import { enforceRateLimit, ipKey, rateLimit } from "./moderation";
+import { enforceRateLimit, ipKey, rateLimit, enforceRejectionLimit, countRejection, accountKey } from "./moderation";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { checkSecondFactor, limitMfaAttempts, mfaEnabledFor, mfaRequiredFor, readMfaChallenge, signMfaChallenge } from "./mfa";
+import { checkPassword } from "@shared/passwords";
 
 const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;          // 15 minutes
 const REFRESH_TOKEN_TTL_DAYS = 60;
@@ -227,13 +228,23 @@ export function registerMobileAuthRoutes(app: Express) {
         return res.status(400).json({ message: "Email and password are required" });
       }
 
+      // Failures counted against the account as well as the address (server/moderation.ts).
+      const attempted = accountKey(email);
+      if (attempted && !(await enforceRejectionLimit(res, attempted, "loginAccount"))) return;
+
       const [user] = await db.select().from(users).where(eq(users.email, email.toLowerCase().trim()));
       // Same message either way so the endpoint can't be used to enumerate accounts.
       const invalid = { message: "Invalid email or password" };
-      if (!user?.passwordHash || isDeleted(user)) return res.status(401).json(invalid);
+      if (!user?.passwordHash || isDeleted(user)) {
+        if (attempted) void countRejection(attempted, "loginAccount");
+        return res.status(401).json(invalid);
+      }
 
       const ok = await bcrypt.compare(password, user.passwordHash);
-      if (!ok) return res.status(401).json(invalid);
+      if (!ok) {
+        if (attempted) void countRejection(attempted, "loginAccount");
+        return res.status(401).json(invalid);
+      }
 
       // Two-factor accounts get a challenge, not tokens; /api/auth/mobile/mfa/verify finishes with a code.
       if (mfaEnabledFor(user)) return res.json({ mfaRequired: true, challengeToken: signMfaChallenge(user.id) });
@@ -253,9 +264,8 @@ export function registerMobileAuthRoutes(app: Express) {
       if (!email || !password) {
         return res.status(400).json({ message: "Email and password are required" });
       }
-      if (password.length < 6) {
-        return res.status(400).json({ message: "Password must be at least 6 characters" });
-      }
+      const weak = checkPassword(password, { email });
+      if (weak) return res.status(400).json({ message: weak.message, code: "invalid_input", field: weak.field });
 
       const normalized = email.toLowerCase().trim();
       const [existing] = await db.select().from(users).where(eq(users.email, normalized));

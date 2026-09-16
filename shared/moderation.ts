@@ -74,6 +74,24 @@ export const RATE_LIMITS = {
     max: 8, windowMinutes: 15,
     message: "Too many sign-in attempts. Try again in 15 minutes.",
   },
+  /*
+   * The same guessing, counted against the account instead of the address.
+   *
+   * A per-address limit stops one machine and nothing else: credential
+   * stuffing arrives from thousands of addresses, a few guesses each, against
+   * accounts whose passwords leaked elsewhere. Counting failures per account
+   * is what sees that.
+   *
+   * More generous than the per-address limit on purpose. Only failures count
+   * (a correct password never does), so the person whose account it is has to
+   * get it wrong twelve times in a quarter of an hour to feel it — while
+   * somebody else's list runs out after twelve guesses at their account,
+   * however many addresses it comes from.
+   */
+  loginAccount: {
+    max: 12, windowMinutes: 15,
+    message: "Too many failed sign-ins for this account. Try again in 15 minutes, or reset your password.",
+  },
   ai: {
     max: 30, windowMinutes: 10,
     message: "Nova needs a moment — that's a lot of requests at once. Try again in a few minutes.",

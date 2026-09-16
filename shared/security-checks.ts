@@ -238,7 +238,7 @@ export function scanSecurity(allFiles: SourceFile[], extra: { suspectedSecrets?:
      * sign-in counts nothing but addresses.
      */
     const signInFiles = server.filter((f) => /["'`]\/(api\/)?(auth\/)?(login|signin|sign-in)["'`]/.test(f.content ?? ""));
-    const byAccount = where(signInFiles, /(enforceRateLimit|withinRateLimit|consume|check)\s*\([^)]{0,80}(email|user\.id|userId|account)[^)]{0,40}["'`](login|signin|password|auth)["'`]|failedLogins?|loginAttempts?|lockoutUntil|lockedUntil/i);
+    const byAccount = where(signInFiles, /(enforceRateLimit|enforceRejectionLimit|countRejection|withinRateLimit|consume|check)\s*\([^)]{0,80}(accountKey|email|user\.id|userId|account)[^)]{0,60}["'`](login\w*|signin|password|auth)["'`]|["'`]loginAccount["'`]|failedLogins?|loginAttempts?|lockoutUntil|lockedUntil/i);
     add({
       id: "credential-stuffing", label: "Sign-in limited per account, not only per address", category: "accounts", severity: "high",
       status: !loginRoutes.length ? "n/a" : byAccount.length ? "pass" : byAddress.length ? "partial" : "missing",
@@ -255,10 +255,17 @@ export function scanSecurity(allFiles: SourceFile[], extra: { suspectedSecrets?:
   {
     const signup = onServer(/["'`]\/(api\/)?(auth\/)?(register|signup|sign-up)["'`]/);
     // A length floor, written as a number: 8 or more passes, 6 doesn't.
-    const floor = [...(src.map((f) => f.content ?? "").join("\n").matchAll(/password[\w.]*\.length\s*<\s*(\d+)|min\s*\(\s*(\d+)[^)]*\)[^\n]{0,40}password|password[^\n]{0,40}min\s*\(\s*(\d+)/gi))]
-      .map((m) => Number(m[1] ?? m[2] ?? m[3])).filter((n) => Number.isFinite(n) && n > 0);
+    /*
+     * Written as a comparison (`password.length < 8`), as a schema minimum, or
+     * as a named constant in a policy module — the last is what a codebase
+     * looks like once the rule is shared between web and mobile, and reading
+     * only the first called such a codebase ruleless.
+     */
+    const floor = [...(src.map((f) => f.content ?? "").join("\n").matchAll(/password[\w.]*\.length\s*<\s*(\d+)|PASSWORD_MIN(?:IMUM)?(?:_LENGTH)?\s*=\s*(\d+)|min\s*\(\s*(\d+)[^)]*\)[^\n]{0,40}password|password[^\n]{0,40}min\s*\(\s*(\d+)/gi))]
+      .map((m) => Number(m[1] ?? m[2] ?? m[3] ?? m[4])).filter((n) => Number.isFinite(n) && n > 0);
     const shortest = floor.length ? Math.min(...floor) : null;
-    const breachChecked = has(/haveibeenpwned|pwnedpasswords|zxcvbn|common-?passwords?|passwordBlocklist|weakPasswords/i);
+    // A breach API, a strength library, or a blocklist of the passwords guessed first.
+    const breachChecked = has(/haveibeenpwned|pwnedpasswords|zxcvbn|common-?passwords?|passwordBlocklist|weakPasswords|\bCOMMON\b\s*=\s*new Set|checkPassword\s*\(/i);
     const managed = has(/@clerk\/|next-auth|@auth0\/|@supabase\/supabase-js|firebase\/auth|@workos-inc\//);
     add({
       id: "password-policy", label: "Passwords long enough to be worth hashing", category: "accounts", severity: "medium",

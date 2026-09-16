@@ -6,11 +6,12 @@ import passport from "passport";
 import bcrypt from "bcryptjs";
 import { ensureUserProfile } from "../../user-provisioning";
 import { stampSignupAttribution } from "../../attribution";
-import { enforceRateLimit, ipKey, rateLimit } from "../../moderation";
+import { enforceRateLimit, ipKey, rateLimit, enforceRejectionLimit, countRejection, accountKey } from "../../moderation";
 import { db } from "../../db";
 import { mobileRefreshTokens, users } from "@shared/models/auth";
 import { mfaEnabledFor, mfaRequiredFor } from "../../mfa";
 import { and, eq, isNull, sql } from "drizzle-orm";
+import { checkPassword } from "@shared/passwords";
 /** The session cookie's name, as express-session is configured. */
 const SESSION_COOKIE = "connect.sid";
 
@@ -36,9 +37,8 @@ export function registerAuthRoutes(app: Express): void {
       if (!email || !password) {
         return res.status(400).json({ message: "Email and password are required" });
       }
-      if (password.length < 6) {
-        return res.status(400).json({ message: "Password must be at least 6 characters" });
-      }
+      const weak = checkPassword(password, { email });
+      if (weak) return res.status(400).json({ message: weak.message, code: "invalid_input", field: weak.field });
       const existing = await authStorage.getUserByEmail(email);
       if (existing) {
         return res.status(409).json({ message: "An account with this email already exists" });
@@ -80,9 +80,21 @@ export function registerAuthRoutes(app: Express): void {
      * guessing passwords at the time.
      */
     if (!(await enforceRateLimit(res, ipKey(req), "login"))) return;
+    /*
+     * And against the account being signed in to. Only failures count, so a
+     * correct password never brings this closer; what it stops is a list of
+     * passwords tried against one account from a thousand addresses, which the
+     * per-address limit above never sees.
+     *
+     * Keyed on the address as typed, existing account or not, so the limit
+     * can't be used to find out which addresses have accounts.
+     */
+    const attempted = accountKey(req.body?.email);
+    if (attempted && !(await enforceRejectionLimit(res, attempted, "loginAccount"))) return;
     passport.authenticate("local", (err: any, user: any, info: any) => {
       if (err) return next(err);
       if (!user) {
+        if (attempted) void countRejection(attempted, "loginAccount");
         return res.status(401).json({ message: info?.message || "Invalid credentials" });
       }
       // Two-factor accounts: the password alone doesn't sign in. The session holds a pending sign-in for
@@ -174,6 +186,54 @@ export function registerAuthRoutes(app: Express): void {
    * refresh token. For a lost phone or a shared computer. The current
    * session goes too, so the caller ends signed out.
    */
+  /**
+   * Changing a password.
+   *
+   * Somebody changes their password because they think somebody else knows it,
+   * so the change has to take the other sessions with it — otherwise whoever
+   * knew the old one keeps their seat and the change bought nothing. Every
+   * other session row goes, every mobile device is signed out, and access
+   * tokens already handed out stop working now rather than in fifteen minutes.
+   *
+   * This session stays: the person doing it is here, authenticated, and has
+   * just typed the old password.
+   */
+  app.post("/api/auth/change-password", isAuthenticated, rateLimit("session"), async (req: any, res) => {
+    try {
+      const userId = req.user.id;
+      const [user] = await db.select().from(users).where(eq(users.id, userId));
+      if (!user) return res.status(404).json({ message: "No such account" });
+      if (!user.passwordHash) {
+        return res.status(400).json({ message: "This account signs in with Google, so it has no password to change.", code: "no_password" });
+      }
+
+      const current = String(req.body?.currentPassword ?? "");
+      if (!current || !(await bcrypt.compare(current, user.passwordHash))) {
+        return res.status(401).json({ message: "That isn't your current password.", code: "bad_password", field: "currentPassword" });
+      }
+      const next = String(req.body?.newPassword ?? "");
+      const weak = checkPassword(next, { email: user.email });
+      if (weak) return res.status(400).json({ message: weak.message, code: "invalid_input", field: "newPassword" });
+      if (next === current) {
+        return res.status(400).json({ message: "That's the password you already have.", code: "invalid_input", field: "newPassword" });
+      }
+
+      const passwordHash = await bcrypt.hash(next, 12);
+      await db.update(users).set({ passwordHash, accessTokensRevokedAt: new Date() }).where(eq(users.id, userId));
+
+      // Everywhere else, now. This session's row is spared so the person isn't signed out of the page they're on.
+      const keep = req.sessionID;
+      const ended = await db.execute(sql`DELETE FROM sessions WHERE sess->'passport'->>'user' = ${userId} AND sid <> ${keep}`);
+      const devices = await db.update(mobileRefreshTokens).set({ revokedAt: new Date() })
+        .where(and(eq(mobileRefreshTokens.userId, userId), isNull(mobileRefreshTokens.revokedAt))).returning({ id: mobileRefreshTokens.id });
+
+      res.json({ ok: true, sessionsEnded: Number((ended as any).rowCount ?? 0), devicesSignedOut: devices.length });
+    } catch (err) {
+      console.error("change-password failed:", err);
+      res.status(500).json({ message: "Couldn't change your password. Nothing was changed." });
+    }
+  });
+
   // Its own limit, not just the write floor: one call deletes every session row for the account and
   // revokes every device token, and a script calling it in a loop is a way to make the database work.
   app.post("/api/auth/logout-all", isAuthenticated, rateLimit("session"), async (req: any, res) => {

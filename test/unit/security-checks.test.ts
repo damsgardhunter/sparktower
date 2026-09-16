@@ -325,6 +325,16 @@ describe("the checks added for accounts, supply chain and operations", () => {
       });`);
     expect(verdict("credential-stuffing", [app, both]).status).toBe("pass");
 
+    // A failures-only limit is the better shape — a correct password shouldn't bring anyone closer to a lockout — so it has to read as one.
+    const failuresOnly = srv(`
+      app.post("/api/auth/login", async (req, res) => {
+        if (!(await enforceRateLimit(res, ipKey(req), "login"))) return;
+        const attempted = accountKey(req.body?.email);
+        if (attempted && !(await enforceRejectionLimit(res, attempted, "loginAccount"))) return;
+        if (!user) { void countRejection(attempted, "loginAccount"); return res.status(401).end(); }
+      });`);
+    expect(verdict("credential-stuffing", [app, failuresOnly]).status).toBe("pass");
+
     /*
      * The mistake this check made first: a per-account limit somewhere else on
      * the server — the 2FA code step, a refresh limiter — is not the password
@@ -344,6 +354,15 @@ describe("the checks added for accounts, supply chain and operations", () => {
 
     const checked = srv('import { pwnedPasswords } from "./haveibeenpwned";\napp.post("/api/auth/register", (req, res) => { if (password.length < 8) return res.status(400).end(); });');
     expect(verdict("password-policy", [app, checked]).status).toBe("pass");
+
+    /*
+     * The shape a codebase reaches once web and mobile share the rule: a
+     * policy module with a named minimum and a blocklist, called from the
+     * route. Reading only for `password.length < 8` called that ruleless.
+     */
+    const policyModule = { path: "shared/passwords.ts", content: 'export const PASSWORD_MIN = 8;\nconst COMMON = new Set(["password123"]);\nexport function checkPassword(pw) { return null; }' };
+    const usingIt = srv('import { checkPassword } from "@shared/passwords";\napp.post("/api/auth/register", (req, res) => { const weak = checkPassword(password, { email }); if (weak) return res.status(400).end(); });');
+    expect(verdict("password-policy", [app, policyModule, usingIt]).status).toBe("pass");
   });
 
   it("changing a password: no route is missing, a route that leaves the old sessions open is partial", () => {

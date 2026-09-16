@@ -14,6 +14,7 @@ import { PENDING_PATH_KEY, type PendingPath } from "@shared/path-artifacts";
 import { PENDING_INVITE_KEY } from "@shared/invites";
 import heroVideo from "@assets/Brooklyn_Tower_Tesla_Coil_Animation_1772567582595.mp4";
 import { MfaCodeForm } from "@/components/mfa";
+import { PASSWORD_MIN } from "@shared/passwords";
 
 /** The artifact a visitor chose "start" or "explore" on before signing up, so the signup is credited to it. */
 function pendingArtifactId(): string | undefined {
@@ -487,8 +488,9 @@ function SignupForm({ onSuccess }: { onSuccess: () => void }) {
       setError("Passwords do not match");
       return;
     }
-    if (password.length < 6) {
-      setError("Password must be at least 6 characters");
+    // The server decides; this is the same rule said sooner (shared/passwords.ts).
+    if (password.length < PASSWORD_MIN) {
+      setError(`Use at least ${PASSWORD_MIN} characters — length is what makes a password hard to guess.`);
       return;
     }
     setLoading(true);
@@ -574,7 +576,7 @@ function SignupForm({ onSuccess }: { onSuccess: () => void }) {
             <Input
               id="signup-password"
               type={showPassword ? "text" : "password"}
-              placeholder="At least 6 characters"
+              placeholder={`At least ${PASSWORD_MIN} characters`}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required

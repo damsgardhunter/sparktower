@@ -53,7 +53,7 @@ interface CountSource {
  * un-reacting deletes the row; a presign writes nothing; an AI call writes to
  * a dozen places.
  */
-const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai", "login", "write", "track", "post", "connect", "review", "payout", "webhookReject", "session", "workspace", "follow", "apply", "sprint", "checkout", "external", "invite", "inviteLookup"]);
+const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai", "login", "loginAccount", "write", "track", "post", "connect", "review", "payout", "webhookReject", "session", "workspace", "follow", "apply", "sprint", "checkout", "external", "invite", "inviteLookup"]);
 
 const hitSource = (action: RateLimitAction): CountSource => ({
   table: rateLimitHits, author: rateLimitHits.userId, created: rateLimitHits.createdAt,
@@ -103,6 +103,7 @@ const COUNTED: Record<RateLimitAction, CountSource[]> = {
   upload: [hitSource("upload")],
   ai:     [hitSource("ai")],
   login:  [hitSource("login")],
+  loginAccount: [hitSource("loginAccount")],
   write:  [hitSource("write")],
   track:  [hitSource("track")],
   post:   [hitSource("post")],
@@ -131,6 +132,17 @@ const COUNTED: Record<RateLimitAction, CountSource[]> = {
  * header's first entry, which is the one the client writes: sending a new
  * made-up address with every attempt reset the sign-in limit each time.
  */
+/**
+ * The key a sign-in is counted against: the address as typed, whether or not
+ * an account has it. Keying on a user id would count nothing for the addresses
+ * an attacker guesses wrong, and answering differently for the two would turn
+ * the limit into a way to find out who has an account here.
+ */
+export function accountKey(email: unknown): string | null {
+  const value = String(email ?? "").trim().toLowerCase();
+  return value && value.length <= 320 ? `account:${value}` : null;
+}
+
 export function ipKey(req: any): string {
   return `ip:${req.ip || req.socket?.remoteAddress || "unknown"}`;
 }

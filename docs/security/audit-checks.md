@@ -99,13 +99,12 @@ _Total: 43 checks._
 
 ## What this codebase fails today
 
-- `credential-stuffing` — sign-in is limited per address only. A password list tried from many addresses meets no limit at all.
-- `password-policy` — six characters, with no check against common or breached passwords.
-- `password-change` — there's no route to change a password, so nobody whose password leaked can take it back, and no sessions to revoke when they do.
 - `ci-action-pinning` — 20 third-party CI actions are pinned to moving tags.
 - `error-monitoring` — nothing collects errors; a 500 is visible only to whoever is reading the logs.
 - `email-authentication` — the app sends invites and verification mail with no SPF/DKIM/DMARC recorded.
 - `backups` — restoring is mentioned in the release checklist; no restore has been rehearsed.
 - `csrf` is partial by design: same-origin checks cover state changes, with no per-form token.
 
-The first three are the ones to fix before real users: they're all in the sign-in path, and all small.
+The sign-in gaps this list used to carry — per-address-only throttling, six-character passwords, no way to change one — were fixed on 16 September 2026 (`server/replit_integrations/auth/routes.ts`, `shared/passwords.ts`, `test/integration/sign-in-hardening.test.ts`). Each of those three checks found a real gap the day it was written, which is the argument for adding a check before fixing the thing it checks.
+
+What's left is operational: pin the CI actions, add error reporting, publish the mail records, rehearse a restore.

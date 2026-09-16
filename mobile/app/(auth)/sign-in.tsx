@@ -64,7 +64,8 @@ export default function SignIn() {
     if (tab === "signup") {
       // The web checks these in this order.
       if (password !== confirm) { setError("Passwords do not match"); return; }
-      if (password.length < 6) { setError("Password must be at least 6 characters"); return; }
+      // shared/passwords.ts, restated: the server refuses the same thing, this just says so sooner.
+      if (password.length < 8) { setError("Use at least 8 characters — length is what makes a password hard to guess."); return; }
     }
     setBusy(true);
     try {
@@ -216,7 +217,7 @@ export default function SignIn() {
                   autoCapitalize="none" keyboardType="email-address" autoComplete="email" testID={tab === "login" ? "input-login-email" : "input-signup-email"} />
 
                 <LabeledInput label="Password" value={password} onChangeText={setPassword}
-                  placeholder={tab === "signup" ? "At least 6 characters" : "Your password"}
+                  placeholder={tab === "signup" ? "At least 8 characters" : "Your password"}
                   secureTextEntry={!showPassword} autoComplete={tab === "signup" ? "new-password" : "current-password"}
                   onSubmitEditing={tab === "login" ? submit : undefined} returnKeyType={tab === "login" ? "go" : "next"}
                   testID={tab === "login" ? "input-login-password" : "input-signup-password"}

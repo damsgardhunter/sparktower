@@ -6,6 +6,8 @@ Durable and database-backed (`server/moderation.ts`, limits in `shared/moderatio
 
 Two kinds, and the difference decides what happens when nobody is signed in.
 
+**Sign-in is counted twice**: `login` against the address (8 per 15 minutes, every attempt), and `loginAccount` against the address being signed in to (12 per 15 minutes, **failures only** — a correct password never brings anyone closer to a lockout). The second is what sees credential stuffing, which arrives from thousands of addresses with a few guesses each and is invisible to a per-address limit. Both count the email as typed, whether or not an account has it, so the limit can't be used to find out who has an account here. `test/integration/sign-in-hardening.test.ts`.
+
 **Hit-counted** (`react`, `upload`, `ai`, `login`, `write`, `track`, `post`, `connect`, `review`, `payout`, `webhookReject`, `session`, `workspace`, `follow`, `apply`, `sprint`, `checkout`, `external`, `invite`, `inviteLookup`) — every use writes a row to `rate_limit_hits`, keyed by account **or by address** when there's no account. These are the ones an unauthenticated route can use, which is why sign-in and sign-up are limited at all.
 
 **Content-counted** (`comment`, `feedPost`, `message`, `project`) — counted from the content itself: "how many comments has this author written in the last ten minutes", read from `project_comments` and `feed_comments` together, so a limit that reads one table while two routes write to it isn't a limit.
