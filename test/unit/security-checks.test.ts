@@ -34,9 +34,11 @@ const hardened = [
   { path: ".env.example", content: "SESSION_SECRET=" },
   { path: "SECURITY.md", content: "Email security@example.com" },
   { path: ".github/dependabot.yml", content: "version: 2" },
-  { path: ".github/workflows/ci.yml", content: "steps:\n  - run: npm audit --audit-level=high\n  - uses: gitleaks/gitleaks-action@v2" },
+  { path: ".github/workflows/ci.yml", content: `steps:\n  - run: npm audit --audit-level=high\n  - uses: gitleaks/gitleaks-action@${"b".repeat(40)} # v2` },
+  { path: "docs/runbook.md", content: "Nightly backup; restore rehearsed into a scratch database each release." },
   { path: "server/index.ts", content: `
 import express from "express";
+import * as Sentry from "@sentry/node";
 import helmet from "helmet";
 import { z } from "zod";
 import bcrypt from "bcrypt";
@@ -48,7 +50,9 @@ if (process.env.NODE_ENV === "production" && !process.env.SESSION_SECRET) {
 const app = express();
 app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"] } } }));
 app.use(session({ cookie: { httpOnly: true, secure: isProduction, sameSite: "lax", maxAge: 604800000 } }));
-app.post("/api/login", rateLimit({ max: 8 }), async (req, res) => { await bcrypt.compare(req.body.password, hash); req.session.regenerate(() => res.json({ ok: true })); });
+app.post("/api/login", rateLimit({ max: 8 }), async (req, res) => { if (!(await enforceRateLimit(res, req.body.email, "login"))) return; await bcrypt.compare(req.body.password, hash); req.session.regenerate(() => res.json({ ok: true })); });
+app.post("/api/auth/change-password", async (req, res) => { await db.update(users).set({ passwordHash, accessTokensRevokedAt: new Date() }); });
+Sentry.init({ dsn: process.env.SENTRY_DSN });
 app.post("/api/logout", (req, res) => req.logout(() => req.session.destroy(() => res.json({ ok: true }))));
 app.post("/api/projects/:id", requireOwner, rateLimit({ max: 30 }), async (req, res) => { const body = z.object({ title: z.string() }).parse(req.body); });
 app.delete("/api/projects/:id", rateLimit({ max: 30 }), isProjectMember(req.user.id, id));
@@ -301,5 +305,100 @@ describe("the checks added for limits, sessions, stored secrets and data rights"
     expect(verdict("account-data-rights", [srv(`${users}\napp.post("/api/account/delete-account", h);`)]).status).toBe("partial");
     expect(verdict("account-data-rights", [srv(`${users}\napp.post("/api/account/delete-account", h);\napp.get("/api/account/export", exportMyData);`)]).status).toBe("pass");
     expect(verdict("account-data-rights", [srv(`app.get("/api/status", h);`)]).status).toBe("n/a");
+  });
+});
+
+describe("the checks added for accounts, supply chain and operations", () => {
+  const verdict = (id: string, files: { path: string; content?: string }[]) => scanSecurity(files as any, {}).checks.find((c) => c.id === id)!;
+  const srv = (content: string, path = "server/auth.ts") => ({ path, content });
+  const app = srv('import express from "express";\napp.listen(3000);', "server/index.ts");
+
+  it("sign-in: per-address only is partial, per-account as well is a pass", () => {
+    const perAddress = srv('app.post("/api/auth/login", async (req, res) => { if (!(await enforceRateLimit(res, ipKey(req), "login"))) return; });');
+    expect(verdict("credential-stuffing", [app, perAddress]).status).toBe("partial");
+    expect(verdict("credential-stuffing", [app, perAddress]).detail).toMatch(/many addresses meets no limit/);
+
+    const both = srv(`
+      app.post("/api/auth/login", async (req, res) => {
+        if (!(await enforceRateLimit(res, ipKey(req), "login"))) return;
+        if (!(await enforceRateLimit(res, \`login:\${email}\`, "login"))) return;
+      });`);
+    expect(verdict("credential-stuffing", [app, both]).status).toBe("pass");
+
+    /*
+     * The mistake this check made first: a per-account limit somewhere else on
+     * the server — the 2FA code step, a refresh limiter — is not the password
+     * step being protected.
+     */
+    const elsewhere = [app, perAddress, srv('await enforceRateLimit(res, `mfa:${userId}`, "login");', "server/mfa.ts")];
+    expect(verdict("credential-stuffing", elsewhere).status).toBe("partial");
+  });
+
+  it("passwords: six characters is a gap, eight with a breach check is a pass", () => {
+    const six = srv('app.post("/api/auth/register", (req, res) => { if (password.length < 6) return res.status(400).end(); });');
+    expect(verdict("password-policy", [app, six]).status).toBe("missing");
+    expect(verdict("password-policy", [app, six]).detail).toMatch(/Minimum length 6/);
+
+    const eight = srv('app.post("/api/auth/register", (req, res) => { if (password.length < 8) return res.status(400).end(); });');
+    expect(verdict("password-policy", [app, eight]).status).toBe("partial");
+
+    const checked = srv('import { pwnedPasswords } from "./haveibeenpwned";\napp.post("/api/auth/register", (req, res) => { if (password.length < 8) return res.status(400).end(); });');
+    expect(verdict("password-policy", [app, checked]).status).toBe("pass");
+  });
+
+  it("changing a password: no route is missing, a route that leaves the old sessions open is partial", () => {
+    const none = srv("const hash = await bcrypt.hash(password, 12);");
+    expect(verdict("password-change", [app, none]).status).toBe("missing");
+
+    const noRevoke = srv('const hash = await bcrypt.hash(password, 12);\napp.post("/api/auth/change-password", handler);');
+    expect(verdict("password-change", [app, noRevoke]).status).toBe("partial");
+
+    const revoking = srv(`
+      const hash = await bcrypt.hash(password, 12);
+      app.post("/api/auth/change-password", async (req, res) => {
+        await db.update(users).set({ passwordHash: hash, accessTokensRevokedAt: new Date() });
+      });`);
+    expect(verdict("password-change", [app, revoking]).status).toBe("pass");
+  });
+
+  it("CI actions: a moving tag is a gap, a commit isn't", () => {
+    const tagged = { path: ".github/workflows/ci.yml", content: "steps:\n  - uses: actions/checkout@v4\n  - uses: ./.github/actions/local" };
+    const flagged = verdict("ci-action-pinning", [app, tagged]);
+    expect(flagged.status).toBe("missing");
+    // The local action isn't third-party, so it isn't counted.
+    expect(flagged.detail).toMatch(/1 of 1 third-party action is pinned to a moving tag/);
+
+    const pinned = { path: ".github/workflows/ci.yml", content: `steps:\n  - uses: actions/checkout@${"a".repeat(40)} # v4` };
+    expect(verdict("ci-action-pinning", [app, pinned]).status).toBe("pass");
+  });
+
+  it("the dependency scan: one that can't fail the build is only half a gate", () => {
+    const blocking = { path: ".github/workflows/ci.yml", content: "steps:\n  - run: npm audit --audit-level=high" };
+    expect(verdict("dependency-audit-blocking", [app, blocking]).status).toBe("pass");
+    const swallowed = { path: ".github/workflows/ci.yml", content: "steps:\n  - run: npm audit --audit-level=high || true" };
+    expect(verdict("dependency-audit-blocking", [app, swallowed]).status).toBe("partial");
+    expect(verdict("dependency-audit-blocking", [app]).status).toBe("n/a");
+  });
+
+  it("monitoring: a dependency counts, a CSS class doesn't", () => {
+    expect(verdict("error-monitoring", [app]).status).toBe("missing");
+    const reporting = srv('import * as Sentry from "@sentry/node";\nSentry.init({ dsn });', "server/monitoring.ts");
+    expect(verdict("error-monitoring", [app, reporting]).status).toBe("pass");
+    // "overflow-x-auto [scrollbar-width:none]" contains "rollbar", and once read as one.
+    const css = { path: "client/src/Tabs.tsx", content: 'export const T = () => <div className="overflow-x-auto [scrollbar-width:none]" />;' };
+    expect(verdict("error-monitoring", [app, css]).status).toBe("missing");
+  });
+
+  it("backups and email authentication: written down is as far as a repository can prove", () => {
+    expect(verdict("backups", [app]).status).toBe("missing");
+    const runbook = { path: "docs/runbook.md", content: "Restore from the nightly backup into a scratch database." };
+    expect(verdict("backups", [app, runbook]).status).toBe("partial");
+
+    const mailer = srv('import nodemailer from "nodemailer";\nawait sendEmail({ to });', "server/email.ts");
+    expect(verdict("email-authentication", [app, mailer]).status).toBe("missing");
+    const dns = { path: "docs/dns.md", content: "SPF, DKIM and DMARC records for mail.example.com." };
+    expect(verdict("email-authentication", [app, mailer, dns]).status).toBe("partial");
+    // No email at all: not a question for this codebase.
+    expect(verdict("email-authentication", [app]).status).toBe("n/a");
   });
 });

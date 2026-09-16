@@ -40,7 +40,15 @@ export function tablesExercisedByTests(
   files: { path: string; content?: string | null }[],
   tableNames: string[],
 ): string[] {
-  const isTest = (p: string) => /(^|\/)(tests?|__tests__|e2e|spec)(\/|$)/i.test(p) || /\.(test|spec)\.[cm]?[jt]sx?$/.test(p);
+  /*
+     * Integration and browser tests only. A unit test can't fill a database, so
+     * naming a table in one proves nothing about the table — and this check
+     * read `contests` as exercised because an unrelated unit fixture and a
+     * 404 test mentioned the word, while nothing had ever joined a contest.
+     */
+  const isTest = (p: string) =>
+    (/(^|\/)(tests?|__tests__|e2e|spec)(\/|$)/i.test(p) || /\.(test|spec)\.[cm]?[jt]sx?$/.test(p))
+    && !/(^|\/)unit(\/|$)/i.test(p);
   const text = files.filter((f) => isTest(f.path) && f.content).map((f) => f.content!).join("\n");
   if (!text) return [];
   const camel = (name: string) => name.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());

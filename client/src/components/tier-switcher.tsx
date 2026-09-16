@@ -20,8 +20,6 @@ export function TierSwitcher() {
   const { toast } = useToast();
   const { tier, subscription, creditsUsed, creditsLimit, isUnlimited } = useEntitlements();
 
-  if (!import.meta.env.DEV) return null;
-
   const refresh = () => {
     // Entitlements affect nearly every query, so clear the whole cache.
     queryClient.invalidateQueries();
@@ -60,6 +58,10 @@ export function TierSwitcher() {
   });
 
   const hasRealSubscription = Boolean(subscription?.stripeSubscriptionId);
+
+  // Below the hooks, not above them: an early return before a hook makes the
+  // hook run on some renders and not others. Vite strips this branch in a production build.
+  if (!import.meta.env.DEV) return null;
 
   return (
     <div className="px-2 py-2 rounded-lg border border-dashed border-amber-500/40 bg-amber-500/5 space-y-2" data-testid="tier-switcher">

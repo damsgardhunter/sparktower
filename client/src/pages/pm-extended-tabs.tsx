@@ -592,7 +592,7 @@ function LegalSection({ projectId }: { projectId: string }) {
     createMutation.mutate(form, { onSuccess: () => { setDialogOpen(false); setForm({ docType: "tos", title: "", content: "" }); } });
   };
 
-  const useTemplate = (type: string) => {
+  const applyTemplate = (type: string) => {
     const tpl = LEGAL_TEMPLATES[type];
     if (tpl) setForm({ docType: type, title: tpl.title, content: tpl.content });
   };
@@ -640,9 +640,9 @@ function LegalSection({ projectId }: { projectId: string }) {
             <div>
               <Label>Quick Templates</Label>
               <div className="flex gap-2 mt-1">
-                <Button variant="outline" size="sm" onClick={() => useTemplate("ip-ownership")}>IP Ownership</Button>
-                <Button variant="outline" size="sm" onClick={() => useTemplate("tos")}>Terms of Service</Button>
-                <Button variant="outline" size="sm" onClick={() => useTemplate("privacy")}>Privacy Policy</Button>
+                <Button variant="outline" size="sm" onClick={() => applyTemplate("ip-ownership")}>IP Ownership</Button>
+                <Button variant="outline" size="sm" onClick={() => applyTemplate("tos")}>Terms of Service</Button>
+                <Button variant="outline" size="sm" onClick={() => applyTemplate("privacy")}>Privacy Policy</Button>
               </div>
             </div>
             <div><Label>Type</Label>

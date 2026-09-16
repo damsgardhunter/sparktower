@@ -68,18 +68,21 @@ export function SecurityReportPanel({ projectId, report }: { projectId: string; 
   const [showPassed, setShowPassed] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const { add, added, onBoard } = useAddToBoard(projectId);
+  /*
+   * A row opens and closes on a click — but not on the click that ends a
+   * text selection, a long press, or anything inside the open details:
+   * someone selecting a fix to copy it must not have the block snap shut.
+   *
+   * Declared with the other hooks, above the early return: a hook after one
+   * runs on some renders and not others, which is the order React relies on.
+   */
+  const pressedAt = useRef(0);
   if (!report?.checks?.length) {
     return <p className="text-xs text-muted-foreground" data-testid="security-report-none">Run a new read of the code to check security before release.</p>;
   }
   const gaps = report.checks.filter((c) => c.status === "missing" || c.status === "partial");
   const rest = report.checks.filter((c) => c.status === "pass" || c.status === "n/a");
   const plan = report.plan ?? [];
-  /*
-   * A row opens and closes on a click — but not on the click that ends a
-   * text selection, a long press, or anything inside the open details:
-   * someone selecting a fix to copy it must not have the block snap shut.
-   */
-  const pressedAt = useRef(0);
   const onPressStart = () => { pressedAt.current = Date.now(); };
   const toggle = (key: string, e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest("[data-no-toggle]")) return;

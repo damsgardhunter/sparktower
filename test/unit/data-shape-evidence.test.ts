@@ -23,6 +23,16 @@ const files = [
 ];
 
 describe("which tables the tests fill", () => {
+  it("ignores unit tests, which can't fill a database", () => {
+    // How `contests` came to read as proven: a unit fixture and a 404 test named it, and nothing had joined one.
+    const unitOnly = [{ path: "test/unit/audit-evidence.test.ts", content: "const rows = [{ table: 'contests' }];" }];
+    expect(tablesExercisedByTests(unitOnly, ["contests"])).toEqual([]);
+    const integration = [{ path: "test/integration/contests.test.ts", content: "await db.insert(contests).values({});" }];
+    expect(tablesExercisedByTests(integration, ["contests"])).toEqual(["contests"]);
+    const browser = [{ path: "e2e/contests.spec.ts", content: "await api.post('/api/contests/x/join');\nconst rows = 'contests';" }];
+    expect(tablesExercisedByTests(browser, ["contests"])).toEqual(["contests"]);
+  });
+
   it("finds a table by either spelling, and doesn't count product code", () => {
     const found = tablesExercisedByTests(files, ["moderation_log", "content_reports", "contests"]);
     // moderationLog in an ORM call, content_reports in SQL — both are the test exercising that table.

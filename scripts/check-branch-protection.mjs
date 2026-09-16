@@ -26,6 +26,24 @@ try {
   process.exit(2);
 }
 
+/*
+ * What the checks have actually been doing lately.
+ *
+ * The audit reads the workflow files and can't see a single run, so a `main`
+ * that has been red for a week looks exactly like a green one. This asks.
+ */
+function recentRuns() {
+  try {
+    const raw = execFileSync("gh", [
+      "api", "repos/{owner}/{repo}/actions/runs?branch=main&per_page=20",
+      "--jq", "[.workflow_runs[] | select(.status == \"completed\") | {name: .name, conclusion: .conclusion, at: .created_at, url: .html_url}]",
+    ], { encoding: "utf8" });
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
 const contexts = protection.required_status_checks?.contexts ?? [];
 const strict = protection.required_status_checks?.strict ?? false;
 const admins = protection.enforce_admins?.enabled ?? false;
@@ -49,6 +67,19 @@ if (!launchMode && !admins) {
   console.warn("note: not enforced for admins — an owner's push to main lands without the checks. Deliberate for now; `--launch` treats it as a failure.");
 }
 if (!strict) console.log("note: a pull request may merge on checks that ran against a slightly older main (strict off, deliberate — see docs/ci-gate.md).");
+
+const runs = recentRuns();
+if (runs?.length) {
+  const failed = runs.filter((r) => r.conclusion !== "success");
+  const last = runs[0];
+  console.log(`\nlast ${runs.length} completed runs on main: ${runs.length - failed.length} green, ${failed.length} not`);
+  console.log(`most recent: ${last.name} — ${last.conclusion} (${last.at.slice(0, 10)})`);
+  // Red on main is worth saying out loud, but it isn't a protection problem: it's a broken build.
+  if (last.conclusion !== "success") console.error(`\nmain's most recent run did not pass: ${last.url}`);
+  for (const r of failed.slice(0, 5)) console.warn(`- ${r.name} ${r.conclusion} ${r.at.slice(0, 10)} ${r.url}`);
+} else if (runs) {
+  console.log("\nno completed runs on main yet");
+}
 
 if (problems.length) {
   console.error(`\n${problems.length} problem${problems.length === 1 ? "" : "s"}:`);

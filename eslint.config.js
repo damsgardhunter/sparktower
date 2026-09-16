@@ -1,5 +1,6 @@
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
+import reactHooks from "eslint-plugin-react-hooks";
 
 /**
  * Lint rules chosen to be worth blocking a merge on.
@@ -54,8 +55,23 @@ export default tseslint.config(
       parser: tseslint.parser,
       parserOptions: { ecmaVersion: 2022, sourceType: "module" },
     },
-    plugins: { "@typescript-eslint": tseslint.plugin },
+    plugins: { "@typescript-eslint": tseslint.plugin, "react-hooks": reactHooks },
     rules: {
+      /*
+       * React's two hook rules.
+       *
+       * `rules-of-hooks` is a bug rule: a hook called conditionally breaks the
+       * order React relies on, and the failure is a wrong value or a crash on
+       * a later render, nowhere near the line that caused it.
+       *
+       * `exhaustive-deps` is a warning, not an error: a stale dependency is
+       * usually a bug but sometimes deliberate, and the codebase already says
+       * which is which with disable comments. Those comments are why this
+       * plugin has to be installed at all — a disable for a rule ESLint
+       * doesn't know is itself an error, which is what had CI red.
+       */
+      "react-hooks/rules-of-hooks": "error",
+      "react-hooks/exhaustive-deps": "warn",
       /*
        * Off wholesale: these fire constantly on a TypeScript codebase for
        * reasons the compiler already handles better, and none of them

@@ -25,6 +25,8 @@ import {
 import { NOVA_SURFACES, type NovaSurfaceId, type NovaSurfaceConfig } from "@shared/nova-surfaces";
 import { parseModelJson, respondToAiError } from "./ai-json";
 import { rateLimit } from "./moderation";
+import { packFor } from "@shared/nova-prompt-packs";
+import { firstPlanFor } from "./nova-first-plan";
 
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
@@ -239,6 +241,37 @@ export function registerNovaAssistRoutes(app: Express) {
     } catch (error) {
       console.error("Nova assist error:", error);
       respondToAiError(res, error, "Nova couldn't help with that");
+    }
+  });
+
+  /**
+   * The first plan for a new project, from its goal and subcategory's prompt
+   * pack (shared/nova-prompt-packs.ts). GET returns the questions to ask;
+   * POST writes the plan, and saves it to the board only when told to.
+   */
+  app.get("/api/projects/:id/nova/first-plan", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      if (!(await isMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const project = await storage.getProject(req.params.id);
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      const pack = packFor(project.goal, project.subcategory);
+      res.json({ pack: { key: pack.key, status: pack.status, version: pack.version }, questions: pack.questions });
+    } catch (error) {
+      console.error("Nova first-plan questions error:", error);
+      res.status(500).json({ message: "Couldn't load those questions" });
+    }
+  });
+
+  app.post("/api/projects/:id/nova/first-plan", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
+    // metering: checked in firstPlanFor; charged only after the answer parses
+    try {
+      const userId = (req.user as any).id;
+      if (!(await isMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      await firstPlanFor(req.params.id, userId, (req.body ?? {}) as { answers?: Record<string, string>; save?: boolean }, res);
+    } catch (error) {
+      console.error("Nova first-plan error:", error);
+      respondToAiError(res, error, "Nova couldn't write that plan");
     }
   });
 

@@ -28,7 +28,10 @@ Every check has unit tests for both the flagged and the clean shape (`test/unit/
 | Two-factor sign-in (at least for admins) | `mfa` | low |
 | Passwords hashed | `password-hashing` | high |
 | Sign-in attempts throttled | `login-throttling` | high |
+| Sign-in limited per account, not only per address | `credential-stuffing` | high |
 | Ownership checks on reads | `read-authorization` | high |
+| Passwords long enough to be worth hashing | `password-policy` | medium |
+| Passwords can be changed, and changing one ends the old sessions | `password-change` | medium |
 | Email addresses verified | `email-verification` | medium |
 
 ### Input & output
@@ -56,22 +59,27 @@ Every check has unit tests for both the flagged and the clean shape (`test/unit/
 | Stored credentials hashed or sealed | `secrets-at-rest` | high |
 | Secrets compared in constant time | `timing-safe-compare` | medium |
 
+### Operations
+
+| Check | id | Severity |
+| --- | --- | --- |
+| Backups, and a restore someone has actually done | `backups` | medium |
+| Sensitive actions logged | `audit-log` | low |
+| Vulnerability disclosure policy | `disclosure` | low |
+| Errors are reported somewhere | `error-monitoring` | low |
+| Webhooks verify signatures | `webhook-verification` | high |
+| Limits beyond sign-in | `write-rate-limits` | medium |
+| The sending domain is authenticated (SPF, DKIM, DMARC) | `email-authentication` | medium |
+
 ### Dependencies & CI
 
 | Check | id | Severity |
 | --- | --- | --- |
 | Secret scanning in CI | `secret-scanning` | low |
+| CI actions pinned to a commit | `ci-action-pinning` | medium |
+| The dependency scan can fail the build | `dependency-audit-blocking` | medium |
 | Vulnerable dependencies caught | `dependency-audit` | medium |
 | Dependencies pinned (lockfile) | `lockfile` | low |
-
-### Operations
-
-| Check | id | Severity |
-| --- | --- | --- |
-| Sensitive actions logged | `audit-log` | low |
-| Vulnerability disclosure policy | `disclosure` | low |
-| Webhooks verify signatures | `webhook-verification` | high |
-| Limits beyond sign-in | `write-rate-limits` | medium |
 
 ### Sessions & cookies
 
@@ -87,21 +95,17 @@ Every check has unit tests for both the flagged and the clean shape (`test/unit/
 | --- | --- | --- |
 | Accounts can be deleted and exported | `account-data-rights` | medium |
 
-
-_Total: 35 checks._
-
-## What the audit is shown
-
-The model never sees the repository — it sees a digest (`server/code-digest.ts`), and every list in it has a size limit. That is fine until a clipped list reads as a complete one: an audit of this codebase was handed 90 routes of 434 under a header saying "(120)" and reported working features as "not evidenced in the provided files", three times, about code that was there.
-
-The sharpest case: an audit reported `POST /api/artifacts/:id/publish` as "NOT REGISTERED anywhere in this repository" and called the growth loop broken. It is registered — at `server/routes.ts:386`, hundreds of lines past where the excerpt stops — and the coverage section printed counts and exceptions, never names, so there was nowhere to look a route up. **EVERY MOUNTED ROUTE** now lists all of them with their guards and file, and the preamble points at it: if a route is registered it is there, and if it isn't there it isn't registered.
-
-Three more things it couldn't see, all since added: **what runs at boot** (an audit reported the moderation log's TRUNCATE protection as possibly-never-applied, because the call sits at line 90 of the entry file and the excerpt stopped at 70 — the boot sequence is now lifted out and listed in order), and **what's in the rest of a long file** (an excerpt of a 1,200-line file stops mid-route, which reads as a doubt about the code; each excerpt is now followed by an index of the exports and routes that follow, with line numbers to ask for).
-
-So the digest now says what it is: how many files exist, how many were read, how many appear as excerpts (opening lines, ~26 files), that lists are clipped where they say so, and that absence from it is not absence from the code. Counts are of what was **found**, not what fitted; the route list points at the ROUTE COVERAGE table, which holds every route with its guards. `test/unit/digest-honesty.test.ts` fails if a header ever again prints a cap as a total.
+_Total: 43 checks._
 
 ## What this codebase fails today
 
+- `credential-stuffing` — sign-in is limited per address only. A password list tried from many addresses meets no limit at all.
+- `password-policy` — six characters, with no check against common or breached passwords.
+- `password-change` — there's no route to change a password, so nobody whose password leaked can take it back, and no sessions to revoke when they do.
+- `ci-action-pinning` — 20 third-party CI actions are pinned to moving tags.
+- `error-monitoring` — nothing collects errors; a 500 is visible only to whoever is reading the logs.
+- `email-authentication` — the app sends invites and verification mail with no SPF/DKIM/DMARC recorded.
+- `backups` — restoring is mentioned in the release checklist; no restore has been rehearsed.
 - `csrf` is partial by design: same-origin checks cover state changes, with no per-form token.
 
-`email-verification` and `account-data-rights` were the two outstanding gaps; both now pass. Data rights live in `server/account-data.ts` (which table is exported, deleted or kept, one line each) with `server/account-routes.ts` in front and `test/integration/account-data.test.ts` behind — including a test that fails when a new table keyed to a user is listed nowhere.
+The first three are the ones to fix before real users: they're all in the sign-in path, and all small.

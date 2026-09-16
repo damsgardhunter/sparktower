@@ -221,6 +221,79 @@ export function scanSecurity(allFiles: SourceFile[], extra: { suspectedSecrets?:
     });
   }
   {
+    /*
+     * Per address is the limit people write first, and it stops one machine
+     * guessing. It does nothing about the attack that actually happens: a
+     * password list tried across many addresses, a handful of guesses from
+     * each. Counting failures per account is what closes that, and the two
+     * limits are complementary rather than alternatives.
+     */
+    const loginRoutes = onServer(/["'`]\/(api\/)?(auth\/)?(login|signin|sign-in|session)["'`]/);
+    const byAddress = onServer(/enforceRateLimit\s*\(\s*[^,]+,\s*ipKey\s*\(|rateLimit\s*\(\s*["'`](login|signin|auth)["'`]|keyGenerator[\s\S]{0,60}(ip|address)/i);
+    // A limit that keys on who is being signed in to: the email or the account id, not the caller's address.
+    /*
+     * Only where sign-in happens. Asking the whole server finds the 2FA code's
+     * per-account limit and the mobile refresh limiter and calls the password
+     * step protected — which is how this check first passed a codebase whose
+     * sign-in counts nothing but addresses.
+     */
+    const signInFiles = server.filter((f) => /["'`]\/(api\/)?(auth\/)?(login|signin|sign-in)["'`]/.test(f.content ?? ""));
+    const byAccount = where(signInFiles, /(enforceRateLimit|withinRateLimit|consume|check)\s*\([^)]{0,80}(email|user\.id|userId|account)[^)]{0,40}["'`](login|signin|password|auth)["'`]|failedLogins?|loginAttempts?|lockoutUntil|lockedUntil/i);
+    add({
+      id: "credential-stuffing", label: "Sign-in limited per account, not only per address", category: "accounts", severity: "high",
+      status: !loginRoutes.length ? "n/a" : byAccount.length ? "pass" : byAddress.length ? "partial" : "missing",
+      detail: !loginRoutes.length ? "No sign-in route found."
+        : byAccount.length ? "Failed sign-ins are counted against the account as well as the address."
+        : byAddress.length ? "Sign-in is limited per address only: a list of passwords tried from many addresses meets no limit at all."
+        : "Nothing counts failed sign-ins.",
+      why: "Credential stuffing doesn't come from one address. It comes from thousands, a few guesses each, against accounts whose passwords leaked somewhere else — which a per-address limit never sees.",
+      fix: "Count failed sign-ins against the account being attempted (10 per 15 minutes is generous), alongside the per-address limit. Answer the same way whether the account exists or not, so the limit doesn't become an account-enumeration oracle.",
+      // The sign-in files first: they're where the fix goes.
+      evidence: [...byAccount, ...loginRoutes, ...byAddress].filter((f, i, all) => all.indexOf(f) === i).slice(0, 3),
+    });
+  }
+  {
+    const signup = onServer(/["'`]\/(api\/)?(auth\/)?(register|signup|sign-up)["'`]/);
+    // A length floor, written as a number: 8 or more passes, 6 doesn't.
+    const floor = [...(src.map((f) => f.content ?? "").join("\n").matchAll(/password[\w.]*\.length\s*<\s*(\d+)|min\s*\(\s*(\d+)[^)]*\)[^\n]{0,40}password|password[^\n]{0,40}min\s*\(\s*(\d+)/gi))]
+      .map((m) => Number(m[1] ?? m[2] ?? m[3])).filter((n) => Number.isFinite(n) && n > 0);
+    const shortest = floor.length ? Math.min(...floor) : null;
+    const breachChecked = has(/haveibeenpwned|pwnedpasswords|zxcvbn|common-?passwords?|passwordBlocklist|weakPasswords/i);
+    const managed = has(/@clerk\/|next-auth|@auth0\/|@supabase\/supabase-js|firebase\/auth|@workos-inc\//);
+    add({
+      id: "password-policy", label: "Passwords long enough to be worth hashing", category: "accounts", severity: "medium",
+      status: !signup.length || managed.length ? "n/a"
+        : shortest == null ? "missing"
+        : shortest >= 8 && breachChecked.length ? "pass"
+        : shortest >= 8 ? "partial"
+        : "missing",
+      detail: !signup.length ? "This codebase doesn't register accounts itself."
+        : managed.length ? "A hosted auth provider sets the password rules."
+        : shortest == null ? "No minimum length found on sign-up."
+        : `Minimum length ${shortest}${breachChecked.length ? ", and common or breached passwords are refused" : ", with no check against common or breached passwords"}.`,
+      why: "Six characters is a few seconds of offline guessing once a dump leaks, however well it was hashed — and the most common passwords are guessed first, at any length.",
+      fix: "Ask for at least 8 characters and refuse the common ones (a small blocklist, or the k-anonymity range API at api.pwnedpasswords.com, which never sends the password). Don't force composition rules or rotation: they produce worse passwords.",
+      evidence: [...signup.slice(0, 2), ...breachChecked.slice(0, 1)],
+    });
+  }
+  {
+    const passwords = onServer(/passwordHash|password_hash|bcrypt|argon2/);
+    const changeRoute = onServer(/["'`][^"'`]*(change-password|password\/change|update-password|reset-password)["'`]|changePassword|updatePassword/i);
+    // Changing it has to end the sessions it was protecting, or the person who knew the old one keeps their seat.
+    const revokes = onServer(/(changePassword|updatePassword|resetPassword|password)[\s\S]{0,400}(accessTokensRevokedAt|revokeAll|destroyAllSessions|session\.destroy|deleteFrom\s*\(\s*sessions|DELETE FROM sessions|logoutAll)/i);
+    add({
+      id: "password-change", label: "Passwords can be changed, and changing one ends the old sessions", category: "accounts", severity: "medium",
+      status: !passwords.length ? "n/a" : changeRoute.length && revokes.length ? "pass" : changeRoute.length ? "partial" : "missing",
+      detail: !passwords.length ? "No password sign-in."
+        : !changeRoute.length ? "No route changes a password, so somebody whose password leaked can't take it back."
+        : revokes.length ? "Changing a password signs the other sessions out."
+        : "A password can be changed, but the sessions opened with the old one stay signed in.",
+      why: "Changing a password is what someone does when they think it's known. If the sessions and tokens issued under it keep working, the change has bought nothing — and there's no route at all, they can only ask you to do it by hand.",
+      fix: "Add a change route that asks for the current password, then revoke every session and refresh token for the account (this codebase already has accessTokensRevokedAt and per-account session rows). Offer a reset by emailed single-use link for the password nobody remembers.",
+      evidence: [...changeRoute.slice(0, 2), ...revokes.slice(0, 1)],
+    });
+  }
+  {
     const admin = onServer(/\badmin\b|role\s*===|isAdmin|requireAdmin|requireOwner|requireReviewer/i);
     // A library, a passkey flow, or TOTP written out by hand (an otpauth:// URL, a verifyTotp over HMAC).
     const mfa = has(/from ["'](otplib|speakeasy|@simplewebauthn\/server|@otplib\/[\w-]+)["']|require\(["'](otplib|speakeasy)["']\)|verifyRegistrationResponse|verifyAuthenticationResponse|totp\.verify|authenticator\.(verify|check)\(|otpauth:\/\/|\b(verify|check)Totp\s*\(/i);
@@ -579,6 +652,42 @@ export function scanSecurity(allFiles: SourceFile[], extra: { suspectedSecrets?:
     });
   }
 
+  {
+    /*
+     * A tag is a moving pointer. Whoever controls the action's repository can
+     * move v4 to whatever they like, and it runs in CI with the repository's
+     * token — the supply-chain attack that has actually happened, more than
+     * once. A commit SHA can't be moved.
+     */
+    const steps = [...ci.flatMap((f) => [...(f.content ?? "").matchAll(/uses:\s*([^\s#]+)/g)].map((m) => ({ ref: m[1], file: f.path })))];
+    const external = steps.filter((s2) => !s2.ref.startsWith(".") && s2.ref.includes("/"));
+    const unpinned = external.filter((s2) => !/@[0-9a-f]{40}$/.test(s2.ref));
+    add({
+      id: "ci-action-pinning", label: "CI actions pinned to a commit", category: "supply-chain", severity: "medium",
+      status: !external.length ? "n/a" : unpinned.length ? "missing" : "pass",
+      detail: !external.length ? "No third-party actions in CI."
+        : unpinned.length ? `${unpinned.length} of ${external.length} third-party action${external.length === 1 ? " is" : "s are"} pinned to a moving tag: ${[...new Set(unpinned.map((u) => u.ref))].slice(0, 4).join(", ")}.`
+        : `All ${external.length} third-party actions are pinned to a commit.`,
+      why: "A tag can be repointed by whoever owns the action, and CI then runs their new code with your repository token and any secret the job can see.",
+      fix: "Pin each third-party action to a full commit SHA with the version in a trailing comment (uses: actions/checkout@<sha> # v4), and let Dependabot raise the updates.",
+      evidence: [...new Set(unpinned.map((u) => u.file))].slice(0, 3),
+    });
+  }
+  {
+    // A scanner that can't fail the build is a scanner nobody reads.
+    const auditStep = where(ci, /npm audit|pnpm audit|yarn (npm )?audit|snyk|osv-scanner|trivy|pip-audit|govulncheck/i);
+    const defanged = ci.filter((f) => /(npm|pnpm|yarn) audit[^\n]*(\|\|\s*true|continue-on-error)|continue-on-error:\s*true[\s\S]{0,200}audit/i.test(f.content ?? "")).map((f) => f.path);
+    add({
+      id: "dependency-audit-blocking", label: "The dependency scan can fail the build", category: "supply-chain", severity: "medium",
+      status: !auditStep.length ? "n/a" : defanged.length ? "partial" : "pass",
+      detail: !auditStep.length ? "No dependency scan in CI to begin with (see the dependency-audit check)."
+        : defanged.length ? "The scan runs but can't fail the build: its result is swallowed." : "A failing scan fails the build.",
+      why: "An advisory nobody is forced to read is an advisory nobody reads. `|| true` turns a gate into a log line.",
+      fix: "Let the audit step decide the job's fate, with a threshold you can live with (npm audit --audit-level=high). If something must be tolerated, record it as an explicit exception rather than swallowing every result.",
+      evidence: [...defanged, ...auditStep].slice(0, 3),
+    });
+  }
+
   // --- Dependencies & CI ---------------------------------------------------------
   {
     const audit = [...where(ci, /npm audit|pnpm audit|yarn (npm )?audit|snyk|osv-scanner|trivy|dependency-review|pip-audit|bundle-audit|govulncheck/i),
@@ -678,6 +787,52 @@ export function scanSecurity(allFiles: SourceFile[], extra: { suspectedSecrets?:
       why: "People who find a hole need a way to tell you before they tell everyone else.",
       fix: "Add SECURITY.md to the repo and serve /.well-known/security.txt with a contact email.",
       evidence: disclosure.slice(0, 2),
+    });
+  }
+  {
+    // Named where a dependency is named, so a CSS class like "overflow-x-auto [scrollbar-width:none]" isn't read as Rollbar.
+    const monitoring = has(/from ["'`][^"'`]*(@sentry\/|bugsnag|rollbar|dd-trace|@datadog\/|@opentelemetry\/|logtail|newrelic)|require\(["'`][^"'`]*(bugsnag|rollbar|dd-trace|newrelic)|\bSentry\.init\s*\(|\bbugsnag\.start\s*\(|\bRollbar\s*\(/i);
+    add({
+      id: "error-monitoring", label: "Errors are reported somewhere", category: "operations", severity: "low",
+      status: monitoring.length ? "pass" : isServer ? "missing" : "n/a",
+      detail: monitoring.length ? "Errors are sent to a monitoring service." : "Nothing collects errors: a 500 is visible only to whoever is reading the logs at the time.",
+      why: "The failures that matter are the ones nobody reports — a checkout that 500s for one card type, a job throwing every night. Without collection you hear about them from users, late.",
+      fix: "Add an error reporter (Sentry or similar) on the server and the client, scrub the body and headers before sending, and alert on a rate rather than on every event.",
+      evidence: monitoring.slice(0, 2),
+    });
+  }
+  {
+    /*
+     * Process, not code — so this asks for the written commitment, which is
+     * the only thing a repository can hold. A check that can't see the DNS or
+     * the backup bucket says what it can see, and says which it is.
+     */
+    const backups = [...paths].filter((p2) => /(^|\/)(docs|ops|runbook)/i.test(p2) && /\.(md|mdx)$/.test(p2))
+      .filter((p2) => /backup|restore|disaster/i.test(files.find((f) => f.path === p2)?.content ?? ""));
+    add({
+      id: "backups", label: "Backups, and a restore someone has actually done", category: "operations", severity: "medium",
+      status: backups.length ? "partial" : "missing",
+      detail: backups.length ? "Backups and restoring are written down; whether a restore has been rehearsed can't be read from the repository." : "Nothing in the repository mentions backups or restoring.",
+      why: "The backup you have never restored is a belief, not a backup — and the morning you need it is the worst time to find out which.",
+      fix: "Write down what is backed up, how often, and where; then restore it into a scratch database and record the date you did. Repeat after any schema change big enough to worry you.",
+      evidence: backups.slice(0, 2),
+    });
+  }
+  {
+    const sendsEmail = has(/@sendgrid\/|resend|nodemailer|postmark|mailgun|ses\.send|sendEmail\s*\(/i);
+    // This file names every pattern it looks for, so it would otherwise be its own evidence.
+    const authenticated = files
+      .filter((f) => !NOT_APP_CODE.test(f.path) && /\b(spf|dkim|dmarc)\b/i.test(f.content ?? ""))
+      .map((f) => f.path);
+    add({
+      id: "email-authentication", label: "The sending domain is authenticated (SPF, DKIM, DMARC)", category: "operations", severity: "medium",
+      status: !sendsEmail.length ? "n/a" : authenticated.length ? "partial" : "missing",
+      detail: !sendsEmail.length ? "This codebase doesn't send email."
+        : authenticated.length ? "SPF/DKIM/DMARC are written down; the records themselves live in DNS and can't be read from here."
+        : "The app sends email and nothing records SPF, DKIM or DMARC for the sending domain.",
+      why: "Unauthenticated mail lands in spam — including the verification and invite links people are waiting for — and leaves the domain open to anyone sending as you.",
+      fix: "Publish SPF and DKIM for the sending domain, then DMARC at p=none until the reports are clean and p=quarantine after. Note the records in the repository so the next person knows they exist.",
+      evidence: authenticated.slice(0, 2),
     });
   }
 

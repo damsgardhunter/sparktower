@@ -13,6 +13,14 @@ const stub = (name: string) => fileURLToPath(new URL(`./test/stubs/${name}.ts`, 
 export default defineConfig({
   test: {
     environment: "node",
+    /*
+     * No CSS pipeline. These are Node tests with no stylesheet in sight, but
+     * Vitest looks upward for a PostCSS config and finds the web app's at the
+     * repository root — then fails to load Tailwind, which this package
+     * doesn't install. Green here, red in CI, where mobile installs only its
+     * own dependencies.
+     */
+    css: false,
     include: ["src/**/*.test.ts", "test/**/*.test.ts"],
     restoreMocks: true,
   },

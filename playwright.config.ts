@@ -37,7 +37,8 @@ export default defineConfig({
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    command: "npx tsx server/index.ts",
+    // The database first, then the server: Playwright can start this before its own global setup has made it.
+    command: "npx tsx e2e/ensure-db.ts && npx tsx server/index.ts",
     url: `${E2E_BASE_URL}/_health`,
     timeout: 120_000,
     reuseExistingServer: false,
