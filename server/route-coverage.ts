@@ -226,10 +226,26 @@ const MODEL_CALL = /\b(openai|anthropic)\s*\.|completions\.create\(|responses\.c
  * it before the app's error handler — which maps ModelResponseError to 502.
  */
 function unreadableAnswerOf(body: string, catches: (readonly [number, number])[]): "502" | "5xx" {
-  if (/\banswerUnreadable\s*\(|\brespondToAiError\s*\(|\binstanceof\s+ModelResponseError\b|model_unreadable/.test(body)) return "502";
+  const handles502 = /\banswerUnreadable\s*\(|\brespondToAiError\s*\(|\binstanceof\s+ModelResponseError\b|model_unreadable/;
+  /*
+   * Where it matters is the catch. A route can call `answerUnreadable` for the
+   * empty answer it checks itself and still end its catch with a plain 500 —
+   * which is what POST /api/chat did, while this read the whole body and called
+   * it handled. An unreadable answer thrown by a helper lands in the catch, so
+   * the catch is what decides the status.
+   */
+  /*
+   * A catch that answers 502 anywhere in the route means the unreadable path is
+   * handled where it's thrown — routes often parse in an inner try and keep a
+   * plain 500 outside it for everything else. Only when no catch does that, and
+   * one of them swallows to a 5xx, is an unreadable answer really a generic 500.
+   */
+  if (catches.some(([a, b]) => handles502.test(body.slice(a, b)))) return "502";
   const swallowing = catches.some(([a, b]) => {
     const block = body.slice(a, b);
-    return /status\(\s*5\d\d\s*\)/.test(block) && !/\b(?:err|error|e)\??\.status\b|\bnext\s*\(\s*(?:err|error|e)\s*\)|\bthrow\b/.test(block);
+    // Passing the error's own status on, handing it to the error handler, or rethrowing — not merely logging `error.status`, which POST /api/chat does on its way to a plain 500.
+    const passesItOn = /res\.status\s*\(\s*(?:err|error|e)\??\.status\b|\bnext\s*\(\s*(?:err|error|e)\s*\)|\bthrow\b/.test(block);
+    return /status\(\s*5\d\d\s*\)/.test(block) && !passesItOn;
   });
   return swallowing ? "5xx" : "502";
 }

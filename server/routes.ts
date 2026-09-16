@@ -642,6 +642,15 @@ Only include fields you have enough info to fill. Start empty if needed.`;
         return res.status(402).json({ message: "OpenAI account out of credits. Add credits or update the API key.", details: error?.error?.message || error?.message });
       }
 
+      /*
+       * An unreadable answer is 502 model_unreadable here as it is on every
+       * other AI route. This route checks its own empty reply above, but a
+       * ModelResponseError thrown by a helper it calls landed here and came
+       * back as a generic 500 — the one route whose clients couldn't tell
+       * "try again" from "we're broken".
+       */
+      if (error instanceof ModelResponseError) return respondToAiError(res, error, "AI chat failed");
+
       if (process.env.NODE_ENV === "development") {
         // Return a slightly more helpful error in dev for quicker debugging.
         return res.status(500).json({ message: "AI chat failed", error: error?.message || String(error) });
@@ -2589,7 +2598,8 @@ RULES:
       res.json({ reply: cleanReply, actionsTaken });
     } catch (error) {
       console.error("Nova guide error:", error);
-      res.status(500).json({ message: "Nova AI failed" });
+      // Unreadable answer: 502 model_unreadable, the same as every other AI route.
+      respondToAiError(res, error, "Nova AI failed");
     }
   });
 
@@ -5675,7 +5685,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       res.json({ summary });
     } catch (error) {
       console.error("AI summarize error:", error);
-      res.status(500).json({ message: "Failed to generate summary" });
+      respondToAiError(res, error, "Failed to generate summary");
     }
   });
 

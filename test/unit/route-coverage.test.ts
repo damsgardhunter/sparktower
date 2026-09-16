@@ -94,6 +94,49 @@ describe("buildRouteCoverage", () => {
     expect(nova).toContain("limit:credits→ai burst");
   });
 
+  it("judges an unreadable answer by what the catch does, not by a mention elsewhere", () => {
+    /*
+     * POST /api/chat called answerUnreadable for the empty reply it checked
+     * itself, then ended its catch with a plain 500 — so an unreadable answer
+     * thrown by a helper came back as "AI chat failed". Reading the whole body
+     * for a mention called that handled; reading the catch tells the truth.
+     * The inner-try shape is the common one and must still read as handled.
+     */
+    const files = [
+      f("server/routes.ts", 'import "./ai";'),
+      f("server/ai.ts", `
+        app.post("/api/chat", isAuthenticated, async (req, res) => {
+          if (!(await requireCredits(res, userId, 1, "chat"))) return;
+          const completion = await openai.chat.completions.create({});
+          if (!raw) return answerUnreadable(res, new ModelResponseError("reply"), "reply");
+          res.json({ reply });
+        } catch (error) {
+          console.error("Chat error:", error);
+          if (error?.status) console.error(error.status);
+          res.status(500).json({ message: "AI chat failed" });
+        }
+        });
+        app.post("/api/score", isAuthenticated, async (req, res) => {
+          try {
+            if (!(await requireCredits(res, userId, 1, "score"))) return;
+            const completion = await openai.chat.completions.create({});
+            let parsed;
+            try { parsed = parseModelJson(completion.choices[0].message.content); }
+            catch (err) { return res.status(502).json({ message: "unreadable", code: "model_unreadable" }); }
+            res.json(parsed);
+          } catch (error) {
+            res.status(500).json({ message: "Failed to score" });
+          }
+        });
+      `),
+    ];
+    const by = Object.fromEntries(buildRouteCoverage(files).rows.map((r) => [`${r.method} ${r.path}`, r]));
+    // Mentions answerUnreadable, but its catch turns everything into a 500.
+    expect(by["POST /api/chat"].metering?.unreadableAnswer).toBe("5xx");
+    // Parses in an inner try that answers 502; the outer 500 is for everything else.
+    expect(by["POST /api/score"].metering?.unreadableAnswer).toBe("502");
+  });
+
   it("does not count routes in files nothing imports", () => {
     const c = buildRouteCoverage([entry, live, dead]);
     expect(c.rows.find((r) => r.path === "/api/live")?.mounted).toBe(true);
