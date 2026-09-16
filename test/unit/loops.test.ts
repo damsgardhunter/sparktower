@@ -104,6 +104,46 @@ describe("the code audit's closure check, held to the files", () => {
     expect(fakeStage.fix).toBe("Add a share link");
   });
 
+  it("says whether a read cited nothing, or cited something that isn't there", () => {
+    /*
+     * These used to end in the same sentence — "not every stage has code behind
+     * it" — and only one of them is about the builder's code. In a real run,
+     * seven loops cited twenty-odd files each and the revenue loop cited none,
+     * describing its mechanism in prose instead. Every file it was describing
+     * existed. Sending somebody to look for missing code on that basis wastes
+     * their afternoon.
+     */
+    const [citedNothing] = sanitizeLoopClosures([{
+      key: "L1", closure: "closed",
+      stages: [{ step: "Generate something metered", status: "built", evidence: [] }, { step: "Run out of credits", status: "built", evidence: [] }],
+      returnPath: { mechanism: "checkout returns to the page you left and refreshes credits", evidence: [] },
+    }], loops.slice(0, 1), files);
+    expect(citedNothing.closure).toBe("open");
+    expect(citedNothing.note).toMatch(/named no file for any stage/);
+    expect(citedNothing.note).toMatch(/Run the audit again/);
+
+    const [citedFiction] = sanitizeLoopClosures([{
+      key: "L1", closure: "closed",
+      stages: [{ step: "Post", status: "built", evidence: ["server/imaginary.ts"] }],
+      returnPath: { mechanism: "email", evidence: ["server/notify.ts"] },
+    }], loops.slice(0, 1), files);
+    expect(citedFiction.closure).toBe("open");
+    expect(citedFiction.note).toMatch(/none of the files it cited are in the repository/);
+    expect(citedFiction.note).toContain("server/imaginary.ts");
+
+    // A read that cited real files for one stage and missed another keeps the original wording:
+    // that one really is a statement about the code.
+    const [mixed] = sanitizeLoopClosures([{
+      key: "L1", closure: "closed",
+      stages: [
+        { step: "Post", status: "built", evidence: ["server/check-ins.ts"] },
+        { step: "Share", status: "missing", evidence: [] },
+      ],
+      returnPath: { mechanism: "email", evidence: ["server/notify.ts"] },
+    }], loops.slice(0, 1), files);
+    expect(mixed.note).toBe("Reported closed, but not every stage has code behind it.");
+  });
+
   it("reports a loop the model skipped as open, never closed", () => {
     const reads = sanitizeLoopClosures([], loops, files);
     expect(reads.map((r) => r.closure)).toEqual(["open", "open"]);

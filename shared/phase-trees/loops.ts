@@ -252,18 +252,47 @@ export function sanitizeLoopClosures(
     if (!item) {
       return { loopTaskId: loop.taskId, title: loop.title, type: loop.type, closure: "open", stages: [], returnPath: null, breaksAt: "", fix: "", note: "The audit didn't report on this loop; run it again or check it by hand." };
     }
+    /*
+     * Two different failures used to end in the same sentence, and only one of
+     * them is about the builder's code.
+     *
+     * A read that cites a file which isn't in the tree has made a claim that
+     * can't be checked. A read that cites *nothing at all* has made no claim —
+     * and in one real run, seven loops cited twenty-odd files each while the
+     * revenue loop cited zero, describing its mechanism in prose instead. Both
+     * came back as "not every stage has code behind it", which a builder
+     * reasonably reads as "your code is missing". It wasn't: every file was
+     * there. So count what was offered as well as what survived.
+     */
+    let cited = 0;
+    let unreal: string[] = [];
+    const keep = (raw: unknown) => {
+      const offered = (Array.isArray(raw) ? raw : []).map((f) => s(typeof f === "string" ? f : (f as any)?.file, 200)).filter(Boolean);
+      cited += offered.length;
+      const real = onlyReal(raw);
+      unreal = [...unreal, ...offered.filter((f) => !files.has(f))];
+      return real;
+    };
+
     const stages: LoopStageCheck[] = (Array.isArray(item.stages) ? item.stages : []).slice(0, 8).map((st: any) => {
-      const evidence = onlyReal(st?.evidence);
+      const evidence = keep(st?.evidence);
       const claimed = ["built", "partial", "missing"].includes(st?.status) ? st.status : "missing";
       // A built stage with nothing real behind it is, at best, partial.
       return { step: s(st?.step, 200), status: claimed === "built" && !evidence.length ? "partial" : claimed, evidence };
     }).filter((st: LoopStageCheck) => st.step);
-    const returnEvidence = onlyReal(item.returnPath?.evidence);
+    const returnEvidence = keep(item.returnPath?.evidence);
     const returnPath = item.returnPath?.mechanism ? { mechanism: s(item.returnPath.mechanism, 300), evidence: returnEvidence } : null;
     let closure: LoopClosure = ["closed", "open", "not-built"].includes(item.closure) ? item.closure : "open";
     let note: string | undefined;
     if (closure === "closed") {
-      if (!stages.length || stages.some((st) => st.status !== "built")) { closure = "open"; note = "Reported closed, but not every stage has code behind it."; }
+      if (!stages.length || stages.some((st) => st.status !== "built")) {
+        closure = "open";
+        note = cited === 0
+          ? "Reported closed, but this read named no file for any stage — which says nothing about the code, only that the read didn't cite it. Run the audit again before acting on this."
+          : unreal.length && stages.every((st) => !st.evidence.length)
+            ? `Reported closed, but none of the files it cited are in the repository (e.g. ${unreal[0]}). Check the path before writing anything new.`
+            : "Reported closed, but not every stage has code behind it.";
+      }
       else if (!returnPath || !returnEvidence.length) { closure = "open"; note = "Reported closed, but no file shows what brings the user back to the first step."; }
     }
     if (closure === "not-built" && stages.some((st) => st.status !== "missing")) closure = "open";
