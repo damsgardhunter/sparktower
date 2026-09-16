@@ -115,6 +115,22 @@ describe("authentication on the write surface", () => {
     expect(live.find((r) => label(r) === "POST /api/stripe/webhook")!.limits).toEqual(["webhookReject (failures only)"]);
   });
 
+  /*
+   * A content-counted limit ("how many comments has this author written
+   * lately") is counted by author id. On a route with nobody signed in there is
+   * no author, the count comes back zero, and the limit allows everything —
+   * a write that reads as limited and isn't. The middleware now refuses that
+   * combination at runtime (server/moderation.ts); this catches it in the
+   * source, where it's cheaper to notice.
+   */
+  it("no unauthenticated route carries a limit that counts by author", () => {
+    const byAuthor = ["comment", "feedPost", "message", "project"];
+    const open = live.filter((r) => !r.auth && r.limits.some((l) => byAuthor.includes(l.split(" ")[0])));
+    expect(open.map(label), "these limits count rows by author, and nobody is signed in to be one").toEqual([]);
+    // And the check is watching something: those limits are in use where people are signed in.
+    expect(live.some((r) => r.auth && r.limits.some((l) => byAuthor.includes(l.split(" ")[0])))).toBe(true);
+  });
+
   it("the only inbound webhook is Stripe's (its signature is checked in stripe-webhook.test.ts)", () => {
     expect(live.filter((r) => /webhook/i.test(r.path)).map(label)).toEqual(["POST /api/stripe/webhook"]);
   });

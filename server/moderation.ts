@@ -472,12 +472,24 @@ export function rateLimit(action: RateLimitAction): RequestHandler {
   return async (req: any, res, next) => {
     /*
      * No user, no count — was the rule, which made this a no-op on every
-     * endpoint without auth, auth endpoints included. Hit-counted actions
-     * can key on the address instead; content-counted ones genuinely need
-     * an author and pass through.
+     * endpoint without auth, auth endpoints included. Hit-counted actions key
+     * on the address instead.
+     *
+     * A content-counted action can't: its limit is "how many rows did this
+     * author write lately", counted by author id, and an address never matches
+     * one — the count would come back zero and allow everything. So a
+     * content-counted limit with nobody signed in refuses rather than passing
+     * through. Every route using one authenticates first today, so this is
+     * unreachable; it exists so that the day one doesn't, the route fails
+     * loudly instead of quietly becoming an unlimited write that still reads
+     * as limited. `test/unit/route-guards.test.ts` catches the same mistake in
+     * the source.
      */
     const userId: string | undefined = req.user?.id ?? (HIT_COUNTED.has(action) ? ipKey(req) : undefined);
-    if (!userId) return next();
+    if (!userId) {
+      console.error(`[moderation] ${action} is counted from content by author, and nobody is signed in: refusing ${req.method} ${req.path} rather than letting it through unlimited.`);
+      return res.status(401).json({ message: "Sign in to do that.", code: "unauthenticated" });
+    }
 
     const check = await withinRateLimit(userId, action);
     if (!check.ok) return refuse(res, userId, action, check);
