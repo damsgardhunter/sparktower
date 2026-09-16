@@ -30,6 +30,7 @@ import {
 } from "./code-ingest";
 import { buildCodeDigest, type CodeDigest } from "./code-digest";
 import { summarizeWebScreens } from "./audit-evidence";
+import { buildClaimIndex, verifyFindings } from "./audit-claims";
 import { CAPABILITY_AREAS, sanitizeCapabilities } from "@shared/capabilities";
 import { deepReadAll } from "./audit-deep-reads";
 import { computeAuditDelta } from "@shared/audit-delta";
@@ -447,6 +448,29 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
     },
     repo: repoMeta,
   };
+
+  /*
+   * Last gate before a person reads any of this: every sentence that says
+   * something doesn't exist is checked against the repository that was just
+   * scanned (server/audit-claims.ts).
+   *
+   * The audit's recurring failure has never been bad judgement — it has been
+   * turning a gap in its own evidence into a statement about the code, and a
+   * builder can't tell the two apart. Run over the audits already stored for
+   * this project, this found false absence claims in five of the last fifteen:
+   * artifact routes reported unregistered while mounted at server/routes.ts,
+   * path/work routes "not present", a test file "referenced but not present"
+   * that was right there. The claim is kept and the fact is attached to it,
+   * because the model may have meant something true and said it badly.
+   */
+  const claims = verifyFindings(findings, buildClaimIndex(snapshot.files, digest.signals.routeCoverage.rows));
+  if (claims.corrected) {
+    console.warn(`[audit] ${claims.corrected} claim(s) contradicted by the repository and annotated:`,
+      claims.corrections.slice(0, 5).map((c) => `${c.claimed} → ${c.found}`));
+  }
+  // Counted where the builder can see it: an audit that had to correct itself
+  // five times is telling you something about the audit.
+  (findings.scan as any).claimsContradicted = claims.corrected;
 
   // The catch-up: the audit's edits, down to what's new and worth doing.
   const board = await storage.getProjectKanbanTasks(projectId).catch(() => []);
