@@ -121,10 +121,18 @@ export const SURFACE_CLASS_LABEL: Record<SurfaceClass, string> = {
 export const SURFACE_ROUTES: Record<string, string[]> = {
   contests: ["/contests"],
   sprints: ["/sprints"],
-  matches: ["/matches"],
   messages: ["/messages"],
-  leaderboard: ["/leaderboard"],
   discover: ["/discover"],
+  /*
+   * `/matches` and `/leaderboard` are deliberately absent, though both surfaces
+   * still exist and still gate their APIs below. Both pages were absorbed into
+   * Discover and their addresses are now redirects, kept because old links,
+   * emails and notifications still point at them. Listing them here would make
+   * turning either surface off render a 404 at an address whose only job is to
+   * forward — the kill switch would break the redirect rather than the feature.
+   * The matching and ranking they gate are reached through Discover, which has
+   * its own flag.
+   */
   feed: ["/posts", "/a/"],
   backing: ["/admin/backing"],
 };

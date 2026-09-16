@@ -619,7 +619,7 @@ export default function ProjectManager() {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4">
         <p className="text-secondary">Project not found</p>
-        <Button variant="outline" onClick={() => setLocation("/projects")} data-testid="button-back-projects">Back to Projects</Button>
+        <Button variant="outline" onClick={() => setLocation("/profile#projects")} data-testid="button-back-projects">Back to Projects</Button>
       </div>
     );
   }

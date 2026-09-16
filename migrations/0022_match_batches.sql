@@ -1,0 +1,1 @@
+ALTER TABLE "user_matches" ADD COLUMN "batch" integer DEFAULT 0 NOT NULL;

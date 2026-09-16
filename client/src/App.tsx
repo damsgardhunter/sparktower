@@ -1,5 +1,6 @@
 import { Switch, Route, Redirect, useLocation, Link } from "wouter";
 import VerifyEmailPage, { VerifyEmailNotice } from "@/components/verify-email";
+import PathHome from "@/pages/path-home";
 import { useEffect } from "react";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -13,12 +14,9 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { NotificationBell } from "@/components/notification-bell";
 import LandingPage from "@/pages/landing";
 import Home from "@/pages/home";
-import Projects from "@/pages/projects";
 import NovaIntro from "@/pages/nova-intro";
 import ProjectCreate from "@/pages/project-create";
 import ProjectDashboard from "@/pages/project-dashboard";
-import Matches from "@/pages/matches";
-import Leaderboard from "@/pages/leaderboard";
 import Discover from "@/pages/discover";
 import Onboarding from "@/pages/onboarding";
 import DocumentBuilder from "@/pages/document-builder";
@@ -212,7 +210,23 @@ function Router() {
             <Route path="/" component={Home} />
             <Route path="/onboarding" component={Onboarding} />
             <Route path="/verify-email" component={VerifyEmailPage} />
-            <Route path="/projects" component={Projects} />
+            {/* Every project's next step in one place — the address the retention loop returns to. */}
+            <Route path="/path" component={PathHome} />
+            {/*
+              * The three destinations Discover absorbed. They stay as routes for good:
+              * old emails, notifications and shared links point at them, and a 404 for
+              * those is worse than a hop. Replacing history rather than pushing, so Back
+              * goes where the person came from instead of bouncing off the redirect.
+              *
+              * /projects was your OWN list, which now lives on your profile — the browse
+              * half of it is what moved to Discover, so sending it there would answer a
+              * different question than the one the link asked.
+              *
+              * Exact paths in wouter, so this matches the bare index only: every
+              * /projects/* route below is untouched. They follow it for readability,
+              * not because the order matters here.
+              */}
+            <Route path="/projects"><Redirect to="/profile#projects" replace /></Route>
             <Route path="/projects/new" component={NovaIntro} />
             <Route path="/projects/new/create" component={ProjectCreate} />
             {/* Before /projects/:id so the builder path isn't swallowed by it. */}
@@ -222,8 +236,8 @@ function Router() {
             <Route path="/profile" component={Profile} />
             <Route path="/settings/security" component={SecuritySettings} />
             <Route path="/profile/:id" component={Profile} />
-            <Route path="/matches" component={Matches} />
-            <Route path="/leaderboard" component={Leaderboard} />
+            <Route path="/matches"><Redirect to="/discover" replace /></Route>
+            <Route path="/leaderboard"><Redirect to="/discover" replace /></Route>
             <Route path="/discover" component={Discover} />
             <Route path="/contests" component={Contests} />
             <Route path="/contests/:slug" component={ContestDetail} />

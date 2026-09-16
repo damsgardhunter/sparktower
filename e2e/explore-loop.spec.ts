@@ -61,10 +61,11 @@ test("a real browser walks the Explore loop, and the owner's dashboard counts it
   expect(created.ok()).toBeTruthy();
   const projectId = (await created.json()).id as string;
 
-  // Discover, then the project list in the same tab: two opens, and the second is a return.
+  // Discover twice in the same tab: two opens, and the second is a return.
+  // Browsing projects used to be its own page; it's the default state here now.
   await page.goto("/discover");
-  await expect(page.getByTestId("input-search-users")).toBeVisible();
-  await page.goto("/projects");
+  await expect(page.getByTestId("discover-search")).toBeVisible();
+  await page.goto("/discover");
   const card = page.getByTestId(`card-project-${projectId}`);
   await expect(card).toBeVisible();
 
@@ -85,7 +86,7 @@ test("a real browser walks the Explore loop, and the owner's dashboard counts it
 
   // Back to Discover closes the pass; leaving for the dashboard flushes it, and ends the session.
   await page.goto("/discover");
-  await expect(page.getByTestId("input-search-users")).toBeVisible();
+  await expect(page.getByTestId("discover-search")).toBeVisible();
   await page.goto("/admin/analytics");
 
   await expect.poll(() => step(page, "lookedCloser"), { timeout: 15_000 }).toBeGreaterThanOrEqual(1);

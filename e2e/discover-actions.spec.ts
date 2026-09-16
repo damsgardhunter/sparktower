@@ -69,8 +69,9 @@ test("cards connect with a note, message in one tap, follow instantly — and a 
   const thread = (await (await bea.get(`/api/messages/${ariId}`)).json()) as any[];
   expect(thread.some((m) => m.content === sent)).toBe(true);
 
-  // Follow on the project list: instant, and still there after a reload.
-  await page.goto("/projects");
+  // Follow on a project card in Discover's results: instant, and still there
+  // after a reload.
+  await page.goto("/discover");
   await page.getByTestId(`button-follow-${projectId}`).click();
   await expect(page.getByTestId(`button-follow-${projectId}`)).toHaveText(/Following/);
   await page.reload();

@@ -75,12 +75,12 @@ test("a return shows what's new since you looked, continues exploring, and actin
   await expect(page.getByTestId("return-banner")).toHaveCount(0);
 
   // Acting brings the nudge, and the nudge leads somewhere real.
-  await page.goto("/projects");
+  await page.goto("/discover");
   await page.getByTestId(`button-follow-${projectId}`).click();
   const more = page.getByTestId("toast-more-like-this");
   await expect(more).toBeVisible();
   await more.click();
-  await expect(page).toHaveURL(/\/projects\?category=saas/);
+  await expect(page).toHaveURL(/\/discover\?category=saas/);
 
   await beaContext.close();
 });

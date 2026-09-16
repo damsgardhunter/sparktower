@@ -11,7 +11,7 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
 } from "@/components/ui/sidebar";
-import { Home, Compass, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles, MessageSquare, Handshake, ShieldCheck, ChevronDown } from "lucide-react";
+import { Home, Compass, Telescope, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles, MessageSquare, Handshake, ShieldCheck, ChevronDown, Banknote, Megaphone } from "lucide-react";
 import { useState } from "react";
 import { PRIMARY_NAV, SECONDARY_NAV } from "@/lib/navigation";
 import { Badge } from "@/components/ui/badge";
@@ -26,7 +26,7 @@ import { TierSwitcher } from "@/components/tier-switcher";
 import { PLAN_PRESENTATION } from "@shared/plans";
 import { useSurfaces } from "@/hooks/use-surfaces";
 
-const ICONS = { Home, FolderKanban, Compass, Users, Handshake, MessageSquare, Trophy, Medal, CreditCard };
+const ICONS = { Home, FolderKanban, Compass, Telescope, Users, Handshake, MessageSquare, Trophy, Medal, CreditCard };
 const MORE_OPEN_KEY = "st_nav_more_open";
 
 export function AppSidebar() {
@@ -62,6 +62,8 @@ export function AppSidebar() {
 
   // Reviewers get the daily safety review, badged when alerts are waiting or a review is due.
   const isReviewer = !!user && ["reviewer", "admin"].includes((user as any).platformRole);
+  // Featured tools is the one admin page reviewers can't use — /api/admin/promotions is admins only.
+  const isAdmin = !!user && (user as any).platformRole === "admin";
   const { data: safety } = useQuery<{ reviewDue: boolean; alerts: number }>({
     queryKey: ["/api/admin/safety/status"],
     enabled: isReviewer,
@@ -94,6 +96,11 @@ export function AppSidebar() {
                       <Link href={item.url} data-testid={`link-${item.title.toLowerCase()}`}>
                         <Icon className="h-4 w-4" />
                         <span className="flex-1">{item.title}</span>
+                        {item.title === "Discover" && discoverNew > 0 && (
+                          <Badge variant="default" className="no-default-hover-elevate no-default-active-elevate text-xs" data-testid="badge-discover-new" title="New posts from people and projects you've looked at">
+                            {discoverNew > 99 ? "99+" : `${discoverNew}${discoverNews?.more ? "+" : ""} new`}
+                          </Badge>
+                        )}
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
@@ -108,7 +115,7 @@ export function AppSidebar() {
             <button type="button" onClick={toggleMore} className="flex items-center gap-1 px-2 h-7 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/80 hover:text-foreground" aria-expanded={moreOpen} data-testid="nav-secondary-toggle">
               More
               <ChevronDown className={`h-3 w-3 transition-transform ${moreOpen ? "" : "-rotate-90"}`} />
-              {!moreOpen && (unreadCount > 0 || discoverNew > 0) && <span className="ml-1 h-1.5 w-1.5 rounded-full bg-primary" aria-label="New in More" />}
+              {!moreOpen && unreadCount > 0 && <span className="ml-1 h-1.5 w-1.5 rounded-full bg-primary" aria-label="New in More" />}
             </button>
             {moreOpen && (
               <SidebarGroupContent>
@@ -121,11 +128,6 @@ export function AppSidebar() {
                           <Link href={item.url} data-testid={`link-${item.title.toLowerCase()}`}>
                             <Icon className="h-3.5 w-3.5" />
                             <span className="flex-1 text-[13px]">{item.title}</span>
-                            {item.title === "Discover" && discoverNew > 0 && (
-                              <Badge variant="default" className="no-default-hover-elevate no-default-active-elevate text-xs" data-testid="badge-discover-new" title="New posts from people and projects you've looked at">
-                                {discoverNew > 99 ? "99+" : `${discoverNew}${discoverNews?.more ? "+" : ""} new`}
-                              </Badge>
-                            )}
                             {item.title === "Messages" && unreadCount > 0 && (
                               <Badge variant="default" className="no-default-hover-elevate no-default-active-elevate text-xs" data-testid="badge-unread-messages">
                                 {unreadCount > 99 ? "99+" : unreadCount}
@@ -167,6 +169,32 @@ export function AppSidebar() {
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={location === "/admin/backing"}
+                    className="data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground"
+                  >
+                    <Link href="/admin/backing" data-testid="link-backing-review">
+                      <Banknote className="h-4 w-4" />
+                      <span className="flex-1">Backing review</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                {isAdmin && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={location === "/admin/promotions"}
+                      className="data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground"
+                    >
+                      <Link href="/admin/promotions" data-testid="link-admin-promotions">
+                        <Megaphone className="h-4 w-4" />
+                        <span className="flex-1">Featured tools</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

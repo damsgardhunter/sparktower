@@ -172,14 +172,14 @@ export function ProfileRailCard() {
             <RailDivider />
             {/* The "is anyone seeing this" numbers, LinkedIn's stat rows. */}
             <RailRow
-              href="/projects"
+              href="/profile#projects"
               label="Project views"
               value={stats.projectViews.toLocaleString()}
               icon={Eye}
               testId="rail-stat-views"
             />
             <RailRow
-              href="/matches"
+              href="/discover"
               label="Connections"
               value={stats.connections}
               icon={Users}
@@ -187,7 +187,7 @@ export function ProfileRailCard() {
             />
             {stats.reputationScore !== null && (
               <RailRow
-                href="/leaderboard"
+                href="/discover"
                 label="Builder index"
                 value={stats.reputationScore}
                 icon={TrendingUp}
@@ -197,7 +197,7 @@ export function ProfileRailCard() {
 
             <RailDivider />
             <RailRow
-              href="/projects?view=mine"
+              href="/profile#projects"
               label="My projects"
               sublabel={`${stats.projects} owned · ${stats.tasksCompleted} tasks shipped`}
               icon={FolderKanban}

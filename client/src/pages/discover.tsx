@@ -1,87 +1,115 @@
+/**
+ * Discover: one screen where Projects, Matches and the Leaderboard used to be.
+ *
+ * Three destinations meant three answers to "who or what should I look at",
+ * and people had to guess which one held the thing they wanted. This page asks
+ * once. Top to bottom it is: the search, the wall of top projects, the people
+ * we think fit you, and then everything that matched — which, with an empty
+ * box, is the project list the site used to have at /projects.
+ *
+ * The editorial sections step aside once someone actually searches. A search
+ * is a question, and burying its answer two screens below a leaderboard nobody
+ * asked about is how the old Projects page felt.
+ */
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { ReturnBanner } from "@/components/return-banner";
 import { useExploreUpdates } from "@/hooks/use-explore-updates";
-import { useConnectionStates } from "@/components/discover-actions";
-import { useQuery } from "@tanstack/react-query";
-import { useSearch } from "wouter";
-import { UserCard } from "@/components/user-card";
-import { Input } from "@/components/ui/input";
-import { Loader2, Search, SlidersHorizontal } from "lucide-react";
-import type { UserProfile, User } from "@shared/schema";
-import { useEffect, useState } from "react";
 import { openDiscover } from "@/lib/explore";
-import { Button } from "@/components/ui/button";
+import { DiscoverSearchBar } from "@/components/discover/discover-search-bar";
+import { TopProjects } from "@/components/discover/top-projects";
+import { MatchStrip } from "@/components/discover/match-strip";
+import {
+  DiscoverResults,
+  type PersonWithProfile,
+  type ProjectWithDetails,
+} from "@/components/discover/discover-results";
+import {
+  discoverSearchUrl,
+  isBrowsing,
+  useDiscoverFilters,
+  type DiscoverFilterState,
+} from "@/components/discover/use-discover-filters";
 
-type UserWithProfile = User & { profile: UserProfile };
+interface DiscoverSearchResponse {
+  query: DiscoverFilterState;
+  counts: { projects: number; people: number };
+  projects: ProjectWithDetails[];
+  people: PersonWithProfile[];
+  goals: string[];
+}
 
 export default function Discover() {
-  // `?q=` — where "More like this" sends people, searched by a skill.
-  const query = new URLSearchParams(useSearch()).get("q");
-  const [search, setSearch] = useState(query ?? "");
-  useEffect(() => { if (query !== null) setSearch(query); }, [query]);
-  const { data: users, isLoading } = useQuery<UserWithProfile[]>({
-    queryKey: [`/api/users/search?q=${encodeURIComponent(search)}`],
-  });
+  const { filters, setFilters } = useDiscoverFilters();
+  const [metric, setMetric] = useState<"donations" | "views">("donations");
+  const browsing = isBrowsing(filters);
 
   // The Explore loop starts here — see lib/explore.ts.
   useEffect(() => { openDiscover("discover"); }, []);
-  const { data: connections } = useConnectionStates((users ?? []).map((u) => u.id));
   const { updates, byKey } = useExploreUpdates();
+  const updateFor = (kind: "project" | "builder", id: string) => byKey.get(`${kind}:${id}`);
+
+  /*
+   * Who the strip above is already showing. The same key as MatchStrip's own
+   * query, so this reads its cache rather than asking twice — and everyone in
+   * it is dropped from the people below. Before that, browsing Discover showed
+   * the same three faces in "People who may interest you" and again in
+   * "People" a scroll later, which reads as a bug.
+   */
+  const { data: matches } = useQuery<{ matchedUserId: string }[]>({ queryKey: ["/api/matches"], enabled: browsing });
+  const alreadyShown = new Set(browsing ? (matches ?? []).map((m) => m.matchedUserId) : []);
+
+  const { data, isLoading, isFetching, isError } = useQuery<DiscoverSearchResponse>({
+    // The URL is the key: one search per address, so the back button replays
+    // results out of the cache instead of re-asking the server.
+    queryKey: [discoverSearchUrl(filters)],
+    placeholderData: (previous) => previous,
+  });
 
   return (
-    <div className="p-6 h-full overflow-y-auto">
-      <div className="max-w-6xl mx-auto">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold tracking-tight">Discover People</h1>
-          <p className="text-secondary mt-1">
-            Find entrepreneurs and freelancers to join your next project.
+    /*
+     * The top padding belongs to the header, not to this wrapper: a sticky
+     * element can't rise above its containing block's content box, so padding
+     * here pinned the search bar 24px down and left a strip of cards scrolling
+     * through the gap above it. `!pt-0` cancels the layout's own `[&>*]:pt-6`
+     * (client/src/App.tsx) for the same reason.
+     */
+    <div className="h-full overflow-y-auto !pt-0">
+      <div className="mx-auto max-w-6xl px-4 sm:px-6 pb-20 space-y-10">
+        <header className="space-y-1 pt-6">
+          <h1 className="text-3xl font-bold tracking-tight">Discover</h1>
+          <p className="text-muted-foreground">
+            Projects to back or join, builders to work with, and what the tower is rewarding right now.
           </p>
+        </header>
+
+        <ReturnBanner updates={updates} />
+
+        {/* Sticky so narrowing a search never means scrolling back up for the box.
+            Opaque rather than translucent: a blurred backdrop over a grid of
+            white cards read as smudges behind the filters. */}
+        <div className="sticky top-0 z-20 -mx-4 sm:-mx-6 px-4 sm:px-6 py-3 bg-background border-b border-border">
+          <DiscoverSearchBar
+            filters={filters}
+            setFilters={setFilters}
+            counts={data?.counts}
+            isFetching={isFetching}
+          />
         </div>
 
-        <div className="mb-6"><ReturnBanner updates={updates} /></div>
+        {browsing && <TopProjects metric={metric} onMetric={setMetric} />}
 
-        <div className="flex flex-col md:flex-row gap-4 mb-8">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-tertiary" />
-            <Input
-              placeholder="Search by name, skills, or interests..."
-              className="pl-10"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              data-testid="input-search-users"
-            />
-          </div>
-          <Button variant="outline" className="md:w-auto" data-testid="button-filters">
-            <SlidersHorizontal className="mr-2 h-4 w-4" />
-            Filters
-          </Button>
-        </div>
+        {browsing && <MatchStrip updateFor={(userId) => updateFor("builder", userId)} />}
 
-        {isLoading ? (
-          <div className="flex items-center justify-center py-20">
-            <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          </div>
-        ) : users && users.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {users.map((user, i) => (
-              <UserCard
-                key={user.id}
-                profile={user.profile}
-                userName={user.firstName || user.email || "Anonymous"}
-                explore={{ source: "discover", rankPosition: i + 1 }}
-                connection={connections?.[user.id]}
-                update={byKey.get(`builder:${user.id}`)}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="text-center py-20 border-2 border-dashed rounded-lg bg-card/50">
-            <Search className="h-12 w-12 text-tertiary mx-auto mb-4" />
-            <h3 className="text-lg font-semibold">No users found</h3>
-            <p className="text-secondary mt-2">
-              Try adjusting your search terms or filters.
-            </p>
-          </div>
-        )}
+        <DiscoverResults
+          filters={filters}
+          projects={data?.projects ?? []}
+          people={(data?.people ?? []).filter((p) => !alreadyShown.has(p.id))}
+          counts={data?.counts}
+          isLoading={isLoading}
+          isError={isError}
+          updateFor={updateFor}
+        />
       </div>
     </div>
   );

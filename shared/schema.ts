@@ -486,6 +486,13 @@ export const userMatches = pgTable("user_matches", {
   matchedUserId: varchar("matched_user_id").notNull().references(() => users.id),
   score: integer("score").notNull(),
   reasons: varchar("reasons").array(),
+  /*
+   * Which run produced this row. Scoring the same community twice returns the
+   * same people, so without this a builder opening Discover on Tuesday sees
+   * exactly who they ignored on Monday. The generator holds back anyone from
+   * the last couple of batches (server/routes.ts, runMatchGeneration).
+   */
+  batch: integer("batch").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   userMatchUnique: unique().on(table.userId, table.matchedUserId),
