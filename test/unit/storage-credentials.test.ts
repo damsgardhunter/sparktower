@@ -11,15 +11,13 @@
  */
 import { describe, it, expect } from "vitest";
 import { storageCredentialMode, parseServiceAccountKey } from "../../server/replit_integrations/object_storage/objectStorage";
+import { fakeServiceAccountKey } from "../helpers/fake-secrets";
 
 const env = (over: Record<string, string | undefined>) => over as NodeJS.ProcessEnv;
 
-const KEY = {
-  type: "service_account",
-  project_id: "sparktower-prod",
-  client_email: "uploads@sparktower-prod.iam.gserviceaccount.com",
-  private_key: "-----BEGIN PRIVATE KEY-----\nnot-a-real-key\n-----END PRIVATE KEY-----\n",
-};
+// Built from parts in the helper, so no committed line is shaped like a key
+// (test/unit/no-committed-secrets.test.ts sweeps the whole repository for that).
+const KEY = fakeServiceAccountKey("sparktower-prod");
 
 describe("which credentials the storage client uses", () => {
   it("prefers an explicit service-account key over everything else", () => {

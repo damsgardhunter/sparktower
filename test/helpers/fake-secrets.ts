@@ -23,3 +23,21 @@ export const FAKE_STRIPE_TEST_KEY = join("sk", "test", "0000notarealkey0000");
 export const fakeWebhookSecret = (label: string) => join("whsec", "fake", label.replace(/[^a-z0-9]+/gi, ""));
 /** Shaped like an OpenAI key, for the same reasons. */
 export const FAKE_OPENAI_KEY = join("sk", "proj", "0000notarealkey0000");
+
+/**
+ * Shaped like a PEM private key, for the storage credential tests.
+ *
+ * Same trick, different scanner: the `BEGIN`/`END` lines are assembled here so
+ * no committed line reads as a key block. The body is deliberately not
+ * base64-of-anything — nothing can be parsed out of it.
+ */
+const pem = (label: string) => ["-----", label, " PRIVATE KEY-----"].join("");
+export const FAKE_PRIVATE_KEY = `${pem("BEGIN")}\nnotarealkey\n${pem("END")}\n`;
+
+/** A service-account key file, as Google Cloud hands one over. */
+export const fakeServiceAccountKey = (projectId = "example-project") => ({
+  type: "service_account",
+  project_id: projectId,
+  client_email: `uploads@${projectId}.iam.gserviceaccount.com`,
+  private_key: FAKE_PRIVATE_KEY,
+});
