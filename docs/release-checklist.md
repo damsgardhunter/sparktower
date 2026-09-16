@@ -135,7 +135,10 @@ in the comment.
         -H 'stripe-signature: t=1,v1=forged' -d '{}' -w ' %{http_code}\n'   # 400 — verification refused it
       ```
       A 500 here means the parser ate the raw body — every real webhook will
-      fail from now on and nothing else will look wrong. Then, from the Stripe
+      fail from now on and nothing else will look wrong. One exception, which
+      the log tells apart: `"Stripe webhook signing secret is not configured"`
+      is a deliberate 500 (a 400 would stop Stripe retrying) and means
+      `STRIPE_WEBHOOK_SECRET` is still unset. Then, from the Stripe
       dashboard, Developers → Webhooks → your endpoint → **Send test event** →
       confirm a 200 in the dashboard's response log.
 

@@ -33,6 +33,49 @@ Two things worth understanding before you touch anything:
 
 ---
 
+## 0. The production build, already tested (2026-09-16)
+
+Before any of this, the exact artefact Replit will run was built and booted
+locally against the real `.env`, on a spare port, as `NODE_ENV=production`:
+
+```sh
+npm run build                                          # dist/index.cjs + dist/public
+NODE_ENV=production PORT=5055 node --env-file=.env dist/index.cjs
+```
+
+It came up clean, and every answer was the right one:
+
+| | |
+|---|---|
+| `/_health` | 200 |
+| `/api/auth/user` | 401 — mounted and guarding itself |
+| `/api/does-not-exist` | 404 JSON, not the HTML app |
+| `/`, `/projects`, `/a/<id>` | 200 HTML — the SPA fallback serves client routes |
+| `/assets/index-*.js` | 200, 2.6 MB — the hash in the served HTML matches the built file |
+| `/.well-known/security.txt`, `/sitemap.xml`, `/api/plans` | 200 |
+| headers | CSP, HSTS, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, Referrer-Policy |
+| unsigned Stripe webhook | 400 |
+
+Booting it a second time with `PUBLIC_URL=https://sparktower.app` showed
+exactly what step 3 changes:
+
+```
+Google OAuth callback URL: https://sparktower.app/api/auth/google/callback
+robots.txt:  Allow: /$ … Sitemap: https://sparktower.app/sitemap.xml
+sitemap.xml: <loc>https://sparktower.app/</loc>
+```
+
+Two warnings it printed, both expected locally and both worth fixing in
+production:
+
+- `Skipping Stripe webhook registration: no public URL` — gone once
+  `PUBLIC_URL` is set (step 3).
+- `MOBILE_TOKEN_SECRET is not set; mobile access tokens use a key derived from
+  SESSION_SECRET` — set a separate one in the deployment (step 1), so rotating
+  one secret doesn't invalidate the other.
+
+The build runs. What follows is entirely about hosting and DNS.
+
 ## 1. Deploy the app somewhere first
 
 `.replit` already describes the deployment: autoscale, `npm run build`, then
@@ -75,10 +118,25 @@ proves you own it.
 
 In GoDaddy: **My Products → Domains → sparktower.app → DNS → Manage Zones.**
 
-1. **Delete the two parked A records** on `@` (`76.223.105.230`,
-   `13.248.243.5`). Leaving them is the most common way this fails: the domain
-   keeps resolving to the parked page for some visitors and to your app for
-   others, depending on which record their resolver picked.
+1. **Deal with the parked `A @` record.** In the zone it shows as a single row
+   whose value reads **“WebsiteBuilder Site”** rather than an IP address —
+   that is GoDaddy's Websites + Marketing product holding the apex, which is
+   why the two parked IPs answer `dig` but no IP appears in the UI. GoDaddy
+   will not let you simply delete a record it manages.
+
+   **Edit it, don't delete it.** Pencil icon on that row → replace the value
+   with the IP Replit gave you → Save. GoDaddy warns that this disconnects the
+   Website Builder site; that is exactly what you want, and the row becomes an
+   ordinary A record afterwards.
+
+   If the field won't accept an IP, detach the product first: **My Products →
+   Websites + Marketing → your site → Settings → unpublish or delete the
+   site**, then come back and the `A @` row is editable (or deletable, and you
+   add your own).
+
+   Do not leave both: a zone with GoDaddy's parked IPs *and* yours resolves to
+   the parked page for some visitors and to your app for others, depending on
+   which record their resolver happened to pick.
 2. **Add** `A` · name `@` · value = the IP Replit gave you · TTL 600 (GoDaddy
    defaults to 1 hour; 10 minutes while you are still changing things).
 3. **Add** `TXT` · name = exactly what Replit printed (often `@` or
@@ -86,6 +144,16 @@ In GoDaddy: **My Products → Domains → sparktower.app → DNS → Manage Zone
 4. **`www`:** keep the existing `CNAME www → sparktower.app`. That makes www
    resolve to the same place, and the app serves both. If you would rather www
    *redirect*, add it as a second linked domain in Replit and let it 301.
+
+5. **Lower the TTL while you work.** Every row in the zone is at GoDaddy's
+   default 1 Hour, which is also how long a mistake sticks around. Set the `A @`
+   row to 600 seconds until the site is up, then put it back.
+
+The other rows in the zone are unrelated and can stay: `NS` (GoDaddy's
+nameservers), `SOA`, `CNAME _domainconnect` (how GoDaddy's one-click setups
+attach), and `CNAME pay → paylinks.commerce.godaddy.com` (GoDaddy Pay Links —
+delete it if you don't use it; it does nothing either way). The `TXT _dmarc`
+row is GoDaddy's default and is dealt with in step 6.
 
 DNS is not instant. GoDaddy usually publishes within a few minutes; resolvers
 elsewhere can hold the old answer for as long as the old TTL. Watch it:
@@ -166,8 +234,12 @@ curl -s -X POST https://sparktower.app/api/stripe/webhook \
   -H 'stripe-signature: t=1,v1=forged' -d '{}' -w ' %{http_code}\n'       # 400, verification refused
 ```
 
-A 500 means the JSON parser ate the raw body and every real webhook will fail
-silently from then on. Then send a test event from the Stripe dashboard and
+A 500 on the *second* one means one of two things, and they're easy to tell
+apart in the log: `"Stripe webhook signing secret is not configured"` means
+`STRIPE_WEBHOOK_SECRET` isn't set yet — deliberate, because a 400 would make
+Stripe give up while a 500 makes it retry for three days. Anything else means
+the JSON parser ate the raw body, and every real webhook will fail silently
+from then on. Then send a test event from the Stripe dashboard and
 confirm the verdict at `/admin/analytics` → Stripe health moves off
 `waiting_for_first_event`.
 
