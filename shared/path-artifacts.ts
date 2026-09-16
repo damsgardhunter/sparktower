@@ -80,11 +80,31 @@ export interface PendingPath {
   projectId?: string;
 }
 
-/** Where a new account goes once onboarding is done, given what it chose on an artifact page. */
+/** The pending choice in a raw stored value, or null for anything that isn't one. */
+export function parsePendingPath(raw: string | null | undefined): PendingPath | null {
+  try {
+    const p = JSON.parse(raw ?? "null");
+    return p && typeof p === "object" && typeof p.goal === "string" && typeof p.fromArtifact === "string" ? p as PendingPath : null;
+  } catch { return null; }
+}
+
+/**
+ * Where a new account goes once onboarding is done, given what it chose on an
+ * artifact page: that project, to look first; or straight into project create,
+ * which opens on the goal they picked (it's kept until the project exists);
+ * or, with no choice, the project intro.
+ */
 export function afterOnboardingPath(pending: PendingPath | null): string {
   if (pending?.intent === "explore" && pending.projectId && /^[A-Za-z0-9-]{8,64}$/.test(pending.projectId)) return `/projects/${pending.projectId}`;
+  if (pending?.goal) return "/projects/new/create?step=setup";
   return "/projects/new";
 }
+
+/**
+ * Where a project made from that choice lands: its path, on the goal's section,
+ * with the first step up next and Publish beside it once it's done.
+ */
+export const afterPendingCreatePath = (projectId: string, goal: string) => `/projects/${projectId}/manage?section=${encodeURIComponent(goal)}`;
 
 /** The public URL of an artifact, relative to the site. */
 export const artifactPath = (id: string) => `/a/${id}`;

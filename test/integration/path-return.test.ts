@@ -8,6 +8,7 @@ import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
 import { eq, sql } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
+import { notify } from "../../server/notifications";
 import { db } from "../../server/db";
 import { projectMembers, projects, notifications, pathPace, projectKanbanTasks } from "@shared/schema";
 
@@ -42,7 +43,7 @@ describe("coming back to the next step", () => {
     await mate.agent.patch(`/api/kanban/${statement.id}`).send({ status: "done", description: "Plan a week of dinners from your fridge." }).expect(200);
     await settle();
     expect((await bell(owner)).find((x) => x.kind === "path_step_done")).toMatchObject({
-      text: "Mate finished a step on Return Path", href: `/projects/${project.id}/manage`, excerpt: expect.stringMatching(/^Product statement — next: /),
+      text: "Mate finished a step on Return Path", href: `/projects/${project.id}/manage?section=ship_mvp&tab=nova&focus=next`, excerpt: expect.stringMatching(/^Product statement — next: /),
     });
     expect((await bell(mate)).some((x) => x.kind === "path_step_done")).toBe(false);
 
@@ -96,7 +97,7 @@ describe("coming back to the next step", () => {
     expect(away.daysSinceActivity).toBeGreaterThanOrEqual(2);
     await settle();
     const nudges = (await bell(solo)).filter((x) => x.kind === "next_step");
-    expect(nudges).toEqual([expect.objectContaining({ text: "Your next step on Quiet Path is ready", href: `/projects/${project.id}/manage`, excerpt: away.next.step ?? away.next.title })]);
+    expect(nudges).toEqual([expect.objectContaining({ text: "Your next step on Quiet Path is ready", href: `/projects/${project.id}/manage?section=ship_mvp&tab=nova&focus=${away.next.id}`, excerpt: away.next.step ?? away.next.title })]);
     await solo.agent.post("/api/notifications/read").send({ all: true }).expect(200);
     await solo.agent.get("/api/me/next-steps").expect(200);
     await settle();
@@ -129,7 +130,7 @@ describe("coming back to the next step", () => {
     await owner.agent.get("/api/me/next-steps").expect(200);
     await settle();
     const reminders = (await bell(owner)).filter((x) => x.kind === "weekly_update");
-    expect(reminders).toEqual([expect.objectContaining({ text: "Share this week's progress on Weekly Path", href: `/projects/${project.id}/manage`, excerpt: expect.stringMatching(/^2 steps finished: Product statement/) })]);
+    expect(reminders).toEqual([expect.objectContaining({ text: "Share this week's progress on Weekly Path", href: `/projects/${project.id}/manage?tab=nova&focus=weekly`, excerpt: expect.stringMatching(/^2 steps finished: Product statement/) })]);
 
     // Only finished steps on this project's path.
     const refuse = (ids: string[]) => owner.agent.post("/api/feed").send({ postType: "project_update", projectId: project.id, content: "x", pathStepIds: ids });
@@ -172,5 +173,32 @@ describe("coming back to the next step", () => {
     await settle();
     const weekly = (await owner.agent.get(`/api/projects/${project.id}/path`)).body.weekly;
     expect(weekly.steps.map((s: any) => s.taskId)).toContain(m14.id);
+  });
+
+  it("sends a path notification to the section its step is on, focused on the next step", async () => {
+    const app = await getTestApp();
+    const owner = await person(app, "Sections");
+    const mate = await person(app, "Raiser");
+    const project = (await owner.agent.post("/api/projects").send({ title: "Two Sections", description: "A project shipping and raising at once, so steps land in different sections.", category: "saas", goal: "ship_mvp", subcategory: "saas" })).body;
+    await db.insert(projectMembers).values({ projectId: project.id, userId: mate.id, role: "Engineer" } as any);
+
+    // A step on the Raise path (not the project's primary), and one tagged into Systemize by hand.
+    const [raiseStep] = await db.insert(projectKanbanTasks).values({ projectId: project.id, title: "Capital profile", status: "done", tags: ["backbone:FUND.M1.1"] } as any).returning();
+    const [sysStep] = await db.insert(projectKanbanTasks).values({ projectId: project.id, title: "Map the process", status: "done", tags: ["track:systemize_business"] } as any).returning();
+    await notify({ recipients: [owner.id], actorId: mate.id, kind: "path_step_done", targetId: raiseStep.id, projectId: project.id });
+    await notify({ recipients: [owner.id], actorId: mate.id, kind: "path_step_done", targetId: sysStep.id, projectId: project.id });
+    // A nudge stored the way path-return writes it: projectId:milestoneId.
+    await notify({ recipients: [owner.id], actorId: owner.id, allowSelf: true, kind: "next_step", targetId: `${project.id}:FUND.M1.2`, projectId: project.id });
+    await settle();
+
+    const items = (await bell(owner)).filter((x) => x.project?.id === project.id);
+    const hrefs = items.map((x) => x.href);
+    expect(hrefs).toContain(`/projects/${project.id}/manage?section=raise_funding&tab=nova&focus=next`);
+    expect(hrefs).toContain(`/projects/${project.id}/manage?section=systemize_business&tab=nova&focus=next`);
+    expect(hrefs).toContain(`/projects/${project.id}/manage?section=raise_funding&tab=nova&focus=FUND.M1.2`);
+
+    // A task that's since been deleted still links somewhere useful: the project's dashboard.
+    await db.delete(projectKanbanTasks).where(eq(projectKanbanTasks.id, sysStep.id));
+    expect((await bell(owner)).map((x) => x.href)).toContain(`/projects/${project.id}/manage?tab=nova&focus=next`);
   });
 });

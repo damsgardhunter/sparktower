@@ -3,8 +3,8 @@
  * dashboard, so a builder knows where to start in a glance: what it is, who
  * does it, how long, and the button that starts it.
  */
-import { useState } from "react";
-import { Link } from "wouter";
+import { useEffect, useRef, useState } from "react";
+import { Link, useSearch } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -16,6 +16,7 @@ import { ShareStepDialog, PublishArtifactDialog, WeeklyUpdateDialog } from "@/co
 import { LowCreditsNotice } from "@/components/upgrade-to-keep-generating";
 import { sectionDef } from "@/lib/sections";
 import { LOOP_TYPE_INFO, type LoopType } from "@shared/phase-trees";
+import { PATH_FOCUS } from "@shared/notifications";
 import { Chip, Clamp } from "./block";
 import { ACTOR_SHORT, TIER_SHORT, estimate, NOVA_GRADIENT, type PathStatus } from "./path-types";
 import { CheckCircle2, Circle, Clock, ListTree, Loader2, Plus, ShieldCheck, Sparkles, User, Share2, Globe, PartyPopper, ArrowRight, ListChecks } from "lucide-react";
@@ -29,12 +30,20 @@ export function NextStep({ projectId, data, onNavigate }: { projectId: string; d
   const [sharingStep, setSharingStep] = useState(false);
   const [publishingStep, setPublishingStep] = useState(false);
   const [postingWeek, setPostingWeek] = useState(false);
+  const highlighted = usePathFocus(data, () => setPostingWeek(true));
 
   const { next, current } = data;
   const sources = new Set(data.phases.flatMap((p) => p.milestones).map((m) => m.expandsFrom).filter(Boolean));
   const isSource = (id: string) => sources.has(id);
 
   const markDone = useMutation({ mutationFn: (taskId: string) => apiRequest("PATCH", `/api/kanban/${taskId}`, { status: "done" }), onSuccess: refresh, onError: fail });
+  // The builder's own answer, without Nova: it becomes the step's written answer — what Publish makes the artifact from.
+  const [writing, setWriting] = useState<string | null>(null);
+  const writeDone = useMutation({
+    mutationFn: (b: { taskId: string; description: string }) => apiRequest("PATCH", `/api/kanban/${b.taskId}`, { status: "done", description: b.description }),
+    onSuccess: () => { setWriting(null); refresh(); },
+    onError: fail,
+  });
   const [draft, setDraft] = useState<{ backboneId: string; loopTaskId: string | null; sourceTitle: string; text: string } | null>(null);
   const expand = useMutation({
     mutationFn: (body: { backboneId: string; artifact?: string; loopTaskId?: string | null }) => apiRequest("POST", `/api/projects/${projectId}/path/expand`, body).then((r) => r.json()),
@@ -93,7 +102,7 @@ export function NextStep({ projectId, data, onNavigate }: { projectId: string; d
   if (!next) {
     return (
       <div className="space-y-3">
-        <div className="rounded-xl border border-border p-5 space-y-3" data-testid="path-complete">
+        <div className={`rounded-xl border border-border p-5 space-y-3 transition-shadow ${highlighted ? "ring-2 ring-primary ring-offset-2 ring-offset-background" : ""}`} data-testid="path-complete">
           <p className="font-semibold flex items-center gap-2"><PartyPopper className="h-4 w-4 text-primary" />Path complete</p>
           {data.proposal?.map((p) => (
             <div key={p.goal} className="flex items-center justify-between gap-3 text-sm border-t border-border pt-3">
@@ -114,7 +123,7 @@ export function NextStep({ projectId, data, onNavigate }: { projectId: string; d
   return (
     <div className="space-y-3">
       <LowCreditsNotice />
-      <div className={`rounded-xl p-[1.5px] ${NOVA_GRADIENT} shadow-sm`}>
+      <div className={`rounded-xl p-[1.5px] ${NOVA_GRADIENT} shadow-sm transition-shadow ${highlighted ? "ring-2 ring-primary ring-offset-2 ring-offset-background" : ""}`} data-testid="next-action-frame">
         <div className="rounded-[10.5px] bg-background p-4 sm:p-5 space-y-3" data-testid="next-action">
           <div className="flex items-center gap-1.5 flex-wrap">
             <Chip className="bg-primary/10 text-primary font-medium" title={current.title} testid="path-phase">
@@ -192,8 +201,23 @@ export function NextStep({ projectId, data, onNavigate }: { projectId: string; d
                 {next.tier === "claimed" ? "I did this" : "Done"}
               </Button>
             )}
+            {next.taskId && writing == null && (
+              <Button size="sm" variant="ghost" onClick={() => setWriting("")} data-testid="button-next-write">Write it myself</Button>
+            )}
             <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => onNavigate("kanban")} data-testid="button-next-open">Open in tasks</Button>
           </div>
+
+          {writing != null && next.taskId && (
+            <div className="space-y-2 border-t border-border pt-3" data-testid="next-write-form">
+              <Textarea rows={5} className="text-sm" autoFocus placeholder="Your answer to this step. It's what Publish turns into a public page." value={writing} onChange={(e) => setWriting(e.target.value)} data-testid="input-next-answer" />
+              <div className="flex gap-2">
+                <Button size="sm" disabled={writeDone.isPending || !writing.trim()} onClick={() => writeDone.mutate({ taskId: next.step?.taskId ?? next.taskId!, description: writing.trim() })} data-testid="button-next-save-done">
+                  {writeDone.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />}Save and mark done
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setWriting(null)}>Cancel</Button>
+              </div>
+            </div>
+          )}
 
           {loopForm && (
             <div className="space-y-2 border-t border-border pt-3" data-testid="loop-form">
@@ -227,4 +251,50 @@ export function NextStep({ projectId, data, onNavigate }: { projectId: string; d
       {followUps}
     </div>
   );
+}
+
+/**
+ * Arriving from a notification or a "Continue" link (`?focus=`, shared/notifications.ts):
+ * bring the Next Step card into view and light it up for a moment, so the
+ * person lands on the thing to do rather than somewhere on the dashboard.
+ *
+ * `weekly` also opens the weekly update. A milestone id that's no longer the
+ * next step says so — the step they were told about got done in the meantime.
+ * The param is removed once handled, so a reload or a tab switch doesn't
+ * replay it. Returns whether the card is highlighted right now.
+ */
+function usePathFocus(data: PathStatus, openWeekly: () => void): boolean {
+  const { toast } = useToast();
+  const search = useSearch();
+  const focus = new URLSearchParams(search).get("focus");
+  const handled = useRef<string | null>(null);
+  const [highlighted, setHighlighted] = useState(false);
+
+  useEffect(() => {
+    if (!focus || handled.current === focus) return;
+    handled.current = focus;
+
+    // No cleanup: removing the param below re-runs this effect, and cancelling here would undo the scroll and leave the highlight on.
+    requestAnimationFrame(() => {
+      document.querySelector('[data-testid="next-action-frame"], [data-testid="path-complete"]')?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    setHighlighted(true);
+    window.setTimeout(() => setHighlighted(false), 2500);
+
+    if (focus === PATH_FOCUS.weekly) {
+      if (data.weekly?.due && data.weekly.steps.length) openWeekly();
+      else toast({ title: "Nothing new to share", description: "This week's finished steps are already posted." });
+    } else if (focus !== PATH_FOCUS.next && data.next && data.next.id !== focus) {
+      toast({ title: "That step's done", description: `Next up: ${data.next.step?.title ?? data.next.title}` });
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    params.delete("focus");
+    const rest = params.toString();
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}${rest ? `?${rest}` : ""}${window.location.hash}`);
+    // Once per focus value; the data is already loaded when this card renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus]);
+
+  return highlighted;
 }

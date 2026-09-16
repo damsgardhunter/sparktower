@@ -17,7 +17,7 @@
 
 export type SecuritySeverity = "high" | "medium" | "low";
 export type SecurityStatus = "pass" | "partial" | "missing" | "n/a";
-export type SecurityCategory = "transport" | "sessions" | "input" | "secrets" | "supply-chain" | "accounts" | "operations";
+export type SecurityCategory = "transport" | "sessions" | "input" | "secrets" | "supply-chain" | "accounts" | "operations" | "privacy";
 
 export interface SecurityCheckResult {
   id: string;
@@ -52,6 +52,7 @@ export const SECURITY_CATEGORY_LABEL: Record<SecurityCategory, string> = {
   "supply-chain": "Dependencies & CI",
   accounts: "Accounts & access",
   operations: "Operations",
+  privacy: "Privacy & data rights",
 };
 
 interface SourceFile { path: string; content?: string | null }
@@ -70,6 +71,16 @@ function where(files: SourceFile[], re: RegExp, max = 4): string[] {
   }
   return out;
 }
+
+/**
+ * The same file with every string literal emptied, so a pattern can ask what
+ * the code *does* with a value rather than what a message happens to mention.
+ * Without it, `console.warn("set MOBILE_TOKEN_SECRET")` reads as a logged secret.
+ */
+const withoutStrings = (files: SourceFile[]): SourceFile[] => files.map((f) => ({
+  path: f.path,
+  content: (f.content ?? "").replace(/"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g, '""'),
+}));
 
 const WEIGHT: Record<SecuritySeverity, number> = { high: 3, medium: 2, low: 1 };
 
@@ -166,6 +177,22 @@ export function scanSecurity(allFiles: SourceFile[], extra: { suspectedSecrets?:
       evidence: [...csrf, ...originGuard, ...strictSite, ...laxSite, ...originCheck].slice(0, 4),
     });
   }
+  {
+    // Three things a session has to do: change id at sign-in, end at sign-out, and expire on its own.
+    const sessions = onServer(/express-session|cookie-session|req\.session\b|flask\.session|django\.contrib\.sessions|iron-session/);
+    const rotates = onServer(/session\.regenerate\s*\(|regenerateSession|rotateSession|session\.cycle_key\(|reset_session/);
+    const ends = onServer(/session\.destroy\s*\(|req\.logout\s*\(|session\.clear\(|clearCookie\(|session\.pop\(|logout_user\(/);
+    const expires = onServer(/maxAge\s*:|expires\s*:|\bttl\s*[:=]|SESSION_COOKIE_AGE|PERMANENT_SESSION_LIFETIME|max_age\s*=/);
+    const have = [rotates.length, ends.length, expires.length].filter(Boolean).length;
+    add({
+      id: "session-lifecycle", label: "Sessions rotate, end and expire", category: "sessions", severity: "medium",
+      status: !sessions.length ? "n/a" : have === 3 ? "pass" : have ? "partial" : "missing",
+      detail: !sessions.length ? "No server-side sessions." : `New id at sign-in ${rotates.length ? "✓" : "✗"} · ended at sign-out ${ends.length ? "✓" : "✗"} · expires ${expires.length ? "✓" : "✗"}`,
+      why: "A session id that survives sign-in lets an attacker who planted it ride the session afterwards (session fixation); one that isn't destroyed at sign-out, or never expires, stays usable from any device it leaked to.",
+      fix: "Regenerate the session on successful sign-in, destroy it (and clear the cookie) on sign-out, and give the cookie a maxAge so an abandoned session dies by itself.",
+      evidence: [...rotates, ...ends, ...expires].filter((f, i2, all) => all.indexOf(f) === i2).slice(0, 4),
+    });
+  }
 
   // --- Accounts & access ----------------------------------------------------
   {
@@ -226,6 +253,49 @@ export function scanSecurity(allFiles: SourceFile[], extra: { suspectedSecrets?:
       why: "Signed in isn't the same as allowed: without a check, anyone signed in can edit or delete another user's records by id.",
       fix: "On every route that changes a record by id, load it and confirm the caller owns it (or is on its team) before writing; return 404 otherwise.",
       evidence: authz.slice(0, 4),
+    });
+  }
+  {
+    /*
+     * The read side of the same question. A GET by id that never asks who is
+     * asking hands any signed-in (or signed-out) caller someone else's record —
+     * the most common real-world leak, and invisible in the UI because nothing
+     * links to it.
+     */
+    const readsById = onServer(/\b(app|router)\.get\(\s*["'][^"']*:(\w*[iI]d|\w*[sS]lug|token)\b/);
+    const scopedReadRe = /\b(app|router)\.get\(\s*["'][^"']*:[\s\S]{0,600}?(isProjectMember|projectTeam|requireOwner|requireAdmin|requireReviewer|canRead|canView|assertCan|authorize\(|\.can\(|(userId|ownerId|authorId|createdBy)\s*(,|!==|===|!=|==)\s*(userId|req\.user|\(req\.user)|forUser\(|scopedTo|\bwhere\b[^;]{0,120}(userId|ownerId|authorId))/g;
+    const scopedReads = server.reduce((n, f) => n + ((f.content ?? "").match(scopedReadRe)?.length ?? 0), 0);
+    const publicByDesign = onServer(/public[-\w]*(artifact|profile|page|feed)|isPublic\b|visibility\s*[=:]\s*["']public/i);
+    add({
+      id: "read-authorization", label: "Ownership checks on reads", category: "accounts", severity: "high",
+      status: !readsById.length ? "n/a" : scopedReads >= 2 ? "pass" : scopedReads === 1 ? "partial" : "missing",
+      detail: !readsById.length
+        ? "No routes read a record by id."
+        : scopedReads
+          ? `${scopedReads} read${scopedReads === 1 ? "" : "s"} by id check who is asking${publicByDesign.length ? " (some pages are public by design)" : ""}.`
+          : "Records are read by id with no owner, member or role check found.",
+      why: "A record read by id is readable by anyone who can guess or iterate the id — sequential ids make that trivial, and a leak through a read is as bad as one through a write.",
+      fix: "On every route that returns a record by id, load it and confirm the caller may see it (owner, team member, or an explicit public flag) before responding; return 404 otherwise.",
+      evidence: readsById.slice(0, 4),
+    });
+  }
+  {
+    // Only asked of sign-ups this codebase owns: an OAuth-only or hosted-auth app has its provider do this.
+    const localSignup = onServer(/\b(app|router)\.post\(\s*["'][^"']*(register|signup|sign-up|users)["']|def (register|signup)\b/i);
+    const hostedAuth = has(/@clerk\/|next-auth|@auth0\/|@supabase\/supabase-js|firebase\/auth|@workos-inc\//);
+    // A column that records it, or a flow that sends it — not the word "verification" in a comment, and not an OAuth provider's own email_verified claim.
+    const verifies = has(/email_?[vV]erified\w*\s*:\s*(boolean|timestamp|integer|varchar)|boolean\(\s*["']email_verified|email_verified\s+(boolean|timestamp)|verification_?[tT]oken|sendVerificationEmail|["'`][^"'`]*verify-email|confirmation_?[tT]oken|magic[_ -]?link/);
+    add({
+      id: "email-verification", label: "Email addresses verified", category: "accounts", severity: "medium",
+      status: !localSignup.length ? "n/a" : verifies.length || hostedAuth.length ? "pass" : "missing",
+      detail: !localSignup.length
+        ? "This codebase doesn't register accounts itself."
+        : hostedAuth.length && !verifies.length ? "A hosted auth provider handles sign-up and verification."
+        : verifies.length ? "Sign-up verifies the address before the account is used."
+        : "Anyone can sign up with an address they don't own, and nothing confirms it.",
+      why: "Unverified addresses let someone hold an account under your user's email, collect mail meant for them, and turn any 'email a link' feature into spam sent from your domain.",
+      fix: "Email a single-use, expiring verification link at sign-up; hold back anything that emails other people (invites, notifications) until the address is confirmed.",
+      evidence: [...verifies, ...localSignup].slice(0, 4),
     });
   }
 
@@ -304,6 +374,54 @@ export function scanSecurity(allFiles: SourceFile[], extra: { suspectedSecrets?:
     });
   }
   {
+    /*
+     * A file path built from a value that isn't a literal. `path.join(root, id)`
+     * looks contained and isn't: "../" in the value walks out of the root, and
+     * the router hands the value over undecoded. Judged per file — the check
+     * that contains it has to be where the path is built, not elsewhere in the
+     * repository.
+     */
+    const buildsPath = /path\.(join|resolve)\s*\(\s*[^,)]+,\s*(?!["'`])[^)]+\)|(sendFile|download|createReadStream|createWriteStream|readFile(Sync)?|writeFile(Sync)?|unlink(Sync)?)\s*\([^)]{0,160}\breq\.(params|query|body|path|url)|open\s*\(\s*os\.path\.join\([^)]*request\./;
+    // The value came from the request (here, or through this file's own parameters).
+    const fromRequest = /\breq\.(params|query|body|path|url)|\brequest\.(args|GET|path)|\(\s*\w*[pP]ath\s*:\s*string|objectPath|entityId|fileName|filename|\bkey\s*:\s*string/;
+    // Contained: resolve then prove it's still under the root, reduce to a basename, or accept only a strict shape.
+    const containedRe = /path\.relative\([^)]*\)[\s\S]{0,80}startsWith\(\s*["'`]\.\.|\b(resolved|resolvedPath|fullPath|absolute\w*|abs|candidate|target(Path)?|filePath|localPath|finalPath)\s*\.startsWith\(|path\.basename\s*\(|\/\^\[[^\]]*\]\{?[\d,]*\}?\$\/\.test\(|includes\(\s*["'`]\.\.["'`]\s*\)|realpathSync|is_safe_path|commonpath/;
+    const risky = server.filter((f) => {
+      const c = f.content ?? "";
+      return buildsPath.test(c) && fromRequest.test(c) && !containedRe.test(c);
+    }).map((f) => f.path);
+    const anyPathFromRequest = server.filter((f) => buildsPath.test(f.content ?? "") && fromRequest.test(f.content ?? "")).map((f) => f.path);
+    add({
+      id: "path-traversal", label: "File paths can't escape their folder", category: "input", severity: "high",
+      status: !anyPathFromRequest.length ? "n/a" : risky.length ? "missing" : "pass",
+      detail: !anyPathFromRequest.length
+        ? "No file paths are built from request values."
+        : risky.length
+          ? `A file path is built from a request value with no check that it stays inside its folder, in ${risky.length} file${risky.length === 1 ? "" : "s"}.`
+          : "Request-supplied file paths are constrained where they're built.",
+      why: "\"../\" in a filename reads or writes files outside the folder you meant — other users' uploads, .env, your keys.",
+      fix: "Where the path is built, resolve it and refuse it unless it is still inside the root (path.relative(root, full) must not start with \"..\"), or accept only a strict id shape (^[A-Za-z0-9_-]+$) and build the path yourself.",
+      evidence: (risky.length ? risky : anyPathFromRequest).slice(0, 4),
+    });
+  }
+  {
+    const runsCommands = onServer(/child_process|from ["']node:child_process["']|\bsubprocess\b|os\.system\(|Runtime\.getRuntime\(\)\.exec/);
+    // A shell, or a command line built by hand: both let a user's value become part of the command.
+    const unsafe = onServer(/\bexec(Sync)?\s*\(\s*[`"'][^`"']*\$\{|\bexec(Sync)?\s*\([^,)]*\+|shell\s*:\s*true|os\.system\(|subprocess\.(run|call|Popen|check_output)\([^)]*shell\s*=\s*True/);
+    add({
+      id: "command-injection", label: "No shell commands built from input", category: "input", severity: "high",
+      status: !runsCommands.length ? "n/a" : unsafe.length ? "missing" : "pass",
+      detail: !runsCommands.length
+        ? "The server doesn't run external commands."
+        : unsafe.length
+          ? "A command is run through a shell or built by string concatenation."
+          : "External commands are run with arguments as a list, no shell.",
+      why: "One \"; rm -rf\" (or a filename with a backtick in it) in a value that reaches a shell runs as your server user.",
+      fix: "Use spawn/execFile with the arguments as an array and no shell, and allow only values you recognise; never build a command string.",
+      evidence: [...unsafe, ...runsCommands].slice(0, 4),
+    });
+  }
+  {
     const leak = onServer(/res\.(status\(\d+\)\.)?(json|send)\(\s*(err|error)(\.stack)?\s*\)|stack:\s*(err|error)\.stack/);
     add({
       id: "error-leakage", label: "Errors don't leak internals", category: "input", severity: "low",
@@ -353,6 +471,111 @@ export function scanSecurity(allFiles: SourceFile[], extra: { suspectedSecrets?:
       why: "A session secret that silently defaults to a known string lets anyone forge sessions on a misconfigured deploy.",
       fix: "Throw at startup when SESSION_SECRET (and other signing keys) are missing in production, and keep an .env.example listing them.",
       evidence: [...weakDefault, ...enforced, ...envExample].slice(0, 4),
+    });
+  }
+  {
+    /*
+     * Logged with the strings emptied out, so this is about values that reach
+     * the log — not messages that name a variable ("set MOBILE_TOKEN_SECRET").
+     */
+    const bare = withoutStrings(server);
+    const logged = where(bare, /(console\.(log|info|warn|error|debug)|logger?\.(log|info|warn|error|debug)|print)\s*\([^)]*\b(req\.(body|headers|cookies)|password\w*|passwordHash|\w*[sS]ecret|\w*[tT]oken|apiKey|api_key|authorization|sessionID|creditCard|ssn)\b/);
+    add({
+      id: "log-leakage", label: "Secrets and personal data stay out of logs", category: "secrets", severity: "medium",
+      status: !isServer ? "n/a" : logged.length ? "missing" : "pass",
+      detail: logged.length
+        ? `Passwords, tokens or whole request bodies are logged in ${logged.length}${logged.length >= 4 ? "+" : ""} file${logged.length === 1 ? "" : "s"}.`
+        : "No passwords, tokens or raw request bodies written to logs.",
+      why: "Logs are copied, shipped to third parties and kept for months: a token in a log line is a credential in every one of those places, and personal data there outlives the account.",
+      fix: "Log an id and an outcome, never the body, headers or a credential; redact known-sensitive fields in one place so new call sites are covered.",
+      evidence: logged.slice(0, 4),
+    });
+  }
+  {
+    /*
+     * Credentials the database holds. A column that stores a password, token or
+     * key is only safe if what's in it is a hash (it only ever has to be
+     * compared) or sealed (it has to be read back).
+     */
+    const schema = files.filter((f) => f.content && /(^|\/)(schema|models?)\b|(^|\/)(migrations|prisma)\//.test(f.path) && /\.(ts|js|py|rb|sql|prisma)$/.test(f.path));
+    const sensitiveRe = /(password|secret|token|api_?key|access_?key|private_?key|credential)/i;
+    // A name that already says what's stored (…Hash, sealed…, …_encrypted), or a column about a credential rather than the credential itself (revokedAt, expiresAt, mfaEnabledAt).
+    const safeNameRe = /(hash|hashed|digest|sealed|encrypted|_enc\b|revoked|expires|_at\b|Required|Enabled|Count|Id\b)/i;
+    /** The field's own name, so the check can ask whether the code seals *this* column. */
+    const fieldOf = (line: string) =>
+      /(?:^|[\s{,])([A-Za-z_][A-Za-z0-9_]*)\s*:/.exec(line)?.[1]
+      ?? /\bADD COLUMN\s+"?([A-Za-z_][A-Za-z0-9_]*)"?/i.exec(line)?.[1]
+      ?? /^\s*"?([A-Za-z_][A-Za-z0-9_]*)"?\s+\w/.exec(line)?.[1]
+      ?? "";
+    // A SQL column is snake_case where the code that seals it is camelCase.
+    const camel = (v: string) => v.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
+    const sealedElsewhere = (field: string) => field.length > 2 && [...new Set([field, camel(field)])].some((name) => src.some((f) =>
+      new RegExp(`\\b${name}\\b`).test(f.content ?? "") && /\bseal\s*\(|createCipheriv|encrypt\s*\(|pgp_sym_encrypt|bcrypt|argon2|scrypt|createHash\(/.test(f.content ?? "")));
+    const raw: string[] = [];
+    for (const f of schema) {
+      for (const line of (f.content ?? "").split("\n")) {
+        // A column definition — a typed column in an ORM schema, a SQL column, or a Prisma field — not a comment, a table declaration or an import.
+        if (/^\s*(\/\/|\*|#|--)/.test(line)) continue;
+        const isColumn = /:\s*(varchar|text|char|uuid|jsonb|json|integer|bigint|boolean|timestamp|date|numeric|real|bytea|serial)\s*\(/i.test(line)
+          || /^\s*"?[a-z0-9_]+"?\s+(varchar|text|char|uuid|jsonb|json|integer|bigint|boolean|timestamp|date|numeric|real|bytea)\b/i.test(line)
+          || /\bADD COLUMN\s+"?[a-z0-9_]+"?\s+(varchar|text|char|uuid|jsonb|json|integer|bigint|boolean|timestamp|date|numeric|real|bytea)\b/i.test(line)
+          || /^\s*\w+\s+(String|Bytes|Json)\b/.test(line);
+        if (!isColumn) continue;
+        if (!sensitiveRe.test(line) || safeNameRe.test(line)) continue;
+        if (sealedElsewhere(fieldOf(line))) continue;
+        raw.push(f.path);
+        break;
+      }
+    }
+    const protects = has(/bcrypt|argon2|scrypt|createHash\(\s*["']sha256|pgp_sym_encrypt|createCipheriv|\bseal\s*\(|encrypt\s*\(|KMS|vault/i);
+    add({
+      id: "secrets-at-rest", label: "Stored credentials hashed or sealed", category: "secrets", severity: "high",
+      status: !schema.length ? "n/a" : raw.length && !protects.length ? "missing" : raw.length ? "partial" : "pass",
+      detail: !schema.length ? "No schema or model files found."
+        : !raw.length ? "Credential columns are stored as hashes or sealed values."
+        : protects.length ? `Hashing or encryption exists, but ${raw.length} schema file${raw.length === 1 ? " keeps" : "s keep"} a credential column whose name doesn't say it's hashed or sealed.`
+        : "Credential columns are stored with no hashing or encryption anywhere in the codebase.",
+      why: "One database dump — a backup, a support export, a leaked read-only replica — hands over every password, token and key it holds in plain text.",
+      fix: "Hash what you only compare (passwords with bcrypt/argon2, tokens with SHA-256); seal what you must read back (AES-GCM under a key from the environment); name the column so it says which.",
+      evidence: raw.slice(0, 4),
+    });
+  }
+  {
+    /*
+     * Comparing a secret with === leaks it a character at a time: the compare
+     * returns sooner on a wrong first byte than a wrong last one, and that
+     * difference is measurable over enough requests.
+     */
+    const compareRe = /\b(signature|sig|expected|digest|hmac|mac|token|hash|secret|otp|code)\w*\s*(===|!==|==|!=)\s*\w*(signature|sig|expected|digest|hmac|mac|token|hash|secret|otp|code)\w*\b/i;
+    const safeCompare = /timingSafeEqual|timing_safe|compare_digest|SecurityUtils\.secure_compare|subtle\.timingSafe|hash_equals|ConstantTime/i;
+    const risky = server.filter((f) => compareRe.test(f.content ?? "") && !safeCompare.test(f.content ?? "")).map((f) => f.path);
+    const anyCompare = server.filter((f) => compareRe.test(f.content ?? "") || safeCompare.test(f.content ?? "")).map((f) => f.path);
+    add({
+      id: "timing-safe-compare", label: "Secrets compared in constant time", category: "secrets", severity: "medium",
+      status: !anyCompare.length ? "n/a" : risky.length ? "partial" : "pass",
+      detail: !anyCompare.length ? "Nothing compares a signature, token or hash."
+        : risky.length ? `${risky.length} file${risky.length === 1 ? "" : "s"} compare a signature, token or code with a plain equality check.`
+        : "Signatures, tokens and codes are compared in constant time.",
+      why: "A plain equality check returns faster the earlier it finds a difference, which lets an attacker who can time your responses guess a signature or a one-time code byte by byte.",
+      fix: "Compare secrets with crypto.timingSafeEqual (or your language's constant-time compare) on equal-length buffers; better still, look the value up by its hash so there's nothing to compare.",
+      evidence: (risky.length ? risky : anyCompare).slice(0, 4),
+    });
+  }
+
+  // --- Privacy -------------------------------------------------------------------
+  {
+    const accounts = onServer(/\busers?\b[\s\S]{0,40}(table|model|schema|collection)|createUser|registerUser|\b(app|router)\.post\(\s*["'][^"']*(register|signup)/i);
+    const deletes = onServer(/delete[-_]?account|deleteUser\b|close[-_]?account|["'][^"']*\/account["'][\s\S]{0,80}delete|\bapp\.delete\(\s*["'][^"']*\/(me|account|users?\/:?\w*)["']|erase_user|anonymi[sz]eUser/i);
+    const exports_ = onServer(/data[-_]?export|export[-_]?(my[-_]?)?data|downloadMyData|\/account\/export|takeout|gdpr/i);
+    const have = [deletes.length, exports_.length].filter(Boolean).length;
+    add({
+      id: "account-data-rights", label: "Accounts can be deleted and exported", category: "privacy", severity: "medium",
+      status: !accounts.length ? "n/a" : have === 2 ? "pass" : have ? "partial" : "missing",
+      detail: !accounts.length ? "No user accounts."
+        : `Delete my account ${deletes.length ? "✓" : "✗"} · export my data ${exports_.length ? "✓" : "✗"}`,
+      why: "People in the UK and EU can demand both, with a month to comply; doing it by hand against production is where mistakes delete the wrong rows. Keeping data for accounts nobody can close also makes every future breach bigger.",
+      fix: "Add a route that deletes or anonymises the account and everything keyed to it (sessions, tokens, uploads) after confirming the password or a second factor, and one that returns the account's own data as JSON.",
+      evidence: [...deletes, ...exports_].slice(0, 4),
     });
   }
 
@@ -421,6 +644,29 @@ export function scanSecurity(allFiles: SourceFile[], extra: { suspectedSecrets?:
       why: "Without a record of who changed roles, refunded or deleted what, you can't investigate an incident.",
       fix: "Write an append-only log row for sign-ins, role changes, deletions and admin actions (who, what, when, from where).",
       evidence: log.slice(0, 3),
+    });
+  }
+  {
+    /*
+     * Sign-in throttling is its own check; this is everything else. Counted as
+     * a share of write routes, because a limiter on one route and none on the
+     * other ninety is the usual shape.
+     */
+    const writeRe = /\b(app|router)\.(post|put|patch|delete)\s*\(/g;
+    const limiterRe = /rateLimit\(|rate_limit|limiter|enforceRateLimit|throttle|slowDown|Ratelimit|@limits?\(|RateLimiter/i;
+    const limitedWriteRe = /\b(app|router)\.(post|put|patch|delete)\s*\([^;]{0,240}?(rateLimit\(|limiter|enforceRateLimit|throttle|slowDown|Ratelimit|RateLimiter)/g;
+    const writes = server.reduce((n, f) => n + ((f.content ?? "").match(writeRe)?.length ?? 0), 0);
+    const limited = server.reduce((n, f) => n + ((f.content ?? "").match(limitedWriteRe)?.length ?? 0), 0);
+    const global = onServer(/app\.use\(\s*(rateLimit|limiter|slowDown|rateLimiter)/i);
+    const anyLimiter = onServer(limiterRe);
+    const share = writes ? limited / writes : 0;
+    add({
+      id: "write-rate-limits", label: "Limits beyond sign-in", category: "operations", severity: "medium",
+      status: !writes ? "n/a" : global.length || share >= 0.5 ? "pass" : limited || anyLimiter.length ? "partial" : "missing",
+      detail: !writes ? "No write routes." : global.length ? "A limiter is applied to the whole app." : `${limited} of ${writes} write routes carry a limit.`,
+      why: "Sign-in isn't the only route worth abusing: posting, inviting, uploading and anything that calls a paid API can be run in a loop to spam your users, fill your storage or spend your budget.",
+      fix: "Put a limit on every write, and a tighter one on the expensive routes (email, uploads, AI calls) — keyed by account as well as by address, and stored somewhere every instance shares.",
+      evidence: [...global, ...anyLimiter].slice(0, 4),
     });
   }
   {

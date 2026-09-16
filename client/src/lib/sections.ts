@@ -9,7 +9,7 @@
  * existing `invalidateQueries(["/api/projects", id, "path"])` refreshes it.
  */
 import { useQuery } from "@tanstack/react-query";
-import { PROJECT_GOALS, goalOfBackboneId, isProjectGoal, type ProjectGoal } from "@shared/goals";
+import { PROJECT_GOALS, isProjectGoal, sectionOfTask, type ProjectGoal } from "@shared/goals";
 import { Rocket, Workflow, HandCoins, type LucideIcon } from "lucide-react";
 
 export interface SectionDef {
@@ -70,21 +70,8 @@ export function usePath<T = any>(projectId: string | undefined, goal: ProjectGoa
   });
 }
 
-const tagValue = (tags: string[] | null | undefined, prefix: string) => tags?.find((t) => t.startsWith(prefix))?.slice(prefix.length) ?? null;
-
-/**
- * The section a board task belongs to: its `track:` tag, else its milestone's
- * prefix (its own or its parent's). A task that's on no path — one someone
- * added by hand without a section — returns null: it shows in every section.
- */
-export function sectionOfTask(tags: string[] | null | undefined, primary: ProjectGoal): ProjectGoal | null {
-  const tagged = tagValue(tags, "track:");
-  if (isProjectGoal(tagged)) return tagged;
-  const id = tagValue(tags, "backbone:") ?? tagValue(tags, "parent:");
-  if (id) return goalOfBackboneId(id) ?? primary;
-  if (tagValue(tags, "injected:")) return primary;
-  return null;
-}
+// One definition, shared with the server (notification links name the section a step is in).
+export { sectionOfTask };
 
 /** Whether a board task shows in a section: its own, or on no section. Tasks from a path the project left are hidden. */
 export const taskInSection = (tags: string[] | null | undefined, goal: ProjectGoal, primary: ProjectGoal) =>

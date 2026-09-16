@@ -205,6 +205,48 @@ describe("the log", () => {
     expect((await undo(restore.id, { reasonCode: "reviewer_error" })).body.code).toBe("not_undoable");
   });
 
+  it("undo of a takedown or a suspension made outside the queue puts it back, once, and only if nothing changed since", async () => {
+    const s = await scene(await getTestApp());
+    const undo = (id: string, body: object) => s.mod.agent.post(`/api/admin/moderation-log/${id}/undo`).send(body);
+
+    // A takedown with no report behind it: undone from the log, and the comment is back for everyone.
+    await s.mod.agent.post(`/api/admin/content/comment/${s.commentId}/hide`).send({ reason: "Rude", reasonCode: "harassment" }).expect(200);
+    expect(await s.sees(s.stranger)).toBe(false);
+    const [takedown] = await s.audit();
+    const back = await undo(takedown.id, { reasonCode: "appeal_upheld", note: "Author appealed" });
+    expect(back.status, JSON.stringify(back.body)).toBe(200);
+    expect(back.body).toMatchObject({ ok: true, undoes: takedown.id, hidden: false });
+    expect(await s.sees(s.stranger)).toBe(true);
+    const [restored] = await s.audit();
+    expect(restored).toMatchObject({
+      action: "content_restored", reasonCode: "appeal_upheld", reason: "Author appealed",
+      details: { undoes: takedown.id, undoneAction: "content_hidden" },
+      previousState: { hiddenMode: "removed" }, resultingState: { hiddenAt: null, hiddenMode: null },
+    });
+    expect((await undo(takedown.id, { reasonCode: "reviewer_error" })).body.code).toBe("already_undone");
+
+    // A suspension: undone from the log, and the account works again.
+    const blocked = () => s.author.agent.post("/api/projects").send({ title: "Again", description: "Posting again once the suspension is lifted.", category: "saas", goal: "ship_mvp", subcategory: "saas" });
+    await s.mod.agent.post(`/api/admin/users/${s.author.id}/suspend`).send({ suspended: true, reason: "Repeated abuse" }).expect(200);
+    expect((await blocked()).body.code).toBe("account_suspended");
+    const suspension = ((await s.mod.agent.get(`/api/admin/moderation-log?action=suspend&targetId=${s.author.id}`)).body as any[])[0];
+    const lifted = await undo(suspension.id, { reasonCode: "reviewer_error" });
+    expect(lifted.status, JSON.stringify(lifted.body)).toBe(200);
+    expect(lifted.body).toMatchObject({ ok: true, suspended: false });
+    expect((await blocked()).status).toBe(200);
+    const [reinstated] = (await s.mod.agent.get(`/api/admin/moderation-log?targetType=user&targetId=${s.author.id}`)).body as any[];
+    expect(reinstated).toMatchObject({ action: "reinstate", details: { undoes: suspension.id, undoneAction: "suspend" }, resultingState: { suspendedAt: null, suspendedReason: null } });
+
+    // Someone acted again since: the later call stands, and the undo is refused rather than overwriting it.
+    await s.mod.agent.post(`/api/admin/content/comment/${s.commentId}/hide`).send({ reason: "Still rude", reasonCode: "harassment" }).expect(200);
+    const [second] = await s.audit();
+    await s.mod.agent.post(`/api/admin/content/comment/${s.commentId}/restore`).send({}).expect(200);
+    const stale = await undo(second.id, { reasonCode: "reviewer_error" });
+    expect(stale.status).toBe(409);
+    expect(stale.body).toMatchObject({ code: "state_changed", field: "content" });
+    expect(await s.sees(s.stranger)).toBe(true);
+  });
+
   it("undo of a ban reinstates the author; an undo is refused when the thing changed since the decision", async () => {
     const s = await scene(await getTestApp());
     const report = await s.report();

@@ -396,9 +396,24 @@ export class ObjectStorageService {
 
     const entityId = parts.slice(1).join("/");
 
+    /*
+     * The path arrives from the router undecoded and unnormalised, so "..",
+     * "." and empty segments are the caller's to send. Joined onto a root they
+     * walk out of it — to another user's uploads locally, to another prefix in
+     * the bucket in production. Refused here, where the path is built, rather
+     * than trusting whatever called in.
+     */
+    if (entityId.split("/").some((seg) => seg === "" || seg === "." || seg === ".." || seg.startsWith("\\"))) {
+      throw new ObjectNotFoundError();
+    }
+
     // Local fallback: map to filesystem path under LOCAL_OBJECT_ROOT
     if (isLocalFallback()) {
-      const localPath = path.join(LOCAL_OBJECT_ROOT, entityId);
+      const localPath = path.resolve(LOCAL_OBJECT_ROOT, entityId);
+      // Belt and braces: whatever the segments were, the file has to be inside the root.
+      if (path.relative(LOCAL_OBJECT_ROOT, localPath).startsWith("..")) {
+        throw new ObjectNotFoundError();
+      }
       try {
         await fsPromises.access(localPath, fs.constants.R_OK);
         return new (LocalFile as any)(localPath) as any;

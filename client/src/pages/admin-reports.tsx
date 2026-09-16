@@ -66,6 +66,8 @@ const ACTION_WORDS: Record<string, string> = {
   report_reopened: "Undone — report reopened",
   content_hidden: "Taken down",
   content_restored: "Restored",
+  suspend: "Account suspended",
+  reinstate: "Account reinstated",
 };
 
 /**
@@ -158,8 +160,8 @@ function History({ targetType, targetId }: { targetType: string; targetId: strin
   const [undoCode, setUndoCode] = useState("");
   const undo = useMutation({
     mutationFn: async (id: string) => (await apiRequest("POST", `/api/admin/moderation-log/${id}/undo`, { reasonCode: undoCode })).json(),
-    onSuccess: () => {
-      toast({ title: "Undone", description: "The state before that decision is back, and the report is open again." });
+    onSuccess: (r: any) => {
+      toast({ title: "Undone", description: r?.reportStatus ? "The state before that decision is back, and the report is open again." : "The state before that decision is back." });
       setUndoing(null); setUndoCode("");
       for (const key of ["/api/admin/moderation-log", "/api/admin/reports", "/api/admin/reports/count"]) qc.invalidateQueries({ queryKey: [key] });
     },

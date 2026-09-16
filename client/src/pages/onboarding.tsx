@@ -18,7 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { X, Plus, Github, Linkedin, Globe, MapPin, Loader2, Upload, FileText, CheckCircle, Clock, Zap, Shield, Users, Handshake } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { PENDING_PATH_KEY, afterOnboardingPath, type PendingPath } from "@shared/path-artifacts";
+import { PENDING_PATH_KEY, afterOnboardingPath, parsePendingPath, type PendingPath } from "@shared/path-artifacts";
 import { PENDING_INVITE_KEY } from "@shared/invites";
 import { useUpload } from "@/hooks/use-upload";
 
@@ -162,7 +162,9 @@ export default function Onboarding() {
       await apiRequest("POST", "/api/profile", data);
       await apiRequest("POST", "/api/profile/complete-onboarding");
 
-      queryClient.invalidateQueries({ queryKey: ["/api/profile"] });
+      // Awaited: the app's gate reads this profile, and navigating on the stale
+      // copy (isOnboarded: false) bounces a finished account back to step one.
+      await queryClient.invalidateQueries({ queryKey: ["/api/profile"] });
 
       toast({
         title: "Welcome to SparkTower!",
@@ -172,7 +174,7 @@ export default function Onboarding() {
       // A new account has no projects; the next thing to do is make one — unless
       // it came from a published artifact to look at that project first.
       let pending: PendingPath | null = null;
-      try { pending = JSON.parse(localStorage.getItem(PENDING_PATH_KEY) ?? "null"); } catch { /* no pending choice */ }
+      try { pending = parsePendingPath(localStorage.getItem(PENDING_PATH_KEY)); } catch { /* no pending choice */ }
       // An invite waiting in this browser comes first: that's what they signed up for.
       let invite: string | null = null;
       try { invite = localStorage.getItem(PENDING_INVITE_KEY); } catch { /* none */ }
@@ -885,8 +887,14 @@ export default function Onboarding() {
                 >
                   Back
                 </Button>
+                {/*
+                  * Keyed apart: sharing one element, the click on the last Next re-rendered it
+                  * as the submit button before the click finished, and submitted the form —
+                  * skipping Review entirely.
+                  */}
                 {step === STEPS.length - 1 ? (
                   <Button
+                    key="submit"
                     type="submit"
                     disabled={isSubmitting}
                     className="bg-primary hover:bg-primary/90"
@@ -902,7 +910,7 @@ export default function Onboarding() {
                     )}
                   </Button>
                 ) : (
-                  <Button type="button" onClick={next} data-testid="button-next">
+                  <Button key="next" type="button" onClick={next} data-testid="button-next">
                     Next Step
                   </Button>
                 )}

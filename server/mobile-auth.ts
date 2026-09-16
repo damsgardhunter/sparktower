@@ -101,6 +101,24 @@ export function verifyAccessToken(token: string): { userId: string; issuedAtMs: 
 const hashToken = (token: string): string =>
   crypto.createHash("sha256").update(token).digest("hex");
 
+/**
+ * A device label as it may be stored: the client's own words for "iPhone 15",
+ * kept short and on one line.
+ *
+ * It arrives with sign-in and is never verified — nothing depends on it, and
+ * nothing can: the app says what it is. What it must not do is carry control
+ * characters or newlines into a list of a person's devices, or run to any
+ * length, so it's cleaned here, once, on the way in.
+ */
+export const cleanDeviceLabel = (raw: unknown): string | null => {
+  if (typeof raw !== "string") return null;
+  // eslint-disable-next-line no-control-regex
+  const flat = raw.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029]/g, " ").replace(/\s+/g, " ").trim();
+  return flat ? flat.slice(0, DEVICE_LABEL_MAX) : null;
+};
+/** Long enough for "Pixel 8 Pro · Android 15", short enough to read in a list. */
+export const DEVICE_LABEL_MAX = 80;
+
 /** Issues a refresh token, storing only its hash. */
 async function issueRefreshToken(userId: string, device?: string, mfa = false): Promise<string> {
   const raw = crypto.randomBytes(48).toString("base64url");
@@ -108,7 +126,7 @@ async function issueRefreshToken(userId: string, device?: string, mfa = false): 
   await db.insert(mobileRefreshTokens).values({
     userId,
     tokenHash: hashToken(raw),
-    device: device?.slice(0, 200) || null,
+    device: cleanDeviceLabel(device),
     expiresAt,
     mfa,
   });
@@ -346,7 +364,7 @@ export function registerMobileAuthRoutes(app: Express) {
     // public-write: the refresh token, looked up by SHA-256 hash, unexpired, claimed atomically once; a spent token reused ends every mobile session (test/integration/auth-hardening.test.ts)
     if (!(await enforceRateLimit(res, ipKey(req), "login"))) return;
     try {
-      const { refreshToken, device } = req.body as { refreshToken?: string; device?: string };
+      const { refreshToken } = req.body as { refreshToken?: string };
       if (!refreshToken) return res.status(400).json({ message: "refreshToken is required" });
 
       // Claimed atomically: of two requests racing with one token, only one gets a session.
@@ -365,7 +383,13 @@ export function registerMobileAuthRoutes(app: Express) {
       }
 
       // A session that passed a second factor keeps that through rotation.
-      res.json(await buildSession(row.userId, device || row.device || undefined, { mfa: row.mfa }));
+      /*
+       * The label rides along from the sign-in that started this chain, not
+       * from the refresh call: a refresh proves possession of a token, not
+       * whose device it is, so letting the body rewrite it would only let a
+       * holder relabel the session in the owner's device list.
+       */
+      res.json(await buildSession(row.userId, row.device ?? undefined, { mfa: row.mfa }));
     } catch (error) {
       console.error("Mobile refresh error:", error);
       res.status(500).json({ message: "Could not refresh your session" });
@@ -388,7 +412,16 @@ export function registerMobileAuthRoutes(app: Express) {
     }
   });
 
-  /** Signs this device out. Other devices keep their sessions. */
+  /**
+   * Signs this device out. Other devices keep their sessions.
+   *
+   * No guard, deliberately: the refresh token in the body is the credential,
+   * and sign-out has to work when the access token has already expired — the
+   * common case for an app reopened days later. It can only end the session
+   * whose token is presented; holding that token is already the ability to
+   * mint sessions, so being able to end it grants nothing new. Signing out of
+   * a device you can't produce a token for is /api/auth/logout-all.
+   */
   app.post("/api/auth/mobile/logout", async (req, res) => {
     // public-write: the refresh token it revokes, by hash; it can only end the session it names
     if (!(await enforceRateLimit(res, ipKey(req), "session"))) return;

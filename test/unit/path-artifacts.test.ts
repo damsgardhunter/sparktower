@@ -1,6 +1,6 @@
 /** The growth loop's pure rules: what an artifact holds, what a publish needs, and how its page previews. */
 import { describe, it, expect } from "vitest";
-import { artifactFromStep, validatePublish, normalizeTag, artifactIdFromPath, injectPageMeta, ARTIFACT_MAX_TAGS } from "@shared/path-artifacts";
+import { artifactFromStep, validatePublish, normalizeTag, artifactIdFromPath, injectPageMeta, ARTIFACT_MAX_TAGS, afterOnboardingPath, afterPendingCreatePath, parsePendingPath } from "@shared/path-artifacts";
 
 describe("artifactFromStep", () => {
   it("uses the step's answer, and a build's summary, check and files — never file contents", () => {
@@ -40,5 +40,27 @@ describe("publishing", () => {
     expect(html).toContain("<title>A &quot;quoted&quot; &lt;step&gt;</title>");
     expect(html).toContain('<meta property="og:url" content="https://x.test/a/1" />');
     expect(html.indexOf("og:title")).toBeLessThan(html.indexOf("</head>"));
+  });
+});
+
+describe("a stranger's choice on an artifact page, through signup", () => {
+  const id = "0f8c2a4e-1111-4222-8333-444455556666";
+  it("reads only a well-formed stored choice", () => {
+    expect(parsePendingPath(JSON.stringify({ goal: "ship_mvp", fromArtifact: id, intent: "start" }))).toMatchObject({ goal: "ship_mvp", intent: "start" });
+    for (const bad of [null, "", "not json", "null", "[]", JSON.stringify({ goal: 3, fromArtifact: id }), JSON.stringify({ goal: "ship_mvp" })]) {
+      expect(parsePendingPath(bad), String(bad)).toBeNull();
+    }
+  });
+
+  it("sends onboarding to that project to explore, straight into create on the goal to start, or to the intro with no choice", () => {
+    expect(afterOnboardingPath({ goal: "ship_mvp", fromArtifact: id, intent: "explore", projectId: id })).toBe(`/projects/${id}`);
+    expect(afterOnboardingPath({ goal: "ship_mvp", fromArtifact: id, intent: "start" })).toBe("/projects/new/create?step=setup");
+    // Explore with no usable project id still starts their own.
+    expect(afterOnboardingPath({ goal: "raise_capital", fromArtifact: id, intent: "explore", projectId: "../x" })).toBe("/projects/new/create?step=setup");
+    expect(afterOnboardingPath(null)).toBe("/projects/new");
+  });
+
+  it("lands the project it made on its path, on the goal's section", () => {
+    expect(afterPendingCreatePath(id, "ship_mvp")).toBe(`/projects/${id}/manage?section=ship_mvp`);
   });
 });

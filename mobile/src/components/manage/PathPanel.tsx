@@ -4,9 +4,9 @@
  * Loops (Ship) or Fundability (Raise), Codebase, Recent activity, and the
  * whole path one tap away. Everything reads the section's live path.
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../theme";
@@ -177,6 +177,35 @@ export function PathPanel({ projectId, goal, onNavigate, onStartSection, isPrima
 
 // --- Next step ----------------------------------------------------------------
 
+/**
+ * Arriving from a notification (`?focus=`, shared/notifications.ts PATH_FOCUS):
+ * the Next Step card is outlined for a moment; `weekly` opens the weekly
+ * update; a milestone id that's no longer next says the step got done. The
+ * param is cleared once handled so it doesn't replay.
+ */
+function usePathFocus(data: PathStatus, openWeekly: () => void): boolean {
+  const { focus } = useLocalSearchParams<{ focus?: string }>();
+  const router = useRouter();
+  const { notify } = useNotify();
+  const handled = useRef<string | null>(null);
+  const [highlighted, setHighlighted] = useState(false);
+  useEffect(() => {
+    if (!focus || handled.current === focus) return;
+    handled.current = focus;
+    setHighlighted(true);
+    setTimeout(() => setHighlighted(false), 2500);
+    if (focus === "weekly") {
+      if (data.weekly?.due && data.weekly.steps.length) openWeekly();
+      else notify("This week's finished steps are already posted.");
+    } else if (focus !== "next" && data.next && data.next.id !== focus) {
+      notify(`That step's done. Next up: ${data.next.step?.title ?? data.next.title}`);
+    }
+    router.setParams({ focus: undefined } as any);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus]);
+  return highlighted;
+}
+
 function NextStep({ projectId, data, onNavigate }: { projectId: string; data: PathStatus; onNavigate: (tab: string) => void }) {
   const router = useRouter();
   const refresh = useRefreshPath(projectId);
@@ -184,6 +213,7 @@ function NextStep({ projectId, data, onNavigate }: { projectId: string; data: Pa
   const [loopForm, setLoopForm] = useState<{ title: string; description: string; type: LoopType } | null>(null);
   const [draft, setDraft] = useState<{ backboneId: string; loopTaskId: string | null; sourceTitle: string; text: string } | null>(null);
   const [sharing, setSharing] = useState<"step" | "artifact" | "week" | null>(null);
+  const highlighted = usePathFocus(data, () => setSharing("week"));
   const { data: project } = useQuery({ queryKey: mkey(projectId, "project"), queryFn: () => api<any>(`/api/projects/${projectId}`), enabled: !!projectId });
   const projectTitle: string = project?.title ?? "your project";
 
@@ -246,7 +276,7 @@ function NextStep({ projectId, data, onNavigate }: { projectId: string; data: Pa
   if (!next) {
     return (
       <View style={{ gap: spacing.sm }}>
-        <Card>
+        <Card style={highlighted ? { borderColor: colors.primary, borderWidth: 2 } : undefined}>
           <Row center gap={spacing.sm}><Icon name="trophy-outline" size={18} color={colors.success} /><Text style={{ fontFamily: fontFamily.bold, fontSize: font.base, color: colors.text }}>Path complete</Text></Row>
           {data.proposal?.map((p) => (
             <Row key={p.goal} between gap={spacing.md} style={{ borderTopWidth: 1, borderColor: colors.borderSubtle, paddingTop: spacing.sm }}>
@@ -266,8 +296,8 @@ function NextStep({ projectId, data, onNavigate }: { projectId: string; data: Pa
 
   return (
     <View style={{ gap: spacing.sm }}>
-      <GradientOutline width={1.5} rounded={radius.md} innerStyle={{ padding: spacing.md, gap: spacing.sm }}>
-        <View testID="next-action" style={{ gap: spacing.sm }}>
+      <GradientOutline width={highlighted ? 3 : 1.5} rounded={radius.md} innerStyle={{ padding: spacing.md, gap: spacing.sm }}>
+        <View testID="next-action" accessibilityHint={highlighted ? "Your next step" : undefined} style={{ gap: spacing.sm }}>
           <Row center gap={6}>
             <Icon name="compass-outline" size={13} color={colors.primary} />
             <Overline color={colors.primary}>Next step</Overline>

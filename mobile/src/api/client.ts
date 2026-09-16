@@ -144,7 +144,8 @@ async function refreshAccessToken(): Promise<string | null> {
       const res = await fetch(`${API_URL}/api/auth/mobile/refresh`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refreshToken, device: deviceLabel() }),
+        // No device label: the server keeps the one from sign-in (server/mobile-auth.ts).
+        body: JSON.stringify({ refreshToken }),
       });
 
       if (!res.ok) {

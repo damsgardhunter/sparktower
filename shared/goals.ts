@@ -52,6 +52,22 @@ export function goalOfBackboneId(id: string | null | undefined): ProjectGoal | n
   return (Object.entries(GOAL_BACKBONE_PREFIX).find(([, p]) => p === prefix)?.[0] as ProjectGoal | undefined) ?? null;
 }
 
+const tagValue = (tags: string[] | null | undefined, prefix: string) => tags?.find((t) => t.startsWith(prefix))?.slice(prefix.length) ?? null;
+
+/**
+ * The section a board task belongs to: its `track:` tag, else its milestone's
+ * prefix (its own or its parent's). A task that's on no path — one someone
+ * added by hand without a section — returns null: it shows in every section.
+ */
+export function sectionOfTask(tags: string[] | null | undefined, primary: ProjectGoal): ProjectGoal | null {
+  const tagged = tagValue(tags, "track:");
+  if (isProjectGoal(tagged)) return tagged;
+  const id = tagValue(tags, "backbone:") ?? tagValue(tags, "parent:");
+  if (id) return goalOfBackboneId(id) ?? primary;
+  if (tagValue(tags, "injected:")) return primary;
+  return null;
+}
+
 /**
  * What kind of thing it is, within its path.
  *

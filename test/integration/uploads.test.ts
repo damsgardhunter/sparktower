@@ -129,6 +129,32 @@ describe("serving an uploaded object", () => {
     expect(Buffer.from(served.body).toString("utf8")).toBe(bytes.toString("utf8"));
   });
 
+  it("refuses a path that climbs out of the object root, however it's spelled", async () => {
+    const app = await getTestApp();
+    const storage = new ObjectStorageService();
+    // A secret next to the root, the way a deploy's .env sits beside its uploads.
+    const outside = path.join(OBJECT_ROOT, "..", `not-an-upload-${Date.now()}.txt`);
+    await fs.writeFile(outside, "SESSION_SECRET=super-secret", "utf8");
+    try {
+      const name = path.basename(outside);
+      for (const attempt of [
+        // Each of these resolves outside OBJECT_ROOT: one level up is where the file sits.
+        `/objects/../${name}`,
+        `/objects/uploads/../../${name}`,
+        `/objects/uploads/./../../${name}`,
+        "/objects/uploads/../../../../../../etc/passwd",
+      ]) {
+        await expect(storage.getObjectEntityFile(attempt), attempt).rejects.toThrow();
+      }
+      // The route answers 404, never the file's contents.
+      const served = await request(app).get(`/objects/uploads/../../${name}`);
+      expect(served.status).toBe(404);
+      expect(served.text ?? "").not.toContain("super-secret");
+    } finally {
+      await fs.rm(outside, { force: true });
+    }
+  });
+
   it("404s for an object that was never uploaded", async () => {
     const app = await getTestApp();
     const res = await request(app).get("/objects/uploads/00000000-0000-4000-8000-000000000000");

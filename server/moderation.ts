@@ -25,6 +25,7 @@ import {
   RATE_LIMITS, DUPLICATE_RULES, REPORT_TARGETS, RETIRED_REPORT_TARGETS, REPORT_REASON_IDS, reportDetailLabel, REPORT_NOTE_MAX,
   REPORT_STATUSES, RATE_LIMITED, DUPLICATE_CONTENT, type DuplicateContentBody, MODERATION_ACTION_IDS, isActionableTarget, isReasonCode,
   reasonCodesFor, moderationReasonLabel, isUndoReasonCode, UNDOABLE_ACTIONS, sameModeratedState,
+  ACCOUNT_UNDO_ACTIONS, CONTENT_UNDO_ACTIONS, failsClosed, LIMIT_UNAVAILABLE, LIMIT_UNAVAILABLE_RETRY_SECONDS, type LimitUnavailableBody,
   type RateLimitAction, type ReportTarget, type DuplicateRule, type RateLimitedBody, type ModerationAction,
 } from "@shared/moderation";
 
@@ -211,6 +212,8 @@ async function isExempt(key: string): Promise<boolean> {
 
 export interface RateCheck {
   ok: boolean;
+  /** The count itself failed, rather than the person being over a limit (server/moderation.ts, FAIL_CLOSED_ACTIONS). */
+  unavailable?: boolean;
   /** Over the limit, but let through because the account is on the allowlist. */
   exempt: boolean;
   used: number;
@@ -229,8 +232,11 @@ export interface RateCheck {
  * never the "come back in fifteen minutes" that someone one second from room
  * used to be told.
  *
- * Fails open on a database error: a limiter that blocks writes when it can't
- * count is worse than the spam it prevents.
+ * Fails open on a database error for ordinary actions — a limiter that blocks
+ * comments when it can't count is worse than the spam it prevents — and closed
+ * for the few where unmetered traffic does real damage (sign-in attempts,
+ * model spend, money, uploads: FAIL_CLOSED_ACTIONS). Those get `unavailable`,
+ * and the caller answers 503 rather than pretending a limit was hit.
  */
 export async function withinRateLimit(key: string, action: RateLimitAction): Promise<RateCheck> {
   const limit = RATE_LIMITS[action];
@@ -258,8 +264,10 @@ export async function withinRateLimit(key: string, action: RateLimitAction): Pro
     const soonest = frees.length ? Math.min(...frees) : windowSeconds;
     return { ok: false, exempt: false, used, max: limit.max, retryAfterSeconds: Math.min(windowSeconds, Math.max(1, soonest)) };
   } catch (err) {
-    console.error(`[moderation] Rate check failed for ${action}, allowing:`, err);
-    return { ok: true, exempt: false, used: 0, max: limit.max, retryAfterSeconds: 0 };
+    const closed = failsClosed(action);
+    console.error(`[moderation] Rate check failed for ${action}, ${closed ? "refusing" : "allowing"}:`, err);
+    if (!closed) return { ok: true, exempt: false, used: 0, max: limit.max, retryAfterSeconds: 0 };
+    return { ok: false, exempt: false, unavailable: true, used: 0, max: limit.max, retryAfterSeconds: LIMIT_UNAVAILABLE_RETRY_SECONDS };
   }
 }
 
@@ -305,7 +313,7 @@ function flushRefusals(before: number) {
   }
 }
 
-function recordRefusal(req: any, action: RateLimitAction, kind: "volume" | "duplicate") {
+function recordRefusal(req: any, action: RateLimitAction, kind: "volume" | "duplicate" | "unavailable") {
   if (!req) return;
   const minute = Math.floor(Date.now() / 60_000);
   const who = req.user?.id ?? ipKey(req);
@@ -346,6 +354,17 @@ export function flushRefusalCounts(): void {
  * at 400/30 is the first.
  */
 function refuse(res: any, key: string, action: RateLimitAction, check: RateCheck) {
+  if (check.unavailable) {
+    // Nobody hit a limit: the counter is down, and this is one of the actions that doesn't run unmetered.
+    const body: LimitUnavailableBody = {
+      message: "We couldn't check this just now. Try again in a moment.",
+      code: LIMIT_UNAVAILABLE, action, retryAfterSeconds: check.retryAfterSeconds,
+    };
+    recordRefusal(res.req, action, "unavailable");
+    res.setHeader("Retry-After", String(check.retryAfterSeconds));
+    res.status(503).json(body);
+    return;
+  }
   console.warn(`[rate-limit] refused ${action} for user ${key}: ${check.used}/${check.max} in ${RATE_LIMITS[action].windowMinutes}m`);
   recordRefusal(res.req, action, "volume");
   const body: RateLimitedBody = {
@@ -782,6 +801,63 @@ export function registerModerationRoutes(app: Express) {
     });
     res.json({ ok: true, hidden: hide });
   };
+  /**
+   * Undoing a decision made outside the report queue: a takedown, a restore,
+   * a suspension, a reinstatement.
+   *
+   * The row itself is the lock, so two reviewers undoing the same entry queue
+   * up and the second is told it's already done. The state the decision left
+   * behind must still be there — if someone has acted since, the later call
+   * stands and this one is refused rather than quietly overwriting it.
+   */
+  const undoDirectDecision = async (
+    entry: typeof moderationLog.$inferSelect,
+    opts: { undoAction: string; reasonCode: string; note: string | null; actorId: string },
+  ): Promise<{ status: number; body: Record<string, unknown> }> => {
+    const account = ACCOUNT_UNDO_ACTIONS.includes(entry.action);
+    const t = account ? null : TAKEDOWN_TABLES[String(entry.targetType)];
+    if (!account && !t) return { status: 400, body: { message: "That kind of content can't be restored from the log.", code: "not_undoable" } };
+    const targetId = account ? entry.targetUserId : entry.targetId;
+    if (!targetId) return { status: 400, body: { message: "That entry doesn't say what it acted on.", code: "not_undoable" } };
+
+    const isComment = entry.targetType === "comment";
+    const stateOf = (r: any) => account
+      ? { suspendedAt: r.suspendedAt ?? null, suspendedReason: r.suspendedReason ?? null }
+      : { hiddenAt: r.hiddenAt ?? null, hiddenById: r.hiddenById ?? null, hiddenReason: r.hiddenReason ?? null, ...(isComment ? { hiddenMode: r.hiddenMode ?? null } : {}) };
+    const date = (v: unknown) => (v ? new Date(String(v)) : null);
+    const before = (entry.previousState ?? null) as Record<string, any> | null;
+    const after = (entry.resultingState ?? null) as Record<string, any> | null;
+    if (!before) return { status: 400, body: { message: "That entry didn't record what it changed, so it can't be undone.", code: "not_undoable" } };
+
+    return db.transaction(async (tx) => {
+      const table = account ? users : t!.table;
+      const [row] = await tx.select().from(table).where(eq(table.id, targetId)).for("update");
+      if (!row) return { status: 404, body: { message: account ? "That account no longer exists." : "That content no longer exists.", code: "target_gone" } };
+
+      const [undone] = await tx.select({ id: moderationLog.id }).from(moderationLog)
+        .where(sql`${moderationLog.details}->>'undoes' = ${entry.id}`).limit(1);
+      if (undone) return { status: 409, body: { message: "This decision has already been undone.", code: "already_undone", logId: undone.id } };
+
+      const now = stateOf(row);
+      if (!sameModeratedState(after, now)) {
+        return { status: 409, body: { message: account ? "The account has changed since this decision, so it can't be undone as it was." : "That content has changed since this decision, so it can't be undone as it was.", code: "state_changed", field: account ? "author" : "content" } };
+      }
+
+      const change = account
+        ? { suspendedAt: date(before.suspendedAt), suspendedReason: before.suspendedReason ?? null }
+        : { hiddenAt: date(before.hiddenAt), hiddenById: before.hiddenById ?? null, hiddenReason: before.hiddenReason ?? null, ...(isComment ? { hiddenMode: before.hiddenMode ?? null } : {}) };
+      const [restored] = await tx.update(table).set(change as any).where(eq(table.id, targetId)).returning();
+
+      const [logged] = await tx.insert(moderationLog).values({
+        action: opts.undoAction, actorId: opts.actorId, targetUserId: entry.targetUserId,
+        targetType: entry.targetType, targetId: entry.targetId, reason: opts.note, reasonCode: opts.reasonCode,
+        previousState: now, resultingState: stateOf(restored),
+        details: { undoes: entry.id, undoneAction: entry.action },
+      }).returning();
+      return { status: 200, body: { ok: true, logId: logged.id, undoes: entry.id, ...(account ? { suspended: !!(restored as any).suspendedAt } : { hidden: !!(restored as any).hiddenAt }) } };
+    });
+  };
+
   app.post("/api/admin/content/:type/:id/hide", isAuthenticated, requireReviewer, rateLimit("review"), (req: any, res) => setHidden(req, res, true).catch((e) => { console.error("takedown failed:", e); res.status(500).json({ message: "Couldn't take that down" }); }));
   app.post("/api/admin/content/:type/:id/restore", isAuthenticated, requireReviewer, rateLimit("review"), (req: any, res) => setHidden(req, res, false).catch((e) => { console.error("restore failed:", e); res.status(500).json({ message: "Couldn't restore that" }); }));
 
@@ -915,6 +991,17 @@ export function registerModerationRoutes(app: Express) {
       if (!entry) return res.status(404).json({ message: "Log entry not found" });
       const undoAction = UNDOABLE_ACTIONS[entry.action];
       const reportId = (entry.details as any)?.reportId as string | undefined;
+      /*
+       * A takedown or a suspension made outside the queue: no report to put
+       * back, one row to restore. Same rules as a queue undo — once only, and
+       * only while the thing is still as the decision left it.
+       */
+      if (CONTENT_UNDO_ACTIONS.includes(entry.action) || ACCOUNT_UNDO_ACTIONS.includes(entry.action)) {
+        const outcome = await undoDirectDecision(entry, { undoAction, reasonCode, note, actorId: req.user.id });
+        return res.status(outcome.status).json(outcome.body);
+      }
+
+      // Past the branch above, only queue decisions remain: a comment, and the report it was decided from.
       if (!undoAction || entry.targetType !== "comment" || !reportId) {
         return res.status(400).json({ message: "Only decisions made from the report queue can be undone here.", code: "not_undoable" });
       }

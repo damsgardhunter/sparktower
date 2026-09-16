@@ -2,7 +2,8 @@
  * The growth loop in a real browser: finish a path step → publish it as an
  * artifact → its public page previews properly and reads with no account →
  * a stranger signs up from it, choosing the same goal → its author hears →
- * the newcomer publishes their own. API-level: test/integration/path-artifacts.test.ts.
+ * the newcomer, through onboarding and project create on that goal, finishes
+ * their first step and publishes their own. API-level: test/integration/path-artifacts.test.ts.
  */
 import { test, expect, type Browser } from "@playwright/test";
 
@@ -74,12 +75,60 @@ test("a published step brings a stranger in, and they publish their own", async 
     return bell.items.some((x: any) => x.kind === "artifact_signup" && x.text === "Newcomer Growth joined SparkTower from your artifact");
   }).toBe(true);
 
-  // The newcomer finishes their first step and publishes their own.
-  const api = strangerContext.request;
-  expect((await api.post("/api/profile/complete-onboarding", { data: { displayName: "Newcomer Growth", headline: "New here", bio: "Came from an artifact." } })).ok()).toBeTruthy();
-  const theirs = await finishFirstStep(api, `Newcomer ${stamp()}`, "Budget trips for students.");
-  const artifact = await (await api.post(`/api/projects/${theirs.project.id}/path/tasks/${theirs.step.id}/artifact`)).json();
-  const published = await (await api.post(`/api/artifacts/${artifact.id}/publish`, { data: { title: "My first product statement" } })).json();
-  await stranger.goto(published.url);
-  await expect(stranger.getByTestId("text-artifact-title")).toHaveText("My first product statement");
+  /*
+   * The newcomer, in the browser the whole way: onboarding sends them into
+   * project create with the artifact's goal chosen; the goal survives a reload;
+   * the project lands on its path; they write their first step themselves and
+   * publish it — the same loop that brought them in.
+   */
+  await stranger.getByTestId("input-display-name").fill("Newcomer Growth");
+  await stranger.getByTestId("input-headline").fill("New here");
+  await stranger.getByTestId("input-bio").fill("Came from an artifact.");
+  await stranger.getByTestId("input-location").fill("Lisbon");
+  for (let i = 0; i < 7; i++) await stranger.getByTestId("button-next").click();
+  await stranger.getByTestId("button-submit-onboarding").click();
+  await expect(stranger).toHaveURL(/\/projects\/new\/create\?step=setup$/, { timeout: 15_000 });
+
+  await stranger.getByTestId("input-project-title").fill(`Student Trips ${stamp()}`);
+  await stranger.getByTestId("textarea-project-description").fill("Budget trips for students, planned around term dates.");
+  await stranger.getByTestId("button-next").click();
+  await expect(stranger).toHaveURL(/step=goal/);
+  await expect(stranger.getByTestId("goal-ship_mvp")).toHaveAttribute("aria-pressed", "true");
+  // Still chosen after a reload: the choice is kept until the project exists.
+  await stranger.reload();
+  await expect(stranger.getByTestId("goal-ship_mvp")).toHaveAttribute("aria-pressed", "true");
+  expect(await stranger.evaluate(() => localStorage.getItem("st_pending_path"))).toContain("ship_mvp");
+  await stranger.getByTestId("button-next").click();
+  await stranger.getByTestId("subcategory-saas").click();
+  await stranger.getByTestId("button-next").click();
+  await stranger.getByTestId("button-create-project").click();
+
+  // On its path, at the first step, with the choice spent.
+  await expect(stranger).toHaveURL(/\/projects\/[0-9a-f-]{36}\/manage\?section=ship_mvp(&|$)/, { timeout: 15_000 });
+  expect(await stranger.evaluate(() => localStorage.getItem("st_pending_path"))).toBeNull();
+  await stranger.getByTestId("btn-skip-onboarding").click({ timeout: 10_000 }).catch(() => {});
+  await expect(stranger.getByTestId("nova-onboarding-overlay")).toHaveCount(0);
+  await expect(stranger.getByTestId("next-action-title")).toHaveText("Product statement");
+  await stranger.getByTestId("button-next-write").click();
+  await stranger.getByTestId("input-next-answer").fill("Weekend trips students can afford, planned around their exams.");
+  await stranger.getByTestId("button-next-save-done").click();
+  await expect(stranger.getByTestId("path-last-done")).toContainText("Product statement");
+
+  await stranger.getByTestId("button-publish-finished-step").click();
+  const theirs = stranger.getByTestId("publish-artifact-dialog");
+  await expect(theirs.getByTestId("artifact-preview")).toContainText("students can afford");
+  await theirs.getByTestId("input-artifact-title").fill("My first product statement");
+  await theirs.getByTestId("input-artifact-tags").fill("travel, students");
+  await theirs.getByTestId("button-publish-artifact").click();
+  const theirUrl = await theirs.getByTestId("text-artifact-url").inputValue();
+  expect(theirUrl).toMatch(/\/a\/[0-9a-f-]{36}$/);
+
+  // Public, with no account, and on the feed.
+  const outsider = await browser.newContext();
+  const reader = await outsider.newPage();
+  await reader.goto(new URL(theirUrl).pathname);
+  await expect(reader.getByTestId("text-artifact-title")).toHaveText("My first product statement");
+  const feed = await (await strangerContext.request.get("/api/feed?limit=10")).json();
+  expect(feed.posts.some((p: any) => String(p.content ?? "").includes("My first product statement") || p.entityType === "path_artifact")).toBe(true);
+  await Promise.all([outsider.close(), strangerContext.close(), author.context.close()]);
 });

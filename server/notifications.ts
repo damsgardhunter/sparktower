@@ -19,10 +19,11 @@ import { storage } from "./storage";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
 import {
-  notifications, projectFollows, projectMembers, projects, userFollows, users, userProfiles, feedComments,
+  notifications, projectFollows, projectMembers, projects, userFollows, users, userProfiles, feedComments, projectKanbanTasks,
   type NotificationKind,
 } from "@shared/schema";
-import { notificationHref, notificationText } from "@shared/notifications";
+import { notificationHref, notificationText, PATH_FOCUS } from "@shared/notifications";
+import { goalOfBackboneId, isProjectGoal, sectionOfTask, type ProjectGoal } from "@shared/goals";
 
 /** Past this many recipients a single post is a broadcast, and a broadcast is the feed's job. */
 const MAX_FANOUT = 1000;
@@ -125,6 +126,42 @@ export async function notifyComment(input: {
   await send(input.postAuthorId, "comment");
 }
 
+/**
+ * Where a path notification should land: the section its step is on, and what
+ * to focus. Worked out when the bell is read rather than stored, so older
+ * notifications link properly too.
+ *
+ *  - path_step_done: its target is the finished board task — the section from
+ *    its tags; focus the section's next step, which is what the team does now.
+ *  - next_step: its target is `projectId:milestoneId` — the section from the
+ *    milestone's prefix; focus that milestone, so the dashboard can say when
+ *    it's been done since.
+ *  - weekly_update: the project's, not a section's; focus the weekly update.
+ */
+async function pathTargets(rows: { id: string; kind: string; targetId: string; projectId: string | null }[]): Promise<Map<string, { section: ProjectGoal | null; focus: string }>> {
+  const out = new Map<string, { section: ProjectGoal | null; focus: string }>();
+  const doneTaskIds = [...new Set(rows.filter((r) => r.kind === "path_step_done").map((r) => r.targetId))];
+  const tasks = doneTaskIds.length
+    ? await db.select({ id: projectKanbanTasks.id, tags: projectKanbanTasks.tags, primary: projects.goal })
+      .from(projectKanbanTasks).innerJoin(projects, eq(projects.id, projectKanbanTasks.projectId))
+      .where(inArray(projectKanbanTasks.id, doneTaskIds)).catch(() => [])
+    : [];
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  for (const r of rows) {
+    if (r.kind === "path_step_done") {
+      const task = byId.get(r.targetId);
+      const primary = isProjectGoal(task?.primary) ? task!.primary : null;
+      out.set(r.id, { section: task && primary ? sectionOfTask(task.tags, primary) ?? primary : null, focus: PATH_FOCUS.next });
+    } else if (r.kind === "next_step") {
+      const milestoneId = r.targetId.slice(r.targetId.indexOf(":") + 1);
+      out.set(r.id, { section: goalOfBackboneId(milestoneId), focus: milestoneId || PATH_FOCUS.next });
+    } else if (r.kind === "weekly_update") {
+      out.set(r.id, { section: null, focus: PATH_FOCUS.weekly });
+    }
+  }
+  return out;
+}
+
 export function registerNotificationRoutes(app: Express) {
   /**
    * The bell: newest first, each with who did it and where it goes. Anything
@@ -149,6 +186,7 @@ export function registerNotificationRoutes(app: Express) {
         .orderBy(desc(notifications.createdAt))
         .limit(limit);
 
+      const paths = await pathTargets(rows.map((r) => r.n));
       const items = [];
       for (const r of rows) {
         if (r.n.postId) {
@@ -156,7 +194,7 @@ export function registerNotificationRoutes(app: Express) {
           if (!post || post.hiddenAt || (post.project?.isPrivate && !post.viewerIsTeam)) continue;
         }
         const actorName = r.displayName || [r.firstName, r.lastName].filter(Boolean).join(" ") || r.email || "Someone";
-        const shaped = { kind: r.n.kind, actorId: r.n.actorId, postId: r.n.postId, projectId: r.n.projectId, actorName, projectTitle: r.projectTitle ?? null };
+        const shaped = { kind: r.n.kind, actorId: r.n.actorId, postId: r.n.postId, projectId: r.n.projectId, actorName, projectTitle: r.projectTitle ?? null, ...paths.get(r.n.id) };
         items.push({
           id: r.n.id, kind: r.n.kind, createdAt: r.n.createdAt, read: !!r.n.readAt,
           actor: { id: r.n.actorId, name: actorName, avatarUrl: r.avatarUrl || r.profileImageUrl || null },

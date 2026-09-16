@@ -180,6 +180,39 @@ export const RATE_LIMITS = {
 
 export type RateLimitAction = keyof typeof RATE_LIMITS;
 
+/**
+ * Actions that must not run unmetered when the limiter can't count.
+ *
+ * A limiter that blocks ordinary writes because the database hiccuped is worse
+ * than the spam it prevents, so a failed count lets a comment or a follow
+ * through. These are the ones where it isn't: a password guesser gets
+ * unlimited attempts, a script spends the account's model credits, or money
+ * moves — damage an outage shouldn't be able to cause. They're refused with
+ * LIMIT_UNAVAILABLE for as long as the count is failing, which on a healthy
+ * day is never.
+ */
+export const FAIL_CLOSED_ACTIONS = ["login", "session", "ai", "checkout", "payout", "external", "upload", "inviteLookup"] as const;
+export const failsClosed = (action: RateLimitAction): boolean => (FAIL_CLOSED_ACTIONS as readonly string[]).includes(action);
+
+/** The code on a refusal that isn't the person's doing: the limiter itself couldn't answer. */
+export const LIMIT_UNAVAILABLE = "limit_unavailable" as const;
+
+/** How long a client should wait when the limiter can't count. Short: an outage is measured in seconds, not the window's length. */
+export const LIMIT_UNAVAILABLE_RETRY_SECONDS = 30;
+
+/**
+ * What a request refused by an unavailable limiter gets back: status 503, this
+ * body, and a `Retry-After`. Deliberately not a 429 — nobody hit a limit, and
+ * telling someone they're doing too much when the database is down sends them
+ * to the wrong fix.
+ */
+export interface LimitUnavailableBody {
+  message: string;
+  code: typeof LIMIT_UNAVAILABLE;
+  action: RateLimitAction;
+  retryAfterSeconds: number;
+}
+
 /** The machine-readable code on every rate-limit refusal. */
 export const RATE_LIMITED = "rate_limited" as const;
 
@@ -421,13 +454,31 @@ export const UNDO_REASON_CODES = [
 ] as const;
 export const isUndoReasonCode = (id: string): boolean => UNDO_REASON_CODES.some((r) => r.id === id);
 
-/** The queue decisions an undo can reverse, and the entry the reversal appends. */
+/**
+ * The decisions an undo can reverse, and the entry the reversal appends.
+ *
+ * Queue decisions and the two a reviewer can make outside the queue: taking
+ * content down and suspending an account. Both of those already have an
+ * opposite route, but an undo is not the same thing — it puts back exactly
+ * what was there, refuses when the thing has changed since, and ties the
+ * reversal to the decision it reverses in the log, so "overturned on appeal"
+ * is a question the log can answer.
+ */
 export const UNDOABLE_ACTIONS: Record<string, string> = {
   comment_remove: "comment_restore",
   comment_shadow_hide: "comment_restore",
   comment_ban: "comment_restore",
   comment_dismiss: "report_reopened",
+  content_hidden: "content_restored",
+  content_restored: "content_hidden",
+  suspend: "reinstate",
+  reinstate: "suspend",
 };
+
+/** Decisions undone by putting a user account back as it was, rather than a comment or a report. */
+export const ACCOUNT_UNDO_ACTIONS: readonly string[] = ["suspend", "reinstate"];
+/** Decisions undone by putting a piece of content back as it was. */
+export const CONTENT_UNDO_ACTIONS: readonly string[] = ["content_hidden", "content_restored"];
 
 /** A saved state compared with a live one: timestamps by instant, everything else exactly. */
 export function sameModeratedState(saved: Record<string, unknown> | null | undefined, live: Record<string, unknown> | null | undefined): boolean {

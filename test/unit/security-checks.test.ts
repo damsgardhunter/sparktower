@@ -47,12 +47,13 @@ if (process.env.NODE_ENV === "production" && !process.env.SESSION_SECRET) {
 }
 const app = express();
 app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"] } } }));
-app.use(session({ cookie: { httpOnly: true, secure: isProduction, sameSite: "lax" } }));
-app.post("/api/login", rateLimit({ max: 8 }), async (req, res) => { await bcrypt.compare(req.body.password, hash); });
-app.post("/api/projects/:id", requireOwner, async (req, res) => { const body = z.object({ title: z.string() }).parse(req.body); });
-app.delete("/api/projects/:id", isProjectMember(req.user.id, id));
+app.use(session({ cookie: { httpOnly: true, secure: isProduction, sameSite: "lax", maxAge: 604800000 } }));
+app.post("/api/login", rateLimit({ max: 8 }), async (req, res) => { await bcrypt.compare(req.body.password, hash); req.session.regenerate(() => res.json({ ok: true })); });
+app.post("/api/logout", (req, res) => req.logout(() => req.session.destroy(() => res.json({ ok: true }))));
+app.post("/api/projects/:id", requireOwner, rateLimit({ max: 30 }), async (req, res) => { const body = z.object({ title: z.string() }).parse(req.body); });
+app.delete("/api/projects/:id", rateLimit({ max: 30 }), isProjectMember(req.user.id, id));
 app.post("/api/stripe/webhook", (req, res) => { stripe.webhooks.constructEvent(req.body, req.headers["stripe-signature"], secret); });
-app.post("/api/admin/roles", requireAdmin, requireMfa, (req, res) => { logActivity({ action: "role changed" }); totp.verify({ token, secret }); });
+app.post("/api/admin/roles", requireAdmin, requireMfa, rateLimit({ max: 10 }), (req, res) => { logActivity({ action: "role changed" }); totp.verify({ token, secret }); });
 app.use((err, req, res, next) => { console.error(err); res.status(500).json({ message: "Something went wrong" }); });` },
   { path: "client/src/Chat.tsx", content: `const escapeHtml = (s) => s.replace(/</g, "&lt;"); export const Msg = ({ t }) => <p dangerouslySetInnerHTML={{ __html: escapeHtml(t) }} />;` },
   // Not the app's code: these must not satisfy or fail anything.
@@ -188,5 +189,117 @@ describe("the secret-config check", () => {
     const c = verdict(files);
     expect(c.detail).not.toMatch(/hard-coded default/);
     expect(c.status).toBe("pass");
+  });
+});
+
+describe("the checks added for reads, paths, commands and logs", () => {
+  const verdict = (id: string, files: { path: string; content?: string }[]) => scanSecurity(files as any, {}).checks.find((c) => c.id === id)!;
+  const srv = (content: string, path = "server/routes.ts") => ({ path, content });
+
+  it("reads by id: flags one with no check on who is asking, passes ones that scope by owner or membership", () => {
+    const open = verdict("read-authorization", [srv(`app.get("/api/invoices/:id", async (req, res) => res.json(await db.invoice(req.params.id)));`)]);
+    expect(open.status).toBe("missing");
+    expect(open.severity).toBe("high");
+    const scoped = verdict("read-authorization", [srv(`
+app.get("/api/invoices/:id", async (req, res) => { const row = await db.invoice(req.params.id); if (row.userId !== req.user.id) return res.status(404).end(); res.json(row); });
+app.get("/api/projects/:id/tasks", async (req, res) => { if (!(await isProjectMember(req.user.id, req.params.id))) return res.status(403).end(); res.json([]); });`)]);
+    expect(scoped.status).toBe("pass");
+    // Nothing read by id at all: not a gap.
+    expect(verdict("read-authorization", [srv(`app.get("/api/health", (req, res) => res.json({ ok: true }));`)]).status).toBe("n/a");
+  });
+
+  it("file paths: flags one built from a request value, passes a contained or strictly shaped one", () => {
+    const loose = verdict("path-traversal", [srv(`
+app.get("/files/*rest", (req, res) => { const name = req.path.slice(7); res.sendFile(path.join(ROOT, name)); });`)]);
+    expect(loose.status).toBe("missing");
+    expect(loose.evidence).toEqual(["server/routes.ts"]);
+    const contained = verdict("path-traversal", [srv(`
+app.get("/files/*rest", (req, res) => { const name = req.path.slice(7); const resolved = path.resolve(ROOT, name); if (path.relative(ROOT, resolved).startsWith("..")) return res.status(404).end(); res.sendFile(resolved); });`)]);
+    expect(contained.status).toBe("pass");
+    const strict = verdict("path-traversal", [srv(`
+app.get("/files/:id", (req, res) => { const id = String(req.params.id); if (!/^[A-Za-z0-9_-]{1,120}$/.test(id)) return res.status(400).end(); res.sendFile(path.join(ROOT, id)); });`)]);
+    expect(strict.status).toBe("pass");
+    expect(verdict("path-traversal", [srv(`app.get("/api/health", (req, res) => res.json({ ok: true }));`)]).status).toBe("n/a");
+  });
+
+  it("commands: flags a shell or a command built by hand, passes arguments as a list", () => {
+    const shell = verdict("command-injection", [srv(`import { execSync } from "child_process";\nexecSync(\`convert \${req.body.file} out.png\`);`)]);
+    expect(shell.status).toBe("missing");
+    expect(verdict("command-injection", [srv(`import { exec } from "child_process";\nexec("ls " + req.query.dir);`)]).status).toBe("missing");
+    expect(verdict("command-injection", [srv(`import { spawn } from "child_process";\nspawn("ffmpeg", ["-i", input, output]);`)]).status).toBe("pass");
+    expect(verdict("command-injection", [srv(`app.get("/api/health", (req, res) => res.json({ ok: true }));`)]).status).toBe("n/a");
+  });
+
+  it("logs: flags a logged body, token or password, and isn't fooled by a message that only names one", () => {
+    expect(verdict("log-leakage", [srv(`import express from "express";\napp.post("/api/login", (req, res) => { console.log("login", req.body); });`)]).status).toBe("missing");
+    expect(verdict("log-leakage", [srv(`import express from "express";\napp.listen(3000);\nconsole.error("refresh failed", refreshToken);`)]).status).toBe("missing");
+    // The name in a message is not the value: this is the false positive the check must not raise.
+    const messageOnly = verdict("log-leakage", [srv(`import express from "express";\nconsole.warn("[auth] MOBILE_TOKEN_SECRET is not set; set a password reset token in .env");\napp.listen(3000);`)]);
+    expect(messageOnly.status).toBe("pass");
+  });
+});
+
+describe("the checks added for limits, sessions, stored secrets and data rights", () => {
+  const verdict = (id: string, files: { path: string; content?: string }[]) => scanSecurity(files as any, {}).checks.find((c) => c.id === id)!;
+  const srv = (content: string, path = "server/routes.ts") => ({ path, content });
+
+  it("limits beyond sign-in: counts the share of writes that carry one, and a whole-app limiter passes outright", () => {
+    const only = `app.post("/api/login", rateLimit({ max: 8 }), login);\napp.post("/api/posts", create);\napp.post("/api/invites", invite);\napp.delete("/api/posts/:id", remove);`;
+    expect(verdict("write-rate-limits", [srv(only)]).status).toBe("partial");
+    expect(verdict("write-rate-limits", [srv(only)]).detail).toMatch(/1 of 4/);
+    expect(verdict("write-rate-limits", [srv(`app.post("/api/posts", create);\napp.post("/api/invites", invite);`)]).status).toBe("missing");
+    expect(verdict("write-rate-limits", [srv(`app.use(rateLimit({ max: 100 }));\napp.post("/api/posts", create);`)]).status).toBe("pass");
+    expect(verdict("write-rate-limits", [srv(`app.get("/api/posts", list);`)]).status).toBe("n/a");
+  });
+
+  it("sessions: wants a new id at sign-in, an end at sign-out, and an expiry", () => {
+    const all = srv(`app.use(session({ cookie: { maxAge: 604800000 } }));\napp.post("/login", (req, res) => req.session.regenerate(done));\napp.post("/logout", (req, res) => req.session.destroy(done));`);
+    expect(verdict("session-lifecycle", [all]).status).toBe("pass");
+    const some = verdict("session-lifecycle", [srv(`app.use(session({ cookie: { maxAge: 1000 } }));\nreq.session.userId = user.id;`)]);
+    expect(some.status).toBe("partial");
+    expect(some.detail).toMatch(/New id at sign-in ✗/);
+    expect(verdict("session-lifecycle", [srv(`app.get("/api/me", jwtOnly);`)]).status).toBe("n/a");
+  });
+
+  it("stored credentials: a plainly named token column is a gap; hashed and sealed ones aren't", () => {
+    const raw = [{ path: "shared/schema.ts", content: `export const invites = table("invites", { token: varchar("token").notNull(), apiKey: varchar("api_key") });` }];
+    expect(verdict("secrets-at-rest", raw).status).toBe("missing");
+    const hashedOnly = [{ path: "shared/schema.ts", content: `export const invites = table("invites", { tokenHash: varchar("token_hash").notNull(), passwordHash: varchar("password_hash") });` }];
+    expect(verdict("secrets-at-rest", hashedOnly).status).toBe("pass");
+    const sealed = [
+      { path: "shared/schema.ts", content: `export const users = table("users", { mfaSecret: text("mfa_secret") });` },
+      { path: "server/secret-box.ts", content: `export const seal = (plain) => createCipheriv("aes-256-gcm", key, iv);` },
+    ];
+    // A sealed value still reads as a gap by name alone — but with encryption present it's "partial", not "missing".
+    expect(verdict("secrets-at-rest", sealed).status).toBe("partial");
+    // SQL migrations count too, including a column added later — and a snake_case column is matched to the camelCase code that seals it.
+    const sqlRaw = [{ path: "migrations/0003_keys.sql", content: `ALTER TABLE "users" ADD COLUMN "api_key" text;` }];
+    expect(verdict("secrets-at-rest", sqlRaw).status).toBe("missing");
+    const sqlSealed = [
+      { path: "migrations/0003_keys.sql", content: `ALTER TABLE "users" ADD COLUMN "mfa_secret" text;` },
+      { path: "server/mfa.ts", content: `await db.update(users).set({ mfaSecret: seal(secret) });\nconst seal = (p) => createCipheriv("aes-256-gcm", key, iv);` },
+    ];
+    expect(verdict("secrets-at-rest", sqlSealed).status).toBe("pass");
+    expect(verdict("secrets-at-rest", [srv(`app.get("/x", h);`)]).status).toBe("n/a");
+  });
+
+  it("secret comparison: plain equality on a signature is a gap, a constant-time compare isn't", () => {
+    expect(verdict("timing-safe-compare", [srv(`const ok = signature === expectedSignature;`)]).status).toBe("partial");
+    expect(verdict("timing-safe-compare", [srv(`if (!crypto.timingSafeEqual(a, b)) return null;\nconst same = digest === expected;`)]).status).toBe("pass");
+    expect(verdict("timing-safe-compare", [srv(`app.get("/x", h);`)]).status).toBe("n/a");
+  });
+
+  it("email verification: asked of a codebase that registers accounts, not of one that hands sign-up to a provider", () => {
+    expect(verdict("email-verification", [srv(`app.post("/api/register", async (req, res) => { await db.insert(users).values({ email: req.body.email }); });`)]).status).toBe("missing");
+    expect(verdict("email-verification", [srv(`app.post("/api/register", h);\nawait sendVerificationEmail(user, verificationToken);`)]).status).toBe("pass");
+    expect(verdict("email-verification", [srv(`app.post("/api/posts", h);`)]).status).toBe("n/a");
+  });
+
+  it("data rights: wants both a way out and a copy of the data", () => {
+    const users = `export const users = table("users", {});\napp.post("/api/register", h);`;
+    expect(verdict("account-data-rights", [srv(users)]).status).toBe("missing");
+    expect(verdict("account-data-rights", [srv(`${users}\napp.post("/api/account/delete-account", h);`)]).status).toBe("partial");
+    expect(verdict("account-data-rights", [srv(`${users}\napp.post("/api/account/delete-account", h);\napp.get("/api/account/export", exportMyData);`)]).status).toBe("pass");
+    expect(verdict("account-data-rights", [srv(`app.get("/api/status", h);`)]).status).toBe("n/a");
   });
 });

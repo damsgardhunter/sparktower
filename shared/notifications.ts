@@ -3,6 +3,7 @@
  * mobile inbox say the same thing and open the same place.
  */
 import type { NotificationKind } from "./schema";
+import type { ProjectGoal } from "./goals";
 
 export interface NotificationShape {
   kind: NotificationKind;
@@ -11,6 +12,29 @@ export interface NotificationShape {
   postId: string | null;
   projectId: string | null;
   projectTitle: string | null;
+  /** For a path notification: the section its step is on, when known. */
+  section?: ProjectGoal | null;
+  /** For a path notification: what to bring into view — see PATH_FOCUS. */
+  focus?: string | null;
+}
+
+/**
+ * What a path link brings into view on the project's dashboard.
+ *
+ * `next`: the section's Next Step card. `weekly`: the card, with the weekly
+ * update open. Anything else is the milestone id the notification was about
+ * (`SHIP.M1.2`): the card again, and if that step has been finished since,
+ * a word that this is the one after it.
+ */
+export const PATH_FOCUS = { next: "next", weekly: "weekly" } as const;
+
+/** The project's dashboard, on a section, focused on its next step. */
+export function pathHref(projectId: string, opts: { section?: ProjectGoal | null; focus?: string | null } = {}): string {
+  const params = new URLSearchParams();
+  if (opts.section) params.set("section", opts.section);
+  params.set("tab", "nova");
+  params.set("focus", opts.focus || PATH_FOCUS.next);
+  return `/projects/${projectId}/manage?${params.toString()}`;
 }
 
 export function notificationText(n: NotificationShape): string {
@@ -37,10 +61,12 @@ export function notificationText(n: NotificationShape): string {
 }
 
 /** Where tapping it goes: the post for anything about a post, the person or project otherwise. */
-export function notificationHref(n: Pick<NotificationShape, "kind" | "actorId" | "postId" | "projectId">): string {
+export function notificationHref(n: Pick<NotificationShape, "kind" | "actorId" | "postId" | "projectId" | "section" | "focus">): string {
   if (n.postId) return `/posts/${n.postId}`;
-  // The path lives on the project's own screen, where the next step is the first thing shown.
-  if ((n.kind === "path_step_done" || n.kind === "next_step" || n.kind === "weekly_update" || n.kind === "artifact_signup") && n.projectId) return `/projects/${n.projectId}/manage`;
+  // The path lives on the project's dashboard: straight to the section the step is on, with its Next Step card in view.
+  if ((n.kind === "path_step_done" || n.kind === "next_step") && n.projectId) return pathHref(n.projectId, { section: n.section, focus: n.focus });
+  if (n.kind === "weekly_update" && n.projectId) return pathHref(n.projectId, { section: n.section, focus: PATH_FOCUS.weekly });
+  if (n.kind === "artifact_signup" && n.projectId) return `/projects/${n.projectId}/manage`;
   if (n.kind === "project_follow" && n.projectId) return `/projects/${n.projectId}`;
   if (n.kind === "invite_accepted" && n.projectId) return `/projects/${n.projectId}/manage?tab=team`;
   if (n.kind === "connection_request") return "/profile";

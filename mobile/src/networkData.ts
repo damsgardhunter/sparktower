@@ -148,7 +148,8 @@ export function appHref(webHref: string | null | undefined, actorId: string): st
   if ((m = /^\/posts\/([^/?#]+)/.exec(href))) return `/post/${m[1]}`;
   if ((m = /^\/a\/([^/?#]+)/.exec(href))) return `/a/${m[1]}`;
   if ((m = /^\/projects\/([^/?#]+)\/documents\/([^/?#]+)/.exec(href))) return `/project/${m[1]}/documents/${m[2]}`;
-  if ((m = /^\/projects\/([^/?#]+)\/manage/.exec(href))) return `/manage/${m[1]}`;
+  // The manager keeps the link's section, tab and focus (a path notification lands on that section's next step).
+  if ((m = /^\/projects\/([^/?#]+)\/manage(\?[^#]*)?/.exec(href))) return `/manage/${m[1]}${m[2] ?? ""}`;
   if ((m = /^\/projects\/([^/?#]+)/.exec(href))) return `/project/${m[1]}`;
   if (href === "/profile") return "/network/invitations";
   if ((m = /^\/profile\/([^/?#]+)/.exec(href))) return `/user/${m[1]}`;

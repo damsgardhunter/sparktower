@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { pathHref } from "@shared/notifications";
 import { apiRequest } from "@/lib/queryClient";
 import { refreshNotifications } from "@/components/notification-bell";
 import { useQuery } from "@tanstack/react-query";
@@ -24,7 +25,7 @@ function NextStepLink({ projectId }: { projectId: string }) {
   if (!data?.adopted) return null;
   return (
     <Link
-      href={`/projects/${projectId}/manage`}
+      href={pathHref(projectId)}
       className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-[13px] hover:bg-primary/10"
       data-testid="post-next-step"
     >

@@ -41,6 +41,9 @@ describe("signing out", () => {
     const all = await other.post("/api/auth/logout-all");
     expect(all.status).toBe(200);
     expect(all.body.devicesSignedOut).toBe(1);
+    // Web sessions are ended by reading the session store's own rows (sess->passport->user): if that shape ever
+    // drifts, this count goes to 0 and the assertions below fail, rather than global sign-out quietly missing browsers.
+    expect(all.body.sessionsEnded).toBeGreaterThanOrEqual(1);
     expect((await other.get("/api/auth/user")).status).toBe(401);
     expect((await request(app).post("/api/auth/mobile/refresh").set("x-forwarded-for", "203.0.113.252").send({ refreshToken })).status).toBe(401);
     // And the phone's access token, still unexpired, stops working now rather than in 15 minutes.
@@ -136,6 +139,36 @@ describe("public writes that trust a credential in the request", () => {
     expect((await request(app).put("/internal-local-upload/abc123").set("x-forwarded-for", uploader).send("data")).status).toBe(429);
   });
 });
+
+  it("keeps the device label the app gave at sign-in, cleaned, and won't let a refresh rewrite it", async () => {
+    const app = await getTestApp();
+    const { db } = await import("../../server/db");
+    const { mobileRefreshTokens } = await import("@shared/schema");
+    const { eq } = await import("drizzle-orm");
+    const email = `device-${Date.now()}@example.test`;
+    await request(app).post("/api/auth/register").set("x-forwarded-for", "203.0.113.130")
+      .send({ email, password, firstName: "Device" }).expect(201);
+
+    const messy = `  Ada's iPhone\u0000 15\n\nPro  ${"x".repeat(200)}`;
+    const login = await request(app).post("/api/auth/mobile/login").set("x-forwarded-for", "203.0.113.131").send({ email, password, device: messy });
+    expect(login.status).toBe(200);
+    const [stored] = await db.select().from(mobileRefreshTokens).where(eq(mobileRefreshTokens.userId, login.body.user.id));
+    expect(stored.device).toBe(`Ada's iPhone 15 Pro ${"x".repeat(200)}`.slice(0, 80));
+    expect(stored.device).not.toMatch(/[\u0000-\u001f]/);
+
+    // A refresh proves possession of a token, not whose device it is: the label comes from the sign-in, not the body.
+    const refreshed = await request(app).post("/api/auth/mobile/refresh").set("x-forwarded-for", "203.0.113.132")
+      .send({ refreshToken: login.body.refreshToken, device: "Attacker's laptop" });
+    expect(refreshed.status).toBe(200);
+    const rows = await db.select().from(mobileRefreshTokens).where(eq(mobileRefreshTokens.userId, login.body.user.id));
+    expect(rows.map((r) => r.device)).toEqual([stored.device, stored.device]);
+
+    // Nothing sent, nothing stored.
+    const bare = await request(app).post("/api/auth/mobile/login").set("x-forwarded-for", "203.0.113.133").send({ email, password, device: "   " });
+    expect(bare.status).toBe(200);
+    const all = await db.select().from(mobileRefreshTokens).where(eq(mobileRefreshTokens.userId, login.body.user.id));
+    expect(all.some((r) => r.device === null)).toBe(true);
+  });
 
 describe("security headers on the real app", () => {
   it("every response carries them — pages, the API, errors — and none says what the server runs", async () => {

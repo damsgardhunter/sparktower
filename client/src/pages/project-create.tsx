@@ -43,7 +43,7 @@ import ReactMarkdown from "react-markdown";
 import type { Project } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 import { useUpload } from "@/hooks/use-upload";
-import { PENDING_PATH_KEY, type PendingPath } from "@shared/path-artifacts";
+import { PENDING_PATH_KEY, afterPendingCreatePath, parsePendingPath } from "@shared/path-artifacts";
 import { PROJECT_GOALS, projectGoal, subcategoriesFor, isValidSubcategory, type ProjectGoal } from "@shared/goals";
 import { NEW_PROJECT_STEPS, type NewProjectStep, nextStep, prevStep, stepIndex } from "@shared/new-project-steps";
 import { useAuth } from "@/hooks/use-auth";
@@ -172,14 +172,16 @@ const STEP_LABELS: Record<NewProjectStep, string> = {
   setup: "Set up with Nova", goal: "Goal", subcategory: "Kind", review: "Create",
 };
 
-/** The goal picked on a public artifact page before signing up, used once. */
+/**
+ * The goal picked on a public artifact page before signing up. Read, not
+ * consumed: it stays through a reload or a detour, and is cleared only once a
+ * project exists (see createMutation).
+ */
 function pendingPathGoal(): { goal?: ProjectGoal } {
-  try {
-    const raw = localStorage.getItem(PENDING_PATH_KEY);
-    if (!raw) return {};
-    const pending = JSON.parse(raw) as PendingPath;
-    return PROJECT_GOALS.some((g) => g.id === pending.goal) ? { goal: pending.goal as ProjectGoal } : {};
-  } catch { return {}; }
+  let raw: string | null = null;
+  try { raw = localStorage.getItem(PENDING_PATH_KEY); } catch { return {}; }
+  const pending = parsePendingPath(raw);
+  return pending && PROJECT_GOALS.some((g) => g.id === pending.goal) ? { goal: pending.goal as ProjectGoal } : {};
 }
 
 export default function ProjectCreate() {
@@ -227,8 +229,6 @@ export default function ProjectCreate() {
     // Someone who came from a published artifact starts on the goal they chose there.
     ...pendingPathGoal(),
   }));
-  // Used once: the next project starts from scratch.
-  useEffect(() => { try { localStorage.removeItem(PENDING_PATH_KEY); } catch { /* nothing to clear */ } }, []);
 
   const soloMode = !!projectData.soloMode;
 
@@ -273,7 +273,8 @@ export default function ProjectCreate() {
       if (raw) {
         const d = JSON.parse(raw);
         if (Array.isArray(d.messages) && d.messages.length) { setMessages(d.messages); setShowIntro(false); }
-        if (d.projectData && typeof d.projectData === "object") setProjectData((prev) => ({ ...prev, ...d.projectData }));
+        // The artifact's goal wins over an older draft's: it's the choice they just made.
+        if (d.projectData && typeof d.projectData === "object") setProjectData((prev) => ({ ...prev, ...d.projectData, ...pendingPathGoal() }));
         if (Array.isArray(d.edited)) setEdited(d.edited.map(String));
         if (Array.isArray(d.novaTitles)) setNovaTitles(d.novaTitles.map(String));
       }
@@ -371,12 +372,15 @@ export default function ProjectCreate() {
     },
     onSuccess: (project) => {
       if (draftKey) { try { localStorage.removeItem(draftKey); } catch { /* fine */ } }
+      // A project from an artifact's "start your own path": the choice is spent, and they land on the path, first step up.
+      const fromArtifact = pendingPathGoal().goal === project.goal;
+      try { localStorage.removeItem(PENDING_PATH_KEY); } catch { /* nothing to clear */ }
       toast({
         title: "Project created!",
         description: "Your project has been successfully created.",
       });
       queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
-      setLocation(`/projects/${project.id}/manage`);
+      setLocation(fromArtifact ? afterPendingCreatePath(project.id, project.goal) : `/projects/${project.id}/manage`);
     },
   });
 

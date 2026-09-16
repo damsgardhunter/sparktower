@@ -13,7 +13,7 @@ import { renderRouteCoverage } from "./route-coverage";
 import { renderDataShape, type DataShape } from "@shared/data-shape";
 import { CAPABILITY_AREAS, sanitizeDeepRead, type CapabilityEntry, type CapabilityArea, type CapabilityDetail } from "@shared/capabilities";
 import { parseModelJson } from "./ai-json";
-import { isTest, summarizeTestInventory, summarizeMobileScreens } from "./audit-evidence";
+import { isTest, summarizeTestInventory, summarizeMobileScreens, summarizeAuthEndpoints, summarizeEnforcementFilters } from "./audit-evidence";
 
 const rawBase = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
 const openai = new OpenAI({
@@ -110,6 +110,10 @@ export async function deepReadArea(
     // "is this tested?" is answered from the repository, not from the handful of files whose full text fits.
     summarizeTestInventory(files.map((f) => f.path), testsAreTheSubject ? null : hint ?? null),
     entry.area === "mobile" ? summarizeMobileScreens(files) : null,
+    // Both ends of the app's sign-in, so "same auth as the web" is checked rather than taken from a comment.
+    entry.area === "mobile" && coverage ? summarizeAuthEndpoints(coverage.rows) : null,
+    // The chain's last step: where hidden content and suspended accounts are filtered out of reads.
+    entry.area === "moderation" ? summarizeEnforcementFilters(files) : null,
   ].filter(Boolean).join("\n\n") || null;
   const allowed = new Set(files.map((f) => f.path));
 
