@@ -119,6 +119,43 @@ describe("the endpoints a loop's writing names", () => {
     expect(documentedEndpoints(["`/api/projects/:projectId/follow`"], routes)[0]).toMatch(/registered/);
   });
 
+  it("treats a wildcard as the family it is, rather than a missing endpoint", () => {
+    /*
+     * The bug this pins: a read of the path loop reported that "/api/artifacts/*
+     * is NOT REGISTERED in the repository" and told the builder to go and write
+     * routes that were already mounted. `/api/artifacts/*` isn't an endpoint —
+     * looking it up as one finds nothing, and the "not in the route list" line
+     * landed directly above the line correctly reporting the real route as
+     * registered. The model believed the wrong one.
+     */
+    const withFamily = [
+      ...routes,
+      { label: "POST /api/artifacts/:id/publish", file: "server/artifact-routes.ts" },
+      { label: "POST /api/artifacts/:id/unpublish", file: "server/artifact-routes.ts" },
+    ];
+    const [family] = documentedEndpoints(["The client publishes via /api/artifacts/* and it works."], withFamily);
+    expect(family).toContain("a family, not one endpoint: 2 registered");
+    expect(family).toContain("POST /api/artifacts/:id/publish");
+    expect(family).not.toContain("NOT");
+
+    // A family with nothing under it is still a real finding, and says so plainly.
+    const [empty] = documentedEndpoints(["We'll add /api/webhooks/* later."], withFamily);
+    expect(empty).toContain("NOT ONE route is registered under it");
+  });
+
+  it("answers with the method that was asked about, when that route exists", () => {
+    const both = [
+      ...routes,
+      { label: "DELETE /api/kanban/:taskId", file: "server/routes.ts" },
+      { label: "PATCH /api/kanban/:taskId", file: "server/routes.ts" },
+    ];
+    // Reporting DELETE to someone who asked about PATCH reads as "that's not the one I meant".
+    expect(documentedEndpoints(["mark it done with PATCH /api/kanban/:taskId"], both)[0])
+      .toBe("PATCH /api/kanban/:taskId  — registered in server/routes.ts");
+    expect(documentedEndpoints(["remove it with DELETE /api/kanban/:taskId"], both)[0])
+      .toBe("DELETE /api/kanban/:taskId  — registered in server/routes.ts");
+  });
+
   it("names each endpoint once, keeps to the cap, and ignores prose without paths", () => {
     const many = Array.from({ length: 30 }, (_, i) => `POST /api/thing-${i}`).join(" ");
     expect(documentedEndpoints([many], routes).length).toBe(20);
@@ -145,5 +182,32 @@ describe("the endpoints a loop's writing names", () => {
     // Client code alone isn't evidence a server route exists: that's the call, not the handler.
     const clientOnly = documentedEndpoints(["POST /api/artifacts/:id/publish"], [], [files[1]] as any);
     expect(clientOnly[0]).toContain("NOT FOUND anywhere in the files read");
+  });
+});
+
+describe("which files a loop's steps pull in", () => {
+  it("matches a name's parts, not any substring that happens to be inside one", () => {
+    /*
+     * "land" matched landing.tsx, "share" matched shared.ts, "build" matched
+     * document-builder.tsx. Each coincidence matched exactly one file, so the
+     * rarity sort — which is meant to favour the specific — promoted all three
+     * above the files that genuinely share a rarer noun.
+     */
+    const loop = {
+      title: "Land and share",
+      description: "land on home, share the build with a stored artifact",
+    };
+    const { paths } = pickLoopEvidence(loop, files);
+    expect(paths).not.toContain("client/src/pages/landing.tsx");
+    expect(paths.some((p) => /shared\.ts$/.test(p))).toBe(false);
+    // And a real name still matches, plural or singular.
+    const artifacts = pickLoopEvidence({ title: "Publish an artifact", description: "publish the artifact" }, files);
+    expect(artifacts.paths.some((p) => /artifact/.test(p))).toBe(true);
+  });
+
+  it("doesn't spend a slot on the generic UI kit", () => {
+    // "select" is a word in half the loops written and also a file in every shadcn project.
+    const { paths } = pickLoopEvidence({ title: "Select a project", description: "select a project, see progress" }, files);
+    expect(paths.filter((p) => /components\/ui\//.test(p))).toEqual([]);
   });
 });

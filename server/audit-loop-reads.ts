@@ -35,7 +35,7 @@ const PATH_RE = /(?:^|[\s`'"(\[|])((?:[\w@.-]+\/)+[\w@.-]+\.(?:tsx?|jsx?|mjs|md|
 const isTest = (p: string) => /(^|\/)(test|tests|e2e|__tests__)\/|\.(test|spec)\.[tj]sx?$/.test(p);
 
 /** Any /api path written in prose or code, as documentation names them. */
-const ENDPOINT_RE = /(?:\b(GET|POST|PUT|PATCH|DELETE)\s+)?(\/api\/[\w:./-]+)/gi;
+const ENDPOINT_RE = /(?:\b(GET|POST|PUT|PATCH|DELETE)\s+)?(\/api\/[\w:./-]+\*?)/gi;
 /** The file where a path literally appears, params ignored — evidence it exists even when the route list missed it. */
 function handWritten(path: string, files: RepoFile[]): string | null {
   const pattern = path.split("/").map((seg) => (seg.startsWith(":") ? "[^/`'\"]+" : seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).join("/");
@@ -66,10 +66,18 @@ export function documentedEndpoints(
   max = 20,
 ): string[] {
   const registered = new Map<string, { label: string; file: string }>();
+  /** Every registered route for a path shape, so the method somebody named can be honoured. */
+  const byShape = new Map<string, { label: string; file: string; method: string }[]>();
   for (const r of routes) {
     const path = /\s(\/\S+)$/.exec(r.label)?.[1] ?? r.label.split(" ").pop() ?? "";
-    if (path.startsWith("/api/")) registered.set(shape(path), r);
+    if (!path.startsWith("/api/")) continue;
+    const key = shape(path);
+    if (!registered.has(key)) registered.set(key, r);
+    byShape.set(key, [...(byShape.get(key) ?? []), { ...r, method: r.label.split(" ")[0] }]);
   }
+  /** Routes under a prefix, for a mention like `/api/artifacts/*`. */
+  const under = (prefix: string) =>
+    [...byShape.keys()].filter((k) => k.startsWith(prefix)).flatMap((k) => byShape.get(k) ?? []);
   const seen = new Set<string>();
   const lines: string[] = [];
   for (const text of texts) {
@@ -78,7 +86,29 @@ export function documentedEndpoints(
       const key = shape(path);
       if (!path.startsWith("/api/") || seen.has(key) || lines.length >= max) continue;
       seen.add(key);
-      const hit = registered.get(key);
+
+      /*
+       * `/api/artifacts/*` is a family, not an endpoint, and so is a mention
+       * that trails off in a slash. Looking one up as though it were a path
+       * finds nothing and prints "not in the route list" — directly above the
+       * line that correctly reports the real route as registered. A read of
+       * this codebase's path loop took that as proof the artifact routes did
+       * not exist and told the builder to write them again. They were already
+       * there, mounted at server/routes.ts.
+       */
+      if (/[*]$/.test(path) || (/\/$/.test(m[2]) && !registered.has(key))) {
+        const prefix = shape(path.replace(/\*$/, ""));
+        const family = under(prefix);
+        lines.push(family.length
+          ? `${path}  — a family, not one endpoint: ${family.length} registered (${family.slice(0, 4).map((r) => r.label).join(", ")}${family.length > 4 ? ", …" : ""})`
+          : `${path}  — a family, and NOT ONE route is registered under it`);
+        continue;
+      }
+
+      // The method somebody wrote, when that exact route exists; otherwise whatever is registered at that shape.
+      const named = (m[1] ?? "").toUpperCase();
+      const exact = named ? (byShape.get(key) ?? []).find((r) => r.method === named) : undefined;
+      const hit = exact ?? registered.get(key);
       if (hit) { lines.push(`${hit.label}  — registered in ${hit.file}`); continue; }
       /*
        * Not in the route list — which is a list, not the repository. Before
@@ -150,18 +180,66 @@ export function pickLoopEvidence(
   // Tests: an end-to-end spec proves the most, then integration, then unit — and a few say enough.
   const testRank = (p: string) => (/^e2e\//.test(p) ? 0 : /integration/.test(p) ? 1 : 2);
   const tests = (citedBy[0] ?? []).filter(isTest).sort((a, b) => testRank(a) - testRank(b)).slice(0, 4);
-  for (const p of (citedBy[0] ?? []).filter((p) => !isTest(p)).slice(0, max - tests.length)) add(p);
+  /*
+   * Files named after the loop ("safety" → safety-routes.ts, admin-safety.tsx),
+   * the most specific names first: "artifact" says more than "path".
+   *
+   * The words of the *steps* count, not only the title's. This comment used to
+   * claim the artifact case while the code matched titles alone — and the path
+   * loop's title is "follow a goal path (Ship/Systemize/Raise)", so "Raise"
+   * pulled in fund, capital and investment files while `artifact-routes.ts` and
+   * the test that publishes one were never shown to the read at all. It then
+   * reported the artifact routes as unregistered and told the builder to write
+   * them a second time. A noun in the steps is how a loop names its own parts.
+   */
+  /*
+   * A word matches a *part* of the file's name, not any substring of it.
+   * Substring matching made "land" match `landing.tsx`, "share" match
+   * `shared.ts` and "build" match `document-builder.tsx` — and since each of
+   * those accidents matched exactly one file, the rarity sort promoted them
+   * above `artifact-routes.ts`, which six files genuinely share. Coincidences
+   * are always rare; that is what made them win.
+   */
+  const partsOf = (path: string) => path.toLowerCase().split("/").pop()!.split(/[^a-z0-9]+/).filter(Boolean);
+  const namesPart = (parts: string[], w: string) => parts.some((p) => p === w || p === `${w}s` || `${p}s` === w);
+  const named = files
+    // The generic UI kit is buttons, selects and progress bars. `select.tsx` matching the word
+    // "select" in a loop's steps is a coincidence, and it was taking a reserved slot.
+    .filter((f) => !/\.md$/i.test(f.path) && !/(^|\/)components\/ui\//.test(f.path))
+    .map((f) => {
+      const parts = partsOf(f.path);
+      return {
+        f,
+        hits: titleWords.filter((w) => namesPart(parts, w)),
+        stepHits: stepWords.filter((w) => !titleWords.includes(w) && namesPart(parts, w)),
+      };
+    })
+    .filter((x) => x.hits.length || x.stepHits.length);
+  const all = (x: typeof named[number]) => [...x.hits, ...x.stepHits];
+  const commonness = (w: string) => named.filter((x) => all(x).includes(w)).length;
+  /*
+   * Rarest word first, wherever it came from. Weighting title words above step
+   * words undoes the whole point: this loop's title carries "path", which names
+   * a dozen files, while its steps carry "artifact", which names three — and
+   * the three are the ones that answer the question.
+   */
+  named.sort((a, b) =>
+    Math.min(...all(a).map(commonness)) - Math.min(...all(b).map(commonness)) ||
+    all(b).length - all(a).length);
+  /*
+   * Reserved, not appended. Ranking these better achieved nothing while they
+   * were added last: the doc's own citations filled all sixteen slots first,
+   * and the files named for the loop's parts never fit. A few slots are held
+   * for them before the rest of the budget is spent.
+   */
+  const RESERVED = 3;
+  const reserved = named.slice(0, RESERVED).map((x) => x.f.path);
+
+  for (const p of (citedBy[0] ?? []).filter((p) => !isTest(p)).slice(0, Math.max(0, max - tests.length - reserved.length))) add(p);
   for (const p of firstPassEvidence) add(p);
+  for (const p of reserved) add(p);
   for (const p of tests) add(p);
   for (const p of citedBy.slice(1).flat()) add(p);
-  // Files named after the loop ("safety" → safety-routes.ts, admin-safety.tsx),
-  // the most specific names first: "artifact" says more than "path".
-  const named = files
-    .filter((f) => !/\.md$/i.test(f.path))
-    .map((f) => { const name = f.path.toLowerCase().split("/").pop()!; return { f, hits: titleWords.filter((w) => name.includes(w)) }; })
-    .filter((x) => x.hits.length);
-  const commonness = (w: string) => named.filter((x) => x.hits.includes(w)).length;
-  named.sort((a, b) => Math.min(...a.hits.map(commonness)) - Math.min(...b.hits.map(commonness)) || b.hits.length - a.hits.length);
   for (const { f } of named) {
     if (out.length >= max) break;
     add(f.path);
