@@ -84,3 +84,40 @@ describe("sprint review and contests", () => {
     }
   });
 });
+
+/**
+ * What the two of them actually write down during a sprint. `sprint_responses`
+ * was named by no test: the screens ask the questions, the route saves them,
+ * and nothing had ever checked that it does — or that the person in the next
+ * sprint can't read yours.
+ */
+describe("sprint responses", () => {
+  it("saves an answer for a participant, keeps the latest, and refuses everyone else", async () => {
+    const app = await getTestApp();
+    const [a, b] = [await person(app, "Asa"), await person(app, "Bea")];
+    const outsider = await person(app, "Nosy");
+    const [sprint] = await db.insert(cofounderSprints).values({
+      user1Id: a.id, user2Id: b.id, duration: "24h", status: "building",
+      productName: `Answers ${Date.now()}`, productDescription: "A sprint whose questions get answered.",
+    } as any).returning();
+
+    const saved = await a.agent.post(`/api/sprints/${sprint.id}/responses`).send({ questionKey: "why_this", answer: "Because we both keep hitting it." });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    expect(saved.body).toMatchObject({ sprintId: sprint.id, userId: a.id, questionKey: "why_this" });
+
+    // Answering again replaces the answer rather than adding a second one.
+    expect((await a.agent.post(`/api/sprints/${sprint.id}/responses`).send({ questionKey: "why_this", answer: "Because we both keep hitting it, weekly." })).status).toBe(200);
+    const mine = (await a.agent.get(`/api/sprints/${sprint.id}/responses`)).body as any[];
+    expect(mine.filter((r) => r.questionKey === "why_this")).toHaveLength(1);
+    expect(mine.find((r) => r.questionKey === "why_this").answer).toMatch(/weekly/);
+
+    // Half an answer isn't one.
+    expect((await b.agent.post(`/api/sprints/${sprint.id}/responses`).send({ questionKey: "why_this" })).status).toBe(400);
+    expect((await b.agent.post(`/api/sprints/${sprint.id}/responses`).send({ answer: "No question" })).status).toBe(400);
+
+    // Not in this sprint: not their questions to answer, and not theirs to read.
+    expect((await outsider.agent.post(`/api/sprints/${sprint.id}/responses`).send({ questionKey: "why_this", answer: "Mine now" })).status).toBe(403);
+    expect((await request(app).post(`/api/sprints/${sprint.id}/responses`).send({ questionKey: "why_this", answer: "Nobody" })).status).toBe(401);
+    expect((await a.agent.post("/api/sprints/00000000-0000-4000-8000-000000000009/responses").send({ questionKey: "x", answer: "y" })).status).toBe(404);
+  });
+});

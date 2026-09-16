@@ -151,4 +151,44 @@ describe("two-factor sign-in", () => {
     const ordinary = await request(app).post("/api/auth/mobile/login").set("x-forwarded-for", ip()).send({ email: user.email, password });
     expect(ordinary.body).toMatchObject({ accessToken: expect.any(String), mfaEnrollmentRequired: false });
   });
+
+  it("issues a fresh set of recovery codes, and only to a session that has passed a code", async () => {
+    const app = await getTestApp();
+    const me = await account(app, "Regen");
+
+    // Not on yet: nothing to replace.
+    const tooEarly = await me.agent.post("/api/auth/mfa/recovery-codes").send({});
+    expect(tooEarly.status).toBe(400);
+    expect(tooEarly.body.code).toBe("mfa_not_enabled");
+
+    const { secret, recoveryCodes: first } = await passMfa(me.agent);
+    expect(first).toHaveLength(10);
+
+    // A password alone doesn't even make a session while 2FA is on: the sign-in is held pending a code,
+    // so replacing the codes isn't refused as unauthorised — there is nobody there to refuse.
+    const passwordOnly = login(app, me.email);
+    expect((await passwordOnly.res).body).toMatchObject({ mfaRequired: true });
+    expect((await passwordOnly.agent.post("/api/auth/mfa/recovery-codes").send({})).status).toBe(401);
+
+    // The enrolled session can, and what comes back is new.
+    const again = await me.agent.post("/api/auth/mfa/recovery-codes").send({});
+    expect(again.status, JSON.stringify(again.body)).toBe(200);
+    expect(again.body.recoveryCodes).toHaveLength(10);
+    expect(again.body.recoveryCodes.some((c: string) => first.includes(c))).toBe(false);
+
+    // The old ones are dead: a code from the first set no longer signs anyone in.
+    const stale = login(app, me.email);
+    expect((await stale.res).body).toMatchObject({ mfaRequired: true });
+    const withOld = await stale.agent.post("/api/auth/mfa/verify").send({ code: first[0] });
+    expect(withOld.status, "a replaced recovery code must not work").toBe(401);
+
+    // A new one does, once.
+    const fresh = login(app, me.email);
+    await fresh.res;
+    expect((await fresh.agent.post("/api/auth/mfa/verify").send({ code: again.body.recoveryCodes[0] })).status).toBe(200);
+    const reused = login(app, me.email);
+    await reused.res;
+    expect((await reused.agent.post("/api/auth/mfa/verify").send({ code: again.body.recoveryCodes[0] })).status).toBe(401);
+    expect(secret).toBeTruthy();
+  });
 });

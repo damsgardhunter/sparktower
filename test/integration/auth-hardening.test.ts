@@ -170,6 +170,47 @@ describe("public writes that trust a credential in the request", () => {
     expect(all.some((r) => r.device === null)).toBe(true);
   });
 
+describe("the development tier overrides", () => {
+  /*
+   * Two routes let an account hand itself a paid tier and wipe its credit
+   * usage. They exist so a developer can see the paid experience without
+   * paying, and they are refused in production — which is the only thing
+   * standing between "convenient" and "free plans for anyone who finds them".
+   */
+  it("work for a signed-in developer, and are gone in production", async () => {
+    const app = await getTestApp();
+    const { agent, email } = await signedIn(app, "dev-tier");
+    const { db: lookup } = await import("../../server/db");
+    const { users: userTable } = await import("@shared/schema");
+    const { eq: is } = await import("drizzle-orm");
+    const [{ id: userId }] = await lookup.select({ id: userTable.id }).from(userTable).where(is(userTable.email, email));
+    const { db } = await import("../../server/db");
+    const { users } = await import("@shared/schema");
+    const { eq } = await import("drizzle-orm");
+    const accountOf = async () => (await db.select({ tier: users.subscriptionTier, used: users.creditsUsed }).from(users).where(eq(users.id, userId)))[0];
+
+    expect((await agent.post("/api/dev/set-tier").send({ tier: "builder" })).status).toBe(200);
+    expect((await accountOf()).tier).toBe("builder");
+    await db.update(users).set({ creditsUsed: 120 }).where(eq(users.id, userId));
+    expect((await agent.post("/api/dev/reset-credits").send({})).status).toBe(200);
+    expect((await accountOf()).used).toBe(0);
+
+    // In production they don't exist — not "forbidden", which would confirm they're there.
+    const wasProduction = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      await db.update(users).set({ creditsUsed: 90 }).where(eq(users.id, userId));
+      const tier = await agent.post("/api/dev/set-tier").send({ tier: "pro" });
+      expect(tier.status).toBe(404);
+      expect((await agent.post("/api/dev/reset-credits").send({})).status).toBe(404);
+      // And nothing happened on the way to the 404.
+      expect(await accountOf()).toMatchObject({ tier: "builder", used: 90 });
+    } finally {
+      if (wasProduction === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = wasProduction;
+    }
+  });
+});
+
 describe("security headers on the real app", () => {
   it("every response carries them — pages, the API, errors — and none says what the server runs", async () => {
     const app = await getTestApp();
