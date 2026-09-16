@@ -13,7 +13,7 @@ import { renderRouteCoverage } from "./route-coverage";
 import { renderDataShape, tablesExercisedByTests, type DataShape } from "@shared/data-shape";
 import { CAPABILITY_AREAS, sanitizeDeepRead, type CapabilityEntry, type CapabilityArea, type CapabilityDetail } from "@shared/capabilities";
 import { parseModelJson } from "./ai-json";
-import { isTest, summarizeTestInventory, summarizeMobileScreens, summarizeAuthEndpoints, summarizeEnforcementFilters, summarizeUntestedRoutes } from "./audit-evidence";
+import { isTest, summarizeTestInventory, summarizeMobileScreens, summarizeWebScreens, summarizeAuthEndpoints, summarizeEnforcementFilters, summarizeUntestedRoutes } from "./audit-evidence";
 
 const rawBase = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
 const openai = new OpenAI({
@@ -138,6 +138,9 @@ export async function deepReadArea(
     // "is this tested?" is answered from the repository, not from the handful of files whose full text fits.
     summarizeTestInventory(files.map((f) => f.path), testsAreTheSubject ? null : hint ?? null),
     entry.area === "mobile" ? summarizeMobileScreens(files) : null,
+    // The web's routes with their gating: for auth, because "which screens does a signed-out
+    // person reach" is the question; for mobile, because the two apps are only comparable together.
+    entry.area === "auth" || entry.area === "mobile" ? summarizeWebScreens(files) : null,
     // Both ends of the app's sign-in, so "same auth as the web" is checked rather than taken from a comment.
     entry.area === "mobile" && coverage ? summarizeAuthEndpoints(coverage.rows) : null,
     // The chain's last step: where hidden content and suspended accounts are filtered out of reads.
@@ -154,7 +157,7 @@ export async function deepReadArea(
         { role: "system", content: `You are Nova, doing a close read of one area of a builder's codebase. ${coachingDirectiveFor(ent)}
 Area: ${area.label}. What counts: ${area.counts}.
 First-pass verdict: ${entry.status}${entry.summary ? ` — ${entry.summary}` : ""}.
-Answer the question from the FILES, the ROUTE COVERAGE and the TEST FILES and MOBILE SCREENS lists only. Those lists are complete (every test in the repository, or every one named for this area; every mobile route file): a file on them exists even when its full text isn't in FILES — never call it missing, and count from the lists. Quantify wherever the code lets you ("14 of 19 write routes"). Name gaps as concrete things to change, each with the file it lives in when you can point at one — only paths that appear in the files given or the coverage list. No advice, no generalities: if it isn't in the code in front of you, say it isn't there.
+Answer the question from the FILES, the ROUTE COVERAGE and the TEST FILES, MOBILE SCREENS and WEB SCREENS lists only. Those lists are complete (every test in the repository, or every one named for this area; every mobile route file; every web route declared in the client router): a file on them exists even when its full text isn't in FILES — never call it missing, and count from the lists. Quantify wherever the code lets you ("14 of 19 write routes"). Name gaps as concrete things to change, each with the file it lives in when you can point at one — only paths that appear in the files given or the coverage list. No advice, no generalities: if it isn't in the code in front of you, say it isn't there.
 Respond ONLY with JSON: {"coverage":"one or two sentences, quantified","gaps":[{"item":"","file":"path or omit","severity":"low|medium|high"}],"strengths":["what is done well, one line each, at most three"]}` },
         { role: "user", content: `QUESTION\n${AREA_QUESTIONS[entry.area]}\n\n${cov ? `${cov}\n\n` : ""}FILES\n${fileText}` },
       ],

@@ -14,7 +14,7 @@
 import type { Response } from "express";
 import OpenAI from "openai";
 import { storage } from "./storage";
-import { requireCredits, requireFeature, modelFor, coachingDirectiveFor } from "./entitlements";
+import { modelFor, coachingDirectiveFor, type UserEntitlements } from "./entitlements";
 import { CREDIT_COSTS } from "@shared/plans";
 import { packFor, NOVA_PACK_VERSION, type NovaPromptPack } from "@shared/nova-prompt-packs";
 import { applyProjectOperations, buildOperableProjectState, stripIdFragments, collectProjectIds } from "./project-operations";
@@ -82,16 +82,13 @@ export async function firstPlanFor(
   projectId: string,
   userId: string,
   body: { answers?: Record<string, string>; save?: boolean },
+  ent: UserEntitlements,
   res: Response,
 ): Promise<void> {
   const project = await storage.getProject(projectId);
   if (!project) { res.status(404).json({ message: "Project not found" }); return; }
 
   const pack = packFor(project.goal, project.subcategory);
-  const ent = await requireFeature(res, userId, "aiMilestones", "Nova's first plan");
-  if (!ent) return;
-  if (!(await requireCredits(res, userId, CREDIT_COSTS.novaAssist, "Nova's first plan"))) return;
-
   const state = await buildOperableProjectState(projectId, { includeIds: false });
   const { system, user } = firstPlanPrompt(pack, project, state, body.answers);
   const completion = await getOpenAI().chat.completions.create({

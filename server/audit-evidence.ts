@@ -137,6 +137,146 @@ export function summarizeMobileScreens(files: { path: string; content?: string }
 }
 
 /**
+ * The web app's screens: the route, what gates it, and what it calls.
+ *
+ * The mobile app got this treatment and the web app — which is most of the
+ * product — did not, so a read of the web could say how many page files exist
+ * and nothing about what they are. Worse, it could not answer the question
+ * worth asking about a single-page app: *which pages does a signed-out person
+ * reach?* That is a security question with a definite answer sitting in one
+ * file's `<Switch>` blocks, and no read was being given it.
+ *
+ * Gating is read off position: routes declared before the signed-out branch are
+ * the deliberately public ones (a shared artifact, an invite link), routes
+ * inside it are what a signed-out visitor gets, and everything after the app
+ * shell needs an account. The client's gate is convenience rather than
+ * security — the server refuses the data either way — but a page that renders
+ * for the wrong person is how the wrong thing gets seen, and a disagreement
+ * between the two lists is worth noticing.
+ */
+export function summarizeWebScreens(files: { path: string; content?: string }[]): string | null {
+  const app = files.find((f) => /^client\/src\/App\.[jt]sx?$/.test(f.path) && f.content);
+  if (!app?.content) return null;
+  const content = app.content;
+
+  // The three regions of the router, in the order they're written.
+  const signedOutAt = content.search(/if\s*\(\s*!\s*isAuthenticated\s*\)/);
+  const shellAt = content.search(/<AppSidebar\b/);
+  const gateOf = (at: number) =>
+    signedOutAt >= 0 && at < signedOutAt ? "public (no account needed)"
+      : shellAt >= 0 && at < shellAt ? "signed out"
+      : "signed in";
+
+  const pages = new Map<string, string>();
+  for (const m of content.matchAll(/import\s+(?:\{[^}]*\}\s*,\s*)?(\w+)[^;]*?from\s+["']([^"']+)["']/g)) {
+    pages.set(m[1], m[2]);
+  }
+  const byPath = new Map(files.filter((f) => f.content).map((f) => [f.path, f.content!]));
+  /** `@/pages/profile` → client/src/pages/profile.tsx, the way the bundler's alias resolves it. */
+  const resolve = (spec: string, from: string): string | null => {
+    let base: string;
+    if (spec.startsWith("@shared/")) base = `shared/${spec.slice("@shared/".length)}`;
+    else if (spec.startsWith("@/")) base = `client/src/${spec.slice(2)}`;
+    else if (spec.startsWith(".")) {
+      const parts = from.split("/").slice(0, -1);
+      for (const piece of spec.split("/")) {
+        if (piece === "." || piece === "") continue;
+        if (piece === "..") parts.pop();
+        else parts.push(piece);
+      }
+      base = parts.join("/");
+    } else return null;
+    for (const candidate of [base, `${base}.tsx`, `${base}.ts`, `${base}/index.tsx`, `${base}/index.ts`]) {
+      if (byPath.has(candidate)) return candidate;
+    }
+    return null;
+  };
+
+  /**
+   * The API paths one file asks for. Three shapes, because the client has
+   * three: a react-query key whose first element is the path, an `apiRequest`
+   * with its method, and a bare `fetch`. Cache invalidation is skipped — a
+   * screen that invalidates `/api/feed` after posting isn't a screen that reads
+   * the feed, and counting it would attach half the API to every page.
+   */
+  const callsIn = (text = ""): Set<string> => {
+    const found = new Set<string>();
+    const asPath = (literal: string) =>
+      literal.replace(/^\$\{[^}]*\}(?=\/api\/)/, "").replace(/\$\{[^}]*\}/g, ":param").split("?")[0];
+
+    for (const m of text.matchAll(/apiRequest\s*\(\s*["'](\w+)["']\s*,\s*(?:`([^`]*)`|["']([^"']+)["'])/g)) {
+      const path = asPath(m[2] ?? m[3] ?? "");
+      if (path.startsWith("/api/")) found.add(`${m[1].toUpperCase()} ${path}`);
+    }
+    for (const m of text.matchAll(/\bfetch\s*\(\s*(?:`([^`]*)`|["']([^"']+)["'])([\s\S]{0,160})/g)) {
+      const path = asPath(m[1] ?? m[2] ?? "");
+      // `fetch` defaults to GET; the method, when there is one, is in the options object right after.
+      const method = m[3]?.match(/^\s*,\s*\{[\s\S]{0,120}?method\s*:\s*["'`](\w+)/)?.[1];
+      if (path.startsWith("/api/")) found.add(`${(method ?? "GET").toUpperCase()} ${path}`);
+    }
+    for (const m of text.matchAll(/queryKey\s*:\s*\[([^\]]*)\]/g)) {
+      const before = text.slice(Math.max(0, m.index! - 90), m.index!);
+      if (/(invalidate|remove|cancel|set|refetch)Queries?|setQueryData/.test(before)) continue;
+      const segments = m[1].split(",").map((s) => s.trim()).filter(Boolean);
+      const first = segments[0]?.match(/^["'`]([^"'`]+)["'`]$/)?.[1];
+      if (!first?.startsWith("/api/")) continue;
+      const rest = segments.slice(1).map((s) => s.match(/^["'`]([^"'`]+)["'`]$/)?.[1] ?? ":param");
+      found.add(`GET ${[first.replace(/\/$/, ""), ...rest].join("/").split("?")[0]}`);
+    }
+    return found;
+  };
+
+  /** What a page reaches, through the components it renders — the same three levels the mobile inventory follows. */
+  const reachable = (path: string) => {
+    const found = new Set<string>();
+    const seen = new Set<string>([path]);
+    const queue: { path: string; depth: number }[] = [{ path, depth: 0 }];
+    while (queue.length) {
+      const here = queue.shift()!;
+      const text = byPath.get(here.path) ?? "";
+      for (const c of callsIn(text)) found.add(c);
+      if (here.depth >= IMPORT_DEPTH) continue;
+      for (const m of text.matchAll(/from\s+["'](@\/[^"']+|\.[^"']+)["']/g)) {
+        // The generic UI kit is buttons and dialogs; following it costs time and finds nothing.
+        if (/^@\/components\/ui\//.test(m[1])) continue;
+        /*
+         * The session hook and the query client are on every page, so counting
+         * their calls per page says only that every page knows who you are —
+         * and buries the calls that distinguish one page from another. The
+         * pages whose subject *is* signing in (landing, /mfa, verify-email)
+         * call those endpoints directly, so they keep them.
+         */
+        if (/^@\/(hooks\/use-auth|lib\/queryClient)$/.test(m[1])) continue;
+        const target = resolve(m[1], here.path);
+        if (target && !seen.has(target)) { seen.add(target); queue.push({ path: target, depth: here.depth + 1 }); }
+      }
+    }
+    return [...found].sort();
+  };
+
+  const rows: { route: string; gate: string; file: string; calls: string[] }[] = [];
+  for (const m of content.matchAll(/<Route\s+path=["']([^"']+)["'][^>]*component=\{(\w+)\}/g)) {
+    const spec = pages.get(m[2]);
+    const file = spec ? resolve(spec, app.path) : null;
+    rows.push({ route: m[1], gate: gateOf(m.index!), file: file ?? `(component ${m[2]}, file not resolved)`, calls: file ? reachable(file) : [] });
+  }
+  if (!rows.length) return null;
+
+  // Page files that exist and no route renders: dead, or reachable some other way. Either is worth seeing.
+  const routed = new Set(rows.map((r) => r.file));
+  const orphans = files.filter((f) => /^client\/src\/pages\/.+\.[jt]sx$/.test(f.path) && !routed.has(f.path)).map((f) => f.path);
+
+  const lines = rows.slice(0, SCREEN_INVENTORY_MAX).map((r) => {
+    const calls = r.calls.length
+      ? `calls: ${r.calls.slice(0, VIA_MAX).join(", ")}${r.calls.length > VIA_MAX ? ` +${r.calls.length - VIA_MAX} more` : ""}`
+      : "no API calls found (static or navigation page)";
+    return `${r.route}  [${r.gate}]  [${r.file}]  ${calls}`;
+  });
+  const publicRoutes = rows.filter((r) => r.gate !== "signed in").length;
+  return `WEB SCREENS (${rows.length} routes in ${app.path}, every one declared there; ${publicRoutes} reachable without a signed-in account; calls read off each page and the components it imports, ${IMPORT_DEPTH} deep)\n${lines.join("\n")}${rows.length > SCREEN_INVENTORY_MAX ? `\n… ${rows.length - SCREEN_INVENTORY_MAX} more` : ""}${orphans.length ? `\nPAGE FILES NO ROUTE RENDERS (${orphans.length}): ${orphans.slice(0, 20).join(", ")}${orphans.length > 20 ? `, … ${orphans.length - 20} more` : ""}` : ""}`;
+}
+
+/**
  * The server's own sign-in surface, for reading the mobile app against.
  *
  * The app's auth is only comparable to the web's if both ends are in the same

@@ -39,6 +39,9 @@ const CHARGED_IN_HELPER: Record<string, [file: string, fn: string]> = {
   "POST /api/mcp/projects/:projectId/audit": ["server/code-audit-routes.ts", "runCodeAuditInner"],
   "POST /api/projects/:id/nova/suggest": ["server/nova-assist-routes.ts", "novaSuggest"],
   "POST /api/mcp/projects/:projectId/ask": ["server/nova-assist-routes.ts", "novaSuggest"],
+  // The check moved up into the route so it reads like every other AI route; the charge stays
+  // in the helper, after the plan has parsed, which is what this test then goes and verifies.
+  "POST /api/projects/:id/nova/first-plan": ["server/nova-first-plan.ts", "firstPlanFor"],
 };
 
 /** Routes that charge a different amount from what they checked, each with why that's safe. */

@@ -799,13 +799,28 @@ export function scanSecurity(allFiles: SourceFile[], extra: { suspectedSecrets?:
   {
     // Named where a dependency is named, so a CSS class like "overflow-x-auto [scrollbar-width:none]" isn't read as Rollbar.
     const monitoring = has(/from ["'`][^"'`]*(@sentry\/|bugsnag|rollbar|dd-trace|@datadog\/|@opentelemetry\/|logtail|newrelic)|require\(["'`][^"'`]*(bugsnag|rollbar|dd-trace|newrelic)|\bSentry\.init\s*\(|\bbugsnag\.start\s*\(|\bRollbar\s*\(/i);
+    /*
+     * An SDK is one way and not the only way. A project that turns its errors
+     * into structured records and posts them at a configured endpoint has the
+     * thing the SDK was for — so this reads the shape as well as the name, and
+     * asks for the two properties that make either version worth having: the
+     * handler is wired to something that outlives the terminal, and the process
+     * itself is watched (an unhandled rejection is the error you most want and
+     * least see).
+     */
+    const homegrown = has(/\breportError\s*\(|\bwatchProcessErrors\s*\(|ERROR_WEBHOOK_URL/);
+    const watchesProcess = has(/process\.on\(\s*["'`](unhandledRejection|uncaughtException)/);
+    const reported = monitoring.length ? monitoring : homegrown;
     add({
       id: "error-monitoring", label: "Errors are reported somewhere", category: "operations", severity: "low",
-      status: monitoring.length ? "pass" : isServer ? "missing" : "n/a",
-      detail: monitoring.length ? "Errors are sent to a monitoring service." : "Nothing collects errors: a 500 is visible only to whoever is reading the logs at the time.",
+      status: !isServer ? "n/a" : reported.length && (monitoring.length || watchesProcess.length) ? "pass" : reported.length ? "partial" : "missing",
+      detail: monitoring.length ? "Errors are sent to a monitoring service."
+        : homegrown.length && watchesProcess.length ? "Errors become structured records with a drain, and unhandled rejections and uncaught exceptions are reported too."
+        : homegrown.length ? "Errors are collected, but nothing reports an unhandled rejection or an uncaught exception."
+        : "Nothing collects errors: a 500 is visible only to whoever is reading the logs at the time.",
       why: "The failures that matter are the ones nobody reports — a checkout that 500s for one card type, a job throwing every night. Without collection you hear about them from users, late.",
-      fix: "Add an error reporter (Sentry or similar) on the server and the client, scrub the body and headers before sending, and alert on a rate rather than on every event.",
-      evidence: monitoring.slice(0, 2),
+      fix: "Report errors to something that outlives the terminal — an SDK, or structured records posted to a collector — scrub the body, headers and message before sending, watch unhandledRejection and uncaughtException, and alert on a rate rather than on every event.",
+      evidence: [...reported, ...watchesProcess].slice(0, 3),
     });
   }
   {
@@ -816,13 +831,26 @@ export function scanSecurity(allFiles: SourceFile[], extra: { suspectedSecrets?:
      */
     const backups = [...paths].filter((p2) => /(^|\/)(docs|ops|runbook)/i.test(p2) && /\.(md|mdx)$/.test(p2))
       .filter((p2) => /backup|restore|disaster/i.test(files.find((f) => f.path === p2)?.content ?? ""));
+    /*
+     * The difference between writing down that backups exist and knowing they
+     * work is a date: a row in a restore log saying somebody did it. A document
+     * with an empty log (the row that says "no restore has been rehearsed yet")
+     * has no date on it, so it reads as partial, which is what it is.
+     */
+    const rehearsed = backups.filter((p2) => {
+      const lines = (files.find((f) => f.path === p2)?.content ?? "").split("\n");
+      return lines.some((line) => /^\s*\|/.test(line) && /\b20\d\d-\d\d-\d\d\b/.test(line));
+    });
     add({
       id: "backups", label: "Backups, and a restore someone has actually done", category: "operations", severity: "medium",
-      status: backups.length ? "partial" : "missing",
-      detail: backups.length ? "Backups and restoring are written down; whether a restore has been rehearsed can't be read from the repository." : "Nothing in the repository mentions backups or restoring.",
+      status: rehearsed.length ? "pass" : backups.length ? "partial" : "missing",
+      detail: rehearsed.length ? "Backups are written down and a restore has been rehearsed and dated."
+        : backups.length ? "Backups and restoring are written down, and no rehearsed restore is recorded — the log is still empty."
+        : "Nothing in the repository mentions backups or restoring.",
       why: "The backup you have never restored is a belief, not a backup — and the morning you need it is the worst time to find out which.",
       fix: "Write down what is backed up, how often, and where; then restore it into a scratch database and record the date you did. Repeat after any schema change big enough to worry you.",
-      evidence: backups.slice(0, 2),
+      // The document with the log first: it's the one to open.
+      evidence: [...rehearsed, ...backups.filter((p2) => !rehearsed.includes(p2))].slice(0, 2),
     });
   }
   {

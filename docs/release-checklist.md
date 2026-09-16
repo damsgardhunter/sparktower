@@ -80,6 +80,20 @@ export PROD_DB="postgresql://…"                   # from Replit → Secrets �
       account. Roles are re-derived from these at every boot.
 - [ ] `AI_INTEGRATIONS_OPENAI_API_KEY` is set. The server can't import its
       route files without one.
+- [ ] `ERROR_WEBHOOK_URL` points somewhere you will actually see — a Slack or
+      Discord incoming webhook is enough. Unset, a 500 in production is one
+      line on stderr and nobody is told (`server/error-reporting.ts`). Confirm
+      it works by hitting a route that throws on purpose, or watch the first
+      real one arrive.
+
+## 2b. The sending domain (once per domain, not per deploy)
+
+- [ ] **SPF, DKIM and DMARC are published** for the domain in `EMAIL_FROM`, and
+      the row at the bottom of [ops/email-authentication.md](ops/email-authentication.md)
+      is filled in. Until they are, verification links and invites land in spam
+      and anybody can send mail as you. Check end to end rather than by `dig`:
+      send yourself an invite at a Gmail address and confirm `SPF: PASS`,
+      `DKIM: PASS`, `DMARC: PASS` in "show original".
 
 ## 3. Deploy
 
@@ -150,6 +164,16 @@ in the comment.
 
 - [ ] **Kill switches.** Open **$APP/admin/surfaces**. Anything switched off
       during the last incident that should be back on?
+
+## 4b. The backup, before you need it
+
+- [ ] **A restore has been rehearsed in the last three months** — there is a
+      dated row in [ops/backups.md](ops/backups.md) saying who restored a
+      snapshot into a scratch database, how long it took, and whether the app
+      could read it. If the newest row is older than that, or there is no row,
+      do the rehearsal in that file *before* a deploy that changes the schema
+      destructively. It takes twenty minutes and it is the only thing that turns
+      "we have backups" into something you know.
 
 ## 5. Rollback
 

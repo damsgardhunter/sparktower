@@ -29,6 +29,7 @@ import {
   type RepoSnapshot,
 } from "./code-ingest";
 import { buildCodeDigest, type CodeDigest } from "./code-digest";
+import { summarizeWebScreens } from "./audit-evidence";
 import { CAPABILITY_AREAS, sanitizeCapabilities } from "@shared/capabilities";
 import { deepReadAll } from "./audit-deep-reads";
 import { computeAuditDelta } from "@shared/audit-delta";
@@ -320,6 +321,15 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
           commits.length ? `THE COMMITS SINCE THEN (${commits.length}, newest first)\n${commits.slice(0, 60).map((c) => `- ${c.message}`).join("\n")}` : null,
           declined.length ? `DECLINED LAST TIME — the builder chose not to apply these; don't propose them again\n${declined.map((d) => `- ${d}`).join("\n")}` : null,
           renderSecurityGaps(security),
+          /*
+           * Every web route with what gates it and what it calls. The digest
+           * lists page *files*, which doesn't answer either question a read
+           * asks about a single-page app: what a signed-out visitor reaches,
+           * and which endpoints a screen actually depends on. The mobile app
+           * has had this in its deep read for a while; the web is most of the
+           * product and had nothing.
+           */
+          summarizeWebScreens(snapshot.files),
           `THE ACTUAL CODEBASE\n${digest.prompt}`,
         ].filter(Boolean).join("\n\n"),
       },

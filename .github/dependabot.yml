@@ -22,3 +22,13 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  # The CI actions are pinned to commits (a tag can be repointed by whoever
+  # owns the action, and it runs with this repository's token). Pinned means
+  # stale unless something proposes the bumps, which is this.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

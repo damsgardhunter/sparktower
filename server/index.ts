@@ -17,6 +17,7 @@ import { serveStatic } from "./static";
 import { createApp, log } from "./app";
 import { warnIfSharedTokenSecret } from "./mobile-auth";
 import { assertSecretsAtBoot } from "./secrets";
+import { watchProcessErrors } from "./error-reporting";
 
 declare module "http" {
   interface IncomingMessage {
@@ -26,6 +27,10 @@ declare module "http" {
 
 // Before anything listens or connects: no secrets (or weak ones in production), no server.
 assertSecretsAtBoot();
+
+// A promise nobody caught and a throw outside every handler used to be a silent
+// exit. They are reported now, like any other 500 (server/error-reporting.ts).
+watchProcessErrors();
 
 const httpServer = createServer();
 

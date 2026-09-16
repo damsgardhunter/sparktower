@@ -18,7 +18,7 @@ vi.mock("openai", () => {
   return { default: OpenAI, OpenAI };
 });
 
-const { summarizeTestInventory, summarizeMobileScreens, summarizeAuthEndpoints, summarizeUntestedRoutes } = await import("../../server/audit-evidence");
+const { summarizeTestInventory, summarizeMobileScreens, summarizeWebScreens, summarizeAuthEndpoints, summarizeUntestedRoutes } = await import("../../server/audit-evidence");
 const { deepReadArea } = await import("../../server/audit-deep-reads");
 
 const repo = [
@@ -78,6 +78,56 @@ describe("the test inventory a close read gets", () => {
     expect(out).toContain("/notifications  [mobile/app/(tabs)/notifications.tsx]  calls: /api/notifications, /api/notifications/read-all");
     expect(out).toContain("/manage/[id]  [mobile/app/manage/[id].tsx]  calls: /api/projects/:param, /api/projects/:param/path");
     expect(out).not.toContain("client/src");
+  });
+
+  it("lists every web route with what gates it and what it calls, and the pages no route renders", () => {
+    const app = `
+      import Landing from "@/pages/landing";
+      import Home from "@/pages/home";
+      import Artifact from "@/pages/public-artifact";
+      import Profile from "@/pages/profile";
+      function Router() {
+        if (isPublicRoute) {
+          return <Switch><Route path="/a/:id" component={Artifact} /></Switch>;
+        }
+        if (!isAuthenticated) {
+          return <Switch><Route path="/" component={Landing} /></Switch>;
+        }
+        return <div><AppSidebar />
+          <Route path="/" component={Home} />
+          <Route path="/profile" component={Profile} />
+        </div>;
+      }`;
+    const out = summarizeWebScreens([
+      { path: "client/src/App.tsx", content: app },
+      { path: "client/src/pages/public-artifact.tsx", content: 'useQuery({ queryKey: ["/api/public/artifacts", id] })' },
+      { path: "client/src/pages/landing.tsx", content: 'fetch("/api/auth/login", { method: "POST", body })' },
+      {
+        path: "client/src/pages/home.tsx",
+        // Imports a component that fetches, and invalidates a key it never reads.
+        content: `import { Feed } from "@/components/feed";\nimport { useAuth } from "@/hooks/use-auth";\nqueryClient.invalidateQueries({ queryKey: ["/api/notifications"] });`,
+      },
+      { path: "client/src/components/feed.tsx", content: 'useQuery({ queryKey: ["/api/feed"] }); apiRequest("POST", `/api/feed/${id}/react`)' },
+      { path: "client/src/pages/profile.tsx", content: "export default function Profile() { return null; }" },
+      { path: "client/src/pages/orphan.tsx", content: "export default function Orphan() { return null; }" },
+      { path: "client/src/hooks/use-auth.ts", content: 'fetch("/api/auth/user"); fetch("/api/logout", { method: "POST" })' },
+    ])!;
+
+    expect(out).toMatch(/^WEB SCREENS \(4 routes in client\/src\/App\.tsx/);
+    // The question worth answering about a single-page app, in the header line.
+    expect(out).toContain("2 reachable without a signed-in account");
+    expect(out).toContain("/a/:id  [public (no account needed)]  [client/src/pages/public-artifact.tsx]  calls: GET /api/public/artifacts/:param");
+    // fetch defaults to GET; a method in the options is read off it.
+    expect(out).toContain("/  [signed out]  [client/src/pages/landing.tsx]  calls: POST /api/auth/login");
+    // Followed into the component that actually fetches; the invalidated key is not a call.
+    expect(out).toContain("/  [signed in]  [client/src/pages/home.tsx]  calls: GET /api/feed, POST /api/feed/:param/react");
+    expect(out).not.toContain("/api/notifications");
+    // The session hook is on every page, so its endpoints are nobody's page in particular.
+    expect(out).not.toContain("/api/auth/user");
+    expect(out).toContain("/profile  [signed in]  [client/src/pages/profile.tsx]  no API calls found");
+    expect(out).toContain("PAGE FILES NO ROUTE RENDERS (1): client/src/pages/orphan.tsx");
+    // No client router, nothing to say — rather than an empty heading.
+    expect(summarizeWebScreens([{ path: "server/routes.ts", content: "app.get('/api/x')" }])).toBeNull();
   });
 
   it("gives the CI read the gate contract, since the gate itself is a setting on GitHub", async () => {

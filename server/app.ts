@@ -24,6 +24,29 @@ import { ModelResponseError } from "./ai-json";
 import { enforceRejectionLimit, countRejection, ipKey } from "./moderation";
 import { securityHeaders } from "./security-headers";
 import { stripSealedFields } from "@shared/strip-sealed";
+import { reportError } from "./error-reporting";
+
+/**
+ * Where an error happened, as a shape rather than as a URL.
+ *
+ * Express knows the pattern when the error came out of a route handler
+ * (`req.route.path`). When it came out of middleware it doesn't, so the path is
+ * reduced by hand: every id-looking segment becomes `:id`. Either way what
+ * leaves the process is `/api/projects/:id/backings` and not the id, which is
+ * the point — an error report shouldn't be a second copy of the access log.
+ */
+function routePattern(req: Request): string {
+  const pattern = (req as any).route?.path;
+  if (typeof pattern === "string") return `${req.baseUrl ?? ""}${pattern === "/" ? "" : pattern}` || "/";
+  return (req.path || "/")
+    .split("/")
+    .map((segment) =>
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(segment) || /^\d+$/.test(segment) || /^[0-9a-f]{16,}$/i.test(segment)
+        ? ":id"
+        : segment,
+    )
+    .join("/");
+}
 
 export interface CreateAppOptions {
   /** Routes are registered against this — some attach to the server itself. */
@@ -238,7 +261,7 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
     res.status(404).json({ message: "Not found", code: "not_found" });
   });
 
-  app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
+  app.use((err: any, req: Request, res: Response, next: NextFunction) => {
     if (res.headersSent) return next(err);
 
     /*
@@ -267,6 +290,13 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
     console.error("Internal Server Error:", err);
+    /*
+     * And somewhere that outlives the terminal (server/error-reporting.ts). The
+     * route *pattern* goes with it, never the URL: `/api/projects/:id` says
+     * where to look in the code, while the URL carries an id, and a query
+     * string carries whatever was in the box.
+     */
+    reportError(err, { route: routePattern(req), method: req.method, userId: (req as any).user?.id, status });
     return res.status(status).json({ message });
   });
 

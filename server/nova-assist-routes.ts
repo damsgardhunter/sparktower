@@ -264,11 +264,14 @@ export function registerNovaAssistRoutes(app: Express) {
   });
 
   app.post("/api/projects/:id/nova/first-plan", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
-    // metering: checked in firstPlanFor; charged only after the answer parses
+    // metering: checked here, like every other AI route; charged in firstPlanFor only after the answer parses
     try {
       const userId = (req.user as any).id;
       if (!(await isMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      await firstPlanFor(req.params.id, userId, (req.body ?? {}) as { answers?: Record<string, string>; save?: boolean }, res);
+      const ent = await requireFeature(res, userId, "aiMilestones", "Nova's first plan");
+      if (!ent) return;
+      if (!(await requireCredits(res, userId, CREDIT_COSTS.novaAssist, "Nova's first plan"))) return;
+      await firstPlanFor(req.params.id, userId, (req.body ?? {}) as { answers?: Record<string, string>; save?: boolean }, ent, res);
     } catch (error) {
       console.error("Nova first-plan error:", error);
       respondToAiError(res, error, "Nova couldn't write that plan");
