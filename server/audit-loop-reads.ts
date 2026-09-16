@@ -36,6 +36,14 @@ const isTest = (p: string) => /(^|\/)(test|tests|e2e|__tests__)\/|\.(test|spec)\
 
 /** Any /api path written in prose or code, as documentation names them. */
 const ENDPOINT_RE = /(?:\b(GET|POST|PUT|PATCH|DELETE)\s+)?(\/api\/[\w:./-]+)/gi;
+/** The file where a path literally appears, params ignored — evidence it exists even when the route list missed it. */
+function handWritten(path: string, files: RepoFile[]): string | null {
+  const pattern = path.split("/").map((seg) => (seg.startsWith(":") ? "[^/`'\"]+" : seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).join("/");
+  const re = new RegExp(pattern);
+  const hit = files.find((f) => f.content && !isTest(f.path) && !/^(client|mobile)\//.test(f.path) && re.test(f.content));
+  return hit?.path ?? null;
+}
+
 /** `/api/users/:id/follow` and `/api/users/:userId/follow` are the same endpoint. */
 const shape = (path: string) => path.replace(/:[\w-]+/g, ":p").replace(/\/+$/, "").toLowerCase();
 
@@ -51,7 +59,12 @@ const shape = (path: string) => path.replace(/:[\w-]+/g, ":p").replace(/\/+$/, "
  * prompt rather than the code. Checked against every route in the repository,
  * so "not registered" is also a real finding.
  */
-export function documentedEndpoints(texts: string[], routes: { label: string; file: string }[], max = 20): string[] {
+export function documentedEndpoints(
+  texts: string[],
+  routes: { label: string; file: string }[],
+  files: RepoFile[] = [],
+  max = 20,
+): string[] {
   const registered = new Map<string, { label: string; file: string }>();
   for (const r of routes) {
     const path = /\s(\/\S+)$/.exec(r.label)?.[1] ?? r.label.split(" ").pop() ?? "";
@@ -66,7 +79,18 @@ export function documentedEndpoints(texts: string[], routes: { label: string; fi
       if (!path.startsWith("/api/") || seen.has(key) || lines.length >= max) continue;
       seen.add(key);
       const hit = registered.get(key);
-      lines.push(hit ? `${hit.label}  — registered in ${hit.file}` : `${(m[1] ?? "").toUpperCase()} ${path}`.trim() + "  — NOT REGISTERED anywhere in this repository");
+      if (hit) { lines.push(`${hit.label}  — registered in ${hit.file}`); continue; }
+      /*
+       * Not in the route list — which is a list, not the repository. Before
+       * saying a route doesn't exist, look for it in the code: a route table
+       * can be clipped, or a shape the detector doesn't know. Saying "missing"
+       * about something that is right there sends a builder to write it twice,
+       * so the weaker claim is the honest one.
+       */
+      const written = handWritten(path, files);
+      lines.push(`${(m[1] ?? "").toUpperCase()} ${path}`.trim() + (written
+        ? `  — not in the route list, but this path is written in ${written} (check how it's mounted)`
+        : "  — NOT FOUND anywhere in the files read"));
     }
   }
   return lines;
@@ -153,7 +177,7 @@ export async function readLoopClosure(
   const chosen = new Set(paths);
   const loopRoutes = routes.filter((r) => chosen.has(r.file));
   // The endpoints this loop's own writing names, and whether they exist — wherever they're registered.
-  const named = documentedEndpoints([loop.description ?? "", ...allDocs.map((d) => d.content ?? ""), ...paths.map((p) => byPath.get(p)?.content ?? "")], routes);
+  const named = documentedEndpoints([loop.description ?? "", ...allDocs.map((d) => d.content ?? ""), ...paths.map((p) => byPath.get(p)?.content ?? "")], routes, files);
   const kind = LOOP_TYPE_INFO[loop.type];
 
   try {

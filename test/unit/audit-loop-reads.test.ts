@@ -93,7 +93,7 @@ describe("the endpoints a loop's writing names", () => {
     expect(lines).toContain("POST /api/messages/:userId  — registered in server/routes.ts");
     expect(lines).toContain("GET /api/discover/updates  — registered in server/explore-routes.ts");
     // The one that doesn't exist is the finding, and it's marked as such.
-    expect(lines).toContain("POST /api/discover/dismiss  — NOT REGISTERED anywhere in this repository");
+    expect(lines).toContain("POST /api/discover/dismiss  — NOT FOUND anywhere in the files read");
   });
 
   it("matches on the endpoint, not the name someone gave a parameter", () => {
@@ -109,4 +109,23 @@ describe("the endpoints a loop's writing names", () => {
     expect(documentedEndpoints([""], routes)).toEqual([]);
   });
 });
+
+  it("doesn't call a route missing when the code plainly has it", () => {
+    /*
+     * The route list is a list, not the repository: it can be clipped, and a
+     * detector can miss a shape. Telling a builder to write a route that is
+     * already there is worse than saying nothing, so a path found in the code
+     * is reported as found, with where to look.
+     */
+    const files = [
+      { path: "server/artifact-routes.ts", content: 'app.post("/api/artifacts/:id/publish", isAuthenticated, handler);', size: 1 },
+      { path: "client/src/components/continue-path-card.tsx", content: 'apiRequest("POST", `/api/artifacts/${id}/publish`)', size: 1 },
+    ] as any;
+    const lines = documentedEndpoints(["publish with POST /api/artifacts/:id/publish"], [], files);
+    expect(lines[0]).toBe("POST /api/artifacts/:id/publish  — not in the route list, but this path is written in server/artifact-routes.ts (check how it's mounted)");
+
+    // Client code alone isn't evidence a server route exists: that's the call, not the handler.
+    const clientOnly = documentedEndpoints(["POST /api/artifacts/:id/publish"], [], [files[1]] as any);
+    expect(clientOnly[0]).toContain("NOT FOUND anywhere in the files read");
+  });
 });

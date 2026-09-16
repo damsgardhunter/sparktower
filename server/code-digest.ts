@@ -707,7 +707,7 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
      */
     section("HOW TO READ THIS", [
       `This is a digest of ${signals.fileCount} files, not the codebase. ${signals.readCount} were read; ${excerptCount} appear as excerpts (opening lines only, not whole files).`,
-      "Lists are clipped where they say so, and the ROUTE COVERAGE table is the complete route inventory — use it, not the route list, to decide whether an endpoint exists.",
+      "Lists are clipped where they say so. EVERY MOUNTED ROUTE, in the ROUTE COVERAGE section, is the complete inventory: if an endpoint is registered it is there, with its guards and its file. Look a route up there — never conclude from an excerpt or a clipped list that it doesn't exist.",
       "Nothing here being absent means it is absent from the code. If a judgement depends on a file you cannot see, say what you would need to look at instead of reporting the feature as missing or unevidenced.",
     ].join("\n")),
     section("SIZE", [

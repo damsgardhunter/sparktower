@@ -425,6 +425,24 @@ function meteringLines(c: RouteCoverage, lst: (xs: string[]) => string, maxList:
 }
 
 /** The matrix as prompt text: the summary and the gaps, never four hundred rows. */
+/** Every mounted route, one short line each: what it is, what guards it, where it lives. */
+function inventory(rows: RouteCoverageRow[], max = 700): string {
+  const shown = rows.slice(0, max);
+  const line = (r: RouteCoverageRow) => {
+    const marks = [
+      r.auth ? "auth" : "open",
+      r.privileged ? "privileged" : null,
+      r.limits.length ? `limit:${r.limits.join("+")}` : r.floor ? "floor" : null,
+      r.credits ? "credits" : null,
+      r.surface ? `surface:${r.surface}` : null,
+    ].filter(Boolean).join(" ");
+    return `  ${r.method} ${r.path} — ${marks} [${r.file}]`;
+  };
+  const head = `- EVERY MOUNTED ROUTE (${rows.length}${rows.length > shown.length ? `, ${shown.length} listed` : ""}). If a route isn't here, it isn't registered; if it is here, it is. Look it up rather than inferring from the excerpts.`;
+  const tail = rows.length > shown.length ? `\n  … and ${rows.length - shown.length} more` : "";
+  return `${head}\n${shown.map(line).join("\n")}${tail}`;
+}
+
 export function renderRouteCoverage(c: RouteCoverage | null | undefined, maxList = 25): string | null {
   if (!c || !c.rows.length) return null;
   const s = c.summary;
@@ -440,5 +458,16 @@ export function renderRouteCoverage(c: RouteCoverage | null | undefined, maxList
     ...meteringLines(c, lst, maxList),
     `- Behind a surface kill switch: ${s.surfaceGated}/${s.routes}${c.surfacePrefixes.length ? ` (prefixes: ${c.surfacePrefixes.map((p) => `${p.prefix}→${p.surface}`).join(", ")})` : ""}`,
     c.unmountedFiles.length ? `- Not counted: routes in files nothing imports (dead code, not live endpoints): ${c.unmountedFiles.join(", ")}` : null,
+    /*
+     * Every route, by name.
+     *
+     * Everything above this line is counts and exceptions, which answers "how
+     * many" and never "does this one exist". An audit asked exactly that about
+     * POST /api/artifacts/:id/publish — registered at server/routes.ts:386,
+     * past the excerpt — and, finding it in no list, reported the publish route
+     * as missing and the loop as broken. The list is long and worth its length:
+     * it is the only place in the digest where a route can be looked up.
+     */
+    inventory(c.rows.filter((r) => r.mounted)),
   ].filter(Boolean).join("\n");
 }

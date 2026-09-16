@@ -53,6 +53,39 @@ describe("what the digest says about itself", () => {
     expect(digest.prompt).not.toMatch(/… and \d+ more not listed here/);
   });
 
+  it("names every registered route, including one registered far past the excerpt", () => {
+    /*
+     * An audit reported POST /api/artifacts/:id/publish as "NOT REGISTERED
+     * anywhere in this repository" and called the loop broken. It is
+     * registered — at server/routes.ts:386, hundreds of lines past where the
+     * excerpt stops — and the coverage section printed counts, not names, so
+     * there was nowhere to look it up. Now there is.
+     */
+    const digest = buildCodeDigest(snapshotFromFiles([
+      { path: "package.json", content: JSON.stringify({ name: "x", dependencies: { express: "4" } }) },
+      { path: "server/artifact-routes.ts", content: 'import express from "express";\nexport function registerArtifactRoutes(app) {\n  app.post("/api/artifacts/:id/publish", isAuthenticated, rateLimit("feedPost"), handler);\n}' },
+      {
+        path: "server/routes.ts",
+        content: [
+          'import express from "express";',
+          'import { registerArtifactRoutes } from "./artifact-routes";',
+          ...Array.from({ length: 300 }, (_, i) => `// a great deal of other wiring, line ${i}`),
+          "registerArtifactRoutes(app);",
+        ].join("\n"),
+      },
+    ] as any, "test"));
+
+    expect(digest.prompt).toContain("EVERY MOUNTED ROUTE");
+    // The inventory's own line, not the route list's: indented, and carrying the guards.
+    const line = digest.prompt.split("\n").find((l) => l.startsWith("  POST /api/artifacts/:id/publish"));
+    expect(line, "a registered route must be findable by name").toBeTruthy();
+    // With what guards it, and where it lives, so the next question is answerable too.
+    expect(line).toContain("auth");
+    expect(line).toContain("[server/artifact-routes.ts]");
+    // And the reader is told what the list means.
+    expect(digest.prompt).toContain("If a route isn't here, it isn't registered; if it is here, it is.");
+  });
+
   it("says what the server does on the way up, so 'is that rule applied in production?' is answerable", () => {
     /*
      * An audit reported the moderation log's TRUNCATE protection as
