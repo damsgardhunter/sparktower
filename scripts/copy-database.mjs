@@ -69,8 +69,37 @@ if (describe(source) === describe(target)) {
 }
 
 const { Pool } = pg;
+
+/**
+ * Connection options for a database that may be across the internet.
+ *
+ * A managed Postgres refuses plaintext — Render answers "SSL/TLS required" —
+ * and node-postgres does not turn TLS on by default, so a correct connection
+ * string still fails. `psql` and `pg_dump` don't need this: libpq negotiates
+ * TLS on its own, which is why the dump step worked and this one didn't.
+ *
+ * `rejectUnauthorized: false` encrypts the connection without verifying the
+ * server's certificate chain, because managed hosts sign these with their own
+ * CA and verifying it means downloading and shipping that CA file. The traffic
+ * is encrypted; what isn't checked is whether the host is who it claims to be.
+ * For a one-off administrative copy to a hostname you just read off the
+ * dashboard that is a reasonable trade — for the application's own connection
+ * it would not be, which is why the app uses the internal URL instead.
+ */
+function connection(url) {
+  let local = false;
+  try {
+    const host = new URL(url).hostname;
+    local = host === "localhost" || host === "127.0.0.1" || host === "::1";
+  } catch { /* leave it as remote, which is the safer assumption */ }
+  return {
+    connectionString: url,
+    connectionTimeoutMillis: 15_000,
+    ...(local ? {} : { ssl: { rejectUnauthorized: false } }),
+  };
+}
 async function inspect(url, label) {
-  const pool = new Pool({ connectionString: url, connectionTimeoutMillis: 15_000 });
+  const pool = new Pool(connection(url));
   const ask = async (sql) => { try { return (await pool.query(sql)).rows[0]; } catch { return null; } };
   try {
     /*
@@ -210,7 +239,7 @@ console.log(`         ${(statSync(dumpFile).size / 1024 / 1024).toFixed(1)} MB`)
  */
 await (async () => {
   process.stdout.write(`\nClearing ${describe(target)}… `);
-  const pool = new Pool({ connectionString: target, connectionTimeoutMillis: 15_000 });
+  const pool = new Pool(connection(target));
   try {
     for (const sql of ["DROP SCHEMA IF EXISTS drizzle CASCADE", "DROP OWNED BY CURRENT_USER CASCADE"]) {
       try { await pool.query(sql); } catch (err) {
