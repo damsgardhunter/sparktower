@@ -10,6 +10,7 @@
 import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
 import { getTestApp, closeTestApp } from "../helpers/app";
+import { verifyEmail } from "../helpers/verify-email";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -21,6 +22,7 @@ async function signedIn() {
   const agent = request.agent(app);
   const res = await agent.post("/api/auth/register").set("x-forwarded-for", "198.51.100.61").send({ email: email(), password: "Testpass123!", firstName: "Csrf" });
   expect(res.status).toBe(201);
+  await verifyEmail(app, res.body.email);
   return { app, agent };
 }
 
@@ -78,6 +80,7 @@ describe("cross-site writes with a session cookie", () => {
     // Stripe posts from its own servers; its signature check still decides.
     const hook = await request(app).post("/api/stripe/webhook").set({ "Content-Type": "application/json", Origin: "https://stripe.com", Cookie: "x=1" }).send("{}");
     expect(hook.status).toBe(400);
-    expect(hook.body.error).toMatch(/stripe-signature/i);
+    expect(hook.body).toMatchObject({ code: "missing_signature" });
+    expect(hook.body.message).toMatch(/stripe-signature/i);
   });
 });

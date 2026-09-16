@@ -13,6 +13,7 @@ import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
 import { eq, sql } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
+import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
 import { activityEvents, contentReports, moderationLog, rateLimitHits, users } from "@shared/schema";
 import { RATE_LIMITS } from "@shared/moderation";
@@ -28,6 +29,7 @@ async function person(app: any, name: string, email?: string) {
   const res = await agent.post("/api/auth/register").set("x-forwarded-for", `198.51.100.${address++}`)
     .send({ email: email ?? `sl-${name}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@example.test`, password: "Testpass123!", firstName: name });
   expect(res.status).toBe(201);
+  await verifyEmail(app, res.body.email, `198.51.104.${address}`);
   return { agent, id: res.body.id as string };
 }
 

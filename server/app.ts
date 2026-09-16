@@ -140,18 +140,26 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
     express.raw({ type: "application/json" }),
     async (req, res) => {
       // public-write: Stripe's signature over the raw body (WebhookHandlers.processWebhook, test/integration/stripe-webhook.test.ts); failed deliveries limited per address
+      /*
+       * Exempt from the global write floor (WRITE_FLOOR_EXEMPT) on purpose: a
+       * busy account's legitimate deliveries all arrive from Stripe's
+       * addresses, and a shared counter would drop real events. What limits it
+       * instead is the rejection limiter below — an address whose deliveries
+       * keep failing verification is refused — and every answer here uses the
+       * same { message, code } shape as the rest of the API.
+       */
       // An address whose deliveries keep failing it is refused before the next check.
       const sender = ipKey(req);
       if (!(await enforceRejectionLimit(res, sender, "webhookReject"))) return;
       const signature = req.headers["stripe-signature"];
       if (!signature) {
         await countRejection(sender, "webhookReject");
-        return res.status(400).json({ error: "Missing stripe-signature" });
+        return res.status(400).json({ message: "Missing stripe-signature", code: "missing_signature" });
       }
       try {
         const sig = Array.isArray(signature) ? signature[0] : signature;
         if (!Buffer.isBuffer(req.body)) {
-          return res.status(500).json({ error: "Webhook processing error" });
+          return res.status(500).json({ message: "Webhook processing error", code: "webhook_failed" });
         }
         const result = await WebhookHandlers.processWebhook(req.body as Buffer, sig);
         res.status(200).json({ received: true, duplicate: result.duplicate });
@@ -161,10 +169,10 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
         if (error instanceof WebhookVerificationError) {
           await countRejection(sender, "webhookReject");
           console.error("Webhook rejected:", error.message);
-          return res.status(400).json({ error: "Webhook signature verification failed" });
+          return res.status(400).json({ message: "Webhook signature verification failed", code: "invalid_signature" });
         }
         console.error("Webhook handler failed (Stripe will retry):", error?.message ?? error);
-        res.status(500).json({ error: "Webhook processing error" });
+        res.status(500).json({ message: "Webhook processing error", code: "webhook_failed" });
       }
     },
   );

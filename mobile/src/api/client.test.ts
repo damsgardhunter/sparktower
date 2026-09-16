@@ -84,7 +84,12 @@ describe("refreshing an expired token", () => {
     };
     expect(await api("/api/feed")).toEqual({ ok: true });
     const refresh = calls.find((c) => c.url.endsWith("/refresh"))!;
-    expect(refresh.body).toMatchObject({ refreshToken: "refresh-1", device: expect.stringContaining("ios") });
+    /*
+     * The refresh token and nothing else. The server reads only that
+     * (server/mobile-auth.ts) and keeps the device label from sign-in, so
+     * sending one here would be a value nobody looks at.
+     */
+    expect(refresh.body).toEqual({ refreshToken: "refresh-1" });
     expect(calls.map((c) => c.url.replace("https://api.sparktower.test", ""))).toEqual(["/api/feed", "/api/auth/mobile/refresh", "/api/feed"]);
     expect(await getRefreshToken()).toBe("refresh-2");
   });

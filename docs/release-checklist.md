@@ -99,6 +99,24 @@ in the comment.
       dashboard, Developers → Webhooks → your endpoint → **Send test event** →
       confirm a 200 in the dashboard's response log.
 
+- [ ] **The event ledger has actually recorded something.** A 200 in Stripe's
+      log only proves the request arrived. Open **$APP/admin/analytics** →
+      Stripe health (owner only, `GET /api/admin/stripe/health`) and read the
+      verdict, which now also asks Stripe which endpoints it will deliver to:
+
+      | Verdict | What it means |
+      |---|---|
+      | `not_configured` / `no_webhook_secret` | keys missing — fix before taking money |
+      | `no_endpoint_registered` | **the dangerous one**: checkout works, nothing is recorded |
+      | `waiting_for_first_event` | wired up, nothing has arrived yet — the test event above should turn this into `receiving` |
+      | `receiving_with_failures` | arriving, some failed: see `recentFailures`, fix, and Stripe's retries clear them |
+      | `receiving` | working |
+
+      The page prints the next step for whichever verdict it shows. Until one
+      real event has been recorded, the idempotency ledger (`stripe_events`,
+      which dedupes Stripe's retries) has never run in production — send the
+      test event and confirm `events.total` moves.
+
 - [ ] **Uploads.** Presign is auth-gated, and an existing object still serves.
       ```sh
       curl -s -X POST $APP/api/uploads/request-url -H 'Content-Type: application/json' \

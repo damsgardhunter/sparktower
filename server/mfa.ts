@@ -44,7 +44,18 @@ export const mfaEnabledFor = (user: Pick<UserRow, "mfaEnabledAt" | "mfaSecret"> 
   !!user?.mfaEnabledAt && !!user?.mfaSecret;
 
 /** This request's session (web) or token (mobile) passed a second factor. */
-export const mfaSatisfied = (req: any) => !!req.session?.mfaVerifiedAt || req.mfaVerified === true;
+/**
+ * Whether this request passed a second factor — and the account still has one.
+ *
+ * Both halves matter. The mark lives in the session (web) or in the token's
+ * signed `mfa` claim (mobile), and either can outlive the thing it was about:
+ * a support reset (`npm run mfa:reset`) turns 2FA off while sessions and
+ * 15-minute tokens from before it are still in the wild, and they would
+ * otherwise keep counting as verified. Asking the account as well means a mark
+ * is only ever as good as the enrolment behind it.
+ */
+export const mfaSatisfied = (req: any) =>
+  mfaEnabledFor(req.user) && (!!req.session?.mfaVerifiedAt || req.mfaVerified === true);
 
 /**
  * For a privileged route, after its role check: refuses (and answers) when the

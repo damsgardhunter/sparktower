@@ -115,7 +115,21 @@ export function artifactIdFromPath(path: string | null | undefined): string | nu
   return m ? m[1] : null;
 }
 
-export interface PageMeta { title: string; description: string; url: string; siteName?: string }
+export interface PageMeta {
+  title: string;
+  description: string;
+  url: string;
+  siteName?: string;
+  /**
+   * The page's own words, for a reader that doesn't run JavaScript.
+   *
+   * The app renders into an empty root, so without this the HTML a crawler
+   * (or a text browser, or a reader mode) receives says nothing but the title.
+   * A <noscript> copy costs nothing in a browser and makes the page readable
+   * everywhere else.
+   */
+  article?: { heading: string; summary: string; body: string; projectTitle: string; projectPath: string; publishedAt?: string | null };
+}
 
 const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
@@ -141,5 +155,32 @@ export function injectPageMeta(html: string, meta: PageMeta): string {
     `<meta name="twitter:description" content="${description}" />`,
   ].join("\n    ");
   const withoutTitle = html.replace(/<title>[\s\S]*?<\/title>\s*/i, "");
-  return withoutTitle.replace(/<\/head>/i, `    ${tags}\n  </head>`);
+  const head = withoutTitle.replace(/<\/head>/i, `    ${tags}\n  </head>`);
+  if (!meta.article) return head;
+
+  const a = meta.article;
+  // Paragraphs, and headings kept as headings: the body is the builder's own markdown-ish text.
+  const paragraphs = a.body.split(/\n{2,}/).slice(0, 60).map((block) => {
+    const line = block.trim();
+    if (!line) return "";
+    const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (heading) {
+      const level = Math.min(heading[1].length + 1, 6);
+      return `<h${level}>${escapeHtml(heading[2].trim())}</h${level}>`;
+    }
+    return `<p>${escapeHtml(line)}</p>`;
+  }).filter(Boolean).join("\n      ");
+
+  const article = [
+    "<noscript>",
+    "  <article>",
+    `    <h1>${escapeHtml(a.heading)}</h1>`,
+    a.publishedAt ? `    <p><time datetime="${escapeHtml(a.publishedAt)}">${escapeHtml(a.publishedAt.slice(0, 10))}</time></p>` : "",
+    `    <p><a href="${escapeHtml(a.projectPath)}">${escapeHtml(a.projectTitle)}</a></p>`,
+    a.summary ? `    <p>${escapeHtml(a.summary)}</p>` : "",
+    `      ${paragraphs}`,
+    "  </article>",
+    "</noscript>",
+  ].filter(Boolean).join("\n  ");
+  return head.replace(/<body([^>]*)>/i, `<body$1>\n  ${article}\n`);
 }

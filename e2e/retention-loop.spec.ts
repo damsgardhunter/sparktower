@@ -6,6 +6,7 @@
  * test/integration/path-return.test.ts.
  */
 import { test, expect } from "@playwright/test";
+import { verifyEmail } from "./verify-email";
 
 const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -14,6 +15,8 @@ test.use({ extraHTTPHeaders: { "x-forwarded-for": "203.0.113.61" } });
 test("the home screen brings you back to the next step, and a finished step can be shared from it", async ({ page }) => {
   await page.goto("/");
   expect((await page.request.post("/api/auth/register", { data: { email: `e2e-ret-${stamp()}@example.test`, password, firstName: "Rae", lastName: "Return" } })).ok()).toBeTruthy();
+  // Accounts start unconfirmed; anything that reaches other people needs the emailed link (server/email-verification.ts).
+  await verifyEmail(page.request);
   expect((await page.request.post("/api/profile/complete-onboarding", { data: { displayName: "Rae Return", headline: "Building a meal planner", bio: "Here for the path." } })).ok()).toBeTruthy();
   const title = `Return Path ${stamp()}`;
   const project = await (await page.request.post("/api/projects", {

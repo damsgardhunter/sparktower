@@ -5,7 +5,7 @@ import { sql } from "drizzle-orm";
 import { PROJECT_GOAL_IDS, isValidSubcategory } from "./goals";
 
 // Re-exporting from auth models as requested
-export { sessions, users, mobileRefreshTokens, mcpTokens, type User, type UpsertUser, type MobileRefreshToken, type McpToken } from "./models/auth";
+export { sessions, users, mobileRefreshTokens, mcpTokens, emailVerificationTokens, type User, type UpsertUser, type MobileRefreshToken, type McpToken } from "./models/auth";
 import { users, mobileRefreshTokens } from "./models/auth";
 
 export const userProfiles = pgTable("user_profiles", {
@@ -224,7 +224,7 @@ export const projects = pgTable("projects", {
 
 export const novaGuideMessages = pgTable("nova_guide_messages", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   role: text("role").notNull(),
   content: text("content").notNull(),
   actionsTaken: jsonb("actions_taken").default([]),
@@ -233,7 +233,7 @@ export const novaGuideMessages = pgTable("nova_guide_messages", {
 
 export const projectMembers = pgTable("project_members", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   userId: varchar("user_id").notNull().references(() => users.id),
   role: text("role").notNull(),
   timezone: text("timezone"),
@@ -266,7 +266,7 @@ export const projectInvites = pgTable("project_invites", {
 
 export const donations = pgTable("donations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   donorId: varchar("donor_id").notNull().references(() => users.id),
   amount: integer("amount").notNull(), // in cents
   message: text("message"),
@@ -294,7 +294,7 @@ export const donations = pgTable("donations", {
  */
 export const projectBackingCampaigns = pgTable("project_backing_campaigns", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id).unique(),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }).unique(),
   /** Off until the creator opens it. Nothing is collectable before that. */
   enabled: boolean("enabled").default(false).notNull(),
   headline: text("headline"),
@@ -339,7 +339,7 @@ export const projectBackingCampaigns = pgTable("project_backing_campaigns", {
 /** One rung of the ladder. Five works; three leaves money, eight is a menu. */
 export const projectBackerTiers = pgTable("project_backer_tiers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   amountCents: integer("amount_cents").notNull(),
   /** The creator's own words — "Believer", "Ride or die", "Absolute unit". */
   name: text("name").notNull(),
@@ -364,7 +364,7 @@ export const projectBackerTiers = pgTable("project_backer_tiers", {
  */
 export const projectBackings = pgTable("project_backings", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   backerId: varchar("backer_id").notNull().references(() => users.id),
   /** The rung earned, resolved from the amount rather than what was clicked. */
   tierId: varchar("tier_id").references(() => projectBackerTiers.id, { onDelete: "set null" }),
@@ -410,7 +410,7 @@ export const projectBackings = pgTable("project_backings", {
 export const projectMerchOrders = pgTable("project_merch_orders", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   backingId: varchar("backing_id").notNull().references(() => projectBackings.id),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   status: text("status", {
     enum: ["queued", "submitted", "shipped", "failed", "canceled"],
   }).default("queued").notNull(),
@@ -439,7 +439,7 @@ export const projectMerchOrders = pgTable("project_merch_orders", {
 export const backerBadges = pgTable("backer_badges", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull().references(() => users.id),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   /** Highest level earned, from BADGE_LEVELS. */
   level: text("level").notNull(),
   /** Total across every pledge to this project, which is what sets the level. */
@@ -558,7 +558,7 @@ export const directMessages = pgTable("direct_messages", {
 
 export const projectApplications = pgTable("project_applications", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   userId: varchar("user_id").notNull().references(() => users.id),
   status: text("status", { enum: ["pending", "accepted", "rejected"] }).default("pending").notNull(),
   resumeUrl: text("resume_url"),
@@ -569,7 +569,7 @@ export const projectApplications = pgTable("project_applications", {
 
 export const projectFollows = pgTable("project_follows", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   userId: varchar("user_id").notNull().references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
@@ -607,7 +607,7 @@ export type UserFollow = typeof userFollows.$inferSelect;
 
 export const projectKanbanTasks = pgTable("project_kanban_tasks", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   title: text("title").notNull(),
   description: text("description"),
   status: text("status", { enum: ["todo", "in-progress", "review", "done"] }).default("todo").notNull(),
@@ -662,7 +662,7 @@ export const userTaskStats = pgTable("user_task_stats", {
 
 export const projectPersonas = pgTable("project_personas", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   age: integer("age"),
   occupation: text("occupation"),
@@ -677,7 +677,7 @@ export const projectPersonas = pgTable("project_personas", {
 
 export const projectMilestones = pgTable("project_milestones", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   title: text("title").notNull(),
   description: text("description"),
   status: text("status", { enum: ["planned", "in-progress", "completed"] }).default("planned").notNull(),
@@ -692,7 +692,7 @@ export const projectMilestones = pgTable("project_milestones", {
  */
 export const projectRoadmaps = pgTable("project_roadmaps", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   /** The user's stated destination, e.g. "500 paying users by June". */
   goal: text("goal").notNull(),
   summary: text("summary"),
@@ -726,7 +726,7 @@ export const roadmapPhases = pgTable("roadmap_phases", {
 /** Nova's periodic project health assessments (Pro tier). */
 export const projectHealthChecks = pgTable("project_health_checks", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   score: integer("score").notNull(),
   status: text("status").notNull(),
   summary: text("summary").notNull(),
@@ -774,7 +774,7 @@ export type CodeAuditRun = typeof codeAuditRuns.$inferSelect;
 
 export const projectCodeAudits = pgTable("project_code_audits", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   createdById: varchar("created_by_id").notNull().references(() => users.id),
   /** "github:owner/repo@main" or "upload:my-project.zip". */
   source: text("source").notNull(),
@@ -827,7 +827,7 @@ export const projectCodeAudits = pgTable("project_code_audits", {
  */
 export const projectDocuments = pgTable("project_documents", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   createdById: varchar("created_by_id").notNull().references(() => users.id),
   title: text("title").notNull(),
   /** What the builder asked for, kept so a re-plan has the original intent. */
@@ -864,7 +864,7 @@ export const projectDocuments = pgTable("project_documents", {
  */
 export const projectTaskCompletions = pgTable("project_task_completions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   /** The kanban row that was finished. Unique, so a done/undone loop can't double-count. */
   taskId: varchar("task_id").notNull().unique(),
   /** Who moved it to done. Null if that user was later removed. */
@@ -885,7 +885,7 @@ export const projectTaskCompletions = pgTable("project_task_completions", {
  */
 export const healthFindingFeedback = pgTable("health_finding_feedback", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   /** The check the pushback was written against, for provenance. */
   checkId: varchar("check_id").references(() => projectHealthChecks.id, { onDelete: "set null" }),
   userId: varchar("user_id").notNull().references(() => users.id),
@@ -908,7 +908,7 @@ export const healthFindingFeedback = pgTable("health_finding_feedback", {
  */
 export const projectStoryboards = pgTable("project_storyboards", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   /** The account that generated it — the only account that can view it. */
   userId: varchar("user_id").notNull().references(() => users.id),
   style: text("style").notNull(),
@@ -938,7 +938,7 @@ export interface StoryboardScene {
  */
 export const investorArtifacts = pgTable("investor_artifacts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   userId: varchar("user_id").notNull().references(() => users.id),
   kind: text("kind", { enum: ["deck_outline", "readiness_score", "pitch_critique", "pricing_analysis"] }).notNull(),
   /** 0-100 for scores and critiques. Null for deck outlines. */
@@ -955,7 +955,7 @@ export const investorArtifacts = pgTable("investor_artifacts", {
  */
 export const mockInterviews = pgTable("mock_interviews", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   userId: varchar("user_id").notNull().references(() => users.id),
   /** The investor archetype Nova is playing. */
   persona: text("persona").notNull(),
@@ -988,7 +988,7 @@ export const mockInterviewTurns = pgTable("mock_interview_turns", {
  */
 export const projectComments = pgTable("project_comments", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   authorId: varchar("author_id").notNull().references(() => users.id),
   targetType: text("target_type", { enum: ["milestone", "project", "roadmap_phase"] }).notNull(),
   targetId: varchar("target_id").notNull(),
@@ -1041,7 +1041,7 @@ export const feedPosts = pgTable("feed_posts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   authorId: varchar("author_id").notNull().references(() => users.id),
   /** The project this post is about. Null for general founder chatter. */
-  projectId: varchar("project_id").references(() => projects.id),
+  projectId: varchar("project_id").references(() => projects.id, { onDelete: "cascade" }),
   postType: text("post_type", { enum: FEED_POST_TYPES }).notNull(),
   content: text("content").notNull(),
   mediaUrls: varchar("media_urls").array().default([]),
@@ -1059,6 +1059,13 @@ export const feedPosts = pgTable("feed_posts", {
   /** When the project's team last read the feedback on this post; comments after it are new. */
   feedbackSeenAt: timestamp("feedback_seen_at"),
   editedAt: timestamp("edited_at"),
+  /**
+   * Deleted by its author while other people were replying: the author's words
+   * and images go, the row stays so the thread they wrote under doesn't
+   * vanish with it. A post nobody replied to is deleted outright and has no
+   * row at all. Same rule as a comment with replies under it.
+   */
+  deletedAt: timestamp("deleted_at"),
   /** Taken down by a reviewer: hidden from every read, with who and why. Null means visible. */
   hiddenAt: timestamp("hidden_at"),
   hiddenById: varchar("hidden_by_id"),
@@ -1207,7 +1214,7 @@ export interface FeedMention {
 
 export const projectActivityLog = pgTable("project_activity_log", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   userId: varchar("user_id").references(() => users.id),
   action: text("action").notNull(),
   entityType: text("entity_type"),
@@ -1218,7 +1225,7 @@ export const projectActivityLog = pgTable("project_activity_log", {
 
 export const projectDecisions = pgTable("project_decisions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   userId: varchar("user_id").notNull().references(() => users.id),
   title: text("title").notNull(),
   decision: text("decision").notNull(),
@@ -1570,7 +1577,7 @@ export const contentReports = pgTable("content_reports", {
   targetId: varchar("target_id").notNull(),
   /** Denormalised so the queue can show context without five joins. */
   targetOwnerId: varchar("target_owner_id").references(() => users.id),
-  projectId: varchar("project_id").references(() => projects.id),
+  projectId: varchar("project_id").references(() => projects.id, { onDelete: "cascade" }),
   reason: text("reason").notNull(),
   note: text("note"),
   /**
@@ -1601,7 +1608,7 @@ export const surfaceFlags = pgTable("surface_flags", {
 
 export const projectFiles = pgTable("project_files", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   /** The section it was added in, or null when it's shared across all three. */
   track: text("track"),
   uploaderId: varchar("uploader_id").notNull().references(() => users.id),
@@ -1615,7 +1622,7 @@ export const projectFiles = pgTable("project_files", {
 
 export const projectLinks = pgTable("project_links", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   label: text("label").notNull(),
   url: text("url").notNull(),
   category: text("category", { enum: ["repo", "docs", "design", "drive", "notes", "other"] }).default("other").notNull(),
@@ -1626,7 +1633,7 @@ export const projectLinks = pgTable("project_links", {
 
 export const projectChatMessages = pgTable("project_chat_messages", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   role: text("role").notNull(),
   content: text("content").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -1636,7 +1643,7 @@ export const projectChatMessages = pgTable("project_chat_messages", {
 
 export const projectLiveChatMessages = pgTable("project_live_chat_messages", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   userId: varchar("user_id").notNull().references(() => users.id),
   content: text("content").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -1646,7 +1653,7 @@ export const projectLiveChatMessages = pgTable("project_live_chat_messages", {
 
 export const projectWaitlistEntries = pgTable("project_waitlist_entries", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   email: text("email").notNull(),
   name: text("name"),
   source: text("source"),
@@ -1655,7 +1662,7 @@ export const projectWaitlistEntries = pgTable("project_waitlist_entries", {
 
 export const projectInterviews = pgTable("project_interviews", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   userId: varchar("user_id").notNull().references(() => users.id),
   intervieweeName: text("interviewee_name").notNull(),
   intervieweeRole: text("interviewee_role"),
@@ -1669,7 +1676,7 @@ export const projectInterviews = pgTable("project_interviews", {
 
 export const projectExperiments = pgTable("project_experiments", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   userId: varchar("user_id").notNull().references(() => users.id),
   hypothesis: text("hypothesis").notNull(),
   method: text("method"),
@@ -1684,7 +1691,7 @@ export const projectExperiments = pgTable("project_experiments", {
 
 export const projectPricingTiers = pgTable("project_pricing_tiers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   price: integer("price").default(0),
   billingPeriod: text("billing_period").default("monthly"),
@@ -1705,7 +1712,7 @@ export const projectPricingTiers = pgTable("project_pricing_tiers", {
  */
 export const projectAnalyticsEvents = pgTable("project_analytics_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   /** The section it belongs to (ship_mvp, systemize_business, raise_funding), or null when it's project-wide. */
   track: text("track"),
   eventName: text("event_name").notNull(),
@@ -1717,7 +1724,7 @@ export const projectAnalyticsEvents = pgTable("project_analytics_events", {
 
 export const projectLegalDocs = pgTable("project_legal_docs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   docType: text("doc_type").notNull(),
   title: text("title").notNull(),
   content: text("content"),
@@ -1727,7 +1734,7 @@ export const projectLegalDocs = pgTable("project_legal_docs", {
 
 export const projectDeployChecklistItems = pgTable("project_deploy_checklist_items", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   item: text("item").notNull(),
   category: text("category").default("other"),
   isCompleted: boolean("is_completed").default(false),
@@ -1737,7 +1744,7 @@ export const projectDeployChecklistItems = pgTable("project_deploy_checklist_ite
 
 export const projectSupportTickets = pgTable("project_support_tickets", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   submitterEmail: text("submitter_email"),
   submitterName: text("submitter_name"),
   subject: text("subject").notNull(),
@@ -1750,7 +1757,7 @@ export const projectSupportTickets = pgTable("project_support_tickets", {
 
 export const projectLaunchTasks = pgTable("project_launch_tasks", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   channel: text("channel").notNull(),
   task: text("task").notNull(),
   status: text("status").default("planned"),
@@ -1779,7 +1786,7 @@ export const projectLaunchTasks = pgTable("project_launch_tasks", {
  */
 export const projectCheckIns = pgTable("project_check_ins", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: varchar("project_id").notNull().references(() => projects.id),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   userId: varchar("user_id").notNull().references(() => users.id),
   /**
    * Monday of the week this covers, at UTC midnight.
@@ -1873,7 +1880,7 @@ export const loopEvents = pgTable("loop_events", {
   name: text("name").notNull(),
   /** Null for events from someone who isn't signed in. */
   userId: varchar("user_id").references(() => users.id),
-  projectId: varchar("project_id").references(() => projects.id),
+  projectId: varchar("project_id").references(() => projects.id, { onDelete: "cascade" }),
   checkInId: varchar("check_in_id"),
   /** Correlates `started` with `submitted` for one composing session. */
   sessionId: varchar("session_id"),
@@ -2201,7 +2208,7 @@ export const cofounderSprints = pgTable("cofounder_sprints", {
   user2ProposedName: text("user2_proposed_name"),
   isPractice: boolean("is_practice").default(false).notNull(),
   /** Set when the sprint is working on an existing project rather than a new idea. */
-  sourceProjectId: varchar("source_project_id").references(() => projects.id),
+  sourceProjectId: varchar("source_project_id").references(() => projects.id, { onDelete: "cascade" }),
   agreedProblem: text("agreed_problem"),
   agreedIcp: text("agreed_icp"),
   agreedValueProp: text("agreed_value_prop"),
@@ -2318,7 +2325,7 @@ export const sprintMatchmakingQueue = pgTable("sprint_matchmaking_queue", {
    * Optional project the builder wants to sprint on, so the sprint works on
    * something real instead of a throwaway idea.
    */
-  projectId: varchar("project_id").references(() => projects.id),
+  projectId: varchar("project_id").references(() => projects.id, { onDelete: "cascade" }),
   /** Bumped by the client heartbeat; stale rows are swept. */
   lastSeenAt: timestamp("last_seen_at").defaultNow().notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),

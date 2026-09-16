@@ -9,6 +9,7 @@ import connectPg from "connect-pg-simple";
 import { authStorage } from "./storage";
 import bcrypt from "bcryptjs";
 import { sessionSecret } from "../../secrets";
+import { isDeleted } from "../../account-data";
 
 export function getSession() {
   const sessionTtlSeconds = 7 * 24 * 60 * 60;
@@ -56,7 +57,8 @@ export async function setupAuth(app: Express) {
         ? serialized.claims.sub
         : String(serialized);
       const user = await authStorage.getUser(userId);
-      cb(null, user || null);
+      // A closed account is nobody: its sessions are deleted at deletion, and any that outlive it resolve to no user.
+      cb(null, user && !isDeleted(user) ? user : null);
     } catch (err) {
       cb(err);
     }
@@ -68,7 +70,7 @@ export async function setupAuth(app: Express) {
       async (email, password, done) => {
         try {
           const user = await authStorage.getUserByEmail(email);
-          if (!user) {
+          if (!user || isDeleted(user)) {
             return done(null, false, { message: "Invalid email or password" });
           }
           if (!user.passwordHash) {
@@ -139,6 +141,8 @@ export async function setupAuth(app: Express) {
               profileImageUrl: profile.photos?.[0]?.value || undefined,
               authProvider: "google",
               googleId: profile.id,
+              // Google has already checked the address; asking its owner to prove it again is theatre.
+              emailVerifiedAt: new Date(),
             });
             await ensureUserProfile(newUser);
             // Only here, on the branch that actually creates an account —

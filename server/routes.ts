@@ -22,6 +22,8 @@ import { registerArtifactRoutes } from "./artifact-routes";
 import { registerPromotionRoutes } from "./promotion-routes";
 import { registerInviteRoutes } from "./invite-routes";
 import { registerMfaRoutes } from "./mfa";
+import { registerAccountRoutes } from "./account-routes";
+import { registerSitemapRoutes } from "./sitemap";
 import { ensureCreatorBadges } from "./backer-badges";
 import { registerFeedRoutes, registerProjectDiscussionRoutes, publishSystemPost, SYSTEM_POST_COPY, SYSTEM_POST_TYPES } from "./feed-routes";
 import { registerProfileRoutes } from "./profile-routes";
@@ -50,6 +52,7 @@ import {
 } from "./project-operations";
 import { insertUserProfileSchema, insertProjectSchema, insertProjectBase, insertContestSchema, insertProjectLiveChatMessageSchema, insertWaitlistEntrySchema, insertInterviewSchema, insertExperimentSchema, insertPricingTierSchema, insertAnalyticsEventSchema, insertLegalDocSchema, insertDeployChecklistItemSchema, insertSupportTicketSchema, insertLaunchTaskSchema, insertProjectDecisionSchema, insertProjectFileSchema, insertProjectLinkSchema, type StoryboardScene } from "@shared/schema";
 import { pickFields, WRITABLE } from "./body-fields";
+import { registerEmailVerificationRoutes, requireVerifiedEmail } from "./email-verification";
 import { z } from "zod";
 import OpenAI from "openai";
 import { eq, ne, and, sql, inArray, desc, isNull } from "drizzle-orm";
@@ -340,6 +343,13 @@ export async function registerRoutes(
    * decorate is not a suspension.
    */
   app.use(blockSuspended);
+  /*
+   * An unconfirmed address can read and can work on its own project, but
+   * nothing it does reaches another person (server/email-verification.ts).
+   * Mounted here for the same reason as the suspension check: a gate on only
+   * the routes someone remembered to decorate is not a gate.
+   */
+  app.use(requireVerifiedEmail);
   app.use(limitWrites);
   /*
    * Behaviour capture, mounted here for two reasons.
@@ -376,6 +386,10 @@ export async function registerRoutes(
   registerArtifactRoutes(app);
   registerPromotionRoutes(app);
   registerInviteRoutes(app);
+  // Your data: export it, or close the account (server/account-data.ts).
+  registerAccountRoutes(app);
+  // robots.txt and the sitemap of published artifact pages — how a crawler finds the growth loop's front doors.
+  registerSitemapRoutes(app);
   registerMfaRoutes(app);
   registerProfileRoutes(app);
   registerDocumentRoutes(app);
@@ -395,6 +409,7 @@ export async function registerRoutes(
 
   registerSurfaceRoutes(app);
   registerModerationRoutes(app);
+  registerEmailVerificationRoutes(app);
   registerSafetyRoutes(app);
   registerInvestmentRoutes(app);
   registerBackingRoutes(app);

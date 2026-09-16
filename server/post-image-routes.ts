@@ -89,7 +89,8 @@ export function registerPostImageRoutes(app: Express) {
         ? await openai.images.edit({ model: IMAGE_MODEL, prompt, image: [logo], size: "1536x1024", quality: IMAGE_QUALITY } as any)
         : await openai.images.generate({ model: IMAGE_MODEL, prompt, size: "1536x1024", quality: IMAGE_QUALITY } as any);
       const b64 = response.data?.[0]?.b64_json;
-      if (!b64) return res.status(502).json({ message: "Couldn't draw that this time. Nothing was charged — try again." });
+      // An answer with no image in it is an unreadable answer: same 502 and machine code as every other AI route, so a client can tell "try again" from "we're broken".
+      if (!b64) return res.status(502).json({ message: "Couldn't draw that this time. Nothing was charged — try again.", code: "model_unreadable" });
 
       const url = await new ObjectStorageService().writeObjectBuffer(Buffer.from(b64, "base64"), "image/png");
       await storage.deductCredits(userId, CREDIT_COSTS.postImage);

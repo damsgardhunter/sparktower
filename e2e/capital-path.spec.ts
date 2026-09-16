@@ -10,6 +10,7 @@
  * there's no model here.
  */
 import { test, expect, type Browser } from "@playwright/test";
+import { verifyEmail } from "./verify-email";
 import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
@@ -26,6 +27,8 @@ async function personIn(browser: Browser, ip: string, first: string) {
   const email = `e2e-${first.toLowerCase()}-${stamp()}@example.test`;
   const res = await api.post("/api/auth/register", { data: { email, password, firstName: first, lastName: "Capital" } });
   expect(res.ok()).toBeTruthy();
+  // Accounts start unconfirmed; anything that reaches other people needs the emailed link (server/email-verification.ts).
+  await verifyEmail(api);
   expect((await api.post("/api/profile/complete-onboarding", { data: { displayName: `${first} Capital`, headline: "Building a business", bio: "Here for the money." } })).ok()).toBeTruthy();
   return { context, api, email, id: (await res.json()).id as string };
 }

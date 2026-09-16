@@ -8,6 +8,7 @@
  * than a simulator, which is the part of the original packet that was dropped.
  */
 import { test, expect } from "@playwright/test";
+import { verifyEmail } from "./verify-email";
 
 const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -19,6 +20,8 @@ test("cards connect with a note, message in one tap, follow instantly — and a 
   await bea.get("/");
   const beaUser = await bea.post("/api/auth/register", { data: { email: `e2e-bea-${stamp()}@example.test`, password, firstName: "Bea", lastName: "Builder" } });
   expect(beaUser.ok()).toBeTruthy();
+  // Accounts start unconfirmed; posting, commenting and reporting need the emailed link (server/email-verification.ts).
+  await verifyEmail(bea);
   const beaId = (await beaUser.json()).id as string;
   expect((await bea.post("/api/profile/complete-onboarding", {
     data: { displayName: "Bea Builder", headline: "Shipping a habit tracker", bio: "Building in public." },
@@ -33,6 +36,8 @@ test("cards connect with a note, message in one tap, follow instantly — and a 
   await page.goto("/");
   const ariUser = await page.request.post("/api/auth/register", { data: { email: `e2e-ari-${stamp()}@example.test`, password, firstName: "Ari", lastName: "Explorer" } });
   expect(ariUser.ok()).toBeTruthy();
+  // Accounts start unconfirmed; posting, commenting and reporting need the emailed link (server/email-verification.ts).
+  await verifyEmail(page.request);
   const ariId = (await ariUser.json()).id as string;
   expect((await page.request.post("/api/profile/complete-onboarding", {
     data: { displayName: "Ari Explorer", headline: "Looking for a co-builder", bio: "Here for the loop." },

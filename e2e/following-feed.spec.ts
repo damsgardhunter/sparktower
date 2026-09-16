@@ -7,6 +7,7 @@
  * nothing you can see — checked end to end.
  */
 import { test, expect } from "@playwright/test";
+import { verifyEmail } from "./verify-email";
 
 const password = "Testpass123!";
 
@@ -26,6 +27,8 @@ test("following a builder fills the Following feed, immediately and for good", a
   await bea.get("/");
   const beaUser = await bea.post("/api/auth/register", { data: { email: `e2e-bea3-${stamp()}@example.test`, password, firstName: "Bea", lastName: "Builder" } });
   expect(beaUser.ok()).toBeTruthy();
+  // Accounts start unconfirmed; posting, commenting and reporting need the emailed link (server/email-verification.ts).
+  await verifyEmail(bea);
   const beaId = (await beaUser.json()).id as string;
   expect((await bea.post("/api/profile/complete-onboarding", {
     data: { displayName: "Bea Builder", headline: "Shipping a habit tracker", bio: "Building in public." },
@@ -33,6 +36,8 @@ test("following a builder fills the Following feed, immediately and for good", a
 
   await page.goto("/");
   expect((await page.request.post("/api/auth/register", { data: { email: `e2e-ari3-${stamp()}@example.test`, password, firstName: "Ari", lastName: "Explorer" } })).ok()).toBeTruthy();
+  // Accounts start unconfirmed; posting, commenting and reporting need the emailed link (server/email-verification.ts).
+  await verifyEmail(page.request);
   expect((await page.request.post("/api/profile/complete-onboarding", {
     data: { displayName: "Ari Explorer", headline: "Looking for a co-builder", bio: "Here for the loop." },
   })).ok()).toBeTruthy();

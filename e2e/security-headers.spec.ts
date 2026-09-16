@@ -6,6 +6,7 @@
  * policy enforced (CSP_ENFORCE=1); this one fails on any violation it sees.
  */
 import { test, expect, type Page } from "@playwright/test";
+import { verifyEmail } from "./verify-email";
 import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
@@ -45,6 +46,8 @@ test("security headers are set, the app can't be framed, and the pages load noth
   const api = context.request;
   await api.get("/");
   const me = await (await api.post("/api/auth/register", { headers: { "x-forwarded-for": "203.0.113.170" }, data: { email: `e2e-csp-${stamp()}@example.test`, password: "Testpass123!", firstName: "Cee", lastName: "Esspee" } })).json();
+  // Accounts start unconfirmed; posting, commenting and reporting need the emailed link (server/email-verification.ts).
+  await verifyEmail(api);
   expect((await api.post("/api/profile/complete-onboarding", { data: { displayName: "Cee Esspee", headline: "x", bio: "y" } })).ok()).toBeTruthy();
   const project = await (await api.post("/api/projects", { data: { title: `CSP ${stamp()}`, description: "A project to load every kind of page.", category: "saas", goal: "ship_mvp", subcategory: "saas" } })).json();
   const tasks = await (await api.get(`/api/projects/${project.id}/kanban`)).json();

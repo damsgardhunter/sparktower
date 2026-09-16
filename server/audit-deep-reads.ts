@@ -13,7 +13,7 @@ import { renderRouteCoverage } from "./route-coverage";
 import { renderDataShape, type DataShape } from "@shared/data-shape";
 import { CAPABILITY_AREAS, sanitizeDeepRead, type CapabilityEntry, type CapabilityArea, type CapabilityDetail } from "@shared/capabilities";
 import { parseModelJson } from "./ai-json";
-import { isTest, summarizeTestInventory, summarizeMobileScreens, summarizeAuthEndpoints, summarizeEnforcementFilters } from "./audit-evidence";
+import { isTest, summarizeTestInventory, summarizeMobileScreens, summarizeAuthEndpoints, summarizeEnforcementFilters, summarizeUntestedRoutes } from "./audit-evidence";
 
 const rawBase = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
 const openai = new OpenAI({
@@ -48,9 +48,30 @@ const AREA_FILE_HINTS: Partial<Record<CapabilityArea, RegExp>> = {
   analytics: /analytics|metrics|track/i,
   data: /schema|storage|db\b|migrat/i,
   tests: /vitest|playwright|test\/setup|test\/helpers|test\/integration|test\/unit|e2e\//i,
-  ci: /\.github\/workflows|ci-stability|release-checklist/i,
+  ci: /\.github\/workflows|ci-stability|release-checklist|ci-gate|branch-protection|dependabot/i,
   deploy: /index\.ts$|app\.ts$|surfaces|health|env-contract|\.replit|Dockerfile/i,
   mobile: /^mobile\/(app|src)\/|mobile-auth/i,
+};
+
+/**
+ * The file an area's question is really about, kept in the read whatever else
+ * competes for the ten slots.
+ *
+ * Name-matching alone put `server/webhookHandlers.ts` behind a dozen other
+ * files matching /stripe|billing/, and a payments read without it can only say
+ * "the claim-before-side-effects mechanism isn't in the files provided" — a
+ * statement about the prompt, not the code. These go in first.
+ */
+const AREA_MUST_READ: Partial<Record<CapabilityArea, RegExp>> = {
+  payments: /(^|\/)(webhookHandlers|billing-credits)\.ts$/,
+  auth: /(^|\/)(mobile-auth|mfa|replitAuth)\.ts$/,
+  rateLimiting: /(^|\/)moderation\.ts$/,
+  moderation: /(^|\/)(moderation|moderation-log-rules)\.ts$/,
+  mobile: /(^|\/)mobile-auth\.ts$/,
+  // entitlements.ts holds requireCredits and reserveOptionalAi; moderation.ts holds the limiter both of them call.
+  ai: /(^|\/)(entitlements|moderation)\.ts$/,
+  // The gate is a GitHub setting, so the repository's evidence for it is the written contract and the script that checks it.
+  ci: /(^|\/)ci-gate\.md$|(^|\/)check-branch-protection\.mjs$/,
 };
 
 /** The matrix rows this area's question is about, one compact line each, so "which routes" is answerable from evidence. */
@@ -85,6 +106,12 @@ export async function deepReadArea(
   const maxFiles = opts.maxFiles ?? 10, maxChars = opts.maxCharsPerFile ?? 60000;
   const byPath = new Map(files.map((f) => [f.path, f]));
   const chosen: RepoFile[] = [];
+  // The mechanism files first: they answer the area's question, and losing them to the cap costs the whole verdict.
+  const mustRead = AREA_MUST_READ[entry.area];
+  if (mustRead) for (const f of files) {
+    if (chosen.length >= maxFiles) break;
+    if (f.content && !isTest(f.path) && mustRead.test(f.path) && !chosen.includes(f)) chosen.push(f);
+  }
   for (const e of entry.evidence) { const f = byPath.get(e.file); if (f?.content && !chosen.includes(f)) chosen.push(f); if (chosen.length >= maxFiles) break; }
   // Files the area's question is about, by name, so "not present in the
   // files provided" stops being the answer when the file exists.
@@ -114,6 +141,8 @@ export async function deepReadArea(
     entry.area === "mobile" && coverage ? summarizeAuthEndpoints(coverage.rows) : null,
     // The chain's last step: where hidden content and suspended accounts are filtered out of reads.
     entry.area === "moderation" ? summarizeEnforcementFilters(files) : null,
+    // For the testing areas: which routes no test names, so "what isn't covered" is answered from the repository.
+    testsAreTheSubject && coverage ? summarizeUntestedRoutes(files, coverage.rows) : null,
   ].filter(Boolean).join("\n\n") || null;
   const allowed = new Set(files.map((f) => f.path));
 

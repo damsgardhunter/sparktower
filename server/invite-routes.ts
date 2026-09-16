@@ -31,14 +31,40 @@ export const newInviteToken = () => crypto.randomBytes(32).toString("base64url")
 const siteBase = (req: Request) => (process.env.SERVER_BASE_URL || process.env.PUBLIC_URL || `${req.protocol}://${req.get("host")}`).replace(/\/$/, "");
 
 type Owned =
-  | { project: { id: string; title: string; ownerId: string; soloMode: boolean | null }; error?: undefined }
-  | { error: { status: number; body: { message: string } }; project?: undefined };
+  | { project: { id: string; title: string; ownerId: string; soloMode: boolean | null }; isOwner: boolean; error?: undefined }
+  | { error: { status: number; body: { message: string } }; project?: undefined; isOwner?: undefined };
 
-async function ownedProject(projectId: string, userId: string): Promise<Owned> {
+async function loadProject(projectId: string): Promise<{ id: string; title: string; ownerId: string; soloMode: boolean | null } | null> {
   const [project] = await db.select({ id: projects.id, title: projects.title, ownerId: projects.ownerId, soloMode: projects.soloMode }).from(projects).where(eq(projects.id, projectId));
+  return project ?? null;
+}
+
+/**
+ * Anyone on the team, for the things a teammate does: inviting, and seeing who
+ * has been invited.
+ *
+ * Invites used to be the owner's alone, which quietly ended the referral loop
+ * at the first person: someone joins, builds, and has no way to bring in the
+ * person they know is needed — they'd have to ask the owner to send it. The
+ * caps that matter aren't about who asks (per-person limit, per-project daily
+ * cap, pending-invite ceiling), and they all still apply.
+ */
+async function teamProject(projectId: string, userId: string): Promise<Owned> {
+  const project = await loadProject(projectId);
   if (!project) return { error: { status: 404, body: { message: "Project not found" } } };
-  if (project.ownerId !== userId) return { error: { status: 403, body: { message: "Only the project's owner can invite people." } } };
-  return { project };
+  if (project.ownerId === userId) return { project, isOwner: true };
+  const [member] = await db.select({ id: projectMembers.id }).from(projectMembers)
+    .where(and(eq(projectMembers.projectId, project.id), eq(projectMembers.userId, userId)));
+  if (!member) return { error: { status: 403, body: { message: "Only people on this project can invite others to it." } } };
+  return { project, isOwner: false };
+}
+
+/** The owner alone, for what only they should decide. */
+async function ownedProject(projectId: string, userId: string): Promise<Owned> {
+  const project = await loadProject(projectId);
+  if (!project) return { error: { status: 404, body: { message: "Project not found" } } };
+  if (project.ownerId !== userId) return { error: { status: 403, body: { message: "Only the project's owner can do that." } } };
+  return { project, isOwner: true };
 }
 
 async function inviterName(userId: string) {
@@ -47,16 +73,18 @@ async function inviterName(userId: string) {
   return row ? feedDisplayName(row, { displayName: row.displayName }) : "A builder";
 }
 
-const publicInvite = (i: typeof projectInvites.$inferSelect) => ({
+const publicInvite = (i: typeof projectInvites.$inferSelect, invitedBy?: string | null) => ({
   id: i.id, email: i.email, role: i.role, expiresAt: i.expiresAt, createdAt: i.createdAt,
   emailStatus: i.emailStatus, status: inviteStatus(i),
+  /** Who sent it: a team's invites are no longer all the owner's. */
+  invitedById: i.createdById, invitedByName: invitedBy ?? null,
 });
 
 export function registerInviteRoutes(app: Express) {
   /** Create an invite. The link is in this response and nowhere else. */
   app.post("/api/projects/:id/invites", isAuthenticated, rateLimit("invite"), async (req: any, res) => {
     try {
-      const owned = await ownedProject(String(req.params.id), req.user.id);
+      const owned = await teamProject(String(req.params.id), req.user.id);
       if (owned.error) return res.status(owned.error.status).json(owned.error.body);
       const project = owned.project!;
       if (project.soloMode) return res.status(400).json({ message: "This is a solo build — it doesn't take collaborators.", code: "solo_project" });
@@ -108,10 +136,14 @@ export function registerInviteRoutes(app: Express) {
   /** The project's invites, newest first. Never their links. */
   app.get("/api/projects/:id/invites", isAuthenticated, async (req: any, res) => {
     try {
-      const owned = await ownedProject(String(req.params.id), req.user.id);
+      const owned = await teamProject(String(req.params.id), req.user.id);
       if (owned.error) return res.status(owned.error.status).json(owned.error.body);
-      const rows = await db.select().from(projectInvites).where(eq(projectInvites.projectId, owned.project!.id)).orderBy(desc(projectInvites.createdAt)).limit(100);
-      res.json({ invites: rows.map(publicInvite) });
+      const rows = await db.select({ invite: projectInvites, firstName: users.firstName, lastName: users.lastName, email: users.email, displayName: userProfiles.displayName })
+        .from(projectInvites)
+        .leftJoin(users, eq(users.id, projectInvites.createdById))
+        .leftJoin(userProfiles, eq(userProfiles.userId, projectInvites.createdById))
+        .where(eq(projectInvites.projectId, owned.project!.id)).orderBy(desc(projectInvites.createdAt)).limit(100);
+      res.json({ invites: rows.map((r) => publicInvite(r.invite, r.firstName || r.email ? feedDisplayName(r, { displayName: r.displayName }) : null)) });
     } catch (error) {
       console.error("Invite list error:", error);
       res.status(500).json({ message: "Couldn't load invites" });
@@ -121,12 +153,17 @@ export function registerInviteRoutes(app: Express) {
   /** Revoke one: its link stops working immediately. */
   app.delete("/api/projects/:id/invites/:inviteId", isAuthenticated, rateLimit("invite"), async (req: any, res) => {
     try {
-      const owned = await ownedProject(String(req.params.id), req.user.id);
+      const owned = await teamProject(String(req.params.id), req.user.id);
       if (owned.error) return res.status(owned.error.status).json(owned.error.body);
+      // A teammate can take back an invite they sent; taking back someone else's is the owner's call.
       const [row] = await db.update(projectInvites).set({ revokedAt: new Date() })
-        .where(and(eq(projectInvites.id, String(req.params.inviteId)), eq(projectInvites.projectId, owned.project!.id), isNull(projectInvites.acceptedAt), isNull(projectInvites.revokedAt)))
+        .where(and(
+          eq(projectInvites.id, String(req.params.inviteId)), eq(projectInvites.projectId, owned.project!.id),
+          isNull(projectInvites.acceptedAt), isNull(projectInvites.revokedAt),
+          ...(owned.isOwner ? [] : [eq(projectInvites.createdById, req.user.id)]),
+        ))
         .returning();
-      if (!row) return res.status(404).json({ message: "No pending invite by that id." });
+      if (!row) return res.status(404).json({ message: owned.isOwner ? "No pending invite by that id." : "No pending invite of yours by that id." });
       res.json({ invite: publicInvite(row) });
     } catch (error) {
       console.error("Invite revoke error:", error);

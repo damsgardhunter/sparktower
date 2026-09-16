@@ -57,6 +57,14 @@ export const users = pgTable("users", {
    * a copied access token dies with the sessions instead of living out its 15 minutes.
    */
   accessTokensRevokedAt: timestamp("access_tokens_revoked_at"),
+
+  /**
+   * Set when the person deleted their account. The row stays as a tombstone —
+   * moderation records and anything they chose to leave behind (shown as
+   * "Deleted account") still point at it — but everything personal on it is
+   * scrubbed and nothing can sign in as it again. See server/account-data.ts.
+   */
+  deletedAt: timestamp("deleted_at"),
   /**
    * Two-factor sign-in (server/mfa.ts). The authenticator secret, sealed
    * (server/secret-box.ts) — never plaintext. Required for reviewers, admins
@@ -71,6 +79,13 @@ export const users = pgTable("users", {
   /** One-time recovery codes, SHA-256 hashed; a used one is removed. */
   mfaRecoveryCodes: text("mfa_recovery_codes").array(),
   suspendedReason: text("suspended_reason"),
+  /**
+   * When this address was confirmed by someone who can read mail sent to it.
+   * Null means the account works, but nothing that reaches other people does
+   * (server/email-verification.ts). Google accounts arrive confirmed — Google
+   * has already checked — and accounts that predate this were backfilled.
+   */
+  emailVerifiedAt: timestamp("email_verified_at"),
   /*
    * Where this account came from, captured on the visitor's first page and
    * written here once, when the account is created. First touch: the link that
@@ -89,6 +104,31 @@ export const users = pgTable("users", {
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
+
+/**
+ * Links sent to confirm an address, stored by hash.
+ *
+ * By hash for the same reason as every other credential here: the database is
+ * not a place where a working sign-in link should sit in plaintext. One row
+ * per send, so a resend doesn't invalidate a link already in flight, and each
+ * is good once — `usedAt` is set when it's spent.
+ *
+ * The address is kept alongside: a link is for the address it was sent to, so
+ * changing the account's email leaves old links useless.
+ */
+export const emailVerificationTokens = pgTable("email_verification_tokens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** SHA-256 of the token in the link. */
+  tokenHash: varchar("token_hash").notNull().unique(),
+  /** The address it was sent to, lowercased. */
+  email: varchar("email").notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  usedAt: timestamp("used_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  byUser: index("email_verification_user_idx").on(table.userId),
+}));
 
 /**
  * Refresh tokens for the native mobile apps.

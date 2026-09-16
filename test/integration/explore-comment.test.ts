@@ -9,6 +9,7 @@ import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
 import { and, eq, like } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
+import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
 import { activityEvents } from "@shared/schema";
 
@@ -19,6 +20,7 @@ async function person(app: any, first: string) {
   const res = await request(app).post("/api/auth/register").set("x-forwarded-for", `203.0.113.${address++}`)
     .send({ email: `xc-${first}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@example.test`, password: "Testpass123!", firstName: first });
   expect(res.status).toBe(201);
+  await verifyEmail(app, res.body.email, `203.0.114.${address++}`);
   const auth = (res.headers["set-cookie"] as unknown as string[]).map((c) => c.split(";")[0]).filter((c) => !/^st_(vid|sid)=/.test(c)).join("; ");
   return { id: res.body.id as string, auth };
 }

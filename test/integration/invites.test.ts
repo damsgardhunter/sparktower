@@ -8,6 +8,7 @@ import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
 import { and, eq, sql } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
+import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
 import { projectInvites, projectMembers, rateLimitHits } from "@shared/schema";
 import { hashInviteToken } from "../../server/invite-routes";
@@ -24,6 +25,7 @@ async function person(app: any, first: string, email?: string) {
   const address = email ?? `invite-${first.toLowerCase()}-${Date.now()}-${n}@example.test`;
   const res = await agent.post("/api/auth/register").set("x-forwarded-for", `198.51.105.${10 + n}`).send({ email: address, password: "Testpass123!", firstName: first });
   expect(res.status).toBe(201);
+  await verifyEmail(app, address, `198.51.106.${10 + n}`);
   return { agent, id: res.body.id as string, email: address };
 }
 const tokenOf = (url: string) => url.split("/invite/")[1];
@@ -119,5 +121,40 @@ describe("project invites", () => {
     const { projects } = await import("@shared/schema");
     await db.update(projects).set({ soloMode: true }).where(eq(projects.id, solo.id));
     expect((await owner3.agent.post(`/api/projects/${solo.id}/invites`).send({})).body.code).toBe("solo_project");
+  });
+
+  it("lets whoever joined bring in the next person, but not take back someone else's invite", async () => {
+    const app = await getTestApp();
+    const owner = await person(app, "Lead");
+    const joiner = await person(app, "Joiner");
+    const stranger = await person(app, "Stranger");
+    const project = (await owner.agent.post("/api/projects").send({ title: "Referral Chain", description: "A project where the person who joins can invite the next one.", category: "saas", goal: "ship_mvp", subcategory: "saas" })).body;
+
+    // The owner invites the first collaborator, who accepts.
+    const first = await owner.agent.post(`/api/projects/${project.id}/invites`).send({ email: joiner.email, role: "Engineer" });
+    expect(first.status).toBe(201);
+    expect((await joiner.agent.post(`/api/invites/${tokenOf(first.body.url)}/accept`).send({})).status).toBe(200);
+
+    // Now they can invite the next person themselves — that's the loop coming back round.
+    const second = await joiner.agent.post(`/api/projects/${project.id}/invites`).send({ email: `next-${Date.now()}@example.test`, role: "Designer" });
+    expect(second.status, JSON.stringify(second.body)).toBe(201);
+    expect((await joiner.agent.post(`/api/projects/${project.id}/invites`).send({ role: "Designer" })).status).toBe(201);
+
+    // Someone with no part in the project still can't.
+    const refused = await stranger.agent.post(`/api/projects/${project.id}/invites`).send({ email: "outsider@example.test" });
+    expect(refused.status).toBe(403);
+    expect((await stranger.agent.get(`/api/projects/${project.id}/invites`)).status).toBe(403);
+
+    // The list says whose invite is whose, to everyone on the team.
+    const listed = (await joiner.agent.get(`/api/projects/${project.id}/invites`)).body.invites as any[];
+    expect(listed.find((i) => i.id === second.body.invite.id)).toMatchObject({ invitedById: joiner.id, invitedByName: "Joiner" });
+    expect(listed.find((i) => i.id === first.body.invite.id)).toMatchObject({ invitedById: owner.id });
+
+    // A teammate can take back their own invite, and only their own.
+    const ownersInvite = (await owner.agent.post(`/api/projects/${project.id}/invites`).send({ email: `theirs-${Date.now()}@example.test`, role: "Engineer" })).body.invite;
+    expect((await joiner.agent.delete(`/api/projects/${project.id}/invites/${ownersInvite.id}`)).status).toBe(404);
+    expect((await joiner.agent.delete(`/api/projects/${project.id}/invites/${second.body.invite.id}`)).status).toBe(200);
+    // The owner can take back anyone's.
+    expect((await owner.agent.delete(`/api/projects/${project.id}/invites/${ownersInvite.id}`)).status).toBe(200);
   });
 });

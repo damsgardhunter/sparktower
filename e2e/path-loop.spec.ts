@@ -5,6 +5,7 @@
  * to your next step. API-level: test/integration/path-return.test.ts.
  */
 import { test, expect, type Browser } from "@playwright/test";
+import { verifyEmail } from "./verify-email";
 
 const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -14,6 +15,8 @@ async function personIn(browser: Browser, ip: string, first: string) {
   const api = context.request;
   await api.get("/");
   expect((await api.post("/api/auth/register", { data: { email: `e2e-path-${first.toLowerCase()}-${stamp()}@example.test`, password, firstName: first, lastName: "Path" } })).ok()).toBeTruthy();
+  // Accounts start unconfirmed; anything that reaches other people needs the emailed link (server/email-verification.ts).
+  await verifyEmail(api);
   expect((await api.post("/api/profile/complete-onboarding", { data: { displayName: `${first} Path`, headline: "Following the path", bio: "Here for the loop." } })).ok()).toBeTruthy();
   return { context, api };
 }

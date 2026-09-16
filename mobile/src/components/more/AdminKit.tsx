@@ -5,7 +5,7 @@
  */
 import React from "react";
 import { Pressable, Text, View, type StyleProp, type ViewStyle } from "react-native";
-import { Stack } from "expo-router";
+import { Stack, useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { fetchMe } from "../../api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../theme";
@@ -29,6 +29,44 @@ export function NotFoundScreen({ title }: { title: string }) {
       <Empty icon="help-circle-outline" title="Page not found" body="This page doesn't exist, or it isn't for your account." />
     </View>
   );
+}
+
+/**
+ * A 403 from the second-factor gate (server/mfa.ts). The role is right and the
+ * session isn't, which is a different thing from a page that isn't yours —
+ * telling a reviewer "page not found" when they need to set up 2FA leaves them
+ * with nowhere to go.
+ */
+export const mfaBlock = (err: any): "enrol" | "verify" | null =>
+  err?.status !== 403 ? null
+  : err?.body?.code === "mfa_enrollment_required" ? "enrol"
+  : err?.body?.code === "mfa_required" ? "verify"
+  : null;
+
+/** What a reviewer sees when the review tools are locked behind a code they haven't given. */
+export function TwoFactorNeeded({ title, mode }: { title: string; mode: "enrol" | "verify" }) {
+  const router = useRouter();
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.canvas, justifyContent: "center", paddingHorizontal: spacing.lg, gap: spacing.lg }}>
+      <Stack.Screen options={{ title }} />
+      <Empty
+        icon="shield-checkmark-outline"
+        title={mode === "enrol" ? "Two-factor needed" : "Sign in with your code"}
+        body={mode === "enrol"
+          ? "Review and admin tools need two-factor authentication. It takes a minute to set up."
+          : "This sign-in didn't use your authenticator code. Sign out and back in to use the review tools."}
+      />
+      {mode === "enrol" && <Btn label="Set up two-factor" onPress={() => router.push("/security" as any)} testID="admin-setup-2fa" />}
+    </View>
+  );
+}
+
+/** The screen to show instead, if any: locked behind a code, or not yours at all. */
+export function blockedView(title: string, err: any): React.ReactElement | null {
+  const block = mfaBlock(err);
+  if (block) return <TwoFactorNeeded title={title} mode={block} />;
+  if (isNotFound(err)) return <NotFoundScreen title={title} />;
+  return null;
 }
 
 /** Loading, or not found, before a gated screen renders. Returns null when the screen may render. */

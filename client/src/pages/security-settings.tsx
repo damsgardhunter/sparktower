@@ -5,8 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, ShieldCheck } from "lucide-react";
+import { Download, Loader2, ShieldCheck, Trash2 } from "lucide-react";
 import { postJson, type MfaStatus } from "@/components/mfa";
+import { Checkbox } from "@/components/ui/checkbox";
 
 /**
  * Two-factor authentication: set it up (a key for the authenticator app, then
@@ -102,6 +103,99 @@ export default function SecuritySettings() {
           )}
         </CardContent>
       </Card>
+      <YourData mfaEnabled={status.enabled} />
     </div>
+  );
+}
+
+/**
+ * Article 15 and article 17, as two buttons: take a copy of everything, or
+ * close the account. Deleting asks for the password again (and a code, with
+ * 2FA on) because a borrowed tab must not be able to do this.
+ */
+function YourData({ mfaEnabled }: { mfaEnabled: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [keepPosts, setKeepPosts] = useState(true);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const deleteAccount = (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    setBusy(true);
+    postJson("/api/account/delete", { password, code, confirm, keepPosts })
+      .then(() => { window.location.href = "/"; })
+      .catch((err: any) => { setError(err.message); setBusy(false); });
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-lg">Your data</CardTitle>
+        <CardDescription>Take a copy of everything on this account, or close it for good.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-0.5">
+            <p className="text-sm font-medium">Download my data</p>
+            <p className="text-sm text-muted-foreground">A JSON file: your account, profile, projects, posts and everything else keyed to you.</p>
+          </div>
+          {/* A plain link, so the browser saves the file rather than the page holding it in memory. */}
+          <Button asChild variant="outline" size="sm" className="shrink-0">
+            <a href="/api/account/export" download data-testid="link-export-data"><Download className="h-3.5 w-3.5 mr-1.5" />Export</a>
+          </Button>
+        </div>
+
+        <div className="border-t pt-4 space-y-3">
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-0.5">
+              <p className="text-sm font-medium">Delete my account</p>
+              <p className="text-sm text-muted-foreground">
+                This can't be undone. Projects with other members are handed to another member; projects nobody else is on are deleted with everything in them.
+              </p>
+            </div>
+            {!open && (
+              <Button variant="outline" size="sm" className="shrink-0 text-destructive border-destructive/40 hover:bg-destructive/10" onClick={() => setOpen(true)} data-testid="button-delete-account">
+                <Trash2 className="h-3.5 w-3.5 mr-1.5" />Delete
+              </Button>
+            )}
+          </div>
+
+          {open && (
+            <form onSubmit={deleteAccount} className="space-y-3 rounded-md border border-destructive/30 p-3" data-testid="form-delete-account">
+              {error && <div className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md p-3" data-testid="text-delete-error">{error}</div>}
+              <div className="space-y-1.5">
+                <Label htmlFor="delete-password">Your password</Label>
+                <Input id="delete-password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} data-testid="input-delete-password" />
+                <p className="text-xs text-muted-foreground">Signed in with Google and never set one? Type <span className="font-mono">delete my account</span> below instead.</p>
+                <Input placeholder="delete my account" value={confirm} onChange={(e) => setConfirm(e.target.value)} data-testid="input-delete-confirm" />
+              </div>
+              {mfaEnabled && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="delete-code">Authenticator code</Label>
+                  <Input id="delete-code" inputMode="numeric" autoComplete="one-time-code" placeholder="123456" value={code} onChange={(e) => setCode(e.target.value)} data-testid="input-delete-code" />
+                </div>
+              )}
+              <label className="flex items-start gap-2 text-sm">
+                <Checkbox checked={keepPosts} onCheckedChange={(v) => setKeepPosts(v === true)} data-testid="checkbox-keep-posts" />
+                <span>
+                  Leave my posts and comments up, shown as "Deleted account".
+                  <span className="block text-xs text-muted-foreground">Unticked, they're deleted too — replies other people wrote will lose what they were answering.</span>
+                </span>
+              </label>
+              <div className="flex gap-2">
+                <Button type="submit" variant="destructive" size="sm" disabled={busy} data-testid="button-delete-confirm">
+                  {busy ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5 mr-1.5" />}Delete my account
+                </Button>
+                <Button type="button" variant="ghost" size="sm" onClick={() => { setOpen(false); setError(""); setPassword(""); setCode(""); setConfirm(""); }}>Cancel</Button>
+              </div>
+            </form>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }

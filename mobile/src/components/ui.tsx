@@ -237,7 +237,7 @@ export function IconButton({
 }
 
 export function Btn({
-  label, onPress, variant = "primary", disabled, loading, style, small, icon,
+  label, onPress, variant = "primary", disabled, loading, style, small, icon, testID,
 }: {
   label: string;
   onPress?: () => void;
@@ -247,6 +247,8 @@ export function Btn({
   style?: StyleProp<ViewStyle>;
   small?: boolean;
   icon?: IconName;
+  /** So a test can find the button by name, as it can every other control here. */
+  testID?: string;
 }) {
   const isDisabled = disabled || loading;
   const textColor = variant === "primary" ? colors.primaryText
@@ -257,6 +259,7 @@ export function Btn({
     <Pressable
       onPress={onPress}
       disabled={isDisabled}
+      testID={testID}
       style={({ pressed }) => [
         s.btn,
         small && s.btnSmall,

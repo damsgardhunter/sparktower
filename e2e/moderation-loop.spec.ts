@@ -15,6 +15,7 @@
  * still clicked through.
  */
 import { test, expect, type Browser } from "@playwright/test";
+import { verifyEmail } from "./verify-email";
 import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
@@ -30,6 +31,8 @@ async function personIn(browser: Browser, ip: string, first: string) {
   await api.get("/");
   const res = await api.post("/api/auth/register", { data: { email: `e2e-${first.toLowerCase()}-${stamp()}@example.test`, password, firstName: first, lastName: "Mod" } });
   expect(res.ok()).toBeTruthy();
+  // Accounts start unconfirmed; posting, commenting and reporting need the emailed link (server/email-verification.ts).
+  await verifyEmail(api);
   expect((await api.post("/api/profile/complete-onboarding", {
     data: { displayName: `${first} Mod`, headline: "Here for the loop", bio: "Testing moderation." },
   })).ok()).toBeTruthy();

@@ -5,6 +5,7 @@
  * Nova building the plan. Stops before Nova runs — there's no model here.
  */
 import { test, expect } from "@playwright/test";
+import { verifyEmail } from "./verify-email";
 
 const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -14,6 +15,8 @@ test("a founder answers the money questions by tapping, and Nova's plan is next"
   const page = await context.newPage();
   await page.goto("/");
   expect((await page.request.post("/api/auth/register", { data: { email: `e2e-money-${stamp()}@example.test`, password, firstName: "Mo", lastName: "Money" } })).ok()).toBeTruthy();
+  // Accounts start unconfirmed; anything that reaches other people needs the emailed link (server/email-verification.ts).
+  await verifyEmail(page.request);
   expect((await page.request.post("/api/profile/complete-onboarding", { data: { displayName: "Mo Money", headline: "Opening a bistro", bio: "Starting from zero." } })).ok()).toBeTruthy();
   const project = await page.request.post("/api/projects", {
     data: { title: "Corner Bistro", description: "A neighbourhood bistro, starting from nothing but a plan.", category: "food", goal: "systemize_business", subcategory: "restaurant" },

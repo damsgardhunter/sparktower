@@ -38,5 +38,38 @@ describe("Stripe health", () => {
     expect(seen.events.lastReceivedAt).toBeTruthy();
     expect(seen.events.recentFailures).toEqual([expect.objectContaining({ id: "evt_bad", error: "database was down" })]);
     expect(seen.donations).toMatchObject({ total: 0, refunded: 0, partlyRefunded: 0 });
+    /*
+     * Every verdict comes with the thing to do about it. This environment has
+     * no Stripe credentials, so it stops at a configuration verdict — which is
+     * itself the point: missing configuration outranks "events are arriving",
+     * because an event ledger with no way to verify signatures is not health.
+     */
+    expect(["not_configured", "no_webhook_secret"]).toContain(seen.verdict);
+    expect(seen.nextStep).toMatch(/^Set STRIPE/);
+  });
+
+  it("says when nothing is registered to deliver to — the case where payments work and nothing is recorded", async () => {
+    const app = await getTestApp();
+    const owner = request.agent(app);
+    expect((await owner.post("/api/auth/register").set("x-forwarded-for", "198.51.100.63").send({ email: "owner@test.local", password: "Testpass123!" })).status).toBe(201);
+    await passMfa(owner);
+
+    const res = await owner.get("/api/admin/stripe/health");
+    expect(res.status).toBe(200);
+    /*
+     * Without Stripe credentials the endpoint list can't be read, so this
+     * environment can only reach the earlier verdicts — what's pinned here is
+     * that the page always says what to do next, and never mistakes "can't ask
+     * Stripe" for "Stripe says there's nothing".
+     */
+    expect(["not_configured", "no_webhook_secret", "waiting_for_first_event", "no_endpoint_registered"]).toContain(res.body.verdict);
+    expect(typeof res.body.nextStep === "string" || res.body.nextStep === null).toBe(true);
+    if (res.body.verdict === "no_endpoint_registered") {
+      expect(res.body.configured.stripeEndpoints).toEqual([]);
+      expect(res.body.nextStep).toMatch(/nothing recorded/);
+    } else if (!res.body.configured.apiKey) {
+      // Nothing was asked of Stripe, so the list is unknown rather than empty — the distinction the verdict rests on.
+      expect(res.body.configured.stripeEndpoints).toBeNull();
+    }
   });
 });

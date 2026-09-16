@@ -2574,10 +2574,11 @@ function TeamTab({ project, members, applications, isOwner, tasks, onUpdateMembe
           </h2>
           <p className="text-sm text-muted-foreground">{members.length} member{members.length === 1 ? "" : "s"}</p>
         </div>
-        {isOwner && !soloMode && <InviteCollaboratorDialog projectId={project.id} projectTitle={project.title} />}
+        {/* Anyone on the team can bring the next person in (server/invite-routes.ts). */}
+        {!soloMode && <InviteCollaboratorDialog projectId={project.id} projectTitle={project.title} />}
       </div>
 
-      {isOwner && !soloMode && <PendingInvites projectId={project.id} />}
+      {!soloMode && <PendingInvites projectId={project.id} />}
 
       {soloMode && (
         <Card className="border-primary/20 bg-primary/5" data-testid="card-solo-mode-notice">

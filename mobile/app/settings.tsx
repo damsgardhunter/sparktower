@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Linking, ScrollView, Text, View } from "react-native";
+import { Linking, Pressable, ScrollView, Share, Text, View } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Constants from "expo-constants";
@@ -7,7 +7,7 @@ import { api, API_URL, fetchMe } from "../src/api/client";
 import { useAuth } from "../src/auth/AuthContext";
 import { useEntitlementsQuery } from "../src/hooks/useEntitlements";
 import { colors, font, fontFamily, spacing } from "../src/theme";
-import { Btn, Chip, ErrorNote, Icon, errText, type IconName } from "../src/components/ui";
+import { Btn, Chip, ErrorNote, Field, Icon, errText, type IconName } from "../src/components/ui";
 import { Group, MenuRow } from "../src/components/MoreKit";
 import { NoticeBanner, Sheet, useNotice, type Notice } from "../src/components/Sheet";
 
@@ -33,6 +33,10 @@ export default function Settings() {
   const ent = useEntitlementsQuery();
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: fetchMe });
   const [confirmAll, setConfirmAll] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [keepPosts, setKeepPosts] = useState(true);
   const { notice, show, clear } = useNotice();
   const [error, setError] = useState<string | null>(null);
 
@@ -40,6 +44,21 @@ export default function Settings() {
     mutationFn: () => api("/api/auth/logout-all", { method: "POST" }),
     onSuccess: async () => { setConfirmAll(false); await signOut(); },
     onError: (e) => setError(errText(e, "Couldn't sign out everywhere. Try again.")),
+  });
+
+  /** Everything on the account, handed to the phone's share sheet — mail it to yourself, or save it to Files. */
+  const exportData = useMutation({
+    mutationFn: () => api<Record<string, unknown>>("/api/account/export"),
+    onSuccess: async (data) => {
+      await Share.share({ title: "My SparkTower data", message: JSON.stringify(data, null, 2) });
+    },
+    onError: (e) => setError(errText(e, "Couldn't build your export. Try again in a minute.")),
+  });
+
+  const closeAccount = useMutation({
+    mutationFn: () => api("/api/account/delete", { method: "POST", body: { password, code: code.trim(), keepPosts } }),
+    onSuccess: async () => { setClosing(false); await signOut(); },
+    onError: (e) => setError(errText(e, "Couldn't close the account. Nothing was changed.")),
   });
 
   const { data: plans } = useQuery({ queryKey: ["plans"], queryFn: () => api<any>("/api/plans") });
@@ -95,8 +114,14 @@ export default function Settings() {
             </Group>
 
             <Group title="Security" footer="Signing out everywhere ends every web session and every signed-in phone, including this one. Use it for a lost phone or a shared computer.">
+              <MenuRow icon="shield-checkmark" title="Two-factor authentication" subtitle={user?.mfaEnabledAt ? "On" : "Off — an extra code at sign-in"} tint={user?.mfaEnabledAt ? colors.success : colors.textSecondary} onPress={() => go("/security")} testID="settings-security" />
               <MenuRow icon="log-out-outline" title="Sign out" tint={colors.textSecondary} onPress={() => { void signOut(); }} />
               <MenuRow icon="phone-portrait-outline" title="Sign out everywhere" danger onPress={() => { setError(null); setConfirmAll(true); }} />
+            </Group>
+
+            <Group title="Your data" footer="Closing an account can't be undone. A project with other members is handed to another member; a project nobody else is on is deleted with everything in it.">
+              <MenuRow icon="download-outline" title="Download my data" subtitle="Your account, profile, projects and posts, as a file" tint={colors.info} onPress={() => { setError(null); exportData.mutate(); }} testID="settings-export-data" />
+              <MenuRow icon="trash-outline" title="Delete my account" danger onPress={() => { setError(null); setPassword(""); setCode(""); setClosing(true); }} testID="settings-delete-account" />
             </Group>
 
             {__DEV__ && <DevTiers plans={plans?.plans ?? []} tier={ent.tier} used={ent.creditsUsed} limit={ent.isUnlimited ? "∞" : ent.creditsLimit} show={show} />}
@@ -112,6 +137,24 @@ export default function Settings() {
         <View style={{ flexDirection: "row", gap: spacing.sm }}>
           <Btn label="Cancel" variant="outline" style={{ flex: 1 }} onPress={() => setConfirmAll(false)} />
           <Btn label="Sign out all" variant="danger" style={{ flex: 1 }} loading={logoutAll.isPending} onPress={() => logoutAll.mutate()} />
+        </View>
+      </Sheet>
+      <Sheet visible={closing} onClose={() => setClosing(false)} title="Delete your account?"
+        subtitle="This can't be undone. Every device is signed out, and your profile and personal data are removed.">
+        {error && <ErrorNote message={error} />}
+        <Field label="Your password" value={password} onChangeText={setPassword} secureTextEntry placeholder="Your password" autoCapitalize="none" />
+        {!!user?.mfaEnabledAt && (
+          <Field label="Authenticator code" value={code} onChangeText={setCode} numeric placeholder="123456" />
+        )}
+        <Pressable onPress={() => setKeepPosts((v) => !v)} style={{ flexDirection: "row", gap: spacing.sm, alignItems: "flex-start", paddingVertical: spacing.sm }} testID="settings-keep-posts">
+          <Icon name={keepPosts ? "checkbox" : "square-outline"} size={20} color={keepPosts ? colors.primary : colors.textTertiary} />
+          <Text style={{ flex: 1, color: colors.textSecondary, fontSize: font.sm, fontFamily: fontFamily.regular, lineHeight: 19 }}>
+            Leave my posts and comments up, shown as "Deleted account". Untick to delete them too.
+          </Text>
+        </Pressable>
+        <View style={{ flexDirection: "row", gap: spacing.sm }}>
+          <Btn label="Cancel" variant="outline" style={{ flex: 1 }} onPress={() => setClosing(false)} />
+          <Btn label="Delete account" variant="danger" style={{ flex: 1 }} loading={closeAccount.isPending} onPress={() => closeAccount.mutate()} />
         </View>
       </Sheet>
       <NoticeBanner notice={notice} onDismiss={clear} />

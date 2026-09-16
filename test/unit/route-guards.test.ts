@@ -142,6 +142,7 @@ describe("authentication on the write surface", () => {
     "POST /api/auth/mobile/logout": "revokes the refresh token it's given; nothing else; limited per address",
     "POST /api/logout": "must work with an expired session; refuses cross-site requests",
     "POST /api/stripe/webhook": "Stripe's signature is the credential; failed deliveries limited per address",
+    "POST /api/auth/verify-email": "the emailed token is the credential; hashed, unexpired, spent once, and the link may be opened signed out; limited per address",
     "POST /api/track": "anonymous analytics beacons; limited per address",
     "PUT /internal-local-upload/:id": "development only; the issued, single-use id is the credential, size-capped",
   };

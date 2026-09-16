@@ -43,6 +43,49 @@ describe("publishing", () => {
   });
 });
 
+describe("the page a crawler receives", () => {
+  const html = `<!doctype html><html><head><title>SparkTower</title></head><body><div id="root"></div></body></html>`;
+  const meta = {
+    title: "Our product statement", description: "Weeknight dinners from what's in the fridge.", url: "https://sparktower.example/a/abc",
+    article: {
+      heading: "Our product statement",
+      summary: "Weeknight dinners from what's in the fridge.",
+      body: "## The problem\n\nPeople throw food away.\n\nSo we plan the week from what they already have.",
+      projectTitle: "Weeknight Recipes", projectPath: "/projects/p1", publishedAt: "2026-09-15T10:00:00.000Z",
+    },
+  };
+
+  it("carries the words of the page, not just its title, for anything that doesn't run JavaScript", () => {
+    const out = injectPageMeta(html, meta);
+    expect(out).toContain("<noscript>");
+    expect(out).toContain("<h1>Our product statement</h1>");
+    expect(out).toContain("<h3>The problem</h3>");
+    expect(out).toContain("<p>People throw food away.</p>");
+    // The backlink to the project the step belongs to.
+    expect(out).toContain('<a href="/projects/p1">Weeknight Recipes</a>');
+    expect(out).toContain('<time datetime="2026-09-15T10:00:00.000Z">2026-09-15</time>');
+    // Still a working document: one title, the canonical, and the app's own root untouched.
+    expect(out.match(/<title>/g)).toHaveLength(1);
+    expect(out).toContain('<link rel="canonical" href="https://sparktower.example/a/abc" />');
+    expect(out).toContain('<div id="root"></div>');
+  });
+
+  it("escapes the builder's text — it's user content, in a page", () => {
+    const out = injectPageMeta(html, {
+      ...meta,
+      article: { ...meta.article, heading: '</noscript><script>alert(1)</script>', body: "<img src=x onerror=alert(1)>" },
+    });
+    expect(out).not.toContain("<script>alert(1)</script>");
+    expect(out).not.toContain("<img src=x");
+    expect(out).toContain("&lt;/noscript&gt;&lt;script&gt;");
+  });
+
+  it("leaves a page with no article exactly as it was, apart from its tags", () => {
+    const out = injectPageMeta(html, { title: "SparkTower", description: "Build in public.", url: "https://sparktower.example/" });
+    expect(out).not.toContain("<noscript>");
+  });
+});
+
 describe("a stranger's choice on an artifact page, through signup", () => {
   const id = "0f8c2a4e-1111-4222-8333-444455556666";
   it("reads only a well-formed stored choice", () => {

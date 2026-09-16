@@ -1,4 +1,5 @@
 import { Switch, Route, Redirect, useLocation, Link } from "wouter";
+import VerifyEmailPage, { VerifyEmailNotice } from "@/components/verify-email";
 import { useEffect } from "react";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -117,6 +118,8 @@ function Router() {
         <Route path="/" component={LandingPage} />
         {/* Google sign-in, for an account with 2FA on, lands here for the code (server/mfa.ts). */}
         <Route path="/mfa" component={MfaVerifyPage} />
+        {/* The emailed link works signed out — the link is the credential. */}
+        <Route path="/verify-email" component={VerifyEmailPage} />
         <Route>
           <Redirect to="/" />
         </Route>
@@ -198,6 +201,8 @@ function Router() {
         {/* The revenue loop: out of credits anywhere → plans → checkout → back here. */}
         {/* Reviewers, admins and the owner: their tools are locked until this session passes 2FA. */}
         <MfaNotice />
+        {/* Until the address is confirmed, nothing this account writes reaches another person. */}
+        <VerifyEmailNotice />
         <BillingIssueNotice />
         <UpgradeToKeepGenerating />
         <CheckoutReturn />
@@ -206,6 +211,7 @@ function Router() {
           <Switch>
             <Route path="/" component={Home} />
             <Route path="/onboarding" component={Onboarding} />
+            <Route path="/verify-email" component={VerifyEmailPage} />
             <Route path="/projects" component={Projects} />
             <Route path="/projects/new" component={NovaIntro} />
             <Route path="/projects/new/create" component={ProjectCreate} />

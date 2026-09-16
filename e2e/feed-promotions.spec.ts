@@ -5,6 +5,7 @@
  * referral link shows its perk. API-level: test/integration/promotions.test.ts.
  */
 import { test, expect } from "@playwright/test";
+import { verifyEmail } from "./verify-email";
 import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
@@ -21,6 +22,8 @@ test("featured tools rotate through the feed, can be hidden, and play an admin's
   const api = context.request;
   await api.get("/");
   const me = await (await api.post("/api/auth/register", { headers: { "x-forwarded-for": "203.0.113.120" }, data: { email: `e2e-promo-${stamp()}@example.test`, password: "Testpass123!", firstName: "Promo", lastName: "Viewer" } })).json();
+  // Accounts start unconfirmed; posting, commenting and reporting need the emailed link (server/email-verification.ts).
+  await verifyEmail(api);
   expect((await api.post("/api/profile/complete-onboarding", { data: { displayName: "Promo Viewer", headline: "x", bio: "y" } })).ok()).toBeTruthy();
   for (let i = 0; i < 3; i++) await api.post("/api/feed", { data: { postType: "project_update", content: `Progress note ${i} ${stamp()}` } });
 
@@ -112,6 +115,8 @@ test("scrolling fast past loading videos doesn't throw", async ({ browser }) => 
   const api = context.request;
   await api.get("/");
   const me = await (await api.post("/api/auth/register", { headers: { "x-forwarded-for": "203.0.113.121" }, data: { email: `e2e-promo-scroll-${stamp()}@example.test`, password: "Testpass123!", firstName: "Fast", lastName: "Scroller" } })).json();
+  // Accounts start unconfirmed; posting, commenting and reporting need the emailed link (server/email-verification.ts).
+  await verifyEmail(api);
   expect((await api.post("/api/profile/complete-onboarding", { data: { displayName: "Fast Scroller", headline: "x", bio: "y" } })).ok()).toBeTruthy();
   const db = new pg.Client({ connectionString: testDatabaseUrl("_e2e") });
   await db.connect();

@@ -177,3 +177,55 @@ export function summarizeEnforcementFilters(files: { path: string; content?: str
 }
 /** Files listed before the enforcement summary is trimmed. */
 const ENFORCEMENT_MAX = 15;
+
+/**
+ * Which API paths no test so much as mentions.
+ *
+ * "Are the important paths tested?" is answerable from the repository — every
+ * route is known, and so is every test — but only if someone does the crossing.
+ * Without it a read of the testing area counts test files and says coverage
+ * "cannot be enumerated", which tells a builder nothing about where the holes
+ * are. A mention is a weak signal on its own (a test may name a route and
+ * assert nothing), but its absence is a strong one: a route no test names is
+ * certainly untested.
+ *
+ * Grouped by path — a test that names a path has named it, whichever method it
+ * used — and writes and privileged paths lead: an untested GET is a bug someone
+ * sees, an untested write is a bug that changes data.
+ */
+export function summarizeUntestedRoutes(
+  files: { path: string; content?: string }[],
+  rows: { method: string; path: string; file: string; write?: boolean; privileged?: boolean; mounted?: boolean }[],
+  max = 40,
+): string | null {
+  const live = rows.filter((r) => r.mounted !== false && r.path.startsWith("/api/"));
+  if (!live.length) return null;
+  const tests = files.filter((f) => isTest(f.path) && f.content).map((f) => f.content!);
+  if (!tests.length) return null;
+
+  // `/api/projects/:id/invites` as a test writes it: `/api/projects/${project.id}/invites`.
+  const mentions = (path: string) => {
+    const pattern = path.split("/").map((seg) => (seg.startsWith(":") ? "[^/`\'\"]+" : seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).join("/");
+    const re = new RegExp(pattern);
+    return tests.some((content) => re.test(content));
+  };
+
+  // By path, not by method: a test that names `/api/feed` has named it, and claiming its POST
+  // is untested because the test used GET would be a finding about this check, not the code.
+  const paths = new Map<string, { methods: Set<string>; file: string; write: boolean; privileged: boolean }>();
+  for (const r of live) {
+    const at = paths.get(r.path) ?? { methods: new Set<string>(), file: r.file, write: false, privileged: false };
+    at.methods.add(r.method);
+    at.write ||= !!r.write;
+    at.privileged ||= !!r.privileged;
+    paths.set(r.path, at);
+  }
+  const untested = [...paths.entries()].filter(([path]) => !mentions(path));
+  const rank = ([, at]: typeof untested[number]) => (at.privileged ? 0 : at.write ? 1 : 2);
+  untested.sort((a, b) => rank(a) - rank(b) || a[0].localeCompare(b[0]));
+  const writes = untested.filter(([, at]) => at.write).length;
+  const head = `PATHS NO TEST MENTIONS (${untested.length} of ${paths.size}; ${writes} of them write. A mention isn't a test, but a path no test names is untested.)`;
+  if (!untested.length) return `${head}\n(every path is named by at least one test)`;
+  const line = ([path, at]: typeof untested[number]) => `${[...at.methods].sort().join(", ")} ${path}${at.privileged ? "  privileged" : at.write ? "  write" : ""}  [${at.file}]`;
+  return `${head}\n${untested.slice(0, max).map(line).join("\n")}${untested.length > max ? `\n… ${untested.length - max} more` : ""}`;
+}

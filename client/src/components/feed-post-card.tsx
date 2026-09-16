@@ -97,8 +97,14 @@ export function FeedPostCard({ post, standalone = false }: { post: FeedPostWithD
   });
 
   const deletePost = useMutation({
-    mutationFn: async () => { await apiRequest("DELETE", `/api/feed/${post.id}`); },
-    onSuccess: () => { toast({ title: "Post deleted" }); invalidate(); },
+    mutationFn: async () => (await apiRequest("DELETE", `/api/feed/${post.id}`)).json(),
+    onSuccess: (r: any) => {
+      // Replies from other people hold the thread open; say so, rather than letting it look like the delete half-worked.
+      toast(r?.thread === "kept"
+        ? { title: "Post deleted", description: "The replies other people wrote are still there, without your post." }
+        : { title: "Post deleted" });
+      invalidate();
+    },
     onError: () => toast({ title: "Couldn't delete the post", variant: "destructive" }),
   });
 
@@ -183,7 +189,12 @@ export function FeedPostCard({ post, standalone = false }: { post: FeedPostWithD
         </div>
 
         <div className="px-4 pt-3 pb-3 space-y-3">
-        <FeedContent content={post.content} mentions={(post.mentions as FeedMention[]) || []} className="text-[15px] leading-relaxed" />
+        {/* Deleted by its author while people were replying: their words are gone, the thread they wrote under isn't. */}
+        {(post as any).deletedAt ? (
+          <p className="text-[15px] italic text-muted-foreground" data-testid={`post-deleted-${post.id}`}>This post was deleted by its author. The replies to it are still here.</p>
+        ) : (
+          <FeedContent content={post.content} mentions={(post.mentions as FeedMention[]) || []} className="text-[15px] leading-relaxed" />
+        )}
 
         {/* The questions this update wants answered: what makes the feedback specific. */}
         {((post.asks as string[] | undefined)?.length ?? 0) > 0 && (

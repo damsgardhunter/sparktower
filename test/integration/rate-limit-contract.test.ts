@@ -11,8 +11,10 @@
  */
 import { describe, it, expect, afterAll, afterEach, vi } from "vitest";
 import request from "supertest";
+import { randomUUID } from "node:crypto";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
+import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
 import { feedComments, feedPosts, rateLimitHits, users } from "@shared/schema";
 import { RATE_LIMITS, RATE_LIMITED, DUPLICATE_RULES, DUPLICATE_CONTENT, type RateLimitAction } from "@shared/moderation";
@@ -27,6 +29,8 @@ async function person(app: any) {
   const email = `rlc-${Date.now()}-${n}-${Math.random().toString(36).slice(2, 6)}@example.test`;
   const res = await agent.post("/api/auth/register").set("x-forwarded-for", `198.51.100.${120 + n}`).send({ email, password: "Testpass123!" });
   expect(res.status).toBe(201);
+  // Confirmed, so the writes below reach the rate limiter rather than the verification gate.
+  await verifyEmail(app, email, `198.51.104.${120 + n}`);
   return { agent, id: res.body.id as string, email };
 }
 
@@ -90,6 +94,35 @@ describe("the three categories, past their limits", () => {
     await seedHits(id, "ai", RATE_LIMITS.ai.max);
     expectRefusal(await agent.post("/api/chat").send({ message: "hello" }), "ai");
   });
+});
+
+describe("the write floor", () => {
+  /*
+   * Most writes carry no limiter of their own; what covers them is
+   * `app.use(limitWrites)` (server/routes.ts), which is easy to lose in a
+   * refactor and impossible to notice — nothing fails, everything just becomes
+   * unlimited. So this drives a route that has no limit of its own past the
+   * floor and holds it to the same refusal contract as the rest.
+   */
+  it("limits a write that has no limit of its own, and refuses it the same way", async () => {
+    const app = await getTestApp();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { agent } = await person(app);
+    // Floor-only, and it answers 404 for an id that doesn't exist — so this measures the floor, not the route.
+    const path = `/api/backing-tiers/${randomUUID()}`;
+
+    let last: request.Response | undefined;
+    let refusedAfter = 0;
+    for (let i = 0; i <= RATE_LIMITS.write.max; i++) {
+      last = await agent.delete(path).set("x-forwarded-for", "198.51.100.205");
+      if (last.status === 429) { refusedAfter = i; break; }
+      // Anything but "no such tier" means the attempt was stopped by something else, and the count below would be measuring that instead.
+      expect(last.status, `attempt ${i}: ${JSON.stringify(last.body)}`).toBe(404);
+    }
+    expectRefusal(last!, "write");
+    // Refused for the floor's reason, at the floor's limit — not by something the route does.
+    expect(refusedAfter).toBe(RATE_LIMITS.write.max);
+  }, 120_000);
 });
 
 describe("around the contract", () => {

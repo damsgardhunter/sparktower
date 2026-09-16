@@ -37,9 +37,10 @@ vi.mock("openai", () => {
   class OpenAI {
     chat = { completions: { create: async () => ({ choices: [{ message: { content: answer() } }] }) } };
     responses = { create: async () => ({ output_text: answer(), output: [] }) };
+    // An image model that fails the same three ways: it throws, or it answers with no image in it.
     images = {
-      generate: async () => { calls++; throw new Error("no images in tests"); },
-      edit: async () => { calls++; throw new Error("no images in tests"); },
+      generate: async () => { calls++; if (mode === "throw") throw new Error("no images in tests"); return { data: [{}] }; },
+      edit: async () => { calls++; if (mode === "throw") throw new Error("no images in tests"); return { data: [{}] }; },
     };
     static default = OpenAI;
   }
@@ -100,7 +101,7 @@ describe("every AI route, with a model that fails", () => {
     const routes = aiRoutes();
     expect(routes.length).toBeGreaterThan(40);
 
-    const results: { route: string; mode: string; status: number; reachedModel: boolean; charged: number }[] = [];
+    const results: { route: string; mode: string; status: number; reachedModel: boolean; charged: number; code: string | null }[] = [];
     for (const m of ["throw", "garbage", "empty"] as const) {
       mode = m;
       for (const r of routes) {
@@ -115,7 +116,10 @@ describe("every AI route, with a model that fails", () => {
           ? (request(app) as any)[r.method.toLowerCase()](url).set("authorization", `Bearer ${b.token}`)
           : (b.agent as any)[r.method.toLowerCase()](url);
         const res = await call.send({ ...BODY, taskId: b.taskId });
-        results.push({ route: `${r.method} ${r.path}`, mode: m, status: res.status, reachedModel: calls > callsBefore, charged: (await creditsUsed(b.agent)) - before });
+        results.push({
+          route: `${r.method} ${r.path}`, mode: m, status: res.status, reachedModel: calls > callsBefore,
+          charged: (await creditsUsed(b.agent)) - before, code: res.body?.code ?? null,
+        });
       }
     }
 
@@ -126,8 +130,43 @@ describe("every AI route, with a model that fails", () => {
     const billedFailures = results.filter((x) => x.charged !== 0 && (x.mode === "throw" || x.mode === "empty" || x.status >= 400));
     expect(billedFailures, "charged for a failed model call or an error answer").toEqual([]);
     expect(reached.length).toBeGreaterThanOrEqual(MIN_ROUTES_REACHING_THE_MODEL);
+
+    /*
+     * What the answer says when the model answered, badly. The route scan
+     * records which routes *should* answer 502 model_unreadable; this is the
+     * same claim made at runtime, per route, which is the part a reader can't
+     * take on trust from the source.
+     */
+    const unreadable = results.filter((x) => x.reachedModel && (x.mode === "empty" || x.mode === "garbage"));
+    const wrongError = unreadable.filter((x) => x.status >= 500 && !(x.status === 502 && x.code === "model_unreadable"));
+    expect(wrongError, "an unreadable model answer must be 502 model_unreadable, never a generic 5xx").toEqual([]);
+
+    /*
+     * Prose can be a route's answer — a chat reply, a verdict, a summary — so
+     * answering 2xx to garbage and charging for it is honest there. Nothing is
+     * ever a valid answer: a route that returns 2xx when the model said nothing
+     * is answering with something that isn't Nova's, and must say so by being a
+     * known fallback, and must not charge.
+     */
+    const saidNothing = results.filter((x) => x.reachedModel && x.mode === "empty");
+    const fallbacks = [...new Set(saidNothing.filter((x) => x.status < 400).map((x) => x.route))].sort();
+    expect(fallbacks, "a route that answers 2xx when the model said nothing must be a known, unbilled fallback").toEqual(UNBILLED_FALLBACKS);
+    expect(saidNothing.filter((x) => x.charged !== 0), "charged when the model said nothing").toEqual([]);
   }, 300_000);
 });
+
+/**
+ * Routes that answer 2xx when the model's answer is unreadable, because they
+ * have something sensible to fall back to — and charge nothing for it. Adding
+ * to this list is a decision: it means the person gets an answer that isn't
+ * Nova's without being told.
+ */
+const UNBILLED_FALLBACKS = [
+  // The storyboard falls back to generic scenes; only Nova's scenes are billed (server/routes.ts).
+  "POST /api/projects/:id/generate-video",
+  // Reputation is computed from the person's own activity; the model only adds colour.
+  "POST /api/reputation/calculate",
+];
 
 /** Routes the sweep drives all the way to the model; raise it when fixtures reach more, never lower it. */
 const MIN_ROUTES_REACHING_THE_MODEL = 26;

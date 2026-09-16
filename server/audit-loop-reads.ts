@@ -34,6 +34,44 @@ const words = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").split("
 const PATH_RE = /(?:^|[\s`'"(\[|])((?:[\w@.-]+\/)+[\w@.-]+\.(?:tsx?|jsx?|mjs|md|sql|ya?ml|json))(?=$|[\s`'")\]|,:;])/g;
 const isTest = (p: string) => /(^|\/)(test|tests|e2e|__tests__)\/|\.(test|spec)\.[tj]sx?$/.test(p);
 
+/** Any /api path written in prose or code, as documentation names them. */
+const ENDPOINT_RE = /(?:\b(GET|POST|PUT|PATCH|DELETE)\s+)?(\/api\/[\w:./-]+)/gi;
+/** `/api/users/:id/follow` and `/api/users/:userId/follow` are the same endpoint. */
+const shape = (path: string) => path.replace(/:[\w-]+/g, ":p").replace(/\/+$/, "").toLowerCase();
+
+/**
+ * The endpoints a loop's own documentation names, each marked with whether the
+ * repository actually registers it.
+ *
+ * A loop's proof files are the ones named for it, which on a large codebase
+ * often aren't where its routes live — follow, connect and message are all
+ * registered in one enormous `routes.ts` that no loop is named after. Without
+ * this, a read of the Explore loop can only say the documented endpoints
+ * "cannot be evidenced from the provided files", which is a fact about the
+ * prompt rather than the code. Checked against every route in the repository,
+ * so "not registered" is also a real finding.
+ */
+export function documentedEndpoints(texts: string[], routes: { label: string; file: string }[], max = 20): string[] {
+  const registered = new Map<string, { label: string; file: string }>();
+  for (const r of routes) {
+    const path = /\s(\/\S+)$/.exec(r.label)?.[1] ?? r.label.split(" ").pop() ?? "";
+    if (path.startsWith("/api/")) registered.set(shape(path), r);
+  }
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const text of texts) {
+    for (const m of String(text ?? "").matchAll(ENDPOINT_RE)) {
+      const path = m[2].replace(/[.,;:)\]]+$/, "");
+      const key = shape(path);
+      if (!path.startsWith("/api/") || seen.has(key) || lines.length >= max) continue;
+      seen.add(key);
+      const hit = registered.get(key);
+      lines.push(hit ? `${hit.label}  — registered in ${hit.file}` : `${(m[1] ?? "").toUpperCase()} ${path}`.trim() + "  — NOT REGISTERED anywhere in this repository");
+    }
+  }
+  return lines;
+}
+
 /**
  * The files that should prove a loop, most telling first. Pure, so which files
  * a loop is judged on is tested without a model.
@@ -114,6 +152,8 @@ export async function readLoopClosure(
     .map((f) => { const cap = isTest(f.path) ? Math.min(maxChars, 12_000) : maxChars; return `### ${f.path}\n${f.content!.slice(0, cap)}${f.content!.length > cap ? "\n… (truncated)" : ""}`; }).join("\n\n");
   const chosen = new Set(paths);
   const loopRoutes = routes.filter((r) => chosen.has(r.file));
+  // The endpoints this loop's own writing names, and whether they exist — wherever they're registered.
+  const named = documentedEndpoints([loop.description ?? "", ...allDocs.map((d) => d.content ?? ""), ...paths.map((p) => byPath.get(p)?.content ?? "")], routes);
   const kind = LOOP_TYPE_INFO[loop.type];
 
   try {
@@ -122,9 +162,9 @@ export async function readLoopClosure(
       messages: [
         { role: "system", content: `You are Nova, doing a close read of one loop in a builder's codebase: does it close? ${coachingDirectiveFor(ent)}
 A loop is CLOSED only when the code carries a user through every step AND something in the code brings them — or the next person — back to the first step: a notification, a feed item, a card, a link, a scheduled review, a renewal. A sequence that works but ends is OPEN.
-The first pass, from a sample of the repository, said: ${firstPass.closure}${firstPass.breaksAt ? ` — breaks at: ${firstPass.breaksAt}` : ""}. It may simply not have seen the files. You now have the full text of the files that should prove this loop, and every route they register. Judge from them only. Cite only paths from the FILES; a stage is built when a route, page or job in those files really does it. A test that exercises a stage end to end is strong evidence it's built.
+The first pass, from a sample of the repository, said: ${firstPass.closure}${firstPass.breaksAt ? ` — breaks at: ${firstPass.breaksAt}` : ""}. It may simply not have seen the files. You now have the full text of the files that should prove this loop, every route they register, and — separately — every endpoint this loop's own writing names, each marked with whether the repository registers it. An endpoint marked "registered in <file>" EXISTS: say so, even when that file's text isn't below. Only one marked "NOT REGISTERED" is missing. Judge from them only. Cite only paths from the FILES; a stage is built when a route, page or job in those files really does it. A test that exercises a stage end to end is strong evidence it's built.
 Respond ONLY with JSON: {"closure":"closed"|"open"|"not-built","stages":[{"step":"","status":"built"|"partial"|"missing","evidence":["path"]}],"returnPath":{"mechanism":"","evidence":["path"]},"breaksAt":"for open: the exact step, and what's missing","fix":"for open: the concrete change"}` },
-        { role: "user", content: `THE LOOP — ${kind.label}: "${loop.title}"\nWritten as: ${loop.description || "(not written)"}\nCloses when: ${kind.closes}\n${loop.steps.length ? `Build steps: ${loop.steps.map((s) => `${s.title} (${s.status})`).join("; ")}\n` : ""}\nROUTES IN THESE FILES (${loopRoutes.length}, read off the source)\n${loopRoutes.map((r) => `- ${r.label}  [${r.file}]`).join("\n") || "(none)"}\n\nFILES\n${text}` },
+        { role: "user", content: `THE LOOP — ${kind.label}: "${loop.title}"\nWritten as: ${loop.description || "(not written)"}\nCloses when: ${kind.closes}\n${loop.steps.length ? `Build steps: ${loop.steps.map((s) => `${s.title} (${s.status})`).join("; ")}\n` : ""}\nROUTES IN THESE FILES (${loopRoutes.length}, read off the source)\n${loopRoutes.map((r) => `- ${r.label}  [${r.file}]`).join("\n") || "(none)"}\n\nENDPOINTS THIS LOOP'S WRITING NAMES (${named.length}, checked against every route in the repository)\n${named.map((l) => `- ${l}`).join("\n") || "(none named)"}\n\nFILES\n${text}` },
       ],
     }, { timeout: opts.timeoutMs ?? 120_000 });
     const parsed = parseModelJson(completion.choices[0]?.message?.content ?? "", "loop read");

@@ -17,6 +17,7 @@ import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
 import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
+import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
 import { users } from "@shared/schema";
 
@@ -35,6 +36,7 @@ async function signedIn(app: any, label: string) {
     .post("/api/auth/register")
     .send({ email, password, firstName: label, lastName: "Tester" });
   expect(res.status).toBe(201);
+  await verifyEmail(app, email);
   return { agent, email, userId: res.body.id as string };
 }
 

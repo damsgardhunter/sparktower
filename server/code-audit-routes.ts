@@ -28,7 +28,7 @@ import {
   parseGithubUrl, snapshotFromGithub, snapshotFromZip, MAX_ARCHIVE_BYTES,
   type RepoSnapshot,
 } from "./code-ingest";
-import { buildCodeDigest } from "./code-digest";
+import { buildCodeDigest, type CodeDigest } from "./code-digest";
 import { CAPABILITY_AREAS, sanitizeCapabilities } from "@shared/capabilities";
 import { deepReadAll } from "./audit-deep-reads";
 import { computeAuditDelta } from "@shared/audit-delta";
@@ -389,7 +389,7 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
       why: str(m?.why, 400),
     })).filter((m: any) => m.title),
     /** Whether each written loop closes in the code, held to cited files — open ones read again, closely. */
-    loops: await rereadOpenLoops(ent, auditLoops, sanitizeLoopClosures(parsed.loops, auditLoops, new Set(snapshot.files.map((f) => f.path))), snapshot.files, digest.signals.routes),
+    loops: await rereadOpenLoops(ent, auditLoops, sanitizeLoopClosures(parsed.loops, auditLoops, new Set(snapshot.files.map((f) => f.path))), snapshot.files, everyRoute(digest)),
     nextThreeThings: strList(parsed.nextThreeThings, 5, 400),
     /** The deterministic checklist, and Nova's prioritised fixes for this codebase. */
     security: {
@@ -548,6 +548,21 @@ export async function applyAuditSections(
   } as any);
   if (changes.length) await refreshPace(audit.projectId).catch(() => {});
   return { changes, skipped };
+}
+
+/**
+ * Every route the repository registers, for the loop reads.
+ *
+ * `signals.routes` is a display list, capped and deduped for a prompt; the
+ * coverage rows are the full set. A close read asks "does this documented
+ * endpoint exist?", and on a large app the answer sat past the display cap —
+ * which is how follow, connect and message came back "cannot be evidenced".
+ */
+function everyRoute(digest: CodeDigest): { label: string; file: string }[] {
+  const out = new Map<string, { label: string; file: string }>();
+  for (const r of digest.signals.routeCoverage.rows) out.set(`${r.method} ${r.path}`, { label: `${r.method} ${r.path}`, file: r.file });
+  for (const r of digest.signals.routes) if (!out.has(r.label)) out.set(r.label, r);
+  return [...out.values()];
 }
 
 export function registerCodeAuditRoutes(app: Express) {

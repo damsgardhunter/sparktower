@@ -8,7 +8,7 @@ import { Btn, Card, Empty, Loading, Screen, Segments, errText } from "../../src/
 import { PageIntro, Pill } from "../../src/components/MoreKit";
 import { NoticeBanner, Sheet, useNotice, type Notice } from "../../src/components/Sheet";
 import {
-  ChoiceList, ConfirmSheet, LinkPill, NotFoundScreen, gateView, isNotFound, text, useReviewer,
+  ChoiceList, ConfirmSheet, LinkPill, NotFoundScreen, gateView, blockedView, isNotFound, text, useReviewer,
 } from "../../src/components/more/AdminKit";
 
 // --- shared/moderation.ts, restated ----------------------------------------
@@ -117,7 +117,9 @@ export default function AdminReports() {
 
   const gate = gateView("Reports", loading, isReviewer);
   if (gate) return gate;
-  if (isNotFound(error)) return <NotFoundScreen title="Reports" />;
+  // Locked behind a second factor, or simply not this account's page (src/components/more/AdminKit.tsx).
+  const blocked = blockedView("Reports", error);
+  if (blocked) return blocked;
 
   const list = data ?? [];
 

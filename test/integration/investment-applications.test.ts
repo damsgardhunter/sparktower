@@ -9,7 +9,7 @@ import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
 import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
-import { db } from "../../server/db";
+import { db, pool } from "../../server/db";
 import { projects } from "@shared/schema";
 
 afterAll(async () => { await closeTestApp(); });
@@ -68,6 +68,10 @@ describe("investment applications", () => {
     const inbox = (await founder.agent.get(`${url}/applications`)).body;
     expect(inbox).toHaveLength(1);
     expect(inbox[0]).toMatchObject({ status: "new", amount: "25k_100k", investor: { id: investor.id, name: "Investor", email: investor.email, phone: "+1 (918) 555-0142" } });
+    // The founder reads the number; the database doesn't hold it in the clear (server/pii.ts).
+    const stored = await pool.query("SELECT phone FROM investment_applications WHERE investor_id = $1", [investor.id]);
+    expect(stored.rows[0].phone).toMatch(/^v1\./);
+    expect(stored.rows[0].phone).not.toContain("555-0142");
 
     // Reviewing: the founder marks and notes; nobody else can, and the investor can only withdraw.
     const appUrl = `/api/investment-applications/${inbox[0].id}`;

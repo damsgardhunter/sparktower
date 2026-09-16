@@ -19,6 +19,7 @@ import {
   type PrintfulOrderItem, type PrintfulRecipient,
 } from "./printful";
 import { type MerchConfig } from "@shared/backing";
+import { openPii } from "./pii";
 
 /** Distinct ids so the two jobs never block each other. */
 const LOCK_FULFILLMENT = 918_2701;
@@ -142,7 +143,8 @@ export async function runMerchFulfillment(): Promise<{ submitted: number; failed
 
     for (const { order, campaign, projectTitle } of rows) {
       try {
-        const address = order.shippingAddress as ShippingAddress | null;
+        // Sealed in the database, opened here for the one job that has to post it to the printer.
+        const address = openPii<ShippingAddress>(order.shippingAddress);
         if (!address?.line1) throw new Error("No shipping address on this order.");
 
         const config = (campaign.merchConfig || {}) as MerchConfig;

@@ -11,6 +11,7 @@
  * route works unchanged for mobile.
  */
 import type { Express, RequestHandler } from "express";
+import { sendVerificationEmail } from "./email-verification";
 import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import { OAuth2Client } from "google-auth-library";
@@ -18,6 +19,7 @@ import { db } from "./db";
 import { users, mobileRefreshTokens } from "@shared/schema";
 import { eq, and, isNull, gt } from "drizzle-orm";
 import { storage } from "./storage";
+import { isDeleted } from "./account-data";
 import { ACCESS_TOKEN_KEY_LABEL, mobileTokenKey } from "./secrets";
 import { ensureUserProfile } from "./user-provisioning";
 import { stampSignupAttribution } from "./attribution";
@@ -195,7 +197,7 @@ export const attachBearerUser: RequestHandler = async (req: any, _res, next) => 
     if (!verified) return next();
 
     const user = await storage.getUser(verified.userId);
-    if (!user) return next();
+    if (!user || isDeleted(user)) return next();
     // Revoked with the account's sessions (sign out everywhere, a stolen refresh token): refused before its expiry.
     if (user.accessTokensRevokedAt && verified.issuedAtMs <= user.accessTokensRevokedAt.getTime()) return next();
 
@@ -228,7 +230,7 @@ export function registerMobileAuthRoutes(app: Express) {
       const [user] = await db.select().from(users).where(eq(users.email, email.toLowerCase().trim()));
       // Same message either way so the endpoint can't be used to enumerate accounts.
       const invalid = { message: "Invalid email or password" };
-      if (!user?.passwordHash) return res.status(401).json(invalid);
+      if (!user?.passwordHash || isDeleted(user)) return res.status(401).json(invalid);
 
       const ok = await bcrypt.compare(password, user.passwordHash);
       if (!ok) return res.status(401).json(invalid);
@@ -271,6 +273,7 @@ export function registerMobileAuthRoutes(app: Express) {
       // The app carries its own attribution — there is no landing page here to
       // have stamped a cookie on. See server/attribution.ts.
       await stampSignupAttribution(user.id, req);
+      await sendVerificationEmail(user, req);
 
       res.json(await buildSession(user.id, device));
     } catch (error) {
@@ -339,6 +342,8 @@ export function registerMobileAuthRoutes(app: Express) {
             lastName: payload.family_name || "",
             profileImageUrl: payload.picture || null,
             authProvider: "google",
+            // Google has already checked the address; asking its owner to prove it again is theatre.
+            emailVerifiedAt: new Date(),
           }).returning();
           // Only this branch creates an account; the two above return one that
           // already existed.

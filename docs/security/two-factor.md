@@ -22,6 +22,18 @@ Roles are checked at request time, so someone promoted while signed in hits the 
 - The TOTP secret is sealed with AES-256-GCM (`server/secret-box.ts`); recovery codes (10, shown once) are stored as SHA-256. None of the `mfa*` columns are ever sent in a response (`NEVER_SENT`, `server/app.ts`).
 - A code is accepted for the current 30-second step ± one. The step used is recorded atomically, so a code (or an earlier one) can't be used twice. A recovery code is removed as it's used.
 - Attempts are limited per address (the `login` limit) and per account (`mfa:<userId>`).
+- A session or token counts as verified only while the account is still enrolled (`mfaSatisfied`). A support reset turns 2FA off, and any session or 15-minute token from before it stops counting rather than staying privileged.
+
+## What each factor is trusted for
+
+| The server believes | Because of | Not because of |
+|---|---|---|
+| a code at web sign-in | `mfaPending` in *this* session, put there by a correct password in the last 5 minutes | anything in the request body; the same code in another browser is nothing |
+| a code at mobile sign-in | a signed 5-minute challenge token (HMAC, purpose-bound) | the device label, which is unverified client text |
+| `mfa: true` on an access token | the token's HMAC covers the whole token, header included — so the header's `alg` is never read, and a claim can't be added without the key | the claim alone: the account must still be enrolled |
+| a mobile sign-out | the refresh token in the body — holding it is the right to revoke it | a session or an access token; it revokes that one token and nothing else |
+
+`test/integration/auth-trust.test.ts` holds each of these: forged and re-headed tokens, expired and typeless claims, a code replayed into another session, a stale pending sign-in, sign-out touching one device, and a device label that buys nothing.
 
 ## Lost phone and recovery codes
 

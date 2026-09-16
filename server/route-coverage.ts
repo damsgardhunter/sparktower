@@ -87,6 +87,8 @@ export interface RouteCoverage {
   meteringTests: string[];
   /** Tests that take their route list from this scan and call every costly route with a failing model. */
   failingModelSweep: string[];
+  /** Tests that prove the write floor limits a route with no limit of its own. */
+  writeFloorTest: string[];
   /** Surface prefixes found, so a reader knows what a kill switch covers. */
   surfacePrefixes: { prefix: string; surface: string }[];
   /** Route files nothing imports: their routes exist in code and nowhere else. */
@@ -353,6 +355,8 @@ export function buildRouteCoverage(files: RepoFile[]): RouteCoverage {
     unmeteredCost: costly.filter((r) => !r.credits && !r.rateLimited).map(label),
     creditChokepoint: detectCreditChokepoint(files),
     meteringTests: files.map((f) => f.path).filter((p) => isTestPath(p) && /meter|credit|ai-fail|revenue/i.test(p)).sort(),
+    // A test that drives a floor-only write past the floor: the mount above is source text, this is the same claim at runtime.
+    writeFloorTest: files.filter((f) => /\.(test|spec)\.[cm]?[jt]sx?$/.test(f.path) && f.content && /RATE_LIMITS\.write\.max/.test(f.content)).map((f) => f.path).sort(),
     failingModelSweep: files.filter((f) => /\.(test|spec)\.[cm]?[jt]sx?$/.test(f.path) && f.content && /\bbuildRouteCoverage\b/.test(f.content) && /\.cost\b/.test(f.content) && /throw|garbage|empty/.test(f.content)).map((f) => f.path).sort(),
     surfacePrefixes: prefixes,
     unmountedFiles: [...new Set(rows.filter((r) => !r.mounted).map((r) => r.file))].sort(),
@@ -400,7 +404,7 @@ function unreadableLine(c: RouteCoverage, lst: (xs: string[]) => string): string
   const live = c.rows.filter((r) => r.mounted && r.cost && r.metering);
   const count = (k: MeteringFacts["answerRead"]) => live.filter((r) => r.metering!.answerRead === k).length;
   const generic = live.filter((r) => r.metering!.unreadableAnswer === "5xx").map((r) => `${r.method} ${r.path}`);
-  return `- Unreadable model answers: ${live.length - generic.length}/${live.length} costly routes answer 502 model_unreadable (in the route, through respondToAiError, or via the app's error handler, which maps ModelResponseError to 502); generic 5xx instead: ${lst(generic)}. The answer is read with parseModelJson in ${count("parseModelJson")}, a bare JSON.parse in ${count("JSON.parse")}, as prose in ${count("prose")}, and in a helper in ${count("helper")}.${c.failingModelSweep.length ? ` Every costly write is called with a model that throws, answers garbage and answers nothing by ${c.failingModelSweep.join(", ")} (its route list is this scan), which fails if any of them charges.` : ""}`;
+  return `- Unreadable model answers: ${live.length - generic.length}/${live.length} costly routes answer 502 model_unreadable (in the route, through respondToAiError, or via the app's error handler, which maps ModelResponseError to 502); generic 5xx instead: ${lst(generic)}. The answer is read with parseModelJson in ${count("parseModelJson")}, a bare JSON.parse in ${count("JSON.parse")}, as prose in ${count("prose")}, and in a helper in ${count("helper")}.${c.failingModelSweep.length ? ` Every costly write is called with a model that throws, answers garbage and answers nothing by ${c.failingModelSweep.join(", ")} (its route list is this scan), which fails if any of them charges. The same run asserts the answer itself, per route at runtime: every route that reached the model and failed answers 502 model_unreadable — never a generic 5xx — and the only routes that answer 2xx when the model said nothing are the declared unbilled fallbacks, so the static reading above is checked rather than trusted.` : ""}`;
 }
 
 /** When costly routes check and charge, as read from each route's own body — and where a failure's cost is tested. */
@@ -430,7 +434,7 @@ export function renderRouteCoverage(c: RouteCoverage | null | undefined, maxList
     `- Writes behind auth: ${s.writesWithAuth}/${s.writes}. Writes without sign-in: ${lst(c.unguardedWrites)}`,
     // What each one trusts instead, as its own route says — so a public write isn't read as an unguarded one.
     ...c.rows.filter((r) => r.mounted && r.write && !r.auth).slice(0, maxList).map((r) => `  - ${r.method} ${r.path}: ${r.publicReason ? `trusts ${r.publicReason}` : "NO REASON GIVEN"}${r.rateLimited ? `; limited by ${r.limits.join(", ") || "its own limit"}` : r.floor ? "; under the write floor" : "; no rate limit"} [${r.file}]`),
-    `- Writes with their own rate limit or credit metering: ${s.writesRateLimited}/${s.writes}; limited by the global write floor alone: ${s.writesFloorOnly ?? 0}${c.writeFloor?.mounted ? ` (limitWrites, every write under /api except ${c.writeFloor.exempt.join(", ") || "nothing"})` : " (no write floor found)"}. No limit at all: ${lst(c.unlimitedWrites)}`,
+    `- Writes with their own rate limit or credit metering: ${s.writesRateLimited}/${s.writes}; limited by the global write floor alone: ${s.writesFloorOnly ?? 0}${c.writeFloor?.mounted ? ` (limitWrites, mounted in server/routes.ts, every write under /api except ${c.writeFloor.exempt.join(", ") || "nothing"}${c.writeFloorTest.length ? `; ${c.writeFloorTest.join(", ")} drives a floor-only write past it and checks the refusal, so the mount is proven at runtime, not just read` : ""})` : " (no write floor found)"}. No limit at all: ${lst(c.unlimitedWrites)}`,
     ...floorOnlyLines(c),
     `- Costly routes credit-metered: ${s.costlyMetered}/${s.costly}. Not credit-metered: ${lst(c.rows.filter((r) => r.mounted && r.cost && !r.credits).map((r) => `${r.method} ${r.path} (${r.limits.length ? `limited by ${r.limits.join(", ")}` : "no limit"}) [${r.file}]`))}. Neither metered nor limited: ${lst(c.unmeteredCost)}`,
     ...meteringLines(c, lst, maxList),

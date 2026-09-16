@@ -13,6 +13,7 @@
  * page, so every check polls the owner's numbers rather than sleeping.
  */
 import { test, expect, type Page } from "@playwright/test";
+import { verifyEmail } from "./verify-email";
 import { passMfa } from "./mfa-helper";
 
 const password = "Testpass123!";
@@ -36,12 +37,16 @@ test("a real browser walks the Explore loop, and the owner's dashboard counts it
   expect((await pat.post("/api/auth/register", {
     data: { email: `e2e-pat-${Date.now()}@example.test`, password, firstName: "Pat", lastName: "Poster" },
   })).ok()).toBeTruthy();
+  // Accounts start unconfirmed; anything that reaches other people needs the emailed link (server/email-verification.ts).
+  await verifyEmail(pat);
 
   // The owner, because only the owner can read the numbers — and a builder all the same.
   await page.goto("/");
   expect((await page.request.post("/api/auth/register", {
     data: { email: "owner@e2e.local", password, firstName: "Olive", lastName: "Owner" },
   })).ok()).toBeTruthy();
+  // Accounts start unconfirmed; anything that reaches other people needs the emailed link (server/email-verification.ts).
+  await verifyEmail(page.request);
   expect((await page.request.post("/api/profile/complete-onboarding", {
     data: { displayName: "Olive Owner", headline: "Shipping weekly", bio: "Here for the loop." },
   })).ok()).toBeTruthy();

@@ -6,6 +6,7 @@
  * this is the proof a person can see it.
  */
 import { test, expect, type Browser } from "@playwright/test";
+import { verifyEmail } from "./verify-email";
 
 const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -16,6 +17,8 @@ async function personIn(browser: Browser, ip: string, first: string) {
   await api.get("/");
   const res = await api.post("/api/auth/register", { data: { email: `e2e-fb-${first.toLowerCase()}-${stamp()}@example.test`, password, firstName: first, lastName: "Loop" } });
   expect(res.ok()).toBeTruthy();
+  // Accounts start unconfirmed; posting, commenting and reporting need the emailed link (server/email-verification.ts).
+  await verifyEmail(api);
   expect((await api.post("/api/profile/complete-onboarding", {
     data: { displayName: `${first} Loop`, headline: "Here for the build loop", bio: "Testing feedback." },
   })).ok()).toBeTruthy();

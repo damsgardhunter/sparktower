@@ -150,6 +150,7 @@ describe("stripe webhook signature verification", () => {
       .send(body);
 
     expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: "invalid_signature" });
 
     /*
      * The assertion that matters. A 400 alone would still be satisfied if the
@@ -193,7 +194,10 @@ describe("stripe webhook signature verification", () => {
       .send(body);
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/signature/i);
+    // The same body shape as every other refusal in the API: a message and a machine code.
+    expect(res.body).toMatchObject({ code: "missing_signature" });
+    expect(res.body.message).toMatch(/signature/i);
+    expect(res.body.error).toBeUndefined();
     // Refused before the sync layer was ever reached.
     expect(delivered).toHaveLength(0);
   });

@@ -92,8 +92,6 @@ _Total: 35 checks._
 
 ## What this codebase fails today
 
-- `email-verification` — anyone can sign up with an address they don't own. Nothing confirms it, and invites email other people.
-- `account-data-rights` — no way for someone to delete their account or get a copy of their data.
 - `csrf` is partial by design: same-origin checks cover state changes, with no per-form token.
 
-Fixing either of the first two is a product change, not a config change; they're listed here so the gap stays visible.
+`email-verification` and `account-data-rights` were the two outstanding gaps; both now pass. Data rights live in `server/account-data.ts` (which table is exported, deleted or kept, one line each) with `server/account-routes.ts` in front and `test/integration/account-data.test.ts` behind — including a test that fails when a new table keyed to a user is listed nowhere.

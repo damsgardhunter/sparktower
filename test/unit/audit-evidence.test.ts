@@ -18,7 +18,7 @@ vi.mock("openai", () => {
   return { default: OpenAI, OpenAI };
 });
 
-const { summarizeTestInventory, summarizeMobileScreens, summarizeAuthEndpoints } = await import("../../server/audit-evidence");
+const { summarizeTestInventory, summarizeMobileScreens, summarizeAuthEndpoints, summarizeUntestedRoutes } = await import("../../server/audit-evidence");
 const { deepReadArea } = await import("../../server/audit-deep-reads");
 
 const repo = [
@@ -80,6 +80,46 @@ describe("the test inventory a close read gets", () => {
     expect(out).not.toContain("client/src");
   });
 
+  it("gives the CI read the gate contract, since the gate itself is a setting on GitHub", async () => {
+    // Whether merges are blocked can't be read off code at all; what the repository can show is the written
+    // contract and the script that compares it with what GitHub enforces. Without them the read can only
+    // say "enforcement cannot be confirmed", which is true of any repository and useful to nobody.
+    const files = [
+      { path: ".github/workflows/ci.yml", size: 10, content: "jobs:\n  server-web:\n  e2e:" },
+      { path: "docs/ci-gate.md", size: 10, content: "# The CI gate\nBranch protection requires: server-web, e2e" },
+      { path: "scripts/check-branch-protection.mjs", size: 10, content: "const REQUIRED = ['server-web', 'e2e'];" },
+      { path: "test/integration/auth.test.ts", size: 10, content: "it('signs in')" },
+    ];
+    prompts.length = 0;
+    await deepReadArea(ent, { area: "ci", status: "built", summary: "", evidence: [] } as any, files as any, null);
+    expect(prompts[0]).toContain("### docs/ci-gate.md");
+    expect(prompts[0]).toContain("### scripts/check-branch-protection.mjs");
+    expect(prompts[0]).toContain("### .github/workflows/ci.yml");
+  });
+
+  it("keeps the file that answers the area's question, however many others match its name", async () => {
+    // Ten files matching /stripe|billing/ ahead of it: name-matching alone pushed the handler out of the read,
+    // and a payments verdict without it can only say the claim-before-side-effects mechanism isn't shown.
+    const crowded = [
+      ...Array.from({ length: 10 }, (_, i) => ({ path: `server/stripe-extra-${i}.ts`, size: 10, content: `// stripe helper ${i}` })),
+      { path: "server/webhookHandlers.ts", size: 10, content: "export class WebhookHandlers { static async claim() {} }" },
+      { path: "server/billing-credits.ts", size: 10, content: "export const refill = 1;" },
+      { path: "server/routes.ts", size: 10, content: "// checkout return" },
+    ];
+    prompts.length = 0;
+    await deepReadArea(ent, { area: "payments", status: "built", summary: "", evidence: [{ file: "server/routes.ts" }] } as any, crowded as any, null);
+    expect(prompts[0]).toContain("### server/webhookHandlers.ts");
+    expect(prompts[0]).toContain("### server/billing-credits.ts");
+    // The area's own evidence still gets in alongside it.
+    expect(prompts[0]).toContain("### server/routes.ts");
+
+    // Other areas keep theirs too.
+    prompts.length = 0;
+    await deepReadArea(ent, { area: "moderation", status: "built", summary: "", evidence: [] } as any,
+      [...crowded, { path: "server/moderation.ts", size: 10, content: "// the queue" }] as any, null);
+    expect(prompts[0]).toContain("### server/moderation.ts");
+  });
+
   it("follows a screen's own components, so a screen that renders one isn't read as having no data", () => {
     const out = summarizeMobileScreens([
       // The common shape: the route renders a component, and the component fetches.
@@ -127,5 +167,39 @@ describe("the test inventory a close read gets", () => {
     expect(out).not.toContain("/api/feed");
     expect(out).not.toContain("/api/auth/dead");
     expect(summarizeAuthEndpoints([{ method: "GET", path: "/api/feed", file: "f.ts", auth: false }])).toBeNull();
+  });
+
+  it("crosses the routes against the tests, so 'what isn't covered' is answered from the repository", () => {
+    const rows = [
+      { method: "POST", path: "/api/projects/:id/invites", file: "server/invite-routes.ts", write: true },
+      { method: "DELETE", path: "/api/admin/users/:id", file: "server/admin.ts", write: true, privileged: true },
+      { method: "GET", path: "/api/feed", file: "server/feed-routes.ts" },
+      { method: "POST", path: "/api/feed", file: "server/feed-routes.ts", write: true },
+      { method: "POST", path: "/api/retired", file: "server/old.ts", write: true, mounted: false },
+    ];
+    const files = [
+      // A test writes a route with its parameters filled in; that still counts as naming it.
+      { path: "test/integration/invites.test.ts", content: "await agent.post(`/api/projects/${project.id}/invites`).send({});" },
+      { path: "e2e/wedge.spec.ts", content: 'await api.get("/api/feed");' },
+      { path: "server/feed-routes.ts", content: 'app.post("/api/feed", handler); app.delete("/api/admin/users/:id", handler);' },
+    ];
+    const out = summarizeUntestedRoutes(files, rows)!;
+    // One of the three live paths is named by no test — and product code naming it doesn't count.
+    expect(out).toMatch(/^PATHS NO TEST MENTIONS \(1 of 3; 1 of them write\./);
+    expect(out).toContain("DELETE /api/admin/users/:id  privileged  [server/admin.ts]");
+    // /api/feed is named by a test, so both its methods count as named: the claim is about paths.
+    expect(out).not.toContain("/api/feed");
+    expect(out).not.toContain("/api/projects/:id/invites");
+    expect(out).not.toContain("/api/retired");
+    // Privileged routes lead: an untested admin route is the one to look at first.
+    expect(out.split("\n")[1]).toContain("/api/admin/users/:id");
+  });
+
+  it("says so plainly when every route is named, and answers nothing without routes or tests", () => {
+    const rows = [{ method: "GET", path: "/api/feed", file: "server/feed-routes.ts" }];
+    const tested = [{ path: "test/a.test.ts", content: 'get("/api/feed")' }];
+    expect(summarizeUntestedRoutes(tested, rows)).toContain("every path is named by at least one test");
+    expect(summarizeUntestedRoutes([{ path: "server/x.ts", content: "get('/api/feed')" }], rows)).toBeNull();
+    expect(summarizeUntestedRoutes(tested, [])).toBeNull();
   });
 });

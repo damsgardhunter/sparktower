@@ -235,7 +235,8 @@ export function registerFeedRoutes(app: Express) {
     try {
       const deleted = await storage.deleteFeedPost(req.params.id, req.user.id);
       if (!deleted) return res.status(404).json({ message: "Post not found" });
-      res.json({ success: true });
+      // "kept": other people had replied, so their thread is still there without your post in it.
+      res.json({ success: true, thread: deleted });
     } catch (error) {
       console.error("Delete post error:", error);
       res.status(500).json({ message: "Failed to delete the post" });
@@ -257,6 +258,8 @@ export function registerFeedRoutes(app: Express) {
       const post = await storage.getFeedPost(req.params.id, userId);
       // A private project's post doesn't exist for anyone outside its team — not to read, react to or comment on.
       if (!post || (post.project?.isPrivate && !post.viewerIsTeam)) return res.status(404).json({ message: "Post not found" });
+      // The thread is still readable, but its post is gone: nothing new is added to it.
+      if (post.deletedAt) return res.status(410).json({ message: "The author deleted this post.", code: "post_deleted" });
 
       // Same reaction again means "take it back".
       const next = post.viewerReaction === reaction ? null : (reaction ?? null);
@@ -333,6 +336,8 @@ export function registerFeedRoutes(app: Express) {
 
       const post = await storage.getFeedPost(req.params.id, userId);
       if (!post || (post.project?.isPrivate && !post.viewerIsTeam)) return res.status(404).json({ message: "Post not found" });
+      // The replies already written stay readable; nothing new joins a post its author deleted.
+      if (post.deletedAt) return res.status(410).json({ message: "The author deleted this post.", code: "post_deleted" });
 
       // A reply hangs off a comment on this same post that's still there to reply to.
       if (parentCommentId) {

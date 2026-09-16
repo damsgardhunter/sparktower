@@ -7,6 +7,7 @@
 import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
 import { getTestApp, closeTestApp } from "../helpers/app";
+import { verifyEmail } from "../helpers/verify-email";
 import { resolveTree, mainLineMilestones, PATH_TREES } from "@shared/phase-trees";
 
 afterAll(async () => { await closeTestApp(); });
@@ -14,7 +15,8 @@ afterAll(async () => { await closeTestApp(); });
 const password = "Testpass123!";
 async function owner(app: any) {
   const agent = request.agent(app);
-  await agent.post("/api/auth/register").send({ email: `pt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@example.test`, password });
+  const res = await agent.post("/api/auth/register").send({ email: `pt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@example.test`, password });
+  await verifyEmail(app, res.body.email);
   return agent;
 }
 const create = (agent: any, goal: string, subcategory: string, title = "Tree Test") =>

@@ -7,7 +7,7 @@ import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
 import { Btn, Empty, Icon, Loading, errText, type IconName } from "../../src/components/ui";
 import { Callout, Pill, TitledCard, humanize } from "../../src/components/MoreKit";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
-import { LinkPill, NotFoundScreen, gateView, isNotFound, useReviewer } from "../../src/components/more/AdminKit";
+import { LinkPill, NotFoundScreen, gateView, blockedView, isNotFound, useReviewer } from "../../src/components/more/AdminKit";
 
 /** shared/safety.ts SAFETY_CHECKLIST — restated; the server rejects a review missing any id. */
 const CHECKLIST = [
@@ -85,7 +85,9 @@ export default function AdminSafety() {
 
   const gate = gateView("Safety review", meLoading, isReviewer);
   if (gate) return gate;
-  if (isNotFound(error)) return <NotFoundScreen title="Safety review" />;
+  // Locked behind a second factor, or simply not this account's page (src/components/more/AdminKit.tsx).
+  const blocked = blockedView("Safety review", error);
+  if (blocked) return blocked;
 
   const go = (path: string) => router.push(path as any);
   const links: [string, string][] = [["Reports queue", "/admin/reports"], ["Surfaces", "/admin/surfaces"]];

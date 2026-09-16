@@ -14,6 +14,7 @@ import { storage } from "./storage";
 import { investmentApplications, projects, users, userProfiles } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
+import { openPii, sealPii } from "./pii";
 import {
   INVESTMENT_DISCLAIMER, OWNER_STATUSES, sanitizeAsk, validateApplication, type InvestmentAsk,
 } from "@shared/investment";
@@ -91,7 +92,10 @@ export function registerInvestmentRoutes(app: Express) {
       const [existing] = await db.select({ id: investmentApplications.id }).from(investmentApplications)
         .where(and(eq(investmentApplications.projectId, project.id), eq(investmentApplications.investorId, userId), inArray(investmentApplications.status, [...OPEN_STATUSES])));
       if (existing) return res.status(409).json({ message: "You've already applied to this project. The founder has your application.", code: "already_applied" });
-      const [row] = await db.insert(investmentApplications).values({ projectId: project.id, investorId: userId, ...checked.value }).returning();
+      // The phone number is sealed at rest (server/pii.ts); everything else on the form is about the ask, not the person.
+      const [row] = await db.insert(investmentApplications)
+        .values({ projectId: project.id, investorId: userId, ...checked.value, phone: sealPii(checked.value.phone) })
+        .returning();
       res.status(201).json({ id: row.id, status: row.status, createdAt: row.createdAt });
     } catch (error) {
       console.error("Investment application error:", error);
@@ -123,7 +127,7 @@ export function registerInvestmentRoutes(app: Express) {
           headline: r.headline ?? null, avatarUrl: r.avatarUrl ?? null,
           // Shared because they consented on the form; withdrawn applications keep their contact private again.
           email: r.app.status === "withdrawn" ? null : r.email,
-          phone: r.app.status === "withdrawn" ? null : r.app.phone,
+          phone: r.app.status === "withdrawn" ? null : openPii<string>(r.app.phone),
         },
       })));
     } catch (error) {

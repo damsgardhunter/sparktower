@@ -5,6 +5,7 @@
  * screen, signs up, and joins the project. API-level: test/integration/invites.test.ts.
  */
 import { test, expect } from "@playwright/test";
+import { verifyEmail } from "./verify-email";
 import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
@@ -20,6 +21,8 @@ test("an owner invites a collaborator by link; a stranger opens it signed out, s
   await api.get("/");
   const inviteeEmail = `e2e-invitee-${stamp()}@example.test`;
   expect((await api.post("/api/auth/register", { data: { email: `e2e-owner-${stamp()}@example.test`, password: "Testpass123!", firstName: "Olive", lastName: "Owner" } })).ok()).toBeTruthy();
+  // Accounts start unconfirmed; anything that reaches other people needs the emailed link (server/email-verification.ts).
+  await verifyEmail(api);
   expect((await api.post("/api/profile/complete-onboarding", { data: { displayName: "Olive Owner", headline: "Building", bio: "Inviting a teammate." } })).ok()).toBeTruthy();
   const project = await (await api.post("/api/projects", { data: { title: `Team Up ${stamp()}`, description: "A project that invites a collaborator.", category: "saas", goal: "ship_mvp", subcategory: "saas" } })).json();
 

@@ -117,6 +117,15 @@ export async function artifactPageMeta(req: Request, res: Response, next: NextFu
         title: `${artifact.title} — ${artifact.project.title} on SparkTower`,
         description: artifact.summary || `${artifact.path.goalLabel}: a step on ${artifact.project.title}'s path.`,
         url: `${base}${artifactPath(artifact.id)}`,
+        // The page's own text, for anything that reads HTML without running it.
+        article: {
+          heading: artifact.title ?? artifact.project.title,
+          summary: artifact.summary ?? "",
+          body: (artifact.body ?? "").slice(0, 20_000),
+          projectTitle: artifact.project.title,
+          projectPath: `/projects/${artifact.project.id}`,
+          publishedAt: artifact.publishedAt ? new Date(artifact.publishedAt).toISOString() : null,
+        },
       } satisfies PageMeta;
     }
   } catch { /* the page still loads; it just previews generically */ }

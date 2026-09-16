@@ -5,14 +5,16 @@
 import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
 import { getTestApp, closeTestApp } from "../helpers/app";
+import { verifyEmail } from "../helpers/verify-email";
 
 afterAll(async () => { await closeTestApp(); });
 
 let address = 190;
 async function signUp(app: any, name: string) {
   const agent = request.agent(app);
-  await agent.post("/api/auth/register").set("x-forwarded-for", `203.0.113.${address++}`)
+  const res = await agent.post("/api/auth/register").set("x-forwarded-for", `203.0.113.${address++}`)
     .send({ email: `pp-${name}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@example.test`, password: "Testpass123!", firstName: name });
+  await verifyEmail(app, res.body.email, `203.0.114.${address++}`);
   return agent;
 }
 

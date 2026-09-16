@@ -580,7 +580,10 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
     packageManager,
     serverEntry,
     scriptNames: Object.keys(packageScripts).slice(0, 30),
-    routeCoverage: { ...routeCoverage, rows: routeCoverage.rows.slice(0, 200) },
+    // Enough rows for every route on a large app: a close read asks whether a
+    // documented endpoint exists, and a truncated list answers "no" wrongly.
+    // Each consumer takes the slice it can afford to print.
+    routeCoverage: { ...routeCoverage, rows: routeCoverage.rows.slice(0, 800) },
     fileIndex: fileIndexOf(read),
   };
 

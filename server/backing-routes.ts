@@ -48,6 +48,7 @@ import {
   tierNeedsShipping, type MerchConfig,
 } from "@shared/backing";
 import { rateLimit } from "./moderation";
+import { openPii, sealPii } from "./pii";
 
 const str = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
 const clampInt = (v: unknown, min: number, max: number, fallback: number) => {
@@ -1103,7 +1104,8 @@ export function registerBackingRoutes(app: Express) {
           merch: (r.merchProducts?.length ?? 0) > 0
             ? { products: r.merchProducts, status: r.merchStatus, trackingUrl: r.trackingUrl }
             : null,
-          shippingAddress: r.backing.shippingAddress,
+          // Sealed at rest (server/pii.ts); the project's own team is who it's for.
+          shippingAddress: openPii<ShippingAddress>(r.backing.shippingAddress),
         };
       }));
     } catch (error) {
@@ -1263,7 +1265,8 @@ export async function recordBacking(session: any): Promise<void> {
       status: "held",
       stripeCheckoutSessionId: session.id,
       stripePaymentIntentId: session.payment_intent || null,
-      shippingAddress: address,
+      // Where somebody lives: sealed, so a database dump isn't a list of addresses.
+      shippingAddress: sealPii(address),
       unclaimedPreference: m.unclaimedPreference === "donate_platform" ? "donate_platform" : "refund",
       refundDueAt,
     }).returning();
@@ -1291,7 +1294,7 @@ export async function recordBacking(session: any): Promise<void> {
             quantity: 1,
             artwork: (campaign?.merchConfig as Record<string, unknown>) || {},
           })),
-          shippingAddress: address,
+          shippingAddress: sealPii(address),
         });
       }
     }

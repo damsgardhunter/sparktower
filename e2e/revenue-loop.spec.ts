@@ -6,6 +6,7 @@
  * sets it. API-level: test/integration/revenue-loop.test.ts.
  */
 import { test, expect } from "@playwright/test";
+import { verifyEmail } from "./verify-email";
 import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
@@ -24,6 +25,8 @@ test("out of credits on the path offers an upgrade, and paying brings you back r
   const api = context.request;
   await api.get("/");
   const me = await (await api.post("/api/auth/register", { data: { email: `e2e-revenue-${stamp()}@example.test`, password: "Testpass123!", firstName: "Payer", lastName: "Revenue" } })).json();
+  // Accounts start unconfirmed; anything that reaches other people needs the emailed link (server/email-verification.ts).
+  await verifyEmail(api);
   expect((await api.post("/api/profile/complete-onboarding", { data: { displayName: "Payer Revenue", headline: "Out of credits", bio: "Here for the loop." } })).ok()).toBeTruthy();
   const project = await (await api.post("/api/projects", { data: { title: `Revenue Loop ${stamp()}`, description: "A project that runs out of AI credits.", category: "saas", goal: "ship_mvp", subcategory: "saas" } })).json();
 
@@ -52,7 +55,8 @@ test("out of credits on the path offers an upgrade, and paying brings you back r
   // Paid (as Stripe's webhook records it), back on the page checkout returns to.
   await sql("UPDATE users SET subscription_tier = 'builder', credits_used = 0 WHERE id = $1", [me.id]);
   await page.goto(`/projects/${project.id}/manage?checkout=success`);
-  await expect(page.getByText("You're upgraded")).toBeVisible();
+  // The toast renders twice: the visible card and the screen-reader announcement alongside it.
+  await expect(page.getByText("You're upgraded", { exact: true }).first()).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/manage(\\?(?!.*checkout).*)?$`));
   await expect(page.getByTestId("low-credits-notice")).toHaveCount(0);
 });

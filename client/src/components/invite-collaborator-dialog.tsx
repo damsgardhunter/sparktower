@@ -17,7 +17,7 @@ interface CreatedInvite {
   url: string;
   email: { status: "sent" | "logged" | "failed"; error?: string } | null;
 }
-interface InviteRow { id: string; email: string | null; role: string; expiresAt: string; createdAt: string; emailStatus: string | null; status: "pending" | "accepted" | "revoked" | "expired" }
+interface InviteRow { id: string; email: string | null; role: string; expiresAt: string; createdAt: string; emailStatus: string | null; status: "pending" | "accepted" | "revoked" | "expired"; invitedById?: string | null; invitedByName?: string | null }
 
 const SELECT = "h-9 w-full rounded-md border border-input bg-background px-2 text-sm";
 
@@ -136,7 +136,11 @@ export function PendingInvites({ projectId }: { projectId: string }) {
       <ul className="divide-y divide-border/60">
         {invites.map((i) => (
           <li key={i.id} className="flex items-center gap-2 py-1.5 text-sm" data-testid={`invite-row-${i.id}`}>
-            <span className="flex-1 min-w-0 truncate">{i.email ?? "Link invite"} <span className="text-muted-foreground">· {i.role}</span></span>
+            <span className="flex-1 min-w-0 truncate">
+              {i.email ?? "Link invite"} <span className="text-muted-foreground">· {i.role}</span>
+              {/* Whose invite it is: a team's invites aren't all the owner's any more. */}
+              {i.invitedByName && <span className="text-muted-foreground"> · from {i.invitedByName}</span>}
+            </span>
             <Badge variant={i.status === "pending" ? "secondary" : "outline"} className="text-[10px] capitalize">{i.status}</Badge>
             {i.status === "pending" && (
               <Button variant="ghost" size="icon" className="h-7 w-7" title="Revoke" disabled={revoke.isPending} onClick={() => revoke.mutate(i.id)} data-testid={`button-revoke-invite-${i.id}`}>

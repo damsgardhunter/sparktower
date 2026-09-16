@@ -17,6 +17,7 @@ import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
 import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
+import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
 import { projects } from "@shared/schema";
 
@@ -41,6 +42,7 @@ describe("a new user can get all the way through the loop", () => {
     expect(signup.body.email).toBe(email);
     // A password hash must never leave the server, whatever it is asked for.
     expect(signup.body.passwordHash).toBeUndefined();
+    await verifyEmail(app, email);
 
     // The session has to survive the next request or nothing below works.
     const me = await agent.get("/api/auth/user");
@@ -109,9 +111,11 @@ describe("a new user can get all the way through the loop", () => {
     const app = await getTestApp();
     const agent = request.agent(app);
 
+    const privateEmail = newEmail();
     await agent
       .post("/api/auth/register")
-      .send({ email: newEmail(), password, firstName: "Private", lastName: "Builder" });
+      .send({ email: privateEmail, password, firstName: "Private", lastName: "Builder" });
+    await verifyEmail(app, privateEmail, "198.51.109.11");
 
     const project = await agent.post("/api/projects").send({
       title: "Quiet Project",
@@ -145,7 +149,10 @@ describe("a new user can get all the way through the loop", () => {
 
     // Nor its comments or reactions: a signed-in stranger with the id can't read, comment or react.
     const outsider = request.agent(app);
-    await outsider.post("/api/auth/register").set("x-forwarded-for", "198.51.100.199").send({ email: newEmail(), password, firstName: "Outside" });
+    const outsiderEmail = newEmail();
+    await outsider.post("/api/auth/register").set("x-forwarded-for", "198.51.100.199").send({ email: outsiderEmail, password, firstName: "Outside" });
+    // Confirmed, so the refusals below are the private post's 404s, not the verification gate.
+    await verifyEmail(app, outsiderEmail, "198.51.109.12");
     expect((await outsider.get(`/api/feed/${id}/comments`)).status).toBe(404);
     expect((await request(app).get(`/api/feed/${id}/comments`)).status).toBe(404);
     expect((await outsider.post(`/api/feed/${id}/comments`).send({ content: "Found your private post." })).status).toBe(404);

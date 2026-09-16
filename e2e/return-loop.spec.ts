@@ -10,6 +10,7 @@
  * server remembers, on a device that remembers nothing.
  */
 import { test, expect } from "@playwright/test";
+import { verifyEmail } from "./verify-email";
 
 const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -20,6 +21,8 @@ test("a return shows what's new since you looked, continues exploring, and actin
   await bea.get("/");
   const beaUser = await bea.post("/api/auth/register", { data: { email: `e2e-bea2-${stamp()}@example.test`, password, firstName: "Bea", lastName: "Builder" } });
   expect(beaUser.ok()).toBeTruthy();
+  // Accounts start unconfirmed; posting, commenting and reporting need the emailed link (server/email-verification.ts).
+  await verifyEmail(bea);
   const beaId = (await beaUser.json()).id as string;
   expect((await bea.post("/api/profile/complete-onboarding", {
     data: { displayName: "Bea Builder", headline: "Shipping a habit tracker", bio: "Building in public." },
@@ -32,6 +35,8 @@ test("a return shows what's new since you looked, continues exploring, and actin
 
   await page.goto("/");
   expect((await page.request.post("/api/auth/register", { data: { email: `e2e-ari2-${stamp()}@example.test`, password, firstName: "Ari", lastName: "Explorer" } })).ok()).toBeTruthy();
+  // Accounts start unconfirmed; posting, commenting and reporting need the emailed link (server/email-verification.ts).
+  await verifyEmail(page.request);
   expect((await page.request.post("/api/profile/complete-onboarding", {
     data: { displayName: "Ari Explorer", headline: "Looking for a co-builder", bio: "Here for the loop." },
   })).ok()).toBeTruthy();

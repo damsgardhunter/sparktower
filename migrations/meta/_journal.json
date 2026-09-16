@@ -127,6 +127,27 @@
       "when": 1789504220307,
       "tag": "0017_mfa",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1789518606667,
+      "tag": "0018_email_verification",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1789518694611,
+      "tag": "0019_account_deletion",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1789525369881,
+      "tag": "0020_post_author_delete",
+      "breakpoints": true
     }
   ]
 }

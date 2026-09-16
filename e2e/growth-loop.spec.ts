@@ -6,6 +6,7 @@
  * their first step and publishes their own. API-level: test/integration/path-artifacts.test.ts.
  */
 import { test, expect, type Browser } from "@playwright/test";
+import { verifyEmail } from "./verify-email";
 
 const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -15,6 +16,8 @@ async function personIn(browser: Browser, ip: string, first: string) {
   const api = context.request;
   await api.get("/");
   expect((await api.post("/api/auth/register", { data: { email: `e2e-growth-${first.toLowerCase()}-${stamp()}@example.test`, password, firstName: first, lastName: "Growth" } })).ok()).toBeTruthy();
+  // Accounts start unconfirmed; anything that reaches other people needs the emailed link (server/email-verification.ts).
+  await verifyEmail(api);
   expect((await api.post("/api/profile/complete-onboarding", { data: { displayName: `${first} Growth`, headline: "Building in public", bio: "Here for the loop." } })).ok()).toBeTruthy();
   return { context, api };
 }
@@ -50,6 +53,21 @@ test("a published step brings a stranger in, and they publish their own", async 
   const html = await (await author.api.get(path, { headers: { accept: "text/html" } })).text();
   expect(html).toContain("<title>Our one-line product statement");
   expect(html).toContain('property="og:title"');
+  expect(html).toMatch(/<link rel="canonical" href="[^"]*\/a\/[^"]+" \/>/);
+  /*
+   * And what it says to a reader that doesn't run JavaScript: the app renders
+   * into an empty root, so without this copy the page would be a title and
+   * nothing else to a crawler, a reader mode or a text browser.
+   */
+  expect(html).toContain("<noscript>");
+  expect(html).toContain("fridge");
+  expect(html).toContain(`<a href="/projects/${project.id}">`);
+
+  // And the crawler is told the page exists at all.
+  const robots = await (await author.api.get("/robots.txt")).text();
+  expect(robots).toContain("User-agent: *");
+  const sitemap = await (await author.api.get("/sitemap.xml")).text();
+  expect(sitemap).toContain(`<loc>`);
 
   // A stranger, with no account, reads it and starts their own path.
   const strangerContext = await browser.newContext({ extraHTTPHeaders: { "x-forwarded-for": "203.0.113.92" } });

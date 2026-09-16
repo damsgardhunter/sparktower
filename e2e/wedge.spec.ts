@@ -13,6 +13,7 @@
  * real click in a real browser.
  */
 import { test, expect, type Page } from "@playwright/test";
+import { verifyEmail } from "./verify-email";
 
 const password = "Testpass123!";
 const newEmail = () => `e2e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.test`;
@@ -34,6 +35,9 @@ async function signUp(page: Page, first = "Casey") {
   // A brand-new account is sent to onboarding; that redirect is the proof
   // the session was created and the profile provisioned.
   await page.waitForURL(/\/onboarding/, { timeout: 15_000 });
+
+  // Signing up through the form leaves the address unconfirmed, and posting needs it (server/email-verification.ts).
+  await verifyEmail(page.request, email);
 
   // Same cookie jar as the page, so this is the signed-in user completing it.
   const done = await page.request.post("/api/profile/complete-onboarding", {

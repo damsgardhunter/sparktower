@@ -490,7 +490,8 @@ export interface IStorage {
   createFeedPost(data: InsertFeedPost): Promise<FeedPost>;
   getFeedPosts(options: { viewerId?: string; limit: number; before?: string; authorId?: string; projectId?: string; postType?: string }): Promise<FeedPostWithDetails[]>;
   getFeedPost(id: string, viewerId?: string): Promise<FeedPostWithDetails | undefined>;
-  deleteFeedPost(id: string, authorId: string): Promise<boolean>;
+  /** false when it wasn't theirs; "deleted" when the row went; "kept" when replies held it open (see the implementation). */
+  deleteFeedPost(id: string, authorId: string): Promise<false | "deleted" | "kept">;
   setFeedReaction(postId: string, userId: string, reaction: string | null): Promise<{ reactionCount: number; viewerReaction: string | null }>;
   getFeedComments(postId: string, viewerId?: string): Promise<FeedCommentWithDetails[]>;
   setFeedCommentReaction(commentId: string, userId: string, reaction: string | null): Promise<{ reactionCount: number; viewerReaction: string | null }>;
@@ -1427,7 +1428,7 @@ export class DatabaseStorage implements IStorage {
     /** Only posts by builders, or on projects, this user follows. */
     followedBy?: string;
   }): Promise<FeedPostWithDetails[]> {
-    const conditions = [isNull(feedPosts.hiddenAt)];
+    const conditions = [isNull(feedPosts.hiddenAt), isNull(feedPosts.deletedAt)];
     if (options.authorId) conditions.push(eq(feedPosts.authorId, options.authorId));
     if (options.projectId) conditions.push(eq(feedPosts.projectId, options.projectId));
     if (options.postType) conditions.push(eq(feedPosts.postType, options.postType as any));
@@ -1553,12 +1554,31 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  async deleteFeedPost(id: string, authorId: string): Promise<boolean> {
+  /**
+   * Deletes the author's post.
+   *
+   * With nobody else in it, the row goes and the database takes its reactions
+   * with it. Once other people have replied, deleting the row would delete
+   * their words too (feed_comments cascades), so the post's own content goes
+   * and the row stays as a headstone — the same thing a comment with replies
+   * under it does.
+   */
+  async deleteFeedPost(id: string, authorId: string): Promise<false | "deleted" | "kept"> {
+    const [fromSomeoneElse] = await db.select({ id: feedComments.id }).from(feedComments)
+      .where(and(eq(feedComments.postId, id), ne(feedComments.authorId, authorId), isNull(feedComments.deletedAt)))
+      .limit(1);
+    if (fromSomeoneElse) {
+      const cleared = await db.update(feedPosts)
+        .set({ deletedAt: new Date(), content: "", mediaUrls: [], mentions: [], asks: [] })
+        .where(and(eq(feedPosts.id, id), eq(feedPosts.authorId, authorId), isNull(feedPosts.deletedAt)))
+        .returning();
+      return cleared.length > 0 ? "kept" : false;
+    }
     const deleted = await db
       .delete(feedPosts)
       .where(and(eq(feedPosts.id, id), eq(feedPosts.authorId, authorId)))
       .returning();
-    return deleted.length > 0;
+    return deleted.length > 0 ? "deleted" : false;
   }
 
   /**
@@ -2532,6 +2552,7 @@ export class DatabaseStorage implements IStorage {
         sql`${feedPosts.projectId} is not null`,
         inArray(feedPosts.postType, ["project_update", "milestone"]),
         isNull(feedPosts.hiddenAt),
+        isNull(feedPosts.deletedAt),
       ));
 
     const follows = await db.select().from(projectFollows).where(eq(projectFollows.userId, userId));

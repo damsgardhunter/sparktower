@@ -13,6 +13,7 @@ import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
 import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
+import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
 import { users, moderationLog, contentReports } from "@shared/schema";
 import { RATE_LIMITS } from "@shared/moderation";
@@ -28,6 +29,7 @@ async function signedIn(app: any, first: string) {
   const email = newEmail();
   const res = await agent.post("/api/auth/register").send({ email, password, firstName: first, lastName: "Drill" });
   expect(res.status).toBe(201);
+  await verifyEmail(app, email);
   return { agent, email, userId: res.body.id as string };
 }
 

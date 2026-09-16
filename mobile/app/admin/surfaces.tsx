@@ -7,7 +7,7 @@ import { colors, radius, spacing } from "../../src/theme";
 import { Empty, Icon, Loading, Screen, errText } from "../../src/components/ui";
 import { PageIntro, Pill, TitledCard } from "../../src/components/MoreKit";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
-import { ConfirmSheet, NotFoundScreen, gateView, isNotFound, text, useReviewer } from "../../src/components/more/AdminKit";
+import { ConfirmSheet, NotFoundScreen, gateView, blockedView, isNotFound, text, useReviewer } from "../../src/components/more/AdminKit";
 
 /** shared/surfaces.ts SURFACE_CLASS_LABEL, in the web's order. */
 const ORDER = ["core", "momentum", "later", "network", "off"] as const;
@@ -59,7 +59,9 @@ export default function AdminSurfaces() {
 
   const gate = gateView("Feature areas", loading, isReviewer);
   if (gate) return gate;
-  if (isNotFound(error)) return <NotFoundScreen title="Feature areas" />;
+  // Locked behind a second factor, or simply not this account's page (src/components/more/AdminKit.tsx).
+  const blocked = blockedView("Feature areas", error);
+  if (blocked) return blocked;
 
   const rows = data?.surfaces ?? [];
   const onCount = rows.filter((r) => r.enabled).length;

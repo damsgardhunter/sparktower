@@ -8,7 +8,7 @@ import { readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 vi.mock("openai", () => ({ default: class { chat = { completions: { create: async () => ({}) } }; } }));
 vi.mock("../../server/db", () => ({ db: {}, pool: {} }));
-import { pickLoopEvidence } from "../../server/audit-loop-reads";
+import { documentedEndpoints, pickLoopEvidence } from "../../server/audit-loop-reads";
 
 const root = join(__dirname, "..", "..");
 const walk = (dir: string, out: { path: string; size: number; content: string }[] = []) => {
@@ -73,4 +73,40 @@ describe("the close read of an open loop", () => {
     expect(revenue.docs[0]).toBe("docs/revenue-loop.md");
     expect(revenue.paths).toEqual(expect.arrayContaining(["server/entitlements.ts", "client/src/components/upgrade-to-keep-generating.tsx", "server/billing-credits.ts", "e2e/revenue-loop.spec.ts"]));
   });
+
+describe("the endpoints a loop's writing names", () => {
+  const routes = [
+    { label: "POST /api/projects/:id/follow", file: "server/routes.ts" },
+    { label: "POST /api/users/:userId/follow", file: "server/routes.ts" },
+    { label: "POST /api/connections/request", file: "server/routes.ts" },
+    { label: "POST /api/messages/:userId", file: "server/routes.ts" },
+    { label: "GET /api/discover/updates", file: "server/explore-routes.ts" },
+  ];
+
+  it("says which exist, wherever they're registered, and which don't", () => {
+    const doc = `The loop: open Discover, follow a builder with POST /api/users/:id/follow, ask to connect
+      (POST /api/connections/request), message them at POST /api/messages/:userId, and come back
+      through GET /api/discover/updates. Later we'll add POST /api/discover/dismiss.`;
+    const lines = documentedEndpoints([doc], routes);
+    expect(lines).toContain("POST /api/users/:userId/follow  — registered in server/routes.ts");
+    expect(lines).toContain("POST /api/connections/request  — registered in server/routes.ts");
+    expect(lines).toContain("POST /api/messages/:userId  — registered in server/routes.ts");
+    expect(lines).toContain("GET /api/discover/updates  — registered in server/explore-routes.ts");
+    // The one that doesn't exist is the finding, and it's marked as such.
+    expect(lines).toContain("POST /api/discover/dismiss  — NOT REGISTERED anywhere in this repository");
+  });
+
+  it("matches on the endpoint, not the name someone gave a parameter", () => {
+    expect(documentedEndpoints(["POST /api/messages/:recipientId"], routes)[0]).toMatch(/registered in server\/routes\.ts/);
+    expect(documentedEndpoints(["`/api/projects/:projectId/follow`"], routes)[0]).toMatch(/registered/);
+  });
+
+  it("names each endpoint once, keeps to the cap, and ignores prose without paths", () => {
+    const many = Array.from({ length: 30 }, (_, i) => `POST /api/thing-${i}`).join(" ");
+    expect(documentedEndpoints([many], routes).length).toBe(20);
+    expect(documentedEndpoints(["POST /api/messages/:userId and again POST /api/messages/:userId"], routes)).toHaveLength(1);
+    expect(documentedEndpoints(["The user follows a builder and comes back."], routes)).toEqual([]);
+    expect(documentedEndpoints([""], routes)).toEqual([]);
+  });
+});
 });

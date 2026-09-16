@@ -8,7 +8,7 @@ import { Btn, Empty, Icon, Loading, Screen, errText } from "../../src/components
 import { Callout, PageIntro, Pill, TitledCard } from "../../src/components/MoreKit";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
 import {
-  ConfirmSheet, NotFoundScreen, StatBox, StatGrid, gateView, isNotFound, money, text, useReviewer,
+  ConfirmSheet, NotFoundScreen, StatBox, StatGrid, gateView, blockedView, isNotFound, money, text, useReviewer,
 } from "../../src/components/more/AdminKit";
 
 /** shared/backing.ts, restated. */
@@ -107,7 +107,9 @@ export default function BackingReview() {
   const gate = gateView("Payout review", loading, isReviewer);
   if (gate) return gate;
   // Same answer the API gives a non-reviewer: this page does not exist.
-  if (isNotFound(error)) return <NotFoundScreen title="Payout review" />;
+  // Locked behind a second factor, or simply not this account's page (src/components/more/AdminKit.tsx).
+  const blocked = blockedView("Payout review", error);
+  if (blocked) return blocked;
 
   const current = queue?.find((q) => q.projectId === selected);
 

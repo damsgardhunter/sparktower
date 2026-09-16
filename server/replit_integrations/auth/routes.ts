@@ -1,4 +1,5 @@
 import type { Express } from "express";
+import { sendVerificationEmail } from "../../email-verification";
 import { authStorage } from "./storage";
 import { isAuthenticated } from "./replitAuth";
 import passport from "passport";
@@ -56,6 +57,8 @@ export function registerAuthRoutes(app: Express): void {
       // Where they came from, from the cookie stamped on their first page.
       // Here and not in ensureUserProfile, which also runs on every sign-in.
       await stampSignupAttribution(user.id, req);
+      // The link goes out now; the account works meanwhile, minus anything that reaches other people.
+      await sendVerificationEmail(user, req);
 
       req.login(user, (err: any) => {
         if (err) return next(err);

@@ -9,6 +9,7 @@ import { colors, font, fontFamily, spacing } from "../../src/theme";
 import { ListItem, type IconName } from "../../src/components/ui";
 import { NoticeBanner, Sheet, useNotice } from "../../src/components/Sheet";
 import { PostCard } from "../../src/components/PostCard";
+import { VerifyEmailNotice } from "../../src/components/VerifyEmailNotice";
 import { POST_TYPES, type FeedPage, type FeedPost, type PostType } from "../../src/components/feedModel";
 import { Box, GlossyButton, primaryTint } from "../../src/components/feed/Box";
 import { DiscoverNewsLink, FeedbackUsedCard, MyProjectsCard, ProfileCard } from "../../src/components/feed/HomeRail";
@@ -111,6 +112,7 @@ export default function Feed() {
   const header = (
     <View style={s.stack}>
       <ProfileCard />
+      <VerifyEmailNotice onNotice={show} />
       <GlossyButton label="Create Project" icon="add" onPress={() => router.push("/project/new" as any)} testID="button-create-project-home" />
       <DiscoverNewsLink />
       <ContinuePathCard onNotice={show} />
