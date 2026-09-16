@@ -62,6 +62,12 @@ describe("a new account", () => {
       ["a connection request", () => person.agent.post("/api/connections/request").send({ userId: other.id })],
       ["a report", () => person.agent.post("/api/reports").send({ targetType: "comment", targetId: "00000000-0000-0000-0000-000000000000", reason: "spam" })],
       ["a project comment", () => person.agent.post(`/api/projects/${projectId}/comments`).send({ targetType: "project", targetId: projectId, content: "Commenting before confirming." })],
+      // Publishing puts a page on the open internet; applying is a message to an owner; a reaction notifies an author.
+      ["publishing an artifact", () => person.agent.post("/api/artifacts/00000000-0000-0000-0000-000000000000/publish").send({})],
+      ["publishing a document", () => person.agent.post("/api/documents/00000000-0000-0000-0000-000000000000/publish").send({})],
+      ["applying to a project", () => person.agent.post(`/api/projects/${projectId}/apply`).send({ message: "I'd like to help with this." })],
+      ["reacting to a post", () => person.agent.post("/api/feed/00000000-0000-0000-0000-000000000000/react").send({ reaction: "like" })],
+      ["a sprint message", () => person.agent.post("/api/sprints/00000000-0000-0000-0000-000000000000/messages").send({ content: "Hello partner." })],
     ] as const;
     for (const [what, call] of blocked) {
       const res = await call();

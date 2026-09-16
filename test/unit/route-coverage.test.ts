@@ -57,6 +57,43 @@ describe("buildRouteCoverage", () => {
     expect(renderRouteCoverage(null)).toBeNull();
   });
 
+  it("names a limit the handler applies itself, brackets in the arguments and all", () => {
+    /*
+     * `enforceRateLimit(res, ipKey(req), "login")` — the action is the last
+     * argument, and the ones before it have brackets of their own. Reading only
+     * as far as the first `)` stopped inside `ipKey(req)`, so every sign-in and
+     * sign-up route reported no named limit: eight routes that look unlimited
+     * in the evidence while being limited in the code.
+     */
+    const auth = f("server/auth.ts", `
+      app.post("/api/auth/login", async (req, res) => {
+        if (!(await enforceRateLimit(res, ipKey(req), "login"))) return;
+      });
+      app.post("/api/stripe/webhook", async (req, res) => {
+        if (!(await enforceRejectionLimit(res, ipKey(req), "webhookReject"))) return;
+      });
+    `);
+    const entry = f("server/routes.ts", 'import "./auth";');
+    const rows = buildRouteCoverage([entry, auth]).rows;
+    const by = Object.fromEntries(rows.map((r) => [`${r.method} ${r.path}`, r]));
+    expect(by["POST /api/auth/login"].limits).toEqual(["login"]);
+    expect(by["POST /api/auth/login"].rateLimited).toBe(true);
+    expect(by["POST /api/stripe/webhook"].limits).toEqual(["webhookReject (failures only)"]);
+  });
+
+  it("lists every mounted route by name, with what guards it", () => {
+    // The counts above answer "how many"; only a list answers "does this one exist".
+    const rendered = renderRouteCoverage(buildRouteCoverage([app, f("server/other.ts", "")]))!;
+    expect(rendered).toContain("EVERY MOUNTED ROUTE");
+    const line = rendered.split("\n").find((l) => l.startsWith("  POST /api/projects "))!;
+    expect(line).toContain("auth");
+    expect(line).toContain("limit:project");
+    expect(line).toContain("[server/routes.ts]");
+    // A credit-metered route is limited by requireCredits, not by the floor alone.
+    const nova = rendered.split("\n").find((l) => l.startsWith("  POST /api/projects/:id/nova"))!;
+    expect(nova).toContain("limit:credits→ai burst");
+  });
+
   it("does not count routes in files nothing imports", () => {
     const c = buildRouteCoverage([entry, live, dead]);
     expect(c.rows.find((r) => r.path === "/api/live")?.mounted).toBe(true);

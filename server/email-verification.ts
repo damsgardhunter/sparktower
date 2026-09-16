@@ -102,16 +102,34 @@ export const isVerified = (user: { emailVerifiedAt?: Date | null } | null | unde
 
 /**
  * The paths an unconfirmed account can't use: everything that puts words in
- * front of someone else. Reading, and their own project's work, are untouched.
+ * front of someone else, or a page in front of the public. Reading, and their
+ * own project's work, are untouched.
+ *
+ * A list of paths is only as good as its upkeep, so test/unit/reaches-others.test.ts
+ * holds every write in these families to a decision: gated here, or named
+ * there with why it doesn't reach anyone. A new social route can't slip in
+ * unnoticed.
  */
-const REACHES_OTHERS: RegExp[] = [
+export const REACHES_OTHERS: RegExp[] = [
+  // Posts, comments and the reactions that notify their authors.
   /^\/api\/feed$/,
   /^\/api\/feed\/[^/]+\/comments$/,
+  /^\/api\/feed\/[^/]+\/react$/,
+  /^\/api\/feed\/comments\/[^/]+\/react$/,
   /^\/api\/projects\/[^/]+\/comments$/,
+  /^\/api\/project-comments\/[^/]+\/react$/,
+  // Straight to a person: an invite, a message, a connection request, a report.
   /^\/api\/projects\/[^/]+\/invites$/,
   /^\/api\/messages\/[^/]+$/,
+  /^\/api\/sprints\/[^/]+\/messages$/,
   /^\/api\/connections\/request$/,
   /^\/api\/reports$/,
+  // Applying is a message to the owner, with a name attached.
+  /^\/api\/projects\/[^/]+\/apply$/,
+  /^\/api\/projects\/[^/]+\/investment\/applications$/,
+  // Publishing puts a page on the open internet under this account's name.
+  /^\/api\/artifacts\/[^/]+\/publish$/,
+  /^\/api\/documents\/[^/]+\/publish$/,
 ];
 
 /**

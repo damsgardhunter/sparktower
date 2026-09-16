@@ -6,6 +6,7 @@
  * builder can publish their own. E2E: e2e/growth-loop.spec.ts.
  */
 import { describe, it, expect, afterAll } from "vitest";
+import { verifyEmail } from "../helpers/verify-email";
 import request from "supertest";
 import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
@@ -21,6 +22,7 @@ async function person(app: any, first: string, extra: Record<string, unknown> = 
   const res = await agent.post("/api/auth/register").set("x-forwarded-for", `198.51.101.${10 + (n % 200)}`)
     .send({ email: `artifact-${first}-${Date.now()}-${n}@example.test`, password: "Testpass123!", firstName: first, ...extra });
   expect(res.status).toBe(201);
+  await verifyEmail(app, res.body.email, `198.51.108.${10 + (n % 200)}`);
   return { agent, id: res.body.id as string };
 }
 const settle = () => new Promise((r) => setTimeout(r, 500));

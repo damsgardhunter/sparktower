@@ -5,6 +5,7 @@
  * twice opens the same project. And a contest knows you've joined it.
  */
 import { describe, it, expect, afterAll } from "vitest";
+import { verifyEmail } from "../helpers/verify-email";
 import request from "supertest";
 import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
@@ -21,6 +22,7 @@ async function person(app: any, first: string) {
   const res = await agent.post("/api/auth/register").set("x-forwarded-for", `198.51.100.${210 + n}`)
     .send({ email: `sprint-${first}-${Date.now()}-${n}@example.test`, password: "Testpass123!", firstName: first });
   expect(res.status).toBe(201);
+  await verifyEmail(app, res.body.email, `198.51.109.${10 + (n % 200)}`);
   return { agent, id: res.body.id as string };
 }
 const scores = { communicationClarity: 4, reliability: 5, wouldBuildLongTerm: true, stressLevel: 2 };

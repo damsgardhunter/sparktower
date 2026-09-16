@@ -322,8 +322,15 @@ export function buildRouteCoverage(files: RepoFile[]): RouteCoverage {
         meteringNote: /\/\/\s*metering:\s*([^\n]+)/.exec(chunk)?.[1].trim().slice(0, 200) ?? null,
         limits: [...new Set([
           ...[...chunk.matchAll(/\brateLimit\s*\(\s*["'`](\w+)["'`]/g)].map((m) => m[1]),
-          ...[...body.matchAll(/\benforceRateLimit\s*\([^)]*?["'`](\w+)["'`]\s*\)/g)].map((m) => m[1]),
-          ...[...body.matchAll(/\benforceRejectionLimit\s*\([^)]*?["'`](\w+)["'`]\s*\)/g)].map((m) => `${m[1]} (failures only)`),
+          /*
+           * The action is the last argument, and the ones before it can hold
+           * brackets of their own: `enforceRateLimit(res, ipKey(req), "login")`.
+           * Matching up to the first `)` stopped inside `ipKey(req)` and found
+           * nothing, so the eight routes that limit themselves this way — every
+           * sign-in and sign-up route — read as having no named limit at all.
+           */
+          ...[...body.matchAll(/\benforceRateLimit\s*\([\s\S]{0,200}?["'`](\w+)["'`]\s*\)/g)].map((m) => m[1]),
+          ...[...body.matchAll(/\benforceRejectionLimit\s*\([\s\S]{0,200}?["'`](\w+)["'`]\s*\)/g)].map((m) => `${m[1]} (failures only)`),
           ...(credits ? ["credits"] : []),
         ])],
         metering: analyzeMetering(body),
@@ -429,11 +436,19 @@ function meteringLines(c: RouteCoverage, lst: (xs: string[]) => string, maxList:
 function inventory(rows: RouteCoverageRow[], max = 700): string {
   const shown = rows.slice(0, max);
   const line = (r: RouteCoverageRow) => {
+    /*
+     * What limits it, in the order a reader asks. A credit-metered route is
+     * limited by requireCredits, which enforces the AI burst limit before it
+     * charges — so it is not floor-only, and saying "floor" alone would
+     * under-report 8 of them.
+     */
+    // "credits" is a limit as well as a charge: requireCredits enforces the AI burst limit before it charges.
+    const named = r.limits.map((l) => (l === "credits" ? "credits→ai burst" : l));
+    const limit = named.length ? `limit:${named.join("+")}` : r.floor ? "limit:write floor" : null;
     const marks = [
       r.auth ? "auth" : "open",
       r.privileged ? "privileged" : null,
-      r.limits.length ? `limit:${r.limits.join("+")}` : r.floor ? "floor" : null,
-      r.credits ? "credits" : null,
+      limit,
       r.surface ? `surface:${r.surface}` : null,
     ].filter(Boolean).join(" ");
     return `  ${r.method} ${r.path} — ${marks} [${r.file}]`;
@@ -452,6 +467,8 @@ export function renderRouteCoverage(c: RouteCoverage | null | undefined, maxList
     `- Writes behind auth: ${s.writesWithAuth}/${s.writes}. Writes without sign-in: ${lst(c.unguardedWrites)}`,
     // What each one trusts instead, as its own route says — so a public write isn't read as an unguarded one.
     ...c.rows.filter((r) => r.mounted && r.write && !r.auth).slice(0, maxList).map((r) => `  - ${r.method} ${r.path}: ${r.publicReason ? `trusts ${r.publicReason}` : "NO REASON GIVEN"}${r.rateLimited ? `; limited by ${r.limits.join(", ") || "its own limit"}` : r.floor ? "; under the write floor" : "; no rate limit"} [${r.file}]`),
+    // Named, not just counted: "which ones are floor-only" was a question the counts couldn't answer.
+    `- Floor-only writes (no limit of their own; the write floor is what limits them): ${lst(c.rows.filter((r) => r.mounted && r.write && !r.rateLimited && r.floor).map((r) => `${r.method} ${r.path}`))}`,
     `- Writes with their own rate limit or credit metering: ${s.writesRateLimited}/${s.writes}; limited by the global write floor alone: ${s.writesFloorOnly ?? 0}${c.writeFloor?.mounted ? ` (limitWrites, mounted in server/routes.ts, every write under /api except ${c.writeFloor.exempt.join(", ") || "nothing"}${c.writeFloorTest.length ? `; ${c.writeFloorTest.join(", ")} drives a floor-only write past it and checks the refusal, so the mount is proven at runtime, not just read` : ""})` : " (no write floor found)"}. No limit at all: ${lst(c.unlimitedWrites)}`,
     ...floorOnlyLines(c),
     `- Costly routes credit-metered: ${s.costlyMetered}/${s.costly}. Not credit-metered: ${lst(c.rows.filter((r) => r.mounted && r.cost && !r.credits).map((r) => `${r.method} ${r.path} (${r.limits.length ? `limited by ${r.limits.join(", ")}` : "no limit"}) [${r.file}]`))}. Neither metered nor limited: ${lst(c.unmeteredCost)}`,

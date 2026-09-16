@@ -24,6 +24,12 @@ One exemption: `POST /api/stripe/webhook`.
 - **What limits it instead.** The signature: only Stripe can produce a delivery that verifies. Deliveries that *fail* verification are counted per address (`webhookReject`) and refused, which is the abuse path — anyone can send bytes at the endpoint, nobody else can sign them.
 - **What that leaves.** Verified deliveries are unbounded by us. That is Stripe's traffic, and the ledger (`stripe_events`) dedupes retries of it.
 
+## Reading the evidence
+
+The audit's ROUTE COVERAGE section lists **every mounted route** with what limits it: `limit:login`, `limit:credits→ai burst`, or `limit:write floor` for the 62 writes that carry none of their own. The floor-only ones are also named in a line of their own, because "which ones are floor-only" is a question counts can't answer.
+
+A route that limits itself inside the handler — `enforceRateLimit(res, ipKey(req), "login")` — is named there too. It wasn't until recently: the scanner read only as far as the first `)`, which falls inside `ipKey(req)`, so all eight sign-in and sign-up routes reported no named limit while being limited in the code. `test/unit/route-coverage.test.ts` now pins that shape.
+
 ## What a refusal looks like
 
 One shape everywhere: 429, `{ message, code: "rate_limited", action, retryAfterSeconds, retryAfterMinutes }` and a matching `Retry-After`. Repeating yourself is 409 with `duplicate_content` and no retry fields, because waiting doesn't help. When the counter itself can't be read, 503 `limit_unavailable` — the action doesn't run unmetered. Every refusal is also a row the daily safety review counts (`docs/safety-loop.md`).
