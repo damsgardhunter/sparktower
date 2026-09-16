@@ -86,6 +86,8 @@ describe("publishing a path artifact", () => {
     const reg = await stranger.post("/api/auth/register").set("x-forwarded-for", "198.51.101.250")
       .send({ email: `artifact-stranger-${Date.now()}@example.test`, password: "Testpass123!", firstName: "Newcomer" });
     expect(reg.status).toBe(201);
+    // Publishing a page needs a confirmed address (server/email-verification.ts), as it does for anyone.
+    await verifyEmail(app, reg.body.email, "198.51.108.250");
     await settle();
     const [row] = await db.select().from(pathArtifacts).where(eq(pathArtifacts.id, made.body.id));
     expect(row.signups).toBe(1);

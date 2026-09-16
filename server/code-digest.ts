@@ -15,6 +15,7 @@
 import { fileIndexOf } from "@shared/audit-catchup";
 import type { RepoFile, RepoSnapshot } from "./code-ingest";
 import { buildRouteCoverage, renderRouteCoverage, type RouteCoverage } from "./route-coverage";
+import { tablesExercisedByTests } from "@shared/data-shape";
 
 const text = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
 
@@ -70,6 +71,8 @@ export interface DigestSignals {
   routeCoverage: RouteCoverage;
   /** The test files by path, so a read can say what is covered instead of "no evidence". */
   testFilePaths: string[];
+  /** Tables named by at least one test, so an empty one can be read as unused rather than unproven. */
+  testedTables: string[];
   /**
    * The product's own written intent: markdown files that talk about loops,
    * user journeys, phases or the plan. Builders write down what they mean
@@ -666,6 +669,8 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
     // Each consumer takes the slice it can afford to print.
     routeCoverage: { ...routeCoverage, rows: routeCoverage.rows.slice(0, 800) },
     fileIndex: fileIndexOf(read),
+    // Which of this schema's tables the suite fills: an empty table is then "unused", not "unproven".
+    testedTables: tablesExercisedByTests(read, dataModels.map((m) => m.name)),
   };
 
   // --- excerpts -----------------------------------------------------------

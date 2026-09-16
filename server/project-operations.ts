@@ -146,7 +146,7 @@ export function renderAudit(audit: any, dataShape?: any): string {
     f.stackSummary ? `Stack actually in the code: ${f.stackSummary}` : null,
     audit.summary ? `Nova's read: ${audit.summary}` : null,
     renderRuntime(audit.runtime),
-    renderDataShape(dataShape ?? audit.dataShape),
+    renderDataShape(dataShape ?? audit.dataShape, 40, (audit.signals as any)?.testedTables),
     renderAuditDelta(audit.delta),
     renderCapabilities(f.capabilities),
     renderRouteCoverage((audit.signals as any)?.routeCoverage),

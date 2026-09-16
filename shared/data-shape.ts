@@ -26,16 +26,51 @@ export interface DataShape {
 }
 
 /** Row counts, in words a planner can use. */
-export function renderDataShape(d: DataShape | null | undefined, max = 40): string | null {
+/**
+ * Which tables the test suite writes to, by name.
+ *
+ * A table with no rows means one of two very different things, and the
+ * difference is the whole judgement: a feature nobody has used yet, or a
+ * feature that may never have worked. Tests tell them apart — a table the
+ * suite fills is proven, whatever production looks like — so an audit can say
+ * "built, proven, not yet used" instead of treating a pre-launch product as
+ * half-finished.
+ */
+export function tablesExercisedByTests(
+  files: { path: string; content?: string | null }[],
+  tableNames: string[],
+): string[] {
+  const isTest = (p: string) => /(^|\/)(tests?|__tests__|e2e|spec)(\/|$)/i.test(p) || /\.(test|spec)\.[cm]?[jt]sx?$/.test(p);
+  const text = files.filter((f) => isTest(f.path) && f.content).map((f) => f.content!).join("\n");
+  if (!text) return [];
+  const camel = (name: string) => name.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+  // Both spellings: SQL in a test says `moderation_log`, an ORM call says `moderationLog`.
+  return tableNames.filter((name) => new RegExp(`\\b(${name}|${camel(name)})\\b`).test(text));
+}
+
+export function renderDataShape(
+  d: DataShape | null | undefined,
+  max = 40,
+  exercised?: readonly string[],
+): string | null {
   if (!d) return null;
   if (d.error) return `DATA IN USE: the data-shape read failed (${d.error}); judge features by code only.`;
   const sorted = [...d.tables].sort((a, b) => b.rows - a.rows);
   const busy = sorted.filter((t) => t.rows > 0).slice(0, max).map((t) => `${t.name} ${t.rows.toLocaleString()}${t.exact ? "" : "~"}`).join(", ");
   const empty = sorted.filter((t) => t.rows === 0).map((t) => t.name);
+  const proven = exercised ? empty.filter((n) => exercised.includes(n)) : [];
+  const unproven = empty.filter((n) => !proven.includes(n));
+  const list = (names: string[]) => `${names.slice(0, max).join(", ")}${names.length > max ? " …" : ""}`;
   return [
-    `DATA IN USE (live database, ${d.at.slice(0, 10)}; ${d.totals.tables} tables, ${d.totals.rows.toLocaleString()} rows). A feature whose tables are empty is BUILT BUT UNUSED: judge it "partial" for the product, not "built", and say so.`,
+    `DATA IN USE (live database, ${d.at.slice(0, 10)}; ${d.totals.tables} tables, ${d.totals.rows.toLocaleString()} rows). An empty table means the feature is UNUSED, which is not the same as unbuilt: say "built, not yet used" where tests exercise it, and treat only the untested-and-empty as unproven.`,
     `- Rows: ${busy || "none"}`,
-    empty.length ? `- Empty tables (${empty.length}): ${empty.slice(0, max).join(", ")}${empty.length > max ? " …" : ""}` : "- No empty tables.",
+    !empty.length ? "- No empty tables."
+      : exercised
+        ? [
+          `- Empty but exercised by tests — built and proven, nobody has used it yet (${proven.length}): ${list(proven) || "none"}`,
+          `- Empty and named by no test — unproven (${unproven.length}): ${list(unproven) || "none"}`,
+        ].join("\n")
+        : `- Empty tables (${empty.length}): ${list(empty)}`,
     d.compare && (d.compare.inCodeNotInDb.length || d.compare.inDbNotInCode.length)
       ? `- Schema drift: in code but not in the database: ${d.compare.inCodeNotInDb.join(", ") || "none"}; in the database but not in code: ${d.compare.inDbNotInCode.join(", ") || "none"}.`
       : "- Schema in code and database agree.",

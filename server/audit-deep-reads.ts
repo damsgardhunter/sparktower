@@ -10,7 +10,7 @@ import { modelFor, coachingDirectiveFor, type UserEntitlements } from "./entitle
 import type { RepoFile } from "./code-ingest";
 import type { RouteCoverage } from "./route-coverage";
 import { renderRouteCoverage } from "./route-coverage";
-import { renderDataShape, type DataShape } from "@shared/data-shape";
+import { renderDataShape, tablesExercisedByTests, type DataShape } from "@shared/data-shape";
 import { CAPABILITY_AREAS, sanitizeDeepRead, type CapabilityEntry, type CapabilityArea, type CapabilityDetail } from "@shared/capabilities";
 import { parseModelJson } from "./ai-json";
 import { isTest, summarizeTestInventory, summarizeMobileScreens, summarizeAuthEndpoints, summarizeEnforcementFilters, summarizeUntestedRoutes } from "./audit-evidence";
@@ -132,7 +132,8 @@ export async function deepReadArea(
   const fileText = chosen.map((f) => `### ${f.path}\n${f.content!.slice(0, maxChars)}${f.content!.length > maxChars ? "\n… (truncated)" : ""}`).join("\n\n");
   const cov = [
     RELEVANT_TO_COVERAGE.has(entry.area) && coverage ? [renderRouteCoverage(coverage, 40), rowsForArea(entry.area, coverage)].filter(Boolean).join("\n\n") : null,
-    opts.dataShape ? renderDataShape(opts.dataShape) : null,
+    // With the test files to hand, an empty table can be reported as unused rather than unproven.
+    opts.dataShape ? renderDataShape(opts.dataShape, 40, tablesExercisedByTests(files, opts.dataShape.tables.map((t) => t.name))) : null,
     // Every test file's path — all of them for the testing and CI areas, the ones named for this area elsewhere — so
     // "is this tested?" is answered from the repository, not from the handful of files whose full text fits.
     summarizeTestInventory(files.map((f) => f.path), testsAreTheSubject ? null : hint ?? null),

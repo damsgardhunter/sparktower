@@ -6,6 +6,7 @@
  * private or closed project, and only the founder reads the inbox.
  */
 import { describe, it, expect, afterAll } from "vitest";
+import { verifyEmail } from "../helpers/verify-email";
 import request from "supertest";
 import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
@@ -20,6 +21,8 @@ async function person(app: any, name: string) {
   const email = `inv-${name}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@example.test`;
   const res = await agent.post("/api/auth/register").set("x-forwarded-for", `198.51.100.${address++}`).send({ email, password: "Testpass123!", firstName: name });
   expect(res.status).toBe(201);
+  // Applying is a message to the founder, so it needs a confirmed address (server/email-verification.ts).
+  await verifyEmail(app, email, `198.51.110.${address}`);
   return { agent, id: res.body.id as string, email };
 }
 const application = {

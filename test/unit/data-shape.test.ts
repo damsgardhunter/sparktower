@@ -23,7 +23,8 @@ const shape: DataShape = {
 describe("renderDataShape", () => {
   it("leads with rows, names empty tables, and states drift", () => {
     const t = renderDataShape(shape)!;
-    expect(t).toMatch(/BUILT BUT UNUSED/);
+    // Unused, which is not the same as unbuilt — the distinction lives in data-shape-evidence.test.ts.
+    expect(t).toMatch(/An empty table means the feature is UNUSED, which is not the same as unbuilt/);
     expect(t).toMatch(/sessions 2,000,000~/);
     expect(t).toMatch(/Empty tables \(1\): path_pace/);
     expect(t).toMatch(/in code but not in the database: loopNotes; in the database but not in code: legacy_widgets/);

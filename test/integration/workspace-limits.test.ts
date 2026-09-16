@@ -7,6 +7,7 @@
  * list carries its limit on the running app.
  */
 import { describe, it, expect, afterAll } from "vitest";
+import { verifyEmail } from "../helpers/verify-email";
 import request from "supertest";
 import { sql } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
@@ -72,6 +73,8 @@ describe("limits on workspace, social, sprint, payment and outside-service write
     const res = await agent.post("/api/auth/register").set("x-forwarded-for", "198.51.100.246")
       .send({ email: `wl-${Date.now()}@example.test`, password: "Testpass123!", firstName: "Limit" });
     expect(res.status).toBe(201);
+    // Confirmed, so these calls reach the limiter under test rather than the email gate.
+    await verifyEmail(app, res.body.email, "198.51.110.246");
     const me = res.body.id as string;
     const project = (await agent.post("/api/projects").send({
       title: "Limit Test", description: "A project for pushing workspace writes past their limits.", category: "saas", goal: "ship_mvp", subcategory: "saas",
