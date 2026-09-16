@@ -125,7 +125,8 @@ export function reportError(error: unknown, context: ErrorContext = {}): ErrorRe
     userId: context.userId,
     stack: trimStack(typeof err?.stack === "string" ? err.stack : undefined),
     env: process.env.NODE_ENV ?? "development",
-    release: process.env.RELEASE_SHA || process.env.GITHUB_SHA || undefined,
+    // Whichever the host sets: RENDER_GIT_COMMIT on Render, GITHUB_SHA in CI.
+    release: process.env.RELEASE_SHA || process.env.RENDER_GIT_COMMIT || process.env.GITHUB_SHA || undefined,
   };
 
   const now = Date.now();

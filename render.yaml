@@ -1,0 +1,109 @@
+# How this app runs on Render.
+#
+# A blueprint rather than a page of clicks: the service, its build, its health
+# check and the full list of environment variables it needs live here, in the
+# repository, next to the code that reads them. A deploy someone configured by
+# hand is a deploy nobody else can reproduce.
+#
+# `sync: false` means "Render prompts for this and stores it; never read it from
+# the repo". Every secret is marked that way. Nothing here holds a value that
+# shouldn't be public.
+#
+# To use it: Render → New → Blueprint → point at this repository. Then fill in
+# the prompted values (docs/ops/custom-domain.md lists where each comes from).
+
+services:
+  - type: web
+    name: sparktower
+    runtime: node
+    plan: starter # the free plan sleeps, and a sleeping process runs no background jobs
+    region: oregon
+    branch: main
+    buildCommand: npm ci && npm run build
+    startCommand: node dist/index.cjs
+    # The app answers this before it has finished booting, on purpose, so a
+    # deploy isn't failed by a probe that arrives during startup work.
+    healthCheckPath: /_health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Render provides PORT; the server reads it (server/index.ts).
+      - key: NODE_VERSION
+        value: "20"
+
+      # --- Refuses to boot without these (server/secrets.ts) ----------------
+      - key: SESSION_SECRET
+        generateValue: true # 32+ random chars, held by Render, never in the repo
+      - key: MOBILE_TOKEN_SECRET
+        generateValue: true # deliberately a different value from SESSION_SECRET
+      - key: DATABASE_URL
+        sync: false
+      - key: AI_INTEGRATIONS_OPENAI_API_KEY
+        sync: false
+
+      # --- The site's own address. Everything below it depends on this ------
+      # Invite and verification links, whether the sitemap is indexable, the
+      # Stripe webhook registering itself, the CSRF trusted origins, and the
+      # Google OAuth callback.
+      - key: PUBLIC_URL
+        value: https://sparktower.app
+
+      # --- Who runs the place ------------------------------------------------
+      - key: PLATFORM_OWNER_EMAIL
+        sync: false
+      - key: PLATFORM_REVIEWER_EMAILS
+        sync: false
+
+      # --- Uploads ------------------------------------------------------------
+      # Production refuses to write uploads to the container's disk, which on
+      # Render is wiped every deploy. Both of these or no uploads.
+      - key: PRIVATE_OBJECT_DIR
+        sync: false # /<bucket>/<prefix>
+      - key: PUBLIC_OBJECT_SEARCH_PATHS
+        sync: false
+      - key: GCS_SERVICE_ACCOUNT_KEY
+        sync: false # the whole service-account JSON, or base64 of it
+      - key: GOOGLE_CLOUD_PROJECT
+        sync: false
+
+      # --- Sign in with Google ------------------------------------------------
+      # The redirect URI in the Google console must be exactly
+      # https://sparktower.app/api/auth/google/callback — the server prints the
+      # one it will use at boot.
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_IOS_CLIENT_ID
+        sync: false
+
+      # --- Money ---------------------------------------------------------------
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_PUBLISHABLE_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false # from the endpoint the app registers on first boot
+
+      # --- Mail. Until SPF and DKIM are published, leave these unset ----------
+      # (docs/ops/email-authentication.md — the domain's DMARC is p=quarantine,
+      # so unauthenticated mail is quarantined rather than delivered.)
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+
+      # --- Where a 500 goes besides stderr (server/error-reporting.ts) --------
+      - key: ERROR_WEBHOOK_URL
+        sync: false
+      # The deploy an error came from needs no variable here: Render sets
+      # RENDER_GIT_COMMIT on every service, and the reporter reads it.
+
+      # --- Optional ------------------------------------------------------------
+      - key: GITHUB_TOKEN
+        sync: false # the code-audit feature reads repositories
+      - key: PRINTFUL_API_KEY
+        sync: false
+      - key: PRINTFUL_STORE_ID
+        sync: false

@@ -18,6 +18,7 @@ import { createApp, log } from "./app";
 import { warnIfSharedTokenSecret } from "./mobile-auth";
 import { assertSecretsAtBoot } from "./secrets";
 import { watchProcessErrors } from "./error-reporting";
+import { storageCredentialMode } from "./replit_integrations/object_storage/objectStorage";
 
 declare module "http" {
   interface IncomingMessage {
@@ -80,6 +81,16 @@ let appReady = false;
   // timer so a toggle reaches every instance rather than only the one that
   // served it — this deploys to autoscale.
   warnIfSharedTokenSecret();
+  /*
+   * Which credentials uploads will use, said once at boot. Storage failures
+   * surface much later and far away — an avatar that won't save — and the
+   * first question is always "which credentials did it even try".
+   */
+  if (process.env.PRIVATE_OBJECT_DIR) {
+    console.log(`[storage] bucket ${process.env.PRIVATE_OBJECT_DIR} via ${storageCredentialMode()} credentials`);
+  } else if (process.env.NODE_ENV === "production") {
+    console.warn("[storage] PRIVATE_OBJECT_DIR is not set: uploads will fail. Production does not fall back to local disk.");
+  }
   await loadSurfaceFlags();
   startSurfaceFlagRefresh();
 

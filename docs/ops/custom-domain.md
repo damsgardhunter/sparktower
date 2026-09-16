@@ -35,7 +35,7 @@ Two things worth understanding before you touch anything:
 
 ## 0. The production build, already tested (2026-09-16)
 
-Before any of this, the exact artefact Replit will run was built and booted
+Before any of this, the exact artefact Render will run was built and booted
 locally against the real `.env`, on a spare port, as `NODE_ENV=production`:
 
 ```sh
@@ -76,20 +76,37 @@ production:
 
 The build runs. What follows is entirely about hosting and DNS.
 
-## 1. Deploy the app somewhere first
+## 1. Deploy to Render
 
-`.replit` already describes the deployment: autoscale, `npm run build`, then
-`node ./dist/index.cjs`, serving `dist/public`. Replit → **Deploy** →
-**Autoscale**.
+The repository carries a `.replit` file because that is where it was written.
+It is **not** where this deploys: the host is Render, and
+[`render.yaml`](../../render.yaml) in the repository root describes the service
+— build, start command, health check and every environment variable it needs —
+so the deploy is reproducible instead of being a page of clicks somebody once
+did.
 
-Before the first boot, set the production secrets — the server *refuses to
-start* without some of them, which is the correct behaviour and an unhelpful
-surprise at 2am. The full list is [release-checklist.md §2](../release-checklist.md);
-the ones that stop the boot are:
+Render → **New → Blueprint** → point it at this repository. It reads
+`render.yaml` and prompts for the values marked `sync: false`.
+
+Two requirements that come from the code, not from Render:
+
+- **It must be a Web Service on a paid instance, not the free one.** Boot starts
+  five background loops (backing, analytics, promotions, moderation, retention)
+  and the owner's console holds an open SSE stream at
+  `/api/admin/analytics/live`. A free instance sleeps when idle, and a sleeping
+  process runs no jobs.
+- **Uploads need a bucket before launch, not after.** Render's disk is wiped on
+  every deploy, and production deliberately refuses to fall back to it
+  (`server/replit_integrations/object_storage/objectStorage.ts`) rather than
+  writing someone's avatar somewhere it will vanish. Step 1b.
+
+The server *refuses to start* without some of these, which is correct and an
+unhelpful surprise at 2am. The full list is
+[release-checklist.md §2](../release-checklist.md); the ones that stop the boot:
 
 ```
-SESSION_SECRET              32+ random chars, used nowhere else
-MOBILE_TOKEN_SECRET         a different one, same rules
+SESSION_SECRET              32+ random chars, used nowhere else   (render.yaml generates it)
+MOBILE_TOKEN_SECRET         a different one, same rules           (generated too)
 DATABASE_URL                the production Postgres
 AI_INTEGRATIONS_OPENAI_API_KEY
 PLATFORM_OWNER_EMAIL        the account that gets the owner console
@@ -101,20 +118,60 @@ Run the migrations against production **before** the new build serves traffic:
 DATABASE_URL="$PROD_DB" npm run db:migrate
 ```
 
-**Know it worked:** the deployment's own `*.replit.app` URL answers.
+**Know it worked:** the service's own `*.onrender.com` URL answers.
 
 ```sh
-curl -s -o /dev/null -w '%{http_code}\n' https://<your-deployment>.replit.app/_health   # 200
-curl -s -o /dev/null -w '%{http_code}\n' https://<your-deployment>.replit.app/api/auth/user  # 401
+curl -s -o /dev/null -w '%{http_code}\n' https://sparktower.onrender.com/_health      # 200
+curl -s -o /dev/null -w '%{http_code}\n' https://sparktower.onrender.com/api/auth/user # 401
 ```
 
 A 401 there is the right answer: the API is mounted and guarding itself.
 
+## 1b. The uploads bucket
+
+In Google Cloud: create a bucket, then a service account with **Storage Object
+Admin** on it, and download a JSON key.
+
+```
+PRIVATE_OBJECT_DIR          /<bucket>/private        e.g. /sparktower-uploads/private
+PUBLIC_OBJECT_SEARCH_PATHS  /<bucket>/public
+GCS_SERVICE_ACCOUNT_KEY     the whole JSON key, or base64 of it
+GOOGLE_CLOUD_PROJECT        the project id
+```
+
+Base64 is there because dashboards mangle pasted multi-line values, and an
+escaped `\n` in the private key fails signing with an error that names nothing
+useful — the key is repaired on read either way
+(`parseServiceAccountKey`).
+
+Until this moved off Replit, the storage client authenticated through a sidecar
+at `127.0.0.1:1106` that only exists inside that platform. On any other host
+the credentials resolved to nothing, every upload failed, and the signer's
+advice was "make sure you're running on Replit".
+
+**Know it worked:** the boot log says which credentials it will use —
+
+```
+[storage] bucket /sparktower-uploads/private via service-account credentials
+```
+
+— and then change your avatar on the deployed site and reload. If
+`PRIVATE_OBJECT_DIR` is missing the log says so outright, because production
+does not fall back to disk.
+
 ## 2. Link the domain to the deployment
 
-In Replit: **Deployments → Settings → Link a domain →** `sparktower.app`. It
-gives you two records — an **A** record for the apex and a **TXT** record that
-proves you own it.
+In Render: **your service → Settings → Custom Domains → Add** `sparktower.app`,
+and again for `www.sparktower.app`. Render then tells you what to publish —
+for an apex domain that is an **A record pointing at a Render IP** (they print
+the current one; don't copy it from anywhere else), and for `www` a **CNAME to
+your `*.onrender.com` hostname**. Render verifies by seeing the records
+resolve, so there is usually no separate TXT token.
+
+This is the reason the apex needs an A record at all: a CNAME is not allowed at
+the zone apex, and GoDaddy does not flatten one. Hosts that only give you a
+CNAME (Railway, Heroku) force the apex onto a DNS provider that does — Render
+giving an IP is what keeps this simple.
 
 In GoDaddy: **My Products → Domains → sparktower.app → DNS → Manage Zones.**
 
@@ -125,7 +182,7 @@ In GoDaddy: **My Products → Domains → sparktower.app → DNS → Manage Zone
    will not let you simply delete a record it manages.
 
    **Edit it, don't delete it.** Pencil icon on that row → replace the value
-   with the IP Replit gave you → Save. GoDaddy warns that this disconnects the
+   with the IP Render gave you → Save. GoDaddy warns that this disconnects the
    Website Builder site; that is exactly what you want, and the row becomes an
    ordinary A record afterwards.
 
@@ -137,13 +194,17 @@ In GoDaddy: **My Products → Domains → sparktower.app → DNS → Manage Zone
    Do not leave both: a zone with GoDaddy's parked IPs *and* yours resolves to
    the parked page for some visitors and to your app for others, depending on
    which record their resolver happened to pick.
-2. **Add** `A` · name `@` · value = the IP Replit gave you · TTL 600 (GoDaddy
-   defaults to 1 hour; 10 minutes while you are still changing things).
-3. **Add** `TXT` · name = exactly what Replit printed (often `@` or
-   `_replit-verify`) · value = the token it gave you.
-4. **`www`:** keep the existing `CNAME www → sparktower.app`. That makes www
-   resolve to the same place, and the app serves both. If you would rather www
-   *redirect*, add it as a second linked domain in Replit and let it 301.
+2. That edited row **is** the A record: name `@`, value = Render's IP, TTL 600
+   (GoDaddy defaults to 1 hour; 10 minutes while you are still changing
+   things).
+3. **Change the `www` row.** It is currently `CNAME www → sparktower.app`.
+   Point it at Render instead: `CNAME www → sparktower.onrender.com`. Render
+   then serves www itself and redirects it to the apex, which is what you want
+   — a CNAME to the apex would work too, but Render can only issue a
+   certificate for a hostname that resolves to it.
+4. **If Render asks for a TXT record**, add it with the name exactly as printed
+   (`@`, or a bare prefix like `_render`) — GoDaddy appends the domain itself,
+   so entering the full hostname produces `_render.sparktower.app.sparktower.app`.
 
 5. **Lower the TTL while you work.** Every row in the zone is at GoDaddy's
    default 1 Hour, which is also how long a mistake sticks around. Set the `A @`
@@ -159,11 +220,11 @@ DNS is not instant. GoDaddy usually publishes within a few minutes; resolvers
 elsewhere can hold the old answer for as long as the old TTL. Watch it:
 
 ```sh
-dig +short A sparktower.app @1.1.1.1      # the IP Replit gave you, and only that
+dig +short A sparktower.app @1.1.1.1      # the IP Render gave you, and only that
 dig +short TXT sparktower.app @1.1.1.1    # the verification token
 ```
 
-Then wait for Replit to say **Verified** and to finish issuing the TLS
+Then wait for Render to say **Verified** and to finish issuing the TLS
 certificate — that is automatic, and it cannot start until the A record points
 at them.
 
@@ -313,8 +374,8 @@ unauthenticated until there is a row in it.
 | Symptom | Cause, nearly always |
 |---|---|
 | Parked page still appears for some people | the old A records are still in the zone, or a resolver is holding the old TTL |
-| Replit won't verify the domain | the TXT record's *name* is wrong — GoDaddy appends the domain, so enter `@` or the bare prefix, never the full hostname |
-| Certificate never issues | the A record doesn't point at Replit yet, or an AAAA record left behind points somewhere else |
+| Render won't verify the domain | the TXT record's *name* is wrong — GoDaddy appends the domain, so enter `@` or the bare prefix, never the full hostname |
+| Certificate never issues | the A record doesn't point at Render yet, or an AAAA record left behind points somewhere else |
 | Google sign-in returns to a signed-out page | `PUBLIC_URL` isn't set, or the redirect URI in the Google console doesn't match it exactly |
 | Everyone was signed out after the switch | expected: session cookies are host-only, so moving hosts starts fresh sessions |
 | Mail lands in spam | SPF/DKIM aren't published yet, and DMARC is already at `p=quarantine` |

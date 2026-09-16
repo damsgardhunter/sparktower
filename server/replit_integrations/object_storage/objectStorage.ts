@@ -15,24 +15,98 @@ import {
 
 const REPLIT_SIDECAR_ENDPOINT = "http://127.0.0.1:1106";
 
-// The object storage client is used to interact with the object storage service.
-export const objectStorageClient = new Storage({
-  credentials: {
-    audience: "replit",
-    subject_token_type: "access_token",
-    token_url: `${REPLIT_SIDECAR_ENDPOINT}/token`,
-    type: "external_account",
-    credential_source: {
-      url: `${REPLIT_SIDECAR_ENDPOINT}/credential`,
-      format: {
-        type: "json",
-        subject_token_field_name: "access_token",
+/**
+ * How this process proves to Google Cloud Storage that it's allowed in.
+ *
+ * This used to have one answer: a sidecar on localhost:1106 that only exists
+ * inside Replit. Anywhere else the credentials resolved to nothing, uploads
+ * failed, and the signer said "make sure you're running on Replit" — which is
+ * unhelpful advice to a container on Render. Since production refuses the
+ * local-disk fallback on purpose (see `isLocalFallback` below), that made every
+ * avatar, cover image, artifact and merch render a failure off Replit.
+ *
+ * So there are three answers now, chosen in this order:
+ *
+ *  - `GCS_SERVICE_ACCOUNT_KEY`: the JSON key for a service account, as one
+ *    environment variable. Base64 is accepted because most dashboards mangle
+ *    pasted multi-line JSON. This is what a normal host uses.
+ *  - Application Default Credentials, when `GOOGLE_APPLICATION_CREDENTIALS`
+ *    points at a key file, or when running on Google's own infrastructure.
+ *  - Replit's sidecar, when this really is running on Replit.
+ *
+ * The mode is decided once and named, because "uploads don't work" is a
+ * miserable thing to debug without knowing which set of credentials was tried.
+ */
+export type StorageCredentialMode = "service-account" | "default" | "replit-sidecar";
+
+export function storageCredentialMode(env: NodeJS.ProcessEnv = process.env): StorageCredentialMode {
+  if (env.GCS_SERVICE_ACCOUNT_KEY?.trim()) return "service-account";
+  if (env.GOOGLE_APPLICATION_CREDENTIALS?.trim() || env.GOOGLE_CLOUD_PROJECT?.trim()) return "default";
+  // REPL_ID is set inside every Replit container; the sidecar only exists there.
+  if (env.REPL_ID || env.REPLIT_DEPLOYMENT || env.REPLIT_DOMAINS) return "replit-sidecar";
+  return "default";
+}
+
+/** The service-account JSON, however it was pasted in: raw, or base64. */
+export function parseServiceAccountKey(raw: string): { client_email?: string; private_key?: string; project_id?: string } {
+  const text = raw.trim().startsWith("{") ? raw.trim() : Buffer.from(raw.trim(), "base64").toString("utf8");
+  const key = JSON.parse(text);
+  if (!key.client_email || !key.private_key) {
+    throw new Error("GCS_SERVICE_ACCOUNT_KEY is missing client_email or private_key — is it the whole JSON key file?");
+  }
+  // A key pasted through a form often arrives with its newlines escaped.
+  if (typeof key.private_key === "string") key.private_key = key.private_key.replace(/\\n/g, "\n");
+  return key;
+}
+
+function buildStorageClient(): Storage {
+  const mode = storageCredentialMode();
+  if (mode === "service-account") {
+    const key = parseServiceAccountKey(process.env.GCS_SERVICE_ACCOUNT_KEY!);
+    return new Storage({
+      projectId: process.env.GOOGLE_CLOUD_PROJECT || key.project_id,
+      credentials: { client_email: key.client_email, private_key: key.private_key },
+    });
+  }
+  if (mode === "replit-sidecar") {
+    return new Storage({
+      credentials: {
+        audience: "replit",
+        subject_token_type: "access_token",
+        token_url: `${REPLIT_SIDECAR_ENDPOINT}/token`,
+        type: "external_account",
+        credential_source: {
+          url: `${REPLIT_SIDECAR_ENDPOINT}/credential`,
+          format: { type: "json", subject_token_field_name: "access_token" },
+        },
+        universe_domain: "googleapis.com",
       },
-    },
-    universe_domain: "googleapis.com",
-  },
-  projectId: "",
-});
+      projectId: "",
+    });
+  }
+  return new Storage({ projectId: process.env.GOOGLE_CLOUD_PROJECT || undefined });
+}
+
+/*
+ * Built on first use rather than at import: a bad key should fail when somebody
+ * uploads something, with a message about the key, not at boot in a test run
+ * that never touches storage.
+ */
+let client: Storage | null = null;
+export function getObjectStorageClient(): Storage {
+  if (!client) client = buildStorageClient();
+  return client;
+}
+/** Test seam: credentials are read once, and tests change the environment. */
+export function resetObjectStorageClient(): void { client = null; }
+
+/**
+ * Kept as a property bag so existing callers (`objectStorageClient.bucket(…)`)
+ * keep working while the client itself is built lazily.
+ */
+export const objectStorageClient = {
+  bucket: (name: string) => getObjectStorageClient().bucket(name),
+} as unknown as Storage;
 
 const LOCAL_OBJECT_ROOT = process.env.LOCAL_OBJECT_ROOT || path.join(process.cwd(), "local_objects");
 
@@ -170,8 +244,9 @@ export class ObjectStorageService {
         return `/local/${path.relative(process.cwd(), LOCAL_OBJECT_ROOT)}`;
       }
       throw new Error(
-        "PRIVATE_OBJECT_DIR not set. Create a bucket in 'Object Storage' " +
-          "tool and set PRIVATE_OBJECT_DIR env var."
+        "PRIVATE_OBJECT_DIR is not set, so there is nowhere to put uploads. " +
+          "Set it to /<bucket>/<prefix> and give the process credentials for that " +
+          "bucket (GCS_SERVICE_ACCOUNT_KEY). See docs/ops/custom-domain.md."
       );
     }
     return dir;
@@ -321,8 +396,9 @@ export class ObjectStorageService {
     const privateObjectDir = this.getPrivateObjectDir();
     if (!privateObjectDir) {
       throw new Error(
-        "PRIVATE_OBJECT_DIR not set. Create a bucket in 'Object Storage' " +
-          "tool and set PRIVATE_OBJECT_DIR env var."
+        "PRIVATE_OBJECT_DIR is not set, so there is nowhere to put uploads. " +
+          "Set it to /<bucket>/<prefix> and give the process credentials for that " +
+          "bucket (GCS_SERVICE_ACCOUNT_KEY). See docs/ops/custom-domain.md."
       );
     }
 
@@ -536,6 +612,9 @@ function parseObjectPath(path: string): {
   };
 }
 
+/** GCS names the operations differently from the HTTP methods the callers pass. */
+const SIGNED_ACTIONS = { GET: "read", PUT: "write", DELETE: "delete", HEAD: "read" } as const;
+
 async function signObjectURL({
   bucketName,
   objectName,
@@ -547,6 +626,24 @@ async function signObjectURL({
   method: "GET" | "PUT" | "DELETE" | "HEAD";
   ttlSec: number;
 }): Promise<string> {
+  /*
+   * Off Replit, sign it ourselves. V4 signing needs a private key, which is
+   * exactly what the service-account mode has — so this is the same URL the
+   * sidecar would have handed back, produced locally and without a round trip.
+   *
+   * Default credentials (a workload identity on Google's own infrastructure)
+   * have no private key to sign with; the client falls back to the IAM
+   * signBlob API, which works when the service account has the
+   * `iam.serviceAccountTokenCreator` role. If it doesn't, the error says so.
+   */
+  if (storageCredentialMode() !== "replit-sidecar") {
+    const [url] = await getObjectStorageClient()
+      .bucket(bucketName)
+      .file(objectName)
+      .getSignedUrl({ version: "v4", action: SIGNED_ACTIONS[method], expires: Date.now() + ttlSec * 1000 });
+    return url;
+  }
+
   const request = {
     bucket_name: bucketName,
     object_name: objectName,
