@@ -53,6 +53,22 @@ export PROD_DB="postgresql://…"                   # from Replit → Secrets �
       reads is listed there. A deploy that needs a variable nobody wrote down
       fails at 2am.
 
+## 1b. Close the gate
+
+- [ ] **Make the CI gate bind for everyone, owner included.** Until now an
+      owner's push lands on `main` without the seven checks running first
+      (`docs/ci-gate.md`). Once other people depend on the site, that stops:
+
+      ```sh
+      gh api -X PUT repos/{owner}/{repo}/branches/main/protection/enforce_admins
+      node scripts/check-branch-protection.mjs --launch   # must exit 0
+      ```
+
+      From then on every change is a branch and a pull request that merges when
+      the checks are green. To undo it in an emergency:
+      `gh api -X DELETE repos/{owner}/{repo}/branches/main/protection/enforce_admins`
+      — and say so in the release log, because it reopens the door this closed.
+
 ## 2. Production secrets (Replit → Secrets)
 
 - [ ] `SESSION_SECRET` is a real random value, at least 32 characters, used

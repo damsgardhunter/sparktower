@@ -175,6 +175,9 @@ export function summarizeEnforcementFilters(files: { path: string; content?: str
   const lines = rows.slice(0, ENFORCEMENT_MAX).map((r) => `${r.path}  (${r.hits} line${r.hits === 1 ? "" : "s"})  e.g. ${r.sample}`);
   return `HIDDEN-CONTENT ENFORCEMENT IN READS (${rows.length} file${rows.length === 1 ? "" : "s"} filter on hidden or suspended, read off the source)\n${lines.join("\n")}${rows.length > ENFORCEMENT_MAX ? `\n… ${rows.length - ENFORCEMENT_MAX} more` : ""}`;
 }
+/** Path segments too common to identify a route on their own. */
+const COMMON_SEGMENTS = new Set(["api", "projects", "project", "me", "admin", "auth", "v1"]);
+
 /** Files listed before the enforcement summary is trimmed. */
 const ENFORCEMENT_MAX = 15;
 
@@ -223,11 +226,29 @@ export function summarizeUntestedRoutes(
   }
   const sweptBy = (path: string) => sweeps.find((s) => s.pattern.test(path))?.file ?? null;
 
-  // `/api/projects/:id/invites` as a test writes it: `/api/projects/${project.id}/invites`.
-  const mentions = (path: string) => {
+  /*
+   * Two ways a test can name a route, and both count.
+   *
+   * Written out, with its parameters filled in: `/api/projects/${id}/invites`.
+   * Or built from parts — a table of resources looped over, `/api/projects/${id}/${seg}/${item.id}` —
+   * where the path never appears whole. The second is still a test of that
+   * route, and calling it untested is a claim about this check rather than the
+   * suite, so a file that carries all of a path's own words counts too.
+   */
+  const mentions = (path: string): "named" | "in parts" | "no" => {
+    const segments = path.split("/").filter((s) => s && !s.startsWith(":"));
     const pattern = path.split("/").map((seg) => (seg.startsWith(":") ? "[^/`\'\"]+" : seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).join("/");
-    const re = new RegExp(pattern);
-    return tests.some((content) => re.test(content));
+    const whole = new RegExp(pattern);
+    // The distinctive words of the path: "api" and "projects" say nothing on their own.
+    const distinctive = segments.filter((s) => !COMMON_SEGMENTS.has(s));
+    const eachWord = distinctive.length
+      ? distinctive.map((s) => new RegExp(`\\b${s.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&")}\\b`))
+      : null;
+    if (tests.some((content) => whole.test(content))) return "named";
+    // Every word of the path in one test file, but never the path itself: a table-driven test building
+    // it from variables. Likely covered — not provably, so it's reported apart from the untested.
+    if (eachWord && tests.some((content) => eachWord.every((re) => re.test(content)))) return "in parts";
+    return "no";
   };
 
   // By path, not by method: a test that names `/api/feed` has named it, and claiming its POST
@@ -240,8 +261,9 @@ export function summarizeUntestedRoutes(
     at.privileged ||= !!r.privileged;
     paths.set(r.path, at);
   }
-  const untested = [...paths.entries()].filter(([path]) => !mentions(path) && !sweptBy(path));
-  const swept = [...paths.keys()].filter((path) => !mentions(path) && sweptBy(path));
+  const untested = [...paths.entries()].filter(([path]) => mentions(path) === "no" && !sweptBy(path));
+  const inParts = [...paths.entries()].filter(([path]) => mentions(path) === "in parts" && !sweptBy(path));
+  const swept = [...paths.keys()].filter((path) => mentions(path) !== "named" && sweptBy(path));
   const rank = ([, at]: typeof untested[number]) => (at.privileged ? 0 : at.write ? 1 : 2);
   untested.sort((a, b) => rank(a) - rank(b) || a[0].localeCompare(b[0]));
   const writes = untested.filter(([, at]) => at.write).length;
@@ -249,7 +271,11 @@ export function summarizeUntestedRoutes(
     ? ` ${swept.length} more are driven by a sweep that names no paths (${[...new Set(sweeps.map((s) => s.file))].join(", ")}) and are not counted as untested.`
     : "";
   const head = `PATHS NO TEST MENTIONS (${untested.length} of ${paths.size}; ${writes} of them write. A mention isn't a test, but a path no test names is untested.${sweepNote})`;
-  if (!untested.length) return `${head}\n(every path is named by at least one test)`;
   const line = ([path, at]: typeof untested[number]) => `${[...at.methods].sort().join(", ")} ${path}${at.privileged ? "  privileged" : at.write ? "  write" : ""}  [${at.file}]`;
-  return `${head}\n${untested.slice(0, max).map(line).join("\n")}${untested.length > max ? `\n… ${untested.length - max} more` : ""}`;
+  const clip = (list: typeof untested) => `${list.slice(0, max).map(line).join("\n")}${list.length > max ? `\n… ${list.length - max} more` : ""}`;
+  const first = untested.length ? `${head}\n${clip(untested)}` : `${head}\n(every path is named by at least one test)`;
+  const second = inParts.length
+    ? `\n\nPATHS NAMED ONLY IN PARTS (${inParts.length}; a test file carries every word of the path but never the path itself — usually a table-driven test building it from variables. Check before calling these untested.)\n${clip(inParts.sort((a, b) => rank(a) - rank(b) || a[0].localeCompare(b[0])))}`
+    : "";
+  return first + second;
 }

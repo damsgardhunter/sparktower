@@ -21,15 +21,22 @@ crashes on someone else's machine, long after the tag is pushed. Publishing is
 separate (`.github/workflows/publish-packages.yml`, tag-driven) and re-runs the
 same builds before it releases anything.
 
-Settings on `main`: required checks as above; branches must be up to date
-before merging is **off** (pushes land directly on main today); enforce for
-administrators is **off**, so the owner can push a fix through a red gate
-when the gate itself is what's broken — and is expected to say so in the
-release log.
+## What is actually enforced today
 
-**Verifying it.** `node scripts/check-branch-protection.mjs` reads the
-protection through `gh` and fails if a required check is missing. CI can't
-run it: reading branch protection needs an administrator's token.
+Verified against GitHub on 16 September 2026 (`gh api repos/{owner}/{repo}/branches/main/protection`):
+
+| Setting | State | What that means |
+|---|---|---|
+| Required checks | the 7 above | A pull request can't merge until all seven are green. |
+| Enforce for administrators | **off** | **An owner's push to `main` lands without the checks running first.** Every push today is one of those: CI reports afterwards, in the Actions tab. |
+| Branch up to date before merge (`strict`) | off | A PR may merge on checks that ran against a slightly older `main`. Deliberate: with one person shipping, the risk is small and it avoids rebasing every open PR on each push. |
+| Force pushes / branch deletion | off | History can't be rewritten or the branch removed. |
+
+So the honest description is: **the gate binds pull requests, and advises the owner.** A contributor cannot merge anything red. The owner can — and does, on every direct push — which is the right trade while one person ships and the wrong one once other people depend on the site.
+
+**Before real users**, enforcement for administrators goes on, and everything moves through pull requests. It's a step in `docs/release-checklist.md` with the command, and `node scripts/check-branch-protection.mjs --launch` fails until it's done.
+
+**Verifying it.** `node scripts/check-branch-protection.mjs` reads the protection through `gh` and fails on a missing required check, on force pushes being allowed, or on `main` being deletable; `--launch` also fails while administrators are exempt. CI can't run either: reading branch protection needs an administrator's token, which CI's own token isn't.
 
 **Why there is no ratchet.** Type errors used to be compared with a
 committed baseline. The baseline is gone and the count is zero; a new
