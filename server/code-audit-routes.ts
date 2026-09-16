@@ -413,7 +413,13 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
       stack: digest.signals.stack,
       routeCount: digest.signals.routes.length,
       routes: digest.signals.routes.slice(0, 60),
-      dataModels: digest.signals.dataModels.slice(0, 40),
+      /*
+       * The count is the repository's, the list is what fits. They were the
+       * same field, so a project with a hundred tables was shown as having
+       * forty models — the cap reported as a fact about the code.
+       */
+      modelCount: digest.signals.dataModels.length,
+      dataModels: digest.signals.dataModels.slice(0, 120),
       testFiles: digest.signals.testFiles,
       testFrameworks: digest.signals.testFrameworks,
       hasCi: digest.signals.hasCi,

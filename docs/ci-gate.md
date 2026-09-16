@@ -37,3 +37,13 @@ error is a red build.
 
 **Dependabot** opens weekly, grouped upgrade PRs (production, development,
 mobile, actions), so the `dependencies` job is rarely the first to notice.
+
+## Privileged routes
+
+`test/integration/admin-guards.test.ts` drives every `/api/admin/` route the scanner finds — signed out, as an ordinary account, and as a reviewer whose session never passed a second factor — and fails on any that answers. It's built from the scan, not a list, so a new admin route is covered the day it's written and one that loses its guard fails here.
+
+One route answers any signed-in caller on purpose: `GET /api/admin/analytics/access`, which returns whether *you* are the owner so the client knows whether to offer the console. It's written down in the test with that reason, and the test also checks the exception is still real.
+
+Because the sweep builds its URLs from the scan, it names no path — so it declares `// covers-routes: ^/api/admin/`, which the audit's untested-route summary reads (`server/audit-evidence.ts`). Without that, routes it covers would keep coming back as findings.
+
+`test/integration/admin-console.test.ts` then drives those screens as the people they're for. Two aren't driven because calling them reaches outward (the promotions refreshes), and the live analytics screen is opened as the event stream it is rather than awaited like a request — awaiting it hangs, which is probably why nothing had driven it before.

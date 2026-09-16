@@ -203,6 +203,26 @@ export function summarizeUntestedRoutes(
   const tests = files.filter((f) => isTest(f.path) && f.content).map((f) => f.content!);
   if (!tests.length) return null;
 
+  /*
+   * Some tests drive routes they never name: a sweep that reads the route scan
+   * and calls every admin path proves more about those paths than any literal
+   * string, and mentions nothing. Such a test says so with a line of its own —
+   *
+   *   // covers-routes: ^/api/admin/
+   *
+   * — and the paths it matches count as covered, credited to that file. The
+   * declaration is only as good as the test making it, which is the same trust
+   * a mention asks for.
+   */
+  const sweeps: { pattern: RegExp; file: string }[] = [];
+  for (const f of files) {
+    if (!isTest(f.path) || !f.content) continue;
+    for (const m of f.content.matchAll(/\/\/\s*covers-routes:\s*(\S+)/g)) {
+      try { sweeps.push({ pattern: new RegExp(m[1]), file: f.path }); } catch { /* an unusable pattern covers nothing */ }
+    }
+  }
+  const sweptBy = (path: string) => sweeps.find((s) => s.pattern.test(path))?.file ?? null;
+
   // `/api/projects/:id/invites` as a test writes it: `/api/projects/${project.id}/invites`.
   const mentions = (path: string) => {
     const pattern = path.split("/").map((seg) => (seg.startsWith(":") ? "[^/`\'\"]+" : seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).join("/");
@@ -220,11 +240,15 @@ export function summarizeUntestedRoutes(
     at.privileged ||= !!r.privileged;
     paths.set(r.path, at);
   }
-  const untested = [...paths.entries()].filter(([path]) => !mentions(path));
+  const untested = [...paths.entries()].filter(([path]) => !mentions(path) && !sweptBy(path));
+  const swept = [...paths.keys()].filter((path) => !mentions(path) && sweptBy(path));
   const rank = ([, at]: typeof untested[number]) => (at.privileged ? 0 : at.write ? 1 : 2);
   untested.sort((a, b) => rank(a) - rank(b) || a[0].localeCompare(b[0]));
   const writes = untested.filter(([, at]) => at.write).length;
-  const head = `PATHS NO TEST MENTIONS (${untested.length} of ${paths.size}; ${writes} of them write. A mention isn't a test, but a path no test names is untested.)`;
+  const sweepNote = swept.length
+    ? ` ${swept.length} more are driven by a sweep that names no paths (${[...new Set(sweeps.map((s) => s.file))].join(", ")}) and are not counted as untested.`
+    : "";
+  const head = `PATHS NO TEST MENTIONS (${untested.length} of ${paths.size}; ${writes} of them write. A mention isn't a test, but a path no test names is untested.${sweepNote})`;
   if (!untested.length) return `${head}\n(every path is named by at least one test)`;
   const line = ([path, at]: typeof untested[number]) => `${[...at.methods].sort().join(", ")} ${path}${at.privileged ? "  privileged" : at.write ? "  write" : ""}  [${at.file}]`;
   return `${head}\n${untested.slice(0, max).map(line).join("\n")}${untested.length > max ? `\n… ${untested.length - max} more` : ""}`;

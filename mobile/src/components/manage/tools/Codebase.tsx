@@ -250,7 +250,7 @@ export function CodebaseTool({ projectId, repoUrl, isOwner }: { projectId: strin
             {([
               { icon: "document-text-outline", label: "lines of code", value: (scan.linesOfCode || 0).toLocaleString() },
               { icon: "git-branch-outline", label: "routes found", value: scan.routeCount ?? 0 },
-              { icon: "server-outline", label: "data models", value: scan.dataModels?.length ?? 0 },
+              { icon: "server-outline", label: "data models", value: scan.modelCount ?? scan.dataModels?.length ?? 0 },
               { icon: "flask-outline", label: "test files", value: scan.testFiles ?? 0 },
             ] as { icon: IconName; label: string; value: string | number }[]).map((s) => (
               <View key={s.label} style={{ width: "48%", flexGrow: 1, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceRaised, borderRadius: radius.sm, padding: spacing.sm + 2 }}>
@@ -420,7 +420,7 @@ export function CodebaseTool({ projectId, repoUrl, isOwner }: { projectId: strin
             </Collapsible>
           )}
           {scan.dataModels?.length > 0 && (
-            <Collapsible title="Data models" count={scan.dataModels.length} icon="server-outline">
+            <Collapsible title="Data models" count={scan.modelCount ?? scan.dataModels.length} icon="server-outline">
               <Row wrap gap={4}>{scan.dataModels.map((m: any, i: number) => <Tag key={i} label={m.name} color={colors.textSecondary} />)}</Row>
             </Collapsible>
           )}

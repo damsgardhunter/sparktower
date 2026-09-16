@@ -649,7 +649,7 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
               </div>
               <Stat icon={FileCode} label="lines" value={(scan.linesOfCode || 0).toLocaleString()} />
               <Stat icon={RouteIcon} label="routes" value={scan.routeCount ?? 0} />
-              <Stat icon={Database} label="models" value={scan.dataModels?.length ?? 0} />
+              <Stat icon={Database} label="models" value={scan.modelCount ?? scan.dataModels?.length ?? 0} />
               <Stat icon={FlaskConical} label="test files" value={scan.testFiles ?? 0} />
             </div>
             <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
@@ -907,7 +907,7 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
                 )}
 
                 {scan.dataModels?.length > 0 && (
-                  <Group title="Data models" icon={Database} count={scan.dataModels.length}>
+                  <Group title="Data models" icon={Database} count={scan.modelCount ?? scan.dataModels.length}>
                     <li className="py-2 flex flex-wrap gap-1">
                       {scan.dataModels.map((m: any, i: number) => <Pill key={i} className="border-black/[0.08] dark:border-white/10 font-mono font-normal text-[10px]">{m.name}</Pill>)}
                     </li>

@@ -190,6 +190,27 @@ describe("the test inventory a close read gets", () => {
     // /api/feed is named by a test, so both its methods count as named: the claim is about paths.
     expect(out).not.toContain("/api/feed");
     expect(out).not.toContain("/api/projects/:id/invites");
+
+    /*
+     * A sweep drives routes it never names — it reads the route scan and calls
+     * each one — so it declares what it covers. Without this the summary keeps
+     * reporting swept routes as untested, which is how a covered admin surface
+     * comes back as a finding.
+     */
+    const withSweep = summarizeUntestedRoutes([
+      ...files,
+      { path: "test/integration/admin-guards.test.ts", content: "// covers-routes: ^/api/admin/\nconst routes = scan();" },
+    ], rows)!;
+    expect(withSweep).not.toContain("/api/admin/users/:id");
+    expect(withSweep).toMatch(/^PATHS NO TEST MENTIONS \(0 of 3;/);
+    expect(withSweep).toContain("driven by a sweep that names no paths (test/integration/admin-guards.test.ts)");
+
+    // The declaration only covers what it says: a sweep of one prefix says nothing about another.
+    const narrow = summarizeUntestedRoutes([
+      ...files,
+      { path: "test/integration/other.test.ts", content: "// covers-routes: ^/api/nothing-like-this/" },
+    ], rows)!;
+    expect(narrow).toContain("DELETE /api/admin/users/:id");
     expect(out).not.toContain("/api/retired");
     // Privileged routes lead: an untested admin route is the one to look at first.
     expect(out.split("\n")[1]).toContain("/api/admin/users/:id");
