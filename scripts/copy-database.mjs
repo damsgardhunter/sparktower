@@ -73,6 +73,20 @@ async function inspect(url, label) {
   const pool = new Pool({ connectionString: url, connectionTimeoutMillis: 15_000 });
   const ask = async (sql) => { try { return (await pool.query(sql)).rows[0]; } catch { return null; } };
   try {
+    /*
+     * Reachability first, and separately from everything else. Without this the
+     * individual questions below each fail, each returns null, and a database
+     * this script cannot even connect to is described as "0 tables, no users
+     * table" — indistinguishable from an empty one. That is how a run got as
+     * far as taking a dump and announcing it would ERASE a database it had
+     * never reached.
+     */
+    try {
+      await pool.query("select 1");
+    } catch (err) {
+      console.log(`${label.padEnd(8)} ${describe(url)}\n         UNREACHABLE: ${String(err.message).split("\n")[0]}`);
+      return { unreachable: true, error: err, tables: 0, users: null, schemas: "" };
+    }
     const version = await ask("show server_version");
     const size = await ask("select pg_size_pretty(pg_database_size(current_database())) size");
     /*
@@ -96,6 +110,28 @@ async function inspect(url, label) {
 }
 
 const [from, to] = [await inspect(source, "FROM"), await inspect(target, "TO")];
+
+/*
+ * A hostname with no dots is a private one — Render's internal database
+ * hostnames look like `dpg-xxxxxxxx-a` and resolve only from inside their
+ * network. It is the single most likely reason a laptop can't reach a managed
+ * database, and "getaddrinfo ENOTFOUND" doesn't say so.
+ */
+const looksInternal = (url) => { try { return !new URL(url).hostname.includes("."); } catch { return false; } };
+
+for (const [side, state, url] of [["source", from, source], ["target", to, target]]) {
+  if (!state.unreachable) continue;
+  console.error(`\nCan't reach the ${side} database, so nothing has been changed.`);
+  if (looksInternal(url)) {
+    console.error(
+      `\nThat looks like an internal hostname (no dots in it). On Render, the Internal Database URL\n` +
+      `works only from services running inside Render — not from your machine. Use the\n` +
+      `**External Database URL** from the same page: same database, hostname like\n` +
+      `dpg-xxxxxxxx-a.oregon-postgres.render.com.`,
+    );
+  }
+  process.exit(1);
+}
 
 if (!from.tables) {
   console.error("\nThe source has no tables. Refusing to copy nothing over something.");
