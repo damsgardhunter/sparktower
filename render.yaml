@@ -28,8 +28,14 @@ services:
     # NODE_ENV=production itself, so the app can't come up in development mode
     # because one environment variable went missing.
     startCommand: npm run start
+    # Migrations run before the new version takes traffic, which is the order
+    # the release checklist asks for and the one nobody remembers under
+    # pressure. A failed migration fails the deploy and the old version keeps
+    # serving. (Paid plans only — which this is.)
+    preDeployCommand: npm run db:migrate
     # The app answers this before it has finished booting, on purpose, so a
-    # deploy isn't failed by a probe that arrives during startup work.
+    # deploy isn't failed by a probe that arrives during startup work. It does
+    # NOT check the database: see /_ready in server/app.ts for why.
     healthCheckPath: /_health
     autoDeploy: true
     envVars:
@@ -44,8 +50,15 @@ services:
         generateValue: true # 32+ random chars, held by Render, never in the repo
       - key: MOBILE_TOKEN_SECRET
         generateValue: true # deliberately a different value from SESSION_SECRET
+      # Must be reachable from Render. A localhost URL copied out of a local
+      # .env produces a deploy that goes live, answers /_health with a 200, and
+      # fails every query with ECONNREFUSED 127.0.0.1 — which is exactly what
+      # the first deploy of this service did. `fromDatabase` wires it
+      # automatically when the blueprint creates the database below.
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: sparktower-db
+          property: connectionString
       - key: AI_INTEGRATIONS_OPENAI_API_KEY
         sync: false
 
@@ -114,3 +127,9 @@ services:
         sync: false
       - key: PRINTFUL_STORE_ID
         sync: false
+
+databases:
+  - name: sparktower-db
+    databaseName: sparktower
+    plan: basic-256mb
+    region: oregon

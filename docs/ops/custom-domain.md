@@ -1,8 +1,9 @@
 # Putting the app on sparktower.app
 
-The domain is registered at GoDaddy. Nothing serves it yet, and nothing is
-deployed yet — so the order below matters: a domain pointed at nothing is worse
-than a domain pointed at nowhere, because it looks broken rather than absent.
+The domain is registered at GoDaddy. The app is deployed on Render at
+`sparktower.onrender.com`; the domain does not point at it yet. The order below
+matters: a domain pointed at nothing is worse than a domain pointed at nowhere,
+because it looks broken rather than absent.
 
 Do it in this order. Each step says how to know it worked before you move on.
 
@@ -17,7 +18,7 @@ Do it in this order. Each step says how to know it worked before you move on.
 | DKIM | none |
 | DMARC | `v=DMARC1; p=quarantine; … rua=mailto:dmarc_rua@onsecureserver.net` — GoDaddy's default, not yours |
 | MX | none |
-| The app | not deployed anywhere |
+| The app | live at `sparktower.onrender.com` (Render, Oregon) since 2026-09-16 |
 
 Two things worth understanding before you touch anything:
 
@@ -104,7 +105,7 @@ Two ways in, same result:
   | Language / runtime | Node |
   | Branch | `main` |
   | Build command | `npm ci && npm run build` |
-  | Start command | `node dist/index.cjs` |
+  | Start command | `npm run start` — the script sets `NODE_ENV=production` itself |
   | Health check path | `/_health` |
   | Instance type | Starter or above — **not Free** (see below) |
   | Auto-deploy | on |
@@ -113,10 +114,39 @@ Two ways in, same result:
   CI builds and tests on. `PORT` is set by Render and read by the server; don't
   set it yourself.
 
-**Postgres:** your `DATABASE_URL` already points at a database, and Render is
-happy to talk to it. Only click **New Postgres** if you want to move it here —
-in which case dump, restore, and repoint `DATABASE_URL` before the first boot,
-because the migrations run against whatever it names.
+**Postgres — and the mistake the first deploy actually made.** The
+`DATABASE_URL` in a local `.env` is usually a database *on your machine*
+(`127.0.0.1:5433`, a Docker container, a local proxy). Pasted into Render it
+produces the most confusing possible result: the deploy succeeds, the log says
+`Your service is live 🎉`, `/_health` answers 200, and every query fails with
+`ECONNREFUSED 127.0.0.1:5433`. Nothing is listening on that address inside the
+container, and nothing ever will be.
+
+So: **New → Postgres** (Oregon, same project), then copy its **Internal
+Database URL** into the web service's `DATABASE_URL`. Internal rather than
+external because it stays on Render's private network — faster, and no
+`sslmode` to get right. `render.yaml` declares this database and wires the
+variable with `fromDatabase`, so a blueprint deploy never hits this at all.
+
+If you'd rather host the database elsewhere (Neon, Supabase), that's fine — it
+just has to be reachable from the internet, and the URL needs `?sslmode=require`.
+
+Then the schema. `render.yaml` runs `npm run db:migrate` as a **pre-deploy
+command**, so migrations apply before the new version takes traffic and a
+failed migration fails the deploy with the old version still serving. If you
+built the service by hand, add it: **Settings → Pre-Deploy Command →
+`npm run db:migrate`**.
+
+**Know it worked:**
+
+```sh
+curl -s https://sparktower.onrender.com/_ready     # {"ready":true,"database":"ok","ms":…}
+```
+
+`/_ready` asks the database; `/_health` deliberately doesn't (the platform's
+only response to an unhealthy service is a restart, and restarting a server
+whose database is unreachable is a crash loop). A 503 from `/_ready` prints the
+address it tried, which is the answer nine times out of ten.
 
 Two requirements that come from the code, not from Render:
 
@@ -403,6 +433,9 @@ unauthenticated until there is a row in it.
 
 | Symptom | Cause, nearly always |
 |---|---|
+| Deploy succeeds, site loads, everything is empty or 500s; log says `ECONNREFUSED 127.0.0.1` | `DATABASE_URL` is a local address copied from `.env`. Nothing listens on localhost inside the container. `curl /_ready` to confirm |
+| `[surfaces] Could not load flags, using defaults` on repeat | same cause: the database is unreachable, and this one retries on a timer |
+| Google callback prints `http://localhost:10000/...` at boot | `PUBLIC_URL` isn't set on the service yet |
 | Parked page still appears for some people | the old A records are still in the zone, or a resolver is holding the old TTL |
 | Render won't verify the domain | the TXT record's *name* is wrong — GoDaddy appends the domain, so enter `@` or the bare prefix, never the full hostname |
 | Certificate never issues | the A record doesn't point at Render yet, or an AAAA record left behind points somewhere else |

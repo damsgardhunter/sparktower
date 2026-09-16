@@ -29,8 +29,12 @@
  * that would page somebody a thousand times pages them once and says a thousand.
  */
 
+import { randomBytes } from "node:crypto";
+
 /** A report the drain sends and the log prints. No caller data beyond ids. */
 export interface ErrorReport {
+  /** Short, random, and printed in the log — what a person quotes when reporting a failure. */
+  id: string;
   time: string;
   /** Error constructor name, e.g. "TypeError" — the fingerprint's first half. */
   kind: string;
@@ -116,6 +120,7 @@ export function reportError(error: unknown, context: ErrorContext = {}): ErrorRe
   if (status < 500) return null;
 
   const report: ErrorReport = {
+    id: randomBytes(4).toString("hex"),
     time: new Date().toISOString(),
     kind: String(err?.name ?? typeof error),
     message: redact(String(err?.message ?? error ?? "unknown error")).slice(0, 500),

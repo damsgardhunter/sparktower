@@ -24,7 +24,8 @@ import { ModelResponseError } from "./ai-json";
 import { enforceRejectionLimit, countRejection, ipKey } from "./moderation";
 import { securityHeaders } from "./security-headers";
 import { stripSealedFields } from "@shared/strip-sealed";
-import { reportError } from "./error-reporting";
+import { reportError, redact } from "./error-reporting";
+import { pool } from "./db";
 
 /**
  * Where an error happened, as a shape rather than as a URL.
@@ -143,8 +144,43 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
 
   registerSecurityTxt(app);
 
+  /*
+   * Deliberately shallow: is this process alive and listening? That is the
+   * question a platform's health check should ask, because the only thing it
+   * can do about a "no" is restart the process — and restarting a server whose
+   * *database* is unreachable turns one outage into a crash loop.
+   */
   app.get("/_health", (_req, res) => {
     res.sendStatus(200);
+  });
+
+  /*
+   * The deeper question, for a person or a monitor rather than the platform:
+   * can this deployment actually do anything?
+   *
+   * The first deploy of this app to Render came up, announced itself live, and
+   * answered /_health with a 200 while every single query failed — its
+   * DATABASE_URL still pointed at a database on somebody's laptop. A deploy
+   * that is comprehensively broken should not look identical to a working one,
+   * so this asks the database and says which it is. It is not wired to the
+   * platform's health check, on purpose (see above).
+   */
+  app.get("/_ready", async (_req, res) => {
+    const started = Date.now();
+    try {
+      await pool.query("SELECT 1");
+      res.json({ ready: true, database: "ok", ms: Date.now() - started });
+    } catch (err) {
+      const message = String((err as Error)?.message ?? err);
+      res.status(503).json({
+        ready: false,
+        database: "unreachable",
+        // The address it tried is the answer nine times out of ten: a localhost
+        // here means the deployment carries a development connection string.
+        detail: redact(message).slice(0, 200),
+        ms: Date.now() - started,
+      });
+    }
   });
 
   app.use((req, res, next) => {
@@ -296,7 +332,26 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
      * where to look in the code, while the URL carries an id, and a query
      * string carries whatever was in the box.
      */
-    reportError(err, { route: routePattern(req), method: req.method, userId: (req as any).user?.id, status });
+    const report = reportError(err, { route: routePattern(req), method: req.method, userId: (req as any).user?.id, status });
+
+    /*
+     * A 4xx message is written for the person reading it and goes out as
+     * written. A 5xx message is written by whatever threw, and in production
+     * that is not ours to forward: a query failure's message is the entire SQL
+     * statement, column names and all, and `GET /api/contests` was handing that
+     * to anonymous callers on the live site. The reference is the report's id,
+     * so someone can quote eight characters and have it found in the log.
+     *
+     * Outside production the real message stays, because that is where you want
+     * it and nobody unknown is reading.
+     */
+    if (status >= 500 && process.env.NODE_ENV === "production") {
+      return res.status(status).json({
+        message: "Something went wrong on our end. It's been recorded.",
+        code: "internal_error",
+        reference: report?.id,
+      });
+    }
     return res.status(status).json({ message });
   });
 
