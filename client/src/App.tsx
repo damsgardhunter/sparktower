@@ -174,9 +174,9 @@ function Router() {
           <SidebarTrigger className="relative z-10" data-testid="button-sidebar-toggle" />
 
           <div className="pointer-events-none absolute inset-y-0 inset-x-14 sm:inset-x-28 grid grid-cols-[1fr_9rem_1fr] items-center">
-            <span className="hidden md:block text-center text-base lg:text-lg font-semibold tracking-[0.18em] lg:tracking-[0.3em] whitespace-nowrap drop-shadow" data-testid="text-header-left">I believe'd in them.</span>
+            <span className="slogan-arrive slogan-arrive-left hidden md:block text-center text-base lg:text-lg font-semibold tracking-[0.18em] lg:tracking-[0.3em] whitespace-nowrap drop-shadow" data-testid="text-header-left">I believe'd in them.</span>
             <span />
-            <span className="hidden md:block text-center text-base lg:text-lg font-semibold tracking-[0.18em] lg:tracking-[0.3em] whitespace-nowrap drop-shadow" data-testid="text-header-right">They believe'd in me</span>
+            <span className="slogan-arrive slogan-arrive-right hidden md:block text-center text-base lg:text-lg font-semibold tracking-[0.18em] lg:tracking-[0.3em] whitespace-nowrap drop-shadow" data-testid="text-header-right">They believe'd in me.</span>
           </div>
 
           {/* The hanging semicircle: the gradient's middle colour, which is exactly what the bar is at its centre, so there's no seam. */}
