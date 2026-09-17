@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -482,7 +483,13 @@ function LoginForm() {
           />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="login-password">Password</Label>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="login-password">Password</Label>
+            {/* Next to the field it fails at — where someone looks the moment the password doesn't work. */}
+            <Link href="/forgot-password" className="text-xs text-muted-foreground underline hover:text-foreground" data-testid="link-forgot-password">
+              Forgot your password?
+            </Link>
+          </div>
           <div className="relative">
             <Input
               id="login-password"

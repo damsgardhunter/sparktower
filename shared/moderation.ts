@@ -90,10 +90,26 @@ export const RATE_LIMITS = {
    */
   loginAccount: {
     max: 12, windowMinutes: 15,
-    // No "or reset your password": there is no reset flow yet, and sending
-    // someone who can't get in to a page that doesn't exist is worse than
-    // telling them to wait.
-    message: "Too many failed sign-ins for this account. Try again in 15 minutes.",
+    // The reset is the way out of this for the person whose account it is:
+    // proving they can read the account's mail clears the lock, so they don't
+    // serve out the attacker's fifteen minutes (server/password-reset.ts).
+    message: "Too many failed sign-ins for this account. Try again in 15 minutes, or reset your password.",
+  },
+  /*
+   * Asking for a reset link, counted per address asking and per account asked
+   * about.
+   *
+   * Two different abuses, one limit. A script walking a list of addresses to
+   * find which ones have accounts here is the first; the second is quieter and
+   * meaner — repeatedly requesting links for one person's address so their
+   * inbox fills with them, which also trains them to ignore the real one.
+   *
+   * Low on purpose. Nobody legitimately needs a fourth link in a quarter of an
+   * hour, and the links already sent all still work.
+   */
+  passwordReset: {
+    max: 3, windowMinutes: 15,
+    message: "We've sent a reset link recently. Check your inbox — including spam — and try again in a few minutes.",
   },
   ai: {
     max: 30, windowMinutes: 10,

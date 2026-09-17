@@ -30,6 +30,8 @@ import InviteAcceptPage from "@/pages/invite-accept";
 import AdminPromotions from "@/pages/admin-promotions";
 import MfaVerifyPage from "@/pages/mfa-verify";
 import SecuritySettings from "@/pages/security-settings";
+import ForgotPasswordPage from "@/pages/forgot-password";
+import ResetPasswordPage from "@/pages/reset-password";
 import { MfaNotice } from "@/components/mfa";
 import { NOVA_GRADIENT, NOVA_GRADIENT_CSS } from "@shared/backing";
 import { AnimatedTowerLogo } from "@/components/animated-tower-logo";
@@ -118,6 +120,14 @@ function Router() {
         <Route path="/mfa" component={MfaVerifyPage} />
         {/* The emailed link works signed out — the link is the credential. */}
         <Route path="/verify-email" component={VerifyEmailPage} />
+        {/*
+          * Both halves of a password reset, for the same reason and then some:
+          * everyone who needs them is locked out by definition, so bouncing
+          * them to the sign-in page they can't use would make the feature
+          * pointless.
+          */}
+        <Route path="/forgot-password" component={ForgotPasswordPage} />
+        <Route path="/reset-password" component={ResetPasswordPage} />
         <Route>
           <Redirect to="/" />
         </Route>
@@ -136,7 +146,16 @@ function Router() {
    * something went wrong — and onboarding is the right place to end up either
    * way. Safe because the loading branch above has already settled the query.
    */
-  if (!profile?.isOnboarded && window.location.pathname !== "/onboarding") {
+  /*
+   * Three paths are exempt, all for the same reason: they are the ones a
+   * person follows out of a hole, and onboarding is not the way out of any of
+   * them. Someone who signed up, never finished, and now can't remember their
+   * password would otherwise click the link in their inbox and be shown a
+   * "tell us about yourself" form instead of the reset — with no way to reach
+   * it at all, since every other address redirects here too.
+   */
+  const RECOVERY_PATHS = ["/onboarding", "/verify-email", "/forgot-password", "/reset-password"];
+  if (!profile?.isOnboarded && !RECOVERY_PATHS.includes(window.location.pathname)) {
     return <Redirect to="/onboarding" />;
   }
 
@@ -210,6 +229,9 @@ function Router() {
             <Route path="/" component={Home} />
             <Route path="/onboarding" component={Onboarding} />
             <Route path="/verify-email" component={VerifyEmailPage} />
+            {/* Signed in and still resetting — an old email, or a shared computer. */}
+            <Route path="/forgot-password" component={ForgotPasswordPage} />
+            <Route path="/reset-password" component={ResetPasswordPage} />
             {/* Every project's next step in one place — the address the retention loop returns to. */}
             <Route path="/path" component={PathHome} />
             {/*

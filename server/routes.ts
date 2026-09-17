@@ -55,6 +55,7 @@ import {
 import { insertUserProfileSchema, insertProjectSchema, insertProjectBase, insertContestSchema, insertProjectLiveChatMessageSchema, insertWaitlistEntrySchema, insertInterviewSchema, insertExperimentSchema, insertPricingTierSchema, insertAnalyticsEventSchema, insertLegalDocSchema, insertDeployChecklistItemSchema, insertSupportTicketSchema, insertLaunchTaskSchema, insertProjectDecisionSchema, insertProjectFileSchema, insertProjectLinkSchema, type StoryboardScene } from "@shared/schema";
 import { pickFields, WRITABLE } from "./body-fields";
 import { registerEmailVerificationRoutes, requireVerifiedEmail } from "./email-verification";
+import { registerPasswordResetRoutes } from "./password-reset";
 import { z } from "zod";
 import OpenAI from "openai";
 import { eq, ne, and, sql, inArray, desc, isNull } from "drizzle-orm";
@@ -413,6 +414,10 @@ export async function registerRoutes(
   registerSurfaceRoutes(app);
   registerModerationRoutes(app);
   registerEmailVerificationRoutes(app);
+  // Getting back in without the password (server/password-reset.ts). Public, and
+  // mounted here rather than behind the verification gate: someone locked out
+  // can be neither signed in nor verified.
+  registerPasswordResetRoutes(app);
   registerSafetyRoutes(app);
   registerInvestmentRoutes(app);
   registerBackingRoutes(app);
