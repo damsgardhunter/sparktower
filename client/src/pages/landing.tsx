@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CardDescription } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Zap, MessageSquare, Target, Eye, EyeOff, Loader2, Users, Rocket, Globe, Brain, UserPlus, Search, Handshake, Lightbulb, Wrench, User, ArrowRight, Trophy, Heart } from "lucide-react";
+import { Zap, MessageSquare, Target, Eye, EyeOff, Loader2, Users, Rocket, Globe, Brain, UserPlus, Search, Handshake, Lightbulb, Wrench, User, ArrowRight, Trophy, Heart, Scale } from "lucide-react";
 const logoImage = "/favicon.png";
 import { SiGoogle } from "react-icons/si";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -16,6 +16,8 @@ import { PENDING_PATH_KEY, type PendingPath } from "@shared/path-artifacts";
 import { PENDING_INVITE_KEY } from "@shared/invites";
 import { MfaCodeForm } from "@/components/mfa";
 import { PASSWORD_MIN } from "@shared/passwords";
+import { PROJECT_GOALS } from "@shared/goals";
+import { LiveProjects } from "@/components/live-projects";
 import { Link } from "wouter";
 
 /** The artifact a visitor chose "start" or "explore" on before signing up, so the signup is credited to it. */
@@ -31,6 +33,18 @@ function afterAuthPath(): string {
   } catch { /* no pending invite */ }
   return "/";
 }
+
+/**
+ * The sentence each path gets on the landing page, on top of the one-liner in
+ * shared/goals.ts. The shared one says what the path *is*, everywhere in the
+ * product; this says what you actually do on it, which is what a stranger
+ * deciding whether to sign up is asking.
+ */
+const PATH_DETAIL: Record<string, string> = {
+  ship_mvp: "Scope down to something you can finish, build it, and put it in front of real people before you are ready.",
+  systemize_business: "Write down what you already do, find the parts only you can do, and hand the rest to a process or a person.",
+  raise_funding: "Get the numbers, the story and the deck into one shape, and practise the questions before you are asked them.",
+};
 
 export default function LandingPage() {
   /*
@@ -167,7 +181,112 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <section id="features" className="py-24 px-4 bg-card/30 border-y border-border">
+      <LiveProjects />
+
+      <section id="how-it-works" className="scroll-mt-40 py-24 px-4 bg-white border-t border-gray-100" data-testid="section-how-it-works">
+        <div className="max-w-5xl mx-auto">
+
+          <div className="max-w-3xl mx-auto text-center">
+            <span className="inline-flex items-center gap-2 rounded-full border border-gray-200 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.18em] text-gray-500" data-testid="badge-contest-status">
+              <Trophy className="h-3.5 w-3.5" style={{ color: NOVA_GRADIENT[2] }} />
+              The contest hasn't started yet
+            </span>
+            <h2 className="mt-5 text-3xl md:text-4xl font-bold tracking-tight text-black">
+              The $50B challenge, and where it actually stands
+            </h2>
+            <p className="mt-4 text-[15px] sm:text-base text-gray-600 leading-relaxed">
+              The offer is real and it is not open yet. Handing over a majority of a company is a
+              promotion with a prize, and that means written rules, eligibility, judging and a
+              promotion agreement drafted by lawyers who do this for a living. We are finding
+              those lawyers and writing those rules now.
+            </p>
+          </div>
+
+          <div className="mt-10 grid gap-4 md:grid-cols-3">
+            {[
+              {
+                icon: Scale,
+                title: "Rules, so nobody can cheat",
+                body: "What counts as a company built here, what counts as $50 billion, who verifies it, and what stops someone bolting SparkTower onto a business they already had. Ambiguity is how a prize like this gets fought over instead of won.",
+              },
+              {
+                icon: Globe,
+                title: "Open wherever you are",
+                body: "Anyone, anywhere. That is the hardest part to write, not the easiest: prize promotions are governed country by country, and \"open to everyone\" has to survive the places with the strictest rules rather than ignore them.",
+              },
+              {
+                icon: Handshake,
+                title: "A promotion agreement, in writing",
+                body: "An offer this size is worth nothing as a sentence on a landing page. It needs a document that binds the company, survives a change of ownership, and says exactly what a winner receives.",
+              },
+            ].map((item) => (
+              <div key={item.title} className="rounded-2xl border border-gray-200 p-5" data-testid={`card-contest-${item.title.split(" ")[0].toLowerCase()}`}>
+                <item.icon className="h-5 w-5" style={{ color: NOVA_GRADIENT[1] }} />
+                <h3 className="mt-3 font-bold text-black">{item.title}</h3>
+                <p className="mt-1.5 text-sm text-gray-600 leading-relaxed">{item.body}</p>
+              </div>
+            ))}
+          </div>
+
+          <p className="mt-6 text-center text-sm text-gray-500 max-w-2xl mx-auto">
+            This takes a while, and we would rather say so than open something we would have to
+            change halfway through. Nothing you build before the rules land is wasted: the contest
+            will be judged on companies, and a company takes longer to build than a rulebook takes
+            to write.
+          </p>
+
+          {/* --- Meanwhile: the part you can do today ------------------------------- */}
+
+          <div className="mt-20 max-w-3xl mx-auto text-center">
+            <h2 className="text-3xl md:text-4xl font-bold tracking-tight text-black">
+              So start building now
+            </h2>
+            <p className="mt-4 text-[15px] sm:text-base text-gray-600 leading-relaxed">
+              Make an account, tell Nova what you're thinking about, and it turns the idea into a
+              project with a path under it. Every project picks one of three — and a project works
+              all three side by side as it grows, so the one you pick first is a starting point
+              rather than a category you're stuck in.
+            </p>
+          </div>
+
+          <div className="mt-10 grid gap-5 md:grid-cols-3">
+            {PROJECT_GOALS.map((goal, i) => (
+              <div key={goal.id} className="relative rounded-2xl p-[2px]" style={{ backgroundImage: NOVA_GRADIENT_CSS }} data-testid={`card-path-${goal.id}`}>
+                <div className="h-full rounded-[0.95rem] bg-white p-5">
+                  <div className="flex items-center gap-2">
+                    <span className="grid h-7 w-7 place-items-center rounded-lg text-[11px] font-bold text-white" style={{ backgroundImage: NOVA_GRADIENT_CSS }}>
+                      {i + 1}
+                    </span>
+                    <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-gray-400">{goal.short}</span>
+                  </div>
+                  <h3 className="mt-3 text-lg font-bold text-black">{goal.label}</h3>
+                  <p className="mt-1.5 text-sm text-gray-600 leading-relaxed">{goal.description}</p>
+                  <p className="mt-3 text-sm text-gray-500 leading-relaxed">{PATH_DETAIL[goal.id]}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-12 rounded-2xl bg-gray-50 border border-gray-200 p-6 sm:p-8">
+            <h3 className="font-bold text-black">What the first hour looks like</h3>
+            <ol className="mt-4 grid gap-4 sm:grid-cols-2 text-sm text-gray-600">
+              {[
+                ["Describe the idea in a sentence", "Nova asks what you're building and who it's for, then writes the project for you — you're editing rather than starting at a blank page."],
+                ["Pick a path", "Ship, Systemize or Raise. It decides what Nova puts in front of you first, and it can change."],
+                ["Do the next step", "One card at a time, never a backlog. Each finished step saves what you wrote as part of the project."],
+                ["Publish one and get feedback", "A finished step becomes a page you can share with anyone, no account needed to read it. That is how people find you here."],
+              ].map(([title, body], n) => (
+                <li key={title} className="flex gap-3">
+                  <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full text-[11px] font-bold text-white" style={{ backgroundImage: NOVA_GRADIENT_CSS }}>{n + 1}</span>
+                  <span><span className="font-semibold text-black">{title}.</span> {body}</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        </div>
+      </section>
+
+      <section id="features" className="scroll-mt-40 py-24 px-4 bg-card/30 border-y border-border">
         <div className="max-w-6xl mx-auto">
           <div className="text-center mb-16 space-y-4">
             <h2 className="text-3xl md:text-5xl font-bold tracking-tight">Why SparkTower?</h2>
@@ -205,23 +324,6 @@ export default function LandingPage() {
               </p>
             </div>
           </div>
-        </div>
-      </section>
-
-      <section className="py-16 px-4 bg-background border-b border-border" data-testid="section-stats">
-        <div className="max-w-6xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
-          {[
-            { value: "10,000+", label: "Builders & Creators", icon: Users },
-            { value: "2,500+", label: "Projects Launched", icon: Rocket },
-            { value: "50,000+", label: "AI Matches Made", icon: Brain },
-            { value: "120+", label: "Countries Represented", icon: Globe },
-          ].map((stat) => (
-            <div key={stat.label} className="space-y-2" data-testid={`stat-${stat.label.toLowerCase().replace(/\s+/g, '-')}`}>
-              <stat.icon className="h-6 w-6 text-primary mx-auto mb-2" />
-              <div className="text-3xl md:text-4xl font-bold text-foreground tracking-tight">{stat.value}</div>
-              <div className="text-sm text-muted-foreground font-medium">{stat.label}</div>
-            </div>
-          ))}
         </div>
       </section>
 
@@ -268,39 +370,15 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <section id="how-it-works" className="py-24 px-4 bg-background border-b border-border" data-testid="section-how-it-works">
-        <div className="max-w-5xl mx-auto">
-          <div className="text-center mb-16 space-y-4">
-            <h2 className="text-3xl md:text-5xl font-bold tracking-tight">How It Works</h2>
-            <p className="text-xl text-secondary max-w-2xl mx-auto">
-              Four steps from sign-up to launch. No gatekeeping, no waiting — just building.
-            </p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-            {[
-              { step: "01", title: "Sign Up", desc: "Create your free account in under a minute. No credit card required.", icon: UserPlus },
-              { step: "02", title: "Build Your Profile", desc: "Tell us your skills, interests, and what you're looking to build. Our AI learns what makes you unique.", icon: User },
-              { step: "03", title: "Get Matched", desc: "Our AI finds builders who complement your strengths. Try a 24-hour sprint to test the fit before committing.", icon: Search },
-              { step: "04", title: "Launch Together", desc: "Collaborate with built-in project tools, AI assistance, and a community cheering you on.", icon: Handshake },
-            ].map((item, i) => (
-              <div key={item.step} className="relative text-center space-y-4 p-6" data-testid={`step-${item.step}`}>
-                {i < 3 && (
-                  <div className="hidden md:block absolute top-12 -right-3 z-10">
-                    <ArrowRight className="h-5 w-5 text-primary/40" />
-                  </div>
-                )}
-                <div className="h-14 w-14 rounded-full bg-primary/10 flex items-center justify-center text-primary mx-auto">
-                  <item.icon className="h-6 w-6" />
-                </div>
-                <div className="text-xs font-bold text-primary tracking-widest uppercase">Step {item.step}</div>
-                <h3 className="text-lg font-bold">{item.title}</h3>
-                <p className="text-secondary text-sm leading-relaxed">{item.desc}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
+      {/*
+        * What the contest is, honestly, and what to do in the meantime.
+        *
+        * The panel above promises a majority of the company to whoever builds a
+        * $50B one. A visitor's next two questions are "is that real?" and "so
+        * what do I do now?", and a page that answers neither reads as a stunt.
+        * So: where the rules are, why they aren't finished, and the three paths
+        * a project can actually be on today.
+        */}
       <section className="py-24 px-4 bg-black text-white" data-testid="section-vision">
         <div className="max-w-4xl mx-auto text-center space-y-8">
           <div className="h-16 w-16 rounded-full bg-primary/20 flex items-center justify-center mx-auto">
