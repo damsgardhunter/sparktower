@@ -26,6 +26,7 @@ import { users } from "@shared/schema";
 import { seal, open } from "./secret-box";
 import { deriveKey, mobileTokenKey } from "./secrets";
 import { newTotpSecret, otpauthUrl, verifyTotp } from "./totp";
+import QRCode from "qrcode";
 import { atLeast, isOwner } from "./platform-roles";
 import { enforceRateLimit, rateLimit } from "./moderation";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
@@ -171,7 +172,32 @@ export function registerMfaRoutes(app: Express) {
     if (mfaEnabledFor(req.user)) return res.status(409).json({ message: "Two-factor authentication is already on.", code: "mfa_already_enabled" });
     const secret = newTotpSecret();
     await db.update(users).set({ mfaPendingSecret: seal(secret) }).where(eq(users.id, req.user.id));
-    res.json({ secret, otpauthUrl: otpauthUrl(secret, req.user.email ?? req.user.id) });
+    const url = otpauthUrl(secret, req.user.email ?? req.user.id);
+
+    /*
+     * The same otpauth:// URL as a picture, because the alternative is asking
+     * someone to hand-type thirty-two characters into a phone. Every
+     * authenticator worth having — Google Authenticator, Duo Mobile, 1Password,
+     * Authy, Microsoft Authenticator, Bitwarden — reads this one QR; TOTP is a
+     * standard (RFC 6238) and none of them needs anything app-specific.
+     *
+     * Drawn here rather than in the browser: the page already has the secret,
+     * so nothing is more exposed, and it keeps a QR library out of the bundle
+     * of a page most people open once. A data URL rather than raw SVG markup
+     * so the client renders it as an image and never as HTML.
+     *
+     * Black on white regardless of theme — a QR inverted for dark mode is one
+     * many phone cameras will not read.
+     */
+    let qrDataUrl: string | null = null;
+    try {
+      qrDataUrl = await QRCode.toDataURL(url, { errorCorrectionLevel: "M", margin: 1, width: 240, color: { dark: "#000000ff", light: "#ffffffff" } });
+    } catch (err) {
+      // The key below still works; a missing picture is not a reason to fail setup.
+      console.error("[mfa] couldn't draw the enrolment QR:", err);
+    }
+
+    res.json({ secret, otpauthUrl: url, qrDataUrl });
   });
 
   /** Confirms setup with a code from the app: 2FA is on, this session counts as verified, and the recovery codes are shown once. */
