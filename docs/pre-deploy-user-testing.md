@@ -7,7 +7,9 @@ proxy passes the right address, or a real person understands the screen.
 That's this list.
 
 Deploy mechanics — CI, migrations, secrets, the post-deploy smoke — live in
-[release-checklist.md](release-checklist.md). This list comes first.
+[release-checklist.md](release-checklist.md), and how the deploy itself works
+(Render, the service, the environment, rollback) is
+[ops/deploy.md](ops/deploy.md). This list comes first.
 
 **Blocker** = don't deploy until it passes. **Should** = test before
 inviting people; fine to deploy behind a kill switch meanwhile.

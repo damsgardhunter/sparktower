@@ -5,7 +5,6 @@
  * coverage line and the specific gaps. This is what turns "rate limiting:
  * built" into "covers 14 of 19 writes; comments and uploads are not".
  */
-import OpenAI from "openai";
 import { modelFor, coachingDirectiveFor, type UserEntitlements } from "./entitlements";
 import type { RepoFile } from "./code-ingest";
 import type { RouteCoverage } from "./route-coverage";
@@ -15,11 +14,8 @@ import { CAPABILITY_AREAS, sanitizeDeepRead, type CapabilityEntry, type Capabili
 import { parseModelJson } from "./ai-json";
 import { isTest, summarizeTestInventory, summarizeMobileScreens, summarizeWebScreens, summarizeAuthEndpoints, summarizeEnforcementFilters, summarizeUntestedRoutes } from "./audit-evidence";
 
-const rawBase = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
-const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: rawBase ? (rawBase.endsWith("/v1") ? rawBase : `${rawBase.replace(/\/$/, "")}/v1`) : undefined,
-});
+// Built on first use, never at import: server/openai-client.ts.
+import { openai } from "./openai-client";
 
 /** The one question each area is asked. Quantified answers, named gaps. */
 export const AREA_QUESTIONS: Record<CapabilityArea, string> = {

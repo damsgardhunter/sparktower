@@ -16,7 +16,10 @@ import { checkMerchFonts } from "./merch-render";
 import { serveStatic } from "./static";
 import { createApp, log } from "./app";
 import { warnIfSharedTokenSecret } from "./mobile-auth";
+import { warnIfEmailUnconfigured } from "./email";
+import { warnIfSenderMisaligned, emailLinkHostIsTrusted } from "./public-url";
 import { assertSecretsAtBoot } from "./secrets";
+import { assertEnvironmentAtBoot } from "./preflight";
 import { watchProcessErrors } from "./error-reporting";
 import { storageCredentialMode } from "./replit_integrations/object_storage/objectStorage";
 
@@ -26,7 +29,21 @@ declare module "http" {
   }
 }
 
-// Before anything listens or connects: no secrets (or weak ones in production), no server.
+/*
+ * Before anything listens or connects: is this deployment actually configured?
+ *
+ * The whole report first (server/preflight.ts), so an operator reading a
+ * failed deploy sees everything that is wrong at once rather than fixing one
+ * variable, deploying, and meeting the next one. In production a missing
+ * database, session secret or public URL ends the process here; a missing
+ * Stripe key or mail provider is printed and the server carries on, because
+ * refusing to serve the site to protect an unconfigured feature is the larger
+ * outage.
+ */
+assertEnvironmentAtBoot();
+
+// Then the secrets themselves, which also derive the keys and so must throw
+// rather than report: no secrets, or weak ones in production, no server.
 assertSecretsAtBoot();
 
 // A promise nobody caught and a throw outside every handler used to be a silent
@@ -81,6 +98,18 @@ let appReady = false;
   // timer so a toggle reaches every instance rather than only the one that
   // served it — this deploys to autoscale.
   warnIfSharedTokenSecret();
+  // Email isn't an integration any more: without it, nobody who signs up can use the site (server/email.ts).
+  warnIfEmailUnconfigured();
+  /*
+   * Two things about outbound mail that only show up as "nobody signed up":
+   * a From domain that isn't the one SPF and DKIM were published for, and
+   * email links pointing at a host the CSRF guard doesn't trust.
+   */
+  warnIfSenderMisaligned();
+  {
+    const link = emailLinkHostIsTrusted();
+    if (!link.ok && link.reason) console.error(`[email] ${link.reason}`);
+  }
   /*
    * Which credentials uploads will use, said once at boot. Storage failures
    * surface much later and far away — an avatar that won't save — and the

@@ -2,6 +2,7 @@ import { productNameNote } from "@shared/project-draft";
 import { tierForPrice, PriceTierMissingError } from "./webhookHandlers";
 import { paidSubscription } from "@shared/subscriptions";
 import { registerStripeHealthRoutes } from "./stripe-health";
+import { registerDeploymentRoutes } from "./deployment-info";
 import { ROADMAP_DEPTHS, DEFAULT_ROADMAP_DEPTH, MAX_ROADMAP_PHASES, roadmapDepth, depthForRevision, type RoadmapDepth } from "@shared/roadmap";
 import type { Express } from "express";
 import { createServer, type Server } from "http";
@@ -100,12 +101,8 @@ async function isProjectMember(userId: string, projectId: string): Promise<boole
   return members.some(m => m.userId === userId);
 }
 
-const _rawOpenAiBase = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
-const _openAiBaseURL = _rawOpenAiBase ? (_rawOpenAiBase.endsWith("/v1") ? _rawOpenAiBase : `${_rawOpenAiBase.replace(/\/$/,"")}/v1`) : undefined;
-const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: _openAiBaseURL,
-});
+// Built on first use, never at import: server/openai-client.ts.
+import { openai } from "./openai-client";
 
 /**
  * URL for a storyboard frame. Always the authenticated streaming route — the
@@ -402,6 +399,8 @@ export async function registerRoutes(
   registerMcpRoutes(app);
   registerDiscoverRoutes(app);
   registerStripeHealthRoutes(app);
+  // Which build is running, at what address, and whether it came up (server/deployment-info.ts).
+  registerDeploymentRoutes(app);
   /*
    * Kill switches, mounted as path prefixes rather than per-route.
    *

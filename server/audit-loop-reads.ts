@@ -15,17 +15,13 @@
  * same (`sanitizeLoopClosures`): "closed" still needs a real file for every
  * stage and for the way back.
  */
-import OpenAI from "openai";
 import { modelFor, coachingDirectiveFor, type UserEntitlements } from "./entitlements";
 import type { RepoFile } from "./code-ingest";
 import { parseModelJson } from "./ai-json";
 import { LOOP_TYPE_INFO, sanitizeLoopClosures, type LoopClosureRead, type LoopType } from "@shared/phase-trees";
 
-const rawBase = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
-const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: rawBase ? (rawBase.endsWith("/v1") ? rawBase : `${rawBase.replace(/\/$/, "")}/v1`) : undefined,
-});
+// Built on first use, never at import: server/openai-client.ts.
+import { openai } from "./openai-client";
 
 export interface AuditLoop { key: string; taskId: string; title: string; type: LoopType; description: string; steps: { title: string; status: string }[] }
 

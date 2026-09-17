@@ -4,7 +4,6 @@
  * Everything here is a proposal — server/phase-trees.ts decides what is
  * admitted, so the cap and the grounding rule do not depend on the model.
  */
-import OpenAI from "openai";
 import { modelFor, coachingDirectiveFor, type UserEntitlements } from "./entitlements";
 import { CODE_MODEL, CODE_REASONING_EFFORT } from "./aiModels";
 import type { Artifact, InjectionProposal, WorkPayload, WorkKind } from "@shared/phase-trees";
@@ -12,11 +11,8 @@ import { sanitizePlan } from "@shared/phase-trees";
 import { flattenRunGroups, groupRunSteps, sanitizeRunGroups, isLoopType, LOOP_TYPE_INFO, LOOP_ORDER, MAX_PRODUCT_LOOPS, LOOP_CAP, type LoopType } from "@shared/phase-trees";
 import { parseModelJson } from "./ai-json";
 
-const rawBase = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
-const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: rawBase ? (rawBase.endsWith("/v1") ? rawBase : `${rawBase.replace(/\/$/, "")}/v1`) : undefined,
-});
+// Built on first use, never at import: server/openai-client.ts.
+import { openai } from "./openai-client";
 
 
 /** 3–5 steps from the written core loop (or whatever the parent milestone answered). */

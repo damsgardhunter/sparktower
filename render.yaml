@@ -10,7 +10,9 @@
 # shouldn't be public.
 #
 # To use it: Render → New → Blueprint → point at this repository. Then fill in
-# the prompted values (docs/ops/custom-domain.md lists where each comes from).
+# the prompted values. The source of truth for how this product is deployed —
+# the live URL, where each value comes from, how to verify a deploy came up
+# right — is docs/ops/deploy.md.
 
 services:
   - type: web
@@ -63,11 +65,27 @@ services:
         sync: false
 
       # --- The site's own address. Everything below it depends on this ------
-      # Invite and verification links, whether the sitemap is indexable, the
-      # Stripe webhook registering itself, the CSRF trusted origins, and the
-      # Google OAuth callback.
+      # Invite, verification and password-reset links, whether the sitemap is
+      # indexable, the Stripe webhook registering itself, the CSRF trusted
+      # origins, and the Google OAuth callback.
+      #
+      # Deliberately NOT a value here, though it is not a secret.
+      #
+      # This file used to declare https://sparktower.app while the running
+      # service served https://sparktower.onrender.com — the dashboard had been
+      # corrected and the blueprint had not. Re-syncing the blueprint would
+      # therefore have re-pointed the product at a domain that is still a
+      # parked page: every reset link, every confirm-your-email link and every
+      # shared artifact URL would have led somewhere with no app behind it, and
+      # the Stripe webhook and OAuth callback would have registered against a
+      # host that never answers.
+      #
+      # The site's address is an operational fact that changes on the day DNS
+      # moves, not a constant of the repository. `sync: false` makes Render
+      # keep what the dashboard holds and prompt when it is missing. Changing it
+      # is step one of the DNS move — see docs/ops/deploy.md.
       - key: PUBLIC_URL
-        value: https://sparktower.app
+        sync: false
 
       # --- Who runs the place ------------------------------------------------
       - key: PLATFORM_OWNER_EMAIL
@@ -88,9 +106,12 @@ services:
         sync: false
 
       # --- Sign in with Google ------------------------------------------------
-      # The redirect URI in the Google console must be exactly
-      # https://sparktower.app/api/auth/google/callback — the server prints the
-      # one it will use at boot.
+      # The redirect URI in the Google console must match PUBLIC_URL exactly —
+      # today that is https://sparktower.onrender.com/api/auth/google/callback,
+      # and it becomes the sparktower.app one on the day DNS moves. Both can be
+      # registered at once, which is what makes the move survivable. The server
+      # prints the callback it will use at boot; that line is the answer when
+      # sign-in with Google starts failing after a deploy.
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET

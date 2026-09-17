@@ -97,8 +97,10 @@ fails the build.
 
 Nothing, because nothing real was exposed. The local development database
 (on `127.0.0.1:5433`) is not in the repository and is not
-reachable off the machine. Production credentials live in Replit Secrets and
-were never in git.
+reachable off the machine. Production credentials live in the host's own
+environment settings — Replit Secrets at the time this was written, the Render
+dashboard since production moved there (`docs/ops/deploy.md`) — and were never
+in git.
 
 Rotating a credential that was not exposed would not have made anything
 safer, and recording a rotation that did not happen would make this note

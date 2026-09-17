@@ -5,6 +5,11 @@ The domain is registered at GoDaddy. The app is deployed on Render at
 matters: a domain pointed at nothing is worse than a domain pointed at nowhere,
 because it looks broken rather than absent.
 
+This file covers one job: moving the site's address from `onrender.com` to
+`sparktower.app`. **How the deploy works at all — the host, the service,
+environment variables, the database, rollback, monitoring — is
+[deploy.md](deploy.md), and that file wins wherever this one disagrees.**
+
 Do it in this order. Each step says how to know it worked before you move on.
 
 ## What is true today (measured 2026-09-16, `node scripts/check-email-auth.mjs`)
@@ -72,120 +77,43 @@ production:
 - `Skipping Stripe webhook registration: no public URL` — gone once
   `PUBLIC_URL` is set (step 3).
 - `MOBILE_TOKEN_SECRET is not set; mobile access tokens use a key derived from
-  SESSION_SECRET` — set a separate one in the deployment (step 1), so rotating
-  one secret doesn't invalidate the other.
+  SESSION_SECRET` — set a separate one in the Render dashboard
+  ([deploy.md](deploy.md#environment-variables)), so rotating one secret
+  doesn't invalidate the other.
 
 The build runs. What follows is entirely about hosting and DNS.
 
-## 1. Deploy to Render
+## 1. The deployment itself
 
-The repository carries a `.replit` file because that is where it was written.
-It is **not** where this deploys: the host is Render, and
-[`render.yaml`](../../render.yaml) in the repository root describes the service
-— build, start command, health check and every environment variable it needs —
-so the deploy is reproducible instead of being a page of clicks somebody once
-did.
+Already done: the app is live on Render at `sparktower.onrender.com`. How that
+deploy works — the service, the blueprint, where environment variables are set,
+the database, how a deploy is triggered, how to roll back, what the health
+endpoints prove — is **[deploy.md](deploy.md)**, which is the source of truth
+for all of it. This file does not restate it.
 
-**Which kind of service: Web Service.** Not a Static Site — that serves files
-from a CDN with no Node process, so every `/api/*` route would 404. Not a
-Private Service (unreachable from the internet), not a Background Worker (can't
-take HTTP), not a Cron Job (short-lived). One Web Service runs the API, serves
-the built client, and holds the background loops.
+What this file needs from that one is only the two facts the rest of the steps
+depend on:
 
-Two ways in, same result:
+- the service answers at `https://sparktower.onrender.com`, and
+- `PUBLIC_URL` is set in the Render dashboard, which is what step 3 changes.
 
-- **Blueprints → New Blueprint Instance**, pointed at this repository. It reads
-  [`render.yaml`](../../render.yaml) and prompts for the values marked
-  `sync: false`. Prefer this: the settings are in the repo, so the next person
-  doesn't have to guess what you typed.
-- **New → Web Service**, if you'd rather fill the form. The fields:
-
-  | Field | Value |
-  |---|---|
-  | Language / runtime | Node |
-  | Branch | `main` |
-  | Build command | `npm ci && npm run build` |
-  | Start command | `npm run start` — the script sets `NODE_ENV=production` itself |
-  | Health check path | `/_health` |
-  | Instance type | Starter or above — **not Free** (see below) |
-  | Auto-deploy | on |
-
-  Node's version comes from `engines` in `package.json` (20.x), which is what
-  CI builds and tests on. `PORT` is set by Render and read by the server; don't
-  set it yourself.
-
-**Postgres — and the mistake the first deploy actually made.** The
-`DATABASE_URL` in a local `.env` is usually a database *on your machine*
-(`127.0.0.1:5433`, a Docker container, a local proxy). Pasted into Render it
-produces the most confusing possible result: the deploy succeeds, the log says
-`Your service is live 🎉`, `/_health` answers 200, and every query fails with
-`ECONNREFUSED 127.0.0.1:5433`. Nothing is listening on that address inside the
-container, and nothing ever will be.
-
-So: **New → Postgres** (Oregon, same project), then copy its **Internal
-Database URL** into the web service's `DATABASE_URL`. Internal rather than
-external because it stays on Render's private network — faster, and no
-`sslmode` to get right. `render.yaml` declares this database and wires the
-variable with `fromDatabase`, so a blueprint deploy never hits this at all.
-
-If you'd rather host the database elsewhere (Neon, Supabase), that's fine — it
-just has to be reachable from the internet, and the URL needs `?sslmode=require`.
-
-Then the schema. `render.yaml` runs `npm run db:migrate` as a **pre-deploy
-command**, so migrations apply before the new version takes traffic and a
-failed migration fails the deploy with the old version still serving. If you
-built the service by hand, add it: **Settings → Pre-Deploy Command →
-`npm run db:migrate`**.
-
-**Know it worked:**
+**Know it is up before you touch DNS:**
 
 ```sh
-curl -s https://sparktower.onrender.com/_ready     # {"ready":true,"database":"ok","ms":…}
+curl -s https://sparktower.onrender.com/_health     # OK
+curl -s https://sparktower.onrender.com/_ready      # {"ready":true,"database":"ok","ms":…}
 ```
 
 `/_ready` asks the database; `/_health` deliberately doesn't (the platform's
 only response to an unhealthy service is a restart, and restarting a server
-whose database is unreachable is a crash loop). A 503 from `/_ready` prints the
-address it tried, which is the answer nine times out of ten.
+whose database is unreachable is a crash loop). Pointing a domain at a service
+that answers `/_health` but not `/_ready` just gives the outage a nicer name.
 
-Two requirements that come from the code, not from Render:
-
-- **It must be a Web Service on a paid instance, not the free one.** Boot starts
-  five background loops (backing, analytics, promotions, moderation, retention)
-  and the owner's console holds an open SSE stream at
-  `/api/admin/analytics/live`. A free instance sleeps when idle, and a sleeping
-  process runs no jobs.
-- **Uploads need a bucket before launch, not after.** Render's disk is wiped on
-  every deploy, and production deliberately refuses to fall back to it
-  (`server/replit_integrations/object_storage/objectStorage.ts`) rather than
-  writing someone's avatar somewhere it will vanish. Step 1b.
-
-The server *refuses to start* without some of these, which is correct and an
-unhelpful surprise at 2am. The full list is
-[release-checklist.md §2](../release-checklist.md); the ones that stop the boot:
-
-```
-SESSION_SECRET              32+ random chars, used nowhere else   (render.yaml generates it)
-MOBILE_TOKEN_SECRET         a different one, same rules           (generated too)
-DATABASE_URL                the production Postgres
-AI_INTEGRATIONS_OPENAI_API_KEY
-PLATFORM_OWNER_EMAIL        the account that gets the owner console
-```
-
-Run the migrations against production **before** the new build serves traffic:
-
-```sh
-DATABASE_URL="$PROD_DB" npm run db:migrate
-```
-
-**Know it worked:** the service's own `*.onrender.com` URL answers.
-
-```sh
-curl -s -o /dev/null -w '%{http_code}\n' https://sparktower.onrender.com/_health      # 200
-curl -s -o /dev/null -w '%{http_code}\n' https://sparktower.onrender.com/api/auth/user # 401
-```
-
-A 401 there is the right answer: the API is mounted and guarding itself.
+One thing that is this file's business rather than deploy.md's: **uploads need a
+bucket before launch, not after.** Render's disk is wiped on every deploy, and
+production deliberately refuses to fall back to it
+(`server/replit_integrations/object_storage/objectStorage.ts`) rather than
+writing someone's avatar somewhere it will vanish. That is the next step.
 
 ## 1b. The uploads bucket
 
@@ -297,11 +225,22 @@ curl -s https://sparktower.app/_health           # the app, not a parked page
 
 ## 3. Tell the app its own address
 
-Set in the deployment's secrets, then redeploy:
+Set it in the **Render dashboard → the service → Environment**, then redeploy:
 
 ```
 PUBLIC_URL=https://sparktower.app
 ```
+
+**This step is not optional and not cosmetic.** Today the value is
+`https://sparktower.onrender.com` — that is what production's sitemap
+publishes as canonical, and what every verification link, invite and shared
+artifact URL sent so far was built from. Those links are not rewritten by
+anything you do here; they will keep pointing at `onrender.com`, which is a
+reason to keep that hostname answering rather than to hurry. But a site that
+resolves at `sparktower.app` while this still says `onrender.com` sends new
+visitors to the other host, where their session cookie isn't — so DNS and this
+variable move together. [deploy.md](deploy.md#public_url-is-the-sites-identity-not-a-label)
+has the full list of what is built from it.
 
 This one variable is load-bearing. Until it is set the app doesn't know where it
 lives, and each of these is either wrong or off:
@@ -423,6 +362,10 @@ unauthenticated until there is a row in it.
   `extra.apiUrl` in `mobile/app.json` for the build).
 - **VS Code extension and MCP client:** already default to
   `https://sparktower.app` — they start working when the domain does.
+- **The uptime monitor:** when it exists, its URL is `onrender.com`-based and
+  has to be repointed at `https://sparktower.app/_ready` in the same sitting.
+  It does not exist yet — the steps are in
+  [deploy.md](deploy.md#uptime-monitoring--not-yet-done).
 - **`security.txt`:** already claims `https://sparktower.app/.well-known/security.txt`
   as canonical. Once the domain serves the app, that claim becomes true; confirm
   with `curl -s https://sparktower.app/.well-known/security.txt`.
