@@ -212,6 +212,20 @@ fixed by …" is worth more than three green ticks. Three consecutive entries
 where the checklist was followed and nothing surprised you is the signal that
 this document is doing its job.
 
-| date | commit | deployed by | checklist followed? | notes |
-|---|---|---|---|---|
-| — | — | — | — | *No production deploys recorded yet. The next one goes here.* |
+Don't type the row — generate it, so the timestamp, the commit and the CI link
+are read rather than remembered:
+
+```sh
+node scripts/release-log.mjs --notes "clean"        # after section 4
+node scripts/release-log.mjs --notes "…" --dry-run  # see the row first
+```
+
+It looks up the CI run **for the commit being deployed** (not the latest run on
+`main`, which may be something else by then) and refuses to write a clean row
+unless that run is green. Deploying a commit CI hasn't passed is occasionally
+the right call; `--force` allows it and records it as exactly that, so the log
+can't quietly claim a discipline that wasn't kept.
+
+| date (UTC) | commit | deployed by | ci run | checklist followed? | notes |
+|---|---|---|---|---|---|
+| — | — | — | — | — | *No production deploys recorded yet. The next one goes here.* |

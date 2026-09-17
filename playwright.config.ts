@@ -55,6 +55,24 @@ export default defineConfig({
       SERVER_BASE_URL: E2E_BASE_URL,
       // The Content Security Policy blocks, not just reports, so a browser test fails the moment the page loads something it doesn't allow.
       CSP_ENFORCE: "1",
+      /*
+       * The breached-password check, off.
+       *
+       * It calls Have I Been Pwned for real, and it is ON here because these
+       * tests deliberately run with NODE_ENV=development (see the note at the
+       * top) — the module only defaults itself off under NODE_ENV=test. So the
+       * suite's own password, which is in the public breach corpus like every
+       * obvious test password, was being refused at registration: HTTP 400,
+       * `breached_password`. It failed open on a 2.5s timeout, so the suite
+       * passed when the network was slow and failed when it was quick, which
+       * read as flakiness rather than as a browser test depending on a third
+       * party being reachable.
+       *
+       * The behaviour itself is covered, with the range API stubbed, in
+       * test/integration/password-policy.test.ts. Nothing is lost here.
+       */
+      PASSWORD_BREACH_CHECK: "off",
+
       // Nothing that could reach a real service.
       STRIPE_SECRET_KEY: "",
       PRINTFUL_API_KEY: "",

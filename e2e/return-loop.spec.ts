@@ -12,11 +12,23 @@
 import { test, expect } from "@playwright/test";
 import { verifyEmail } from "./verify-email";
 
+/*
+ * A per-spec address, so registrations here don't share the sign-in budget.
+ *
+ * Registering counts against the per-address sign-in limit (8 in 15 minutes,
+ * shared/moderation.ts). The suite runs serially against one server, so every
+ * spec that doesn't say who it is arrives from the same loopback address and
+ * they spend one budget between them — which is why the specs that ran last
+ * failed on a refused registration, in CI and locally, while each passed alone.
+ * The addresses are TEST-NET-3 (203.0.113.0/24) and unique per person.
+ */
+test.use({ extraHTTPHeaders: { "x-forwarded-for": "203.0.113.185" } });
+
 const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
 test("a return shows what's new since you looked, continues exploring, and acting nudges toward more", async ({ page, browser }) => {
-  const beaContext = await browser.newContext();
+  const beaContext = await browser.newContext({ extraHTTPHeaders: { "x-forwarded-for": "203.0.113.186" } });
   const bea = beaContext.request;
   await bea.get("/");
   const beaUser = await bea.post("/api/auth/register", { data: { email: `e2e-bea2-${stamp()}@example.test`, password, firstName: "Bea", lastName: "Builder" } });

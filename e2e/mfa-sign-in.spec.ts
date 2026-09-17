@@ -55,7 +55,13 @@ test("a reviewer sets up 2FA, then signs in with a code", async ({ browser }) =>
 
   // Sign out; sign in again: the password isn't enough.
   await page.getByTestId("button-logout").click();
-  await expect(page.getByTestId("button-login")).toBeVisible();
+  /*
+   * The landing header is held back while the hero video opens and then fades
+   * in over two seconds (`.hero-header-reveal`), so Log In is deliberately not
+   * there for the first few seconds of the page. Longer than the 5s default,
+   * which the page navigation was already eating into.
+   */
+  await expect(page.getByTestId("button-login")).toBeVisible({ timeout: 15_000 });
   await page.getByTestId("button-login").click();
   await page.getByTestId("input-login-email").fill(email);
   await page.getByTestId("input-login-password").fill(password);

@@ -1,0 +1,20 @@
+# Findings gitleaks has already been shown to be wrong about, by fingerprint
+# (commit:file:rule:line). One line per finding, narrower than the commit-level
+# allowlist in .gitleaks.toml: a pass here covers exactly one value in exactly
+# one revision, so anything else in the same commit is still scanned.
+#
+# Only for a value that is provably not a credential. A real key that "needs"
+# an entry here needs rotating instead.
+
+# A dummy Stripe key in the redaction test — `sk_live_` followed by
+# `abcd1234efgh`, twelve characters of the alphabet and the digits in order.
+# It was never a credential and reaches no network; the test needs something
+# key-shaped to prove the redactor removes it.
+#
+# The working tree no longer contains it: test/helpers/fake-secrets.ts now
+# assembles such values from parts, so the prefix never sits next to a body in
+# a committed file. This entry is only for the revision that still holds the
+# old literal, which `gitleaks detect` re-reads on every run because it scans
+# the full history. History is not rewritten for it — force pushes to main are
+# disabled, and rewriting shared history over a dummy is the larger risk.
+dde000c8f784c7c6b6cff89ab1def551e0ec8674:test/unit/error-reporting.test.ts:stripe-access-token:58
