@@ -136,6 +136,42 @@ const safeUser = (u: UserRow) => {
   return rest;
 };
 
+/**
+ * The enrolment QR, drawn twice over if it has to be.
+ *
+ * PNG first, because it is what every camera and every browser handles without
+ * argument. But PNG encoding goes through zlib and a pixel buffer, and that is
+ * the part that fails on a host with an unusual build of the runtime — which is
+ * exactly how somebody ended up staring at "Couldn't draw the QR code this
+ * time" while the same code drew it happily in development and in the tests.
+ *
+ * So when PNG fails, SVG: a different renderer, no compression, no pixel
+ * buffer, nothing but a string of rectangles. It is handed back base64-encoded
+ * in a data URL like the PNG, so the page still renders it as an *image* and
+ * never as markup — an SVG injected as HTML is a script tag waiting to happen.
+ *
+ * Both failing is survivable: the key below the picture does the same job, and
+ * refusing to set up 2FA because a decoration wouldn't draw would be worse.
+ * Which renderer answered comes back with it, because "it works for me" is not
+ * a diagnosis and the next person to hit this deserves the answer.
+ */
+export async function drawQr(url: string): Promise<{ dataUrl: string | null; drawnAs: "png" | "svg" | null }> {
+  try {
+    const png = await QRCode.toDataURL(url, { errorCorrectionLevel: "M", margin: 1, width: 240, color: { dark: "#000000ff", light: "#ffffffff" } });
+    return { dataUrl: png, drawnAs: "png" };
+  } catch (err) {
+    console.error("[mfa] couldn't draw the enrolment QR as a PNG, trying SVG:", (err as Error)?.message ?? err);
+  }
+  try {
+    const svg = await QRCode.toString(url, { type: "svg", errorCorrectionLevel: "M", margin: 1, width: 240, color: { dark: "#000000ff", light: "#ffffffff" } });
+    return { dataUrl: `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`, drawnAs: "svg" };
+  } catch (err) {
+    // The key below still works; a missing picture is not a reason to fail setup.
+    console.error("[mfa] couldn't draw the enrolment QR as an SVG either:", (err as Error)?.message ?? err);
+    return { dataUrl: null, drawnAs: null };
+  }
+}
+
 export function registerMfaRoutes(app: Express) {
   /** Where this account stands: whether its role needs 2FA, whether it's on, whether this session passed it. */
   app.get("/api/auth/mfa/status", isAuthenticated, (req: any, res) => {
@@ -189,15 +225,8 @@ export function registerMfaRoutes(app: Express) {
      * Black on white regardless of theme — a QR inverted for dark mode is one
      * many phone cameras will not read.
      */
-    let qrDataUrl: string | null = null;
-    try {
-      qrDataUrl = await QRCode.toDataURL(url, { errorCorrectionLevel: "M", margin: 1, width: 240, color: { dark: "#000000ff", light: "#ffffffff" } });
-    } catch (err) {
-      // The key below still works; a missing picture is not a reason to fail setup.
-      console.error("[mfa] couldn't draw the enrolment QR:", err);
-    }
-
-    res.json({ secret, otpauthUrl: url, qrDataUrl });
+    const { dataUrl: qrDataUrl, drawnAs } = await drawQr(url);
+    res.json({ secret, otpauthUrl: url, qrDataUrl, drawnAs });
   });
 
   /** Confirms setup with a code from the app: 2FA is on, this session counts as verified, and the recovery codes are shown once. */
