@@ -77,6 +77,15 @@ const PRIVATE_ACCOUNT_FIELDS = new Set([
   "email", "authProvider", "googleId", "stripeCustomerId", "stripeSubscriptionId", "stripeConnectAccountId",
   "subscriptionTier", "creditsUsed", "creditsResetAt", "platformRole", "suspendedAt", "suspendedReason",
   "signupSource", "signupMedium", "signupCampaign", "signupReferrer", "signupLandingPath", "signupParams", "updatedAt",
+  /*
+   * Money and security state. These ride out on any embedded account row — a
+   * project's owner, a leaderboard entry, a member card — and none of them is
+   * anyone else's business: that a named builder's card was declined, and what
+   * the processor said about it; whether they have two-factor on, which is
+   * exactly what someone picking an account to attack would like to know.
+   */
+  "paymentFailedAt", "paymentFailureMessage", "subscriptionRefundedAt", "subscriptionEventAt",
+  "emailVerifiedAt", "mfaEnabledAt", "accessTokensRevokedAt", "deletedAt",
 ]);
 
 export function stripOthersAccountFields(obj: any, viewer: { id?: string; platformRole?: string } | undefined, depth = 0): any {
@@ -165,21 +174,51 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
    * so this asks the database and says which it is. It is not wired to the
    * platform's health check, on purpose (see above).
    */
+  /*
+   * The answer, briefly remembered.
+   *
+   * This route is public and unauthenticated — it has to be, a probe can't
+   * sign in — and it asks the database something. That combination means
+   * anyone can make this process issue a query, as fast as they can ask:
+   * cheap per request, not free in aggregate, and the reason CodeQL flags it
+   * (js/missing-rate-limiting). A limiter is the wrong instrument here,
+   * because the legitimate caller is a monitor that polls on a schedule and
+   * being refused is exactly what it would report as an outage.
+   *
+   * So the query is what's limited, not the caller. Within the window every
+   * request gets the same answer without touching the database, which caps
+   * this at one query per READY_CACHE_MS however hard it's hit, while a
+   * monitor polling every ten seconds still sees a fresh answer each time.
+   * Short enough that a database that has just gone away is noticed within
+   * the window rather than reported healthy for a minute.
+   */
+  const READY_CACHE_MS = 1_000;
+  let readyCache: { at: number; status: number; body: Record<string, unknown> } | null = null;
+
   app.get("/_ready", async (_req, res) => {
-    const started = Date.now();
+    const now = Date.now();
+    if (readyCache && now - readyCache.at < READY_CACHE_MS) {
+      // `cached` so a reader isn't misled about how fresh `ms` is.
+      return res.status(readyCache.status).json({ ...readyCache.body, cached: true });
+    }
+    const started = now;
     try {
       await pool.query("SELECT 1");
-      res.json({ ready: true, database: "ok", ms: Date.now() - started });
+      const body = { ready: true, database: "ok", ms: Date.now() - started };
+      readyCache = { at: Date.now(), status: 200, body };
+      res.json(body);
     } catch (err) {
       const message = String((err as Error)?.message ?? err);
-      res.status(503).json({
+      const body = {
         ready: false,
         database: "unreachable",
         // The address it tried is the answer nine times out of ten: a localhost
         // here means the deployment carries a development connection string.
         detail: redact(message).slice(0, 200),
         ms: Date.now() - started,
-      });
+      };
+      readyCache = { at: Date.now(), status: 503, body };
+      res.status(503).json(body);
     }
   });
 
