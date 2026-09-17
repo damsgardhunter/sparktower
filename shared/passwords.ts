@@ -72,14 +72,12 @@ export function checkPassword(password: unknown, opts: { email?: string | null }
   return null;
 }
 
-/**
- * Whether this password should be checked against the breached-password
- * corpus. Every password worth setting should be, if the network call is
- * affordable: the k-anonymity range API (api.pwnedpasswords.com/range/<first
- * five hex of the SHA-1>) never receives the password or its full hash.
- *
- * Kept as a named seam rather than a TODO so the place is obvious when the
- * call is added, and so the audit's password-policy check has something honest
- * to read.
+/*
+ * The breach check used to be a seam here — a function that returned "yes,
+ * check this one" and nothing that called it. It is real now, and it lives in
+ * server/password-breach.ts rather than in this file: it makes a network call,
+ * and this module is imported by the browser and by the mobile app, neither of
+ * which should be reaching for an external service or carrying the code that
+ * would. Every server-side place a password is set calls it after this check
+ * passes.
  */
-export const looksBreachable = (password: string): boolean => password.length >= PASSWORD_MIN;

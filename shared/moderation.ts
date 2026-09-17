@@ -90,7 +90,10 @@ export const RATE_LIMITS = {
    */
   loginAccount: {
     max: 12, windowMinutes: 15,
-    message: "Too many failed sign-ins for this account. Try again in 15 minutes, or reset your password.",
+    // No "or reset your password": there is no reset flow yet, and sending
+    // someone who can't get in to a page that doesn't exist is worse than
+    // telling them to wait.
+    message: "Too many failed sign-ins for this account. Try again in 15 minutes.",
   },
   ai: {
     max: 30, windowMinutes: 10,

@@ -414,6 +414,92 @@ export async function enforceRejectionLimit(res: any, key: string, action: RateL
   return true;
 }
 
+/**
+ * Take one attempt from a limit, atomically — check and increment together.
+ *
+ * Every other limit here reads the count and then writes the hit, which is
+ * correct for one caller at a time and wrong for the case a credential-stuffing
+ * limit exists to stop. A script that sends two hundred sign-in attempts at
+ * once has every one of them read the same pre-burst count, find room under
+ * the limit, and proceed: a limit of twelve lets through as many requests as
+ * the attacker is willing to open at the same moment.
+ *
+ * Inside one transaction, behind an advisory lock on the key, the count and
+ * the insert can't be split. Attempts against the same account serialise;
+ * attempts against different accounts don't touch each other, so this costs
+ * nothing to everyone else signing in.
+ *
+ * The attempt is spent up front, so a successful sign-in gives it back —
+ * `refundAttempt`. Only failures should count against someone.
+ */
+export async function reserveAttempt(key: string, action: RateLimitAction): Promise<RateCheck> {
+  const limit = RATE_LIMITS[action];
+  try {
+    return await db.transaction(async (tx) => {
+      // Two 32-bit ints rather than one: hashtext on the key alone would make
+      // two different actions on the same account queue behind each other.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${key}), hashtext(${action}))`);
+
+      const [row] = await tx.select({
+        n: sql<number>`count(*)::int`,
+        frees: sql<number | null>`ceil(extract(epoch from (min(${rateLimitHits.createdAt}) + ${interval(limit.windowMinutes, "minutes")} - now())))::int`,
+      })
+        .from(rateLimitHits)
+        .where(and(
+          eq(rateLimitHits.userId, key),
+          eq(rateLimitHits.action, action),
+          withinMinutes(rateLimitHits.createdAt, limit.windowMinutes),
+        ));
+
+      const used = Number(row?.n ?? 0);
+      if (used >= limit.max) {
+        if (await isExempt(key)) return { ok: true, exempt: true, used, max: limit.max, retryAfterSeconds: 0 };
+        const frees = row?.frees == null ? limit.windowMinutes * 60 : Number(row.frees);
+        return { ok: false, exempt: false, used, max: limit.max, retryAfterSeconds: Math.min(limit.windowMinutes * 60, Math.max(1, frees)) };
+      }
+
+      await tx.insert(rateLimitHits).values({ userId: key, action });
+      return { ok: true, exempt: false, used: used + 1, max: limit.max, retryAfterSeconds: 0 };
+    });
+  } catch (err) {
+    const closed = failsClosed(action);
+    console.error(`[moderation] Atomic reserve failed for ${action}, ${closed ? "refusing" : "allowing"}:`, err);
+    if (!closed) return { ok: true, exempt: false, used: 0, max: limit.max, retryAfterSeconds: 0 };
+    return { ok: false, exempt: false, unavailable: true, used: 0, max: limit.max, retryAfterSeconds: LIMIT_UNAVAILABLE_RETRY_SECONDS };
+  }
+}
+
+/** `reserveAttempt`, with the refusal written to the response. True when there was room. */
+export async function enforceReservedLimit(res: any, key: string, action: RateLimitAction): Promise<boolean> {
+  const check = await reserveAttempt(key, action);
+  if (!check.ok) { refuse(res, key, action, check); return false; }
+  return true;
+}
+
+/**
+ * Give back the attempt this request reserved.
+ *
+ * Deletes the newest hit for the key rather than a specific row id: under a
+ * burst it doesn't matter which one goes, only that the count drops by one,
+ * and the newest is the one this request almost certainly wrote. Best-effort —
+ * a failed refund costs the person one attempt out of their window, which is
+ * the right way for it to fail.
+ */
+export async function refundAttempt(key: string, action: RateLimitAction): Promise<void> {
+  try {
+    await db.execute(sql`
+      DELETE FROM ${rateLimitHits}
+      WHERE id = (
+        SELECT id FROM ${rateLimitHits}
+        WHERE ${rateLimitHits.userId} = ${key} AND ${rateLimitHits.action} = ${action}
+        ORDER BY ${rateLimitHits.createdAt} DESC
+        LIMIT 1
+      )`);
+  } catch (err) {
+    console.error(`[moderation] Could not refund a ${action} attempt:`, err);
+  }
+}
+
 export async function countRejection(key: string, action: RateLimitAction): Promise<void> {
   await recordHit(key, action);
 }

@@ -420,7 +420,54 @@ export function scanSecurity(allFiles: SourceFile[], extra: { suspectedSecrets?:
     });
   }
   {
-    const rawSql = onServer(/sql\.raw\(|\.query\(\s*`[^`]*\$\{|\.execute\(\s*`[^`]*\$\{|\$queryRawUnsafe|raw\(\s*`[^`]*\$\{|cursor\.execute\(\s*f["']/);
+    /*
+     * Concatenating a table or column name the driver has quoted for you is
+     * the one safe way to build SQL from a string: pg's escapeIdentifier
+     * exists precisely because identifiers can't be bound as parameters.
+     * server/data-shape.ts does this legitimately, and a checker that cries
+     * wolf there teaches people to ignore it.
+     */
+    /*
+     * Concatenation inside a query call, read operand by operand.
+     *
+     * A regex can't express the rule that matters — "every piece being glued
+     * on is already safe" — because the answer depends on all of them. The
+     * first attempt used a negative lookahead for escapeIdentifier and was
+     * worse than nothing: it exempted `"FROM " + escapeIdentifier(t)` and, in
+     * doing so, stopped looking, so the `+ userValue` at the end of the same
+     * call sailed through.
+     *
+     * Two operands are safe to concatenate: a quoted literal the developer
+     * wrote, and an identifier the driver has quoted (pg's escapeIdentifier /
+     * escapeLiteral, which exist because an identifier can't be a bound
+     * parameter). Anything else is a value that belongs in a parameter.
+     */
+    const SAFE_OPERAND = /^(?:"[^"]*"|'[^']*'|`[^`$]*`|(?:\w+\.)?escape(?:Identifier|Literal)\s*\()/;
+    const concatsUnsafely = (content: string): boolean => {
+      for (const call of content.matchAll(/\.(?:query|execute)\(([\s\S]{0,600}?)\)\s*[;,)]/g)) {
+        const args = call[1];
+        if (!args.includes("+")) continue;
+        if (args.split("+").slice(1).some((operand) => !SAFE_OPERAND.test(operand.trim()))) return true;
+      }
+      return false;
+    };
+
+    const rawSql = Array.from(new Set([
+      ...onServer(new RegExp([
+        String.raw`sql\.raw\(`,
+        String.raw`\$queryRawUnsafe`,
+        String.raw`cursor\.execute\(\s*f["']`,
+        // Interpolated right at the call.
+        String.raw`\.(?:query|execute)\(\s*\`[^\`]*\$\{`,
+        String.raw`raw\(\s*\`[^\`]*\$\{`,
+        // Built into a variable first, then handed to the driver. The SQL
+        // keyword is what separates a query from any other string with a ${}
+        // in it; without it this matches half the codebase.
+        String.raw`(?:const|let|var)\s+\w+\s*=\s*\`[^\`]*\b(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE)\b[^\`]*\$\{`,
+        String.raw`(?:const|let|var)\s+\w+\s*=\s*(?:"|')[^"']*\b(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE)\b[\s\S]*?(?:"|')\s*\+\s*(?!(?:\w+\.)?escape(?:Identifier|Literal)\s*\()`,
+      ].join("|"))),
+      ...server.filter((f) => f.content && concatsUnsafely(f.content)).map((f) => f.path),
+    ]));
     add({
       id: "sql-injection", label: "Queries parameterised", category: "input", severity: "high",
       status: rawSql.length ? "partial" : "pass",

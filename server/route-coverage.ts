@@ -32,7 +32,7 @@ export interface RouteCoverageRow {
   publicReason: string | null;
   /** Why a costly route is metered differently (free, charged in a helper…), from a `// metering: …` comment in the route. */
   meteringNote: string | null;
-  /** The limits the route applies itself, by name: rateLimit("x"), enforceRateLimit(…, "x"), enforceRejectionLimit(…, "x"), and "credits" for requireCredits. */
+  /** The limits the route applies itself, by name: rateLimit("x"), enforceRateLimit(…, "x"), enforceRejectionLimit(…, "x"), enforceReservedLimit(…, "x"), and "credits" for requireCredits. */
   limits: string[];
   /** For a route that checks or charges credits, or calls a model: in what order. Null otherwise. */
   metering: MeteringFacts | null;
@@ -347,6 +347,8 @@ export function buildRouteCoverage(files: RepoFile[]): RouteCoverage {
            */
           ...[...body.matchAll(/\benforceRateLimit\s*\([\s\S]{0,200}?["'`](\w+)["'`]\s*\)/g)].map((m) => m[1]),
           ...[...body.matchAll(/\benforceRejectionLimit\s*\([\s\S]{0,200}?["'`](\w+)["'`]\s*\)/g)].map((m) => `${m[1]} (failures only)`),
+          // Reserved up front and refunded on success — a limit, however it's spelled.
+          ...[...body.matchAll(/\benforceReservedLimit\s*\([\s\S]{0,200}?["'`](\w+)["'`]\s*\)/g)].map((m) => `${m[1]} (failures only)`),
           ...(credits ? ["credits"] : []),
         ])],
         metering: analyzeMetering(body),
