@@ -61,6 +61,20 @@ describe("the owner's analytics console", () => {
       const timer = setTimeout(() => done(new Error("the live stream sent no backfill within 15 seconds")), 15_000);
       let seen = "";
       stream.on("response", (res: any) => {
+        /*
+         * Hanging up mid-stream tears down the socket under the *response*, and
+         * it emits its own 'aborted' and 'error' (ECONNRESET) — separately from
+         * the request, whose error is handled below. With nothing listening on
+         * this side, that landed outside any test as an unhandled exception:
+         * vitest reported every test passing and still exited non-zero, which
+         * made `server-web` red for a reason that had nothing to do with a
+         * test. Closing a stream you opened on purpose is not a failure.
+         */
+        res.on("aborted", () => { /* expected: we hung up */ });
+        res.on("error", (err: any) => {
+          const expected = /abort|ECONNRESET|socket hang up/i.test(String(err?.code ?? err?.message ?? err));
+          if (!expected) { clearTimeout(timer); done(err as Error); }
+        });
         try {
           expect(res.status).toBe(200);
           expect(String(res.headers["content-type"])).toMatch(/text\/event-stream/);
