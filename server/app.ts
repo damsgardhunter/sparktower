@@ -77,6 +77,15 @@ const PRIVATE_ACCOUNT_FIELDS = new Set([
   "email", "authProvider", "googleId", "stripeCustomerId", "stripeSubscriptionId", "stripeConnectAccountId",
   "subscriptionTier", "creditsUsed", "creditsResetAt", "platformRole", "suspendedAt", "suspendedReason",
   "signupSource", "signupMedium", "signupCampaign", "signupReferrer", "signupLandingPath", "signupParams", "updatedAt",
+  /*
+   * Money and security state. These ride out on any embedded account row — a
+   * project's owner, a leaderboard entry, a member card — and none of them is
+   * anyone else's business: that a named builder's card was declined, and what
+   * the processor said about it; whether they have two-factor on, which is
+   * exactly what someone picking an account to attack would like to know.
+   */
+  "paymentFailedAt", "paymentFailureMessage", "subscriptionRefundedAt", "subscriptionEventAt",
+  "emailVerifiedAt", "mfaEnabledAt", "accessTokensRevokedAt", "deletedAt",
 ]);
 
 export function stripOthersAccountFields(obj: any, viewer: { id?: string; platformRole?: string } | undefined, depth = 0): any {
@@ -165,22 +174,57 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
    * so this asks the database and says which it is. It is not wired to the
    * platform's health check, on purpose (see above).
    */
-  app.get("/_ready", async (_req, res) => {
+  /*
+   * One query at a time, however many are asking.
+   *
+   * This route is public and unauthenticated — a probe cannot sign in — and it
+   * asks the database something, so anyone can make this process talk to the
+   * database by asking. That is what CodeQL flags (js/missing-rate-limiting),
+   * and it is a fair point about a public endpoint that does real work.
+   *
+   * Two instruments were wrong before this one. A rate limiter refuses the
+   * caller, and the legitimate caller is a monitor on a schedule — being
+   * refused is precisely what it would report as an outage. Caching the answer
+   * refuses reality instead: `readiness.test.ts` breaks the database and
+   * expects 503 on the very next request, and it is right to, because a
+   * readiness probe that reports health for a second after the database has
+   * gone is worse than the load it was saving.
+   *
+   * So neither the caller nor the answer is held back — the *queries* are
+   * collapsed. While one is in flight every other request waits on that same
+   * one and they all get its result, so a flood costs one query per round trip
+   * rather than one per request, and nobody is ever told something that isn't
+   * true right now.
+   */
+  let readyInFlight: Promise<{ status: number; body: Record<string, unknown> }> | null = null;
+
+  const askTheDatabase = async () => {
     const started = Date.now();
     try {
       await pool.query("SELECT 1");
-      res.json({ ready: true, database: "ok", ms: Date.now() - started });
+      return { status: 200, body: { ready: true, database: "ok", ms: Date.now() - started } };
     } catch (err) {
       const message = String((err as Error)?.message ?? err);
-      res.status(503).json({
-        ready: false,
-        database: "unreachable",
-        // The address it tried is the answer nine times out of ten: a localhost
-        // here means the deployment carries a development connection string.
-        detail: redact(message).slice(0, 200),
-        ms: Date.now() - started,
-      });
+      return {
+        status: 503,
+        body: {
+          ready: false,
+          database: "unreachable",
+          // The address it tried is the answer nine times out of ten: a localhost
+          // here means the deployment carries a development connection string.
+          detail: redact(message).slice(0, 200),
+          ms: Date.now() - started,
+        },
+      };
     }
+  };
+
+  app.get("/_ready", async (_req, res) => {
+    // Cleared in a `finally` so a rejection can't leave every later request
+    // waiting on a promise that will never be replaced.
+    readyInFlight ??= askTheDatabase().finally(() => { readyInFlight = null; });
+    const { status, body } = await readyInFlight;
+    res.status(status).json(body);
   });
 
   app.use((req, res, next) => {
