@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View, type ViewToken } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -16,10 +16,17 @@ import { DiscoverNewsLink, FeedbackUsedCard, MyProjectsCard, ProfileCard } from 
 import { ContinuePathCard, NEXT_STEPS_KEY } from "../../src/components/feed/ContinuePathCard";
 import { ComposerCard } from "../../src/components/feed/ComposerCard";
 import { RAIL_SLOTS, RailModule, type RailModuleKind } from "../../src/components/feed/RailModules";
+import { PromotionCard } from "../../src/components/feed/PromotionCard";
+import { useFeedPromotions, type PromotionSlot } from "../../src/components/feed/useFeedPromotions";
+import { useHideTabBarOnScroll } from "../../src/components/tab-bar-visibility";
+import { TAB_BAR_SPACE } from "./_layout";
 
 type Scope = "everyone" | "following";
 
-type Item = { key: string; post: FeedPost } | { key: string; module: RailModuleKind };
+type Item =
+  | { key: string; post: FeedPost }
+  | { key: string; module: RailModuleKind }
+  | { key: string; promo: PromotionSlot };
 
 /**
  * Home — the website's home page (client/src/pages/home.tsx) on one column.
@@ -61,19 +68,46 @@ export default function Feed() {
   }, [feed.data]);
   const followingCount = feed.data?.pages[0]?.followingCount;
 
+  // Featured tools, where the website puts them: usually one above the first
+  // post, then one every few posts, on this feed whichever scope or filter is
+  // on — the same as the web's home feed (client/src/components/founder-feed.tsx).
+  const { promotionBefore, onSeen: promoSeen, onHide: promoHide } = useFeedPromotions(posts.length);
+
   // Posts, with the rail's discovery modules between them on the Everyone feed.
   const items = useMemo<Item[]>(() => {
     const out: Item[] = [];
     const withModules = scope === "everyone" && filter === "all";
+    const promoAt = (index: number) => {
+      const promo = promotionBefore(index);
+      if (promo) out.push({ key: `promo-${promo.promotion.id}-${promo.slot}`, promo });
+    };
     posts.forEach((post, i) => {
+      promoAt(i);
       out.push({ key: post.id, post });
       if (withModules) {
         const slot = RAIL_SLOTS.find((r) => r.after === i);
         if (slot) out.push({ key: `module-${slot.kind}`, module: slot.kind });
       }
     });
+    promoAt(posts.length);
     return out;
-  }, [posts, scope, filter]);
+  }, [posts, scope, filter, promotionBefore]);
+
+  // An impression once half the card has been on screen, as the web counts it.
+  // The bar slides away while you read the feed, and comes back on the way up.
+  const hideTabBar = useHideTabBarOnScroll();
+
+  // Held in a ref because FlatList refuses a callback that changes identity.
+  const promoSeenRef = useRef(promoSeen);
+  promoSeenRef.current = promoSeen;
+  const viewability = useRef({
+    viewabilityConfig: { itemVisiblePercentThreshold: 50 },
+    onViewableItemsChanged: ({ viewableItems }: { viewableItems: ViewToken[] }) => {
+      for (const { item } of viewableItems) {
+        if (item && typeof item === "object" && "promo" in item) promoSeenRef.current((item as { promo: PromotionSlot }).promo);
+      }
+    },
+  }).current;
   const leftoverModules = scope === "everyone" && filter === "all" && posts.length > 0 && !feed.hasNextPage
     ? RAIL_SLOTS.filter((r) => r.after >= posts.length).map((r) => r.kind)
     : [];
@@ -207,7 +241,12 @@ export default function Feed() {
       <FlatList
         data={items}
         keyExtractor={(it) => it.key}
-        renderItem={({ item }) => ("post" in item ? <PostCard post={item.post} onNotice={show} /> : <RailModule kind={item.module} />)}
+        renderItem={({ item }) =>
+          "post" in item ? <PostCard post={item.post} onNotice={show} />
+          : "promo" in item ? <PromotionCard promotion={item.promo.promotion} slot={item.promo.slot} onHide={promoHide} />
+          : <RailModule kind={item.module} />}
+        viewabilityConfig={viewability.viewabilityConfig}
+        onViewableItemsChanged={viewability.onViewableItemsChanged}
         ItemSeparatorComponent={() => <View style={{ height: spacing.sm }} />}
         ListHeaderComponent={header}
         ListEmptyComponent={empty}
@@ -227,7 +266,8 @@ export default function Feed() {
         }
         onEndReached={() => { if (feed.hasNextPage && !feed.isFetchingNextPage) feed.fetchNextPage(); }}
         onEndReachedThreshold={0.6}
-        contentContainerStyle={{ paddingTop: spacing.sm, paddingBottom: 110 }}
+        {...hideTabBar}
+        contentContainerStyle={{ paddingTop: spacing.sm, paddingBottom: TAB_BAR_SPACE }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
       />
 

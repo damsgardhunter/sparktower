@@ -246,7 +246,7 @@ export default function Discover() {
 
   return (
     <>
-      <Screen canvas onRefresh={refresh} refreshing={refreshing} contentStyle={{ padding: 0, gap: spacing.sm }}>
+      <Screen hideTabBar canvas onRefresh={refresh} refreshing={refreshing} contentStyle={{ padding: 0, gap: spacing.sm }}>
         <View style={{ backgroundColor: colors.surface }}>
           <TabStrip
             options={[{ value: "grow" as Mode, label: "Grow" }, { value: "looking" as Mode, label: "Who's looking" }]}

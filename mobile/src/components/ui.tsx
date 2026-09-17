@@ -16,6 +16,9 @@ import { LinearGradient } from "expo-linear-gradient";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { API_URL } from "../api/client";
 import { colors, font, fontFamily, novaGradient, radius, shadow, spacing } from "../theme";
+import { useHideTabBarOnScroll } from "./tab-bar-visibility";
+// The floating bar's footprint, so a list's last row isn't stuck underneath it.
+export const TAB_BAR_SPACE = 112;
 
 export type IconName = React.ComponentProps<typeof Ionicons>["name"];
 
@@ -27,7 +30,7 @@ export const assetUri = (uri?: string | null): string | null =>
 
 /** Scrolling screen body with consistent padding and pull-to-refresh. */
 export function Screen({
-  children, onRefresh, refreshing, contentStyle, scroll = true, canvas,
+  children, onRefresh, refreshing, contentStyle, scroll = true, canvas, hideTabBar,
 }: {
   children: React.ReactNode;
   onRefresh?: () => void;
@@ -36,7 +39,14 @@ export function Screen({
   scroll?: boolean;
   /** The gray feed background, for screens made of stacked cards. */
   canvas?: boolean;
+  /**
+   * Let the bottom bar slide away as this screen scrolls, and leave room for
+   * it at the end of the content. For screens people read down; not for forms,
+   * where a bar disappearing mid-answer just loses someone their place.
+   */
+  hideTabBar?: boolean;
 }) {
+  const hiding = useHideTabBarOnScroll();
   const base = [s.screenBase, canvas && { backgroundColor: colors.canvas }];
   if (!scroll) {
     return <View style={[...base, contentStyle]}>{children}</View>;
@@ -44,8 +54,9 @@ export function Screen({
   return (
     <ScrollView
       style={base}
-      contentContainerStyle={[s.screenContent, contentStyle]}
+      contentContainerStyle={[s.screenContent, hideTabBar && { paddingBottom: TAB_BAR_SPACE }, contentStyle]}
       keyboardShouldPersistTaps="handled"
+      {...(hideTabBar ? hiding : null)}
       refreshControl={
         onRefresh
           ? <RefreshControl refreshing={!!refreshing} onRefresh={onRefresh} tintColor={colors.primary} />

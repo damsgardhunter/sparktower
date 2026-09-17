@@ -8,6 +8,8 @@ import { Avatar, Btn, Empty, Icon, Loading, Segments, timeAgo, type IconName } f
 import { useConnectionStates } from "../../src/components/ConnectActions";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
 import { appHref, notificationSection, useConnectionRequests, useInvitationActions } from "../../src/networkData";
+import { useHideTabBarOnScroll } from "../../src/components/tab-bar-visibility";
+import { TAB_BAR_SPACE } from "./_layout";
 
 interface NotificationItem {
   id: string;
@@ -163,9 +165,13 @@ export default function Notifications() {
 
   if (query.isLoading) return <Loading />;
 
+  const hideTabBar = useHideTabBarOnScroll();
+
   return (
     <>
       <FlatList
+        {...hideTabBar}
+        contentContainerStyle={{ paddingBottom: TAB_BAR_SPACE }}
         style={{ flex: 1, backgroundColor: colors.canvas }}
         data={lines}
         keyExtractor={(l) => l.key}
