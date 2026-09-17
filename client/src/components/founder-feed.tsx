@@ -14,7 +14,7 @@ import { useFeedPromotions } from "@/hooks/use-feed-promotions";
 import { useNotificationCounts, refreshNotifications } from "@/components/notification-bell";
 import { apiRequest } from "@/lib/queryClient";
 import { FeedPostCard, type FeedPostWithDetails } from "@/components/feed-post-card";
-import { Heart, Loader2, Newspaper, Users, SlidersHorizontal, ChevronDown, X } from "lucide-react";
+import { Heart, Loader2, Newspaper, Users, SlidersHorizontal, ChevronDown, X, Sparkles } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuLabel,
   DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator,
@@ -33,6 +33,12 @@ interface FeedPage {
   nextCursor: string | null;
   /** Only on the Following feed: how many builders and projects you follow. */
   followingCount?: number;
+  /**
+   * The server ordered this page by relevance to you rather than purely by
+   * time. Worth saying out loud: a feed that isn't in the order you expect,
+   * with nothing explaining why, reads as a bug.
+   */
+  ranked?: boolean;
 }
 
 type Scope = "everyone" | "following";
@@ -127,6 +133,16 @@ export function FounderFeed({ projectId }: { projectId?: string }) {
         )}
         <span className="flex-1 h-px bg-foreground/15 mx-2" aria-hidden />
         <div className="flex items-center gap-1">
+          {/* Only where it's true: the Everyone feed, signed in, unfiltered by author or project. */}
+          {data?.ranked && (
+            <span
+              className="hidden sm:inline-flex items-center gap-1 text-[11px] text-muted-foreground mr-1"
+              title="Posts about what you build, and from people you follow, come first. Newer posts still lead."
+              data-testid="feed-ranked-hint"
+            >
+              <Sparkles className="h-3 w-3" /> Sorted for you
+            </span>
+          )}
           {filter !== "all" && (
             <button
               className="text-[11px] text-primary hover:underline flex items-center gap-0.5"

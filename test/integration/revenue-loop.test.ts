@@ -7,19 +7,20 @@
  * it again. E2E: e2e/revenue-loop.spec.ts.
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { FAKE_STRIPE_TEST_KEY, fakeWebhookSecret } from "../helpers/fake-secrets";
 import request from "supertest";
 import Stripe from "stripe";
 import { eq } from "drizzle-orm";
 import { db } from "../../server/db";
 import { users } from "@shared/schema";
 
-const WEBHOOK_SECRET = "whsec_test_revenue_loop";
-const stripe = new Stripe("sk_test_dummy_key_not_used_for_network", { apiVersion: "2025-08-27.basil" });
+const WEBHOOK_SECRET = fakeWebhookSecret("revenue-loop");
+const stripe = new Stripe(FAKE_STRIPE_TEST_KEY, { apiVersion: "2025-08-27.basil" });
 
 vi.mock("../../server/stripeClient", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../server/stripeClient")>();
   const StripeCtor = (await import("stripe")).default;
-  const client: any = new StripeCtor("sk_test_dummy_key_not_used_for_network", { apiVersion: "2025-08-27.basil" });
+  const client: any = new StripeCtor(FAKE_STRIPE_TEST_KEY, { apiVersion: "2025-08-27.basil" });
   // What Stripe would answer for a Builder subscription, without the network.
   client.subscriptions.retrieve = async (id: string) => ({ id, status: "active", items: { data: [{ price: { id: "price_builder_test" } }] } });
   client.prices.retrieve = async () => ({ id: "price_builder_test", metadata: { tier: "builder" } });

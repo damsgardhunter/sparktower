@@ -14,18 +14,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { verifyEmail } from "./verify-email";
 
-/*
- * A per-spec address, so registrations here don't share the sign-in budget.
- *
- * Registering counts against the per-address sign-in limit (8 in 15 minutes,
- * shared/moderation.ts). The suite runs serially against one server, so every
- * spec that doesn't say who it is arrives from the same loopback address and
- * they spend one budget between them — which is why the specs that ran last
- * failed on a refused registration, in CI and locally, while each passed alone.
- * The addresses are TEST-NET-3 (203.0.113.0/24) and unique per person.
- */
-test.use({ extraHTTPHeaders: { "x-forwarded-for": "203.0.113.182" } });
-
 const password = "Testpass123!";
 
 /** An account and a project, through the API — none of that is what's under test here. */

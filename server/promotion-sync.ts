@@ -77,7 +77,7 @@ export async function syncPromotion(promotionId: string, fetcher: Fetcher = guar
   if (!company) return { promotionId, logo: false, videoId: null, error: "not in the catalog" };
   const [settings] = await db.select({ channel: promotionSettings.youtubeChannelUrl }).from(promotionSettings).where(eq(promotionSettings.promotionId, promotionId));
   // A page on someone else's platform: its logo and channel aren't the company's. Only an admin's channel is used.
-  if (company.readSite === false && !settings?.channel) {
+  if (company.readSite === false && !settings?.channel && !company.channel) {
     const cleared = { logoData: null, logoContentType: null, logoSourceUrl: null, youtubeChannelId: null, videoId: null, videoTitle: null, videoPublishedAt: null, fetchedAt: new Date(), error: "not read from its site (a shared platform page) — set its logo and YouTube channel here" };
     await db.insert(promotionSources).values({ promotionId, ...cleared }).onConflictDoUpdate({ target: promotionSources.promotionId, set: cleared });
     return { promotionId, logo: false, videoId: null, error: cleared.error };
@@ -102,9 +102,23 @@ export async function syncPromotion(promotionId: string, fetcher: Fetcher = guar
   }
   if (!logo && homepage) problems.push("no usable logo");
 
-  // The video: the admin's channel if one is set, else the one the site links,
-  // else a likely handle — used only if that channel's page links the company's domain.
-  const linked = settings?.channel ? [settings.channel] : findYouTubeChannelLinks(homepage);
+  /*
+   * The video, in order of how much the channel is trusted:
+   *
+   *   1. the channel an admin set — they looked it up on purpose;
+   *   2. the channel the catalog carries, checked by hand against the real
+   *      channel's name when it was added;
+   *   3. the channel the company's own homepage links;
+   *   4. a handle guessed from the company's name.
+   *
+   * Only the guess has to prove itself (`channelVouchesFor`). That check is
+   * what keeps a look-alike channel out — the kind that shares a company's
+   * name and belongs to someone else entirely.
+   */
+  const curated = company.channel ? `https://www.youtube.com/${company.channel}` : null;
+  const linked = settings?.channel ? [settings.channel]
+    : curated ? [curated, ...findYouTubeChannelLinks(homepage)]
+    : findYouTubeChannelLinks(homepage);
   const channels = linked.length ? linked.slice(0, 3).map((url) => ({ url, guessed: false }))
     : company.readSite === false ? [] : guessYouTubeHandles(company).slice(0, 4).map((url) => ({ url, guessed: true }));
   let channelId: string | null = null;

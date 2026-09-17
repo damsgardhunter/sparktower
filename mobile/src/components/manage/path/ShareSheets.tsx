@@ -10,7 +10,7 @@
  * is a notification that brings the builder back to the next one.
  */
 import { useState } from "react";
-import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../../api/client";
@@ -142,8 +142,15 @@ export function WeeklyUpdateSheet({ projectId, projectTitle, steps, onClose }: {
   );
 }
 
-interface DraftArtifact { id: string; title: string; summary: string; body: string; files: { path: string }[]; tags: string[]; visibility: string }
+interface DraftArtifact {
+  id: string; title: string; summary: string; body: string; files: { path: string }[]; tags: string[];
+  visibility: string; publishedPostId: string | null;
+}
 
+/**
+ * Opened on a step that's already out, the sheet lands on its published page
+ * rather than the form: the link, and the button that takes it down again.
+ */
 export function PublishArtifactSheet({ projectId, step, onClose }: {
   projectId: string; step: { taskId: string; title: string }; onClose: () => void;
 }) {
@@ -176,30 +183,51 @@ export function PublishArtifactSheet({ projectId, step, onClose }: {
     onSuccess: (r) => { setError(null); setPublished({ url: webUrl(r.url), id: r.artifact?.id ?? draft.data!.id, postId: r.postId }); after(); },
     onError: (e) => setError(errText(e, "Couldn't publish that.")),
   });
+  // The other direction. The feed post is a separate thing, deleted from the feed.
+  const unpublish = useMutation({
+    mutationFn: () => api(`/api/artifacts/${draft.data!.id}/unpublish`, { method: "POST" }),
+    onSuccess: () => { after(); onClose(); notify("The page is down — the link leads nowhere now.", "success"); },
+    onError: (e) => setError(errText(e, "Couldn't take it down.")),
+  });
+
+  // Just published, or opened on a step published earlier — the same page either way.
+  const live = published ?? (draft.data?.visibility === "public"
+    ? { url: webUrl(`/a/${draft.data.id}`), id: draft.data.id, postId: draft.data.publishedPostId ?? "" }
+    : null);
 
   const share = async () => {
-    if (!published) return;
-    const r = await shareText(`${title.trim()}\n${published.url}`);
+    if (!live) return;
+    const r = await shareText(`${title.trim()}\n${live.url}`);
     if (r === "copied") notify("Link copied");
   };
+
+  const takeDown = () => Alert.alert(
+    "Take this page down?",
+    "The page stops being reachable. Anyone who opens the link — including people who already have it — gets nothing. Your post about it stays on the feed until you delete it, and you can publish the page again later.",
+    [{ text: "Leave it up", style: "cancel" }, { text: "Take it down", style: "destructive", onPress: () => unpublish.mutate() }],
+  );
 
   return (
     <Sheet
       visible onClose={onClose}
-      title={published ? "Published" : "Publish what this step produced"}
-      subtitle={published ? "It has a public page anyone can open, and a post on the feed." : "A public page with a title and tags, linked back to your project and its path, plus a feed post."}
+      title={live ? "Published" : "Publish what this step produced"}
+      subtitle={live ? "It has a public page anyone can open, and a post on the feed." : "A public page with a title and tags, linked back to your project and its path, plus a feed post."}
     >
-      {published ? (
+      {live ? (
         <View style={{ gap: spacing.md }}>
           <View style={[input, { backgroundColor: colors.surfaceRaised }]}>
-            <Text selectable style={{ color: colors.text, fontSize: font.sm, fontFamily: fontFamily.regular }} testID="text-artifact-url">{published.url}</Text>
+            <Text selectable style={{ color: colors.text, fontSize: font.sm, fontFamily: fontFamily.regular }} testID="text-artifact-url">{live.url}</Text>
           </View>
           <Row gap={spacing.sm} wrap>
             <Btn small variant="outline" icon="share-outline" label="Share link" onPress={share} />
-            <Btn small variant="outline" icon="open-outline" label="Open the page" onPress={() => { onClose(); router.push(`/a/${published.id}` as any); }} />
-            {!!published.postId && <Btn small variant="ghost" icon="chatbubbles-outline" label="See the post" onPress={() => { onClose(); router.push(`/post/${published.postId}` as any); }} />}
+            <Btn small variant="outline" icon="open-outline" label="Open the page" onPress={() => { onClose(); router.push(`/a/${live.id}` as any); }} />
+            {!!live.postId && <Btn small variant="ghost" icon="chatbubbles-outline" label="See the post" onPress={() => { onClose(); router.push(`/post/${live.postId}` as any); }} />}
           </Row>
-          <Footer><Btn small label="Done" onPress={onClose} /></Footer>
+          <ErrorLine text={error} />
+          <Footer>
+            <Btn small variant="danger" icon="eye-off-outline" label="Take the page down" loading={unpublish.isPending} onPress={takeDown} testID="button-unpublish-artifact" />
+            <Btn small label="Done" onPress={onClose} />
+          </Footer>
         </View>
       ) : draft.isLoading ? (
         <View style={{ height: 120 }}><Loading label="Nova is putting it together…" /></View>

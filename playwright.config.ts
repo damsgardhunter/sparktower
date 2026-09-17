@@ -73,6 +73,19 @@ export default defineConfig({
        */
       PASSWORD_BREACH_CHECK: "off",
 
+      /*
+       * Email included, which it wasn't. These tests run with
+       * NODE_ENV=development, and `emailConfigured()` is false only when the
+       * key is missing or NODE_ENV is "test" — so once a developer put a real
+       * RESEND_API_KEY in their .env, the browser suite inherited it and every
+       * account it creates tried to send a real message through Resend. The
+       * tests still passed, because a failed send is recorded in the dev outbox
+       * they read from, so the only signal was a few dozen refused API calls
+       * per run against somebody's live sending quota.
+       */
+      RESEND_API_KEY: "",
+      EMAIL_FROM: "",
+
       // Nothing that could reach a real service.
       STRIPE_SECRET_KEY: "",
       PRINTFUL_API_KEY: "",

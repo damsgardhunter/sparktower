@@ -15,6 +15,7 @@ import { Area, Block, Bubble, Clamp, GradientOutline, Line, Overline, Pill, Tag,
 import { CapitalProfileCard } from "./CapitalProfileCard";
 import { LoopTree } from "./LoopTree";
 import { MilestoneSheet } from "./MilestoneDetail";
+import { PublishedPages } from "./PublishedPages";
 import { WorkView } from "./WorkView";
 import { PublishArtifactSheet, ShareStepSheet, WeeklyUpdateSheet } from "./path/ShareSheets";
 import {
@@ -247,18 +248,23 @@ function NextStep({ projectId, data, onNavigate }: { projectId: string; data: Pa
 
   const followUps = (
     <>
+      {/* What of this project is already public, and how it's doing (PublishedPages.tsx). */}
+      <PublishedPages projectId={projectId} />
       {data.lastDone && (
         <Row center gap={spacing.sm} wrap style={{ paddingHorizontal: 2 }} >
           <Icon name="checkmark-circle" size={14} color={colors.success} />
           <Text numberOfLines={1} style={{ flexShrink: 1, fontSize: font.xs + 1, fontFamily: fontFamily.regular, color: colors.textSecondary }}>Finished <Text style={{ fontFamily: fontFamily.semibold, color: colors.text }}>{data.lastDone.title}</Text></Text>
-          {data.lastDone.sharedPostId ? (
+          {data.lastDone.sharedPostId && (
             <LinkText label="See feedback" icon="chatbubbles-outline" onPress={() => router.push(`/post/${data.lastDone!.sharedPostId}` as any)} testID="link-shared-step" />
-          ) : (
-            <>
-              <LinkText label="Share" icon="share-social-outline" onPress={() => setSharing("step")} testID="button-share-finished-step" />
-              <LinkText label="Publish" icon="globe-outline" onPress={() => setSharing("artifact")} testID="button-publish-finished-step" />
-            </>
           )}
+          {!data.lastDone.sharedPostId && (
+            <LinkText label="Share" icon="share-social-outline" onPress={() => setSharing("step")} testID="button-share-finished-step" />
+          )}
+          {/*
+            * Publishing stays reachable after sharing, because sharing sets the same flag: the sheet is
+            * also the only way back to a page that is already live, and taking one down has to be possible.
+            */}
+          <LinkText label="Publish" icon="globe-outline" onPress={() => setSharing("artifact")} testID="button-publish-finished-step" />
         </Row>
       )}
       {data.weekly?.due && data.weekly.steps.length > 1 && (

@@ -11,7 +11,7 @@ const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
 test("a founder answers the money questions by tapping, and Nova's plan is next", async ({ browser }) => {
-  const context = await browser.newContext({ extraHTTPHeaders: { "x-forwarded-for": "203.0.113.187" } });
+  const context = await browser.newContext({ extraHTTPHeaders: { "x-forwarded-for": "203.0.113.61" } });
   const page = await context.newPage();
   await page.goto("/");
   expect((await page.request.post("/api/auth/register", { data: { email: `e2e-money-${stamp()}@example.test`, password, firstName: "Mo", lastName: "Money" } })).ok()).toBeTruthy();

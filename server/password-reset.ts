@@ -42,6 +42,7 @@ import { checkPassword } from "@shared/passwords";
 import { isBreached, BREACHED_MESSAGE } from "./password-breach";
 import { enforceRateLimit, ipKey, accountKey } from "./moderation";
 import { RESET_TTL_MINUTES, type ResetFailure } from "@shared/password-reset";
+import { publicBaseUrl } from "./public-url";
 
 // The window and the failure codes are shared, so the pages that render them
 // can't drift from the server that decides them (@shared/password-reset).
@@ -50,14 +51,7 @@ export { RESET_TTL_MINUTES, type ResetFailure } from "@shared/password-reset";
 const hash = (token: string) => crypto.createHash("sha256").update(token).digest("hex");
 const normalise = (email: string) => email.trim().toLowerCase();
 
-/** Where the link points: the public address if we know it, else this request's own host. */
-function baseUrl(req?: { headers: Record<string, any>; protocol?: string }): string {
-  const configured = process.env.PUBLIC_URL || process.env.REPLIT_DOMAINS?.split(",")[0];
-  if (configured) return /^https?:\/\//.test(configured) ? configured.replace(/\/$/, "") : `https://${configured}`;
-  const host = String(req?.headers?.["x-forwarded-host"] ?? req?.headers?.host ?? "localhost:5001").split(",")[0];
-  const protocol = String(req?.headers?.["x-forwarded-proto"] ?? req?.protocol ?? (host.startsWith("localhost") ? "http" : "https")).split(",")[0];
-  return `${protocol}://${host}`;
-}
+
 
 /**
  * Sends a reset link, if there is anything to send one to.
@@ -103,7 +97,7 @@ export async function sendPasswordResetEmail(
       requestedIp: req ? ipKey(req).replace(/^ip:/, "") : null,
     });
 
-    const link = `${baseUrl(req)}/reset-password?token=${encodeURIComponent(token)}`;
+    const link = `${publicBaseUrl(req)}/reset-password?token=${encodeURIComponent(token)}`;
     await sendEmail({
       to: user.email,
       subject: "Reset your SparkTower password",

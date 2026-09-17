@@ -245,7 +245,7 @@ export function ProjectFollowButton({ projectId, title, following, explore, more
   title: string;
   following: boolean;
   explore?: ExploreContext;
-  /** Where "More like this" goes after following — the project list, filtered to its category. */
+  /** Where "More like this" goes after following — Discover, filtered to the project's category. */
   moreLikeThis?: string;
 }) {
   const qc = useQueryClient();

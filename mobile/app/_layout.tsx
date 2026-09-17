@@ -43,8 +43,9 @@ function AuthGate() {
     if (loading) return;
     const inAuthGroup = segments[0] === "(auth)";
     const inOnboarding = (segments[0] as string) === "welcome";
-    // Shared links the web shows signed out: a published artifact.
-    const onPublicPage = ["a"].includes(segments[0] as string);
+    // Shared links the web shows signed out: a published artifact, and an invite —
+    // the person an invite is for usually has no account yet, which is the point of it.
+    const onPublicPage = ["a", "invite"].includes(segments[0] as string);
 
     if (!user) {
       if (!inAuthGroup && !onPublicPage) router.replace("/(auth)/sign-in");

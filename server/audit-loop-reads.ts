@@ -130,7 +130,16 @@ export function pickLoopEvidence(
   loop: Pick<AuditLoop, "title" | "description"> & { type?: LoopType },
   files: RepoFile[],
   firstPassEvidence: string[] = [],
-  max = 16,
+  /*
+   * Sixteen was enough when the loop docs were shorter. As they grew — more
+   * client surfaces, more shared modules — the files at the end of a doc's own
+   * citation list started falling off the budget, and for the revenue loop that
+   * was `server/billing-credits.ts`, where the spending actually happens.
+   * Widening the budget was the honest fix; reordering to favour server code
+   * bought the same slot by dropping the pages that show the loop, which other
+   * loops need.
+   */
+  max = 20,
 ): { paths: string[]; docs: string[] } {
   const byPath = new Map(files.filter((f) => typeof f.content === "string").map((f) => [f.path, f]));
   const titleWords = [...new Set(words(loop.title))];
@@ -228,8 +237,16 @@ export function pickLoopEvidence(
    * and the files named for the loop's parts never fit. A few slots are held
    * for them before the rest of the budget is spent.
    */
-  const RESERVED = 3;
-  const reserved = named.slice(0, RESERVED).map((x) => x.f.path);
+  const RESERVED = 2;
+  /*
+   * Two, and never a file the doc already cites — a reserved slot spent on
+   * something that was coming anyway is a slot taken from the doc's own list,
+   * which is the stronger evidence. Reserving three cost the revenue loop
+   * `server/billing-credits.ts`, which its doc cites and which is where the
+   * spending actually happens.
+   */
+  const alreadyCited = new Set(citedBy.flat());
+  const reserved = named.filter((x) => !alreadyCited.has(x.f.path)).slice(0, RESERVED).map((x) => x.f.path);
 
   for (const p of (citedBy[0] ?? []).filter((p) => !isTest(p)).slice(0, Math.max(0, max - tests.length - reserved.length))) add(p);
   for (const p of firstPassEvidence) add(p);

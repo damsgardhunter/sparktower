@@ -9,7 +9,7 @@
 import type { Express } from "express";
 import { storage } from "./storage";
 import { db } from "./db";
-import { users, userProfiles, projects, projectMembers, feedReactions, feedComments, feedCommentReactions } from "@shared/schema";
+import { users, userProfiles, projects, projectMembers, feedReactions, feedComments, feedCommentReactions, userFollows, projectFollows, connections } from "@shared/schema";
 import { eq, and, or, ilike, ne, desc } from "drizzle-orm";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
@@ -19,6 +19,7 @@ import { markStepsShared, shareableSteps } from "./path-return";
 import { validateAsks } from "@shared/feedback-loop";
 import { closableComments, markClosed, markClosureAnswered, projectTeam } from "./feedback-loop-routes";
 import { notify, unnotify, notifyFollowersOfPost, notifyComment } from "./notifications";
+import { rankFeed, viewerTerms, emptyAffinity, type ViewerAffinity } from "@shared/feed-ranking";
 
 /** Comments on a post, each saying whether its author is on the post's project — only outsiders' count as feedback. */
 async function commentsWithTeam(post: { id: string; projectId: string | null }, viewerId?: string) {
@@ -47,10 +48,16 @@ export function feedDisplayName(
   user: { firstName?: string | null; lastName?: string | null; email?: string | null },
   profile?: { displayName?: string | null } | null
 ): string {
+  /*
+   * Never the email address. This string is published — on posts, comments,
+   * reactions, notifications, and the artifact pages a stranger can open — and
+   * an account with no display name and no first name (which registration
+   * allows) would have had its address printed under its own words. "Someone"
+   * is a worse name and a better outcome.
+   */
   return (
     profile?.displayName ||
     [user.firstName, user.lastName].filter(Boolean).join(" ") ||
-    user.email ||
     "Someone"
   );
 }
@@ -116,8 +123,74 @@ export function registerFeedRoutes(app: Express) {
   });
 
   /**
+   * What a viewer's feed is ranked against: what they build, what they know,
+   * and who they already pay attention to.
+   *
+   * One round of queries per feed load, all in parallel. Cheap enough to do
+   * per request and simple enough to stay correct — a follow made a second ago
+   * counts on the very next page.
+   */
+  async function viewerAffinity(userId: string | undefined): Promise<ViewerAffinity> {
+    if (!userId) return emptyAffinity();
+    try {
+      const [profile, owned, memberships, follows, projFollows, conns] = await Promise.all([
+        storage.getUserProfile(userId),
+        db.select({ id: projects.id, category: projects.category }).from(projects).where(eq(projects.ownerId, userId)),
+        db.select({ projectId: projectMembers.projectId }).from(projectMembers).where(eq(projectMembers.userId, userId)),
+        db.select({ followeeId: userFollows.followeeId }).from(userFollows).where(eq(userFollows.followerId, userId)),
+        db.select({ projectId: projectFollows.projectId }).from(projectFollows).where(eq(projectFollows.userId, userId)),
+        db.select({ requesterId: connections.requesterId, receiverId: connections.receiverId })
+          .from(connections)
+          .where(and(
+            or(eq(connections.requesterId, userId), eq(connections.receiverId, userId)),
+            eq(connections.status, "accepted"),
+          )),
+      ]);
+
+      const memberProjectIds = memberships.map((m) => m.projectId);
+      // Categories of the projects they're on as well as the ones they own —
+      // being the designer on someone else's fintech still makes fintech yours.
+      const memberCategories = memberProjectIds.length
+        ? await Promise.all(memberProjectIds.map(async (id) => (await storage.getProject(id))?.category ?? null))
+        : [];
+
+      return {
+        terms: viewerTerms(profile, [
+          ...owned.map((p) => p.category),
+          ...memberCategories.filter((c): c is string => !!c),
+        ]),
+        categories: new Set(
+          [...owned.map((p) => p.category), ...memberCategories]
+            .filter((c): c is string => !!c)
+            .map((c) => c.toLowerCase().trim())
+        ),
+        followedAuthorIds: new Set(follows.map((f) => f.followeeId)),
+        followedProjectIds: new Set(projFollows.map((f) => f.projectId)),
+        connectedUserIds: new Set(conns.map((c) => (c.requesterId === userId ? c.receiverId : c.requesterId))),
+        ownProjectIds: new Set([...owned.map((p) => p.id), ...memberProjectIds]),
+      };
+    } catch (err) {
+      // Ranking is an improvement on the feed, not a precondition for having
+      // one: a failure here costs relevance, never the posts.
+      console.error("Feed affinity lookup failed, falling back to chronological:", err);
+      return emptyAffinity();
+    }
+  }
+
+  /**
    * The feed. Readable without signing in, but reactions and private-project
    * posts need a session.
+   *
+   * The default feed is ranked, not strictly chronological: each page is still
+   * the same window of posts the cursor describes, ordered inside that window
+   * by how much it has to do with you (shared/feed-ranking.ts). A project's own
+   * feed, a single author's, and the Following feed stay in time order — those
+   * are timelines you asked for by name, and reordering them would be wrong.
+   *
+   * The cursor is taken from the oldest post in the window BEFORE ranking.
+   * Reading it off the end of the ranked list would hand back the least
+   * relevant post's timestamp instead of the oldest one, and pagination would
+   * skip everything in between.
    */
   app.get("/api/feed", async (req: any, res) => {
     try {
@@ -125,21 +198,33 @@ export function registerFeedRoutes(app: Express) {
       // The Following feed is personal, so it needs someone to be personal to.
       const following = req.query.scope === "following";
       if (following && !req.user) return res.status(401).json({ message: "Sign in to see who you follow." });
+      const authorId = (req.query.authorId as string) || undefined;
+      const projectId = (req.query.projectId as string) || undefined;
       const posts = await storage.getFeedPosts({
         viewerId: req.user?.id,
         followedBy: following ? req.user.id : undefined,
         limit,
         before: (req.query.before as string) || undefined,
-        authorId: (req.query.authorId as string) || undefined,
-        projectId: (req.query.projectId as string) || undefined,
+        authorId,
+        projectId,
         postType: FEED_POST_TYPES.includes(req.query.postType as any)
           ? (req.query.postType as string)
           : undefined,
       });
+
+      // Read before ranking, off the chronologically last post.
+      const nextCursor = posts.length === limit ? posts[posts.length - 1].createdAt : null;
+
+      const ranked = following || authorId || projectId || !req.user?.id
+        ? posts
+        : rankFeed(posts, await viewerAffinity(req.user.id));
+
       res.json({
-        posts,
+        posts: ranked,
         // Cursor for the next page; null when we've reached the end.
-        nextCursor: posts.length === limit ? posts[posts.length - 1].createdAt : null,
+        nextCursor,
+        // Says how the page is ordered, so the feed can label it.
+        ranked: ranked !== posts,
         // So an empty Following feed can say which kind of empty: nobody followed, or nobody posting.
         ...(following ? { followingCount: await storage.getFollowingCount(req.user.id) } : {}),
       });
@@ -604,6 +689,9 @@ export function registerProjectDiscussionRoutes(app: Express) {
 
   app.post("/api/project-comments/:commentId/react", isAuthenticated, rateLimit("react"), async (req: any, res) => {
     try {
+      // Reacting is a write against someone's project: the same view rule the thread itself uses.
+      const projectId = await storage.projectOfComment(req.params.commentId);
+      if (!projectId || !(await canView(projectId, req.user.id))) return res.status(404).json({ message: "Comment not found" });
       res.json(await storage.toggleCommentReaction(req.params.commentId, req.user.id));
     } catch (error) {
       console.error("Comment reaction error:", error);

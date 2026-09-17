@@ -249,7 +249,7 @@ export function registerNovaAssistRoutes(app: Express) {
    * pack (shared/nova-prompt-packs.ts). GET returns the questions to ask;
    * POST writes the plan, and saves it to the board only when told to.
    */
-  app.get("/api/projects/:id/nova/first-plan", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
+  app.get("/api/projects/:id/nova/first-plan", isAuthenticated, async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       if (!(await isMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });

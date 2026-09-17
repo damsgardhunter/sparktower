@@ -65,6 +65,31 @@ async function lookOnce({ name, servers }) {
 
   const spf = flat(txt).filter((t) => /^v=spf1\b/i.test(t));
   const dmarcRecords = flat(dmarc).filter((t) => /^v=DMARC1\b/i.test(t));
+  /*
+   * Where the aggregate reports actually go.
+   *
+   * A registrar that publishes a DMARC record for you points `rua` at itself,
+   * which satisfies "a record exists" and "reports are on" while you never see
+   * one. The addresses are compared with the sending domain so the difference
+   * between "reports arrive" and "reports arrive somewhere else" is visible.
+   */
+  /*
+   * Each rua destination, and whether it is one at all.
+   *
+   * A DMARC value is a string: nothing validates it, and `malito:` — one
+   * transposed letter — parses as a perfectly well-formed record with a
+   * destination no receiver can deliver to. This checker used to test only
+   * that `rua=` appeared and reported "reports on", which is how a typo
+   * survived a run of it. The scheme and the address are checked now.
+   */
+  const ruaRaw = (dmarcRecords[0]?.match(/\brua\s*=\s*([^;]+)/i)?.[1] ?? "")
+    .split(",").map((a) => a.trim()).filter(Boolean);
+  const ruaBad = ruaRaw.filter((u) => !/^(mailto:[^@\s]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|https:\/\/\S+)$/i.test(u));
+  const rua = ruaRaw.map((a) => a.replace(/^mailto:/i, ""));
+  const ruaOffDomain = rua.filter((a) => {
+    const host = a.split("@")[1]?.toLowerCase() ?? "";
+    return host && host !== domain && !host.endsWith(`.${domain}`);
+  });
   return {
     resolver: name,
     exists: soa.ok,
@@ -75,6 +100,10 @@ async function lookOnce({ name, servers }) {
     dmarc: dmarcRecords,
     dmarcPolicy: dmarcRecords[0]?.match(/\bp\s*=\s*(none|quarantine|reject)\b/i)?.[1]?.toLowerCase() ?? null,
     dmarcReports: /\brua\s*=/i.test(dmarcRecords[0] ?? ""),
+    rua,
+    ruaRaw,
+    ruaBad,
+    ruaOffDomain,
     dkim,
     mx: mx.ok ? mx.records.map((m) => `${m.priority} ${m.exchange}`) : [],
   };
@@ -88,6 +117,14 @@ const verdict = (label, ok, detail) => `${ok ? "PASS" : "MISSING"}  ${label.padE
 console.log(`Sending domain: ${domain}`);
 console.log(`Checked: ${new Date().toISOString()} via ${resolvers.map((r) => r.name).join(" and ")}\n`);
 
+/*
+ * Declared out here because the exit code at the bottom reads it. It was a
+ * `const` inside the branch below, which threw a ReferenceError at the last
+ * line of the script — after printing a full, correct report, so the run looked
+ * like it had worked and simply exited 1.
+ */
+let ruaUsable = false;
+
 if (!agreed.exists) {
   console.log(`The domain does not resolve at all (${agreed.reason}). There is no zone, so there are no records to find:`);
   console.log(`SPF, DKIM and DMARC are all MISSING, and nothing can send authenticated mail as ${domain} — including you.`);
@@ -98,18 +135,72 @@ if (!agreed.exists) {
   console.log(verdict("DKIM", agreed.dkim.length > 0, agreed.dkim.length
     ? agreed.dkim.map((d) => `${d.selector} (${d.kind})`).join(", ")
     : `no key at any of the selectors tried (${selectors.join(", ")}) — pass --selector <name> if the provider uses another`));
-  console.log(verdict("DMARC", agreed.dmarc.length > 0, agreed.dmarc.length
-    ? `p=${agreed.dmarcPolicy ?? "(none stated)"}${agreed.dmarcReports ? ", reports on" : ", no rua= so no reports arrive"}`
-    : "no record at _dmarc"));
+  /*
+   * Whether a message has any way to align, and whether DMARC is enforcing.
+   * Both are needed before the DMARC line is printed, because "a record
+   * exists" and "this record is doing you good" are different questions and
+   * only the second one is worth a PASS.
+   */
+  const canAlign = agreed.spf.length === 1 || agreed.dkim.length > 0;
+  const enforcing = agreed.dmarcPolicy === "quarantine" || agreed.dmarcPolicy === "reject";
+  ruaUsable = agreed.ruaRaw.length > 0 && agreed.ruaBad.length < agreed.ruaRaw.length;
+  const dmarcDetail = agreed.dmarc.length
+    ? `p=${agreed.dmarcPolicy ?? "(none stated)"}${
+        !agreed.ruaRaw.length ? ", no rua= so no reports arrive"
+        : ruaUsable ? ", reports on"
+        : ", rua is unusable so no reports arrive"}`
+    : "no record at _dmarc";
+  if (enforcing && !canAlign) {
+    // Not MISSING — it is published, and that is the problem.
+    console.log(`BROKEN  ${"DMARC".padEnd(6)} ${dmarcDetail} — enforcing with nothing to align (see below)`);
+  } else {
+    console.log(verdict("DMARC", agreed.dmarc.length > 0, dmarcDetail));
+  }
   if (agreed.dmarcPolicy === "none") console.log(`      ^ p=none observes and enforces nothing. Move to quarantine once the rua reports are clean.`);
+  /*
+   * Reports that go to somebody else are not reports you have. A registrar
+   * that publishes DMARC on your behalf points rua at its own address, so the
+   * record looks complete and you have never seen an aggregate report.
+   */
+  if (agreed.ruaBad.length) {
+    console.log(`      ^ rua destination is not a usable URI: ${agreed.ruaBad.join(", ")}`);
+    console.log(`        A DMARC value is just a string — nothing rejects a misspelt scheme, so this looks`);
+    console.log(`        like a working record and silently collects nothing. It must read mailto:someone@domain.`);
+  }
+  if (agreed.ruaOffDomain.length) {
+    console.log(`      ^ rua points at ${agreed.ruaOffDomain.join(", ")} — not an address on ${domain}.`);
+    console.log(`        The aggregate reports are going there, not to you. If you didn't publish this record, your registrar did.`);
+  }
   console.log(`\nMX: ${agreed.mx.join(", ") || "none (the domain sends but receives nowhere — check that's deliberate)"}`);
+
+  /*
+   * The combination that is worse than having nothing.
+   *
+   * DMARC tells receivers what to do when a message fails to align, and a
+   * message can only align through SPF or DKIM. Enforcing without either means
+   * every message fails — including the ones you send on purpose. This printed
+   * as "PASS DMARC" before, which reads as two problems and one thing done
+   * right, when it is really one problem big enough to stop all the mail.
+   */
+  if (enforcing && !canAlign) {
+    const verb = agreed.dmarcPolicy === "reject" ? "rejected outright" : "delivered to spam";
+    console.log(`\n!! DMARC says p=${agreed.dmarcPolicy} and neither SPF nor DKIM is published.`);
+    console.log(`   Nothing can align, so every message you send as ${domain} fails DMARC and is ${verb}.`);
+    console.log(`   This is worse than publishing no DMARC at all, and it is happening now, silently:`);
+    console.log(`   the provider reports the message as sent and the receiver files it away.`);
+    console.log(`\n   Either publish SPF and DKIM (docs/ops/email-authentication.md), or drop the policy`);
+    console.log(`   to p=none until you have, which enforces nothing and still collects the reports.`);
+  } else if (enforcing && !agreed.dkim.length) {
+    console.log(`\n!  p=${agreed.dmarcPolicy} with SPF but no DKIM. SPF does not survive forwarding, so a`);
+    console.log(`   forwarded message — a mailing list, a "send to my other address" rule — fails and is quarantined.`);
+  }
 }
 
 if (disagreement) console.log(`\nThe two resolvers disagree; DNS is mid-propagation or one is serving a stale answer. Check again in an hour.`);
 
 const row = !agreed.exists
   ? `| ${new Date().toISOString().slice(0, 10)} | ${domain} | MISSING | MISSING | MISSING | scripts/check-email-auth.mjs — domain does not resolve (${agreed.reason}) |`
-  : `| ${new Date().toISOString().slice(0, 10)} | ${domain} | ${agreed.spf.length === 1 ? "published" : "MISSING"} | ${agreed.dkim.length ? agreed.dkim.map((d) => d.selector).join("+") : "MISSING"} | ${agreed.dmarcPolicy ? `p=${agreed.dmarcPolicy}` : "MISSING"} | scripts/check-email-auth.mjs |`;
+  : `| ${new Date().toISOString().slice(0, 10)} | ${domain} | ${agreed.spf.length === 1 ? "published" : "MISSING"} | ${agreed.dkim.length ? agreed.dkim.map((d) => d.selector).join("+") : "MISSING"} | ${agreed.dmarcPolicy ? `p=${agreed.dmarcPolicy}${(agreed.dmarcPolicy === "quarantine" || agreed.dmarcPolicy === "reject") && !(agreed.spf.length === 1 || agreed.dkim.length) ? " (BROKEN — nothing aligns)" : ""}` : "MISSING"} | scripts/check-email-auth.mjs |`;
 console.log(`\nFor the evidence table in docs/ops/email-authentication.md:\n${row}`);
 
 /*
@@ -117,4 +208,4 @@ console.log(`\nFor the evidence table in docs/ops/email-authentication.md:\n${ro
  * become a pre-deploy gate later. It is not in CI today: CI has no business
  * failing because somebody else's DNS is slow.
  */
-process.exit(agreed.exists && agreed.spf.length === 1 && agreed.dkim.length && agreed.dmarc.length ? 0 : 1);
+process.exit(agreed.exists && agreed.spf.length === 1 && agreed.dkim.length && agreed.dmarc.length && ruaUsable ? 0 : 1);

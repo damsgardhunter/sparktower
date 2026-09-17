@@ -62,3 +62,39 @@ test("the home screen brings you back to the next step, and a finished step can 
   await chip.click();
   await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/manage(\\?.*)?$`));
 });
+
+test("the path page is an address you can return to, and it leads back to the step", async ({ page }) => {
+  /*
+   * The loop's return: the home card is behind a toggle on a feed that scrolls,
+   * so "come back and pick up where you left off" needs somewhere to go. This
+   * walks it the way a person does — the sidebar link, the list, the step.
+   */
+  await page.goto("/");
+  expect((await page.request.post("/api/auth/register", { data: { email: `e2e-pathhome-${stamp()}@example.test`, password, firstName: "Pat", lastName: "Home" } })).ok()).toBeTruthy();
+  await verifyEmail(page.request);
+  expect((await page.request.post("/api/profile/complete-onboarding", { data: { displayName: "Pat Home", headline: "Building something", bio: "Here for the path." } })).ok()).toBeTruthy();
+
+  // Nothing started yet: the page says so and offers the one thing that helps.
+  await page.goto("/path");
+  await page.getByTestId("btn-skip-onboarding").click({ timeout: 5_000 }).catch(() => {});
+  await expect(page.getByTestId("path-home-empty")).toBeVisible();
+  await expect(page.getByTestId("button-path-home-new-project")).toBeVisible();
+
+  const title = `Path Home ${stamp()}`;
+  const project = await (await page.request.post("/api/projects", {
+    data: { title, description: "A project whose next step should be waiting on the path page.", category: "saas", goal: "ship_mvp", subcategory: "saas" },
+  })).json();
+
+  // Reachable from the sidebar, not only by typing the address.
+  await page.goto("/");
+  await page.getByRole("link", { name: "Your path" }).click();
+  await expect(page).toHaveURL(/\/path$/);
+
+  // The project's next step is waiting there, and Continue opens it with the card in view.
+  const row = page.getByTestId(`continue-path-${project.id}`);
+  await expect(row).toBeVisible();
+  await expect(row.getByTestId(`continue-path-next-${project.id}`)).toBeVisible();
+  await row.getByTestId(`button-continue-path-${project.id}`).click();
+  await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/manage\\?.*focus=next`));
+  await expect(page.getByTestId("next-action-frame")).toBeVisible({ timeout: 30_000 });
+});
