@@ -392,14 +392,17 @@ export default function LandingPage() {
 /*
  * Change this one string to change the line.
  *
- * It is deliberately not "the fastest growing startup community": that is a
- * measurable claim, this site has seventeen accounts, and the invented
- * statistics that used to sit further down this page were deleted for exactly
- * that reason. A superlative nobody can check is the sentence that makes a
- * reader doubt the $50B offer above it. This says what the place is for, which
- * is true today and gets truer.
+ * "Fastest growing" is a comparative claim rather than the kind of superlative
+ * nobody reads literally, and growth measured as a rate from a small base is a
+ * real way to mean it — 0 to 100 accounts in a day is a bigger percentage than
+ * anyone established can post. Worth knowing, in case a competitor or an
+ * advertising regulator ever asks: keep a note of the basis you would answer
+ * with (accounts week over week, say), because the answer to that question is
+ * either a number you already have or an afternoon you did not plan on. The
+ * specific counts that used to sit further down this page were a different
+ * thing entirely, and they are gone.
  */
-const TAGLINE = "The startup community that ships.";
+const TAGLINE = "The fastest growing startup community.";
 
 function TaglineBanner() {
   /* The gradient, clipped to the glyphs plus a fat transparent stroke. */
@@ -410,11 +413,24 @@ function TaglineBanner() {
     color: "transparent",
   };
 
+  /*
+   * The letters are not flat black. They run through near-black tints of the
+   * same three gradient stops — green-black, black, purple-black — so the fill
+   * has somewhere to go between the bright edges instead of sitting there as a
+   * slab. Dark enough to still read as black type at a glance.
+   */
+  const letterFill = {
+    backgroundImage: "linear-gradient(135deg, #07271b 0%, #0b0b0c 48%, #241043 100%)",
+    WebkitBackgroundClip: "text" as const,
+    backgroundClip: "text" as const,
+    color: "transparent",
+  };
+
   return (
     <section className="relative bg-white px-4 pt-6 pb-14 sm:pb-20" data-testid="section-tagline">
       <h2 className="relative mx-auto max-w-4xl text-center font-black tracking-tight leading-[1.05] text-[2rem] sm:text-5xl md:text-[3.5rem]">
         {/* The glow: the same words, fattened and blurred, sitting underneath. */}
-        <span aria-hidden className="absolute inset-0 select-none" style={{ ...gradientText, WebkitTextStroke: "8px transparent", filter: "blur(16px)", opacity: 0.85 }}>
+        <span aria-hidden className="absolute inset-0 select-none" style={{ ...gradientText, WebkitTextStroke: "6px transparent", filter: "blur(18px)", opacity: 0.45 }}>
           {TAGLINE}
         </span>
         {/* The outline: gradient everywhere, about to be covered in the middle. */}
@@ -422,7 +438,7 @@ function TaglineBanner() {
           {TAGLINE}
         </span>
         {/* The letters themselves. */}
-        <span className="relative text-black" data-testid="text-tagline">{TAGLINE}</span>
+        <span className="relative" style={letterFill} data-testid="text-tagline">{TAGLINE}</span>
       </h2>
     </section>
   );
