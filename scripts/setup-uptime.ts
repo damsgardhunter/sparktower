@@ -128,13 +128,32 @@ async function main() {
   process.stdout.write("Checking the account's alert contacts… ");
   const contacts = (await call("getAlertContacts", key)).alert_contacts ?? [];
   console.log("done.");
-  const usable = contacts.filter((c: any) => Number(c.status) === 2); // 2 = active
+  /*
+   * 0 is a contact somebody added and never confirmed, 1 is one they paused,
+   * 2 is one that will actually be told. The distinction is the whole message:
+   * "you have no contacts" and "you have a contact that doesn't work yet" send
+   * a person to two completely different places, and the second is far more
+   * often the truth — the confirmation mail is easy to miss.
+   */
+  const usable = contacts.filter((c: any) => Number(c.status) === 2);
+  const unconfirmed = contacts.filter((c: any) => Number(c.status) === 0);
+  const paused = contacts.filter((c: any) => Number(c.status) === 1);
+  const describe = (c: any) => `${c.friendly_name || c.value}${c.friendly_name && c.value ? ` (${c.value})` : ""}`;
+
+  if (usable.length) console.log(`Alert contacts: ${usable.map(describe).join(", ")}`);
+  if (unconfirmed.length) {
+    console.log(`\n⚠ Not confirmed yet, so nothing will reach ${unconfirmed.length === 1 ? "it" : "them"}: ${unconfirmed.map(describe).join(", ")}`);
+    console.log("  Open the verification email UptimeRobot sent to that address and click the link.");
+    console.log("  (Check spam — it comes from a no-reply address you've never had mail from.)");
+  }
+  if (paused.length) console.log(`\n⚠ Paused, so they receive nothing: ${paused.map(describe).join(", ")}`);
+
   if (usable.length === 0) {
-    console.log("\n⚠ This account has no active alert contacts, so a monitor would notice an outage");
-    console.log("  and tell nobody. Add one at uptimerobot.com → My Settings → Alert Contacts");
-    console.log("  (confirm the email — an unconfirmed contact doesn't count), then run this again.\n");
-  } else {
-    console.log(`Alert contacts: ${usable.map((c: any) => c.friendly_name || c.value).join(", ")}`);
+    console.log("\n⚠ No contact on this account can be alerted, so the monitor would notice an");
+    console.log("  outage and tell nobody. Add one in the UptimeRobot dashboard — the section is");
+    console.log("  called Alert Contacts under My Settings in the older dashboard, or Integrations");
+    console.log("  under Settings in the newer one — confirm it, then run this again.");
+    console.log("  The monitor below will still be created; it just won't be able to reach anyone.\n");
   }
   // "id_threshold_recurrence": notify immediately, once.
   const alertContacts = usable.map((c: any) => `${c.id}_0_0`).join("-");
