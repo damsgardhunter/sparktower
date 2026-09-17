@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CardDescription } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Zap, MessageSquare, Target, Eye, EyeOff, Loader2, Users, Rocket, Globe, Brain, UserPlus, Search, Handshake, Lightbulb, Wrench, User, ArrowRight, Trophy, Heart, Scale } from "lucide-react";
+import { Zap, Eye, EyeOff, Loader2, Globe, Handshake, ArrowRight, Trophy, Heart, Scale } from "lucide-react";
 const logoImage = "/favicon.png";
 import { SiGoogle } from "react-icons/si";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -286,99 +286,6 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <section id="features" className="scroll-mt-40 py-24 px-4 bg-card/30 border-y border-border">
-        <div className="max-w-6xl mx-auto">
-          <div className="text-center mb-16 space-y-4">
-            <h2 className="text-3xl md:text-5xl font-bold tracking-tight">Why SparkTower?</h2>
-            <p className="text-xl text-secondary max-w-2xl mx-auto">
-              We provide the tools and network to turn your vision into reality.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            <div className="p-8 rounded-2xl bg-card border border-card-border space-y-4 hover-elevate">
-              <div className="h-12 w-12 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
-                <Target className="h-6 w-6" />
-              </div>
-              <h3 className="text-xl font-bold">AI Matching</h3>
-              <p className="text-secondary leading-relaxed">
-                Our smart algorithm matches you with users based on skills, interests, and experience level.
-              </p>
-            </div>
-            <div className="p-8 rounded-2xl bg-card border border-card-border space-y-4 hover-elevate">
-              <div className="h-12 w-12 rounded-xl bg-accent/10 flex items-center justify-center text-accent-foreground">
-                <MessageSquare className="h-6 w-6" />
-              </div>
-              <h3 className="text-xl font-bold">AI Project Chat</h3>
-              <p className="text-secondary leading-relaxed">
-                Guided project creation with an AI assistant that helps you plan roadmaps, teams, and roles.
-              </p>
-            </div>
-            <div className="p-8 rounded-2xl bg-card border border-card-border space-y-4 hover-elevate">
-              <div className="h-12 w-12 rounded-xl bg-chart-4/10 flex items-center justify-center text-chart-4">
-                <Zap className="h-6 w-6" />
-              </div>
-              <h3 className="text-xl font-bold">Showcase & Scale</h3>
-              <p className="text-secondary leading-relaxed">
-                Display your code, receive donations, and climb the leaderboard as your project gains traction.
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="py-24 px-4 bg-card/30 border-b border-border" data-testid="section-personas">
-        <div className="max-w-6xl mx-auto">
-          <div className="text-center mb-16 space-y-4">
-            <h2 className="text-3xl md:text-5xl font-bold tracking-tight">Built for Builders Like You</h2>
-            <p className="text-xl text-secondary max-w-2xl mx-auto">
-              Whether you're going solo or looking for your dream team, SparkTower meets you where you are.
-            </p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            <div className="p-8 rounded-2xl bg-card border border-card-border space-y-4 hover-elevate" data-testid="card-persona-founder">
-              <div className="h-12 w-12 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
-                <Lightbulb className="h-6 w-6" />
-              </div>
-              <h3 className="text-xl font-bold">Solo Founders</h3>
-              <p className="text-secondary leading-relaxed italic">"I have the vision, but I need the right people to make it real."</p>
-              <p className="text-secondary leading-relaxed">
-                Stop pitching into the void. SparkTower's AI matches you with co-founders who share your drive and complement your skills — so you can move from idea to launch, faster.
-              </p>
-            </div>
-            <div className="p-8 rounded-2xl bg-card border border-card-border space-y-4 hover-elevate" data-testid="card-persona-freelancer">
-              <div className="h-12 w-12 rounded-xl bg-accent/10 flex items-center justify-center text-accent-foreground">
-                <Wrench className="h-6 w-6" />
-              </div>
-              <h3 className="text-xl font-bold">Freelancers & Specialists</h3>
-              <p className="text-secondary leading-relaxed italic">"I'm tired of one-off gigs. I want to build something that matters."</p>
-              <p className="text-secondary leading-relaxed">
-                Your skills deserve more than a marketplace listing. Join projects you believe in, earn reputation through real collaboration, and build a portfolio that proves your impact.
-              </p>
-            </div>
-            <div className="p-8 rounded-2xl bg-card border border-card-border space-y-4 hover-elevate" data-testid="card-persona-sideproject">
-              <div className="h-12 w-12 rounded-xl bg-chart-4/10 flex items-center justify-center text-chart-4">
-                <Zap className="h-6 w-6" />
-              </div>
-              <h3 className="text-xl font-bold">Side-Project Builders</h3>
-              <p className="text-secondary leading-relaxed italic">"I build on nights and weekends, but I feel like I'm doing it alone."</p>
-              <p className="text-secondary leading-relaxed">
-                You're not alone anymore. Connect with others who share your hustle. Practice sprints with our AI, compete in hackathons, and turn your side project into your main thing.
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/*
-        * What the contest is, honestly, and what to do in the meantime.
-        *
-        * The panel above promises a majority of the company to whoever builds a
-        * $50B one. A visitor's next two questions are "is that real?" and "so
-        * what do I do now?", and a page that answers neither reads as a stunt.
-        * So: where the rules are, why they aren't finished, and the three paths
-        * a project can actually be on today.
-        */}
       <section className="py-24 px-4 bg-black text-white" data-testid="section-vision">
         <div className="max-w-4xl mx-auto text-center space-y-8">
           <div className="h-16 w-16 rounded-full bg-primary/20 flex items-center justify-center mx-auto">
