@@ -20,7 +20,15 @@ describe("security.txt", () => {
     expect(res.headers["content-type"]).toMatch(/^text\/plain/);
     expect(res.text).toMatch(new RegExp(`^Contact: mailto:${SECURITY_CONTACT_EMAIL}$`, "m"));
     expect(res.text).toMatch(/^Expires: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/m);
-    expect(res.text).toMatch(/^Policy: https:\/\/.+SECURITY\.md$/m);
+    /*
+     * A policy a stranger can actually open. It used to be the SECURITY.md blob
+     * on GitHub, which 404s for everyone outside a private repository — which
+     * is everyone this file is written for. So the rule is now the one that
+     * matters: an absolute https URL, and not one that depends on access to the
+     * repository (server/security-txt.ts).
+     */
+    expect(res.text).toMatch(/^Policy: https:\/\/\S+$/m);
+    expect(res.text).not.toMatch(/^Policy: https:\/\/github\.com\//m);
 
     const legacy = await request(app).get("/security.txt");
     expect(legacy.status).toBe(301);
