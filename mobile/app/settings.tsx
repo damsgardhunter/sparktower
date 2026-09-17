@@ -124,6 +124,19 @@ export default function Settings() {
               <MenuRow icon="trash-outline" title="Delete my account" danger onPress={() => { setError(null); setPassword(""); setCode(""); setClosing(true); }} testID="settings-delete-account" />
             </Group>
 
+            {/*
+              * Apple requires the privacy policy to be reachable from inside
+              * the app, not only from the App Store listing (guideline
+              * 5.1.1(i)); Google asks for the same link in the Data safety
+              * form. Both open on the web, where the policy lives — the same
+              * URL the store listings point at, so there is one document
+              * rather than a copy that drifts.
+              */}
+            <Group title="Legal">
+              <MenuRow icon="lock-closed-outline" title="Privacy policy" subtitle="What's collected, who sees it, how to delete it" tint={colors.textSecondary} onPress={() => Linking.openURL(`${API_URL}/privacy`)} right={<MenuIcon name="open-outline" />} testID="settings-privacy" />
+              <MenuRow icon="document-text-outline" title="Terms of service" tint={colors.textSecondary} onPress={() => Linking.openURL(`${API_URL}/terms`)} right={<MenuIcon name="open-outline" />} testID="settings-terms" />
+            </Group>
+
             {__DEV__ && <DevTiers plans={plans?.plans ?? []} tier={ent.tier} used={ent.creditsUsed} limit={ent.isUnlimited ? "∞" : ent.creditsLimit} show={show} />}
 
             {help}

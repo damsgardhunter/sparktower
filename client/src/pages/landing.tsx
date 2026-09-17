@@ -16,6 +16,7 @@ import { PENDING_PATH_KEY, type PendingPath } from "@shared/path-artifacts";
 import { PENDING_INVITE_KEY } from "@shared/invites";
 import { MfaCodeForm } from "@/components/mfa";
 import { PASSWORD_MIN } from "@shared/passwords";
+import { Link } from "wouter";
 
 /** The artifact a visitor chose "start" or "explore" on before signing up, so the signup is credited to it. */
 function pendingArtifactId(): string | undefined {
@@ -371,7 +372,15 @@ export default function LandingPage() {
             </div>
           </div>
           <div className="border-t border-border pt-8 flex flex-col md:flex-row justify-between items-center gap-4">
-            <p className="text-muted-foreground/60 text-sm">&copy; {new Date().getFullYear()} SparkTower. Built for the future of collaboration.</p>
+            <p className="text-muted-foreground/60 text-sm">
+              &copy; {new Date().getFullYear()} SparkTower. Built for the future of collaboration.
+              {/* Where people look for them, and where a store reviewer looks first. */}
+              <span className="ml-2">
+                <Link href="/privacy" className="underline hover:text-foreground" data-testid="link-footer-privacy">Privacy</Link>
+                <span className="mx-1.5">·</span>
+                <Link href="/terms" className="underline hover:text-foreground" data-testid="link-footer-terms">Terms</Link>
+              </span>
+            </p>
             <p className="text-muted-foreground/40 text-xs italic">"The present is theirs; the future is mine." — Nikola Tesla</p>
           </div>
         </div>

@@ -31,6 +31,7 @@ import AdminPromotions from "@/pages/admin-promotions";
 import MfaVerifyPage from "@/pages/mfa-verify";
 import SecuritySettings from "@/pages/security-settings";
 import ForgotPasswordPage from "@/pages/forgot-password";
+import { PrivacyPolicy, TermsOfService } from "@/pages/legal";
 import ResetPasswordPage from "@/pages/reset-password";
 import { MfaNotice } from "@/components/mfa";
 import { NOVA_GRADIENT, NOVA_GRADIENT_CSS } from "@shared/backing";
@@ -128,6 +129,14 @@ function Router() {
           */}
         <Route path="/forgot-password" component={ForgotPasswordPage} />
         <Route path="/reset-password" component={ResetPasswordPage} />
+        {/*
+          * Signed out on purpose. Both app stores refuse a first submission
+          * without a privacy policy a reviewer can open with no account
+          * (Apple 5.1.1(i), Google's Data safety form), and anyone deciding
+          * whether to sign up should be able to read the terms before they do.
+          */}
+        <Route path="/privacy" component={PrivacyPolicy} />
+        <Route path="/terms" component={TermsOfService} />
         <Route>
           <Redirect to="/" />
         </Route>
@@ -154,7 +163,7 @@ function Router() {
    * "tell us about yourself" form instead of the reset — with no way to reach
    * it at all, since every other address redirects here too.
    */
-  const RECOVERY_PATHS = ["/onboarding", "/verify-email", "/forgot-password", "/reset-password"];
+  const RECOVERY_PATHS = ["/onboarding", "/verify-email", "/forgot-password", "/reset-password", "/privacy", "/terms"];
   if (!profile?.isOnboarded && !RECOVERY_PATHS.includes(window.location.pathname)) {
     return <Redirect to="/onboarding" />;
   }
@@ -232,6 +241,8 @@ function Router() {
             {/* Signed in and still resetting — an old email, or a shared computer. */}
             <Route path="/forgot-password" component={ForgotPasswordPage} />
             <Route path="/reset-password" component={ResetPasswordPage} />
+            <Route path="/privacy" component={PrivacyPolicy} />
+            <Route path="/terms" component={TermsOfService} />
             {/* Every project's next step in one place — the address the retention loop returns to. */}
             <Route path="/path" component={PathHome} />
             {/*
