@@ -175,51 +175,56 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
    * platform's health check, on purpose (see above).
    */
   /*
-   * The answer, briefly remembered.
+   * One query at a time, however many are asking.
    *
-   * This route is public and unauthenticated — it has to be, a probe can't
-   * sign in — and it asks the database something. That combination means
-   * anyone can make this process issue a query, as fast as they can ask:
-   * cheap per request, not free in aggregate, and the reason CodeQL flags it
-   * (js/missing-rate-limiting). A limiter is the wrong instrument here,
-   * because the legitimate caller is a monitor that polls on a schedule and
-   * being refused is exactly what it would report as an outage.
+   * This route is public and unauthenticated — a probe cannot sign in — and it
+   * asks the database something, so anyone can make this process talk to the
+   * database by asking. That is what CodeQL flags (js/missing-rate-limiting),
+   * and it is a fair point about a public endpoint that does real work.
    *
-   * So the query is what's limited, not the caller. Within the window every
-   * request gets the same answer without touching the database, which caps
-   * this at one query per READY_CACHE_MS however hard it's hit, while a
-   * monitor polling every ten seconds still sees a fresh answer each time.
-   * Short enough that a database that has just gone away is noticed within
-   * the window rather than reported healthy for a minute.
+   * Two instruments were wrong before this one. A rate limiter refuses the
+   * caller, and the legitimate caller is a monitor on a schedule — being
+   * refused is precisely what it would report as an outage. Caching the answer
+   * refuses reality instead: `readiness.test.ts` breaks the database and
+   * expects 503 on the very next request, and it is right to, because a
+   * readiness probe that reports health for a second after the database has
+   * gone is worse than the load it was saving.
+   *
+   * So neither the caller nor the answer is held back — the *queries* are
+   * collapsed. While one is in flight every other request waits on that same
+   * one and they all get its result, so a flood costs one query per round trip
+   * rather than one per request, and nobody is ever told something that isn't
+   * true right now.
    */
-  const READY_CACHE_MS = 1_000;
-  let readyCache: { at: number; status: number; body: Record<string, unknown> } | null = null;
+  let readyInFlight: Promise<{ status: number; body: Record<string, unknown> }> | null = null;
 
-  app.get("/_ready", async (_req, res) => {
-    const now = Date.now();
-    if (readyCache && now - readyCache.at < READY_CACHE_MS) {
-      // `cached` so a reader isn't misled about how fresh `ms` is.
-      return res.status(readyCache.status).json({ ...readyCache.body, cached: true });
-    }
-    const started = now;
+  const askTheDatabase = async () => {
+    const started = Date.now();
     try {
       await pool.query("SELECT 1");
-      const body = { ready: true, database: "ok", ms: Date.now() - started };
-      readyCache = { at: Date.now(), status: 200, body };
-      res.json(body);
+      return { status: 200, body: { ready: true, database: "ok", ms: Date.now() - started } };
     } catch (err) {
       const message = String((err as Error)?.message ?? err);
-      const body = {
-        ready: false,
-        database: "unreachable",
-        // The address it tried is the answer nine times out of ten: a localhost
-        // here means the deployment carries a development connection string.
-        detail: redact(message).slice(0, 200),
-        ms: Date.now() - started,
+      return {
+        status: 503,
+        body: {
+          ready: false,
+          database: "unreachable",
+          // The address it tried is the answer nine times out of ten: a localhost
+          // here means the deployment carries a development connection string.
+          detail: redact(message).slice(0, 200),
+          ms: Date.now() - started,
+        },
       };
-      readyCache = { at: Date.now(), status: 503, body };
-      res.status(503).json(body);
     }
+  };
+
+  app.get("/_ready", async (_req, res) => {
+    // Cleared in a `finally` so a rejection can't leave every later request
+    // waiting on a promise that will never be replaced.
+    readyInFlight ??= askTheDatabase().finally(() => { readyInFlight = null; });
+    const { status, body } = await readyInFlight;
+    res.status(status).json(body);
   });
 
   app.use((req, res, next) => {

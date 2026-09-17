@@ -41,9 +41,24 @@ if (!notes) {
   process.exit(2);
 }
 
-/** Who is deploying, as git knows them. */
+/**
+ * Who is deploying.
+ *
+ * The GitHub account first: it's the identity that actually holds the
+ * permission to do this, and it matches the name on the CI run being linked.
+ * `git config user.name` is the fallback, and is often unset — git will happily
+ * derive an author from the system login and hostname without it, so a log that
+ * trusted it alone recorded "unknown" for a real person.
+ */
 const deployer = (() => {
-  try { return sh("git", ["config", "user.name"]) || "unknown"; } catch { return "unknown"; }
+  for (const attempt of [
+    () => sh("gh", ["api", "user", "--jq", ".login"]),
+    () => sh("git", ["config", "user.name"]),
+    () => sh("git", ["log", "-1", "--format=%an"]),
+  ]) {
+    try { const who = attempt(); if (who) return who; } catch { /* try the next */ }
+  }
+  return "unknown";
 })();
 
 /**
