@@ -80,13 +80,27 @@ function prompt(question: string): Promise<string> {
 /** Never let a key reach a log, a terminal, or an error message. */
 const redact = (text: string, key: string) => (key ? text.split(key).join("«api key»") : text);
 
+/** Past this, say so rather than sit there. A script with no timeout looks identical to a hung one. */
+const API_TIMEOUT_MS = 20_000;
+
 async function call(method: string, key: string, params: Record<string, string | number> = {}): Promise<any> {
   const body = new URLSearchParams({ api_key: key, format: "json", ...Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])) });
-  const res = await fetch(`${API}/${method}`, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded", "cache-control": "no-cache" },
-    body,
-  });
+
+  let res: Response;
+  try {
+    res = await fetch(`${API}/${method}`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded", "cache-control": "no-cache" },
+      body,
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+    });
+  } catch (err) {
+    const name = (err as Error)?.name;
+    if (name === "TimeoutError" || name === "AbortError") {
+      throw new Error(`${method}: no answer from api.uptimerobot.com in ${API_TIMEOUT_MS / 1000}s. Nothing was changed. Check the connection (a VPN or proxy blocking it would look exactly like this) and run it again.`);
+    }
+    throw new Error(`${method}: couldn't reach api.uptimerobot.com — ${redact(String((err as Error)?.message ?? err), key)}`);
+  }
   const text = await res.text();
   let json: any;
   try { json = JSON.parse(text); } catch { throw new Error(`${method}: ${res.status} — ${redact(text.slice(0, 200), key)}`); }
@@ -111,7 +125,9 @@ async function main() {
   if (dryRun) console.log("(dry run — nothing will be created or changed)\n");
 
   // Who gets told. A monitor with no alert contacts watches in silence.
+  process.stdout.write("Checking the account's alert contacts… ");
   const contacts = (await call("getAlertContacts", key)).alert_contacts ?? [];
+  console.log("done.");
   const usable = contacts.filter((c: any) => Number(c.status) === 2); // 2 = active
   if (usable.length === 0) {
     console.log("\n⚠ This account has no active alert contacts, so a monitor would notice an outage");
@@ -123,8 +139,10 @@ async function main() {
   // "id_threshold_recurrence": notify immediately, once.
   const alertContacts = usable.map((c: any) => `${c.id}_0_0`).join("-");
 
+  process.stdout.write("Looking for an existing monitor on this URL… ");
   const existing = ((await call("getMonitors", key, { search: target })).monitors ?? [])
     .find((m: any) => String(m.url).replace(/\/$/, "") === target.replace(/\/$/, ""));
+  console.log(existing ? `found #${existing.id}.` : "none yet.");
 
   const settings = {
     friendly_name: FRIENDLY_NAME,
