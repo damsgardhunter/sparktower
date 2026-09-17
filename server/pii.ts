@@ -18,7 +18,7 @@
  *  - `users.google_id`, `stripe_customer_id`, `stripe_subscription_id` —
  *    identifiers issued by someone else, useless without that provider's keys.
  *  - `sessions.sess` — holds a user id and flags, no credential.
- *  - `users.password_hash`, `mfa_secret`, `mfa_recovery_codes`,
+ *  - `users.password_hash`, `mfa_secret`,
  *    `mobile_refresh_tokens.token_hash` — hashed or sealed already, where they
  *    are defined.
  *

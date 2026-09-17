@@ -96,10 +96,19 @@ export const KEPT: Owned[] = [
  * the password hash in the first draft of this file.
  */
 const NEVER_EXPORTED = new Set([
+  // mfa_recovery_codes is dropped (migrations/0024) and kept on this list anyway: it costs
+  // nothing, and it still holds for a database restored from a dump taken before that.
   "password_hash", "mfa_secret", "mfa_pending_secret", "mfa_recovery_codes", "mfa_last_step",
   "token_hash", "stripe_customer_id", "stripe_subscription_id",
   "passwordHash", "mfaSecret", "mfaPendingSecret", "mfaRecoveryCodes", "mfaLastStep",
   "tokenHash", "stripeCustomerId", "stripeSubscriptionId",
+  /*
+   * The project's read-only database connection, sealed at rest and never
+   * returned to a client (shared/schema.ts). The export is a file a person
+   * downloads and forwards, and a member of a project — not only its owner —
+   * can ask for one, so this is the one path where "sealed" had a way out.
+   */
+  "data_source", "dataSource",
 ]);
 
 const ident = (v: string) => {
@@ -137,7 +146,8 @@ export async function exportAccount(userId: string): Promise<Record<string, unkn
        OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = p.id AND m.user_id = $1)`,
     [userId],
   );
-  out.projects = projects.rows;
+  // Scrubbed like every other table here: this row carries the sealed data source.
+  out.projects = scrub(projects.rows);
 
   for (const { table, column } of [...MINE, ...CHOICE, ...KEPT]) {
     const { rows } = await pool.query(statement("SELECT *", table, column), [userId]);
@@ -221,7 +231,7 @@ export async function deleteAccount(userId: string, opts: { keepPosts: boolean }
       `UPDATE users SET
          email = $2, first_name = 'Deleted', last_name = 'account', profile_image_url = NULL,
          password_hash = NULL, google_id = NULL, stripe_customer_id = NULL, stripe_subscription_id = NULL,
-         mfa_secret = NULL, mfa_pending_secret = NULL, mfa_enabled_at = NULL, mfa_last_step = NULL, mfa_recovery_codes = NULL,
+         mfa_secret = NULL, mfa_pending_secret = NULL, mfa_enabled_at = NULL, mfa_last_step = NULL,
          access_tokens_revoked_at = now(), deleted_at = now()
        WHERE id = $1`,
       [userId, `deleted+${userId}@deleted.invalid`],

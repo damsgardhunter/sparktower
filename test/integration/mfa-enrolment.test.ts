@@ -69,8 +69,8 @@ describe("starting 2FA setup", () => {
     expect(enabled.status, JSON.stringify(enabled.body)).toBe(200);
     expect(enabled.body.enabled).toBe(true);
     // Shown once, and the only way back in without the phone.
-    expect(Array.isArray(enabled.body.recoveryCodes)).toBe(true);
-    expect(enabled.body.recoveryCodes.length).toBeGreaterThan(0);
+    // No recovery codes: the authenticator's six digits are the only second factor.
+    expect(enabled.body.recoveryCodes).toBeUndefined();
   }, 30_000);
 
   it("won't hand out a second secret once 2FA is on", async () => {

@@ -5,7 +5,7 @@
  *  - A reviewer without 2FA signs in, but privileged routes refuse until it's
  *    set up; setting it up verifies the session.
  *  - With 2FA on, the password alone gives no session; a code finishes the
- *    sign-in; a wrong, reused or expired code doesn't; a recovery code works once.
+ *    sign-in; a wrong, reused or expired code doesn't; there is no second way in.
  *  - The platform owner (PLATFORM_OWNER_EMAIL) is held to the same rule.
  *  - Mobile: a challenge instead of tokens; tokens that passed carry it through refresh.
  */
@@ -53,7 +53,7 @@ describe("two-factor sign-in", () => {
     expect(r.body.mfaRequired).toBeUndefined();
     expect(JSON.stringify(r.body)).not.toMatch(/mfaSecret|mfaRecoveryCodes/);
     expect((await agent.get("/api/auth/user")).status).toBe(200);
-    expect((await agent.get("/api/auth/mfa/status")).body).toEqual({ required: false, enabled: false, verified: false, recoveryCodesLeft: 0 });
+    expect((await agent.get("/api/auth/mfa/status")).body).toEqual({ required: false, enabled: false, verified: false });
     // Not a reviewer: the admin routes don't exist for them, 2FA or not.
     expect((await agent.get("/api/admin/reports")).status).toBe(404);
   });
@@ -76,13 +76,12 @@ describe("two-factor sign-in", () => {
     expect((await first.agent.post("/api/auth/mfa/enable").send({ code: "000000" })).body.code).toBe("mfa_invalid_code");
     const enabled = await first.agent.post("/api/auth/mfa/enable").send({ code: codeFor(setup.body.secret) });
     expect(enabled.status, JSON.stringify(enabled.body)).toBe(200);
-    expect(enabled.body.recoveryCodes).toHaveLength(10);
+    expect(enabled.body.recoveryCodes, "recovery codes are gone").toBeUndefined();
     expect((await first.agent.get("/api/admin/reports")).status).toBe(200);
     // Stored sealed, never plaintext, and never sent.
     const [row] = await db.select().from(users).where(eq(users.id, reviewer.id));
     expect(row.mfaSecret).toMatch(/^v1\./);
     expect(row.mfaSecret).not.toContain(setup.body.secret);
-    expect(row.mfaRecoveryCodes).not.toContain(enabled.body.recoveryCodes[0]);
     expect(JSON.stringify((await first.agent.get("/api/auth/user")).body)).not.toMatch(/mfaSecret|v1\./);
 
     // Next sign-in: the password alone gives no session.
@@ -99,15 +98,19 @@ describe("two-factor sign-in", () => {
     expect((await second.agent.get("/api/admin/reports")).status).toBe(200);
     expect((await second.agent.get("/api/auth/mfa/status")).body).toMatchObject({ required: true, enabled: true, verified: true });
 
-    // The same code again, on a new sign-in: refused (a code works once). A recovery code works — once.
+    // The same code again, on a new sign-in: refused (a code works once).
     const third = login(app, reviewer.email);
     await third.res;
     expect((await third.agent.post("/api/auth/mfa/verify").send({ code: codeFor(setup.body.secret, 1) })).body.code).toBe("mfa_invalid_code");
-    const recovery = enabled.body.recoveryCodes[0];
-    expect((await third.agent.post("/api/auth/mfa/verify").send({ code: recovery })).body.mfaMethod).toBe("recovery");
-    const fourth = login(app, reviewer.email);
-    await fourth.res;
-    expect((await fourth.agent.post("/api/auth/mfa/verify").send({ code: recovery })).body.code).toBe("mfa_invalid_code");
+    /*
+     * And nothing else opens it: a recovery-code-shaped string is just a wrong
+     * code now. This is exactly where a recovery code used to work — a code
+     * from the app is accepted within one step of now, so once the newest one
+     * has been used there is no other valid code until the clock moves on.
+     * That wait is the cost of having no second credential, and it is thirty
+     * seconds rather than a string somebody screenshotted.
+     */
+    expect((await third.agent.post("/api/auth/mfa/verify").send({ code: "afc72-6a074" })).body.code).toBe("mfa_invalid_code");
     // Without a password first there's nothing to verify.
     expect((await request(app).post("/api/auth/mfa/verify").send({ code: codeFor(setup.body.secret) })).body.code).toBe("mfa_challenge_expired");
   });
@@ -152,43 +155,24 @@ describe("two-factor sign-in", () => {
     expect(ordinary.body).toMatchObject({ accessToken: expect.any(String), mfaEnrollmentRequired: false });
   });
 
-  it("issues a fresh set of recovery codes, and only to a session that has passed a code", async () => {
+  it("has no second way in: the route that minted recovery codes is gone", async () => {
     const app = await getTestApp();
-    const me = await account(app, "Regen");
+    const me = await account(app, "NoCodes");
+    const { secret } = await passMfa(me.agent);
 
-    // Not on yet: nothing to replace.
-    const tooEarly = await me.agent.post("/api/auth/mfa/recovery-codes").send({});
-    expect(tooEarly.status).toBe(400);
-    expect(tooEarly.body.code).toBe("mfa_not_enabled");
+    // The endpoint that used to hand out ten one-time codes answers nothing at all.
+    expect((await me.agent.post("/api/auth/mfa/recovery-codes").send({})).status).toBe(404);
 
-    const { secret, recoveryCodes: first } = await passMfa(me.agent);
-    expect(first).toHaveLength(10);
+    // And a signed-in session still has only the app: the status says nothing about codes.
+    const status = (await me.agent.get("/api/auth/mfa/status")).body;
+    expect(status).toMatchObject({ required: false, enabled: true, verified: true });
+    expect(status.recoveryCodesLeft).toBeUndefined();
 
-    // A password alone doesn't even make a session while 2FA is on: the sign-in is held pending a code,
-    // so replacing the codes isn't refused as unauthorised — there is nobody there to refuse.
-    const passwordOnly = login(app, me.email);
-    expect((await passwordOnly.res).body).toMatchObject({ mfaRequired: true });
-    expect((await passwordOnly.agent.post("/api/auth/mfa/recovery-codes").send({})).status).toBe(401);
-
-    // The enrolled session can, and what comes back is new.
-    const again = await me.agent.post("/api/auth/mfa/recovery-codes").send({});
-    expect(again.status, JSON.stringify(again.body)).toBe(200);
-    expect(again.body.recoveryCodes).toHaveLength(10);
-    expect(again.body.recoveryCodes.some((c: string) => first.includes(c))).toBe(false);
-
-    // The old ones are dead: a code from the first set no longer signs anyone in.
-    const stale = login(app, me.email);
-    expect((await stale.res).body).toMatchObject({ mfaRequired: true });
-    const withOld = await stale.agent.post("/api/auth/mfa/verify").send({ code: first[0] });
-    expect(withOld.status, "a replaced recovery code must not work").toBe(401);
-
-    // A new one does, once.
-    const fresh = login(app, me.email);
-    await fresh.res;
-    expect((await fresh.agent.post("/api/auth/mfa/verify").send({ code: again.body.recoveryCodes[0] })).status).toBe(200);
-    const reused = login(app, me.email);
-    await reused.res;
-    expect((await reused.agent.post("/api/auth/mfa/verify").send({ code: again.body.recoveryCodes[0] })).status).toBe(401);
-    expect(secret).toBeTruthy();
+    // A fresh sign-in is finished by the app's code, and by nothing that looks like a recovery code.
+    const again = login(app, me.email);
+    await again.res;
+    expect((await again.agent.post("/api/auth/mfa/verify").send({ code: "afc72-6a074" })).status).toBe(401);
+    // Enrolment consumed the current step, so the next one along is the code that works.
+    expect((await again.agent.post("/api/auth/mfa/verify").send({ code: codeFor(secret, 1) })).status).toBe(200);
   });
 });

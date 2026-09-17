@@ -263,7 +263,7 @@ describe("mobile: tokens", () => {
 });
 
 // --- Two-factor, by role -----------------------------------------------------
-// The full flows (wrong, reused and recovery codes; mobile challenges) are in
+// The full flows (wrong and reused codes; mobile challenges) are in
 // mfa.test.ts. This is the rule itself: which sign-ins need a second factor.
 
 describe("sign-in: who needs a second factor", () => {

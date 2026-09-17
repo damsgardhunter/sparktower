@@ -2,10 +2,10 @@
  * Two-factor sign-in in a real browser, for a reviewer:
  *
  *   signed in, the header says review tools are locked until 2FA is on → the
- *   security page shows a key, takes a code, shows recovery codes → signing in
+ *   security page shows a key and takes a code → signing in
  *   again stops at a code step → the right code lands in the app, unlocked.
  *
- * The rules (who needs it, replay, recovery, mobile) are in
+ * The rules (who needs it, replay, mobile) are in
  * test/integration/mfa.test.ts; this proves the screens connect them.
  */
 import { test, expect } from "@playwright/test";
@@ -38,7 +38,7 @@ test("a reviewer sets up 2FA, then signs in with a code", async ({ browser }) =>
   await page.getByTestId("link-mfa-setup").click();
   await expect(page).toHaveURL(/\/settings\/security$/);
 
-  // Setup: the key, a code from it, then the recovery codes.
+  // Setup: the key, then a code from it.
   await page.getByTestId("button-mfa-start").click();
   const secret = ((await page.getByTestId("text-mfa-secret").textContent()) ?? "").replace(/\s/g, "");
   expect(secret).toMatch(/^[A-Z2-7]{32}$/);
@@ -48,20 +48,15 @@ test("a reviewer sets up 2FA, then signs in with a code", async ({ browser }) =>
   await expect(page.getByTestId("text-mfa-settings-error")).toBeVisible();
   await page.getByTestId("input-mfa-enable-code").fill(totpAt(secret, timeStep()));
   await page.getByTestId("button-mfa-enable").click();
-  await expect(page.getByTestId("mfa-recovery-codes")).toBeVisible();
+  // There are no recovery codes to show; the page says so instead.
+  await expect(page.getByTestId("text-mfa-lost-phone")).toBeVisible();
   await expect(page.getByTestId("badge-mfa-state")).toHaveText("On");
   await expect(page.getByTestId("mfa-notice")).toHaveCount(0);
   expect((await api.get("/api/admin/reports")).status()).toBe(200);
 
   // Sign out; sign in again: the password isn't enough.
   await page.getByTestId("button-logout").click();
-  /*
-   * The landing header is held back while the hero video opens and then fades
-   * in over two seconds (`.hero-header-reveal`), so Log In is deliberately not
-   * there for the first few seconds of the page. Longer than the 5s default,
-   * which the page navigation was already eating into.
-   */
-  await expect(page.getByTestId("button-login")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("button-login")).toBeVisible();
   await page.getByTestId("button-login").click();
   await page.getByTestId("input-login-email").fill(email);
   await page.getByTestId("input-login-password").fill(password);

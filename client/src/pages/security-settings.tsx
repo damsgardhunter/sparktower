@@ -17,7 +17,7 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 
 /**
  * Two-factor authentication: set it up (a key for the authenticator app, then
- * a code to confirm), and see or replace the recovery codes. Required for
+ * a code to confirm). Required for
  * reviewers, admins and the owner; open to anyone.
  */
 export default function SecuritySettings() {
@@ -25,7 +25,6 @@ export default function SecuritySettings() {
   const { data: status, isLoading } = useQuery<MfaStatus>({ queryKey: ["/api/auth/mfa/status"] });
   const [setup, setSetup] = useState<{ secret: string; otpauthUrl: string; qrDataUrl?: string | null } | null>(null);
   const [code, setCode] = useState("");
-  const [codes, setCodes] = useState<string[] | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -40,13 +39,11 @@ export default function SecuritySettings() {
   const enable = (e: React.FormEvent) => {
     e.preventDefault();
     run(async () => {
-      const res = await postJson<{ recoveryCodes: string[] }>("/api/auth/mfa/enable", { code });
-      setCodes(res.recoveryCodes);
+      await postJson("/api/auth/mfa/enable", { code });
       setSetup(null);
       await refresh();
     });
   };
-  const regenerate = () => run(async () => { setCodes((await postJson<{ recoveryCodes: string[] }>("/api/auth/mfa/recovery-codes")).recoveryCodes); await refresh(); });
 
   if (isLoading || !status) return <div className="flex justify-center p-10"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>;
 
@@ -121,41 +118,17 @@ export default function SecuritySettings() {
             </form>
           )}
 
-          {codes && (
-            <div className="space-y-2 rounded-md border p-3" data-testid="mfa-recovery-codes">
-              <p className="text-sm font-medium">Recovery codes</p>
-              <p className="text-sm text-muted-foreground">Save these somewhere safe. Each one signs you in once if you lose your phone. They won't be shown again.</p>
-              <div className="grid grid-cols-2 gap-1 font-mono text-sm select-all">{codes.map((c) => <span key={c}>{c}</span>)}</div>
-              <div className="flex flex-wrap gap-2">
-                <Button size="sm" variant="outline" onClick={() => navigator.clipboard?.writeText(codes.join("\n"))} data-testid="button-mfa-copy-codes">Copy</Button>
-                {/*
-                  A clipboard is not somewhere you keep the thing that gets you
-                  back in when your phone is gone — the next copy overwrites it.
-                */}
-                <Button
-                  size="sm" variant="outline" data-testid="button-mfa-download-codes"
-                  onClick={() => {
-                    const blob = new Blob([`SparkTower recovery codes\n\nEach code signs you in once if you lose your authenticator.\nKeep this file somewhere you can reach without your phone.\n\n${codes.join("\n")}\n`], { type: "text/plain" });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement("a");
-                    a.href = url;
-                    a.download = "sparktower-recovery-codes.txt";
-                    a.click();
-                    URL.revokeObjectURL(url);
-                  }}
-                >Download</Button>
-              </div>
-            </div>
-          )}
-
-          {status.enabled && !codes && (
-            <div className="flex flex-wrap items-center gap-3 text-sm">
-              <span className="text-muted-foreground" data-testid="text-mfa-codes-left">{status.recoveryCodesLeft} recovery code{status.recoveryCodesLeft === 1 ? "" : "s"} left</span>
-              <Button size="sm" variant="outline" onClick={regenerate} disabled={busy || !status.verified} data-testid="button-mfa-regenerate">New recovery codes</Button>
-            </div>
-          )}
           {status.enabled && (
-            <p className="text-xs text-muted-foreground">Lost your phone and your recovery codes? Contact support to have 2FA reset after we confirm it's you.</p>
+            /*
+             * Said plainly, because it is the whole trade. There are no recovery
+             * codes to lose any more: the six digits from the app are the only
+             * way in, and a lost phone is a conversation with an admin rather
+             * than a string somebody screenshotted a year ago.
+             */
+            <p className="text-xs text-muted-foreground" data-testid="text-mfa-lost-phone">
+              The 6-digit code from your app is the only way in — there are no recovery codes.
+              If you lose your phone, an admin resets 2FA on your account once they've confirmed it's you.
+            </p>
           )}
         </CardContent>
       </Card>

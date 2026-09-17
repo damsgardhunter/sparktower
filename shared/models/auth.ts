@@ -76,8 +76,6 @@ export const users = pgTable("users", {
   mfaEnabledAt: timestamp("mfa_enabled_at"),
   /** The last time step a code was accepted from: a code works once. */
   mfaLastStep: integer("mfa_last_step"),
-  /** One-time recovery codes, SHA-256 hashed; a used one is removed. */
-  mfaRecoveryCodes: text("mfa_recovery_codes").array(),
   /**
    * When the subscription state this account carries was decided — the Stripe
    * event's own timestamp, not ours. Stripe makes no promise about delivery

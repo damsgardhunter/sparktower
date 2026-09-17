@@ -7,14 +7,14 @@
  *
  *  - Enrolled: a correct password doesn't sign you in. The web keeps a pending
  *    sign-in in the session for five minutes; mobile gets a signed challenge.
- *    A code from the authenticator app (or a one-time recovery code) finishes it.
+ *    A code from the authenticator app finishes it.
  *  - Required but not enrolled: sign-in works, but every privileged route
  *    answers 403 `mfa_enrollment_required` until 2FA is set up.
  *  - A session (web) or token pair (mobile) that passed a second factor is
  *    marked; privileged routes check the mark (`mfaGate`, called by
  *    requireReviewer, requireOwner and the admin guard).
  *
- * Secrets are sealed at rest (secret-box); recovery codes are hashed; a code
+ * Secrets are sealed at rest (secret-box); a code
  * works once (the accepted time step is recorded); attempts are limited per
  * account and per address.
  */
@@ -32,7 +32,6 @@ import { enforceRateLimit, rateLimit } from "./moderation";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 
 export const MFA_CHALLENGE_TTL_MS = 5 * 60_000;
-export const RECOVERY_CODE_COUNT = 10;
 
 type UserRow = typeof users.$inferSelect;
 
@@ -71,18 +70,13 @@ export function mfaGate(req: any, res: Response): boolean {
   return false;
 }
 
-const hashRecovery = (code: string) => crypto.createHash("sha256").update(code.toLowerCase().replace(/[^a-z0-9]/g, "")).digest("hex");
-const newRecoveryCodes = () => Array.from({ length: RECOVERY_CODE_COUNT }, () => {
-  const raw = crypto.randomBytes(5).toString("hex"); // 40 bits each
-  return `${raw.slice(0, 5)}-${raw.slice(5)}`;
-});
 
 /**
  * A second factor for an enrolled account: an authenticator code (once per
  * time step — recorded atomically, so a replayed or raced code fails) or a
- * recovery code (removed as it's used). Returns what matched, or null.
+ * app. Returns "totp" when it matched, or null.
  */
-export async function checkSecondFactor(userId: string, code: string): Promise<"totp" | "recovery" | null> {
+export async function checkSecondFactor(userId: string, code: string): Promise<"totp" | null> {
   const [user] = await db.select().from(users).where(eq(users.id, userId));
   if (!mfaEnabledFor(user)) return null;
   const secret = open(user!.mfaSecret!);
@@ -94,12 +88,20 @@ export async function checkSecondFactor(userId: string, code: string): Promise<"
       .returning({ id: users.id });
     return claimed.length ? "totp" : null;
   }
-  const hashed = hashRecovery(code);
-  if (!/^[0-9a-f]{5}-?[0-9a-f]{5}$/i.test(code.trim()) || !(user!.mfaRecoveryCodes ?? []).includes(hashed)) return null;
-  const used = await db.update(users).set({ mfaRecoveryCodes: sql`array_remove(${users.mfaRecoveryCodes}, ${hashed})` })
-    .where(and(eq(users.id, userId), sql`${hashed} = any(${users.mfaRecoveryCodes})`))
-    .returning({ id: users.id });
-  return used.length ? "recovery" : null;
+  /*
+   * And that is the whole list. There used to be a second branch here for a
+   * one-time recovery code, and it is gone on purpose: ten printable strings
+   * that each sign in once are a second password, kept wherever people keep
+   * things — a screenshot, a notes app, a text to themselves — and they bypass
+   * the factor they are supposed to be protecting.
+   *
+   * What replaces them is not nothing. An account that loses its phone is
+   * reset by an operator with database access (script/reset-mfa.ts), after
+   * confirming who the person is some other way. That is slower, and it is
+   * meant to be: a lockout that needs a human is recoverable, and a recovery
+   * code someone screenshotted is not revocable.
+   */
+  return null;
 }
 
 // --- Mobile: a signed, short-lived challenge instead of a server session ---------
@@ -132,7 +134,7 @@ export async function limitMfaAttempts(_req: Request, res: Response, userId: str
 }
 
 const safeUser = (u: UserRow) => {
-  const { passwordHash: _p, mfaSecret: _s, mfaPendingSecret: _ps, mfaRecoveryCodes: _r, mfaLastStep: _l, ...rest } = u;
+  const { passwordHash: _p, mfaSecret: _s, mfaPendingSecret: _ps, mfaLastStep: _l, ...rest } = u;
   return rest;
 };
 
@@ -175,7 +177,7 @@ export async function drawQr(url: string): Promise<{ dataUrl: string | null; dra
 export function registerMfaRoutes(app: Express) {
   /** Where this account stands: whether its role needs 2FA, whether it's on, whether this session passed it. */
   app.get("/api/auth/mfa/status", isAuthenticated, (req: any, res) => {
-    res.json({ required: mfaRequiredFor(req.user), enabled: mfaEnabledFor(req.user), verified: mfaSatisfied(req), recoveryCodesLeft: req.user.mfaRecoveryCodes?.length ?? 0 });
+    res.json({ required: mfaRequiredFor(req.user), enabled: mfaEnabledFor(req.user), verified: mfaSatisfied(req) });
   });
 
   /**
@@ -229,7 +231,7 @@ export function registerMfaRoutes(app: Express) {
     res.json({ secret, otpauthUrl: url, qrDataUrl, drawnAs });
   });
 
-  /** Confirms setup with a code from the app: 2FA is on, this session counts as verified, and the recovery codes are shown once. */
+  /** Confirms setup with a code from the app: 2FA is on and this session counts as verified. */
   app.post("/api/auth/mfa/enable", isAuthenticated, rateLimit("session"), async (req: any, res) => {
     if (!(await limitMfaAttempts(req, res, req.user.id))) return;
     const [user] = await db.select().from(users).where(eq(users.id, req.user.id));
@@ -238,21 +240,11 @@ export function registerMfaRoutes(app: Express) {
     if (!secret) return res.status(400).json({ message: "Start setup first.", code: "mfa_not_started" });
     const step = verifyTotp(secret, String(req.body?.code ?? ""));
     if (step == null) return res.status(401).json({ message: "That code isn't right. Check the time on your phone and try the next one.", code: "mfa_invalid_code" });
-    const codes = newRecoveryCodes();
     await db.update(users).set({
       mfaSecret: seal(secret), mfaPendingSecret: null, mfaEnabledAt: new Date(), mfaLastStep: step,
-      mfaRecoveryCodes: codes.map(hashRecovery),
     }).where(eq(users.id, req.user.id));
     if (req.session) req.session.mfaVerifiedAt = Date.now();
-    res.json({ enabled: true, recoveryCodes: codes, reauthenticate: !req.session });
+    res.json({ enabled: true, reauthenticate: !req.session });
   });
 
-  /** New recovery codes (the old ones stop working). Needs a verified session. */
-  app.post("/api/auth/mfa/recovery-codes", isAuthenticated, rateLimit("session"), async (req: any, res) => {
-    if (!mfaEnabledFor(req.user)) return res.status(400).json({ message: "Two-factor authentication isn't on.", code: "mfa_not_enabled" });
-    if (!mfaSatisfied(req)) return res.status(403).json({ message: "Sign in again with your authenticator code first.", code: "mfa_required" });
-    const codes = newRecoveryCodes();
-    await db.update(users).set({ mfaRecoveryCodes: codes.map(hashRecovery) }).where(eq(users.id, req.user.id));
-    res.json({ recoveryCodes: codes });
-  });
 }
