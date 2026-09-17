@@ -149,3 +149,25 @@ describe("what the boot prints", () => {
     expect(text).toMatch(/STRIPE_SECRET_KEY/);
   });
 });
+
+describe("addresses that must agree with each other", () => {
+  it("catches an OAuth callback pointing somewhere the site isn't", () => {
+    // The real case: production served sparktower.onrender.com while AUTH_HOST
+    // sent Google's callback to sparktower.app, a parked domain. Every
+    // individual variable was valid, and signing in with Google was broken for
+    // everyone — which is exactly the class of failure a per-variable check
+    // cannot see.
+    const report = checkEnvironment({ ...HEALTHY, PUBLIC_URL: "https://sparktower.onrender.com", AUTH_HOST: "sparktower.app" });
+    const finding = report.degraded.find((f) => f.name === "AUTH_HOST");
+    expect(finding, "a mismatched auth host should be reported").toBeTruthy();
+    expect(finding!.detail).toMatch(/google/i);
+    // Broken sign-in is not a reason to refuse to serve the site.
+    expect(report.blocking).toEqual([]);
+  });
+
+  it("is quiet when they agree, or when there's nothing to disagree with", () => {
+    expect(checkEnvironment({ ...HEALTHY, PUBLIC_URL: "https://sparktower.app", AUTH_HOST: "sparktower.app" }).degraded).toEqual([]);
+    // The common case: AUTH_HOST unset, so the callback follows PUBLIC_URL.
+    expect(checkEnvironment(HEALTHY).degraded).toEqual([]);
+  });
+});

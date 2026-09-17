@@ -152,6 +152,42 @@ export const ENV_RULES: EnvRule[] = [
   },
 ];
 
+/**
+ * The addresses in one deployment that have to agree with each other.
+ *
+ * Nothing here is missing or malformed — each value is individually fine — and
+ * that is exactly why this check exists. The site can be served at one address
+ * while Google sign-in sends people back to another, and every single-variable
+ * check passes while sign-in is broken for everyone.
+ *
+ * This is not hypothetical: production served sparktower.onrender.com while
+ * AUTH_HOST pointed the OAuth callback at sparktower.app, a domain that is
+ * still a parked page. Google sent people back to nothing.
+ */
+function crossChecks(env: Record<string, string | undefined>, production: boolean): EnvFinding[] {
+  if (!production) return [];
+  const out: EnvFinding[] = [];
+
+  const hostOf = (raw: string | undefined) => {
+    if (!raw?.trim()) return null;
+    try { return new URL(raw.trim().startsWith("http") ? raw.trim() : `https://${raw.trim()}`).host.toLowerCase(); } catch { return null; }
+  };
+
+  const siteVar = ["PUBLIC_URL", "SERVER_BASE_URL", "RENDER_EXTERNAL_URL"].find((n) => env[n]?.trim());
+  const siteHost = hostOf(env[siteVar ?? ""]);
+  const authHost = hostOf(env.AUTH_HOST);
+
+  if (siteHost && authHost && siteHost !== authHost) {
+    out.push({
+      name: "AUTH_HOST",
+      severity: "degraded",
+      state: "invalid",
+      detail: `is ${authHost} while the site is served at ${siteHost} (${siteVar}). Google sends people back to ${authHost}/api/auth/google/callback after they approve, so signing in with Google lands them on a host that isn't this app. Unset AUTH_HOST unless the callback genuinely belongs on another domain.`,
+    });
+  }
+  return out;
+}
+
 export interface EnvFinding {
   name: string;
   /** The variable that actually supplied the value, when an alternative did. */
@@ -204,6 +240,8 @@ export function checkEnvironment(env: Record<string, string | undefined>): EnvRe
       : { name: rule.name, satisfiedBy: supplier === rule.name ? undefined : supplier, severity: rule.severity, state: "ok" });
   }
 
+  findings.push(...crossChecks(env, production));
+
   const bad = findings.filter((f) => f.state !== "ok");
   return {
     production,
@@ -214,4 +252,4 @@ export function checkEnvironment(env: Record<string, string | undefined>): EnvRe
 }
 
 /** The names a report covers, for anything that wants to show presence without values. */
-export const ENV_NAMES = ENV_RULES.flatMap((r) => [r.name, ...(r.alternatives ?? [])]);
+export const ENV_NAMES = [...ENV_RULES.flatMap((r) => [r.name, ...(r.alternatives ?? [])]), "AUTH_HOST"];
