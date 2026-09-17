@@ -11,6 +11,18 @@ import { fileURLToPath } from "node:url";
 const stub = (name: string) => fileURLToPath(new URL(`./test/stubs/${name}.ts`, import.meta.url));
 
 export default defineConfig({
+  /*
+   * An empty PostCSS config, given inline.
+   *
+   * `test.css: false` says "don't process stylesheets", and it isn't enough:
+   * Vite still *looks* for a PostCSS config before deciding there is nothing to
+   * do, walks up out of this package, finds the web app's at the repository
+   * root and tries to load Tailwind — which mobile doesn't install. Green on a
+   * laptop where the root's node_modules is right there, red in CI where the
+   * mobile job installs only its own dependencies. Handing Vite a config stops
+   * the search.
+   */
+  css: { postcss: { plugins: [] } },
   test: {
     environment: "node",
     /*
