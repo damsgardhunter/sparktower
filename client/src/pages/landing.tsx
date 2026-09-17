@@ -1,11 +1,10 @@
 import { useState } from "react";
-import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { CardDescription } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Zap, MessageSquare, Target, Eye, EyeOff, Loader2, Users, Rocket, Globe, Brain, UserPlus, Search, Handshake, Lightbulb, Wrench, User, ArrowRight } from "lucide-react";
+import { Zap, MessageSquare, Target, Eye, EyeOff, Loader2, Users, Rocket, Globe, Brain, UserPlus, Search, Handshake, Lightbulb, Wrench, User, ArrowRight, Trophy, Heart } from "lucide-react";
 const logoImage = "/favicon.png";
 import { SiGoogle } from "react-icons/si";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -15,7 +14,6 @@ import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { PENDING_PATH_KEY, type PendingPath } from "@shared/path-artifacts";
 import { PENDING_INVITE_KEY } from "@shared/invites";
-import heroVideo from "@assets/Landing_Video.mp4";
 import { MfaCodeForm } from "@/components/mfa";
 import { PASSWORD_MIN } from "@shared/passwords";
 
@@ -34,13 +32,23 @@ function afterAuthPath(): string {
 }
 
 export default function LandingPage() {
-  // Arriving from a public page's "start your own path" opens straight onto sign up.
+  /*
+   * `?signup=1` (a public page's "start your own path") is the default now, so
+   * it needs no branch — the tab it used to select is the one that opens.
+   * `?login=1` (an invite link's "I have an account") still does.
+   */
   const search = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
-  const arrivedToSignUp = search?.get("signup") === "1";
-  // An invite link's "I have an account" opens straight onto log in.
   const arrivedToLogIn = search?.get("login") === "1";
-  const [activeTab, setActiveTab] = useState(arrivedToSignUp ? "signup" : "login");
-  const [showAuthModal, setShowAuthModal] = useState(arrivedToSignUp || arrivedToLogIn);
+  /*
+   * Sign up unless the visitor asked for log in. The form is on the page from
+   * the first paint now, so there is no "show the form" state any more — the
+   * header's buttons pick a tab and bring the panel into view.
+   */
+  const [activeTab, setActiveTab] = useState(arrivedToLogIn ? "login" : "signup");
+  const focusAuth = (tab: "login" | "signup") => {
+    setActiveTab(tab);
+    document.querySelector("[data-testid=panel-auth]")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
 
   return (
     <div className="flex flex-col min-h-screen bg-white text-foreground">
@@ -62,7 +70,13 @@ export default function LandingPage() {
         * `hero-header-reveal` holds the whole thing hidden while the opening
         * video plays, then brings it up slowly (index.css).
         */}
-      <header className="hero-header-reveal fixed top-0 w-full z-50" data-testid="landing-header">
+      {/*
+        * Visible immediately. This used to carry `hero-header-reveal`, which
+        * held it invisible for 3.8 seconds while the opening video played —
+        * and with the video gone that was 3.8 seconds of a page with no way
+        * to sign in on it.
+        */}
+      <header className="fixed top-0 w-full z-50" data-testid="landing-header">
         <div
           className="relative flex items-center justify-between h-14 sm:h-16 md:h-20 px-2 sm:px-6 text-white shadow-[0_4px_20px_-6px_rgba(0,0,0,0.35)]"
           style={{ backgroundImage: NOVA_GRADIENT_CSS }}
@@ -98,7 +112,7 @@ export default function LandingPage() {
               variant="outline"
               className="h-8 px-1.5 text-xs border-0 sm:h-9 sm:px-4 sm:text-sm sm:border bg-white/10 text-white border-white/40 hover:bg-white/20 hover:text-white backdrop-blur-sm"
               data-testid="button-login"
-              onClick={() => { setActiveTab("login"); setShowAuthModal(true); }}
+              onClick={() => focusAuth("login")}
             >
               Log In
             </Button>
@@ -106,7 +120,7 @@ export default function LandingPage() {
               size="sm"
               className="h-8 px-2.5 text-xs sm:h-9 sm:px-4 sm:text-sm bg-white text-black hover:bg-white/90 font-semibold"
               data-testid="button-signup-nav"
-              onClick={() => { setActiveTab("signup"); setShowAuthModal(true); }}
+              onClick={() => focusAuth("signup")}
             >
               Sign Up
             </Button>
@@ -114,50 +128,41 @@ export default function LandingPage() {
         </div>
       </header>
 
-      <section className="relative min-h-screen flex items-start justify-center px-4 pt-28 sm:pt-48 md:pt-56 pb-16 md:pb-24 bg-white overflow-visible">
-        <div className="absolute left-0 right-0 z-0 overflow-hidden" style={{ top: '0px', bottom: 0 }}>
-          <video
-            src={heroVideo}
-            autoPlay
-            muted
-            playsInline
-            className="w-full h-full object-cover object-top"
-            data-testid="video-hero"
-          />
-        </div>
+      {/*
+        * The whole point of the page, above the fold: a person can make an
+        * account without scrolling or clicking anything first.
+        *
+        * It replaced a full-screen hero video with a Tesla quote under it. That
+        * page looked handsome and asked for nothing — the only way to sign up
+        * was to notice a button, which opened a form somewhere further down.
+        * Every social product converges on the same shape for a reason: what
+        * you get on the left, the box that gets you in on the right, nothing in
+        * between. The video also cost every first-time visitor a 2.5MB download
+        * before the page settled.
+        */}
+      <section
+        className="relative flex items-start justify-center px-4 pt-24 sm:pt-32 md:pt-36 pb-16 md:pb-24 bg-white overflow-hidden"
+        data-testid="section-hero"
+      >
+        {/* The gradient, far back and soft, so the white card in front of it has something to sit on. */}
+        <div aria-hidden className="pointer-events-none absolute -top-40 left-1/2 -translate-x-1/2 w-[80rem] h-[50rem] opacity-[0.16] blur-3xl" style={{ backgroundImage: NOVA_GRADIENT_CSS }} />
 
-        <div className="relative z-10 w-full max-w-5xl flex flex-col items-center gap-12" style={{ animation: 'hero-fade-in 0.8s ease-out both' }}>
-          <div className="text-center space-y-6">
-            <h1 className="text-3xl md:text-5xl font-bold text-black tracking-tight italic leading-tight" style={{ opacity: 0, animation: 'hero-fade-in 0.8s ease-out forwards' }} data-testid="text-hero-headline">
-              "The present is theirs; the future, for which I really worked, <span className="text-primary">is mine.</span>"
-            </h1>
-            <div className="flex justify-center" style={{ opacity: 0, animation: 'hero-fade-in 0.8s ease-out 0.1s forwards' }}>
-              <span className="inline-block px-4 py-1.5 bg-black text-white text-sm font-semibold tracking-wide">
-                — Nikola Tesla
-              </span>
-            </div>
-            <p className="text-lg text-gray-600 max-w-2xl mx-auto font-light leading-relaxed" style={{ opacity: 0, animation: 'hero-fade-in 0.8s ease-out 0.2s forwards' }}>
-              SparkTower is built for the builders who think ahead. Like Tesla, we believe the future belongs to those who create it — connect with visionary entrepreneurs, collaborate with AI, and launch the projects that shape tomorrow.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center" style={{ opacity: 0, animation: 'hero-fade-in 0.8s ease-out 0.3s forwards' }}>
-              <Button
-                size="lg"
-                data-testid="button-get-started"
-                onClick={() => { setActiveTab("signup"); setShowAuthModal(true); }}
-              >
-                Get Started
-              </Button>
-              <Button size="lg" variant="outline" className="bg-white/80 backdrop-blur-md" asChild>
-                <a href="#features" data-testid="link-learn-more">Learn More</a>
-              </Button>
+        <div className="relative z-10 w-full max-w-6xl" style={{ animation: "hero-fade-in 0.6s ease-out both" }}>
+          {/* The gradient border: a 2px gradient sheet with the card laid on top of it. */}
+          <div className="rounded-[1.75rem] p-[2px] shadow-[0_24px_60px_-20px_rgba(0,0,0,0.35)]" style={{ backgroundImage: NOVA_GRADIENT_CSS }}>
+            <div className="rounded-[1.65rem] bg-white overflow-hidden grid md:grid-cols-[1.15fr_1fr]">
+
+              <ChallengePanel />
+
+              {/* The box that gets you in. Sign up first: a landing page is for people who don't have an account yet. */}
+              <div className="p-6 sm:p-10 flex flex-col justify-center border-t md:border-t-0 md:border-l border-gray-100" data-testid="panel-auth">
+                <AuthCard activeTab={activeTab} onTabChange={setActiveTab} />
+                <p className="mt-6 text-center text-xs text-gray-400 leading-relaxed">
+                  Free to start. No card, no credits spent until you ask Nova for something.
+                </p>
+              </div>
             </div>
           </div>
-
-          {showAuthModal && (
-            <div className="w-full max-w-md" style={{ opacity: 0, animation: 'hero-fade-in 0.8s ease-out forwards' }}>
-              <AuthCard activeTab={activeTab} onTabChange={setActiveTab} />
-            </div>
-          )}
         </div>
       </section>
 
@@ -262,7 +267,7 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <section className="py-24 px-4 bg-background border-b border-border" data-testid="section-how-it-works">
+      <section id="how-it-works" className="py-24 px-4 bg-background border-b border-border" data-testid="section-how-it-works">
         <div className="max-w-5xl mx-auto">
           <div className="text-center mb-16 space-y-4">
             <h2 className="text-3xl md:text-5xl font-bold tracking-tight">How It Works</h2>
@@ -324,7 +329,7 @@ export default function LandingPage() {
             <Button
               size="lg"
               data-testid="button-join-sparktower"
-              onClick={() => { setActiveTab("signup"); setShowAuthModal(true); }}
+              onClick={() => focusAuth("signup")}
             >
               Join SparkTower
               <ArrowRight className="ml-2 h-5 w-5" />
@@ -375,26 +380,166 @@ export default function LandingPage() {
   );
 }
 
+/**
+ * The left half: what you get, and the offer that makes people stop scrolling.
+ *
+ * Built out of the product's own shapes rather than a stock photograph — a
+ * project card, a believer badge, a path step, Nova's tower — because a
+ * landing page that shows the thing is worth more than one that describes it,
+ * and because these stay true when the product changes. They overlap and tilt
+ * so the panel reads as depth rather than a list.
+ *
+ * The challenge is the headline and deliberately not a link: there is no
+ * contest row behind it yet (`contests` is empty), and sending somebody to an
+ * empty page is worse than telling them it's coming.
+ */
+function ChallengePanel() {
+  return (
+    <div className="relative p-6 sm:p-10 overflow-hidden bg-gradient-to-br from-gray-50 to-white" data-testid="panel-challenge">
+      {/* A wash of the gradient behind the cards, so they have something to lift off. */}
+      <div aria-hidden className="pointer-events-none absolute -right-24 -top-24 w-[28rem] h-[28rem] rounded-full opacity-20 blur-3xl" style={{ backgroundImage: NOVA_GRADIENT_CSS }} />
+
+      <div className="relative z-10">
+        <span
+          className="inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-bold uppercase tracking-[0.18em] text-white shadow-lg"
+          style={{ backgroundImage: NOVA_GRADIENT_CSS }}
+          data-testid="badge-challenge"
+        >
+          <Trophy className="h-3.5 w-3.5" />
+          The Contest
+        </span>
+
+        <h1 className="mt-5 text-3xl sm:text-4xl md:text-[2.75rem] font-bold tracking-tight leading-[1.08] text-black" data-testid="text-hero-headline">
+          Build a $50B company.
+          <br />
+          <span
+            className="bg-clip-text text-transparent"
+            style={{ backgroundImage: NOVA_GRADIENT_CSS }}
+          >
+            Take most of mine.
+          </span>
+        </h1>
+
+        <p className="mt-4 text-[15px] sm:text-base text-gray-600 leading-relaxed max-w-md">
+          The first builder who takes a project from SparkTower to a $50 billion company
+          takes home a majority stake in SparkTower itself. One contest, one winner,
+          no entry fee — start a project and you are in it.
+        </p>
+
+        <a href="#how-it-works" className="mt-5 inline-flex items-center gap-1.5 text-sm font-semibold text-gray-900 hover:gap-2.5 transition-all" data-testid="link-challenge-details">
+          How it works <ArrowRight className="h-4 w-4" />
+        </a>
+      </div>
+
+      {/*
+        * The product in miniature, as one overlapping stack rather than four
+        * things spread to the corners. The first version placed each card
+        * against a different edge and left a hole through the middle of the
+        * panel; depth comes from pieces covering each other, which is what the
+        * collages these pages all use are actually doing.
+        *
+        * Hidden below `sm`, where the form is the only thing that matters.
+        */}
+      <div className="relative z-10 mt-8 h-64 hidden sm:block" aria-hidden>
+        {/* Back of the stack: a project mid-build. */}
+        <div className="absolute left-0 top-8 w-64 rounded-2xl bg-white p-4 shadow-[0_18px_40px_-16px_rgba(0,0,0,0.3)] ring-1 ring-gray-100 -rotate-[4deg]">
+          <div className="flex items-center gap-2.5">
+            <div className="h-9 w-9 rounded-lg shrink-0" style={{ backgroundImage: NOVA_GRADIENT_CSS }} />
+            <div className="min-w-0">
+              <div className="text-[13px] font-semibold text-black leading-tight truncate">Harbor Coffee Co</div>
+              <div className="text-[11px] text-gray-500">Ship an MVP · step 4 of 9</div>
+            </div>
+          </div>
+          <div className="mt-3 h-1.5 w-full rounded-full bg-gray-100">
+            <div className="h-1.5 rounded-full w-5/12" style={{ backgroundImage: NOVA_GRADIENT_CSS }} />
+          </div>
+          <div className="mt-3 flex items-center gap-1.5">
+            <div className="h-5 w-5 rounded-full bg-gray-200" />
+            <div className="h-5 w-5 rounded-full bg-gray-300 -ml-2.5" />
+            <div className="h-5 w-5 rounded-full -ml-2.5" style={{ backgroundColor: NOVA_GRADIENT[0] }} />
+            <span className="ml-1 text-[11px] text-gray-400">3 believers</span>
+          </div>
+        </div>
+
+        {/* Over its shoulder: the next step, which is what the product is for. */}
+        <div className="absolute left-[14.5rem] top-0 w-60 rounded-2xl bg-black p-4 text-white shadow-[0_22px_45px_-14px_rgba(0,0,0,0.55)] rotate-[3deg]">
+          <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.16em] text-white/60">
+            <Zap className="h-3 w-3" /> Next step
+          </div>
+          <div className="mt-2 text-[13px] leading-snug">
+            Write the one-line version of what you're building.
+          </div>
+          <div className="mt-3 inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold text-black" style={{ backgroundImage: NOVA_GRADIENT_CSS }}>
+            Do it with Nova <ArrowRight className="h-3 w-3" />
+          </div>
+        </div>
+
+        {/* Front of the stack, overlapping both: the moment worth showing. */}
+        <div className="absolute left-20 bottom-2 flex items-center gap-2 rounded-full bg-white px-3.5 py-2 shadow-[0_16px_32px_-10px_rgba(0,0,0,0.45)] ring-1 ring-gray-100 -rotate-2">
+          <Heart className="h-4 w-4 fill-current" style={{ color: NOVA_GRADIENT[2] }} />
+          <span className="text-[12px] font-semibold text-black">Believer #1</span>
+        </div>
+
+        {/* The tower, leaning in from the edge the way the reaction chips do. */}
+        <div className="absolute right-0 bottom-6 rounded-2xl p-3.5 shadow-[0_18px_38px_-12px_rgba(0,0,0,0.5)] rotate-[6deg]" style={{ backgroundColor: NOVA_GRADIENT[1] }}>
+          <AnimatedTowerLogo height={64} className="drop-shadow" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The form, with no card around it any more: on the landing page it *is* the
+ * right half of the panel, and a card inside a card is a border inside a
+ * border. It still renders standalone elsewhere, so the spacing lives here
+ * rather than on the panel.
+ *
+ * Sign up leads. The tab order matters more than it looks — the first tab is
+ * what a hurried visitor lands on, and a landing page is read by people who
+ * don't have an account.
+ */
 function AuthCard({ activeTab, onTabChange }: { activeTab: string; onTabChange: (tab: string) => void }) {
   return (
-    <Card className="bg-card/95 backdrop-blur-md border-card-border shadow-2xl">
-      <Tabs value={activeTab} onValueChange={onTabChange}>
-        <CardHeader className="pb-4">
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="login" data-testid="tab-login">Log In</TabsTrigger>
-            <TabsTrigger value="signup" data-testid="tab-signup">Sign Up</TabsTrigger>
-          </TabsList>
-        </CardHeader>
-        <CardContent>
-          <TabsContent value="login" className="mt-0">
-            <LoginForm />
-          </TabsContent>
-          <TabsContent value="signup" className="mt-0">
-            <SignupForm onSuccess={() => onTabChange("login")} />
-          </TabsContent>
-        </CardContent>
-      </Tabs>
-    </Card>
+    <Tabs value={activeTab} onValueChange={onTabChange}>
+      <div className="mb-6">
+        <h2 className="text-2xl font-bold tracking-tight text-black" data-testid="text-auth-heading">
+          {activeTab === "signup" ? "Start building." : "Welcome back."}
+        </h2>
+        <p className="mt-1 text-sm text-gray-500">
+          {activeTab === "signup" ? "Your first project takes about a minute." : "Pick up where you left off."}
+        </p>
+      </div>
+
+      {/* The gradient rides under the selected tab, so the two halves of the panel share a palette. */}
+      <TabsList className="grid w-full grid-cols-2 bg-gray-100 p-1 h-11">
+        <TabsTrigger
+          value="signup"
+          data-testid="tab-signup"
+          className="h-9 data-[state=active]:text-white data-[state=active]:shadow-md"
+          style={activeTab === "signup" ? { backgroundImage: NOVA_GRADIENT_CSS } : undefined}
+        >
+          Sign Up
+        </TabsTrigger>
+        <TabsTrigger
+          value="login"
+          data-testid="tab-login"
+          className="h-9 data-[state=active]:text-white data-[state=active]:shadow-md"
+          style={activeTab === "login" ? { backgroundImage: NOVA_GRADIENT_CSS } : undefined}
+        >
+          Log In
+        </TabsTrigger>
+      </TabsList>
+
+      <div className="mt-6">
+        <TabsContent value="login" className="mt-0">
+          <LoginForm />
+        </TabsContent>
+        <TabsContent value="signup" className="mt-0">
+          <SignupForm onSuccess={() => onTabChange("login")} />
+        </TabsContent>
+      </div>
+    </Tabs>
   );
 }
 
@@ -483,13 +628,7 @@ function LoginForm() {
           />
         </div>
         <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <Label htmlFor="login-password">Password</Label>
-            {/* Next to the field it fails at — where someone looks the moment the password doesn't work. */}
-            <Link href="/forgot-password" className="text-xs text-muted-foreground underline hover:text-foreground" data-testid="link-forgot-password">
-              Forgot your password?
-            </Link>
-          </div>
+          <Label htmlFor="login-password">Password</Label>
           <div className="relative">
             <Input
               id="login-password"
@@ -510,7 +649,7 @@ function LoginForm() {
             </button>
           </div>
         </div>
-        <Button type="submit" className="w-full" disabled={loading} data-testid="button-submit-login">
+        <Button type="submit" className="w-full text-white font-semibold border-0 hover:opacity-90 transition-opacity" style={{ backgroundImage: NOVA_GRADIENT_CSS }} disabled={loading} data-testid="button-submit-login">
           {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
           Log In
         </Button>
@@ -653,7 +792,8 @@ function SignupForm({ onSuccess }: { onSuccess: () => void }) {
             data-testid="input-signup-confirm"
           />
         </div>
-        <Button type="submit" className="w-full" disabled={loading} data-testid="button-submit-signup">
+        {/* The gradient, on the one button the page exists for. */}
+        <Button type="submit" className="w-full text-white font-semibold border-0 hover:opacity-90 transition-opacity" style={{ backgroundImage: NOVA_GRADIENT_CSS }} disabled={loading} data-testid="button-submit-signup">
           {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
           Create Account
         </Button>
