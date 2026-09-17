@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
+import { pathHref } from "@shared/notifications";
+import type { ProjectGoal } from "@shared/goals";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -8,11 +10,15 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { errorText } from "@/lib/api-error";
 import { MAX_ASKS } from "@shared/feedback-loop";
-import { ArrowRight, ChevronDown, Compass, Globe, Loader2, Share2, Sparkles, User } from "lucide-react";
-import { ARTIFACT_MAX_TAGS, ARTIFACT_TITLE_MAX } from "@shared/path-artifacts";
+import { ArrowRight, ChevronDown, Compass, EyeOff, Globe, Loader2, Share2, Sparkles, User } from "lucide-react";
+import { ARTIFACT_MAX_TAGS, ARTIFACT_TITLE_MAX, artifactPath } from "@shared/path-artifacts";
 import { InviteCollaboratorDialog } from "@/components/invite-collaborator-dialog";
 
 export interface NextStepItem {
@@ -104,6 +110,10 @@ export function ShareStepDialog({ projectId, projectTitle, step, open, onClose }
  * own answer, you give it a title people would click and a few tags, and it
  * goes out as a public page (/a/:id) and a feed post. The public page is what
  * gets shared; strangers who sign up from it are credited back to you.
+ *
+ * Reopening it on a step that's already out lands on that same page — the link
+ * and the button that takes it down again, since publishing shouldn't be a
+ * one-way door.
  */
 export function PublishArtifactDialog({ projectId, projectTitle, step, open, onClose }: {
   projectId: string; projectTitle?: string; step: { taskId: string; title: string }; open: boolean; onClose: () => void;
@@ -113,6 +123,7 @@ export function PublishArtifactDialog({ projectId, projectTitle, step, open, onC
   const [tags, setTags] = useState("");
   const [ask, setAsk] = useState("");
   const [published, setPublished] = useState<string | null>(null);
+  const [takingDown, setTakingDown] = useState(false);
   const draft = useQuery<{ id: string; title: string; summary: string; body: string; files: { path: string }[]; tags: string[]; visibility: string }>({
     queryKey: ["/api/projects", projectId, "path", "artifact", step.taskId],
     queryFn: async () => {
@@ -135,21 +146,37 @@ export function PublishArtifactDialog({ projectId, projectTitle, step, open, onC
     },
     onError: (e) => toast({ title: "Couldn't publish that", description: errorText(e), variant: "destructive" }),
   });
+  // The other direction. The feed post is a separate thing the author deletes from the feed.
+  const unpublish = useMutation({
+    mutationFn: async () => (await apiRequest("POST", `/api/artifacts/${draft.data!.id}/unpublish`)).json(),
+    onSuccess: () => {
+      setTakingDown(false);
+      toast({ title: "The page is down", description: "The link leads nowhere now. Your post about it is still on the feed until you delete it." });
+      refreshNextSteps(projectId);
+      onClose();
+    },
+    onError: (e) => toast({ title: "Couldn't take it down", description: errorText(e), variant: "destructive" }),
+  });
+  // Just published, or opened on a step that was published earlier — the same page either way.
+  const liveUrl = published ?? (draft.data?.visibility === "public" ? `${window.location.origin}${artifactPath(draft.data.id)}` : null);
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-md" data-testid="publish-artifact-dialog">
         <DialogHeader>
-          <DialogTitle>{published ? "Published" : "Publish what this step produced"}</DialogTitle>
+          <DialogTitle>{liveUrl ? "Published" : "Publish what this step produced"}</DialogTitle>
           <DialogDescription>
-            {published ? "It has a public page anyone can open, and a post on the feed." : "A public page with a title and tags, linked back to your project and its path, plus a feed post."}
+            {liveUrl ? "It has a public page anyone can open, and a post on the feed." : "A public page with a title and tags, linked back to your project and its path, plus a feed post."}
           </DialogDescription>
         </DialogHeader>
-        {published ? (
+        {liveUrl ? (
           <div className="space-y-2">
-            <input readOnly value={published} className="w-full rounded-md border border-border bg-muted px-2 py-1.5 text-sm" onFocus={(e) => e.target.select()} data-testid="text-artifact-url" />
+            <input readOnly value={liveUrl} className="w-full rounded-md border border-border bg-muted px-2 py-1.5 text-sm" onFocus={(e) => e.target.select()} data-testid="text-artifact-url" />
             <div className="flex gap-3 text-sm">
-              <button className="text-primary hover:underline" onClick={() => navigator.clipboard?.writeText(published)}>Copy link</button>
-              <a href={published} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline" data-testid="link-open-artifact">Open the page</a>
+              <button className="text-primary hover:underline" onClick={() => navigator.clipboard?.writeText(liveUrl)}>Copy link</button>
+              <a href={liveUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline" data-testid="link-open-artifact">Open the page</a>
+              <button className="text-destructive hover:underline flex items-center gap-1 ml-auto" onClick={() => setTakingDown(true)} data-testid="button-unpublish-artifact">
+                <EyeOff className="h-3.5 w-3.5" />Take the page down
+              </button>
             </div>
             {/*
               * The loop's other half. A page worth sharing is the best moment to
@@ -181,13 +208,35 @@ export function PublishArtifactDialog({ projectId, projectTitle, step, open, onC
           </div>
         )}
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>{published ? "Done" : "Not now"}</Button>
-          {!published && (
+          <Button variant="outline" onClick={onClose}>{liveUrl ? "Done" : "Not now"}</Button>
+          {!liveUrl && (
             <Button disabled={!draft.data || title.trim().length < 5 || publish.isPending} onClick={() => publish.mutate()} data-testid="button-publish-artifact">
               {publish.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe className="h-4 w-4 mr-1.5" />}Publish
             </Button>
           )}
         </DialogFooter>
+        <AlertDialog open={takingDown} onOpenChange={setTakingDown}>
+          <AlertDialogContent data-testid="unpublish-artifact-confirm">
+            <AlertDialogHeader>
+              <AlertDialogTitle>Take this page down?</AlertDialogTitle>
+              <AlertDialogDescription>
+                The page stops being reachable. Anyone who opens the link — including people who already have it — gets nothing.
+                Your post about it stays on the feed until you delete it, and you can publish the page again later.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel data-testid="button-unpublish-cancel">Leave it up</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                disabled={unpublish.isPending}
+                onClick={(e) => { e.preventDefault(); unpublish.mutate(); }}
+                data-testid="button-unpublish-confirm"
+              >
+                {unpublish.isPending && <Loader2 className="h-4 w-4 animate-spin mr-1.5" />}Take it down
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </DialogContent>
     </Dialog>
   );
@@ -259,6 +308,67 @@ export function WeeklyUpdateDialog({ projectId, projectTitle, steps, open, onClo
  * one click from the next thing to do, not in the feed with your project three
  * screens away.
  */
+/**
+ * One project's place on its path: where it is, what's next, and the way in.
+ *
+ * Shared by the home feed's card and the path page (client/src/pages/path-home.tsx),
+ * because two renderings of "what should I do next" would disagree within a
+ * week — and this is the sentence the whole retention loop turns on.
+ */
+export function NextStepRow({ item, onShare, onWeekly }: {
+  item: NextStepItem;
+  onShare: (item: NextStepItem) => void;
+  onWeekly: (item: NextStepItem) => void;
+}) {
+  const pct = item.progress.total ? Math.round((item.progress.done / item.progress.total) * 100) : 0;
+  const novaActs = item.next?.actor.startsWith("nova");
+  // The primary section keeps the plain ids; the others add their goal, so each is addressable.
+  const idSuffix = item.track && !item.track.primary ? `${item.project.id}-${item.track.goal}` : item.project.id;
+  // Straight to the step, with the card in view (shared/notifications.ts).
+  const href = pathHref(item.project.id, { section: (item.track?.goal as ProjectGoal | undefined) ?? null });
+  return (
+    <li className="px-4 py-3 space-y-2" data-testid={`continue-path-${idSuffix}`}>
+      <div className="flex items-center gap-2.5">
+        {item.project.logoUrl
+          ? <img src={item.project.logoUrl} alt="" className="h-8 w-8 object-contain shrink-0" />
+          : <span className="h-8 w-8 rounded-md bg-muted flex items-center justify-center text-[11px] font-semibold text-muted-foreground shrink-0">{item.project.title.slice(0, 2).toUpperCase()}</span>}
+        <div className="min-w-0 flex-1">
+          <p className="font-semibold truncate flex items-center gap-1.5">
+            <span className="truncate">{item.project.title}</span>
+            {item.track && <span className="shrink-0 rounded-full bg-primary/10 text-primary px-1.5 py-px text-[10px] font-medium" title={item.track.label} data-testid={`continue-path-section-${idSuffix}`}>{item.track.short}</span>}
+          </p>
+          <p className="text-[11px] text-muted-foreground truncate">{item.phase} · {item.progress.done}/{item.progress.total} steps{item.daysSinceActivity >= 2 ? ` · away ${item.daysSinceActivity} days` : ""}</p>
+        </div>
+        <Button asChild size="sm" className="h-8 gap-1" data-testid={`button-continue-path-${idSuffix}`}>
+          <Link href={href}>Continue <ArrowRight className="h-3.5 w-3.5" /></Link>
+        </Button>
+      </div>
+      <div className="h-1 rounded-full bg-muted overflow-hidden"><div className="h-full bg-primary" style={{ width: `${pct}%` }} /></div>
+      {item.next ? (
+        <p className="flex items-center gap-1.5 flex-wrap" data-testid={`continue-path-next-${idSuffix}`}>
+          {novaActs ? <Sparkles className="h-3.5 w-3.5 text-primary shrink-0" /> : <User className="h-3.5 w-3.5 shrink-0" />}
+          <span className="text-muted-foreground">Next:</span>
+          <span className="font-medium">{item.next.step ?? item.next.title}</span>
+          <span className="text-[11px] text-muted-foreground">· {ACTOR_SHORT[item.next.actor] ?? item.next.actor}{estimate(item.next.estimateMinutes) ? ` · ${estimate(item.next.estimateMinutes)}` : ""}</span>
+        </p>
+      ) : (
+        <p className="text-muted-foreground">Main line done — pick what's next.</p>
+      )}
+      {/* Several steps this week: the weekly update. One: share that step. */}
+      {item.weekly?.due && item.weekly.steps.length > 1 && (
+        <button className="text-xs text-primary hover:underline flex items-center gap-1" onClick={() => onWeekly(item)} data-testid={`button-weekly-update-${idSuffix}`}>
+          <Share2 className="h-3 w-3" /> {item.weekly.steps.length} steps this week — post an update
+        </button>
+      )}
+      {item.lastDone && !item.lastDone.sharedPostId && !(item.weekly?.due && item.weekly.steps.length > 1) && (
+        <button className="text-xs text-primary hover:underline flex items-center gap-1" onClick={() => onShare(item)} data-testid={`button-share-last-step-${idSuffix}`}>
+          <Share2 className="h-3 w-3" /> Share "{item.lastDone.title}" for feedback
+        </button>
+      )}
+    </li>
+  );
+}
+
 export function ContinuePathCard() {
   const { data } = useQuery<{ items: NextStepItem[] }>({ queryKey: ["/api/me/next-steps"] });
   const [sharing, setSharing] = useState<NextStepItem | null>(null);
@@ -287,54 +397,9 @@ export function ContinuePathCard() {
       <Card id="continue-path-list" className="rounded-lg shadow-none border-primary/30 bg-background dark:bg-card" data-testid="continue-path-card">
         <CardContent className="p-0 text-[13px]">
           <ul className="divide-y divide-border/60">
-            {items.map((item) => {
-              const pct = item.progress.total ? Math.round((item.progress.done / item.progress.total) * 100) : 0;
-              const novaActs = item.next?.actor.startsWith("nova");
-              // The primary section keeps the plain ids; the others add their goal, so each is addressable.
-              const idSuffix = item.track && !item.track.primary ? `${item.project.id}-${item.track.goal}` : item.project.id;
-              const href = item.track ? `/projects/${item.project.id}/manage?section=${item.track.goal}` : `/projects/${item.project.id}/manage`;
-              return (
-                <li key={`${item.project.id}:${item.track?.goal ?? ""}`} className="px-4 py-3 space-y-2" data-testid={`continue-path-${idSuffix}`}>
-                  <div className="flex items-center gap-2.5">
-                    {item.project.logoUrl
-                      ? <img src={item.project.logoUrl} alt="" className="h-8 w-8 object-contain shrink-0" />
-                      : <span className="h-8 w-8 rounded-md bg-muted flex items-center justify-center text-[11px] font-semibold text-muted-foreground shrink-0">{item.project.title.slice(0, 2).toUpperCase()}</span>}
-                    <div className="min-w-0 flex-1">
-                      <p className="font-semibold truncate flex items-center gap-1.5">
-                        <span className="truncate">{item.project.title}</span>
-                        {item.track && <span className="shrink-0 rounded-full bg-primary/10 text-primary px-1.5 py-px text-[10px] font-medium" title={item.track.label} data-testid={`continue-path-section-${idSuffix}`}>{item.track.short}</span>}
-                      </p>
-                      <p className="text-[11px] text-muted-foreground truncate">{item.phase} · {item.progress.done}/{item.progress.total} steps{item.daysSinceActivity >= 2 ? ` · away ${item.daysSinceActivity} days` : ""}</p>
-                    </div>
-                    <Button asChild size="sm" className="h-8 gap-1" data-testid={`button-continue-path-${idSuffix}`}>
-                      <Link href={href}>Continue <ArrowRight className="h-3.5 w-3.5" /></Link>
-                    </Button>
-                  </div>
-                  <div className="h-1 rounded-full bg-muted overflow-hidden"><div className="h-full bg-primary" style={{ width: `${pct}%` }} /></div>
-                  {item.next ? (
-                    <p className="flex items-center gap-1.5 flex-wrap" data-testid={`continue-path-next-${idSuffix}`}>
-                      {novaActs ? <Sparkles className="h-3.5 w-3.5 text-primary shrink-0" /> : <User className="h-3.5 w-3.5 shrink-0" />}
-                      <span className="text-muted-foreground">Next:</span>
-                      <span className="font-medium">{item.next.step ?? item.next.title}</span>
-                      <span className="text-[11px] text-muted-foreground">· {ACTOR_SHORT[item.next.actor] ?? item.next.actor}{estimate(item.next.estimateMinutes) ? ` · ${estimate(item.next.estimateMinutes)}` : ""}</span>
-                    </p>
-                  ) : (
-                    <p className="text-muted-foreground">Main line done — pick what's next.</p>
-                  )}
-                  {/* Several steps this week: the weekly update. One: share that step. */}
-                  {item.weekly?.due && item.weekly.steps.length > 1 && (
-                    <button className="text-xs text-primary hover:underline flex items-center gap-1" onClick={() => setWeekly(item)} data-testid={`button-weekly-update-${idSuffix}`}>
-                      <Share2 className="h-3 w-3" /> {item.weekly.steps.length} steps this week — post an update
-                    </button>
-                  )}
-                  {item.lastDone && !item.lastDone.sharedPostId && !(item.weekly?.due && item.weekly.steps.length > 1) && (
-                    <button className="text-xs text-primary hover:underline flex items-center gap-1" onClick={() => setSharing(item)} data-testid={`button-share-last-step-${idSuffix}`}>
-                      <Share2 className="h-3 w-3" /> Share "{item.lastDone.title}" for feedback
-                    </button>
-                  )}
-                </li>
-              );
-            })}
+            {items.map((item) => (
+              <NextStepRow key={`${item.project.id}:${item.track?.goal ?? ""}`} item={item} onShare={setSharing} onWeekly={setWeekly} />
+            ))}
           </ul>
         </CardContent>
       </Card>

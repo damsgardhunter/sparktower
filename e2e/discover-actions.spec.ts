@@ -10,12 +10,24 @@
 import { test, expect } from "@playwright/test";
 import { verifyEmail } from "./verify-email";
 
+/*
+ * A per-spec address, so registrations here don't share the sign-in budget.
+ *
+ * Registering counts against the per-address sign-in limit (8 in 15 minutes,
+ * shared/moderation.ts). The suite runs serially against one server, so every
+ * spec that doesn't say who it is arrives from the same loopback address and
+ * they spend one budget between them — which is why the specs that ran last
+ * failed on a refused registration, in CI and locally, while each passed alone.
+ * The addresses are TEST-NET-3 (203.0.113.0/24) and unique per person.
+ */
+test.use({ extraHTTPHeaders: { "x-forwarded-for": "203.0.113.180" } });
+
 const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
 test("cards connect with a note, message in one tap, follow instantly — and a refusal reverts", async ({ page, browser }) => {
   // Bea, in her own browser context so her session is hers.
-  const beaContext = await browser.newContext();
+  const beaContext = await browser.newContext({ extraHTTPHeaders: { "x-forwarded-for": "203.0.113.181" } });
   const bea = beaContext.request;
   await bea.get("/");
   const beaUser = await bea.post("/api/auth/register", { data: { email: `e2e-bea-${stamp()}@example.test`, password, firstName: "Bea", lastName: "Builder" } });
@@ -69,8 +81,9 @@ test("cards connect with a note, message in one tap, follow instantly — and a 
   const thread = (await (await bea.get(`/api/messages/${ariId}`)).json()) as any[];
   expect(thread.some((m) => m.content === sent)).toBe(true);
 
-  // Follow on the project list: instant, and still there after a reload.
-  await page.goto("/projects");
+  // Follow on a project card in Discover's results: instant, and still there
+  // after a reload.
+  await page.goto("/discover");
   await page.getByTestId(`button-follow-${projectId}`).click();
   await expect(page.getByTestId(`button-follow-${projectId}`)).toHaveText(/Following/);
   await page.reload();

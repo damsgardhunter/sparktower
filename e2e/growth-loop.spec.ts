@@ -81,11 +81,32 @@ test("a published step brings a stranger in, and they publish their own", async 
   expect(await stranger.evaluate(() => localStorage.getItem("st_pending_path"))).toContain("ship_mvp");
   await stranger.getByTestId("input-signup-firstname").fill("Newcomer");
   await stranger.getByTestId("input-signup-lastname").fill("Growth");
-  await stranger.getByTestId("input-signup-email").fill(`e2e-growth-newcomer-${stamp()}@example.test`);
+  const newcomerEmail = `e2e-growth-newcomer-${stamp()}@example.test`;
+  await stranger.getByTestId("input-signup-email").fill(newcomerEmail);
   await stranger.getByTestId("input-signup-password").fill(password);
   await stranger.getByTestId("input-signup-confirm").fill(password);
   await stranger.getByTestId("button-submit-signup").click();
-  await expect(stranger).toHaveURL(/\/onboarding/);
+  /*
+   * Longer than the 5s default, like the other redirects in this file.
+   *
+   * Registering hashes a password, writes the account and sends the
+   * confirmation mail before the client is told to move; on a loaded CI runner
+   * that had been creeping past five seconds, and the failure looked like
+   * "signup is broken" rather than "the wait was too short".
+   */
+  await expect(stranger).toHaveURL(/\/onboarding/, { timeout: 15_000 });
+
+  /*
+   * The newcomer confirms their address, as they would from their inbox.
+   *
+   * Everyone else in this file is created through `personIn`, which confirms;
+   * this one signs up through the form, and nothing did it for them. It only
+   * shows up at the very end: publishing writes a feed post, and an
+   * unconfirmed account may not write anything that reaches other people
+   * (server/email-verification.ts), so the publish was silently refused and
+   * the dialog simply never advanced to showing a URL.
+   */
+  await verifyEmail(stranger.request, newcomerEmail);
 
   // Its author hears about it.
   await expect.poll(async () => {

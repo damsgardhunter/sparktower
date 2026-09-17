@@ -168,6 +168,7 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, or, ilike, sql, and, gte, lte, asc, ne, inArray, isNull } from "drizzle-orm";
+import { ago } from "./sql-interval";
 import { getEntitlements, normalizeTier, FAIR_USE_MONTHLY_CAP } from "@shared/plans";
 
 /**
@@ -207,7 +208,7 @@ export interface FeedPostWithDetails extends FeedPost {
   author: User;
   profile?: UserProfile;
   /** Null for posts not attached to a project. */
-  project: { id: string; title: string; isPrivate: boolean; logoUrl: string | null } | null;
+  project: { id: string; title: string; category: string; isPrivate: boolean; logoUrl: string | null } | null;
   /** The viewing user's own reaction, or null. */
   viewerReaction: string | null;
   reactionBreakdown: { reaction: string; count: number }[];
@@ -310,6 +311,9 @@ export interface IStorage {
   // Matches
   getUserMatches(userId: string): Promise<(UserMatch & { matchedUser: User; matchedProfile?: UserProfile })[]>;
   upsertUserMatch(data: InsertUserMatch): Promise<UserMatch>;
+  getMatchBatchState(userId: string, staleHours: number): Promise<{ latestBatch: number; isStale: boolean; recentlyShown: string[] }>;
+  /** Drops a stored match, both ways — used when the two of them connect and the match becomes noise. */
+  deleteUserMatch(userId: string, matchedUserId: string): Promise<void>;
   
   // Leaderboard
   getLeaderboard(sortBy: "views" | "donations", limit: number, filter?: "solo" | "team" | "all", includePrivateOwnedBy?: string): Promise<(Project & { owner: User })[]>;
@@ -920,6 +924,35 @@ export class DatabaseStorage implements IStorage {
     );
   }
 
+  /**
+   * What the last runs showed, and whether it's time for new ones.
+   *
+   * `recentlyShown` is everyone from the two most recent batches: the people a
+   * fresh run should hold back, so logging in twice in a week doesn't show the
+   * same five faces. `isStale` is asked of the database's clock, not the
+   * server's.
+   */
+  async getMatchBatchState(userId: string, staleHours: number): Promise<{ latestBatch: number; isStale: boolean; recentlyShown: string[] }> {
+    const rows = await db
+      .select({
+        matchedUserId: userMatches.matchedUserId,
+        batch: userMatches.batch,
+        fresh: sql<boolean>`${userMatches.createdAt} > ${ago(staleHours, "hours")}`,
+      })
+      .from(userMatches)
+      .where(eq(userMatches.userId, userId));
+
+    if (rows.length === 0) return { latestBatch: 0, isStale: true, recentlyShown: [] };
+
+    const latestBatch = Math.max(...rows.map((r) => r.batch));
+    return {
+      latestBatch,
+      // Stale unless something from the newest batch was written recently.
+      isStale: !rows.some((r) => r.batch === latestBatch && r.fresh),
+      recentlyShown: rows.filter((r) => r.batch > latestBatch - 2).map((r) => r.matchedUserId),
+    };
+  }
+
   async upsertUserMatch(data: InsertUserMatch): Promise<UserMatch> {
     const [match] = await db
       .insert(userMatches)
@@ -930,6 +963,15 @@ export class DatabaseStorage implements IStorage {
       })
       .returning();
     return match;
+  }
+
+  async deleteUserMatch(userId: string, matchedUserId: string): Promise<void> {
+    // Both directions: they were matched to you as well, and a connection
+    // makes that row just as stale as yours.
+    await db.delete(userMatches).where(or(
+      and(eq(userMatches.userId, userId), eq(userMatches.matchedUserId, matchedUserId)),
+      and(eq(userMatches.userId, matchedUserId), eq(userMatches.matchedUserId, userId)),
+    ));
   }
 
   async getLeaderboard(sortBy: "views" | "donations", limit: number, filter?: "solo" | "team" | "all", includePrivateOwnedBy?: string): Promise<(Project & { owner: User })[]> {
@@ -1177,13 +1219,30 @@ export class DatabaseStorage implements IStorage {
     return sub.creditsRemaining >= amount;
   }
 
+  /**
+   * Spends credits, or doesn't — decided by the database, in one statement.
+   *
+   * This used to read the balance, decide, and then write. Two requests that
+   * read before either wrote both saw enough credits and both spent them, and
+   * the same is true of ten: the allowance held only because the timing
+   * usually cooperated. Every one of those calls costs real money at the model.
+   *
+   * The condition now travels with the update, so the row can only go over the
+   * cap if the database lets it, and it doesn't. Unlimited tiers still
+   * increment — usage has to be counted for the fair-use ceiling to mean
+   * anything — they just have a much higher ceiling.
+   */
   async deductCredits(userId: string, amount: number): Promise<boolean> {
-    const canUse = await this.checkCredits(userId, amount);
-    if (!canUse) return false;
-    // Unlimited tiers increment too — usage has to be tracked for the
-    // fair-use cap to mean anything, it just never blocks below the ceiling.
-    await db.update(users).set({ creditsUsed: sql`${users.creditsUsed} + ${amount}` }).where(eq(users.id, userId));
-    return true;
+    await this.resetCreditsIfNeeded(userId);
+    const user = await this.getUser(userId);
+    if (!user) return false;
+    const limit = this.getCreditLimit(normalizeTier(user.subscriptionTier));
+    const cap = limit === Infinity ? FAIR_USE_MONTHLY_CAP : limit;
+    const [row] = await db.update(users)
+      .set({ creditsUsed: sql`${users.creditsUsed} + ${amount}` })
+      .where(and(eq(users.id, userId), sql`${users.creditsUsed} + ${amount} <= ${cap}`))
+      .returning({ used: users.creditsUsed });
+    return !!row;
   }
 
   async countPrivateProjects(userId: string): Promise<number> {
@@ -1386,6 +1445,12 @@ export class DatabaseStorage implements IStorage {
     return true;
   }
 
+  /** The project a comment belongs to, so a caller can check the viewer may see it. */
+  async projectOfComment(commentId: string): Promise<string | null> {
+    const [row] = await db.select({ projectId: projectComments.projectId }).from(projectComments).where(eq(projectComments.id, commentId));
+    return row?.projectId ?? null;
+  }
+
   async toggleCommentReaction(commentId: string, userId: string) {
     const [existing] = await db
       .select()
@@ -1543,7 +1608,7 @@ export class DatabaseStorage implements IStorage {
       pathStep: stepTask ? { taskId: stepTask.id, title: stepTask.title } : null,
       pathWeek: post.entityType === "path_week" ? { steps: weekSteps.map((t) => ({ taskId: t.id, title: t.title })) } : null,
       artifact: artifactRow ? { id: artifactRow.id, title: artifactRow.title, tags: artifactRow.tags, public: artifactRow.visibility === "public" } : null,
-      project: project ? { id: project.id, title: project.title, isPrivate: project.isPrivate, logoUrl: project.logoUrl } : null,
+      project: project ? { id: project.id, title: project.title, category: project.category, isPrivate: project.isPrivate, logoUrl: project.logoUrl } : null,
       viewerReaction,
       reactionBreakdown: breakdownRows.map((r) => ({ reaction: r.reaction, count: r.count })),
       viewerIsTeam,

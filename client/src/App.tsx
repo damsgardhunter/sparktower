@@ -1,5 +1,6 @@
 import { Switch, Route, Redirect, useLocation, Link } from "wouter";
 import VerifyEmailPage, { VerifyEmailNotice } from "@/components/verify-email";
+import PathHome from "@/pages/path-home";
 import { useEffect } from "react";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -13,12 +14,9 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { NotificationBell } from "@/components/notification-bell";
 import LandingPage from "@/pages/landing";
 import Home from "@/pages/home";
-import Projects from "@/pages/projects";
 import NovaIntro from "@/pages/nova-intro";
 import ProjectCreate from "@/pages/project-create";
 import ProjectDashboard from "@/pages/project-dashboard";
-import Matches from "@/pages/matches";
-import Leaderboard from "@/pages/leaderboard";
 import Discover from "@/pages/discover";
 import Onboarding from "@/pages/onboarding";
 import DocumentBuilder from "@/pages/document-builder";
@@ -32,6 +30,8 @@ import InviteAcceptPage from "@/pages/invite-accept";
 import AdminPromotions from "@/pages/admin-promotions";
 import MfaVerifyPage from "@/pages/mfa-verify";
 import SecuritySettings from "@/pages/security-settings";
+import ForgotPasswordPage from "@/pages/forgot-password";
+import ResetPasswordPage from "@/pages/reset-password";
 import { MfaNotice } from "@/components/mfa";
 import { NOVA_GRADIENT, NOVA_GRADIENT_CSS } from "@shared/backing";
 import { AnimatedTowerLogo } from "@/components/animated-tower-logo";
@@ -120,6 +120,14 @@ function Router() {
         <Route path="/mfa" component={MfaVerifyPage} />
         {/* The emailed link works signed out — the link is the credential. */}
         <Route path="/verify-email" component={VerifyEmailPage} />
+        {/*
+          * Both halves of a password reset, for the same reason and then some:
+          * everyone who needs them is locked out by definition, so bouncing
+          * them to the sign-in page they can't use would make the feature
+          * pointless.
+          */}
+        <Route path="/forgot-password" component={ForgotPasswordPage} />
+        <Route path="/reset-password" component={ResetPasswordPage} />
         <Route>
           <Redirect to="/" />
         </Route>
@@ -138,7 +146,16 @@ function Router() {
    * something went wrong — and onboarding is the right place to end up either
    * way. Safe because the loading branch above has already settled the query.
    */
-  if (!profile?.isOnboarded && window.location.pathname !== "/onboarding") {
+  /*
+   * Three paths are exempt, all for the same reason: they are the ones a
+   * person follows out of a hole, and onboarding is not the way out of any of
+   * them. Someone who signed up, never finished, and now can't remember their
+   * password would otherwise click the link in their inbox and be shown a
+   * "tell us about yourself" form instead of the reset — with no way to reach
+   * it at all, since every other address redirects here too.
+   */
+  const RECOVERY_PATHS = ["/onboarding", "/verify-email", "/forgot-password", "/reset-password"];
+  if (!profile?.isOnboarded && !RECOVERY_PATHS.includes(window.location.pathname)) {
     return <Redirect to="/onboarding" />;
   }
 
@@ -176,9 +193,9 @@ function Router() {
           <SidebarTrigger className="relative z-10" data-testid="button-sidebar-toggle" />
 
           <div className="pointer-events-none absolute inset-y-0 inset-x-14 sm:inset-x-28 grid grid-cols-[1fr_9rem_1fr] items-center">
-            <span className="hidden md:block text-center text-base lg:text-lg font-semibold tracking-[0.18em] lg:tracking-[0.3em] whitespace-nowrap drop-shadow" data-testid="text-header-left">I believe'd in them.</span>
+            <span className="slogan-arrive slogan-arrive-left hidden md:block text-center text-base lg:text-lg font-semibold tracking-[0.18em] lg:tracking-[0.3em] whitespace-nowrap drop-shadow" data-testid="text-header-left">I believe'd in them.</span>
             <span />
-            <span className="hidden md:block text-center text-base lg:text-lg font-semibold tracking-[0.18em] lg:tracking-[0.3em] whitespace-nowrap drop-shadow" data-testid="text-header-right">They believe'd in me</span>
+            <span className="slogan-arrive slogan-arrive-right hidden md:block text-center text-base lg:text-lg font-semibold tracking-[0.18em] lg:tracking-[0.3em] whitespace-nowrap drop-shadow" data-testid="text-header-right">They believe'd in me.</span>
           </div>
 
           {/* The hanging semicircle: the gradient's middle colour, which is exactly what the bar is at its centre, so there's no seam. */}
@@ -212,7 +229,26 @@ function Router() {
             <Route path="/" component={Home} />
             <Route path="/onboarding" component={Onboarding} />
             <Route path="/verify-email" component={VerifyEmailPage} />
-            <Route path="/projects" component={Projects} />
+            {/* Signed in and still resetting — an old email, or a shared computer. */}
+            <Route path="/forgot-password" component={ForgotPasswordPage} />
+            <Route path="/reset-password" component={ResetPasswordPage} />
+            {/* Every project's next step in one place — the address the retention loop returns to. */}
+            <Route path="/path" component={PathHome} />
+            {/*
+              * The three destinations Discover absorbed. They stay as routes for good:
+              * old emails, notifications and shared links point at them, and a 404 for
+              * those is worse than a hop. Replacing history rather than pushing, so Back
+              * goes where the person came from instead of bouncing off the redirect.
+              *
+              * /projects was your OWN list, which now lives on your profile — the browse
+              * half of it is what moved to Discover, so sending it there would answer a
+              * different question than the one the link asked.
+              *
+              * Exact paths in wouter, so this matches the bare index only: every
+              * /projects/* route below is untouched. They follow it for readability,
+              * not because the order matters here.
+              */}
+            <Route path="/projects"><Redirect to="/profile#projects" replace /></Route>
             <Route path="/projects/new" component={NovaIntro} />
             <Route path="/projects/new/create" component={ProjectCreate} />
             {/* Before /projects/:id so the builder path isn't swallowed by it. */}
@@ -222,8 +258,8 @@ function Router() {
             <Route path="/profile" component={Profile} />
             <Route path="/settings/security" component={SecuritySettings} />
             <Route path="/profile/:id" component={Profile} />
-            <Route path="/matches" component={Matches} />
-            <Route path="/leaderboard" component={Leaderboard} />
+            <Route path="/matches"><Redirect to="/discover" replace /></Route>
+            <Route path="/leaderboard"><Redirect to="/discover" replace /></Route>
             <Route path="/discover" component={Discover} />
             <Route path="/contests" component={Contests} />
             <Route path="/contests/:slug" component={ContestDetail} />

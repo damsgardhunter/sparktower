@@ -86,7 +86,25 @@ async function builder(app: any) {
   const token = (await agent.post("/api/mcp-tokens").send({ label: "Sweep" })).body.token as string | undefined;
   return { agent, userId: reg.body.id as string, projectId: project.body.id as string, taskId: (path.body?.next?.workTaskId ?? "no-such-task") as string, token };
 }
-const creditsUsed = async (agent: any) => (await agent.get("/api/subscription")).body.creditsUsed as number;
+/**
+ * Credits spent so far, and a loud failure if that can't be read.
+ *
+ * This is called twice per route — 240-odd times in this sweep — and it used
+ * to hand back `body.creditsUsed` unchecked. One answer without the field made
+ * the subtraction below `NaN`, and `NaN !== 0` is true, so the route was
+ * reported as having been *charged* for a call it never made: a billing
+ * assertion failing because a bookkeeping read didn't come back. It names
+ * itself now, with the status, so the next time it happens the test says what
+ * actually went wrong.
+ */
+const creditsUsed = async (agent: any): Promise<number> => {
+  const res = await agent.get("/api/subscription");
+  const used = res.body?.creditsUsed;
+  if (typeof used !== "number" || !Number.isFinite(used)) {
+    throw new Error(`could not read creditsUsed from GET /api/subscription (status ${res.status}, body ${JSON.stringify(res.body).slice(0, 200)})`);
+  }
+  return used;
+};
 
 const BODY = {
   message: "Help me plan the next step.", taskId: undefined as string | undefined, answer: "A thoughtful answer.",
@@ -127,7 +145,7 @@ describe("every AI route, with a model that fails", () => {
     console.log(`[sweep] ${routes.length} AI routes; ${reached.length} reached the model:\n  ${results.map((x) => `${x.mode.padEnd(7)} ${String(x.status).padEnd(4)} ${x.reachedModel ? "model" : "     "} charged=${x.charged}  ${x.route}`).join("\n  ")}`);
 
     // A thrown call or an empty answer is never a success; an error answer is never billed.
-    const billedFailures = results.filter((x) => x.charged !== 0 && (x.mode === "throw" || x.mode === "empty" || x.status >= 400));
+    const billedFailures = results.filter((x) => x.charged > 0 && (x.mode === "throw" || x.mode === "empty" || x.status >= 400));
     expect(billedFailures, "charged for a failed model call or an error answer").toEqual([]);
     expect(reached.length).toBeGreaterThanOrEqual(MIN_ROUTES_REACHING_THE_MODEL);
 

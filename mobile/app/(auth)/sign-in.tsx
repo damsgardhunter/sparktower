@@ -4,8 +4,10 @@ import {
   ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { useLocalSearchParams } from "expo-router";
+import * as WebBrowser from "expo-web-browser";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../../src/auth/AuthContext";
+import { API_URL } from "../../src/api/client";
 import { colors, font, fontFamily, radius, shadow, spacing } from "../../src/theme";
 import { Icon, type IconName } from "../../src/components/ui";
 import { LandingSections } from "../../src/components/onboarding/LandingSections";
@@ -95,6 +97,17 @@ export default function SignIn() {
     } finally {
       setBusy(false);
     }
+  };
+
+  /*
+   * Resetting a password happens on the web, in the system browser rather than
+   * a WebView: the emailed link has to land somewhere, and only the real
+   * browser can carry a session and a password manager. There's no screen for
+   * it here, so the app just opens client/src/pages/forgot-password.tsx.
+   */
+  const forgotPassword = () => {
+    void WebBrowser.openBrowserAsync(`${API_URL}/forgot-password`)
+      .catch(() => setError("Couldn't open the browser. Go to sparktower.com and choose \u201CForgot your password?\u201D"));
   };
 
   const google = async () => {
@@ -228,6 +241,12 @@ export default function SignIn() {
                   }
                 />
 
+                {tab === "login" && (
+                  <Pressable onPress={forgotPassword} hitSlop={8} style={{ alignSelf: "flex-end" }} testID="link-forgot-password">
+                    <Text style={styles.forgot}>Forgot your password?</Text>
+                  </Pressable>
+                )}
+
                 {tab === "signup" && (
                   <LabeledInput label="Confirm Password" value={confirm} onChangeText={setConfirm}
                     placeholder="Confirm your password" secureTextEntry={!showPassword} autoComplete="new-password"
@@ -347,6 +366,7 @@ const styles = StyleSheet.create({
   divider: { flex: 1, height: 1, backgroundColor: colors.border },
   dividerText: { color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.regular },
   hint: { color: colors.textTertiary, fontSize: font.xs, textAlign: "center", fontFamily: fontFamily.regular },
+  forgot: { color: colors.textSecondary, fontSize: font.xs + 1, fontFamily: fontFamily.medium, textDecorationLine: "underline" },
   switch: { color: colors.textSecondary, fontSize: font.sm, textAlign: "center", fontFamily: fontFamily.regular },
   switchLink: { color: colors.primary, fontFamily: fontFamily.semibold },
 });

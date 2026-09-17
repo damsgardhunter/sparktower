@@ -38,9 +38,25 @@ the role on the next restart.
 | `GOOGLE_IOS_CLIENT_ID` / `GOOGLE_ANDROID_CLIENT_ID` | optional | unset | Replit Secrets |
 | `STRIPE_SECRET_KEY` / `STRIPE_PUBLISHABLE_KEY` | test-mode keys | unset — the webhook tests stub the client | Replit Stripe connector, or Secrets |
 | `PRINTFUL_API_KEY` / `PRINTFUL_STORE_ID` | optional | unset | Replit Secrets |
-| `RESEND_API_KEY` / `EMAIL_FROM` | optional — unset, invite emails are written to the server log and `GET /api/dev/outbox` instead | unset (tests always log) | Replit Secrets; `EMAIL_FROM` on a domain verified in Resend, e.g. `SparkTower <invites@yourdomain>` |
+| `RESEND_API_KEY` / `EMAIL_FROM` | optional — unset, emails are written to the server log and `GET /api/dev/outbox` instead | unset (tests always log) | **required in practice** — see below. `EMAIL_FROM` on a domain verified in Resend, e.g. `SparkTower <hello@yourdomain>` |
+
+### Email is not optional in production any more
+
+It used to carry invites only, and an invite has a link you can copy by hand.
+It now carries the confirmation link, and confirming an address is what lets a
+new account post, comment, message, invite or publish
+(`server/email-verification.ts`). Unset in production, every person who signs up
+lands in a product they cannot use, and nothing on the screen explains why. The
+server says so at boot, loudly, but it does not refuse to start: an existing
+site whose key expires should keep serving the people already on it.
 | `GITHUB_TOKEN` | personal token, for code audits | unset | Replit Secrets |
 | `PRIVATE_OBJECT_DIR` / `PUBLIC_OBJECT_SEARCH_PATHS` | unset → local disk | unset → local disk | bucket path |
+
+## Switches with a safe default
+
+| Variable | Default | What changing it does |
+|---|---|---|
+| `PASSWORD_BREACH_CHECK` | on, except under `NODE_ENV=test` | `off` stops every password being checked against the public breach corpus (`server/password-breach.ts`). The check already fails open when the API is unreachable, so this is only for a deployment that must make no outbound calls at all — and it means accepting passwords that are known to be in a dump. The test suite leaves it off so hundreds of account creations don't each wait on a network timeout; the tests that cover the behaviour turn it on and stub the call. |
 
 ## Set by the platform, never by hand
 

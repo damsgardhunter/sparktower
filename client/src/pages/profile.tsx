@@ -42,6 +42,14 @@ import { ProfileFeed } from "@/components/profile-feed";
 
 type ProjectWithDetails = Project & { owner: User; profile?: UserProfile };
 
+/**
+ * Tabs another screen is allowed to land you on by hash. An allowlist, not
+ * "any hash": the rest are drawn conditionally, and a stale hash naming one
+ * this viewer doesn't get would select a tab that isn't there and leave the
+ * page looking broken.
+ */
+const PRESELECTABLE_TABS = ["editor", "projects"] as const;
+
 export default function Profile() {
   const { id } = useParams<{ id?: string }>();
   const { user: currentUser } = useAuth();
@@ -693,9 +701,11 @@ export default function Profile() {
 
       {/*
        * The hash so "Manage" from the dashboard lands on the tokens rather
-       * than on the About tab with no clue where to go next.
+       * than on the About tab with no clue where to go next — and so the
+       * retired /projects index can send people straight to their projects
+       * instead of dropping them on About to hunt for them.
        */}
-      <Tabs defaultValue={typeof window !== "undefined" && window.location.hash === "#editor" ? "editor" : "about"} className="space-y-6">
+      <Tabs defaultValue={PRESELECTABLE_TABS.find((t) => typeof window !== "undefined" && window.location.hash === `#${t}`) ?? "about"} className="space-y-6">
         <TabsList data-testid="profile-tabs">
           <TabsTrigger value="about" data-testid="tab-about">About</TabsTrigger>
           <TabsTrigger value="projects" data-testid="tab-projects">

@@ -302,7 +302,7 @@ export default function SprintDashboard() {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4">
         <p className="text-muted-foreground">Sprint not found</p>
-        <Button variant="outline" onClick={() => setLocation("/matches")} data-testid="button-back-matches">
+        <Button variant="outline" onClick={() => setLocation("/discover")} data-testid="button-back-matches">
           Back to Matches
         </Button>
       </div>

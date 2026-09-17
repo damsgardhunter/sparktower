@@ -313,9 +313,39 @@
   animation: hero-fade-in 1.2s ease-out 3.2s forwards;
 }
 
+/**
+ * The landing header, held back for the opening of the hero video.
+ *
+ * The video is 8 seconds and its first beat is the tower charging; a gradient
+ * bar dropping in over that reads as chrome loading late. So nothing is there
+ * at all for the first two and a half seconds, and then it comes up over two —
+ * slow enough to register as the page arriving rather than as a popup.
+ *
+ * `visibility` rides along with the opacity so the header can't be tabbed to
+ * or clicked while it's invisible. Stepped at the end, so it becomes
+ * interactive only once it's actually on screen.
+ */
 .hero-header-reveal {
   opacity: 0;
-  animation: hero-fade-in-slow 1.5s ease-out 3.8s forwards;
+  visibility: hidden;
+  animation: hero-header-arrive 2s ease-out 2.5s forwards;
+}
+
+@keyframes hero-header-arrive {
+  0%   { opacity: 0; visibility: visible; transform: translateY(-8px); }
+  100% { opacity: 1; visibility: visible; transform: translateY(0); }
+}
+
+/*
+ * Asked for less motion: the header is simply there, with no entrance and no
+ * hidden window to tab through.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .hero-header-reveal {
+    opacity: 1;
+    visibility: visible;
+    animation: none;
+  }
 }
 
 /**
@@ -403,4 +433,270 @@
 }
 @media (prefers-reduced-motion: reduce) {
   [class*="animate-[featured-shine"] { animation: none; }
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * The home page's surface.
+ *
+ * Home used to opt into `.sharp-boxes` — 2px corners, hairline borders, no
+ * depth — which is the LinkedIn look. `.home-modern` is the other direction,
+ * and the one people now expect from a feed they read on a phone: soft
+ * corners, a card that lifts slightly off the page, and rows that respond to
+ * the pointer.
+ *
+ * Scoped to a class rather than applied to the shared components, because the
+ * same Card, feed post and rail module are used on pages that keep the older
+ * shape. Nothing here changes a component's markup, so every test id and
+ * every layout on those pages is untouched.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+.home-modern {
+  /* The depth used by every card on the page, so they're all lit the same way. */
+  --home-lift: 0 1px 2px hsl(0 0% 0% / 0.04), 0 4px 16px -6px hsl(0 0% 0% / 0.08);
+  --home-lift-hover: 0 1px 2px hsl(0 0% 0% / 0.05), 0 10px 28px -10px hsl(0 0% 0% / 0.16);
+
+  /*
+   * Nova's glow.
+   *
+   * The same green → purple as NOVA_GRADIENT (shared/backing.ts), cast as two
+   * offset coloured shadows rather than a blurred copy of the gradient behind
+   * the card. Two reasons: a gradient pseudo-element needs a negative z-index
+   * to sit behind its own card, which breaks the moment anything on the page
+   * makes a stacking context; and offsetting the colours puts the green up and
+   * left and the purple down and right, which is the gradient's own 135°
+   * direction. So the card looks lit by Nova from the same angle the badge and
+   * the header are.
+   *
+   * Kept under the neutral depth in the box-shadow list so it reads as a tint
+   * on the shadow, not as a second border.
+   */
+  --nova-glow:
+    -7px -7px 20px -13px hsl(142 69% 58% / 0.55),
+     7px  7px 22px -13px hsl(272 91% 65% / 0.55);
+  --nova-glow-hover:
+    -10px -10px 26px -12px hsl(142 69% 58% / 0.8),
+     10px  10px 28px -12px hsl(272 91% 65% / 0.8);
+}
+
+.dark .home-modern {
+  /* On black, shadow does nothing — the lift has to come from the border. */
+  --home-lift: 0 0 0 1px hsl(0 0% 100% / 0.04);
+  --home-lift-hover: 0 0 0 1px hsl(0 0% 100% / 0.09);
+  /* Black swallows a soft shadow, so the glow is carried further out and brighter. */
+  --nova-glow:
+    -8px -8px 24px -12px hsl(142 69% 58% / 0.42),
+     8px  8px 26px -12px hsl(272 91% 65% / 0.46);
+  --nova-glow-hover:
+    -12px -12px 32px -10px hsl(142 69% 58% / 0.7),
+     12px  12px 34px -10px hsl(272 91% 65% / 0.75);
+}
+
+/* Generous, consistent corners on every box the page composes. */
+.home-modern :is(.shadcn-card, .rounded, .rounded-lg, .rounded-xl) {
+  border-radius: 14px;
+}
+
+/*
+ * Every box on the page wears the glow: the rail modules (.home-card) and the
+ * feed's own cards — posts, the composer, promotions, empty states — which all
+ * render through the shared Card as .shadcn-card. Listing both here rather
+ * than tagging each component keeps a new card on the page consistent by
+ * default. The feed's cards set `shadow-none`; this out-specifies it.
+ */
+.home-modern .home-card,
+.home-modern .shadcn-card {
+  box-shadow: var(--home-lift), var(--nova-glow);
+  border-color: hsl(var(--border) / 0.9);
+  transition: box-shadow 260ms cubic-bezier(0.22, 1, 0.36, 1), transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.home-modern .home-card:hover,
+.home-modern .shadcn-card:hover {
+  box-shadow: var(--home-lift-hover), var(--nova-glow-hover);
+}
+
+/* Only cards that are themselves a link or hold a list of them lift as well. */
+.home-modern .home-card-interactive:hover {
+  transform: translateY(-1px);
+}
+
+/*
+ * A feed post answers the pointer by growing slightly, and only by that.
+ *
+ * The brighter glow every other box gets on hover is deliberately taken back
+ * here: a post is the widest thing on the page and there is a column of them,
+ * so a halo that intensifies under the pointer reads as the whole feed
+ * flickering as you scroll past. Scale says "this one, and it's clickable"
+ * without adding light. The glow itself stays at its resting strength.
+ *
+ * 1.01 is about six pixels across a feed column — enough to notice, small
+ * enough that the post doesn't visibly collide with its neighbours.
+ */
+.home-modern [data-testid^="feed-post-"]:hover {
+  box-shadow: var(--home-lift), var(--nova-glow);
+  transform: scale(1.01);
+}
+
+/*
+ * Rows inside a rail module. The highlight is inset and rounded rather than
+ * bleeding to the card's edge — against a soft-cornered card, a full-bleed
+ * highlight collides with the corner radius and looks like a rendering fault.
+ */
+.home-modern .home-row {
+  border-radius: 10px;
+  transition: background-color 140ms ease;
+}
+
+.home-modern .home-row:hover {
+  background-color: hsl(var(--muted-foreground) / 0.08);
+}
+
+/*
+ * The ring behind a matched builder's avatar. A gradient in the brand's own
+ * primary, so it follows the theme instead of pinning a colour — the same
+ * treatment that reads as "story" or "highlight" everywhere else.
+ */
+.home-modern .home-avatar-ring {
+  position: relative;
+}
+
+.home-modern .home-avatar-ring::before {
+  content: "";
+  position: absolute;
+  inset: -2.5px;
+  border-radius: 9999px;
+  background: conic-gradient(
+    from 210deg,
+    hsl(var(--primary)),
+    hsl(var(--primary) / 0.25),
+    hsl(var(--primary))
+  );
+  z-index: 0;
+}
+
+.home-modern .home-avatar-ring > * {
+  position: relative;
+  z-index: 1;
+  box-shadow: 0 0 0 2px hsl(var(--background));
+  border-radius: 9999px;
+}
+
+.dark .home-modern .home-avatar-ring > * {
+  box-shadow: 0 0 0 2px hsl(var(--card));
+}
+
+/*
+ * The sticky greeting bar over the feed. Translucent with a blur, so the feed
+ * passes under it rather than being clipped by it — and a solid fallback
+ * first, because a browser without backdrop-filter would otherwise show the
+ * posts straight through the text.
+ */
+.home-modern .home-sticky {
+  background-color: hsl(var(--muted));
+  border-radius: 14px;
+}
+
+.dark .home-modern .home-sticky {
+  background-color: hsl(var(--background));
+}
+
+@supports (backdrop-filter: blur(12px)) or (-webkit-backdrop-filter: blur(12px)) {
+  .home-modern .home-sticky {
+    background-color: hsl(var(--muted) / 0.72);
+    -webkit-backdrop-filter: blur(14px) saturate(1.6);
+    backdrop-filter: blur(14px) saturate(1.6);
+  }
+
+  .dark .home-modern .home-sticky {
+    background-color: hsl(var(--background) / 0.72);
+  }
+}
+
+/* Cards arriving in the rail, staggered by an inline --home-i on each. */
+@keyframes home-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.home-modern .home-rise {
+  animation: home-rise 460ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: calc(var(--home-i, 0) * 55ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-modern .home-rise { animation: none; }
+  .home-modern .home-card-interactive:hover,
+  .home-modern [data-testid^="feed-post-"]:hover { transform: none; }
+}
+
+/*
+ * The slogan arriving, once, when the app loads.
+ *
+ * "I believe'd in them." and "They believe'd in me." are the two halves of one
+ * sentence about backing someone and being backed, so they arrive from
+ * opposite edges and meet at the tower between them — the movement says the
+ * thing the words say. Each half overshoots its mark slightly and settles,
+ * with a glow that flares as it lands and fades: a lift, not a bounce.
+ *
+ * Once per load, deliberately. The header never unmounts as you move around
+ * the app, so this plays when someone arrives and then stays out of the way —
+ * a slogan that re-animates on every navigation stops reading as a welcome and
+ * starts reading as a distraction. `both` holds the opening frame so nothing
+ * flashes in un-animated before it starts.
+ *
+ * Transform, opacity, blur and shadow only: letter-spacing is set per
+ * breakpoint on the elements themselves (tracking-[0.18em] / lg:0.3em), and
+ * animating it here would pin both sizes to whatever value this file picked.
+ */
+@keyframes slogan-arrive {
+  0% {
+    opacity: 0;
+    transform: translateX(var(--slogan-from, 0)) scale(0.9);
+    filter: blur(8px);
+    text-shadow: none;
+    /*
+     * Per-keyframe easing, not one curve over the whole animation. A single
+     * front-loaded ease is applied again between every pair of stops, which
+     * put this entire entrance inside its first 200ms — technically playing,
+     * practically invisible. Each leg gets the curve it wants instead: a long
+     * decelerating glide in, then a settle.
+     */
+    animation-timing-function: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  }
+  55% {
+    opacity: 1;
+    transform: translateX(0) scale(1.07);
+    filter: blur(0);
+    text-shadow: 0 0 22px rgba(255, 255, 255, 0.85), 0 1px 2px rgba(0, 0, 0, 0.25);
+    animation-timing-function: cubic-bezier(0.33, 0, 0.2, 1);
+  }
+  78% {
+    transform: translateX(0) scale(0.985);
+    text-shadow: 0 0 10px rgba(255, 255, 255, 0.4), 0 1px 2px rgba(0, 0, 0, 0.25);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+    filter: blur(0);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  }
+}
+
+.slogan-arrive {
+  animation: slogan-arrive 1500ms linear both;
+  /* A beat after the page paints, so it reads as an entrance rather than as part of the load. */
+  animation-delay: 220ms;
+}
+
+.slogan-arrive-left  { --slogan-from: -3.5rem; }
+.slogan-arrive-right { --slogan-from: 3.5rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  /* Still an entrance, just a fade: no travel, no scale, no glow. */
+  .slogan-arrive { animation: slogan-fade 400ms ease-out both; }
+}
+
+@keyframes slogan-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }

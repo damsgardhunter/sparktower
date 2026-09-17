@@ -16,11 +16,15 @@ export PROD_DB="postgresql://…"                   # from Replit → Secrets �
 
 - [ ] **User testing passed** — every *Blocker* in
   [pre-deploy-user-testing.md](pre-deploy-user-testing.md) is ticked.
-- [ ] **CI is green on `main`** — `server-web`, `e2e`, and `mobile`.
+- [ ] **CI is green on `main`** — all seven jobs (`docs/ci-gate.md`).
       ```sh
       gh run list --branch main --workflow ci --limit 1
       ```
-      Branch protection requires it, but check anyway; an admin push bypasses it.
+      Since 17 September 2026 nothing reaches `main` without them, the owner
+      included, so this should never be a surprise. Check anyway: the gate
+      guarantees the checks *ran and passed on the commit that merged*, not
+      that `main` is green now — a merge queue of two green PRs can still
+      combine into a red `main` while `strict` is off.
 
 - [ ] **Migrations applied.** Run them against production *before* the new
       build starts serving:
@@ -53,21 +57,21 @@ export PROD_DB="postgresql://…"                   # from Replit → Secrets �
       reads is listed there. A deploy that needs a variable nobody wrote down
       fails at 2am.
 
-## 1b. Close the gate
+## 1b. The gate is closed — check it still is
 
-- [ ] **Make the CI gate bind for everyone, owner included.** Until now an
-      owner's push lands on `main` without the seven checks running first
-      (`docs/ci-gate.md`). Once other people depend on the site, that stops:
+Closed on 17 September 2026: the seven checks bind everyone, the owner
+included. A direct push to `main` is refused and so is `gh pr merge --admin`
+(`docs/ci-gate.md` shows what each refusal looks like). This step is no longer
+"do it" — it's "confirm nobody quietly reopened it":
 
+- [ ] **The gate still binds.**
       ```sh
-      gh api -X PUT repos/{owner}/{repo}/branches/main/protection/enforce_admins
       node scripts/check-branch-protection.mjs --launch   # must exit 0
       ```
-
-      From then on every change is a branch and a pull request that merges when
-      the checks are green. To undo it in an emergency:
-      `gh api -X DELETE repos/{owner}/{repo}/branches/main/protection/enforce_admins`
-      — and say so in the release log, because it reopens the door this closed.
+      A non-zero exit means a required check was dropped, force pushes were
+      allowed, or administrators were exempted again. Find out who and why
+      before deploying; if it was a deliberate exception, it belongs in the
+      release log with its reason.
 
 ## 2. Production secrets (Replit → Secrets)
 
@@ -212,6 +216,20 @@ fixed by …" is worth more than three green ticks. Three consecutive entries
 where the checklist was followed and nothing surprised you is the signal that
 this document is doing its job.
 
-| date | commit | deployed by | checklist followed? | notes |
-|---|---|---|---|---|
-| — | — | — | — | *No production deploys recorded yet. The next one goes here.* |
+Don't type the row — generate it, so the timestamp, the commit and the CI link
+are read rather than remembered:
+
+```sh
+node scripts/release-log.mjs --notes "clean"        # after section 4
+node scripts/release-log.mjs --notes "…" --dry-run  # see the row first
+```
+
+It looks up the CI run **for the commit being deployed** (not the latest run on
+`main`, which may be something else by then) and refuses to write a clean row
+unless that run is green. Deploying a commit CI hasn't passed is occasionally
+the right call; `--force` allows it and records it as exactly that, so the log
+can't quietly claim a discipline that wasn't kept.
+
+| date (UTC) | commit | deployed by | ci run | checklist followed? | notes |
+|---|---|---|---|---|---|
+| — | — | — | — | — | *No production deploys recorded yet. The next one goes here.* |

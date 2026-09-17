@@ -24,8 +24,10 @@ import { registerInviteRoutes } from "./invite-routes";
 import { registerMfaRoutes } from "./mfa";
 import { registerAccountRoutes } from "./account-routes";
 import { registerSitemapRoutes } from "./sitemap";
+import { registerDiscoverSearchRoutes } from "./discover-search";
 import { ensureCreatorBadges } from "./backer-badges";
 import { registerFeedRoutes, registerProjectDiscussionRoutes, publishSystemPost, SYSTEM_POST_COPY, SYSTEM_POST_TYPES } from "./feed-routes";
+import { scoreMatch, isMatchable, defaultMatchReasons, MATCH_FLOOR, type MatchContext } from "@shared/matching";
 import { registerProfileRoutes } from "./profile-routes";
 import { registerDocumentRoutes } from "./document-routes";
 import { registerCodeAuditRoutes } from "./code-audit-routes";
@@ -53,6 +55,7 @@ import {
 import { insertUserProfileSchema, insertProjectSchema, insertProjectBase, insertContestSchema, insertProjectLiveChatMessageSchema, insertWaitlistEntrySchema, insertInterviewSchema, insertExperimentSchema, insertPricingTierSchema, insertAnalyticsEventSchema, insertLegalDocSchema, insertDeployChecklistItemSchema, insertSupportTicketSchema, insertLaunchTaskSchema, insertProjectDecisionSchema, insertProjectFileSchema, insertProjectLinkSchema, type StoryboardScene } from "@shared/schema";
 import { pickFields, WRITABLE } from "./body-fields";
 import { registerEmailVerificationRoutes, requireVerifiedEmail } from "./email-verification";
+import { registerPasswordResetRoutes } from "./password-reset";
 import { z } from "zod";
 import OpenAI from "openai";
 import { eq, ne, and, sql, inArray, desc, isNull } from "drizzle-orm";
@@ -390,6 +393,7 @@ export async function registerRoutes(
   registerAccountRoutes(app);
   // robots.txt and the sitemap of published artifact pages — how a crawler finds the growth loop's front doors.
   registerSitemapRoutes(app);
+  registerDiscoverSearchRoutes(app);
   registerMfaRoutes(app);
   registerProfileRoutes(app);
   registerDocumentRoutes(app);
@@ -410,6 +414,10 @@ export async function registerRoutes(
   registerSurfaceRoutes(app);
   registerModerationRoutes(app);
   registerEmailVerificationRoutes(app);
+  // Getting back in without the password (server/password-reset.ts). Public, and
+  // mounted here rather than behind the verification gate: someone locked out
+  // can be neither signed in nor verified.
+  registerPasswordResetRoutes(app);
   registerSafetyRoutes(app);
   registerInvestmentRoutes(app);
   registerBackingRoutes(app);
@@ -1847,6 +1855,8 @@ If the ask has nothing to do with planning tasks, say so in "summary", return an
   app.post("/api/projects/:id/kanban/ai-generate", isAuthenticated, async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
+      // The plan is built from this project's brief and roadmap and written to its board: members only.
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       await storage.resetCreditsIfNeeded(userId);
 
       // Free has no AI task generation; Starter gets a capped batch.
@@ -2612,7 +2622,9 @@ RULES:
     } catch (e) { res.status(500).json({ message: "Failed to complete onboarding" }); }
   });
 
-  app.get("/api/projects/:id/chat", isAuthenticated, async (req, res) => {
+  app.get("/api/projects/:id/chat", isAuthenticated, async (req: any, res) => {
+    // A team's conversation with Nova, private project or not: members only, like every other project surface.
+    if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
     const messages = await storage.getProjectChatMessages(req.params.id as string);
     res.json(messages);
   });
@@ -2622,6 +2634,8 @@ RULES:
     const userId = (req.user as any).id;
     const { message } = req.body;
 
+    // Before credits: an outsider shouldn't be able to write into a team's chat log, or read it back through the reply.
+    if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
     if (!(await requireCredits(res, userId, CREDIT_COSTS.novaChat, "Nova chat"))) return;
     
     const project = await storage.getProject(projectId);
@@ -2849,6 +2863,8 @@ RULES:
 
   app.get("/api/projects/:id/path", isAuthenticated, async (req: any, res) => {
     try {
+      // The path carries the brief, the plan and the owner's Nova notes — and reading it syncs the tree, which writes.
+      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       const section = sectionOf(req, res);
       if (!section.ok) return;
       const status = await pathStatus(req.params.id, section.goal);
@@ -3588,9 +3604,23 @@ RULES:
   });
 
   // Donations
+  /**
+   * The backer wall: who gave and how much, for a project's public page.
+   *
+   * The rows themselves carry the payment's Stripe identifiers and the donor's
+   * account id, which are nobody's business but the project's — the wall needs
+   * an amount, a message and a date. So the shape is written out here rather
+   * than handing over the row.
+   */
   app.get("/api/projects/:id/donations", async (req, res) => {
     const donations = await storage.getProjectDonations(req.params.id);
-    res.json(donations);
+    res.json(donations.map((d) => ({
+      id: d.id,
+      amount: d.amount,
+      message: d.message,
+      createdAt: d.createdAt,
+      refunded: !!d.refundedAt,
+    })));
   });
 
   /*
@@ -3601,17 +3631,86 @@ RULES:
    */
 
   // Matches
+  /**
+   * Your matches.
+   *
+   * Filtered on the way out, not just on the way in: matches are stored rows,
+   * so connecting with someone after they were matched to you used to leave
+   * them sitting in "People to build with" at 92%. Anyone you're now connected
+   * to — or have a request open with — is dropped here, and the stale row is
+   * cleared so it doesn't come back.
+   */
   app.get("/api/matches", isAuthenticated, async (req: any, res) => {
     const userId = (req.user as any).id;
-    const matches = await storage.getUserMatches(userId);
-    res.json(matches);
+    /*
+     * Matches refresh themselves. Nobody pressed "generate" on their second
+     * visit, so the list people saw was whatever the onboarding run produced,
+     * months later. A read older than MATCH_STALE_HOURS regenerates first —
+     * best-effort, because a failure here should still return what we have.
+     */
+    const triedRecently = Date.now() - (lastMatchAttempt.get(userId) ?? 0) < MATCH_RETRY_MS;
+    const { isStale } = triedRecently ? { isStale: false } : await storage.getMatchBatchState(userId, MATCH_STALE_HOURS);
+    if (isStale) {
+      lastMatchAttempt.set(userId, Date.now());
+      await runMatchGeneration(userId).catch((e) => console.error("Auto match refresh failed:", e));
+    }
+
+    const [matches, related] = await Promise.all([
+      storage.getUserMatches(userId),
+      relatedUserIds(userId),
+    ]);
+    const stale = matches.filter((m) => related.has(m.matchedUserId));
+    if (stale.length) {
+      // Best-effort: a failed cleanup must not cost the caller their matches.
+      await Promise.all(stale.map((m) =>
+        storage.deleteUserMatch(userId, m.matchedUserId).catch(() => {})
+      ));
+    }
+    res.json(matches.filter((m) => !related.has(m.matchedUserId)));
   });
 
-  app.post("/api/matches/generate", isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = (req.user as any).id;
+  /**
+   * Everyone already in your network, by any route: connected, you asked them,
+   * or they asked you. These are the people who must never be offered as a
+   * match — an introduction to someone you've already met isn't one.
+   */
+  async function relatedUserIds(userId: string): Promise<Set<string>> {
+    const [connections, sent, received] = await Promise.all([
+      storage.getConnections(userId),
+      storage.getSentConnectionRequests(userId),
+      storage.getConnectionRequests(userId),
+    ]);
+    return new Set([...connections, ...sent, ...received].map((c) => c.user.id).filter(Boolean));
+  }
+
+  /** How old the newest batch may get before a read regenerates it: a login a day later gets new people. */
+  const MATCH_STALE_HOURS = 20;
+
+  /*
+   * When a run finds nobody, it writes nothing — so the list stays stale and
+   * the next read would scan every profile again, and the one after that.
+   * Somebody with no eligible candidates (a brand-new site, or someone already
+   * connected to everyone) would pay for a full scan on every page load. This
+   * is per-process and deliberately forgettable: losing it on restart costs one
+   * extra scan, which is the right way round.
+   */
+  const lastMatchAttempt = new Map<string, number>();
+  const MATCH_RETRY_MS = 10 * 60 * 1000;
+
+  /**
+   * Fresh matches for one person, and not the same faces as last time.
+   *
+   * Two runs of the same scoring over the same community return the same
+   * people, so a builder who opens Discover on Tuesday sees exactly what they
+   * ignored on Monday and stops looking. Everyone shown in the last two runs is
+   * held back — unless holding them back would leave too few to show, because
+   * an empty list teaches less than a repeat.
+   *
+   * Shared by the button and by the automatic refresh on GET /api/matches.
+   */
+  async function runMatchGeneration(userId: string) {
       const userProfile = await storage.getUserProfile(userId);
-      if (!userProfile) return res.status(400).json({ message: "Complete your profile first" });
+      if (!userProfile) throw Object.assign(new Error("Complete your profile first"), { status: 400 });
 
       // Matching quality scales with tier: how many candidates come back, and
       // whether Nova explains each match in plain language.
@@ -3619,154 +3718,72 @@ RULES:
       const matchLimit = { basic: 5, enhanced: 12, priority: 20 }[matchEnt.teamMatching];
       const wantsAiReasons = matchEnt.teamMatching !== "basic";
 
+      /*
+       * Who's eligible. `relatedUserIds` is the fix for matches that kept
+       * recommending people you'd already connected with: the old code read
+       * your connections into a set and then never consulted it.
+       */
+      const related = await relatedUserIds(userId);
       const allProfiles = await storage.searchUsers("");
-      const otherProfiles = allProfiles.filter(p => p.id !== userId && p.profile?.isOnboarded);
+      const eligible = allProfiles.filter((p) =>
+        isMatchable(p.id, { viewerId: userId, isOnboarded: !!p.profile?.isOnboarded, relatedUserIds: related })
+      );
+
+      /*
+       * Hold back everyone from the last two runs so this run shows new people.
+       * If that leaves fewer than a full page, show them anyway: on a small or
+       * young community an empty Discover teaches less than a repeat, and the
+       * batch number still moves so the rotation resumes as people join.
+       */
+      const { latestBatch, recentlyShown } = await storage.getMatchBatchState(userId, MATCH_STALE_HOURS);
+      const held = new Set(recentlyShown);
+      const unseen = eligible.filter((p) => !held.has(p.id));
+      const otherProfiles = unseen.length >= matchLimit ? unseen : eligible;
+      const batch = latestBatch + 1;
 
       if (otherProfiles.length === 0) {
-        return res.json([]);
+        return [];
       }
 
       const userProjects = await storage.getUserProjects(userId);
-      const userProjectCategories = new Set(userProjects.map(p => p.category));
-      const userProjectRoles = new Set(userProjects.flatMap(p => p.rolesNeeded || []));
-
-      const userConnections = await storage.getConnections(userId);
-      const userConnectionIds = new Set(userConnections.map(c => c.user.id));
-
-      function jaccardSimilarity(a: string[] | null, b: string[] | null): number {
-        if (!a?.length || !b?.length) return 0;
-        const setA = new Set(a.map(s => s.toLowerCase()));
-        const setB = new Set(b.map(s => s.toLowerCase()));
-        const intersection = [...setA].filter(x => setB.has(x)).length;
-        const union = new Set([...setA, ...setB]).size;
-        return union === 0 ? 0 : intersection / union;
-      }
-
-      const experienceLevels = ["beginner", "intermediate", "expert"];
-      function experienceCompatibility(a: string | null, b: string | null): number {
-        if (!a || !b) return 0.5;
-        const idxA = experienceLevels.indexOf(a);
-        const idxB = experienceLevels.indexOf(b);
-        if (idxA === -1 || idxB === -1) return 0.5;
-        const diff = Math.abs(idxA - idxB);
-        if (diff === 0) return 1;
-        if (diff === 1) return 0.7;
-        return 0.4;
-      }
-
       const userReputation = await storage.getUserReputation(userId);
-      const userBuilderIndex = userReputation?.builderIndex || 0;
+      const me = {
+        profile: userProfile,
+        context: {
+          categories: userProjects.map((p) => p.category),
+          rolesNeeded: userProjects.flatMap((p) => p.rolesNeeded || []),
+          mutualConnections: 0,
+          builderIndex: userReputation?.builderIndex || 0,
+        } satisfies MatchContext,
+      };
 
-      function cofounderCompatibility(a: any, b: any): number {
-        let score = 0;
-        let factors = 0;
-
-        if (a.riskTolerance && b.riskTolerance) {
-          const levels = ["low", "moderate", "high"];
-          const diff = Math.abs(levels.indexOf(a.riskTolerance) - levels.indexOf(b.riskTolerance));
-          score += diff === 0 ? 1.0 : diff === 1 ? 0.5 : 0.1;
-          factors++;
-        }
-
-        if (a.scheduleStyle && b.scheduleStyle) {
-          if (a.scheduleStyle === b.scheduleStyle) score += 1.0;
-          else if (a.scheduleStyle === "hybrid" || b.scheduleStyle === "hybrid") score += 0.7;
-          else score += 0.3;
-          factors++;
-        }
-
-        if (a.conflictStyle && b.conflictStyle) {
-          const complementary: Record<string, string[]> = {
-            direct: ["diplomatic", "collaborative"],
-            diplomatic: ["direct", "collaborative"],
-            avoidant: ["collaborative", "diplomatic"],
-            collaborative: ["direct", "diplomatic", "collaborative"],
-          };
-          if (a.conflictStyle === b.conflictStyle) score += 0.7;
-          else if (complementary[a.conflictStyle]?.includes(b.conflictStyle)) score += 1.0;
-          else score += 0.3;
-          factors++;
-        }
-
-        if (a.hoursPerWeek && b.hoursPerWeek) {
-          const diff = Math.abs(a.hoursPerWeek - b.hoursPerWeek);
-          score += diff <= 5 ? 1.0 : diff <= 10 ? 0.6 : 0.2;
-          factors++;
-        }
-
-        if (a.builderType && b.builderType) {
-          if (a.builderType === b.builderType) score += 1.0;
-          else if (a.builderType === "both" || b.builderType === "both") score += 0.7;
-          else score += 0.3;
-          factors++;
-        }
-
-        if (a.speedVsPolish && b.speedVsPolish) {
-          const levels = ["speed", "balanced", "polish"];
-          const diff = Math.abs(levels.indexOf(a.speedVsPolish) - levels.indexOf(b.speedVsPolish));
-          score += diff === 0 ? 1.0 : diff === 1 ? 0.6 : 0.2;
-          factors++;
-        }
-
-        return factors > 0 ? score / factors : 0.5;
-      }
-
-      const scoredMatches: { id: string; score: number; factors: Record<string, number> }[] = [];
+      const scoredMatches: { id: string; score: number; factors: ReturnType<typeof scoreMatch>["factors"] }[] = [];
 
       for (const other of otherProfiles) {
-        const op = other.profile!;
+        const [otherProjects, mutualConns, otherReputation] = await Promise.all([
+          storage.getUserProjects(other.id),
+          storage.getMutualConnections(userId, other.id),
+          storage.getUserReputation(other.id),
+        ]);
 
-        const skillsScore = jaccardSimilarity(userProfile.skills, op.skills);
-        const interestsScore = jaccardSimilarity(userProfile.interests, op.interests);
-        const experienceScore = experienceCompatibility(userProfile.experienceLevel, op.experienceLevel);
+        const { score, factors } = scoreMatch(me, {
+          profile: other.profile!,
+          context: {
+            categories: otherProjects.map((p) => p.category),
+            rolesNeeded: otherProjects.flatMap((p) => p.rolesNeeded || []),
+            mutualConnections: mutualConns.length,
+            builderIndex: otherReputation?.builderIndex || 0,
+          },
+        });
 
-        const otherProjects = await storage.getUserProjects(other.id);
-        const otherCategories = new Set(otherProjects.map(p => p.category));
-        const otherRoles = new Set(otherProjects.flatMap(p => p.rolesNeeded || []));
-        const allCategories = new Set([...userProjectCategories, ...otherCategories]);
-        const categoryScore = allCategories.size > 0
-          ? [...userProjectCategories].filter(c => otherCategories.has(c)).length / allCategories.size
-          : 0;
-        const allRoles = new Set([...userProjectRoles, ...otherRoles]);
-        const roleComplementScore = allRoles.size > 0
-          ? [...userProjectRoles].filter(r => !otherRoles.has(r)).length / allRoles.size
-          : 0;
-        const projectScore = categoryScore * 0.6 + roleComplementScore * 0.4;
-
-        const mutualConns = await storage.getMutualConnections(userId, other.id);
-        const connectionScore = Math.min(1, mutualConns.length * 0.25);
-
-        const cofounderScore = cofounderCompatibility(userProfile, op);
-
-        const otherReputation = await storage.getUserReputation(other.id);
-        const otherBuilderIndex = otherReputation?.builderIndex || 0;
-        const indexDiff = Math.abs(userBuilderIndex - otherBuilderIndex);
-        const builderScore = indexDiff <= 10 ? 1.0 : indexDiff <= 25 ? 0.7 : 0.4;
-
-        const weightedScore = Math.round(
-          (skillsScore * 25 +
-           interestsScore * 20 +
-           experienceScore * 10 +
-           projectScore * 10 +
-           connectionScore * 10 +
-           cofounderScore * 15 +
-           builderScore * 10)
-        );
-
-        if (weightedScore > 5) {
-          scoredMatches.push({
-            id: other.id,
-            score: Math.min(100, weightedScore),
-            factors: { skills: skillsScore, interests: interestsScore, experience: experienceScore, projects: projectScore, connections: connectionScore, cofounder: cofounderScore, builder: builderScore }
-          });
-        }
+        if (score > MATCH_FLOOR) scoredMatches.push({ id: other.id, score, factors });
       }
 
       scoredMatches.sort((a, b) => b.score - a.score);
       const topMatches = scoredMatches.slice(0, matchLimit);
 
       if (topMatches.length === 0) {
-        return res.json([]);
+        return [];
       }
 
       // Optional: reasons need the credits and room under the AI burst limit.
@@ -3776,8 +3793,8 @@ RULES:
 
       if (hasCredits && topMatches.length > 0) {
         try {
-          const matchSummary = topMatches.map(m => {
-            const other = otherProfiles.find(p => p.id === m.id);
+          const matchSummary = topMatches.map((m) => {
+            const other = otherProfiles.find((p) => p.id === m.id);
             return {
               id: m.id,
               name: other?.firstName || "User",
@@ -3786,13 +3803,19 @@ RULES:
               skills: other?.profile?.skills?.slice(0, 5),
               interests: other?.profile?.interests?.slice(0, 5),
               experience: other?.profile?.experienceLevel,
+              // What they've actually done, so a reason can cite it rather
+              // than paraphrasing their skills list back at them.
+              roles: (Array.isArray(other?.profile?.experience) ? (other!.profile!.experience as any[]) : [])
+                .slice(0, 3)
+                .map((r) => [r?.title, r?.company].filter(Boolean).join(" at "))
+                .filter(Boolean),
             };
           });
 
           const response = await openai.chat.completions.create({
             model: "gpt-4o",
             messages: [
-              { role: "system", content: "Generate concise match reasons. Return ONLY valid JSON (no markdown): {\"reasons\": {\"userId\": [\"reason1\", \"reason2\"]}}. Each user gets 2-3 short reasons. Include co-founder compatibility insights when relevant." },
+              { role: "system", content: "Generate concise match reasons. Return ONLY valid JSON (no markdown): {\"reasons\": {\"userId\": [\"reason1\", \"reason2\"]}}. Each user gets 2-3 short reasons. Cite shared work history when the roles suggest it, and include co-founder compatibility insights when relevant." },
               { role: "user", content: `User profile: skills=${userProfile.skills?.join(", ")}, interests=${userProfile.interests?.join(", ")}, experience=${userProfile.experienceLevel}.\n\nMatches: ${JSON.stringify(matchSummary)}` }
             ],
           });
@@ -3809,27 +3832,29 @@ RULES:
       }
 
       const savedMatches = await Promise.all(topMatches.map(async (m) => {
-        const reasons = matchReasons[m.id] || [
-          m.factors.skills > 0.3 ? "Overlapping technical skills" : "Complementary skill set",
-          m.factors.interests > 0.3 ? "Shared interests" : "Diverse perspectives",
-          m.factors.connections > 0 ? "Mutual connections" : "Potential new collaborator",
-        ];
+        const reasons = matchReasons[m.id] || defaultMatchReasons(m.factors);
         return storage.upsertUserMatch({
           userId,
           matchedUserId: m.id,
           score: m.score,
           reasons,
+          batch,
         });
       }));
 
-      res.json(savedMatches);
-    } catch (error) {
+      return savedMatches;
+  }
+
+  app.post("/api/matches/generate", isAuthenticated, async (req: any, res) => {
+    try {
+      res.json(await runMatchGeneration((req.user as any).id));
+    } catch (error: any) {
+      if (error?.status) return res.status(error.status).json({ message: error.message });
       console.error("Match generation error:", error);
       respondToAiError(res, error, "Failed to generate matches");
     }
   });
 
-  // Leaderboard
   app.get("/api/leaderboard", async (req: any, res) => {
     const sortBy = (req.query.sortBy as "views" | "donations") || "views";
     const limit = parseInt(req.query.limit as string) || 10;
@@ -5839,6 +5864,19 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       if (existing.receiverId !== userId) return res.status(403).json({ message: "Only the receiver can accept a connection request" });
       if (existing.status !== "pending") return res.status(400).json({ message: "Connection is not pending" });
       const conn = await storage.acceptConnection(req.params.id);
+      /*
+       * Now that they're connected, neither one is a match for the other any
+       * more. Awaited, not fired off: the client refetches its matches the
+       * moment this responds, and a background delete would race that and let
+       * the person you just added flash back into the rail. One indexed delete
+       * of at most two rows. Still non-fatal — failing to tidy up must not
+       * fail the connection, and the read path filters them out regardless.
+       */
+      try {
+        await storage.deleteUserMatch(userId, existing.requesterId);
+      } catch (e) {
+        console.error("Failed to clear matches after connecting (non-fatal):", e);
+      }
       void notify({ recipients: [existing.requesterId], actorId: userId, kind: "connection_accepted", targetId: existing.id });
       res.json(conn);
     } catch (error) {

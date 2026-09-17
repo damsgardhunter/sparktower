@@ -138,6 +138,38 @@ export const emailVerificationTokens = pgTable("email_verification_tokens", {
 }));
 
 /**
+ * Links that let someone set a new password without knowing the old one.
+ *
+ * Stored by hash, like the verification links above and for the same reason,
+ * except more so: this token IS the account. Anyone holding it can take over,
+ * so the database must not hold a working one, the window is short, and it is
+ * spent the first time it's used.
+ *
+ * The address is kept alongside the user id because the link belongs to the
+ * address it was sent to. If the account's email changes after a link goes
+ * out, that link is for an address its owner no longer controls, and must
+ * stop working.
+ *
+ * `requestedIp` is not for rate limiting — the limiter has its own table — but
+ * for the question asked after the fact: who asked for this, and did the
+ * person whose account it is recognise them.
+ */
+export const passwordResetTokens = pgTable("password_reset_tokens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** SHA-256 of the token in the link. */
+  tokenHash: varchar("token_hash").notNull().unique(),
+  /** The address it was sent to, lowercased. */
+  email: varchar("email").notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  usedAt: timestamp("used_at"),
+  requestedIp: varchar("requested_ip"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  byUser: index("password_reset_user_idx").on(table.userId),
+}));
+
+/**
  * Refresh tokens for the native mobile apps.
  *
  * The web app uses cookie sessions, but a native client can't rely on cookies

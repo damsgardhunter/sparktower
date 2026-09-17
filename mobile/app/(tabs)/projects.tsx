@@ -25,10 +25,11 @@ const STATUSES = [
 const SOURCE = "projects" as ExploreSource;
 
 /**
- * Projects — the native counterpart of client/src/pages/projects.tsx: My
- * projects and Browse all, Create Project, a search box, the Category and
- * Status filters, and the project cards. Browse all opens with the web's
- * "welcome back" banner when something you looked at has posted since.
+ * Projects — off the tab bar since Discover absorbed browsing, but kept as a
+ * screen so its deep links still land: My projects and Browse all, Create
+ * Project, a search box, the Category and Status filters, and the project
+ * cards. Browse all opens with the web's "welcome back" banner when something
+ * you looked at has posted since.
  */
 export default function Projects() {
   const router = useRouter();

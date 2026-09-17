@@ -40,8 +40,8 @@ async function sql(text: string, params: unknown[]) {
 }
 
 test("a founder builds a capital profile, picks a route, and takes an investment application", async ({ browser }) => {
-  const founder = await personIn(browser, "203.0.113.71", "Dana");
-  const investor = await personIn(browser, "203.0.113.72", "Ivan");
+  const founder = await personIn(browser, "203.0.113.192", "Dana");
+  const investor = await personIn(browser, "203.0.113.193", "Ivan");
   // A résumé Nova already read, with an owner role on it.
   await sql(`UPDATE user_profiles SET resume_parsed_at = now(), experience = $2::jsonb WHERE user_id = $1`, [founder.id, JSON.stringify([
     { title: "Owner", company: "Sparkle Pro Cleaning", startDate: "2016-01", endDate: "2021-06", current: false, description: "Office cleaning, 9 staff" },

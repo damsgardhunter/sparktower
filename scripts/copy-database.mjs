@@ -26,7 +26,7 @@
  *
  * --from defaults to DATABASE_URL in .env, which is the usual source.
  */
-import { execFileSync, execFile } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync, statSync, unlinkSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { tmpdir } from "node:os";

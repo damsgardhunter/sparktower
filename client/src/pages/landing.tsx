@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,11 +9,13 @@ import { Zap, MessageSquare, Target, Eye, EyeOff, Loader2, Users, Rocket, Globe,
 const logoImage = "/favicon.png";
 import { SiGoogle } from "react-icons/si";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { AnimatedTowerLogo } from "@/components/animated-tower-logo";
+import { NOVA_GRADIENT, NOVA_GRADIENT_CSS } from "@shared/backing";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { PENDING_PATH_KEY, type PendingPath } from "@shared/path-artifacts";
 import { PENDING_INVITE_KEY } from "@shared/invites";
-import heroVideo from "@assets/Brooklyn_Tower_Tesla_Coil_Animation_1772567582595.mp4";
+import heroVideo from "@assets/Landing_Video.mp4";
 import { MfaCodeForm } from "@/components/mfa";
 import { PASSWORD_MIN } from "@shared/passwords";
 
@@ -41,18 +44,59 @@ export default function LandingPage() {
 
   return (
     <div className="flex flex-col min-h-screen bg-white text-foreground">
-      <header className="fixed top-0 w-full z-50" style={{ opacity: 0, animation: 'hero-fade-in-slow 0.8s ease-out forwards' }}>
-        <div className="relative flex items-center justify-center p-3 bg-white/80 backdrop-blur-md border-b border-black/5">
-          <div className="absolute left-4 flex items-center gap-4">
+      {/*
+        * The same header a signed-in person gets (App.tsx) — Nova's gradient
+        * with the logo hanging under it in a semicircle — scaled up, because
+        * this is the first thing a visitor sees rather than a bar they work
+        * beneath. Matching it means arriving and signing in don't feel like
+        * two different products.
+        *
+        * Two deliberate differences from the app's:
+        *
+        *   - The wordmark rides inside the semicircle with the tower. Signed
+        *     in you already know whose site this is; arriving, you don't.
+        *   - No slogan. The app bar carries it either side of the logo; here
+        *     the hero says what the page is, and the same words twice on one
+        *     screen just crowds the tower.
+        *
+        * `hero-header-reveal` holds the whole thing hidden while the opening
+        * video plays, then brings it up slowly (index.css).
+        */}
+      <header className="hero-header-reveal fixed top-0 w-full z-50" data-testid="landing-header">
+        <div
+          className="relative flex items-center justify-between h-14 sm:h-16 md:h-20 px-2 sm:px-6 text-white shadow-[0_4px_20px_-6px_rgba(0,0,0,0.35)]"
+          style={{ backgroundImage: NOVA_GRADIENT_CSS }}
+        >
+          <div className="relative z-10 flex items-center gap-2 [&_button]:text-white [&_button:hover]:bg-white/15">
             <ThemeToggle />
           </div>
-          <div className="flex flex-col items-center">
-            <img src={logoImage} alt="SparkTower" className="h-10 w-auto" data-testid="img-logo" />
-            <span className="font-bold text-xs tracking-widest uppercase text-black -mt-0.5">SparkTower</span>
-          </div>
-          <div className="absolute right-4 flex items-center gap-3">
+
+          {/*
+            * The hanging semicircle, in the gradient's middle colour — which is
+            * exactly what the bar is at its centre, so the two meet with no seam.
+            * It clips the lightning, so the bolts leave through its curved edge.
+            */}
+          <button
+            type="button"
+            aria-label="SparkTower"
+            onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+            className="absolute left-1/2 -translate-x-1/2 top-0 w-[6.25rem] sm:w-48 md:w-56 h-[4.5rem] sm:h-[7rem] md:h-[8.25rem] rounded-b-full overflow-hidden flex flex-col items-center justify-center gap-0 pb-2 sm:pb-4 shadow-[0_8px_18px_-6px_rgba(0,0,0,0.35)]"
+            style={{ backgroundColor: NOVA_GRADIENT[1] }}
+            data-testid="header-logo-hang"
+          >
+            <AnimatedTowerLogo height={48} className="drop-shadow-lg sm:hidden" />
+            <AnimatedTowerLogo height={84} className="drop-shadow-lg hidden sm:block md:hidden" />
+            <AnimatedTowerLogo height={96} className="drop-shadow-lg hidden md:block" />
+            <span className="text-white font-bold text-[9px] sm:text-[11px] md:text-xs tracking-[0.14em] sm:tracking-[0.2em] uppercase leading-none drop-shadow">
+              SparkTower
+            </span>
+          </button>
+
+          <div className="relative z-10 flex items-center gap-1 sm:gap-3">
             <Button
               size="sm"
+              variant="outline"
+              className="h-8 px-1.5 text-xs border-0 sm:h-9 sm:px-4 sm:text-sm sm:border bg-white/10 text-white border-white/40 hover:bg-white/20 hover:text-white backdrop-blur-sm"
               data-testid="button-login"
               onClick={() => { setActiveTab("login"); setShowAuthModal(true); }}
             >
@@ -60,7 +104,7 @@ export default function LandingPage() {
             </Button>
             <Button
               size="sm"
-              variant="outline"
+              className="h-8 px-2.5 text-xs sm:h-9 sm:px-4 sm:text-sm bg-white text-black hover:bg-white/90 font-semibold"
               data-testid="button-signup-nav"
               onClick={() => { setActiveTab("signup"); setShowAuthModal(true); }}
             >
@@ -70,7 +114,7 @@ export default function LandingPage() {
         </div>
       </header>
 
-      <section className="relative min-h-screen flex items-start justify-center px-4 pt-24 pb-16 md:pb-24 bg-white overflow-visible">
+      <section className="relative min-h-screen flex items-start justify-center px-4 pt-28 sm:pt-48 md:pt-56 pb-16 md:pb-24 bg-white overflow-visible">
         <div className="absolute left-0 right-0 z-0 overflow-hidden" style={{ top: '0px', bottom: 0 }}>
           <video
             src={heroVideo}
@@ -439,7 +483,13 @@ function LoginForm() {
           />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="login-password">Password</Label>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="login-password">Password</Label>
+            {/* Next to the field it fails at — where someone looks the moment the password doesn't work. */}
+            <Link href="/forgot-password" className="text-xs text-muted-foreground underline hover:text-foreground" data-testid="link-forgot-password">
+              Forgot your password?
+            </Link>
+          </div>
           <div className="relative">
             <Input
               id="login-password"

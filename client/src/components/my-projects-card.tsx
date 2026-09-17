@@ -63,7 +63,7 @@ export function MyProjectsCard() {
 
   return (
     <RailCard>
-      <RailHeader title="Your projects" href="/projects?view=mine" />
+      <RailHeader title="Your projects" href="/profile#projects" />
       <div className="space-y-2.5 pt-1">
         {sorted.slice(0, 5).map((p) => {
           const item = nextByProject.get(p.id);

@@ -1,32 +1,48 @@
 /**
  * The sidebar, as data — so the sequencing decision (docs/decisions/0001-path-loops-first.md)
  * is checked, not just followed: the primary group is the path loops and nothing that waits
- * for the wedge; everything else is secondary, and every secondary item that belongs to a
- * surface names it, so its kill switch hides it. test/unit/navigation.test.ts holds it.
+ * for the wedge; everything else is secondary, and every item in either group that belongs
+ * to a surface names it, so its kill switch hides it. test/unit/navigation.test.ts holds it.
  *
  * Icons are named rather than imported, to keep this free of React.
  */
 export interface NavItem {
   title: string;
   url: string;
-  icon: "Home" | "FolderKanban" | "Compass" | "Users" | "Handshake" | "MessageSquare" | "Trophy" | "Medal" | "CreditCard";
+  icon: "Home" | "FolderKanban" | "Compass" | "Telescope" | "Users" | "Handshake" | "MessageSquare" | "Trophy" | "Medal" | "CreditCard";
   /** The surface whose flag hides this item. None for pages that aren't feature areas. */
   surface?: string;
 }
 
-/** Where the work happens: your home (with your paths) and your projects' paths. */
+/**
+ * Where the work happens: your home, the path waiting across your projects, and
+ * the one place to go looking outward.
+ *
+ * "Your path" is an address, which the home feed's card isn't: coming back to
+ * pick up where you left off is the retention loop, and a loop needs somewhere
+ * to return to that isn't "scroll the feed until you find the card".
+ *
+ * Discover takes the slot Projects held. Your own projects were never a
+ * destination you browsed to — you arrive at one from the path, the feed or
+ * your profile — whereas Discover is now the whole outward half of the product
+ * (projects to find, people to match with, the ranking), so it earns the
+ * standing address. It is the one primary item that names a surface: it is
+ * "supports", not "after-wedge", so the sequencing decision lets it lead, but
+ * it is still a switchable feature area and the sidebar must drop it when the
+ * flag is off rather than leave a primary link to a 404.
+ */
 export const PRIMARY_NAV: NavItem[] = [
   { title: "Home", url: "/", icon: "Home" },
-  { title: "Projects", url: "/projects", icon: "FolderKanban" },
+  { title: "Your path", url: "/path", icon: "Compass" },
+  { title: "Discover", url: "/discover", icon: "Telescope", surface: "discover" },
 ];
 
 /** Real, reachable, and quieter: the network surfaces and the rest, each behind its flag. */
 export const SECONDARY_NAV: NavItem[] = [
-  { title: "Discover", url: "/discover", icon: "Compass", surface: "discover" },
-  { title: "Matches", url: "/matches", icon: "Users", surface: "matches" },
+  /* Matches and the leaderboard are sections of Discover now, not addresses of their own; their
+     old URLs still resolve, they just redirect. Their flags still hide them — inside Discover. */
   { title: "Sprints", url: "/sprints", icon: "Handshake", surface: "sprints" },
   { title: "Messages", url: "/messages", icon: "MessageSquare", surface: "messages" },
-  { title: "Leaderboard", url: "/leaderboard", icon: "Trophy", surface: "leaderboard" },
   { title: "Contests and Communities", url: "/contests", icon: "Medal", surface: "contests" },
   { title: "Pricing", url: "/pricing", icon: "CreditCard" },
 ];

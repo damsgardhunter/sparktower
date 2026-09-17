@@ -16,6 +16,18 @@ import { test, expect, type Page } from "@playwright/test";
 import { verifyEmail } from "./verify-email";
 import { passMfa } from "./mfa-helper";
 
+/*
+ * A per-spec address, so registrations here don't share the sign-in budget.
+ *
+ * Registering counts against the per-address sign-in limit (8 in 15 minutes,
+ * shared/moderation.ts). The suite runs serially against one server, so every
+ * spec that doesn't say who it is arrives from the same loopback address and
+ * they spend one budget between them — which is why the specs that ran last
+ * failed on a refused registration, in CI and locally, while each passed alone.
+ * The addresses are TEST-NET-3 (203.0.113.0/24) and unique per person.
+ */
+test.use({ extraHTTPHeaders: { "x-forwarded-for": "203.0.113.183" } });
+
 const password = "Testpass123!";
 
 /** The Explore section of the owner's summary, read with the browser's own session. */
@@ -31,7 +43,7 @@ const eventCount = async (page: Page, name: string) =>
 
 test("a real browser walks the Explore loop, and the owner's dashboard counts it", async ({ page, browser }) => {
   // Pat owns the project, so there's someone else's work to find and follow.
-  const patContext = await browser.newContext();
+  const patContext = await browser.newContext({ extraHTTPHeaders: { "x-forwarded-for": "203.0.113.184" } });
   const pat = patContext.request;
   await pat.get("/");
   expect((await pat.post("/api/auth/register", {
@@ -61,10 +73,11 @@ test("a real browser walks the Explore loop, and the owner's dashboard counts it
   expect(created.ok()).toBeTruthy();
   const projectId = (await created.json()).id as string;
 
-  // Discover, then the project list in the same tab: two opens, and the second is a return.
+  // Discover twice in the same tab: two opens, and the second is a return.
+  // Browsing projects used to be its own page; it's the default state here now.
   await page.goto("/discover");
-  await expect(page.getByTestId("input-search-users")).toBeVisible();
-  await page.goto("/projects");
+  await expect(page.getByTestId("discover-search")).toBeVisible();
+  await page.goto("/discover");
   const card = page.getByTestId(`card-project-${projectId}`);
   await expect(card).toBeVisible();
 
@@ -85,7 +98,7 @@ test("a real browser walks the Explore loop, and the owner's dashboard counts it
 
   // Back to Discover closes the pass; leaving for the dashboard flushes it, and ends the session.
   await page.goto("/discover");
-  await expect(page.getByTestId("input-search-users")).toBeVisible();
+  await expect(page.getByTestId("discover-search")).toBeVisible();
   await page.goto("/admin/analytics");
 
   await expect.poll(() => step(page, "lookedCloser"), { timeout: 15_000 }).toBeGreaterThanOrEqual(1);

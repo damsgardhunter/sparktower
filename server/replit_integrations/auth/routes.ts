@@ -6,12 +6,13 @@ import passport from "passport";
 import bcrypt from "bcryptjs";
 import { ensureUserProfile } from "../../user-provisioning";
 import { stampSignupAttribution } from "../../attribution";
-import { enforceRateLimit, ipKey, rateLimit, enforceRejectionLimit, countRejection, accountKey } from "../../moderation";
+import { enforceRateLimit, ipKey, rateLimit, enforceReservedLimit, refundAttempt, accountKey } from "../../moderation";
 import { db } from "../../db";
 import { mobileRefreshTokens, users } from "@shared/models/auth";
 import { mfaEnabledFor, mfaRequiredFor } from "../../mfa";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { checkPassword } from "@shared/passwords";
+import { isBreached, BREACHED_MESSAGE } from "../../password-breach";
 /** The session cookie's name, as express-session is configured. */
 const SESSION_COOKIE = "connect.sid";
 
@@ -39,6 +40,11 @@ export function registerAuthRoutes(app: Express): void {
       }
       const weak = checkPassword(password, { email });
       if (weak) return res.status(400).json({ message: weak.message, code: "invalid_input", field: weak.field });
+      // The list of what people guess is not the list of what has already
+      // leaked; this is the second one (server/password-breach.ts).
+      if (await isBreached(password)) {
+        return res.status(400).json({ message: BREACHED_MESSAGE, code: "breached_password", field: "password" });
+      }
       const existing = await authStorage.getUserByEmail(email);
       if (existing) {
         return res.status(409).json({ message: "An account with this email already exists" });
@@ -89,14 +95,25 @@ export function registerAuthRoutes(app: Express): void {
      * Keyed on the address as typed, existing account or not, so the limit
      * can't be used to find out which addresses have accounts.
      */
+    /*
+     * The attempt is taken BEFORE the password is checked, and given back if
+     * it turns out to be the right one. Counting only failures, after the
+     * fact, means the check and the increment are two steps — and a stuffing
+     * script doesn't send its guesses one at a time. Two hundred simultaneous
+     * attempts all read the same count, all find room under twelve, and all
+     * get a guess. Reserving first makes them queue behind each other
+     * (server/moderation.ts, reserveAttempt); refunding on success means a
+     * person signing in correctly still never spends from this budget.
+     */
     const attempted = accountKey(req.body?.email);
-    if (attempted && !(await enforceRejectionLimit(res, attempted, "loginAccount"))) return;
+    if (attempted && !(await enforceReservedLimit(res, attempted, "loginAccount"))) return;
     passport.authenticate("local", (err: any, user: any, info: any) => {
       if (err) return next(err);
       if (!user) {
-        if (attempted) void countRejection(attempted, "loginAccount");
         return res.status(401).json({ message: info?.message || "Invalid credentials" });
       }
+      // Right password: this attempt shouldn't have cost them anything.
+      if (attempted) void refundAttempt(attempted, "loginAccount");
       // Two-factor accounts: the password alone doesn't sign in. The session holds a pending sign-in for
       // /api/auth/mfa/verify to finish with a code (server/mfa.ts).
       if (mfaEnabledFor(user)) {
@@ -176,8 +193,24 @@ export function registerAuthRoutes(app: Express): void {
     if (fromElsewhere(req)) return res.status(403).json({ message: "Sign out from SparkTower itself.", code: "cross_site" });
     endSession(req, res, () => res.json({ ok: true }));
   });
+  /*
+   * The GET form exists for links that predate the button and for a typed or
+   * bookmarked URL. A GET that changes something is fetched by things that
+   * aren't a person deciding: a browser prefetching a link it thinks you'll
+   * click, a mail client scanning URLs for safety, an <img> pointed at it. So
+   * it only acts on a real navigation — a request the browser labels as a
+   * document, and not one it labels as a prefetch. Anything else is sent home
+   * with the session intact, and the button (POST) is unaffected.
+   */
+  const isPrefetchOrSubresource = (req: any): boolean => {
+    const purpose = `${req.headers["sec-purpose"] ?? ""} ${req.headers["purpose"] ?? ""} ${req.headers["x-moz"] ?? ""}`.toLowerCase();
+    if (purpose.includes("prefetch") || purpose.includes("prerender")) return true;
+    const dest = String(req.headers["sec-fetch-dest"] ?? "").toLowerCase();
+    // Absent on older browsers: those get the old behaviour rather than a sign-out that silently stops working.
+    return dest !== "" && dest !== "document";
+  };
   app.get("/api/logout", (req: any, res) => {
-    if (fromElsewhere(req)) return res.redirect("/");
+    if (fromElsewhere(req) || isPrefetchOrSubresource(req)) return res.redirect("/");
     endSession(req, res, () => res.redirect("/"));
   });
 
@@ -214,6 +247,11 @@ export function registerAuthRoutes(app: Express): void {
       const next = String(req.body?.newPassword ?? "");
       const weak = checkPassword(next, { email: user.email });
       if (weak) return res.status(400).json({ message: weak.message, code: "invalid_input", field: "newPassword" });
+      // Changing a password is often a response to worrying about one; landing
+      // on a breached password would be the worst possible outcome of that.
+      if (await isBreached(next)) {
+        return res.status(400).json({ message: BREACHED_MESSAGE, code: "breached_password", field: "newPassword" });
+      }
       if (next === current) {
         return res.status(400).json({ message: "That's the password you already have.", code: "invalid_input", field: "newPassword" });
       }

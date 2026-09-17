@@ -9,8 +9,9 @@ import { RailCard, RailHeader, RailDivider } from "@/components/rail-card";
 import { UserAvatar } from "@/components/user-avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { Eye, Plus, Trophy, UserPlus } from "lucide-react";
+import { Eye, Plus, Trophy, UserPlus, Sparkles } from "lucide-react";
 import { Link } from "wouter";
+import { useAuth } from "@/hooks/use-auth";
 import type { Project, UserProfile, User, UserMatch } from "@shared/schema";
 
 type ProjectWithDetails = Project & { owner: User; profile?: UserProfile };
@@ -26,8 +27,17 @@ type MatchWithDetails = UserMatch & { matchedUser: User; matchedProfile: UserPro
  * full-width sections stacked under the feed — leaderboard podium, match cards
  * — now live in the rail, so discovery is visible while you read rather than
  * two screens down.
+ *
+ * The surface is `.home-modern` (see index.css), not the `.sharp-boxes` this
+ * page used to carry. Sharp boxes are the LinkedIn look — 2px corners, no
+ * depth — and the page reads as a directory. Soft corners, a little elevation
+ * and rows that answer the pointer are what a feed people read on a phone
+ * looks like now. The structure underneath is unchanged: same modules, same
+ * order, same test ids.
  */
 export default function Home() {
+  const { user } = useAuth();
+
   const { data: projects, isLoading: projectsLoading } = useQuery<ProjectWithDetails[]>({
     queryKey: ["/api/projects"],
   });
@@ -44,29 +54,46 @@ export default function Home() {
     enabled: surfaceOn("matches"),
   });
 
+  const firstName = user?.firstName?.trim();
+
   return (
-    <div className="sharp-boxes h-full overflow-y-auto bg-muted dark:bg-background">
-      <div className="mx-auto max-w-[1128px] px-4 py-5">
-        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_300px] gap-5 items-start">
+    <div className="home-modern h-full overflow-y-auto bg-muted dark:bg-background">
+      <div className="mx-auto max-w-[1180px] px-4 sm:px-6 py-5 sm:py-7">
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] gap-5 lg:gap-6 items-start">
           {/* --- The feed --- */}
-          <div className="min-w-0 space-y-2">
+          <div className="min-w-0 space-y-3">
             {/*
-              * Starting a project is what sits at the top of the feed: this bar
-              * is the entry point for the whole product.
+              * The greeting and the one action that matters, on a single line.
               *
-              * Full-width rather than a heading plus a button, so it doesn't
-              * cost a row of vertical space above the composer.
+              * Sticky and blurred: on a long feed the way back to "start
+              * something" shouldn't be a scroll to the top. It replaces a
+              * full-width button that cost a whole row and said only "Create
+              * Project" — the same entry point, with the page's one piece of
+              * personality attached to it.
               */}
-            <Button
-              asChild
-              className="btn-glossy w-full h-11 gap-2 text-[15px] font-semibold text-primary-foreground border-0"
-              data-testid="button-create-project-home"
-            >
-              <Link href="/projects/new">
-                <Plus className="h-4 w-4" />
-                Create Project
-              </Link>
-            </Button>
+            <div className="home-sticky sticky top-0 z-20 -mx-1 px-1 py-2 flex items-center gap-3">
+              <div className="min-w-0 flex-1">
+                <h1 className="text-[17px] sm:text-[19px] font-semibold tracking-[-0.01em] truncate">
+                  {firstName ? `Welcome back, ${firstName}` : "Welcome back"}
+                </h1>
+                <p className="text-xs text-muted-foreground truncate">
+                  Here's what people are building today.
+                </p>
+              </div>
+              <Button
+                asChild
+                size="sm"
+                className="btn-glossy h-10 gap-1.5 px-4 text-[14px] font-semibold text-primary-foreground border-0 shrink-0 rounded-full"
+                data-testid="button-create-project-home"
+              >
+                <Link href="/projects/new">
+                  <Plus className="h-4 w-4" />
+                  Create
+                  <span className="sr-only"> project</span>
+                </Link>
+              </Button>
+            </div>
+
             <FounderFeed />
           </div>
 
@@ -78,32 +105,36 @@ export default function Home() {
             * and given its own scroll, the pointer's side is the side that moves.
             */}
           <aside
-            className="space-y-2 lg:sticky lg:top-5 lg:max-h-[calc(100dvh-7rem)] lg:overflow-y-auto lg:pr-1 home-rail-scroll"
+            className="space-y-3 lg:sticky lg:top-5 lg:max-h-[calc(100dvh-7rem)] lg:overflow-y-auto lg:pr-1 home-rail-scroll"
             data-testid="home-rail"
           >
             {/* Your projects and where each is on its path lead the rail; the network cards follow, each behind its flag. */}
-            <MyProjectsCard />
-            <ProfileRailCard />
+            <div className="home-rise" style={{ "--home-i": 0 } as React.CSSProperties}>
+              <MyProjectsCard />
+            </div>
+            <div className="home-rise" style={{ "--home-i": 1 } as React.CSSProperties}>
+              <ProfileRailCard />
+            </div>
 
-            <RailCard>
-              <RailHeader title="New projects" href="/projects" />
+            <RailCard className="home-card home-card-interactive home-rise" style={{ "--home-i": 2 } as React.CSSProperties}>
+              <RailHeader title="New projects" href="/discover" />
               {projectsLoading ? (
                 <div className="space-y-2 pt-1">
-                  {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-10 w-full rounded-md" />)}
+                  {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-11 w-full rounded-lg" />)}
                 </div>
               ) : projects && projects.length > 0 ? (
-                <div className="pt-0.5">
+                <div className="pt-0.5 space-y-0.5">
                   {projects.slice(0, 5).map((project) => (
                     <Link
                       key={project.id}
                       href={`/projects/${project.id}`}
-                      className="flex items-center gap-2 -mx-3 px-3 py-1.5 hover:bg-accent transition-colors"
+                      className="home-row flex items-center gap-2.5 px-2 py-2"
                       data-testid={`rail-project-${project.id}`}
                     >
                       <UserAvatar
                         src={project.profile?.avatarUrl}
                         name={project.owner?.firstName || project.title}
-                        className="h-8 w-8 shrink-0"
+                        className="h-9 w-9 shrink-0"
                       />
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center gap-1 min-w-0">
@@ -124,100 +155,118 @@ export default function Home() {
 
             {/* The podium, compacted. Ranked rows read faster in a rail than
                 three stacked cards did full-width. */}
-            {surfaceOn("leaderboard") && (<RailCard>
-              <RailHeader title="Top projects" href="/leaderboard" />
-              {leaderboardLoading ? (
-                <div className="space-y-2 pt-1">
-                  {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-8 w-full rounded-md" />)}
-                </div>
-              ) : leaderboard && leaderboard.length > 0 ? (
-                <div className="pt-0.5">
-                  {leaderboard.slice(0, 5).map((project, i) => (
-                    <Link
-                      key={project.id}
-                      href={`/projects/${project.id}`}
-                      className="flex items-center gap-2 -mx-3 px-3 py-1.5 hover:bg-accent transition-colors"
-                      data-testid={`rail-top-${project.id}`}
-                    >
-                      <span
-                        className={`h-5 w-5 shrink-0 rounded-full flex items-center justify-center text-[10px] font-bold ${
-                          i === 0
-                            ? "bg-yellow-500/15 text-yellow-600 dark:text-yellow-400"
-                            : i === 1
-                              ? "bg-slate-400/20 text-slate-600 dark:text-slate-300"
-                              : i === 2
-                                ? "bg-amber-600/15 text-amber-700 dark:text-amber-500"
-                                : "bg-muted text-muted-foreground"
-                        }`}
+            {surfaceOn("leaderboard") && (
+              <RailCard className="home-card home-card-interactive home-rise" style={{ "--home-i": 3 } as React.CSSProperties}>
+                <RailHeader title="Top projects" href="/discover" />
+                {leaderboardLoading ? (
+                  <div className="space-y-2 pt-1">
+                    {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-9 w-full rounded-lg" />)}
+                  </div>
+                ) : leaderboard && leaderboard.length > 0 ? (
+                  <div className="pt-0.5 space-y-0.5">
+                    {leaderboard.slice(0, 5).map((project, i) => (
+                      <Link
+                        key={project.id}
+                        href={`/projects/${project.id}`}
+                        className="home-row flex items-center gap-2.5 px-2 py-2"
+                        data-testid={`rail-top-${project.id}`}
                       >
-                        {i === 0 ? <Trophy className="h-3 w-3" /> : i + 1}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-sm font-medium truncate">{project.title}</span>
-                        <span className="block text-xs text-muted-foreground truncate">
-                          by {project.owner?.firstName || project.owner?.email || "a builder"}
+                        <span
+                          className={`h-6 w-6 shrink-0 rounded-full flex items-center justify-center text-[11px] font-bold ${
+                            i === 0
+                              ? "bg-yellow-500/15 text-yellow-600 dark:text-yellow-400"
+                              : i === 1
+                                ? "bg-slate-400/20 text-slate-600 dark:text-slate-300"
+                                : i === 2
+                                  ? "bg-amber-600/15 text-amber-700 dark:text-amber-500"
+                                  : "bg-muted text-muted-foreground"
+                          }`}
+                        >
+                          {i === 0 ? <Trophy className="h-3.5 w-3.5" /> : i + 1}
                         </span>
-                      </span>
-                      <span className="text-xs text-muted-foreground shrink-0 flex items-center gap-1 tabular-nums">
-                        <Eye className="h-3 w-3" />{project.views.toLocaleString()}
-                      </span>
-                    </Link>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground pt-1">Nothing on the leaderboard yet.</p>
-              )}
-            </RailCard>)}
-
-            {surfaceOn("matches") && (<RailCard>
-              <RailHeader title="People to build with" href="/matches" />
-              {matchesLoading ? (
-                <div className="space-y-2 pt-1">
-                  {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-10 w-full rounded-md" />)}
-                </div>
-              ) : matches && matches.length > 0 ? (
-                <div className="pt-0.5">
-                  {matches.slice(0, 4).map((match) => (
-                    // The row opens the person; the badges under their name open their projects, so they sit beside the link, not inside it.
-                    <div key={match.id} className="-mx-3 px-3 py-1.5 hover:bg-accent transition-colors" data-testid={`rail-match-${match.id}`}>
-                      <Link href={`/profile/${match.matchedUser.id}`} className="flex items-center gap-2">
-                        <UserAvatar
-                          src={match.matchedProfile?.avatarUrl}
-                          name={match.matchedProfile?.displayName || match.matchedUser.firstName || "Builder"}
-                          className="h-8 w-8 shrink-0"
-                        />
                         <span className="min-w-0 flex-1">
-                          <span className="block text-sm font-medium truncate">
-                            {match.matchedProfile?.displayName || match.matchedUser.firstName || "A builder"}
-                          </span>
+                          <span className="block text-sm font-medium truncate">{project.title}</span>
                           <span className="block text-xs text-muted-foreground truncate">
-                            {match.matchedProfile?.headline || "Builder on SparkTower"}
+                            by {project.owner?.firstName || project.owner?.email || "a builder"}
                           </span>
                         </span>
-                        {match.score !== null && match.score !== undefined && (
-                          <span className="text-xs font-semibold text-primary shrink-0 tabular-nums">
-                            {match.score}%
-                          </span>
-                        )}
+                        <span className="text-xs text-muted-foreground shrink-0 flex items-center gap-1 tabular-nums">
+                          <Eye className="h-3 w-3" />{project.views.toLocaleString()}
+                        </span>
                       </Link>
-                      <PinnedBadges userId={match.matchedUser.id} size="xs" max={5} className="pl-10 mt-0.5" />
-                    </div>
-                  ))}
-                  <RailDivider />
-                  <Link
-                    href="/matches"
-                    className="flex items-center justify-center gap-1.5 text-xs text-primary hover:underline py-0.5"
-                    data-testid="rail-see-matches"
-                  >
-                    <UserPlus className="h-3.5 w-3.5" /> Find more collaborators
-                  </Link>
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground pt-1">
-                  No matches yet — completing your profile is what makes these good.
-                </p>
-              )}
-            </RailCard>)}
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground pt-1">Nothing on the leaderboard yet.</p>
+                )}
+              </RailCard>
+            )}
+
+            {surfaceOn("matches") && (
+              <RailCard className="home-card home-card-interactive home-rise" style={{ "--home-i": 4 } as React.CSSProperties}>
+                <RailHeader title="People to build with" href="/discover" />
+                {matchesLoading ? (
+                  <div className="space-y-2 pt-1">
+                    {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-12 w-full rounded-lg" />)}
+                  </div>
+                ) : matches && matches.length > 0 ? (
+                  <div className="pt-0.5 space-y-0.5">
+                    {matches.slice(0, 4).map((match) => (
+                      // The row opens the person; the badges under their name open their projects, so they sit beside the link, not inside it.
+                      <div key={match.id} className="home-row px-2 py-2" data-testid={`rail-match-${match.id}`}>
+                        <Link href={`/profile/${match.matchedUser.id}`} className="flex items-center gap-2.5">
+                          <span className="home-avatar-ring shrink-0 inline-flex">
+                            <UserAvatar
+                              src={match.matchedProfile?.avatarUrl}
+                              name={match.matchedProfile?.displayName || match.matchedUser.firstName || "Builder"}
+                              className="h-9 w-9"
+                            />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-sm font-medium truncate">
+                              {match.matchedProfile?.displayName || match.matchedUser.firstName || "A builder"}
+                            </span>
+                            <span className="block text-xs text-muted-foreground truncate">
+                              {match.matchedProfile?.headline || "Builder on SparkTower"}
+                            </span>
+                          </span>
+                          {match.score !== null && match.score !== undefined && (
+                            <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary tabular-nums">
+                              {match.score}%
+                            </span>
+                          )}
+                        </Link>
+                        <PinnedBadges userId={match.matchedUser.id} size="xs" max={5} className="pl-[46px] mt-1" />
+                      </div>
+                    ))}
+                    <RailDivider />
+                    <Link
+                      href="/discover"
+                      className="home-row flex items-center justify-center gap-1.5 text-xs font-medium text-primary py-1.5"
+                      data-testid="rail-see-matches"
+                    >
+                      <UserPlus className="h-3.5 w-3.5" /> Find more collaborators
+                    </Link>
+                  </div>
+                ) : (
+                  /*
+                   * Matches come from your profile, so the empty state is a
+                   * link to the thing that fixes it rather than a sentence
+                   * telling you to go find it.
+                   */
+                  <div className="pt-1 space-y-2">
+                    <p className="text-sm text-muted-foreground">
+                      No matches yet — completing your profile is what makes these good.
+                    </p>
+                    <Button asChild variant="outline" size="sm" className="w-full gap-1.5 rounded-full h-8 text-xs">
+                      <Link href="/profile">
+                        <Sparkles className="h-3.5 w-3.5" /> Complete your profile
+                      </Link>
+                    </Button>
+                  </div>
+                )}
+              </RailCard>
+            )}
 
             <p className="text-[11px] text-muted-foreground text-center pt-1 pb-4">
               SparkTower · built for people who ship

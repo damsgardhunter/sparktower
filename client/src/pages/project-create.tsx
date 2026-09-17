@@ -47,35 +47,15 @@ import { PENDING_PATH_KEY, afterPendingCreatePath, parsePendingPath } from "@sha
 import { PROJECT_GOALS, projectGoal, subcategoriesFor, isValidSubcategory, type ProjectGoal } from "@shared/goals";
 import { NEW_PROJECT_STEPS, type NewProjectStep, nextStep, prevStep, stepIndex } from "@shared/new-project-steps";
 import { useAuth } from "@/hooks/use-auth";
+import { PROJECT_CATEGORIES } from "@shared/categories";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
 }
 
-const CATEGORIES = [
-  "Web App",
-  "Mobile App",
-  "AI/ML",
-  "SaaS",
-  "Fintech",
-  "Sustainability",
-  "IoT",
-  "Design",
-  "Data Analytics",
-  "Marketing",
-  "E-Commerce",
-  "Education",
-  "Healthcare",
-  "Social Media",
-  "Gaming",
-  "Blockchain",
-  "Content Creation",
-  "DevOps",
-  "Research",
-  "Nonprofit",
-  "Other",
-];
+
+const CATEGORIES = PROJECT_CATEGORIES;
 
 const AVAILABLE_ROLES = [
   "Frontend Developer",

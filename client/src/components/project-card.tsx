@@ -113,7 +113,8 @@ export function ProjectCard({ project, explore, following = false, update }: Pro
         </div>
         {explore && me?.id !== project.ownerId && (
           <div className="pt-3">
-            <ProjectFollowButton projectId={project.id} title={project.title} following={following} explore={explore} moreLikeThis={`/projects?category=${encodeURIComponent(project.category)}`} />
+            {/* "More like this" goes to Discover now that browsing lives there; /projects is your own list. */}
+            <ProjectFollowButton projectId={project.id} title={project.title} following={following} explore={explore} moreLikeThis={`/discover?category=${encodeURIComponent(project.category)}`} />
           </div>
         )}
       </CardContent>

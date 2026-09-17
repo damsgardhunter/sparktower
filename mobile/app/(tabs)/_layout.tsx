@@ -12,13 +12,25 @@ import { AppHeader } from "../../src/components/AppHeader";
 /** What expo-router hands a custom tab bar. */
 type BottomTabBarProps = Parameters<NonNullable<ComponentProps<typeof Tabs>["tabBar"]>>[0];
 
-/** The four tabs either side of the create button, in order. */
+/**
+ * The tabs either side of the create button, in order — the left half first.
+ *
+ * Mirrors the web sidebar's primary group now that Discover has absorbed
+ * browsing projects, matches and the leaderboard: Discover is the standing
+ * outward destination, and Projects came off the bar because your own projects
+ * are reached from the create button, the feed and your profile, never by
+ * browsing to a list of them. Discover already sat here, so it keeps its slot
+ * rather than sliding right into the one Projects vacated — moving the whole
+ * bar under people's thumbs would cost more than the symmetry is worth.
+ */
 const TABS: { name: string; label: string; icon: IconName; iconActive: IconName }[] = [
   { name: "feed", label: "Home", icon: "home-outline", iconActive: "home" },
-  { name: "discover", label: "Network", icon: "people-outline", iconActive: "people" },
+  { name: "discover", label: "Discover", icon: "compass-outline", iconActive: "compass" },
   { name: "notifications", label: "Alerts", icon: "notifications-outline", iconActive: "notifications" },
-  { name: "projects", label: "Projects", icon: "rocket-outline", iconActive: "rocket" },
 ];
+
+/** Where the create button splits the bar. Left of it gets the extra tab when the count is odd. */
+const SPLIT = Math.ceil(TABS.length / 2);
 
 function Badge({ value }: { value?: number | string }) {
   if (!value) return null;
@@ -33,7 +45,7 @@ function Badge({ value }: { value?: number | string }) {
 }
 
 /**
- * The bottom bar: Nova's gradient, four tabs, and the big button in the middle
+ * The bottom bar: Nova's gradient, the tabs, and the big button in the middle
  * that starts a project — the one thing the whole product is for, one tap from
  * anywhere.
  */
@@ -87,11 +99,10 @@ function NovaTabBar({ state, navigation }: BottomTabBarProps) {
   return (
     <View style={{ backgroundColor: "transparent" }}>
       <NovaGradient style={{ flexDirection: "row", alignItems: "flex-start", paddingBottom: Math.max(insets.bottom, spacing.sm), borderTopLeftRadius: 18, borderTopRightRadius: 18 }}>
-        {tab(TABS[0])}
-        {tab(TABS[1])}
+        {/* Halves of equal flex, so the create button stays centred whether or not the two sides hold the same number of tabs. */}
+        <View style={{ flex: 1, flexDirection: "row" }}>{TABS.slice(0, SPLIT).map(tab)}</View>
         <View style={{ width: 76 }} />
-        {tab(TABS[2])}
-        {tab(TABS[3])}
+        <View style={{ flex: 1, flexDirection: "row" }}>{TABS.slice(SPLIT).map(tab)}</View>
       </NovaGradient>
       {/* Raised above the bar so it reads as the main action. */}
       <Pressable
@@ -122,10 +133,11 @@ export default function TabsLayout() {
       }}
     >
       <Tabs.Screen name="feed" options={{ title: "Home" }} />
-      <Tabs.Screen name="discover" options={{ title: "Network" }} />
+      <Tabs.Screen name="discover" options={{ title: "Discover" }} />
       <Tabs.Screen name="notifications" options={{ title: "Notifications" }} />
-      <Tabs.Screen name="projects" options={{ title: "Projects" }} />
-      {/* Off the bar, still tabs: messages and your profile from the header, the rest from More. */}
+      {/* Off the bar, still tabs: messages and your profile from the header, the rest from More.
+          Projects joins them — off the bar, but the screen stays so its deep links still land. */}
+      <Tabs.Screen name="projects" options={{ title: "Projects", href: null }} />
       <Tabs.Screen name="messages" options={{ title: "Messages", href: null }} />
       <Tabs.Screen name="profile" options={{ title: "Profile", href: null }} />
       <Tabs.Screen name="sprints" options={{ title: "Sprints", href: null }} />
