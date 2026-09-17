@@ -103,7 +103,7 @@ export function PrivacyPolicy() {
         Passwords are hashed with bcrypt. Two-factor secrets, sign-in tokens and reset links are stored as hashes or
         encrypted, never as something that could be used as-is. Traffic is encrypted in transit. Setting a new password
         signs out every other session and device. None of this makes a system unbreakable, and we'd rather say that
-        than imply otherwise — if you find a hole, <a href="https://github.com/damsgardhunter/sparktower/security/advisories/new">tell us here</a>.
+        than imply otherwise — if you find a hole, <Link href="/security" className="text-primary underline">here’s how to tell us</Link>.
       </p>
 
       <h2>Children</h2>
@@ -119,6 +119,65 @@ export function PrivacyPolicy() {
       <p>
         When this changes in a way that matters, the date at the top changes and we say so in the product. Continuing to
         use SparkTower after that means the new version applies.
+      </p>
+    </LegalPage>
+  );
+}
+
+export function SecurityPolicy() {
+  return (
+    <LegalPage title="Reporting a security problem">
+      <p>
+        If you've found a vulnerability in SparkTower — the website, the mobile apps, the API, or the editor bridge —
+        please tell us privately first, so it can be fixed before anyone is put at risk.
+      </p>
+
+      <h2>How to report it</h2>
+      <p>
+        Email <a href="mailto:security@sparktower.app">security@sparktower.app</a>. Plain text is fine; a polished
+        write-up isn't needed. Please don't open a public issue or post about it before it's fixed.
+      </p>
+      <p>A good report says:</p>
+      <ul>
+        <li>what an attacker could do, and to whom</li>
+        <li>the steps, requests or code to reproduce it</li>
+        <li>the URL, endpoint or file involved, and what kind of account you used — signed out, free, paid, project member</li>
+      </ul>
+
+      <h2>What happens next</h2>
+      <ul>
+        <li><strong>Within 3 business days</strong> — we confirm we've got it.</li>
+        <li><strong>Within 7 days</strong> — we tell you whether we can reproduce it, and how serious we think it is.</li>
+        <li><strong>After that</strong> — an update at least every 14 days until it's fixed.</li>
+      </ul>
+      <p>
+        We aim to fix critical and high-severity issues within 30 days, and others within 90. We'll tell you when the fix
+        ships, and credit you by name in the release notes if you'd like that.
+      </p>
+
+      <h2>In scope</h2>
+      <ul>
+        <li>sparktower.app and its API</li>
+        <li>the SparkTower mobile apps</li>
+        <li>the editor bridge and its tokens</li>
+      </ul>
+
+      <h2>Not in scope</h2>
+      <ul>
+        <li>denial-of-service or load testing</li>
+        <li>social engineering, phishing, or physical attacks</li>
+        <li>spam or rate-limit reports with no security impact</li>
+        <li>problems in services we use rather than run — Stripe, Google, OpenAI — which belong to those vendors</li>
+        <li>a missing header or setting with no demonstrated way to exploit it</li>
+        <li>scanner output with no working proof of concept</li>
+      </ul>
+
+      <h2>Safe harbour</h2>
+      <p>
+        We won't pursue or support legal action against you for research that follows this policy. That means you only
+        touch data in accounts you own or have permission to test; you stop and tell us the moment you reach anyone
+        else's data, and don't keep it; you don't degrade the service for other people; and you give us a reasonable
+        time to fix the problem before you share it publicly.
       </p>
     </LegalPage>
   );

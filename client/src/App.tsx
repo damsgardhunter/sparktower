@@ -31,7 +31,7 @@ import AdminPromotions from "@/pages/admin-promotions";
 import MfaVerifyPage from "@/pages/mfa-verify";
 import SecuritySettings from "@/pages/security-settings";
 import ForgotPasswordPage from "@/pages/forgot-password";
-import { PrivacyPolicy, TermsOfService } from "@/pages/legal";
+import { PrivacyPolicy, TermsOfService, SecurityPolicy } from "@/pages/legal";
 import ResetPasswordPage from "@/pages/reset-password";
 import { MfaNotice } from "@/components/mfa";
 import { NOVA_GRADIENT, NOVA_GRADIENT_CSS } from "@shared/backing";
@@ -137,6 +137,8 @@ function Router() {
           */}
         <Route path="/privacy" component={PrivacyPolicy} />
         <Route path="/terms" component={TermsOfService} />
+        {/* Named by /.well-known/security.txt, so it must answer for a stranger. */}
+        <Route path="/security" component={SecurityPolicy} />
         <Route>
           <Redirect to="/" />
         </Route>
@@ -163,7 +165,7 @@ function Router() {
    * "tell us about yourself" form instead of the reset — with no way to reach
    * it at all, since every other address redirects here too.
    */
-  const RECOVERY_PATHS = ["/onboarding", "/verify-email", "/forgot-password", "/reset-password", "/privacy", "/terms"];
+  const RECOVERY_PATHS = ["/onboarding", "/verify-email", "/forgot-password", "/reset-password", "/privacy", "/terms", "/security"];
   if (!profile?.isOnboarded && !RECOVERY_PATHS.includes(window.location.pathname)) {
     return <Redirect to="/onboarding" />;
   }
@@ -243,6 +245,7 @@ function Router() {
             <Route path="/reset-password" component={ResetPasswordPage} />
             <Route path="/privacy" component={PrivacyPolicy} />
             <Route path="/terms" component={TermsOfService} />
+            <Route path="/security" component={SecurityPolicy} />
             {/* Every project's next step in one place — the address the retention loop returns to. */}
             <Route path="/path" component={PathHome} />
             {/*

@@ -17,6 +17,10 @@ import { test, expect } from "@playwright/test";
 for (const { path, heading } of [
   { path: "/privacy", heading: /privacy policy/i },
   { path: "/terms", heading: /terms of service/i },
+  // Named by /.well-known/security.txt as the disclosure policy, so a stranger
+  // has to be able to open it. It used to point into the GitHub repository,
+  // which stopped resolving for outsiders when the repository went private.
+  { path: "/security", heading: /security problem/i },
 ]) {
   test(`${path} opens with no account and says what it is`, async ({ page }) => {
     // A fresh context, i.e. exactly what a store reviewer has.
@@ -54,4 +58,21 @@ test("the landing page links to both, where people look", async ({ page }) => {
   await expect(page.getByTestId("link-footer-privacy")).toBeVisible();
   await page.getByTestId("link-footer-privacy").click();
   await expect(page).toHaveURL(/\/privacy$/);
+});
+
+test("security.txt only names addresses a stranger can open", async ({ request }) => {
+  const res = await request.get("/.well-known/security.txt");
+  expect(res.status()).toBe(200);
+  const body = await res.text();
+
+  expect(body).toContain("mailto:security@sparktower.app");
+  expect(body).toMatch(/Policy: https:\/\/sparktower\.app\/security/);
+
+  /*
+   * No GitHub URLs. The repository is private, so every link into it 404s for
+   * exactly the person this file exists for — and a researcher who follows a
+   * dead disclosure path concludes nobody is listening, which is worse than
+   * publishing nothing.
+   */
+  expect(body, "security.txt points into a private repository").not.toMatch(/github\.com/);
 });
