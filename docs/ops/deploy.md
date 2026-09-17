@@ -58,12 +58,27 @@ questions at the bottom.
 
 | | address | state |
 |---|---|---|
-| **Current** | `https://sparktower.onrender.com` | **this is the site today.** Verified 2026-09-17: `/_health` → 200 `OK`, `/_ready` → `{"ready":true,"database":"ok","ms":1}` |
-| Intended | `https://sparktower.app` | **not live.** Registered at GoDaddy, still serving GoDaddy's parked page; `/_health` there returns 404 HTML. DNS has not been pointed at Render yet |
+| **Canonical** | `https://sparktower.app` | **this is the site.** The apex is a custom domain on Render (`A` → `216.24.57.1`); `www` CNAMEs to the Render service and 301s to the apex. Verified 2026-09-17: `/_ready` → `{"ready":true,"database":"ok","ms":1}`, and the sitemap publishes `https://sparktower.app/` |
+| Also answers | `https://sparktower.onrender.com` | Render's own hostname. Still serves the app, and should keep doing so — links shared before the cutover point here |
 
-Moving the second row to the first is [custom-domain.md](custom-domain.md). Do
-not treat `sparktower.app` as an address anything can reach until `curl -s
-https://sparktower.app/_health` returns `OK`.
+`PUBLIC_URL` is `https://sparktower.app`, which is what makes the second row a
+spare address rather than a second identity: emails, share links, the sitemap
+and the OAuth callback are all built from `PUBLIC_URL`.
+
+**A note on checking this yourself.** For the first hour or so after the
+cutover, `sparktower.app` answered from two places depending on whose cache you
+asked: a resolver holding GoDaddy's old parking record (`13.248.243.5`) served
+a 404 parked page, while authoritative DNS had already moved to Render. `dig`
+showed the new record while `curl` on the same machine still reached the old
+one, because they don't share a cache. If that happens, it is propagation, not
+a broken deploy — confirm with:
+
+```sh
+curl -s --resolve sparktower.app:443:216.24.57.1 https://sparktower.app/_ready
+```
+
+which bypasses every cache between you and Render. A 200 there means the
+deployment is fine and only caches are behind.
 
 ## `PUBLIC_URL` is the site's identity, not a label
 
@@ -249,7 +264,7 @@ the thing.
       domain moves:
 
       ```sh
-      npm run monitor:setup -- --url https://sparktower.app/_ready
+      npm run monitor:setup -- --url https://sparktower.onrender.com/_ready
       ```
 
       Never pass the key as an argument (the script refuses): your shell keeps
@@ -262,7 +277,7 @@ the thing.
       |---|---|
       | Monitor type | HTTP(s) |
       | Friendly name | `SparkTower production` |
-      | URL | `https://sparktower.onrender.com/_ready` — change to `https://sparktower.app/_ready` when DNS moves |
+      | URL | `https://sparktower.app/_ready` — the canonical domain, so the monitor watches what people actually use |
       | Interval | 5 minutes. Shorter is available on paid plans; 5 is enough to catch an outage before people do, and infrequent enough not to be noise |
       | Timeout | 30 seconds — a cold or busy instance can take a while to answer |
 

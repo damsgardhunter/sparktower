@@ -3,7 +3,7 @@
  *
  *   npm run monitor:setup                 — asks for the key, nothing echoed
  *   npm run monitor:setup -- --dry-run    — says what it would do, changes nothing
- *   npm run monitor:setup -- --url https://sparktower.app/_ready
+ *   npm run monitor:setup -- --url https://sparktower.onrender.com/_ready
  *
  * The key is a credential for an account that can delete every monitor you
  * have, so it is read from a prompt, from UPTIMEROBOT_API_KEY, or from .env —
@@ -27,7 +27,8 @@ import { readFileSync, existsSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 const API = "https://api.uptimerobot.com/v2";
-const DEFAULT_URL = "https://sparktower.onrender.com/_ready";
+// The canonical domain: the monitor should watch what people actually type.
+const DEFAULT_URL = "https://sparktower.app/_ready";
 const FRIENDLY_NAME = "SparkTower production";
 const INTERVAL_SECONDS = 300;
 const TIMEOUT_SECONDS = 30;
