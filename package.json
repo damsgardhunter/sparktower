@@ -24,6 +24,7 @@
     "audit:deps": "node scripts/audit-dependencies.mjs",
     "check:email-auth": "node scripts/check-email-auth.mjs",
     "check:env": "tsx scripts/check-env.ts",
+    "monitor:setup": "tsx scripts/setup-uptime.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test:e2e": "playwright test"
   },

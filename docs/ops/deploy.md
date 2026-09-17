@@ -233,7 +233,30 @@ the thing.
 
 - [ ] **Create the UptimeRobot account** (uptimerobot.com). Use an address more
       than one person can reach, or the alert goes to someone on a plane.
-- [ ] **Add a monitor.**
+- [ ] **Add an alert contact and confirm it.** An unconfirmed contact doesn't
+      receive anything, and a monitor with no contacts watches in silence.
+- [ ] **Create the monitor** — with the Main API Key from My Settings → API:
+
+      ```sh
+      npm run monitor:setup -- --dry-run   # says what it would do, changes nothing
+      npm run monitor:setup                # asks for the key; nothing is echoed or stored
+      ```
+
+      It sets everything in the table below, attaches every confirmed alert
+      contact, and reads the monitor back to show what was really saved. Safe to
+      run again: it matches on the URL and edits the monitor it finds rather
+      than adding a second one — which is also how you repoint it after the
+      domain moves:
+
+      ```sh
+      npm run monitor:setup -- --url https://sparktower.app/_ready
+      ```
+
+      Never pass the key as an argument (the script refuses): your shell keeps
+      it in history and `ps` shows it to anyone on the machine. The server never
+      needs this key — only this script does — so it is stored nowhere.
+
+      The settings it applies, if you'd rather click them in by hand:
 
       | Field | Value |
       |---|---|
@@ -246,11 +269,15 @@ the thing.
       Watch `/_ready`, not `/_health`. `/_health` answers 200 while the
       database is unreachable, which is precisely the outage you want to be
       told about.
-- [ ] **Make it check the body, not just the status code.** Add a keyword
+- [x] **Check the body, not just the status code** — the script sets a keyword
       condition: alert when the response does **not** contain `"ready":true`.
-      Without this, any 200 counts as healthy.
-- [ ] **Alert contacts.** At minimum an email address that reaches a person on
-      their phone. Better, add the same Slack or Discord incoming webhook that
+      Without it, any 200 counts as healthy. If the script reports the monitor
+      came back as HTTP-status-only, the plan didn't accept a keyword check and
+      this box is not ticked after all.
+- [x] **Alert contacts** are attached by the script — every confirmed one on the
+      account. It refuses to pretend otherwise: with none, it says so and the
+      monitor would notice an outage and tell nobody. At minimum an email
+      address that reaches a person on their phone. Better, add the same Slack or Discord incoming webhook that
       `ERROR_WEBHOOK_URL` already points at, so outages and 500s land in the
       same place.
 - [ ] **Set the alert threshold so one blip doesn't page.** Notify after two
