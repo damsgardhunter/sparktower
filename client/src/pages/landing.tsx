@@ -181,6 +181,8 @@ export default function LandingPage() {
         </div>
       </section>
 
+      <TaglineBanner />
+
       <LiveProjects />
 
       <section id="how-it-works" className="scroll-mt-40 py-24 px-4 bg-white border-t border-gray-100" data-testid="section-how-it-works">
@@ -371,6 +373,58 @@ export default function LandingPage() {
         </div>
       </footer>
     </div>
+  );
+}
+
+/**
+ * The line between the sign-up panel and the live tracker.
+ *
+ * Black letters with the gradient showing only at their edges, and the same
+ * gradient blurred behind them for the glow. Three stacked copies of the same
+ * text do it: a blurred one for the light, a gradient one whose gradient is
+ * clipped to the glyphs *and their stroke* (`background-clip: text` with a
+ * transparent `-webkit-text-stroke`, which is what makes the outline gradient
+ * rather than one flat colour), and the black one on top covering the middle.
+ *
+ * The copies are `aria-hidden` and the readable one is last, so a screen
+ * reader hears the sentence once.
+ */
+/*
+ * Change this one string to change the line.
+ *
+ * It is deliberately not "the fastest growing startup community": that is a
+ * measurable claim, this site has seventeen accounts, and the invented
+ * statistics that used to sit further down this page were deleted for exactly
+ * that reason. A superlative nobody can check is the sentence that makes a
+ * reader doubt the $50B offer above it. This says what the place is for, which
+ * is true today and gets truer.
+ */
+const TAGLINE = "The startup community that ships.";
+
+function TaglineBanner() {
+  /* The gradient, clipped to the glyphs plus a fat transparent stroke. */
+  const gradientText = {
+    backgroundImage: NOVA_GRADIENT_CSS,
+    WebkitBackgroundClip: "text" as const,
+    backgroundClip: "text" as const,
+    color: "transparent",
+  };
+
+  return (
+    <section className="relative bg-white px-4 pt-6 pb-14 sm:pb-20" data-testid="section-tagline">
+      <h2 className="relative mx-auto max-w-4xl text-center font-black tracking-tight leading-[1.05] text-[2rem] sm:text-5xl md:text-[3.5rem]">
+        {/* The glow: the same words, fattened and blurred, sitting underneath. */}
+        <span aria-hidden className="absolute inset-0 select-none" style={{ ...gradientText, WebkitTextStroke: "8px transparent", filter: "blur(16px)", opacity: 0.85 }}>
+          {TAGLINE}
+        </span>
+        {/* The outline: gradient everywhere, about to be covered in the middle. */}
+        <span aria-hidden className="absolute inset-0 select-none" style={{ ...gradientText, WebkitTextStroke: "4px transparent" }}>
+          {TAGLINE}
+        </span>
+        {/* The letters themselves. */}
+        <span className="relative text-black" data-testid="text-tagline">{TAGLINE}</span>
+      </h2>
+    </section>
   );
 }
 
