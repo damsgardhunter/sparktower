@@ -21,16 +21,19 @@ export const BOX_SURFACE = "bg-background dark:bg-card";
  * so every rail module is identical rather than each one approximating it.
  */
 export function RailCard({
-  children, className, padded = true,
+  children, className, padded = true, style,
 }: {
   children: React.ReactNode;
   className?: string;
   /** Off for cards whose first child is a full-bleed image. */
   padded?: boolean;
+  /** For a caller that needs to set a CSS variable on the card — home staggers its rail with one. */
+  style?: React.CSSProperties;
 }) {
   return (
     <div
       className={`rounded-lg border border-border ${BOX_SURFACE} overflow-hidden ${padded ? "p-3" : ""} ${className || ""}`}
+      style={style}
     >
       {children}
     </div>
