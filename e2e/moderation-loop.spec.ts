@@ -14,7 +14,7 @@
  * decision half of the loop, which is the part a reviewer can get wrong, is
  * still clicked through.
  */
-import { test, expect, type Browser } from "@playwright/test";
+import { test, expect, type Browser } from "./test";
 import { verifyEmail } from "./verify-email";
 import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";

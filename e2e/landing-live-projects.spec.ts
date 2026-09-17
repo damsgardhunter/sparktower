@@ -11,7 +11,7 @@
  * `GET /api/projects`, which shows an owner their own private projects, and a
  * panel that only works when you are already signed in would prove nothing.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./test";
 import { verifyEmail } from "./verify-email";
 
 const password = "Testpass123!";

@@ -5,7 +5,7 @@
  * bell to the post. The API version is test/integration/explore-comment.test.ts;
  * messaging is e2e/discover-actions.spec.ts.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./test";
 import { verifyEmail } from "./verify-email";
 
 const password = "Testpass123!";

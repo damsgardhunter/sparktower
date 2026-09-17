@@ -5,7 +5,7 @@
  * the newcomer, through onboarding and project create on that goal, finishes
  * their first step and publishes their own. API-level: test/integration/path-artifacts.test.ts.
  */
-import { test, expect, type Browser } from "@playwright/test";
+import { test, expect, type Browser } from "./test";
 import { verifyEmail } from "./verify-email";
 
 const password = "Testpass123!";

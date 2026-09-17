@@ -12,7 +12,7 @@
  * The browser batches events for up to four seconds, and flushes on leaving a
  * page, so every check polls the owner's numbers rather than sleeping.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./test";
 import { verifyEmail } from "./verify-email";
 import { passMfa } from "./mfa-helper";
 

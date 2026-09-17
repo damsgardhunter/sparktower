@@ -11,7 +11,7 @@
  * once, and if that dialog ever renders without it, the feature is silently
  * broken in the only way that costs someone their credential.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./test";
 import { verifyEmail } from "./verify-email";
 
 const password = "Testpass123!";

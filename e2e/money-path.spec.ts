@@ -4,7 +4,7 @@
  * it onto the path; the raise question takes "I don't know"; and the next step is
  * Nova building the plan. Stops before Nova runs — there's no model here.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./test";
 import { verifyEmail } from "./verify-email";
 
 const password = "Testpass123!";

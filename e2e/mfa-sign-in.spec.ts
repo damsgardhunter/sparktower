@@ -8,7 +8,7 @@
  * The rules (who needs it, replay, mobile) are in
  * test/integration/mfa.test.ts; this proves the screens connect them.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./test";
 import { verifyEmail } from "./verify-email";
 import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";

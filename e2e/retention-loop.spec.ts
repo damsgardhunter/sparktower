@@ -5,7 +5,7 @@
  * a link back to the path. The API-level version is
  * test/integration/path-return.test.ts.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./test";
 import { verifyEmail } from "./verify-email";
 
 const password = "Testpass123!";

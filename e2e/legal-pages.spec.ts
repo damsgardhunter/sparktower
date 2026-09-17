@@ -12,7 +12,7 @@
  * password reset pages, once this. A test that renders the real page through
  * the real router is what notices.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./test";
 
 for (const { path, heading } of [
   { path: "/privacy", heading: /privacy policy/i },

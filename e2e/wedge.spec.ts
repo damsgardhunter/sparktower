@@ -12,7 +12,7 @@
  * fails for reasons nobody cares about. Every step that *is* the wedge is a
  * real click in a real browser.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./test";
 import { verifyEmail } from "./verify-email";
 
 const password = "Testpass123!";

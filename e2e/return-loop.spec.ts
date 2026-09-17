@@ -9,7 +9,7 @@
  * Discover badge and the feed's "new since you last looked", from what the
  * server remembers, on a device that remembers nothing.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./test";
 import { verifyEmail } from "./verify-email";
 
 const password = "Testpass123!";
