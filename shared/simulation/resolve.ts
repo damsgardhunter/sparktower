@@ -20,6 +20,8 @@ import { allocate, marketShares } from "./market";
 import { incumbentYear } from "./incumbents";
 import { fixedCosts, focusEffects, interlock, lift, FOCUS_NOTES, type Focus, type TeamDecisions } from "./decisions";
 import { assetEffects, ageAssets } from "./assets";
+import { reachOf } from "./market";
+import { eventFor, economyWithEvent, companyWithEvent, type MarketEvent } from "./events";
 
 /** What one company is told about the year it just had. */
 export interface CompanyReport {
@@ -47,6 +49,24 @@ export interface CompanyReport {
 
   /** Where the company stands against everyone in the niche, 1 is best. */
   rank: number;
+  /**
+   * What the business is worth: a bit over a year of sales, plus what it owns,
+   * minus what it owes. The same arithmetic a buyer uses in `mergers.ts`.
+   */
+  value: number;
+  /**
+   * What the founders' share of that is worth — the number the league table
+   * is ordered by.
+   *
+   * Ranking by customers made volume the only strategy worth playing: a team
+   * that ran a smaller, far more profitable company was told every day that it
+   * was losing, and the only way to climb was to sell more of everything to
+   * anyone. Measuring what the five of them actually own lets a premium
+   * business, a cheap one and a regional one all be right, which is the
+   * difference between four markets and one market with four names.
+   */
+  founderValue: number;
+  founderShare: number;
   /** Plain-language explanation of what actually happened, and why. */
   notes: string[];
   /**
@@ -62,12 +82,20 @@ export interface CompanyReport {
    * silently stops matching and the feature degrades with nothing failing.
    */
   market?: { kind: "won" | "lost" | "sold" | "unsold"; text: string }[];
+  /**
+   * The year's event, typed, for the same reason the market outcomes are:
+   * a screen that wants to lead with "a supplier failed" should not have to
+   * recognise the sentence to know that is what happened.
+   */
+  event?: { headline: string; body: string; advice: string; scope: "market" | "company"; mine: boolean };
   bankrupt: boolean;
 }
 
 export interface YearResult {
   world: World;
   reports: CompanyReport[];
+  /** What happened to the market this year, if anything did. */
+  event: MarketEvent | null;
 }
 
 /** Bounded 0–100. */
@@ -75,7 +103,15 @@ const clamp = (n: number): number => Math.max(0, Math.min(100, n));
 
 export function resolveYear(world: World, decisions: TeamDecisions[], economy?: Economy): YearResult {
   const { niche } = world;
-  const nextEconomy = economy ?? world.economy;
+  /*
+   * The year's news, decided before anything else and applied to the weather
+   * before the market sees it. Drawn from the state of the market rather than
+   * out of the air: a company with a poor reputation gets the scandal, one
+   * that has been quietly excellent gets the write-up. The dice choose which
+   * of the things you had coming arrives, never whether you deserved one.
+   */
+  const event = eventFor({ world, year: world.year, economy: economy ?? world.economy });
+  const nextEconomy = economyWithEvent(economy ?? world.economy, event);
   const byCompany = new Map(decisions.map((d) => [d.companyId, d]));
   const sharesBefore = marketShares(Object.fromEntries(world.companies.map((c) => [c.id, c.customers])));
 
@@ -103,7 +139,24 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
 
     const brandGain = lift((d.cmo?.brandSpend ?? 0) + (d.cmo?.celebritySpend ?? 0) * 1.4, 220_000, 16) * lock.deliverable * focus.marketing;
     const perfGain = lift(d.cmo?.performanceSpend ?? 0, 180_000, 9) * lock.deliverable * focus.marketing;
-    const qualityGain = lift((d.cto?.featureSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 1.2, 200_000, 14) * niche.innovationPace * focus.quality;
+    /*
+     * This year's shipping, plus whatever last year's research finished.
+     * Research buys more per pound than features do and buys it a year late —
+     * the one lever here that asks a team to be behind on purpose.
+     */
+    const landed = company.pipeline ?? 0;
+    /*
+     * Half the saturation point and a higher ceiling than shipping: research
+     * buys roughly half again as much quality per pound. It needs to, because
+     * the year you spend it you gain nothing while everything still decays —
+     * so a payoff merely equal to shipping would make patience strictly worse
+     * and the lever a tax on thinking ahead.
+     */
+    const pipeline = lift(d.cto?.researchSpend ?? 0, 150_000, 24) * niche.innovationPace;
+    if (landed > 0) {
+      notesFor[company.id].push(`Last year's research shipped: ${landed.toFixed(1)} points of quality that no amount of spending this year could have bought.`);
+    }
+    const qualityGain = lift((d.cto?.featureSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 1.2, 200_000, 14) * niche.innovationPace * focus.quality + landed;
     const serviceGain = lift((d.coo?.supportSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 0.5, 150_000, 15) * focus.quality;
     const costCut = lift(d.coo?.efficiencySpend ?? 0, 180_000, 0.18);
 
@@ -122,15 +175,58 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
     const aged = ageAssets(company.assets);
     notesFor[company.id].push(...aged.notes);
 
+    /*
+     * Opening somewhere new. Charged once, in the year it happens: reach is
+     * bought, not declared, and a team that tries to be everywhere at once
+     * finds out what that costs before it finds out what it earns.
+     */
+    const here = Array.isArray(company.cities) ? company.cities : niche.cities.map((c) => c.id);
+    const wanted = new Set(d.cmo?.targetCities ?? here);
+    const opened = niche.cities.filter((c) => wanted.has(c.id) && !here.includes(c.id));
+    const entryCost = opened.reduce((sum, c) => sum + c.entryCost, 0);
+    if (opened.length > 0) {
+      notesFor[company.id].push(
+        `Opened in ${opened.map((c) => c.name).join(", ")} for ${entryCost.toLocaleString()}. That is reach bought rather than earned, and it is only worth it if somebody sells there.`,
+      );
+    }
+    const cities = Array.from(new Set([...here, ...opened.map((c) => c.id)]));
+
     return {
       ...company,
       assets: aged.assets,
+      cities,
+      pipeline,
+      positioning: d.ceo?.positioning ?? company.positioning,
+      // Seats brought back cost a salary again, and the lever comes with them.
+      seats: Array.from(new Set([
+        ...company.seats,
+        // One seat or several, and an empty string means nobody.
+        ...(Array.isArray(d.ceo?.rehire) ? d.ceo!.rehire : d.ceo?.rehire ? [d.ceo.rehire] : []),
+      ].filter(Boolean))) as Company["seats"],
+      cash: company.cash - entryCost,
       price,
       capacity,
       brand: clamp(company.brand + brandGain + perfGain - decay.brand),
       quality: clamp(company.quality + qualityGain - decay.quality),
       service: clamp(company.service + serviceGain - decay.service),
-      unitCost: Math.max(niche.baseUnitCost * 0.45, company.unitCost * (1 - costCut) * nextEconomy.costIndex * focus.cost),
+      /*
+       * Costs move by how much the index moved, not by the whole index.
+       *
+       * `costIndex` is "how far input costs have travelled since year one" —
+       * an index, not a yearly rate. Multiplying the company's already-adjusted
+       * unit cost by the whole of it every year compounded it: a 1.17 index in
+       * year fourteen had been applied fourteen times over, unit costs ended
+       * roughly seven times where they started, and every company in every
+       * season quietly crossed the line where each sale lost money. It showed
+       * up as teams dying in the last three years for no reason they could see.
+       *
+       * Applying the step between last year's index and this one leaves a
+       * season's real drift at about what the index says it is.
+       */
+      unitCost: Math.max(
+        niche.baseUnitCost * 0.45,
+        company.unitCost * (1 - costCut) * (nextEconomy.costIndex / (world.economy?.costIndex || 1)) * focus.cost,
+      ),
     };
   });
 
@@ -189,13 +285,13 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
     const product = (d?.cto?.featureSpend ?? 0) + (d?.cto?.reliabilitySpend ?? 0) + (d?.cto?.techDebtPaydown ?? 0);
     const ops = (d?.coo?.supportSpend ?? 0) + (d?.coo?.efficiencySpend ?? 0);
     const fixed = company.kind === "player"
-      ? fixedCosts(company, d?.coo?.headcount ?? 0, nextEconomy) * focusEffects(d?.ceo?.focus).fixed
+      ? fixedCosts(company, d?.coo?.headcount ?? 0, nextEconomy, reachOf(company, niche)) * focusEffects(d?.ceo?.focus).fixed
       : 0;
     const discretionary = company.kind === "player" ? marketing + product + ops + fixed : (spendFor[company.id] ?? 0);
 
     const borrowed = Math.max(0, d?.cfo?.borrow ?? 0);
     const repaid = Math.max(0, d?.cfo?.repay ?? 0);
-    const raised = d?.cfo?.raise?.amount ?? 0;
+    const raised = Math.max(0, d?.cfo?.raiseAmount ?? d?.cfo?.raise?.amount ?? 0);
 
     const interest = company.debt * nextEconomy.interestRate;
     const costs = variable + discretionary + interest;
@@ -248,8 +344,30 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
      * facing the market with; what it keeps is what it built, plus the result.
      */
     const base = baseById.get(company.id) ?? company;
+
+    /*
+     * What raising costs, which is not interest.
+     *
+     * An investor buys a share of everything the company will ever be, priced
+     * against what it is worth today — so money raised cheaply when the
+     * company is worth little is the most expensive money in the game. The
+     * team feels nothing this year and finds out on day fourteen that they won
+     * a market they own a third of.
+     */
+    let founderShare = base.founderShare ?? 1;
+    if (raised > 0) {
+      const units = Object.values(customers).reduce((sum, n) => sum + n, 0);
+      const worth = Math.max(500_000, units * company.price * 1.2 + assetValue - debt);
+      founderShare = Math.max(0.05, founderShare * (worth / (worth + raised)));
+      notesFor[company.id] = [
+        ...(notesFor[company.id] ?? []),
+        `Raised ${Math.round(raised).toLocaleString()} against a company worth about ${Math.round(worth).toLocaleString()}. The founders now hold ${Math.round(founderShare * 100)}% of whatever this becomes.`,
+      ];
+    }
+
     return {
       ...company,
+      founderShare,
       brand: base.brand,
       quality: base.quality,
       service: base.service,
@@ -264,11 +382,52 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
     };
   });
 
-  /* Rankings: by share, which is the number everyone actually argues about. */
-  const ordered = [...settled].sort((a, b) => (sharesAfter[b.id] ?? 0) - (sharesAfter[a.id] ?? 0));
+  /*
+   * The year's news lands on whoever it happened to, after the market has
+   * resolved. A scandal is a consequence of the year, not a condition of it.
+   */
+  const afterEvent = settled.map((c) => {
+    const touched = companyWithEvent(c, event);
+    /*
+     * Everyone hears about a market event; only the company it happened to
+     * hears about a company one.
+     *
+     * The first version of this added the note only when the company's numbers
+     * had changed — and `companyWithEvent` returns a market-scope company
+     * untouched, because the weather is applied to the economy rather than to
+     * anybody's stats. So a supplier failing, a funding winter, a regulator
+     * arriving: none of them were ever mentioned to a single player. The year
+     * simply got harder for reasons nobody was told.
+     */
+    const heard = event && (event.scope === "market" || event.companyId === c.id);
+    if (heard && c.kind === "player") {
+      notesFor[c.id] = [...(notesFor[c.id] ?? []), `${event!.headline}. ${event!.body} ${event!.advice}`];
+    }
+    return touched;
+  });
+
+  /*
+   * Rankings: by what the founders own, not by how many customers they have.
+   *
+   * Share is the number everyone argues about and it is still on every screen,
+   * but ordering by it made the game one-dimensional — volume beat everything,
+   * and a team running a small, highly profitable company was told for
+   * fourteen days that it was losing. Ranking on the value of what the five of
+   * them actually hold makes the premium play, the cheap play and the regional
+   * play all legitimate ways to win, and makes diluting the company a decision
+   * with a visible cost.
+   */
+  const valueOf = (c: Company): number => {
+    const units = Object.values(c.customers).reduce((sum, n) => sum + n, 0);
+    const assets = c.assets.reduce((sum, a) => sum + a.bookValue * 0.8, 0);
+    return Math.max(0, Math.round(units * c.price * 1.2 + assets - c.debt));
+  };
+  const founderValueOf = (c: Company): number => Math.round(valueOf(c) * (c.founderShare ?? 1));
+
+  const ordered = [...afterEvent].sort((a, b) => founderValueOf(b) - founderValueOf(a));
   const rankOf = new Map(ordered.map((c, i) => [c.id, i + 1]));
 
-  const reports: CompanyReport[] = settled.map((company) => {
+  const reports: CompanyReport[] = afterEvent.map((company) => {
     const units = Object.values(company.customers).reduce((sum, n) => sum + n, 0);
     const before = world.companies.find((c) => c.id === company.id)!;
     const revenue = units * company.price;
@@ -291,13 +450,26 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
       brand: company.brand,
       service: company.service,
       rank: rankOf.get(company.id) ?? 0,
+      event: event
+        ? {
+            headline: event.headline,
+            body: event.body,
+            advice: event.advice,
+            scope: event.scope,
+            mine: event.scope === "market" || event.companyId === company.id,
+          }
+        : undefined,
+      value: valueOf(company),
+      founderValue: founderValueOf(company),
+      founderShare: company.founderShare ?? 1,
       notes: notesFor[company.id] ?? [],
       bankrupt: !!company.bankruptSince,
     };
   });
 
   return {
-    world: { ...world, year: world.year + 1, companies: settled, economy: nextEconomy },
+    world: { ...world, year: world.year + 1, companies: afterEvent, economy: nextEconomy },
     reports,
+    event,
   };
 }

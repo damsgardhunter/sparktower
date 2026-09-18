@@ -12,13 +12,15 @@ import { colors, font, fontFamily, radius, shadow, spacing } from "../../theme";
 import { Btn, Icon, NovaGradient } from "../ui";
 import { Pill, tintSoft } from "../MoreKit";
 import {
-  OUTCOME_LABEL, OUTLOOK_LABEL, METRIC_PENDING, bump, capUse, clampToField,
-  commitmentLevel, covenantProgress, dissolvableSeats, exact, formatUntil,
-  metricRead, money, percent, resolveIsImminent, rewardRead, shortfall, signed,
-  targetGoalRead,
+  OUTCOME_LABEL, OUTLOOK_LABEL, METRIC_PENDING, RAISE_VALUATION_FLOOR, bump, capUse,
+  citiesOpening, clampToField,
+  commitmentLevel, covenantProgress, dilutionPreview, dissolvableSeats, exact, formatUntil,
+  metricRead, money, openingCost, percent, qualityRead, reachOf, reachRead, researchLanding,
+  resolveIsImminent, rewardRead, selectedCities, shareOwnedRead, shortfall, signed,
+  targetGoalRead, toggleCity,
   type Challenge, type ChallengeResult, type Commitment, type CompanyReport,
-  type Covenant, type DeskDistress, type DeskEconomy, type DeskRival, type DeskRole,
-  type DeskTableSeat, type LeverField, type RecoveryKind, type RecoveryOption,
+  type Covenant, type DeskCity, type DeskDistress, type DeskEconomy, type DeskRival, type DeskRole,
+  type DeskTableSeat, type LeverField, type RecoveryKind, type RecoveryOption, type ReportEvent,
   type TargetProgress, type TargetResult,
 } from "./desk";
 
@@ -189,6 +191,21 @@ export function CommitmentMeter({ commitment, live, titleOf }: {
             </Text>
           </View>
         ))}
+        {/* Inside the marketing line above, and named: it is the one item in
+            the total that buys no customers this year, only permission to have
+            some next year. A CMO looking at a marketing line twice the size
+            they expected should not have to work out which half is which. */}
+        {commitment.openingCost > 0 ? (
+          <View testID="desk-commitment-opening" style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+            <Text style={{ width: 44, color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.bold }} />
+            <Text style={{ flex: 1, color: colors.textSecondary, fontSize: font.xs, fontFamily: fontFamily.regular }}>
+              of which opening new places, charged once
+            </Text>
+            <Text style={{ color: colors.warning, fontSize: font.sm, fontFamily: fontFamily.semibold, fontVariant: ["tabular-nums"] }}>
+              {money(commitment.openingCost)}
+            </Text>
+          </View>
+        ) : null}
         <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingTop: 3 }}>
           <Text style={{ width: 44, color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.bold }}>FIXED</Text>
           <Text style={{ flex: 1, color: colors.textSecondary, fontSize: font.xs, fontFamily: fontFamily.regular }}>
@@ -314,15 +331,45 @@ function StepButton({ icon, label, onPress, disabled, testID }: {
 }
 
 /** A lever with a handful of answers rather than a number. */
-export function ChoiceField({ field, value, error, onChange, disabled }: {
+export function ChoiceField({ field, value, error, onChange, disabled, emptyNote }: {
   field: LeverField;
   value: any;
   error?: string;
   onChange: (next: string) => void;
   disabled?: boolean;
+  /** What to say when the server sent no options — see the empty branch below. */
+  emptyNote?: string;
 }) {
   const options = field.options ?? [];
   const chosen = options.find((o) => o.value === value);
+
+  /*
+   * A choice the season has nothing to offer for.
+   *
+   * The rehire lever is empty for every table that has not dissolved a seat,
+   * which is most of them. An empty row of pills reads as a control that is
+   * broken or still loading; a sentence saying there is nothing to choose is
+   * the true state, and it also explains what would put something there. The
+   * server skips validating an optionless choice for the same reason.
+   */
+  if (options.length === 0) {
+    return (
+      <View style={{ gap: 6 }} testID={`desk-choice-empty-${field.id}`}>
+        <Text style={{ color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>{field.label}</Text>
+        <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>{field.help}</Text>
+        <View style={{
+          flexDirection: "row", gap: 6, padding: spacing.sm, borderRadius: radius.sm,
+          backgroundColor: colors.surfaceRaised,
+        }}>
+          <Icon name="remove-circle-outline" size={14} color={colors.textTertiary} />
+          <Text style={{ flex: 1, color: colors.textTertiary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+            {emptyNote ?? "Nothing to choose here this year."}
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={{ gap: 6 }}>
       <Text style={{ color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>{field.label}</Text>
@@ -365,6 +412,307 @@ export function ChoiceField({ field, value, error, onChange, disabled }: {
       {error ? (
         <Text testID={`desk-error-${field.id}`} style={{ color: colors.danger, fontSize: font.xs, fontFamily: fontFamily.medium }}>
           {error}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * Where the company sells, which decides whether anything else matters.
+ *
+ * Every other lever on this desk is a multiplier. This one is the gate: a
+ * person who lives somewhere the company has not opened cannot choose it at
+ * any price, with any product, however loudly it is advertised — so a team
+ * with the best product in the market and one city out of six is invisible to
+ * five sixths of it. That is the sentence the control has to carry, and it is
+ * why the reach figure is at the top rather than under the list.
+ *
+ * Three things the picker says out loud, because each of them is a decision
+ * somebody would otherwise make by accident:
+ *
+ * **Open cities are locked.** There is no closing lever. Opening somewhere is
+ * a one-way door, and a checkbox that appears to offer the way back would be
+ * the control lying about the game.
+ *
+ * **Entry costs are shown per city and totalled.** They are charged once, in
+ * the year it happens, and they land on the marketing seat's line in the
+ * table's commitment total — so the other four can see a city being opened
+ * while it is happening rather than at the tick.
+ *
+ * **The ongoing half is said separately from the one-off half.** The fee is
+ * paid once; the fixed-cost base goes up for ever (the footprint term in
+ * shared/simulation/decisions.ts). Teams that only hear the first number
+ * expand once and wonder why every following year is tighter.
+ */
+export function CitiesField({ field, cities, value, error, onChange, disabled }: {
+  field: LeverField;
+  cities: DeskCity[] | undefined;
+  value: any;
+  error?: string;
+  onChange: (next: string[]) => void;
+  disabled?: boolean;
+}) {
+  const all = cities ?? [];
+  const chosen = selectedCities(all, value);
+  const chosenSet = new Set(chosen);
+  const opening = citiesOpening(all, value);
+  const cost = openingCost(all, value);
+  const now = reachOf(all);
+  const after = reachOf(all, chosen);
+
+  if (all.length === 0) {
+    return (
+      <View style={{ gap: 6 }}>
+        <Text style={{ color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>{field.label}</Text>
+        <Text style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+          This market hasn't sent its map. Nothing to choose until it does.
+        </Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ gap: spacing.sm }} testID="desk-cities">
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+        <Text style={{ flex: 1, color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>{field.label}</Text>
+        <Pill label={`${percent(after, 0)} reach`} icon="map-outline" color={after >= 0.999 ? colors.success : colors.info} />
+      </View>
+
+      <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+        {field.help}
+      </Text>
+
+      {/* The ceiling, in the plainest words available: this is how much of the
+          market is even allowed to pick you. */}
+      <Text
+        testID="desk-cities-reach"
+        style={{ color: after >= 0.999 ? colors.textSecondary : colors.text, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.medium }}
+      >
+        {reachRead(after)}
+      </Text>
+
+      <View style={{ gap: spacing.xs }}>
+        {all.map((city) => (
+          <CityRow
+            key={city.id}
+            city={city}
+            selected={chosenSet.has(city.id)}
+            disabled={!!disabled}
+            onPress={() => onChange(toggleCity(all, value, city.id))}
+          />
+        ))}
+      </View>
+
+      {opening.length > 0 ? (
+        <View
+          testID="desk-cities-cost"
+          style={{
+            gap: 4, padding: spacing.md, borderRadius: radius.sm,
+            backgroundColor: tintSoft(colors.warning, 0.08),
+            borderWidth: 1, borderColor: tintSoft(colors.warning, 0.3),
+          }}
+        >
+          <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+            <Text style={{ flex: 1, color: colors.text, fontSize: font.xs, fontFamily: fontFamily.semibold }}>
+              Opening {opening.map((c) => c.name).join(", ")}
+            </Text>
+            <Text style={{ color: colors.warning, fontSize: font.base, fontFamily: fontFamily.bold, fontVariant: ["tabular-nums"] }}>
+              {money(cost)}
+            </Text>
+          </View>
+          <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+            {exact(cost)} out of cash once, in the year it happens, and it's on your line in the table's commitment above.
+            Reach goes from {percent(now, 0)} to {percent(after, 0)}, and the fixed bill that comes with it is owed every year after.
+          </Text>
+        </View>
+      ) : (
+        <Text style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>
+          Nothing new selected. Staying where you are costs nothing and keeps the ceiling where it is.
+        </Text>
+      )}
+
+      {error ? (
+        <Text testID={`desk-error-${field.id}`} style={{ color: colors.danger, fontSize: font.xs, fontFamily: fontFamily.medium }}>
+          {error}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+/** One place, with what it is worth, what it costs, and whether it is already yours. */
+function CityRow({ city, selected, disabled, onPress }: {
+  city: DeskCity;
+  selected: boolean;
+  disabled: boolean;
+  onPress: () => void;
+}) {
+  const locked = city.open;
+  const tone = locked ? colors.success : selected ? colors.primary : colors.border;
+
+  return (
+    <Pressable
+      onPress={locked || disabled ? undefined : onPress}
+      disabled={locked || disabled}
+      testID={`desk-city-${city.id}`}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked: selected, disabled: locked || disabled }}
+      accessibilityLabel={
+        locked
+          ? `${city.name}, already open, ${percent(city.weight, 0)} of the market`
+          : `${city.name}, ${percent(city.weight, 0)} of the market, ${exact(city.entryCost)} to open`
+      }
+      style={({ pressed }) => [{
+        flexDirection: "row", alignItems: "flex-start", gap: spacing.sm,
+        padding: spacing.md, borderRadius: radius.sm,
+        backgroundColor: locked
+          ? tintSoft(colors.success, 0.06)
+          : selected ? tintSoft(colors.primary, 0.08) : colors.surfaceRaised,
+        borderWidth: selected && !locked ? 2 : 1,
+        borderColor: tone,
+      }, pressed && { opacity: 0.75 }, disabled && !locked && { opacity: 0.6 }]}
+    >
+      <Icon
+        name={locked ? "lock-closed" : selected ? "checkmark-circle" : "ellipse-outline"}
+        size={17}
+        color={locked ? colors.success : selected ? colors.primary : colors.textTertiary}
+      />
+      <View style={{ flex: 1, gap: 2 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <Text style={{ color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>{city.name}</Text>
+          <Text style={{ color: colors.textSecondary, fontSize: font.xs, fontFamily: fontFamily.medium, fontVariant: ["tabular-nums"] }}>
+            {percent(city.weight, 0)} of the market
+          </Text>
+          {locked ? <Pill label="Already open" color={colors.success} /> : null}
+        </View>
+        <Text style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>
+          {city.note}
+        </Text>
+      </View>
+      {/* An open city's entry fee is history, and printing it beside a row
+          nobody can act on invites somebody to read it as a bill. */}
+      {locked ? null : (
+        <Text style={{
+          color: selected ? colors.primary : colors.textSecondary, fontSize: font.sm,
+          fontFamily: fontFamily.semibold, fontVariant: ["tabular-nums"],
+        }}>
+          {money(city.entryCost)}
+        </Text>
+      )}
+    </Pressable>
+  );
+}
+
+/**
+ * What a raise costs, in the only unit that measures it.
+ *
+ * The lever's own help says dilution is the price; this says the price. An
+ * investor buys a share of everything the company becomes, priced against what
+ * it is worth today — so the identical two million is a tenth of the company
+ * in year eleven and half of it in year two, and no amount of prose conveys
+ * that as well as watching the percentage move while you hold the stepper.
+ *
+ * Priced against the desk's own `valuation`, which is the engine's arithmetic
+ * rather than the client's guess, and which is there in year one — when a
+ * company is worth least, the same money costs most, and this is the only
+ * screen that will ever say so before the tick.
+ */
+export function DilutionNote({ founderShare, worth, raise }: {
+  founderShare: number | undefined;
+  worth: number | null | undefined;
+  raise: any;
+}) {
+  const preview = dilutionPreview({ founderShare: founderShare ?? 1, worth, raise });
+  if (!preview) return null;
+
+  return (
+    <View
+      testID="desk-dilution"
+      style={{
+        gap: 3, padding: spacing.md, borderRadius: radius.sm,
+        backgroundColor: tintSoft(colors.novaPurple, 0.08),
+        borderWidth: 1, borderColor: tintSoft(colors.novaPurple, 0.3),
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+        <Icon name="pie-chart-outline" size={14} color={colors.novaPurple} />
+        <Text style={{ flex: 1, color: colors.text, fontSize: font.xs, fontFamily: fontFamily.semibold }}>
+          The founders would go to
+        </Text>
+        <Text style={{ color: colors.novaPurple, fontSize: font.base, fontFamily: fontFamily.bold, fontVariant: ["tabular-nums"] }}>
+          {shareOwnedRead(preview.nextShare)}
+        </Text>
+      </View>
+      <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+        From {shareOwnedRead(founderShare ?? 1)} — {shareOwnedRead(preview.given)} of everything this company ever becomes,
+        gone for good. It never has to be repaid, which is the point, and it is priced against what the company is worth
+        today: {money(Math.max(RAISE_VALUATION_FLOOR, worth ?? 0))}. Raise the same money a year from now, worth more, and it
+        costs a fraction of this.
+      </Text>
+    </View>
+  );
+}
+
+/**
+ * The one lever that buys nothing this year, with what it does buy named.
+ *
+ * Research is the only decision in the game that asks a team to be behind on
+ * purpose, and the failure it invites is specific: somebody spends a million,
+ * reads next morning's report, sees quality barely moved, and concludes the
+ * lever is broken. "Nothing this year" is only half the answer — the other
+ * half is how much, and when — so this shows the points the spend will land
+ * next year, computed from the same `lift` the engine uses and scaled by this
+ * market's pace. A CTO can then weigh a real number against a real wait.
+ *
+ * Two figures, kept apart on purpose: what is already in the pipeline arrives
+ * whatever happens today, and what is being committed arrives a year later
+ * still. Merging them into one total would tell somebody they were about to
+ * get both next year.
+ */
+export function PipelineNote({ pipeline, spend, innovationPace }: {
+  pipeline: number | undefined;
+  spend: any;
+  innovationPace: number | undefined;
+}) {
+  const waiting = Number.isFinite(Number(pipeline)) ? Number(pipeline) : 0;
+  const committing = Number(spend) > 0;
+  const landing = researchLanding(spend, innovationPace);
+  if (waiting <= 0 && !committing) return null;
+
+  return (
+    <View
+      testID="desk-pipeline-note"
+      style={{
+        gap: 4, padding: spacing.md, borderRadius: radius.sm,
+        backgroundColor: tintSoft(colors.info, 0.08),
+        borderWidth: 1, borderColor: tintSoft(colors.info, 0.3),
+      }}
+    >
+      {committing ? (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+          <Icon name="hourglass-outline" size={14} color={colors.info} />
+          <Text style={{ flex: 1, color: colors.text, fontSize: font.xs, fontFamily: fontFamily.semibold }}>
+            This buys, landing next year
+          </Text>
+          <Text
+            testID="desk-research-landing"
+            style={{ color: colors.info, fontSize: font.base, fontFamily: fontFamily.bold, fontVariant: ["tabular-nums"] }}
+          >
+            +{qualityRead(landing)} quality
+          </Text>
+        </View>
+      ) : null}
+
+      <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+        {committing
+          ? "None of it arrives in the year you pay for it. It buys around half again as much quality per pound as shipping features now — the trade is the wait, not the money."
+          : "No research is in flight."}
+      </Text>
+
+      {waiting > 0 ? (
+        <Text style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>
+          +{qualityRead(waiting)} quality is already bought and lands next year whatever you decide today.
         </Text>
       ) : null}
     </View>
@@ -433,6 +781,81 @@ export function ScoreBar({ label, value, color, hint }: {
  * profit figure into something you can act on — so they get room rather than a
  * "details" disclosure.
  */
+/**
+ * The year something happened.
+ *
+ * A season without events is fourteen copies of the same year — the numbers
+ * move and nothing ever *happens* — so when one lands it is the most
+ * interesting thing on the screen and it goes at the top of the report,
+ * above the figures it explains.
+ *
+ * Two things the copy is careful about.
+ *
+ * **It is earned, not rolled.** Every event is drawn from the state of the
+ * market: the company with a poor reputation gets the scandal, the one that
+ * has been quietly excellent gets the write-up. The dice choose which of the
+ * things you had coming arrives, never whether you deserved one. A card that
+ * read as bad luck would make the game feel like it was cheating; one that
+ * reads as the game paying attention is the same event, landing completely
+ * differently.
+ *
+ * **There is always something to do about it.** The engine writes `advice`
+ * for exactly that, and it gets its own line rather than being folded into
+ * the body, because a player reading this on the train is deciding today.
+ *
+ * Whether it happened to *you* changes the framing and not the prominence: a
+ * rival's supply failure is news you can act on, which is most of the reason
+ * events are visible to everybody.
+ */
+export function EventCard({ event, year }: { event: ReportEvent; year: number }) {
+  const tone = event.mine ? colors.warning : colors.info;
+  return (
+    <View
+      testID="desk-event"
+      style={{
+        borderRadius: radius.md, backgroundColor: colors.surface, padding: spacing.lg, gap: spacing.sm,
+        borderWidth: 1, borderColor: colors.border,
+        borderLeftWidth: 3, borderLeftColor: tone, ...shadow.card,
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+        <Icon name="megaphone" size={16} color={tone} />
+        <Text style={{ flex: 1, color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.semibold, letterSpacing: 0.5 }}>
+          YEAR {year} · {event.scope === "market" ? "THE MARKET" : event.mine ? "YOUR COMPANY" : "SOMEBODY ELSE"}
+        </Text>
+        {event.mine ? <Pill label="You" color={tone} solid /> : null}
+      </View>
+
+      <Text style={{ color: colors.text, fontSize: font.lg, lineHeight: 24, fontFamily: fontFamily.bold, letterSpacing: -0.2 }}>
+        {event.headline}
+      </Text>
+      <Text style={{ color: colors.textSecondary, fontSize: font.sm, lineHeight: 20, fontFamily: fontFamily.regular }}>
+        {event.body}
+      </Text>
+
+      {/* The part a team can act on today. Its own line, in the accent, because
+          it is the difference between news and a decision. */}
+      <View style={{ flexDirection: "row", gap: 6, paddingTop: spacing.xs, borderTopWidth: 1, borderColor: colors.borderSubtle }}>
+        <Icon name="arrow-forward-circle-outline" size={14} color={tone} />
+        <Text style={{ flex: 1, color: colors.text, fontSize: font.sm, lineHeight: 19, fontFamily: fontFamily.medium }}>
+          {event.advice}
+        </Text>
+      </View>
+
+      {/* Why this one and not another. Small, and worth the two lines: an event
+          that reads as a dice roll reads as the game cheating, and every one of
+          these was earned by something the market could already see. */}
+      <Text style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>
+        {event.scope === "market"
+          ? "Market events hit everyone at once. What they cost depends on the position each company was already in."
+          : event.mine
+            ? "Events are drawn from where a company already stood, not out of the air. The year chose which of them arrived, not whether one was owed."
+            : "You can see it happening to them, which is most of the point of it being a market."}
+      </Text>
+    </View>
+  );
+}
+
 export function ReportCard({ report }: { report: CompanyReport }) {
   const good = report.profit >= 0;
   return (
@@ -447,7 +870,10 @@ export function ReportCard({ report }: { report: CompanyReport }) {
         <Text style={{ flex: 1, color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold }}>
           Year {report.year}, in the books
         </Text>
-        <Pill label={`#${report.rank} in the market`} color={report.rank <= 2 ? colors.success : colors.info} />
+        {/* The rank is by founder-owned value now, and saying which is not a
+            detail: a team that gained customers and slipped a place would
+            otherwise read the number as broken. */}
+        <Pill label={`#${report.rank} by what you own`} color={report.rank <= 2 ? colors.success : colors.info} />
       </View>
 
       {report.bankrupt ? (
@@ -474,6 +900,37 @@ export function ReportCard({ report }: { report: CompanyReport }) {
           tone={report.turnedAway > 0 ? colors.danger : colors.success}
           hint={report.turnedAway > 0 ? "Wanted you, couldn't be served" : "Everyone who wanted you got served"} />
       </View>
+
+      {/* What the five of them own, which is what the table is ordered by.
+          Its own row rather than two more tiles in the grid above: the value
+          and the share are one sentence — a big number and the fraction of it
+          that is actually yours — and splitting them across a wrapping grid is
+          how somebody reads the first and not the second. Absent on reports
+          written before the scoreboard changed, which is a real state and not
+          a zero. */}
+      {report.founderValue != null ? (
+        <View
+          testID="desk-report-founder-value"
+          style={{
+            gap: 3, padding: spacing.md, borderRadius: radius.sm,
+            backgroundColor: colors.surfaceRaised,
+          }}
+        >
+          <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 6 }}>
+            <Text style={{ color: colors.text, fontSize: font.xl, fontFamily: fontFamily.bold, fontVariant: ["tabular-nums"] }}>
+              {money(report.founderValue)}
+            </Text>
+            <Text style={{ color: colors.textSecondary, fontSize: font.xs, fontFamily: fontFamily.medium, paddingBottom: 4 }}>
+              yours, of a {money(report.value ?? report.founderValue)} business
+            </Text>
+          </View>
+          <Text style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>
+            {report.founderShare != null && report.founderShare < 0.999
+              ? `The founders hold ${shareOwnedRead(report.founderShare)}. This is the number the market is ranked by — growing the company while selling it off can move you down the table.`
+              : "The founders still hold all of it. This is the number the market is ranked by, not customers."}
+          </Text>
+        </View>
+      ) : null}
 
       {report.notes.length > 0 && (
         <View style={{ gap: 6, paddingTop: spacing.xs, borderTopWidth: 1, borderColor: colors.borderSubtle }}>
@@ -1040,7 +1497,8 @@ export function CovenantStrip({ covenant, spend }: { covenant: Covenant; spend: 
           </Text>
         ) : null}
         <Text style={{ color: colors.textTertiary, fontSize: 10, lineHeight: 15, fontFamily: fontFamily.regular }}>
-          Counts what marketing, product and operations commit. Borrowing and repayment sit outside it.
+          Counts what marketing, product and operations commit. Borrowing, repayment, research and the cost of opening
+          somewhere new all sit outside it — they're on the meter above, and the creditor doesn't count them.
         </Text>
       </View>
     </View>

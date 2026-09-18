@@ -46,6 +46,16 @@ async function player(app: any) {
 async function twoTeams(app: any) {
   await db.update(simVentures).set({ phase: "retired" })
     .where(inArray(simVentures.phase, ["filling", "claiming", "naming"]));
+  /*
+   * And close any season still taking rooms, so this one gets its own.
+   *
+   * A season holds every room in its market and a tick moves all of them.
+   * Sharing one across tests meant a test that resolved a year quietly
+   * advanced another test's company — which passed alone and failed in a full
+   * run, on whichever test happened to be downstream.
+   */
+  await db.update(simSeasons).set({ status: "abandoned" })
+    .where(eq(simSeasons.status, "forming"));
 
   const build = async (name: string) => {
     const players = [];

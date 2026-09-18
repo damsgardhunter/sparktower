@@ -9,16 +9,17 @@ import { Callout, Pill, isSwitchedOff } from "../../../src/components/MoreKit";
 import { NoticeBanner, useNotice } from "../../../src/components/Sheet";
 import { SimSectionTitle } from "../../../src/components/sim/SimKit";
 import {
-  ChallengeCard, ChoiceField, CommitmentMeter, DeskBanner, DistressCard, EconomyStrip,
-  FiledRow, LastChallengeCard, NumberField, ReportCard, RivalRow, ScoreBar, Stat,
+  ChallengeCard, ChoiceField, CitiesField, CommitmentMeter, DeskBanner, DilutionNote,
+  DistressCard, EconomyStrip, EventCard, FiledRow, LastChallengeCard, NumberField,
+  PipelineNote, ReportCard, RivalRow, ScoreBar, Stat,
 } from "../../../src/components/sim/DeskKit";
 import { MarketResultCard } from "../../../src/components/sim/MarketKit";
 import { marketNotesRead } from "../../../src/components/sim/market";
 import { ROOM_POLL_MS, useDesk } from "../../../src/components/sim/useSim";
 import {
   ROLE_ORDER, challengeProgress, challengeStanding, commitment, discretionarySpend,
-  draftMatches, exact, formatUntil, inTrouble, money, secondsUntil, tableStatus,
-  validateDraft, validateRecovery, withYourDraft,
+  draftMatches, exact, formatUntil, inTrouble, money, reachOf, reachRead, secondsUntil,
+  shareOwnedRead, tableStatus, validateDraft, validateRecovery, withYourDraft,
   type DeskDistress, type DeskRole, type FileDecisionResult, type RecoveryKind,
 } from "../../../src/components/sim/desk";
 
@@ -203,11 +204,27 @@ export default function Desk() {
         company,
         decisions: withYourDraft(data.filed, data.yourRole, data.yourRole ? draft : null),
         costIndex: economy.costIndex,
+        /*
+         * The cities the company is *already* open in, not the ones this
+         * year's draft would open. The engine charges the fixed bill against
+         * the footprint it had when the year began — opening somewhere costs
+         * its entry fee now and raises the base from next year — so a preview
+         * that used the draft's selection would show the table a bill it has
+         * not been sent yet.
+         */
+        reach: reachOf(data.cities),
+        /*
+         * And the map itself, so the cost of opening somewhere lands on the
+         * marketing seat's line as it does on the server. It is the largest
+         * single movement of cash this table can make, and it used to be the
+         * only one the meter never mentioned.
+         */
+        cities: data.cities,
       });
     } catch {
       return null;
     }
-  }, [company, economy, data?.preview, data?.filed, data?.yourRole, draft]);
+  }, [company, economy, data?.preview, data?.filed, data?.yourRole, data?.cities, draft]);
 
   const localCheck = useMemo(
     () => (company ? validateDraft(fields, draft, company, data?.yourRole ?? null) : { ok: true, errors: {} }),
@@ -287,7 +304,18 @@ export default function Desk() {
    */
   const distress: DeskDistress | undefined = data.distress;
   const committed = live ?? preview?.commitment ?? null;
-  const committedSpend = committed ? discretionarySpend(committed) : null;
+  /*
+   * The capped spend is its own sum, not a slice of the meter.
+   *
+   * The meter counts two things a creditor's cap and a challenge target both
+   * ignore: the fee for opening a city, which the engine takes out of cash,
+   * and research, which buys nothing this year. Reading the cap off the meter
+   * would tell a table it had broken a ceiling it was nowhere near — see
+   * discretionarySpend() in desk.ts, which mirrors the engine's two sums.
+   */
+  const committedSpend = discretionarySpend(
+    withYourDraft(data.filed, data.yourRole, data.yourRole ? draft : null),
+  );
 
   /*
    * Last year's market outcomes, as the report carries them.
@@ -377,7 +405,18 @@ export default function Desk() {
               lower down, beside the money it applies to. */}
           {severeTrouble ? distressCard : null}
 
-          {/* 1. What happened. Before anything about what to do next. */}
+          {/* 1. The year something happened, above the figures it explains.
+              A season where nothing ever happens is one people stop opening on
+              about day five, and when an event does land it is the most
+              interesting thing on this screen. Typed, so nothing here has to
+              recognise a sentence — and deliberately not removed from the
+              report's notes below, because matching prose in order to dedupe
+              is the same fragile trick in the other direction. */}
+          {data.lastYear?.event ? (
+            <EventCard event={data.lastYear.event} year={data.lastYear.year} />
+          ) : null}
+
+          {/* 1a. What happened to the company. Before anything about what to do next. */}
           {data.lastYear ? (
             <ReportCard report={data.lastYear} />
           ) : (
@@ -427,7 +466,47 @@ export default function Desk() {
                   tone={company.customers > company.capacity ? colors.danger : undefined} />
                 <Stat label="Price" value={exact(company.price)} hint={`${exact(company.unitCost)} to make`}
                   tone={company.price <= company.unitCost ? colors.danger : undefined} />
+                {/* What the five of them own. Beside the cash rather than in a
+                    footnote: it is what the league table is ordered by, it only
+                    ever goes down, and the day it moves is the day somebody
+                    filed a raise. */}
+                <Stat label="Founders own" value={shareOwnedRead(company.founderShare ?? 1)}
+                  hint={(company.founderShare ?? 1) >= 0.999 ? "All of it, still" : "The rest belongs to investors"}
+                  tone={(company.founderShare ?? 1) < 0.5 ? colors.warning : undefined} />
+                {/* Research that has already been paid for. Shown even at zero
+                    for the seat that can move it, because "nothing is coming"
+                    is the fact that makes the lever worth pulling. */}
+                <Stat label="Landing next year" value={company.pipeline ? `+${company.pipeline}` : "Nothing"}
+                  hint={company.pipeline ? "Quality already bought and waiting" : "No research in the pipeline"}
+                  tone={company.pipeline ? colors.info : undefined} />
               </View>
+
+              {/* The ceiling on everything below it: a company can only be
+                  chosen by people in a city it has opened, so a brilliant
+                  product at 30% reach is a brilliant product 70% of this
+                  market will never see. */}
+              {data.cities && data.cities.length > 0 ? (
+                <View style={{ flexDirection: "row", gap: 6, alignItems: "flex-start" }}>
+                  <Icon name="map-outline" size={14} color={colors.info} />
+                  <Text style={{ flex: 1, color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+                    {reachRead(reachOf(data.cities))}{" "}
+                    Open in {data.cities.filter((c) => c.open).length} of {data.cities.length} places.
+                  </Text>
+                </View>
+              ) : null}
+
+              {/* Who the company has declared itself for, which changes what
+                  every other number means. Named rather than left implicit:
+                  four seats are spending money inside this decision. */}
+              {company.positioning ? (
+                <View style={{ flexDirection: "row", gap: 6, alignItems: "flex-start" }}>
+                  <Icon name="flag-outline" size={14} color={colors.novaPurple} />
+                  <Text style={{ flex: 1, color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+                    Positioned for {data.segments?.find((seg) => seg.id === company.positioning)?.name ?? company.positioning} — more
+                    appealing to them, slightly less to everybody else.
+                  </Text>
+                </View>
+              ) : null}
 
               <View style={{ gap: spacing.sm, paddingTop: spacing.xs }}>
                 <ScoreBar label="Reputation" value={company.reputation} color={colors.primary}
@@ -563,18 +642,18 @@ export default function Desk() {
                 </Text>
               )}
 
-              {/* The chief executive's seat is one control, and a seat with one
-                  control reads as decorative unless it is said outright that it
-                  isn't. It multiplies what the other four seats' money buys —
-                  FOCUS_EFFECTS in shared/simulation/decisions.ts — and every
-                  option gives something up, which is the part worth arguing
-                  about before the tick rather than reading about after it. */}
+              {/* The chief executive spends nothing and decides the most.
+                  Worth saying outright, because a seat whose controls are all
+                  qualitative reads as decorative next to four seats moving
+                  millions. Focus multiplies what everyone else's money buys
+                  (FOCUS_EFFECTS in shared/simulation/decisions.ts) and
+                  positioning decides who all of it is aimed at. */}
               {data.yourRole === "ceo" && (
                 <Callout
                   icon="flash"
                   tone="info"
-                  title="One lever, and it moves all four of theirs"
-                  body="Your focus multiplies what everyone else's money buys — how far marketing reaches, how fast the product improves, what a unit costs, what the year's fixed bill is. Each one trades something away, and next year's report will name what yours did."
+                  title="You spend nothing and move everything"
+                  body="Focus multiplies what everyone else's money buys — how far marketing reaches, how fast the product improves, what a unit costs. Positioning decides who all of that is aimed at: naming a segment makes the company markedly more appealing to those people and slightly less to everyone else, and the other four then have to work inside your answer."
                 />
               )}
 
@@ -583,24 +662,86 @@ export default function Desk() {
                   // The server's message wins while it stands: it is the one
                   // that actually refused the submission.
                   const message = errors[field.id] || localCheck.errors[field.id];
-                  return field.kind === "choice" ? (
-                    <ChoiceField
-                      key={field.id}
-                      field={field}
-                      value={draft[field.id]}
-                      error={message}
-                      disabled={finished || file.isPending}
-                      onChange={(next) => { setDraft((d) => ({ ...d, [field.id]: next })); clearFieldError(field.id); }}
-                    />
-                  ) : (
-                    <NumberField
-                      key={field.id}
-                      field={field}
-                      value={draft[field.id]}
-                      error={message}
-                      disabled={finished || file.isPending}
-                      onChange={(next) => { setDraft((d) => ({ ...d, [field.id]: next })); clearFieldError(field.id); }}
-                    />
+                  const change = (next: any) => {
+                    setDraft((d) => ({ ...d, [field.id]: next }));
+                    clearFieldError(field.id);
+                  };
+                  const disabled = finished || file.isPending;
+
+                  /*
+                   * Where the company sells. Its own control rather than a row
+                   * of pills: every other lever is a multiplier and this one is
+                   * the gate — nobody outside an open city can choose this
+                   * company at all — and the two costs it carries (a fee now, a
+                   * higher fixed base for ever) both need saying where the
+                   * decision is made.
+                   */
+                  if (field.kind === "cities") {
+                    return (
+                      <CitiesField
+                        key={field.id}
+                        field={field}
+                        cities={data.cities}
+                        value={draft[field.id]}
+                        error={message}
+                        disabled={disabled}
+                        onChange={change}
+                      />
+                    );
+                  }
+
+                  /*
+                   * Positioning and rehiring are both single-select lists the
+                   * server fills in, so they take the same control as focus.
+                   * The value is normalised to "" because "for everybody" is a
+                   * real answer with an empty value, and an undefined draft
+                   * would leave that option looking unchosen when it is what
+                   * the company is currently doing.
+                   */
+                  if (field.kind === "choice" || field.kind === "segment") {
+                    return (
+                      <ChoiceField
+                        key={field.id}
+                        field={field}
+                        value={draft[field.id] ?? (field.kind === "segment" ? "" : undefined)}
+                        error={message}
+                        disabled={disabled}
+                        emptyNote={field.id === "rehire"
+                          ? "Every seat is filled, so there is nobody to bring back. This only has something in it after a seat has been dissolved in a bad year."
+                          : undefined}
+                        onChange={change}
+                      />
+                    );
+                  }
+
+                  return (
+                    <View key={field.id} style={{ gap: 6 }}>
+                      <NumberField
+                        field={field}
+                        value={draft[field.id]}
+                        error={message}
+                        disabled={disabled}
+                        onChange={change}
+                      />
+                      {/* The two money levers whose cost is not the money.
+                          Both are attached to the control rather than written
+                          into the section, because the number they are about
+                          is the one under somebody's thumb. */}
+                      {field.id === "raiseAmount" ? (
+                        <DilutionNote
+                          founderShare={company?.founderShare}
+                          worth={data.valuation ?? null}
+                          raise={draft[field.id]}
+                        />
+                      ) : null}
+                      {field.id === "researchSpend" ? (
+                        <PipelineNote
+                          pipeline={company?.pipeline}
+                          spend={draft[field.id]}
+                          innovationPace={data.innovationPace}
+                        />
+                      ) : null}
+                    </View>
                   );
                 })}
               </View>

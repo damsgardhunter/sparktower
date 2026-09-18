@@ -8,7 +8,8 @@ import { SimSectionTitle } from "../../../src/components/sim/SimKit";
 import { HistoryRow, NoHistoryYet, StandingRowView, StandingsBanner, Trajectory } from "../../../src/components/sim/StandingsKit";
 import { ROOM_POLL_MS, useStandings } from "../../../src/components/sim/useSim";
 import {
-  gapAhead, movementRead, sortRows, standingLine, trajectory, yourRow,
+  biggestNotBest, gapAhead, movementRead, sortRows, standingLine, trajectory,
+  valueGapAhead, yourRow,
 } from "../../../src/components/sim/standings";
 import { seasonOver } from "../../../src/components/sim/lobby";
 
@@ -48,7 +49,18 @@ export default function Standings() {
   const you = useMemo(() => yourRow(rows), [rows]);
   const points = useMemo(() => trajectory(data?.history), [data?.history]);
   const movement = useMemo(() => movementRead(data?.history), [data?.history]);
-  const gap = useMemo(() => gapAhead(rows), [rows]);
+  /*
+   * Two gaps, and they are allowed to disagree.
+   *
+   * The banner carries the one the ranking is actually made of — founder-owned
+   * value — and the customer gap goes under the table, where it is context
+   * rather than a scoreboard. A team that is a hundred thousand customers
+   * behind and four million of value ahead is a team whose strategy is working,
+   * and showing only one of the two numbers hides exactly that.
+   */
+  const gap = useMemo(() => valueGapAhead(rows), [rows]);
+  const customerGap = useMemo(() => gapAhead(rows), [rows]);
+  const contrast = useMemo(() => biggestNotBest(rows), [rows]);
 
   if (isLoading) {
     return (<><Stack.Screen options={{ title: "Standings" }} /><Loading label="Counting the market…" /></>);
@@ -106,12 +118,30 @@ export default function Standings() {
         <Card>
           <SimSectionTitle icon="podium" title={over ? "How it finished" : "The market, in order"} />
           <Text style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>
-            {teams.length} team{teams.length === 1 ? "" : "s"} and {rows.length - teams.length} incumbents, ranked by
-            customers. Share is of every customer in the market, not of the teams.
+            {teams.length} team{teams.length === 1 ? "" : "s"} and {rows.length - teams.length} incumbents, ordered by what the
+            founders own — what the business is worth times the share they still hold. Share is of every customer in the
+            market, and is no longer what decides the order.
           </Text>
           {rows.map((row) => (
             <StandingRowView key={row.id} row={row} leaderShare={leaderShare} />
           ))}
+
+          {/* The scoreboard arguing for itself, with names in it. Only when the
+              market has actually produced the disagreement — an evergreen
+              caption explaining what founder value means would be read once and
+              skipped for the rest of the season. */}
+          {contrast ? (
+            <Callout icon="swap-vertical" tone="info" title="Biggest isn't top" body={contrast} />
+          ) : null}
+
+          {customerGap ? (
+            <Text
+              testID="standings-customer-gap"
+              style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}
+            >
+              On customers alone: {customerGap.line.charAt(0).toLowerCase()}{customerGap.line.slice(1)}
+            </Text>
+          ) : null}
         </Card>
 
         {/* How the season has gone, which is the question the table can't
@@ -135,8 +165,9 @@ export default function Standings() {
                 ))}
               </View>
               <Text style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>
-                Bars are your share of the market, scaled to your own best year so a few points of a crowded market still
-                has a shape. The figures beside them are the real ones.
+                {points[0].basis === "value"
+                  ? "Bars are what the founders owned at the end of each year — the same thing the place under them is decided by — scaled to your own best year. The figures above them are the real ones."
+                  : "Bars are your share of the market, scaled to your own best year so a few points of a crowded market still has a shape. Some of these years predate the change to founder-owned value, so the shape is share and the place under it isn't."}
               </Text>
             </>
           )}

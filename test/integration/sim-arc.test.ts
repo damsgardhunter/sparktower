@@ -54,6 +54,16 @@ async function player(app: any) {
 async function runningCompany(app: any) {
   await db.update(simVentures).set({ phase: "retired" })
     .where(inArray(simVentures.phase, ["filling", "claiming", "naming"]));
+  /*
+   * And close any season still taking rooms, so this one gets its own.
+   *
+   * A season holds every room in its market and a tick moves all of them.
+   * Sharing one across tests meant a test that resolved a year quietly
+   * advanced another test's company — which passed alone and failed in a full
+   * run, on whichever test happened to be downstream.
+   */
+  await db.update(simSeasons).set({ status: "abandoned" })
+    .where(eq(simSeasons.status, "forming"));
 
   const players = [];
   let ventureId = "";
@@ -332,6 +342,42 @@ describe("the way back", () => {
       .where(and(eq(simReportsTable.ventureId, ventureId), eq(simReportsTable.year, 1)));
     expect(JSON.stringify(report.report)).toMatch(/cap was broken/i);
   }, 180_000);
+
+  it("counts research and expansion against the cap, not just marketing", async () => {
+    /*
+     * The loophole this closes: research and the cost of opening a city were
+     * added to the game after the covenant's sum was written, so a company
+     * under a creditor's cap could pour money into next year's product and
+     * half the country and meet the terms on paper. A cap that can be stepped
+     * around is the recovery arc with its teeth removed.
+     */
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+    await setCompany(seasonId, ventureId, {
+      cash: 9_000_000,
+      covenant: { since: 1, spendCap: 500_000, met: 0, rateRelief: 0.03 },
+    });
+
+    // Nothing on marketing at all — everything on the two the cap used to miss.
+    const desk = await seat("cmo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    const shut = desk.body.cities.find((c: any) => !c.open);
+    const open = desk.body.cities.filter((c: any) => c.open).map((c: any) => c.id);
+
+    await seat("cmo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { price: 22, brandSpend: 0, performanceSpend: 0, celebritySpend: 0, targetCities: [...open, shut.id] } });
+    await seat("cto").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0, researchSpend: 1_500_000 } });
+
+    await makeDue(seasonId);
+    await tickSeason(seasonId);
+
+    const [report] = await db.select().from(simReportsTable)
+      .where(and(eq(simReportsTable.ventureId, ventureId), eq(simReportsTable.year, 1)));
+    expect(JSON.stringify(report.report), "the cap should have noticed").toMatch(/cap was broken/i);
+
+    const after = await companyIn(seasonId, ventureId);
+    expect(after.covenant!.met, "and reset the clock").toBe(0);
+  }, 240_000);
 
   it("lifts the covenant after two years inside it", async () => {
     const app = await getTestApp();

@@ -102,12 +102,31 @@ export function readMetric(id: MetricId, input: {
     case "debt": return report.debt;
     case "turned_away": return report.turnedAway;
     case "capacity": return company.capacity;
-    case "spend": return (
-      (decisions?.cmo?.brandSpend ?? 0) + (decisions?.cmo?.performanceSpend ?? 0) + (decisions?.cmo?.celebritySpend ?? 0) +
-      (decisions?.cto?.featureSpend ?? 0) + (decisions?.cto?.reliabilitySpend ?? 0) + (decisions?.cto?.techDebtPaydown ?? 0) +
-      (decisions?.coo?.supportSpend ?? 0) + (decisions?.coo?.efficiencySpend ?? 0)
-    );
+    case "spend": return discretionarySpend(decisions);
   }
+}
+
+/**
+ * Everything a team chose to spend this year.
+ *
+ * One definition, used by the challenge targets that cap spending and by the
+ * creditor's covenant in the tick — they have to agree, or a team is told it
+ * is inside a cap it has broken.
+ *
+ * Research is in it. It was not, briefly, because it was added after this sum
+ * was written: a company under a creditor's cap could pour money into next
+ * year's product and stay technically compliant, which is the one loophole
+ * that would have made the recovery arc toothless. City entry costs are not
+ * here — they are charged directly against cash rather than counted as
+ * discretionary — and are added by the caller that knows the market.
+ */
+export function discretionarySpend(decisions?: TeamDecisions): number {
+  return (
+    (decisions?.cmo?.brandSpend ?? 0) + (decisions?.cmo?.performanceSpend ?? 0) + (decisions?.cmo?.celebritySpend ?? 0) +
+    (decisions?.cto?.featureSpend ?? 0) + (decisions?.cto?.reliabilitySpend ?? 0) +
+    (decisions?.cto?.techDebtPaydown ?? 0) + (decisions?.cto?.researchSpend ?? 0) +
+    (decisions?.coo?.supportSpend ?? 0) + (decisions?.coo?.efficiencySpend ?? 0)
+  );
 }
 
 const round = (n: number, to: number) => Math.max(to, Math.round(n / to) * to);
@@ -247,6 +266,31 @@ const BUILDERS: Record<Role, Builder[]> = {
         partialReward: { kind: "reputation", amount: 2, label: "Some reputation for the noise you did make." },
       };
     },
+    ({ company, niche, year, seed }) => {
+      const dearest = [...niche.segments].sort((a, b) => b.referencePrice - a.referencePrice)[0];
+      return {
+        id: id(seed), role: "cmo", year,
+        title: "Charge what it's worth",
+        brief: `You sell at ${Math.round(company.price)}. The ${dearest.name.toLowerCase()} pay around ${dearest.referencePrice} and barely look at the number — the question is whether the product earns it.`,
+        targets: [
+          { id: "price", label: `Get the price to ${Math.round(dearest.referencePrice * 0.9)} or above`, goal: Math.round(dearest.referencePrice * 0.9), compare: "at_least", metric: "price" },
+          { id: "customers", label: "And keep nine in ten of the customers while you do it", goal: Math.round(Object.values(company.customers).reduce((s, n) => s + n, 0) * 0.9), compare: "at_least", metric: "customers" },
+        ],
+        reward: { kind: "cash", amount: 600_000, label: "A year of margin nobody had to be persuaded into." },
+        partialReward: { kind: "reputation", amount: 2, label: "Some credit for the nerve." },
+      };
+    },
+    ({ company, year, seed }) => ({
+      id: id(seed), role: "cmo", year,
+      title: "Be somewhere new",
+      brief: `You sell in ${(company.cities ?? []).length} place${(company.cities ?? []).length === 1 ? "" : "s"}. Nobody outside them can choose you, however good the product gets.`,
+      targets: [
+        { id: "customers", label: "Grow customers by a quarter", goal: Math.round(Math.max(1000, Object.values(company.customers).reduce((s, n) => s + n, 0) * 1.25)), compare: "at_least", metric: "customers" },
+        { id: "away", label: "Without turning anybody away when they arrive", goal: 0, compare: "at_most", metric: "turned_away" },
+      ],
+      reward: { kind: "credit", amount: 700_000, label: "Reach on the books: the credit line rises with the footprint." },
+      partialReward: { kind: "reputation", amount: 2, label: "Credit for the ground covered." },
+    }),
   ],
   cfo: [
     ({ company, year, seed }) => {
@@ -273,6 +317,28 @@ const BUILDERS: Record<Role, Builder[]> = {
       ],
       reward: { kind: "credit", amount: 1_000_000, label: "A profitable year, on the record: the credit line goes up by a million." },
       partialReward: { kind: "cash", amount: 200_000, label: "Something back for the discipline." },
+    }),
+    ({ company, year, seed }) => ({
+      id: id(seed), role: "cfo", year,
+      title: "Keep the company yours",
+      brief: `The founders hold ${Math.round((company.founderShare ?? 1) * 100)}% of this. Every pound raised buys a permanent slice of whatever it becomes, and the cheapest money is the money you did not need.`,
+      targets: [
+        { id: "cash", label: "Finish the year solvent, without raising", goal: 1, compare: "at_least", metric: "cash" },
+        { id: "debt", label: `And owing no more than ${Math.round(company.debt).toLocaleString()}`, goal: Math.round(company.debt), compare: "at_most", metric: "debt" },
+      ],
+      reward: { kind: "credit", amount: 900_000, label: "A lender who noticed you did not need them." },
+      partialReward: { kind: "cash", amount: 200_000, label: "Something for the restraint." },
+    }),
+    ({ company, year, seed }) => ({
+      id: id(seed), role: "cfo", year,
+      title: "Turn revenue into money",
+      brief: "Revenue is what the market gave you; cash is what survived the year. This one is about the gap between them.",
+      targets: [
+        { id: "revenue", label: "Grow revenue", goal: 1, compare: "at_least", metric: "revenue" },
+        { id: "cash", label: `While ending with more than the ${Math.round(company.cash).toLocaleString()} you started with`, goal: Math.round(company.cash), compare: "at_least", metric: "cash" },
+      ],
+      reward: { kind: "credit", amount: 800_000, label: "A year that converted, on the record." },
+      partialReward: { kind: "cash", amount: 150_000, label: "Part of the difference." },
     }),
   ],
   cto: [
@@ -301,6 +367,28 @@ const BUILDERS: Record<Role, Builder[]> = {
       reward: { kind: "reputation", amount: 5, label: "Reputation: the people you sold to stayed sold." },
       partialReward: { kind: "reputation", amount: 2, label: "Partial credit for a steadier year." },
     }),
+    ({ company, year, seed }) => ({
+      id: id(seed), role: "cto", year,
+      title: "Build for next year",
+      brief: `Research lands a year late and buys more than shipping does. It is the only decision here that asks you to be behind on purpose — and the one that makes year ${year + 1} unanswerable.`,
+      targets: [
+        { id: "quality", label: `Hold quality at ${Math.max(1, Math.round(company.quality - 1))} while you do it`, goal: Math.max(1, Math.round(company.quality - 1)), compare: "at_least", metric: "quality" },
+        { id: "spend", label: `Spending no more than ${Math.round(Math.max(600_000, company.cash * 0.35)).toLocaleString()} across the company`, goal: Math.round(Math.max(600_000, company.cash * 0.35)), compare: "at_most", metric: "spend" },
+      ],
+      reward: { kind: "reputation", amount: 5, label: "A roadmap people believe in." },
+      partialReward: { kind: "reputation", amount: 2, label: "Some of it landed." },
+    }),
+    ({ company, year, seed }) => ({
+      id: id(seed), role: "cto", year,
+      title: "Pay down what you owe yourselves",
+      brief: "Technical debt is the speed you sold to get here. Nothing visible comes of clearing it, which is exactly why nobody ever does.",
+      targets: [
+        { id: "cost", label: `Get unit cost to ${(company.unitCost * 0.93).toFixed(2)}`, goal: Math.round(company.unitCost * 0.93 * 100) / 100, compare: "at_most", metric: "unit_cost" },
+        { id: "quality", label: `Without quality slipping below ${Math.max(1, Math.round(company.quality - 2))}`, goal: Math.max(1, Math.round(company.quality - 2)), compare: "at_least", metric: "quality" },
+      ],
+      reward: { kind: "capacity", amount: 0.06, label: "The same team, shipping faster." },
+      partialReward: { kind: "cash", amount: 150_000, label: "A little of it back." },
+    }),
   ],
   coo: [
     ({ company, year, seed }) => ({
@@ -325,6 +413,28 @@ const BUILDERS: Record<Role, Builder[]> = {
       reward: { kind: "cash", amount: 400_000, label: "The savings, banked." },
       partialReward: { kind: "cash", amount: 120_000, label: "Part of the savings, banked." },
     }),
+    ({ company, year, seed }) => ({
+      id: id(seed), role: "coo", year,
+      title: "Grow without breaking",
+      brief: `Capacity is ${company.capacity.toLocaleString()} and marketing intends to bring more than that. Building ahead of demand is expensive; building behind it is worse.`,
+      targets: [
+        { id: "capacity", label: `Get capacity to ${Math.round(company.capacity * 1.3).toLocaleString()}`, goal: Math.round(company.capacity * 1.3), compare: "at_least", metric: "capacity" },
+        { id: "away", label: "And turn nobody away getting there", goal: 0, compare: "at_most", metric: "turned_away" },
+      ],
+      reward: { kind: "reputation", amount: 5, label: "Everyone who came got served." },
+      partialReward: { kind: "reputation", amount: 2, label: "Mostly held together." },
+    }),
+    ({ company, year, seed }) => ({
+      id: id(seed), role: "coo", year,
+      title: "Be the reason they stay",
+      brief: `Service is at ${Math.round(company.service)}. It is the least visible work on the team, and the segments who pay most care about it more than anything else.`,
+      targets: [
+        { id: "service", label: `Get service to ${Math.min(100, Math.round(company.service + 10))}`, goal: Math.min(100, Math.round(company.service + 10)), compare: "at_least", metric: "service" },
+        { id: "rep", label: `And reputation to ${Math.min(100, Math.round(company.reputation + 4))}`, goal: Math.min(100, Math.round(company.reputation + 4)), compare: "at_least", metric: "reputation" },
+      ],
+      reward: { kind: "reputation", amount: 6, label: "People stopped leaving." },
+      partialReward: { kind: "reputation", amount: 2, label: "Fewer of them, anyway." },
+    }),
   ],
   ceo: [
     ({ company, year, seed, held }) => ({
@@ -348,6 +458,31 @@ const BUILDERS: Record<Role, Builder[]> = {
       ],
       reward: { kind: "credit", amount: 800_000, label: "Reputation is collateral: the credit line rises with it." },
       partialReward: { kind: "reputation", amount: 2, label: "A little of it stuck." },
+    }),
+    ({ company, niche, year, seed }) => {
+      const target = pick(`${seed}:pos`, niche.segments);
+      return {
+        id: id(seed), role: "ceo", year,
+        title: `Be the company for ${target.name.toLowerCase()}`,
+        brief: `${target.description} Deciding who you are for makes you better to them and worse to everybody else, and the other four then have to live inside that.`,
+        targets: [
+          { id: "customers", label: "Come out of the year with more customers than you went in with", goal: Math.round(Object.values(company.customers).reduce((s, n) => s + n, 0) * 1.05), compare: "at_least", metric: "customers" },
+          { id: "rep", label: `And reputation no lower than ${Math.max(1, Math.round(company.reputation - 2))}`, goal: Math.max(1, Math.round(company.reputation - 2)), compare: "at_least", metric: "reputation" },
+        ],
+        reward: { kind: "reputation", amount: 6, label: "A company that stands for something, and was believed." },
+        partialReward: { kind: "reputation", amount: 2, label: "Halfway to meaning it." },
+      };
+    },
+    ({ company, year, seed }) => ({
+      id: id(seed), role: "ceo", year,
+      title: "A year that pays for itself",
+      brief: "Four people want to spend and one of them has to decide what the company is for this year. This is the year it has to add up.",
+      targets: [
+        { id: "profit", label: "End the year in profit", goal: 1, compare: "at_least", metric: "profit" },
+        { id: "customers", label: "Without shrinking to do it", goal: Math.round(Object.values(company.customers).reduce((s, n) => s + n, 0)), compare: "at_least", metric: "customers" },
+      ],
+      reward: { kind: "credit", amount: 900_000, label: "Growth and profit in the same year. Lenders remember that." },
+      partialReward: { kind: "cash", amount: 200_000, label: "One of the two." },
     }),
   ],
 };

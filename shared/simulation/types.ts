@@ -100,6 +100,25 @@ export interface Segment {
 }
 
 /** A market a team can choose to enter. The niche decides who the customers are and who already serves them. */
+/**
+ * A place the market exists in.
+ *
+ * Where a company sells is a decision separate from what it sells and how good
+ * it is. A team can go deep in one city — cheap, and capped — or spread across
+ * the country, which costs money to enter and to keep. The incumbents are
+ * everywhere already, which is most of what makes them incumbents.
+ */
+export interface City {
+  id: string;
+  name: string;
+  /** Share of the niche's customers who live here. The weights sum to 1. */
+  weight: number;
+  /** One-off cost of opening here. */
+  entryCost: number;
+  /** What it is like to sell here, in one line. */
+  note: string;
+}
+
 export interface Niche {
   id: string;
   name: string;
@@ -108,6 +127,8 @@ export interface Niche {
   segments: Segment[];
   /** The companies already here, holding the share a team has to take. */
   incumbents: IncumbentSeed[];
+  /** Where this market exists. A company only sells where it has opened. */
+  cities: City[];
   /** What it costs to make one unit, before anyone improves anything. */
   baseUnitCost: number;
   /** Multiplies how fast quality can be moved in this market — software moves faster than hardware. */
@@ -184,6 +205,31 @@ export interface Company {
   assets: CompanyAsset[];
   /** Seats currently filled. A team that fires its CMO pays one fewer salary and loses the lever. */
   seats: Role[];
+  /**
+   * Cities the company sells in. Incumbents are in all of them.
+   *
+   * Reach is the fraction of the market that can even consider you: a company
+   * in one city out of six is invisible to five sixths of the people it would
+   * otherwise win, however good it is.
+   */
+  cities: string[];
+  /** The segment this company has declared itself for, if any. See `positioningFor`. */
+  positioning?: string;
+  /**
+   * Research finished but not yet shipped, in quality points.
+   *
+   * Lands in full next year. It is why a team can look flat for a year and
+   * then move further in one than anybody could have bought.
+   */
+  pipeline?: number;
+  /**
+   * What the founders still own, 0–1.
+   *
+   * Starts whole and only ever goes down. Raising money is not free and this
+   * is where the cost lives — a team can buy its way through a bad year and
+   * find on day fourteen that it won a market it owns a third of.
+   */
+  founderShare: number;
 }
 
 /** Something a company owns that another company might want. */

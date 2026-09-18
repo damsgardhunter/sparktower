@@ -21,7 +21,7 @@ import { Icon, NovaGradient } from "../ui";
 import { Pill, tintSoft } from "../MoreKit";
 import { exact, money, signed } from "./desk";
 import {
-  ordinal, reputationRead, shareRead, soldUp,
+  ordinal, ownershipRead, reputationRead, shareRead, soldUp, wholeValue,
   type StandingRow, type TrajectoryPoint,
 } from "./standings";
 
@@ -58,7 +58,7 @@ export function StandingsBanner({ year, totalYears, you, line, gap }: {
         {you ? (
           <View
             testID="standings-your-rank"
-            accessibilityLabel={`You are ${ordinal(you.rank)}`}
+            accessibilityLabel={`You are ${ordinal(you.rank)}, with ${exact(you.founderValue ?? 0)} of founder-owned value`}
             style={{
               alignItems: "center", paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
               borderRadius: radius.sm, backgroundColor: "rgba(0,0,0,0.18)", minWidth: 74,
@@ -67,8 +67,11 @@ export function StandingsBanner({ year, totalYears, you, line, gap }: {
             <Text style={{ color: "#FFFFFF", fontSize: 24, fontFamily: fontFamily.bold, fontVariant: ["tabular-nums"] }}>
               {ordinal(you.rank)}
             </Text>
+            {/* What the position is *by*. The share used to sit here, from
+                when the table was ordered by customers; leaving it would put
+                the old scoreboard's number under the new scoreboard's rank. */}
             <Text style={{ color: "rgba(255,255,255,0.8)", fontSize: 10, fontFamily: fontFamily.semibold, letterSpacing: 0.4 }}>
-              {shareRead(you.share)}
+              {money(you.founderValue ?? 0)} YOURS
             </Text>
           </View>
         ) : null}
@@ -92,7 +95,7 @@ export function StandingRowView({ row, leaderShare }: { row: StandingRow; leader
   return (
     <View
       testID={`standings-row-${row.id}`}
-      accessibilityLabel={`${ordinal(row.rank)}, ${row.name}, ${shareRead(row.share)} of the market`}
+      accessibilityLabel={`${ordinal(row.rank)}, ${row.name}, ${exact(row.founderValue ?? 0)} of founder-owned value, ${shareRead(row.share)} of the market`}
       style={{
         flexDirection: "row", alignItems: "flex-start", gap: spacing.sm,
         paddingVertical: spacing.sm, paddingHorizontal: row.isYou ? spacing.sm : 0,
@@ -122,12 +125,28 @@ export function StandingRowView({ row, leaderShare }: { row: StandingRow; leader
           ) : null}
         </View>
 
+        {/* What the table is ordered by, given the largest type in the row.
+            The share bar stays underneath it — share is still the thing
+            everyone argues about, it is just no longer the thing that decides
+            who is winning. */}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+          <Text style={{
+            flex: 1, color: row.isYou ? colors.primary : colors.text, fontSize: font.base,
+            fontFamily: fontFamily.bold, fontVariant: ["tabular-nums"],
+          }}>
+            {money(row.founderValue ?? 0)}
+          </Text>
+          <Text style={{ color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.medium, fontVariant: ["tabular-nums"] }}>
+            {row.founderShare < 0.999 ? `${Math.round(row.founderShare * 100)}% of ${money(wholeValue(row))}` : "wholly owned"}
+          </Text>
+        </View>
+
         <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
           <View style={{ flex: 1, height: 6, borderRadius: 3, backgroundColor: colors.surfaceRaised, overflow: "hidden" }}>
             <View style={{ width: `${fraction * 100}%`, height: "100%", backgroundColor: tone }} />
           </View>
           <Text style={{
-            width: 48, color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold,
+            width: 48, color: colors.textSecondary, fontSize: font.sm, fontFamily: fontFamily.semibold,
             fontVariant: ["tabular-nums"], textAlign: "right",
           }}>
             {shareRead(row.share)}
@@ -137,6 +156,18 @@ export function StandingRowView({ row, leaderShare }: { row: StandingRow; leader
         <Text style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular, fontVariant: ["tabular-nums"] }}>
           {money(row.customers)} customers · {money(row.revenue)} revenue · {exact(row.price)} a head · {reputationRead(row.reputation)} ({row.reputation})
         </Text>
+
+        {/* Only on the rows where it is news. A team that has sold a third of
+            itself is carrying that in the number above, and the sentence is
+            what connects the two. */}
+        {ownershipRead(row) ? (
+          <Text
+            testID={`standings-ownership-${row.id}`}
+            style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}
+          >
+            {ownershipRead(row)}
+          </Text>
+        ) : null}
 
         {/* A team with nothing left has sold the business, and that is a
             strategy rather than a collapse. Saying so here stops the row from
@@ -159,9 +190,12 @@ export function StandingRowView({ row, leaderShare }: { row: StandingRow; leader
  * you got there from, and a team that has climbed from ninth to sixth is
  * having a completely different season from one that has fallen from third.
  *
- * Bars are share, scaled to the company's best year (standings.ts explains
- * why), coloured by whether the year made money — the two facts that can
- * disagree, and the disagreement is the interesting part.
+ * Bars are whatever the season is scored in — founder-owned value when every
+ * year carries one, share otherwise (standings.ts explains the fallback) —
+ * scaled to the company's own best year, and coloured by whether the year made
+ * money. The height and the colour are allowed to disagree, and that
+ * disagreement is the interesting part: a year that grew what the five of them
+ * own while losing money is a real and specific kind of year.
  */
 export function Trajectory({ points }: { points: TrajectoryPoint[] }) {
   if (points.length === 0) return null;
@@ -172,12 +206,16 @@ export function Trajectory({ points }: { points: TrajectoryPoint[] }) {
         {points.map((point) => (
           <View key={point.year} style={{ flex: 1, alignItems: "center", gap: 4 }}>
             <Text style={{ color: colors.textTertiary, fontSize: 9, fontFamily: fontFamily.medium, fontVariant: ["tabular-nums"] }}>
-              {shareRead(point.share)}
+              {point.basis === "value" ? money(point.founderValue ?? 0) : shareRead(point.share)}
             </Text>
             <View style={{ width: "100%", height: 84, justifyContent: "flex-end" }}>
               <View
                 testID={`standings-bar-${point.year}`}
-                accessibilityLabel={`Year ${point.year}: ${shareRead(point.share)} of the market, ${ordinal(point.rank)}`}
+                accessibilityLabel={
+                point.basis === "value"
+                  ? `Year ${point.year}: ${exact(point.founderValue ?? 0)} of founder-owned value, ${ordinal(point.rank)}`
+                  : `Year ${point.year}: ${shareRead(point.share)} of the market, ${ordinal(point.rank)}`
+              }
                 style={{
                   width: "100%",
                   height: `${point.height * 100}%`,
@@ -227,6 +265,7 @@ export function HistoryRow({ point, previousShare }: { point: TrajectoryPoint; p
       </Text>
       <View style={{ flex: 1, gap: 1 }}>
         <Text style={{ color: colors.text, fontSize: font.sm, fontFamily: fontFamily.medium, fontVariant: ["tabular-nums"] }}>
+          {point.founderValue != null ? `${money(point.founderValue)} yours · ` : ""}
           {shareRead(point.share)} · {money(point.customers)} customers · {ordinal(point.rank)}
         </Text>
         {change != null ? (

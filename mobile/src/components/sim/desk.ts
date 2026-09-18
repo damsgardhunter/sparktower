@@ -41,7 +41,7 @@ export interface LeverField {
   id: string;
   label: string;
   help: string;
-  kind: "money" | "price" | "count" | "choice";
+  kind: "money" | "price" | "count" | "choice" | "cities" | "segment";
   min?: number;
   max?: number;
   step?: number;
@@ -55,6 +55,14 @@ export interface Commitment {
   available: number;
   ratio: number;
   bySeat: { role: DeskRole; spend: number }[];
+  /**
+   * Of the marketing seat's spend, the one-off cost of opening somewhere new.
+   *
+   * Inside `spend` and inside the CMO's line, and broken out here because it
+   * is the one item on the meter that buys no customers this year — it buys
+   * permission to have some.
+   */
+  openingCost: number;
 }
 
 /** Mirrors DraftPreview in shared/simulation/levers.ts. */
@@ -80,6 +88,44 @@ export interface DeskCompany {
   bankruptSince: number | null;
   /** The seats the engine still charges an executive salary for. Mirrors Company in shared/simulation/types.ts. */
   seats: DeskRole[];
+  /**
+   * What the founders still own, 0-1. Mirrors Company in shared/simulation/types.ts.
+   *
+   * Starts whole and only ever goes down: raising money is bought with this,
+   * and it is now the thing the league table is ordered by. A team can win a
+   * market and own a third of it.
+   */
+  founderShare?: number;
+  /**
+   * Research finished and not yet shipped, in quality points.
+   *
+   * Lands in full next year whatever happens, which is why a company can look
+   * flat for a year and then move further in one than anyone could have
+   * bought. Mirrors `pipeline` in shared/simulation/types.ts.
+   */
+  pipeline?: number;
+  /** The segment the company has declared itself for, or null for everybody. */
+  positioning?: string | null;
+}
+
+/**
+ * One place the market exists in, as the desk sends it.
+ *
+ * Mirrors City in shared/simulation/types.ts, plus the `open` flag the route
+ * adds. `open` is the whole reason this is not just a list of options: a city
+ * the company already sells in cannot be closed — there is no closing lever —
+ * so it is a fact about the company rather than a choice on the form.
+ */
+export interface DeskCity {
+  id: string;
+  name: string;
+  /** This city's share of the niche's customers. The weights sum to 1. */
+  weight: number;
+  /** One-off cost of opening here, charged in the year it happens. */
+  entryCost: number;
+  note: string;
+  /** True when the company already sells here. Cannot be deselected. */
+  open: boolean;
 }
 
 /** Mirrors Economy in shared/simulation/types.ts, plus the sentence the route adds. */
@@ -139,7 +185,21 @@ export interface CompanyReport {
   quality: number;
   brand: number;
   service: number;
+  /**
+   * Where the company stands — ordered by founder-owned value, not customers.
+   *
+   * Mirrors `rank` in shared/simulation/resolve.ts. Ranking by volume told a
+   * small, highly profitable team it was losing every day and made selling
+   * more of everything the only strategy; the three fields below are what
+   * replaced it.
+   */
   rank: number;
+  /** What the business is worth: a bit over a year of sales, plus what it owns, less what it owes. */
+  value?: number;
+  /** That value times the share the founders still hold. What the table is ordered by. */
+  founderValue?: number;
+  /** 0-1. Optional because reports written before the scoreboard changed have none. */
+  founderShare?: number;
   /** The year's prose. Market outcomes are not in here — they have their own field. */
   notes: string[];
   /**
@@ -151,7 +211,41 @@ export interface CompanyReport {
    * year with no bids, and on any report written before the field existed.
    */
   market?: ReportMarketNote[];
+  /**
+   * The year's news, typed.
+   *
+   * Still prepended into `notes` as prose as well, and deliberately not
+   * deduplicated against it: recognising a sentence in order to remove it is
+   * the same pattern-matching this field exists to avoid, and it fails
+   * silently the first time the copy is edited. The card leads with this and
+   * lets the note stand.
+   */
+  event?: ReportEvent;
   bankrupt: boolean;
+}
+
+/**
+ * What happened this year, as the report carries it.
+ *
+ * Mirrors CompanyReport["event"] in shared/simulation/resolve.ts. `mine` is
+ * true for anything market-wide and for a company event that landed on this
+ * company; `advice` is written to be shown, because there is always something
+ * a team can do about it.
+ *
+ * Worth knowing for the copy around it: events are drawn from the state of the
+ * market rather than out of the air — the company with a poor reputation gets
+ * the scandal, the one that has been quietly excellent gets the write-up. The
+ * dice choose which of the things you had coming arrives, never whether you
+ * deserved one. And none of them fire in year one.
+ */
+export interface ReportEvent {
+  headline: string;
+  body: string;
+  /** What can be done about it. Always present, always worth the room. */
+  advice: string;
+  scope: "market" | "company";
+  /** True when it happened to you — every market event, and your own company's. */
+  mine: boolean;
 }
 
 /**
@@ -187,6 +281,21 @@ export interface DeskView {
   draft?: Record<string, any> | null;
   submitted?: boolean;
   company?: DeskCompany;
+  /** Everywhere this market exists, with the ones the company already sells in flagged. */
+  cities?: DeskCity[];
+  /**
+   * What the company is worth today, floored at 500,000 — the number a raise
+   * is priced against.
+   *
+   * Mirrors the `valuation` sum in server/simulation-desk-routes.ts, which is
+   * the engine's own. Sent rather than derived because a guess about how much
+   * of your company you are selling is not a thing to put in front of anyone.
+   */
+  valuation?: number;
+  /** How fast quality moves in this market. Mirrors Niche.innovationPace. */
+  innovationPace?: number;
+  /** Seats nobody holds, for the chief executive's rehire lever. Mirrors the root field of the same name. */
+  dissolvedSeats?: string[];
   segments?: DeskSegment[];
   economy?: DeskEconomy;
   table?: DeskTableSeat[];
@@ -225,10 +334,30 @@ export const EXECUTIVE_SALARY = 140_000;
  * array — a dissolved seat leaves the table but stops costing a salary, so the
  * two can diverge and only one of them is the bill.
  */
-export function fixedCosts(headcount: number, costIndex: number, seatCount: number): number {
+export function fixedCosts(headcount: number, costIndex: number, seatCount: number, reach = 1): number {
   const salaries = num(headcount) * SALARY_PER_HEAD * (Number.isFinite(costIndex) ? costIndex : 1);
-  return salaries + Math.max(0, num(seatCount)) * EXECUTIVE_SALARY;
+  return (salaries + Math.max(0, num(seatCount)) * EXECUTIVE_SALARY) * footprint(reach);
 }
+
+/**
+ * What selling in more places does to the fixed bill.
+ *
+ * Mirrors the `footprint` term of fixedCosts() in
+ * shared/simulation/decisions.ts: 0.4 of the bill is owed wherever you sell,
+ * and the other 0.6 scales with how much of the market you have opened. A
+ * one-city company is not a national company with fewer customers — it is a
+ * cheaper company — and a preview that assumed a national cost base would
+ * overstate the year by more than half.
+ *
+ * Note which cities count: the ones the company is *already* open in. Opening
+ * a new one costs its entry fee this year and only raises this base from next
+ * year, which is exactly how the engine charges it.
+ */
+export const footprint = (reach: number): number =>
+  0.4 + 0.6 * clamp01(Number.isFinite(reach) ? reach : 1);
+
+/** Inside 0 and 1, for the fractions the engine keeps there. */
+const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 
 /** A value that may have arrived as a string from a text input, as a number. */
 function num(value: any): number {
@@ -252,8 +381,20 @@ export function commitment(input: {
   company: Pick<DeskCompany, "cash" | "debt" | "creditLimit" | "seats">;
   decisions: FiledDecisions;
   costIndex: number;
+  /**
+   * How much of the market the company is open in, 0-1 — `reachOf(cities)`.
+   * Defaults to the whole market, which is what a company from before cities
+   * existed is treated as, and what an incumbent is.
+   */
+  reach?: number;
+  /**
+   * The market's map, so the cost of opening somewhere lands on the marketing
+   * seat's line. Without it the table's largest single movement of cash is
+   * missing from the total the meter exists to show.
+   */
+  cities?: DeskCity[];
 }): Commitment {
-  const { company, decisions, costIndex } = input;
+  const { company, decisions, costIndex, reach, cities } = input;
   const cmo = decisions.cmo ?? {};
   const cto = decisions.cto ?? {};
   const coo = decisions.coo ?? {};
@@ -261,18 +402,40 @@ export function commitment(input: {
 
   const bySeat: { role: DeskRole; spend: number }[] = [
     { role: "cmo", spend: num(cmo.brandSpend) + num(cmo.performanceSpend) + num(cmo.celebritySpend) },
-    { role: "cto", spend: num(cto.featureSpend) + num(cto.reliabilitySpend) + num(cto.techDebtPaydown) },
+    // Research is committed money like any other, even though it buys nothing
+    // until next year. Mirrors commitment() in shared/simulation/levers.ts.
+    { role: "cto", spend: num(cto.featureSpend) + num(cto.reliabilitySpend) + num(cto.techDebtPaydown) + num(cto.researchSpend) },
     { role: "coo", spend: num(coo.supportSpend) + num(coo.efficiencySpend) },
     { role: "cfo", spend: Math.max(0, num(cfo.repay)) },
     { role: "ceo", spend: 0 },
   ];
 
+  /*
+   * Opening a city, on the seat that decided to.
+   *
+   * Charged once, in the year it happens, and it buys no customers at all this
+   * year — it buys permission to have some. Mirrors the `openingCost` term in
+   * commitment() in shared/simulation/levers.ts, including which list it
+   * compares against: what the draft asks for, against where the company
+   * already is.
+   */
+  const opening = openingCost(cities, cmo.targetCities);
+  if (opening > 0) {
+    const marketing = bySeat.find((s) => s.role === "cmo")!;
+    marketing.spend += opening;
+  }
+
   const spend = bySeat.reduce((sum, s) => sum + s.spend, 0);
-  const fixed = fixedCosts(num(coo.headcount), costIndex, company.seats?.length ?? 0);
+  const fixed = fixedCosts(num(coo.headcount), costIndex, company.seats?.length ?? 0, reach ?? 1);
   const borrowable = Math.max(0, company.creditLimit - company.debt);
   const available = Math.max(0, company.cash + num(cfo.borrow) + borrowable - num(cfo.cashBuffer));
 
-  return { spend, fixed, available, ratio: available > 0 ? (spend + fixed) / available : Infinity, bySeat };
+  return {
+    spend, fixed, available,
+    ratio: available > 0 ? (spend + fixed) / available : Infinity,
+    bySeat,
+    openingCost: opening,
+  };
 }
 
 /**
@@ -307,17 +470,27 @@ export function commitmentLevel(ratio: number): CommitmentLevel {
 export const shortfall = (c: Commitment): number => c.spend + c.fixed - c.available;
 
 /**
- * The part of the spend the engine calls "discretionary".
+ * The spend a covenant's cap and a "without spending your way there" target
+ * both mean.
  *
- * The three seats that buy things, and not the finance seat's repayment.
- * Mirrors both the `spend` metric in shared/simulation/challenges.ts and the
- * sum the tick reviews a covenant against (server/simulation-tick.ts), which
- * are deliberately the same number — a spending cap and a "without spending
- * your way there" target have to mean the same thing or one of them is lying.
+ * Mirrors `readMetric("spend")` in shared/simulation/challenges.ts and the sum
+ * the tick reviews a covenant against (server/simulation-tick.ts) term for
+ * term — the two are deliberately the same number, because a cap and a target
+ * that meant different things would make one of them a lie.
+ *
+ * Read from the decisions rather than from the commitment meter's `bySeat`,
+ * which is the whole reason this is its own sum. The meter now carries two
+ * things these two rules do not count: the cost of opening a city, which the
+ * engine charges against cash, and research, which buys nothing this year.
+ * Deriving a cap from the meter would tell a CTO they had broken a ceiling
+ * they were nowhere near — the same class of failure as a wrong total, wearing
+ * the badge of the thing that was meant to prevent it.
  */
-export const discretionarySpend = (c: Commitment): number =>
-  c.bySeat.filter((s) => s.role === "cmo" || s.role === "cto" || s.role === "coo")
-    .reduce((sum, s) => sum + s.spend, 0);
+export const discretionarySpend = (decisions: FiledDecisions): number => (
+  num(decisions.cmo?.brandSpend) + num(decisions.cmo?.performanceSpend) + num(decisions.cmo?.celebritySpend) +
+  num(decisions.cto?.featureSpend) + num(decisions.cto?.reliabilitySpend) + num(decisions.cto?.techDebtPaydown) +
+  num(decisions.coo?.supportSpend) + num(decisions.coo?.efficiencySpend)
+);
 
 // --- The clock -----------------------------------------------------------
 
@@ -400,6 +573,174 @@ export function clampToField(field: LeverField, value: number): number {
   return n;
 }
 
+// --- Where you sell ------------------------------------------------------
+// Mirrors the `cities` lever in shared/simulation/levers.ts, the entry charge
+// in shared/simulation/resolve.ts, and reachOf() in shared/simulation/market.ts.
+//
+// This is the biggest lever on the desk and the only one whose effect is
+// categorical rather than gradual: a person who lives somewhere the company
+// has not opened cannot choose it, however good the product is, however loud
+// the marketing. Everything else on this screen is a multiplier on a number
+// that is zero until a city is open.
+
+/**
+ * The cities a draft is asking for, with the already-open ones kept.
+ *
+ * An open city cannot be given up — there is no closing lever, and the engine
+ * unions what you send with where you already are — so the honest reading of
+ * any draft is "everywhere I am, plus whatever else is ticked". Returned in
+ * the payload's own order so two equal selections are never two different
+ * arrays.
+ */
+export function selectedCities(cities: DeskCity[] | undefined, value: any): string[] {
+  const all = cities ?? [];
+  const asked = new Set((Array.isArray(value) ? value : []).map(String));
+  return all.filter((city) => city.open || asked.has(city.id)).map((city) => city.id);
+}
+
+/**
+ * Ticking or unticking one city.
+ *
+ * An open city is a no-op rather than an error: the control is rendered
+ * locked, and a tap that silently did nothing is better than one that removed
+ * a city from the payload the server would put straight back.
+ */
+export function toggleCity(cities: DeskCity[] | undefined, value: any, id: string): string[] {
+  const all = cities ?? [];
+  const city = all.find((c) => c.id === id);
+  if (!city || city.open) return selectedCities(all, value);
+  const chosen = new Set(selectedCities(all, value));
+  if (chosen.has(id)) chosen.delete(id); else chosen.add(id);
+  return all.filter((c) => c.open || chosen.has(c.id)).map((c) => c.id);
+}
+
+/** The cities this draft would open that aren't open already — what the entry fee is for. */
+export function citiesOpening(cities: DeskCity[] | undefined, value: any): DeskCity[] {
+  const chosen = new Set(selectedCities(cities, value));
+  return (cities ?? []).filter((city) => !city.open && chosen.has(city.id));
+}
+
+/**
+ * What opening them costs, once.
+ *
+ * Part of `commitment()` — it lands on the marketing seat's line, as it does
+ * on the server. Whether the engine books it as discretionary spend or as a
+ * cash movement is bookkeeping; it is the same money leaving, and a table that
+ * opened three cities for 1.7m while the meter stayed comfortable found out at
+ * the tick. Still computed on its own as well, so the picker can show what a
+ * particular selection costs while somebody is still choosing.
+ */
+export const openingCost = (cities: DeskCity[] | undefined, value: any): number =>
+  citiesOpening(cities, value).reduce((sum, city) => sum + (Number.isFinite(city.entryCost) ? city.entryCost : 0), 0);
+
+/**
+ * The fraction of the market that can even consider you.
+ *
+ * Mirrors reachOf() in shared/simulation/market.ts. With no argument it reads
+ * the open cities, which is what the fixed-cost base is charged against today;
+ * pass a draft's selection to see what this year's decision would buy.
+ */
+export function reachOf(cities: DeskCity[] | undefined, ids?: string[]): number {
+  const all = cities ?? [];
+  if (all.length === 0) return 1;
+  const open = new Set(ids ?? all.filter((c) => c.open).map((c) => c.id));
+  return clamp01(all.filter((c) => open.has(c.id)).reduce((sum, c) => sum + (Number.isFinite(c.weight) ? c.weight : 0), 0));
+}
+
+/**
+ * Reach as a sentence, because the percentage alone reads as a score.
+ *
+ * It isn't one. It is a ceiling: the share of people who are allowed to pick
+ * you at all, before anything about the product is considered.
+ */
+export function reachRead(reach: number): string {
+  const pct = clamp01(Number.isFinite(reach) ? reach : 0) * 100;
+  if (pct >= 99.5) return "Everyone in the market can buy from you.";
+  return `${pct < 1 ? "<1" : Math.round(pct)}% of the market can buy from you at all. The rest can't choose you however good you are.`;
+}
+
+// --- Raising money -------------------------------------------------------
+
+/**
+ * What a raise costs in ownership.
+ *
+ * Mirrors the dilution in shared/simulation/resolve.ts: an investor buys a
+ * share of everything the company becomes, priced against what it is worth
+ * *now*, with a floor of 500,000 under that valuation. Which is the whole
+ * point of the lever and the part a number says better than any sentence —
+ * raising 2m against a company worth 2m gives away half of it.
+ *
+ * The valuation is the desk's own `valuation` field, which is the engine's
+ * arithmetic rather than a client's guess, and it is there in year one — which
+ * is exactly when raising is most expensive and the warning matters most.
+ */
+export const RAISE_VALUATION_FLOOR = 500_000;
+
+export function dilutionPreview(input: {
+  /** What the founders hold now, 0-1. */
+  founderShare: number;
+  /** What the business is worth — the desk's `valuation`. */
+  worth: number | null | undefined;
+  raise: number;
+}): { nextShare: number; given: number } | null {
+  const raise = num(input.raise);
+  const share = Number.isFinite(input.founderShare) ? clamp01(input.founderShare) : 1;
+  if (raise <= 0 || input.worth == null || !Number.isFinite(input.worth)) return null;
+  const worth = Math.max(RAISE_VALUATION_FLOOR, input.worth);
+  const nextShare = Math.max(0.05, share * (worth / (worth + raise)));
+  return { nextShare, given: Math.max(0, share - nextShare) };
+}
+
+// --- Research ------------------------------------------------------------
+
+/**
+ * Diminishing returns, as the engine draws them.
+ *
+ * Mirrors `saturate` in shared/simulation/market.ts: money buys half the
+ * ceiling at the half-way spend and never quite reaches the ceiling, which is
+ * why the fourth million of research is worth so much less than the first.
+ */
+export const saturate = (value: number, half: number): number => (value <= 0 ? 0 : value / (value + half));
+
+/** Mirrors lift() in shared/simulation/decisions.ts. */
+export const lift = (spend: number, half: number, ceiling: number): number =>
+  saturate(Math.max(0, num(spend)), half) * ceiling;
+
+/** Mirrors the research half-spend and ceiling in shared/simulation/resolve.ts. */
+export const RESEARCH_HALF = 150_000;
+export const RESEARCH_CEILING = 24;
+
+/**
+ * The quality this year's research will land next year.
+ *
+ * Mirrors `lift(researchSpend, 150_000, 24) * niche.innovationPace` in
+ * shared/simulation/resolve.ts exactly rather than approximately — the whole
+ * value of the number is that a CTO can weigh "nothing this year" against
+ * something specific, and a number that is nearly right is a number that will
+ * be wrong on next year's report with nobody able to say why.
+ */
+export const researchLanding = (spend: any, innovationPace: number | undefined): number =>
+  lift(num(spend), RESEARCH_HALF, RESEARCH_CEILING) * (Number.isFinite(innovationPace) ? (innovationPace as number) : 1);
+
+/** One decimal, and no trailing zero: quality points are read as "+7.4", not "+7.40". */
+export const qualityRead = (points: number): string =>
+  !Number.isFinite(points) ? "—" : trim((Math.round(points * 10) / 10).toFixed(1));
+
+/**
+ * "62%" — ownership, at the precision people argue at.
+ *
+ * A whole number above one per cent, because "61.7%" invites an argument about
+ * a tenth of a point that no decision in this game turns on; below that, one
+ * decimal, since the difference between 0.4% and 0.9% of a company is the
+ * difference between a footnote and a founder.
+ */
+export function shareOwnedRead(share: number | null | undefined): string {
+  if (share == null || !Number.isFinite(share)) return "—";
+  const pct = clamp01(share) * 100;
+  if (pct > 0 && pct < 1) return `${pct.toFixed(1)}%`;
+  return `${Math.round(pct)}%`;
+}
+
 /**
  * Whether this draft is submittable, and why not.
  *
@@ -424,8 +765,41 @@ export function validateDraft(
   for (const field of fields) {
     const value = draft?.[field.id];
 
-    if (field.kind === "choice") {
+    /*
+     * The one choice that has to be answered. Mirrors the `focus` special case
+     * in validateDecision(): every other choice on the desk is allowed to be
+     * left alone, and only the chief executive's focus is a question the year
+     * cannot run without.
+     */
+    if (field.kind === "choice" && field.id === "focus") {
       if (!field.options?.some((o) => o.value === value)) errors[field.id] = "Pick one.";
+      continue;
+    }
+
+    if (field.kind === "choice") {
+      // A choice the season has nothing to offer for — no dissolved seats to
+      // rehire — is skipped rather than refused. The screen says so in words;
+      // an error under an empty control would be the form blaming somebody for
+      // not answering a question it never asked.
+      if ((field.options?.length ?? 0) === 0) continue;
+      if (value !== undefined && value !== null && value !== "" && !field.options!.some((o) => o.value === value)) {
+        errors[field.id] = "Pick one.";
+      }
+      continue;
+    }
+
+    // A list of places, and an empty one is a real answer — the company still
+    // sells wherever it is already open.
+    if (field.kind === "cities") {
+      if (value !== undefined && !Array.isArray(value)) errors[field.id] = "Pick the places you sell.";
+      continue;
+    }
+
+    // A company is allowed to be for everybody, which is what "" means.
+    if (field.kind === "segment") {
+      if (value !== undefined && value !== null && value !== "" && typeof value !== "string") {
+        errors[field.id] = "Pick one, or none.";
+      }
       continue;
     }
 
@@ -651,8 +1025,6 @@ export const METRIC_PENDING: Partial<Record<MetricId, string>> = {
   profit: "Known when the year resolves",
   turned_away: "Known when the year resolves",
 };
-
-const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 
 /**
  * How far along one target is, from what the desk already knows.

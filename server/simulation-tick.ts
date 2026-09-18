@@ -36,7 +36,7 @@ import {
 import { advanceVenture } from "./simulation-routes";
 import { marketListings, resolveBids, biddableFunds, type Bid, type Listing } from "@shared/simulation/assets";
 import { applyRecovery, reviewCovenant, type RecoveryKind } from "@shared/simulation/recovery";
-import { challengeFor, checkChallenge, applyReward, type Challenge } from "@shared/simulation/challenges";
+import { challengeFor, checkChallenge, applyReward, discretionarySpend, type Challenge } from "@shared/simulation/challenges";
 import { applyAcquisition } from "@shared/simulation/mergers";
 import type { Company, CompanyAsset } from "@shared/simulation/types";
 
@@ -361,10 +361,21 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
   for (const company of nextWorld.companies) {
     if (company.kind !== "player" || !company.covenant) continue;
     const theirs = decisions.find((d) => d.companyId === company.id);
-    const spent =
-      (theirs?.cmo?.brandSpend ?? 0) + (theirs?.cmo?.performanceSpend ?? 0) + (theirs?.cmo?.celebritySpend ?? 0) +
-      (theirs?.cto?.featureSpend ?? 0) + (theirs?.cto?.reliabilitySpend ?? 0) + (theirs?.cto?.techDebtPaydown ?? 0) +
-      (theirs?.coo?.supportSpend ?? 0) + (theirs?.coo?.efficiencySpend ?? 0);
+    /*
+     * The same sum the challenge targets use, plus what opening a city cost.
+     *
+     * A cap that ignored either would be a cap in name only: a team could
+     * agree to one, then spend freely on research and on opening half the
+     * country, and meet the creditor's terms on paper while doing exactly what
+     * the terms exist to stop.
+     */
+    const before = world.companies.find((c) => c.id === company.id);
+    const openedThisYear = niche.cities
+      .filter((city) =>
+        (theirs?.cmo?.targetCities ?? []).includes(city.id) &&
+        !(before?.cities ?? niche.cities.map((c) => c.id)).includes(city.id))
+      .reduce((sum, city) => sum + city.entryCost, 0);
+    const spent = discretionarySpend(theirs) + openedThisYear;
     const review = reviewCovenant(company.covenant, spent);
     nextWorld.companies = nextWorld.companies.map((c) =>
       c.id === company.id ? { ...c, covenant: review.covenant } : c);

@@ -157,7 +157,31 @@ export function registerSimulationDeskRoutes(app: Express): void {
       yourRole: seat.role,
       yourTitle: seat.role ? ROLE_TITLES[seat.role as Role] : null,
       yourLevers: seat.role ? ROLE_LEVERS[seat.role as Role] : [],
-      fields: seat.role ? LEVER_FIELDS[seat.role as Role] : [],
+      /*
+       * The seat's levers, with the ones whose choices depend on this company
+       * filled in: which seats could be rehired, and which segments this market
+       * actually has. A static list cannot know either.
+       */
+      fields: seat.role ? LEVER_FIELDS[seat.role as Role].map((field) => {
+        if (field.id === "rehire") {
+          return {
+            ...field,
+            options: (["cmo", "cfo", "cto", "coo"] as Role[])
+              .filter((r) => !company.seats.includes(r))
+              .map((r) => ({ value: r, label: ROLE_TITLES[r], help: `Costs the salary that was saved, and gives the seat back its decisions.` })),
+          };
+        }
+        if (field.id === "positioning") {
+          return {
+            ...field,
+            options: [
+              { value: "", label: "Everybody", help: "No particular allegiance, and no particular advantage anywhere." },
+              ...niche.segments.map((s) => ({ value: s.id, label: s.name, help: s.description })),
+            ],
+          };
+        }
+        return field;
+      }) : [],
       /** What to show in the form: what they filed already, else last year's, else a sensible opening. */
       draft: seat.role
         ? (decisions as any)[seat.role] ?? defaultDraft(seat.role as Role, company, (previous as any)?.[seat.role])
@@ -177,6 +201,11 @@ export function registerSimulationDeskRoutes(app: Express): void {
         price: Math.round(company.price),
         customers: Object.values(company.customers).reduce((sum, n) => sum + n, 0),
         bankruptSince: company.bankruptSince ?? null,
+        /** What the founders still own. Raising money is what spends this. */
+        founderShare: company.founderShare ?? 1,
+        /** Research finished and not yet shipped — it lands next year, whatever happens. */
+        pipeline: Math.round((company.pipeline ?? 0) * 10) / 10,
+        positioning: company.positioning ?? null,
         /*
          * The seats the engine still charges a salary for. Sent because the
          * fixed-cost arithmetic cannot be reproduced without it — a client
@@ -187,12 +216,40 @@ export function registerSimulationDeskRoutes(app: Express): void {
          */
         seats: company.seats,
       },
+      /*
+       * Where the market exists, and where this company sells. The marketing
+       * seat picks from this; everyone else needs it to understand why a good
+       * product is reaching so few people.
+       */
+      cities: niche.cities.map((city) => ({
+        ...city,
+        open: (company.cities ?? niche.cities.map((c) => c.id)).includes(city.id),
+      })),
+      /** Seats that could be filled again, for the chief executive's rehire lever. */
+      dissolvedSeats: (["ceo", "cmo", "cfo", "cto", "coo"] as Role[]).filter((r) => !company.seats.includes(r)),
+
       segments: niche.segments.map((s) => ({
         id: s.id, name: s.name, description: s.description,
         referencePrice: s.referencePrice, loyalty: s.loyalty,
         yours: company.customers[s.id] ?? 0,
       })),
       economy: { ...economy, outlookMeans: OUTLOOK_MEANS[economy.outlook] },
+      /*
+       * What the company is worth, and how fast this market moves.
+       *
+       * Both exist so a screen can show the consequence of a decision before
+       * it is taken rather than after: dilution is priced against the
+       * valuation, and what a year of research buys scales with the market's
+       * pace. Without them a client can only guess, and a guess about how much
+       * of your company you are selling is not a thing to put in front of
+       * somebody.
+       */
+      valuation: (() => {
+        const units = Object.values(company.customers).reduce((sum, n) => sum + n, 0);
+        const assets = company.assets.reduce((sum, a) => sum + a.bookValue * 0.8, 0);
+        return Math.max(500_000, Math.round(units * company.price * 1.2 + assets - company.debt));
+      })(),
+      innovationPace: niche.innovationPace,
 
       table: seats.map((s) => ({
         userId: s.userId,
@@ -279,7 +336,32 @@ export function registerSimulationDeskRoutes(app: Express): void {
      */
     const clean: Record<string, any> = {};
     for (const field of LEVER_FIELDS[role]) {
-      clean[field.id] = field.kind === "choice" ? String(payload[field.id]) : Number(payload[field.id]);
+      const raw = payload[field.id];
+      switch (field.kind) {
+        case "choice":
+        case "segment":
+          // A segment, or nobody. An unset choice is a real answer here.
+          clean[field.id] = raw === undefined || raw === null ? "" : String(raw);
+          break;
+        case "cities":
+          /*
+           * A list of ids, filtered to places that exist.
+           *
+           * The default `Number()` below turned this into NaN, which silently
+           * unset every city the marketing seat had chosen — the decision was
+           * accepted, stored as nonsense, and the team found out by not
+           * expanding. Anything the engine reads by shape rather than by
+           * number has to be handled by shape.
+           */
+          clean[field.id] = Array.isArray(raw)
+            ? raw.map(String).filter((id) => niche.cities.some((c) => c.id === id)).slice(0, 20)
+            : [];
+          break;
+        default: {
+          const n = Number(raw);
+          clean[field.id] = Number.isFinite(n) ? n : 0;
+        }
+      }
     }
 
     await db.insert(simDecisions)

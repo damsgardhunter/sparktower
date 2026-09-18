@@ -18,6 +18,13 @@
  * this crowded, so nothing here dramatises movement: the trajectory is drawn
  * from share, which is the thing that actually moved, and the rank is stated
  * beside it rather than made the headline.
+ *
+ * **The table is ordered by what the founders own, not by customers.** Volume
+ * used to be the only way to climb, which quietly made every team play the
+ * same game and told the smallest, most profitable company in the market that
+ * it was losing. `founderValue` is what the business is worth times the share
+ * the five of them still hold — so a team can lose ground by growing, if it
+ * sold a third of itself to do it, and that trade is the point.
  */
 
 /** Mirrors Distress in shared/simulation/recovery.ts, via the desk's copy of it. */
@@ -29,6 +36,19 @@ export interface StandingRow {
   id: string;
   name: string;
   kind: "player" | "incumbent";
+  /**
+   * What the founders' share of the business is worth, and the order of the
+   * table.
+   *
+   * Mirrors the `worth()` sum in GET /api/sim/ventures/:id/standings: a bit
+   * over a year of sales, plus what the company owns, less what it owes, times
+   * the share the founders still hold. Ranking by customers made volume the
+   * only strategy worth playing and told a small, highly profitable team it
+   * was losing every day of the season.
+   */
+  founderValue: number;
+  /** 0-1, the half of that number a team can lose without losing a customer. */
+  founderShare: number;
   customers: number;
   /** A 0–1 fraction of every customer in the market. */
   share: number;
@@ -49,6 +69,14 @@ export interface HistoryPoint {
   customers: number;
   profit: number;
   rank: number;
+  /**
+   * What the founders owned at the end of that year, and what the rank beside
+   * it was decided by.
+   *
+   * Null on years written before the scoreboard changed — a real state, and
+   * the reason the chart can still fall back to share.
+   */
+  founderValue?: number | null;
 }
 
 export interface StandingsView {
@@ -92,6 +120,9 @@ export function sortRows(rows: StandingRow[] | undefined): StandingRow[] {
     const ra = Number.isFinite(a.rank) ? a.rank : Number.MAX_SAFE_INTEGER;
     const rb = Number.isFinite(b.rank) ? b.rank : Number.MAX_SAFE_INTEGER;
     if (ra !== rb) return ra - rb;
+    // The tiebreak follows what the server ranked by, so a table with two rows
+    // at the same rank still reads in the order the scoreboard means.
+    if ((b.founderValue ?? 0) !== (a.founderValue ?? 0)) return (b.founderValue ?? 0) - (a.founderValue ?? 0);
     if (b.customers !== a.customers) return b.customers - a.customers;
     return a.name.localeCompare(b.name);
   });
@@ -158,6 +189,70 @@ export function gapAhead(rows: StandingRow[] | undefined): { name: string; custo
   };
 }
 
+/**
+ * The company immediately ahead, in the terms the table is actually ordered by.
+ *
+ * `gapAhead` answers "how many more customers", which is still a true and
+ * useful sentence — it is just no longer the question the ranking asks. This
+ * one answers the ranking's question, and the two disagreeing is the most
+ * informative thing this screen can say: being a hundred thousand customers
+ * behind and four million of value ahead is a strategy working.
+ */
+export function valueGapAhead(rows: StandingRow[] | undefined): { name: string; value: number; line: string } | null {
+  const all = sortRows(rows);
+  const index = all.findIndex((r) => r.isYou);
+  if (index <= 0) return null;
+  const ahead = all[index - 1];
+  const gap = Math.max(0, (ahead.founderValue ?? 0) - (all[index].founderValue ?? 0));
+  return {
+    name: ahead.name,
+    value: gap,
+    line: gap === 0
+      ? `Level with ${ahead.name} on what the founders own, and behind on the tiebreak.`
+      : `${gap.toLocaleString()} of founder-owned value behind ${ahead.name}.`,
+  };
+}
+
+/** What the whole business is worth, before the founders' share of it. */
+export const wholeValue = (row: StandingRow): number =>
+  row.founderShare > 0 ? Math.round((row.founderValue ?? 0) / row.founderShare) : (row.founderValue ?? 0);
+
+/** What the part the founders no longer own is worth. The price of every raise, in one number. */
+export const soldAway = (row: StandingRow): number =>
+  Math.max(0, wholeValue(row) - (row.founderValue ?? 0));
+
+/**
+ * One row's ownership, said as the trade it is.
+ *
+ * Full ownership gets no sentence at all — "the founders own all of it" is the
+ * unremarkable case and a line saying so on every undiluted row would train
+ * people to skip the ones where it matters.
+ */
+export function ownershipRead(row: StandingRow): string | null {
+  if (!Number.isFinite(row.founderShare) || row.founderShare >= 0.999) return null;
+  const pct = row.founderShare * 100;
+  const shown = pct < 1 ? pct.toFixed(1) : String(Math.round(pct));
+  return `Founders hold ${shown}% of a ${wholeValue(row).toLocaleString()} business.`;
+}
+
+/**
+ * The sentence that explains the whole scoreboard, when the market has earned it.
+ *
+ * Whenever the largest company by customers is not the one at the top, the
+ * table is making the argument for itself — and naming the two companies is
+ * worth more than any amount of explaining what `founderValue` means. Null
+ * when they are the same company, because then there is nothing to explain and
+ * an evergreen caption would just be noise.
+ */
+export function biggestNotBest(rows: StandingRow[] | undefined): string | null {
+  const all = sortRows(rows);
+  if (all.length < 2) return null;
+  const biggest = all.reduce((best, row) => (row.customers > best.customers ? row : best), all[0]);
+  const top = all[0];
+  if (biggest.id === top.id || biggest.customers <= 0) return null;
+  return `${biggest.name} has the most customers and ${top.name} is top of the table: ${top.name} owns more of what it built. Owning less of a bigger company is worth less than owning all of a smaller one.`;
+}
+
 /** One bar of the season's trajectory. */
 export interface TrajectoryPoint extends HistoryPoint {
   /** 0–1, for the height of the bar. Scaled to the best year, not to the market. */
@@ -165,6 +260,15 @@ export interface TrajectoryPoint extends HistoryPoint {
   /** The best year so far, drawn full height so the shape has a top. */
   peak: boolean;
   profitable: boolean;
+  /**
+   * What the bars are drawn from, so the caption can say so.
+   *
+   * "value" whenever every year carries a founder value, which makes the shape
+   * agree with the rank printed under it. "share" is the fallback for a season
+   * with years from before the scoreboard changed — and a chart that silently
+   * mixed the two would be the one lie this screen cannot afford.
+   */
+  basis: "value" | "share";
 }
 
 /**
@@ -182,17 +286,33 @@ export interface TrajectoryPoint extends HistoryPoint {
  */
 export function trajectory(history: HistoryPoint[] | undefined): TrajectoryPoint[] {
   const points = [...(history ?? [])].sort((a, b) => a.year - b.year);
-  const shares = points.map((p) => (Number.isFinite(p.share) ? Math.max(0, p.share) : 0));
-  const best = shares.reduce((max, s) => Math.max(max, s), 0);
+
+  /*
+   * Drawn in the terms the season is actually scored in, when every year can
+   * be. The rank under each bar is decided by founder-owned value, and a chart
+   * shaped by share beside it would show a year rising while the place beneath
+   * it fell, with nothing on the screen explaining the contradiction. One year
+   * missing the figure — a report written before the change — drops the whole
+   * chart back to share rather than drawing half a season in each unit.
+   */
+  const hasValue = points.length > 0
+    && points.every((p) => p.founderValue != null && Number.isFinite(p.founderValue));
+  const basis: "value" | "share" = hasValue ? "value" : "share";
+
+  const values = points.map((p) => (hasValue
+    ? Math.max(0, p.founderValue as number)
+    : Number.isFinite(p.share) ? Math.max(0, p.share) : 0));
+  const best = values.reduce((max, v) => Math.max(max, v), 0);
 
   return points.map((point, i) => {
-    const share = shares[i];
-    const fraction = best > 0 ? share / best : 0;
+    const value = values[i];
+    const fraction = best > 0 ? value / best : 0;
     return {
       ...point,
       height: Math.max(0.06, Math.min(1, fraction)),
-      peak: best > 0 && share === best,
+      peak: best > 0 && value === best,
       profitable: Number.isFinite(point.profit) && point.profit > 0,
+      basis,
     };
   });
 }

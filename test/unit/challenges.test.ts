@@ -143,10 +143,20 @@ describe("marking it", () => {
     expect(result.reward).toEqual(ch.partialReward);
   });
 
+  /*
+   * A year that fails whatever was actually asked.
+   *
+   * Built from the challenge's own targets rather than from a guess at which
+   * one the seat drew — the pool per seat has grown, and a test that hard-codes
+   * a bad year for one particular challenge is testing the draw.
+   */
+  const missesEverything = () => report(Object.fromEntries(
+    ch.targets.map((t) => [t.metric, t.compare === "at_least" ? t.goal - 1 : t.goal + 1]),
+  ) as any);
+
   it("pays nothing for a year that did none of it", () => {
-    const bad = report({ cash: -5_000_000, debt: 50_000_000, profit: -9_000_000, reputation: 1 });
-    const result = checkChallenge({ challenge: ch, report: bad, company: c });
-    expect(result.outcome).toBe("missed");
+    const result = checkChallenge({ challenge: ch, report: missesEverything(), company: c });
+    expect(result.outcome, JSON.stringify(result.targets)).toBe("missed");
     expect(result.reward).toBeNull();
   });
 
@@ -156,8 +166,7 @@ describe("marking it", () => {
      * happened and by how much is the only useful thing a result can say on
      * day four of fourteen.
      */
-    const bad = report({ cash: -5_000_000, debt: 50_000_000, profit: -9_000_000, reputation: 1 });
-    const result = checkChallenge({ challenge: ch, report: bad, company: c });
+    const result = checkChallenge({ challenge: ch, report: missesEverything(), company: c });
     expect(result.note).toMatch(/got /);
     for (const target of result.targets) {
       expect(typeof target.actual).toBe("number");

@@ -65,8 +65,11 @@ interface Desk {
     cash: number; debt: number; creditLimit: number; reputation: number;
     quality: number; brand: number; service: number; capacity: number;
     unitCost: number; price: number; customers: number; bankruptSince: number | null;
+    founderShare: number; pipeline: number; positioning: string | null;
   };
   segments: { id: string; name: string; description: string; referencePrice: number; loyalty: number; yours: number }[];
+  cities: { id: string; name: string; weight: number; entryCost: number; note: string; open: boolean }[];
+  dissolvedSeats: string[];
   economy: { demand: number; interestRate: number; costIndex: number; outlook: string; outlookMeans: string };
   table: { userId: string; name: string; role: Role | null; title: string | null; filed: boolean; isYou: boolean }[];
   filed: Record<string, any>;
@@ -167,7 +170,16 @@ export default function SimulationDeskPage() {
     if (!desk || desk.phase !== "running" || !desk.yourRole || !draft) return desk?.preview.commitment ?? null;
     try {
       const decisions: any = { ...desk.filed, companyId: desk.ventureId, [desk.yourRole]: draft };
-      return commitment(desk.company as any, decisions, desk.economy);
+      /*
+       * The market's shape matters to this sum twice over: the fixed bill
+       * scales with how much of the country the company sells in, and opening
+       * somewhere new is the largest single cash movement a marketing seat can
+       * make. Without it the meter ignored both — it sat unmoved while a city
+       * worth a million was selected, which is precisely the moment it exists
+       * to say something.
+       */
+      const market: any = { cities: desk.cities, segments: desk.segments };
+      return commitment(desk.company as any, decisions, desk.economy, market);
     } catch {
       /*
        * Fall back to the server's own figure rather than taking the screen
@@ -235,6 +247,13 @@ export default function SimulationDeskPage() {
             <Stat label="Quality" value={`${c.quality}`} />
             <Stat label="Brand" value={`${c.brand}`} />
             <Stat label="Service" value={`${c.service}`} />
+            <Stat
+              label="You own"
+              value={`${Math.round(c.founderShare * 100)}%`}
+              sub={c.founderShare < 1 ? "the rest was sold to investors" : "nobody else has a claim"}
+              tone={c.founderShare < 0.6 ? "warn" : "plain"}
+            />
+            {c.pipeline > 0 && <Stat label="Research due" value={`+${c.pipeline}`} sub="lands next year" />}
           </div>
           {c.bankruptSince !== null && (
             <p className="mt-4 rounded-lg bg-destructive/10 text-destructive text-sm p-3">
@@ -286,6 +305,7 @@ export default function SimulationDeskPage() {
                     value={draft[field.id]}
                     error={errors[field.id]}
                     onChange={(v) => setDraft((d) => ({ ...d!, [field.id]: v }))}
+                    cities={desk.cities}
                   />
                 ))}
               </div>
@@ -717,14 +737,58 @@ function LastYear({ report }: { report: NonNullable<Desk["lastYear"]> }) {
  * is miserable and error-prone in a way that matters here — a stray zero is
  * a decision nobody meant to make.
  */
-function Field({ field, value, error, onChange }: {
+function Field({ field, value, error, onChange, cities }: {
   field: LeverField; value: any; error?: string; onChange: (v: any) => void;
+  cities?: Desk["cities"];
 }) {
-  if (field.kind === "choice") {
+  if (field.kind === "cities") {
+    const open = new Set<string>(Array.isArray(value) ? value : []);
     return (
       <div>
         <Label className="text-sm font-medium">{field.label}</Label>
         <p className="text-xs text-muted-foreground mt-0.5 mb-2">{field.help}</p>
+        <div className="space-y-1.5">
+          {(cities ?? []).map((city) => {
+            const selected = open.has(city.id);
+            return (
+              <button
+                key={city.id}
+                type="button"
+                onClick={() => {
+                  const next = new Set(open);
+                  // Somewhere you already sell cannot be closed — the customers
+                  // are there and leaving them is not a lever this game offers.
+                  if (city.open) return;
+                  selected ? next.delete(city.id) : next.add(city.id);
+                  onChange(Array.from(next));
+                }}
+                className={`w-full text-left rounded-lg border p-2.5 transition ${selected ? "border-primary bg-primary/5" : "border-border hover:border-muted-foreground/40"} ${city.open ? "opacity-90" : ""}`}
+                data-testid={`city-${city.id}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium">{city.name}</span>
+                  <span className="text-xs text-muted-foreground shrink-0">
+                    {city.open ? "already open" : `${compact(city.entryCost)} to open`} · {Math.round(city.weight * 100)}% of the market
+                  </span>
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-0.5">{city.note}</p>
+              </button>
+            );
+          })}
+        </div>
+        {error && <p className="text-xs text-destructive mt-1.5">{error}</p>}
+      </div>
+    );
+  }
+
+  if (field.kind === "segment" || field.kind === "choice") {
+    return (
+      <div>
+        <Label className="text-sm font-medium">{field.label}</Label>
+        <p className="text-xs text-muted-foreground mt-0.5 mb-2">{field.help}</p>
+        {(field.options?.length ?? 0) === 0 && (
+          <p className="text-xs text-muted-foreground">Nothing to choose here — every seat is filled.</p>
+        )}
         <div className="grid grid-cols-2 gap-2">
           {field.options?.map((o) => (
             <button

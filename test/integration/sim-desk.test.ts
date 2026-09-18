@@ -59,6 +59,16 @@ async function runningCompany(app: any) {
    */
   await db.update(simVentures).set({ phase: "retired" })
     .where(inArray(simVentures.phase, ["filling", "claiming", "naming"]));
+  /*
+   * And close any season still taking rooms, so this one gets its own.
+   *
+   * A season holds every room in its market and a tick moves all of them.
+   * Sharing one across tests meant a test that resolved a year quietly
+   * advanced another test's company — which passed alone and failed in a full
+   * run, on whichever test happened to be downstream.
+   */
+  await db.update(simSeasons).set({ status: "abandoned" })
+    .where(eq(simSeasons.status, "forming"));
 
   const players = [];
   let ventureId = "";
@@ -162,7 +172,7 @@ describe("filing a decision", () => {
     const res = await seat("cmo").agent.post(`/api/sim/ventures/${ventureId}/decisions`).send({
       decision: { price: 19, brandSpend: 0, performanceSpend: 0, celebritySpend: 0, borrow: 5_000_000, capacityTarget: 1 },
     });
-    expect(res.status).toBe(200);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
 
     const [row] = await db.select().from(simDecisions)
       .where(and(eq(simDecisions.ventureId, ventureId), eq(simDecisions.role, "cmo")));
@@ -234,6 +244,114 @@ describe("what the table has committed", () => {
     const desk = await seat("coo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
     expect(desk.body.preview.notes.join(" ")).toMatch(/more people than operations could serve/i);
   }, 120_000);
+});
+
+describe("the decisions that make it a business", () => {
+  it("offers every seat a full desk rather than one dial", async () => {
+    /*
+     * The complaint this answers: every seat but marketing had three levers or
+     * fewer and the chief executive had exactly one, so most of the table had
+     * almost nothing to decide on a given day.
+     */
+    const app = await getTestApp();
+    const { ventureId, seat } = await runningCompany(app);
+
+    for (const role of ROLES) {
+      const desk = await seat(role).agent.get(`/api/sim/ventures/${ventureId}/desk`);
+      expect(desk.body.fields.length, `${role} has too little to do`).toBeGreaterThanOrEqual(3);
+      for (const field of desk.body.fields) {
+        expect(field.help.length, `${role}.${field.id} explains nothing`).toBeGreaterThan(20);
+      }
+    }
+  }, 180_000);
+
+  it("sends the marketing seat the places it could open, and which are already open", async () => {
+    const app = await getTestApp();
+    const { ventureId, seat } = await runningCompany(app);
+
+    const desk = await seat("cmo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    expect(desk.body.cities.length).toBeGreaterThan(1);
+    expect(desk.body.cities.some((c: any) => c.open), "a company sells somewhere").toBe(true);
+    expect(desk.body.cities.some((c: any) => !c.open), "and not everywhere").toBe(true);
+    for (const city of desk.body.cities) {
+      expect(city.entryCost).toBeGreaterThan(0);
+      expect(city.note.length).toBeGreaterThan(10);
+    }
+
+    const cityField = desk.body.fields.find((f: any) => f.id === "targetCities");
+    expect(cityField.kind).toBe("cities");
+  }, 180_000);
+
+  it("fills the chief executive's choices from this company's own position", async () => {
+    const app = await getTestApp();
+    const { ventureId, seat } = await runningCompany(app);
+
+    const desk = await seat("ceo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    const positioning = desk.body.fields.find((f: any) => f.id === "positioning");
+    expect(positioning.kind).toBe("segment");
+    // Every segment in this market, plus the option of being for everybody.
+    expect(positioning.options.length).toBe(desk.body.segments.length + 1);
+
+    // Nobody has been dissolved, so there is nobody to rehire.
+    const rehire = desk.body.fields.find((f: any) => f.id === "rehire");
+    expect(rehire.options).toHaveLength(0);
+    expect(desk.body.dissolvedSeats).toHaveLength(0);
+  }, 180_000);
+
+  it("stores the new decisions and acts on them", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+
+    const desk = await seat("cmo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    const shut = desk.body.cities.find((c: any) => !c.open);
+    const open = desk.body.cities.filter((c: any) => c.open).map((c: any) => c.id);
+
+    const filed = await seat("cmo").agent.post(`/api/sim/ventures/${ventureId}/decisions`).send({
+      decision: { price: 22, brandSpend: 500_000, performanceSpend: 0, celebritySpend: 0, targetCities: [...open, shut.id] },
+    });
+    expect(filed.status, JSON.stringify(filed.body)).toBe(200);
+
+    await seat("cfo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { borrow: 0, repay: 0, cashBuffer: 0, raiseAmount: 3_000_000 } });
+    await seat("ceo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { focus: "quality", positioning: desk.body.segments[0].id, rehire: "" } });
+    await seat("cto").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0, researchSpend: 600_000 } });
+
+    await db.update(simSeasons)
+      .set({ nextTickAt: new Date(Date.now() - 1000), startsAt: new Date(Date.now() - 60_000) })
+      .where(eq(simSeasons.id, seasonId));
+    expect(await tickSeason(seasonId)).toBe(1);
+
+    const after = await seat("cmo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    // The city was opened and charged for.
+    expect(after.body.cities.find((c: any) => c.id === shut.id).open).toBe(true);
+    // The raise cost them ownership.
+    expect(after.body.company.founderShare).toBeLessThan(1);
+    // The research is banked and lands next year.
+    expect(after.body.company.pipeline).toBeGreaterThan(0);
+    // And the positioning stuck.
+    expect(after.body.company.positioning).toBe(desk.body.segments[0].id);
+  }, 240_000);
+
+  it("ranks a year by what the founders own rather than by headcount of customers", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+
+    await db.update(simSeasons)
+      .set({ nextTickAt: new Date(Date.now() - 1000), startsAt: new Date(Date.now() - 60_000) })
+      .where(eq(simSeasons.id, seasonId));
+    await tickSeason(seasonId);
+
+    const desk = await seat("ceo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    expect(desk.body.lastYear.founderValue).toBeGreaterThanOrEqual(0);
+    expect(desk.body.lastYear.founderShare).toBe(1);
+
+    const standings = await seat("ceo").agent.get(`/api/sim/ventures/${ventureId}/standings`);
+    const values = standings.body.rows.map((r: any) => r.founderValue);
+    expect(values, "the table should be ordered by what each side owns")
+      .toEqual([...values].sort((a: number, b: number) => b - a));
+  }, 240_000);
 });
 
 describe("the year after", () => {

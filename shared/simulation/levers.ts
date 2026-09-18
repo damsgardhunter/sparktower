@@ -27,6 +27,7 @@
 import type { Company, Niche, Role } from "./types";
 import type { TeamDecisions } from "./decisions";
 import { interlock, fixedCosts } from "./decisions";
+import { reachOf } from "./market";
 
 /** How a lever is presented and bounded. */
 export interface LeverField {
@@ -35,7 +36,7 @@ export interface LeverField {
   label: string;
   /** One line on what moving it actually does. */
   help: string;
-  kind: "money" | "price" | "count" | "choice";
+  kind: "money" | "price" | "count" | "choice" | "cities" | "segment";
   min?: number;
   max?: number;
   step?: number;
@@ -61,6 +62,8 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
       help: "Buying customers now. Faster than brand and it stops the moment you stop paying." },
     { id: "celebritySpend", label: "Sponsorship", kind: "money", min: 0, step: 100_000,
       help: "A shortcut to being known, at a premium. Worth more than the same money on brand, and it does not repeat itself." },
+    { id: "targetCities", label: "Where you sell", kind: "cities",
+      help: "Only people in a city you have opened can choose you, however good you are. Opening one costs money once and costs more to run for ever — spread faster than you can sell and you pay for reach you are not using." },
   ],
   cto: [
     { id: "featureSpend", label: "New features", kind: "money", min: 0, step: 50_000,
@@ -69,6 +72,8 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
       help: "Whether it works. Counts for quality and for service, so it is the cheapest way to move two numbers." },
     { id: "techDebtPaydown", label: "Technical debt", kind: "money", min: 0, step: 50_000,
       help: "Buying back the speed you sold. Nothing visible this year." },
+    { id: "researchSpend", label: "Research", kind: "money", min: 0, step: 50_000,
+      help: "Work that lands next year instead of this one, and buys more quality per pound for the wait. The only decision here that asks you to be behind on purpose." },
   ],
   coo: [
     { id: "capacityTarget", label: "Capacity", kind: "count", min: 0, step: 10_000,
@@ -87,6 +92,8 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
       help: "Less owed, less interest, less cash. The boring move that keeps a bad year from being fatal." },
     { id: "cashBuffer", label: "Cash to hold back", kind: "money", min: 0, step: 100_000,
       help: "What you refuse to let the others spend. A statement of intent rather than a lock." },
+    { id: "raiseAmount", label: "Raise from investors", kind: "money", min: 0, step: 500_000,
+      help: "Money that never has to be repaid, bought with a permanent share of everything the company becomes. Raising while the company is worth little is the most expensive money in the game." },
   ],
   ceo: [
     { id: "focus", label: "Where the year goes", kind: "choice", options: [
@@ -95,6 +102,10 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
       { value: "quality", label: "Quality", help: "Build something worth switching to, and wait for it." },
       { value: "survival", label: "Survival", help: "Stop the bleeding. Everything else can wait for next year." },
     ], help: "What the company is for this year. It does not override anyone — it is what you have told them all to weigh." },
+    { id: "positioning", label: "Who the company is for", kind: "segment",
+      help: "Declaring a segment makes you meaningfully more appealing to those people and slightly less to everyone else. It is the decision the other four then have to live inside." },
+    { id: "rehire", label: "Bring a seat back", kind: "choice", options: [], 
+      help: "A seat dissolved in a bad year can be filled again, at the salary that was saved by losing it — and the lever comes back with it." },
   ],
 };
 
@@ -110,11 +121,11 @@ export function defaultDraft(role: Role, company: Company, previous?: any): Reco
   }
 
   switch (role) {
-    case "cmo": return { price: company.price, brandSpend: 0, performanceSpend: 0, celebritySpend: 0 };
-    case "cto": return { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0 };
+    case "cmo": return { price: company.price, brandSpend: 0, performanceSpend: 0, celebritySpend: 0, targetCities: company.cities ?? [] };
+    case "cto": return { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0, researchSpend: 0 };
     case "coo": return { capacityTarget: company.capacity, supportSpend: 0, efficiencySpend: 0, headcount: 0 };
-    case "cfo": return { borrow: 0, repay: 0, cashBuffer: 0 };
-    case "ceo": return { focus: "growth" };
+    case "cfo": return { borrow: 0, repay: 0, cashBuffer: 0, raiseAmount: 0 };
+    case "ceo": return { focus: "growth", positioning: company.positioning ?? "", rehire: "" };
   }
 }
 
@@ -142,12 +153,46 @@ export function validateDecision(role: Role, payload: any, company: Company): Va
   for (const field of LEVER_FIELDS[role]) {
     const value = payload[field.id];
 
-    if (field.kind === "choice") {
+    if (field.kind === "choice" && field.id === "focus") {
       if (!field.options?.some((o) => o.value === value)) errors[field.id] = "Pick one.";
       continue;
     }
 
-    if (value === undefined || value === null || value === "") { errors[field.id] = "Needs a number."; continue; }
+    if (field.kind === "choice") {
+      // A choice with no options is one the season has nothing to offer for —
+      // an empty seat list, say — and is skipped rather than refused.
+      if ((field.options?.length ?? 0) === 0) continue;
+      if (value !== undefined && value !== null && value !== "" && !field.options!.some((o) => o.value === value)) {
+        errors[field.id] = "Pick one.";
+      }
+      continue;
+    }
+
+    if (field.kind === "cities") {
+      if (value !== undefined && !Array.isArray(value)) errors[field.id] = "Pick the places you sell.";
+      continue;
+    }
+
+    if (field.kind === "segment") {
+      // Optional: a company is allowed to be for everybody.
+      if (value !== undefined && value !== null && value !== "" && typeof value !== "string") {
+        errors[field.id] = "Pick one, or none.";
+      }
+      continue;
+    }
+
+    /*
+     * A field that was never sent is not an error; a field that was sent empty
+     * is.
+     *
+     * The difference matters the moment a new lever is added: every client
+     * that predates it stops sending it, and treating absence as "needs a
+     * number" made adding `researchSpend` silently reject every decision the
+     * technology seat filed. Missing means nought; cleared means the person
+     * emptied the box and meant something by it.
+     */
+    if (value === undefined) continue;
+    if (value === null || value === "") { errors[field.id] = "Needs a number."; continue; }
     const n = Number(value);
     if (!Number.isFinite(n)) { errors[field.id] = "Needs a number."; continue; }
     if (field.min !== undefined && n < field.min) errors[field.id] = `Can't go below ${field.min}.`;
@@ -173,6 +218,8 @@ export interface Commitment {
   ratio: number;
   /** How each seat contributed, so the number is arguable rather than mysterious. */
   bySeat: { role: Role; spend: number }[];
+  /** Of which, the one-off cost of opening somewhere new. */
+  openingCost: number;
 }
 
 /**
@@ -183,17 +230,48 @@ export interface Commitment {
  * the sum. Shown live, it turns "I'll take two million for marketing" from a
  * private decision into a thing the other four can see happening.
  */
-export function commitment(company: Company, decisions: TeamDecisions, economy: { costIndex: number }): Commitment {
+export function commitment(company: Company, decisions: TeamDecisions, economy: { costIndex: number }, niche?: Niche): Commitment {
   const bySeat: { role: Role; spend: number }[] = [
     { role: "cmo", spend: (decisions.cmo?.brandSpend ?? 0) + (decisions.cmo?.performanceSpend ?? 0) + (decisions.cmo?.celebritySpend ?? 0) },
-    { role: "cto", spend: (decisions.cto?.featureSpend ?? 0) + (decisions.cto?.reliabilitySpend ?? 0) + (decisions.cto?.techDebtPaydown ?? 0) },
+    { role: "cto", spend: (decisions.cto?.featureSpend ?? 0) + (decisions.cto?.reliabilitySpend ?? 0) + (decisions.cto?.techDebtPaydown ?? 0) + (decisions.cto?.researchSpend ?? 0) },
     { role: "coo", spend: (decisions.coo?.supportSpend ?? 0) + (decisions.coo?.efficiencySpend ?? 0) },
     { role: "cfo", spend: Math.max(0, decisions.cfo?.repay ?? 0) },
     { role: "ceo", spend: 0 },
   ];
 
+  /*
+   * Opening a city is the largest single movement of cash a marketing seat can
+   * make, and it was not in this total.
+   *
+   * The engine takes it straight out of cash rather than counting it as
+   * discretionary spending, so a table opening three cities for 1.7m watched
+   * the meter stay comfortable and found out at the tick. Whether the engine
+   * books it as spend or as a cash movement is bookkeeping; what the five of
+   * them have committed is the same money either way, and this number exists
+   * to tell them that.
+   */
+  const openingCost = niche
+    ? niche.cities
+        .filter((c) => (decisions.cmo?.targetCities ?? []).includes(c.id) && !(company.cities ?? []).includes(c.id))
+        .reduce((sum, c) => sum + c.entryCost, 0)
+    : 0;
+  if (openingCost > 0) {
+    const marketing = bySeat.find((s) => s.role === "cmo")!;
+    marketing.spend += openingCost;
+  }
+
   const spend = bySeat.reduce((sum, s) => sum + s.spend, 0);
-  const fixed = fixedCosts(company, decisions.coo?.headcount ?? 0, { costIndex: economy.costIndex } as any);
+  /*
+   * The same reach the engine will charge against. A preview that assumed a
+   * national cost base for a one-city company would overstate the bill by more
+   * than half, and the number this whole screen exists for would be wrong.
+   */
+  const fixed = fixedCosts(
+    company,
+    decisions.coo?.headcount ?? 0,
+    { costIndex: economy.costIndex } as any,
+    niche ? reachOf(company, niche) : 1,
+  );
   const borrowable = Math.max(0, company.creditLimit - company.debt);
   const available = Math.max(0,
     company.cash + (decisions.cfo?.borrow ?? 0) + borrowable - (decisions.cfo?.cashBuffer ?? 0));
@@ -204,6 +282,7 @@ export function commitment(company: Company, decisions: TeamDecisions, economy: 
     available,
     ratio: available > 0 ? (spend + fixed) / available : Infinity,
     bySeat,
+    openingCost,
   };
 }
 
@@ -237,7 +316,7 @@ export function draftPreview(input: {
   economy: { costIndex: number };
 }): DraftPreview {
   const { company, niche, decisions, economy } = input;
-  const money = commitment(company, decisions, economy);
+  const money = commitment(company, decisions, economy, niche);
   const lock = interlock(company, decisions, niche);
   const warnings: string[] = [];
 

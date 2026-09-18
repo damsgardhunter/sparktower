@@ -231,6 +231,9 @@ export function seedIncumbents(niche: Niche): Company[] {
       price,
       customers,
       assets: [],
+      // Everywhere already, which is most of what makes them incumbents.
+      cities: [],
+      founderShare: 1,
       seats: [],
     };
   });

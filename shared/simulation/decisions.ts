@@ -60,6 +60,16 @@ export interface FinanceDecision {
   repay: number;
   /** Equity sold, and what fraction of the company goes with it. */
   raise?: { amount: number; equityPct: number };
+  /**
+   * What to raise this year, as the desk files it.
+   *
+   * A flat number rather than the older `{ amount, equityPct }`: the team says
+   * how much they want and the engine prices the dilution against what the
+   * company is actually worth. Letting a team name their own equity price
+   * would be letting them decide what their company is worth, which is the one
+   * number in a raise that is never theirs to choose.
+   */
+  raiseAmount?: number;
   /** Held back rather than spent. Dull, and the reason a bad year isn't a fatal one. */
   cashBuffer: number;
 }
@@ -72,6 +82,15 @@ export interface TechDecision {
   reliabilitySpend: number;
   /** Paying down the shortcuts taken in earlier years. Invisible this year, cheaper every year after. */
   techDebtPaydown: number;
+  /**
+   * Work that lands next year rather than this one.
+   *
+   * Worth more per pound than shipping features now, and it does nothing at
+   * all for the year you spend it in. The only lever in the game that asks a
+   * team to be behind this year on purpose — which is the decision every
+   * real product organisation actually argues about.
+   */
+  researchSpend?: number;
 }
 
 /** Making and serving what is sold. */
@@ -94,6 +113,19 @@ export interface ExecutiveDecision {
   dissolveSeats?: Role[];
   /** An offer to another company in the niche. */
   offer?: { targetCompanyId: string; kind: "buy_asset" | "acquire" | "merge"; assetId?: string; amount: number };
+  /**
+   * Who the company is for.
+   *
+   * A positioning decision rather than a spending one: naming a segment makes
+   * the company meaningfully more appealing to those people and slightly less
+   * to everybody else. It is the chief executive's because it is the decision
+   * the other four then have to live inside — the CMO's price, the COO's
+   * service and the CTO's roadmap all mean different things depending on who
+   * the answer is.
+   */
+  positioning?: string;
+  /** Seats to bring back, at the cost of the salary that was saved by losing them. A single seat arrives as a string. */
+  rehire?: Role[] | Role | "";
 }
 
 /** One year, from all five seats. A missing seat is a real state, not an error. */
@@ -217,6 +249,18 @@ export const FOCUS_EFFECTS = {
 
 export type Focus = keyof typeof FOCUS_EFFECTS;
 
+/**
+ * How much being "for" a segment is worth, and what it costs elsewhere.
+ *
+ * Deliberately modest. A positioning that doubled appeal would make every
+ * other decision a rounding error, and one that did nothing would be a
+ * dropdown pretending to be a strategy. Roughly a fifth better where you aimed
+ * and a tenth worse everywhere else is enough to change which segment is worth
+ * fighting for without deciding the season on its own.
+ */
+export const POSITIONING_BONUS = 1.18;
+export const POSITIONING_COST = 0.92;
+
 /** The multipliers for a focus, or a neutral year when no chief executive filed. */
 export const focusEffects = (focus?: string) =>
   FOCUS_EFFECTS[(focus ?? "") as Focus] ?? { marketing: 1, quality: 1, cost: 1, fixed: 1, decay: 1 };
@@ -229,10 +273,24 @@ export const FOCUS_NOTES: Record<Focus, string> = {
   survival: "The year was run for survival: a hiring freeze and deferred everything. Much cheaper, and the company comes out of it behind where it would otherwise be.",
 };
 
-export function fixedCosts(company: Company, headcount: number, economy: Economy): number {
+/**
+ * What it costs to keep the doors open, before anyone decides anything.
+ *
+ * Scaled by how much of the country the company sells in, which is the part
+ * that makes the city decision a real trade rather than a button marked
+ * "better". A company in one city does not carry a national payroll; one that
+ * has opened everywhere is paying for everywhere whether or not it is selling
+ * there. Expansion buys reach and buys a bigger bill with it, and a team that
+ * spreads faster than it sells feels exactly that.
+ *
+ * The floor matters as much as the scale: even a single-city company has five
+ * executives and a head office, so the base never falls below 40%.
+ */
+export function fixedCosts(company: Company, headcount: number, economy: Economy, reach = 1): number {
+  const footprint = 0.4 + 0.6 * Math.max(0, Math.min(1, reach));
   const salaries = headcount * 85_000 * economy.costIndex;
   // Each filled seat is an executive salary. Dissolving one is a real saving
   // and a real loss — which is the trade the CEO is being offered.
   const executives = company.seats.length * 140_000;
-  return salaries + executives;
+  return (salaries + executives) * footprint;
 }

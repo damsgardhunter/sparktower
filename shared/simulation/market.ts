@@ -67,8 +67,13 @@ export function appealFor(company: Company, segment: Segment): number {
    * expected scored 1.24 on price and walked off with the customers a
    * newcomer should have needed years of service to earn. A discount can make
    * an offer attractive; it cannot make it something it isn't.
+   *
+   * The ceiling sits just above parity because every other axis tops out at
+   * exactly 1: quality, brand and service cannot score better than perfect, so
+   * a price allowed to score 1.15 was the only way any company could beat a
+   * flawless one, and being cheap quietly outranked being good at anything.
    */
-  const priceScore = Math.min(1.15, Math.max(0.02, 1 - segment.priceSensitivity * (priceRatio - 1) * 1.6));
+  const priceScore = Math.min(1.08, Math.max(0.02, 1 - segment.priceSensitivity * (priceRatio - 1) * 1.6));
   /*
    * And far below the going rate, price stops reading as value and starts
    * reading as a warning — most sharply to the segments buying on quality and
@@ -140,6 +145,40 @@ export interface AllocationResult {
  * can serve keeps only what it can deliver, and the rest leave with an opinion.
  * That is the COO's seat made real.
  */
+/**
+ * The share of a market a company can even be considered by.
+ *
+ * Not a quality measure — a brilliant product in one city out of six is
+ * invisible to five sixths of the people who would have chosen it. This is
+ * what makes "where do we sell" a decision rather than a detail, and what
+ * makes the incumbents hard: they are already everywhere.
+ */
+export function reachOf(company: Company, niche: Niche): number {
+  if (company.kind === "incumbent") return 1;
+  /*
+   * A company from before cities existed is treated as selling everywhere.
+   *
+   * Seasons already running have a world stored without this field, and the
+   * alternative to a default is a fortnight of somebody's game silently
+   * collapsing to zero reach because a feature shipped underneath them.
+   */
+  if (!Array.isArray(company.cities)) return 1;
+  const open = new Set(company.cities);
+  const reach = niche.cities.filter((c) => open.has(c.id)).reduce((sum, c) => sum + c.weight, 0);
+  return Math.max(0, Math.min(1, reach));
+}
+
+/**
+ * The positioning multiplier for one company in one segment.
+ *
+ * Kept here rather than folded into the company's stats because it is a
+ * statement about who you are for, not a change in what you are: the same
+ * product, more appealing to the people it was built for and slightly less to
+ * everybody else.
+ */
+export const positioningFor = (company: Company, segmentId: string): number =>
+  !company.positioning ? 1 : company.positioning === segmentId ? 1.18 : 0.92;
+
 export function allocate(
   companies: Company[],
   niche: Niche,
@@ -157,7 +196,7 @@ export function allocate(
   for (const segment of niche.segments) {
     const demand = segmentDemand(segment, year, economy);
     const appeal: Record<string, number> = {};
-    for (const c of companies) appeal[c.id] = appealFor(c, segment);
+    for (const c of companies) appeal[c.id] = appealFor(c, segment) * positioningFor(c, segment.id);
 
     const bestAppeal = Math.max(...companies.map((c) => appeal[c.id]), 0.0001);
 
@@ -175,13 +214,21 @@ export function allocate(
 
       const mine = appeal[c.id];
       const gap = Math.max(0, bestAppeal - mine);
-      // Above the tolerance, a fraction leaves, scaled by how much better the
-      // alternative is. Never everyone at once: a total collapse in one year
-      // is not how markets behave, and it takes the game away from a team that
-      // could still recover.
+      /*
+       * Above the tolerance, a fraction leaves, scaled by how much better the
+       * alternative is. Never everyone at once: a total collapse in one year
+       * is not how markets behave, and it takes the game away from a team that
+       * could still recover.
+       *
+       * The ceiling was half a segment a year, which let a strong offer strip
+       * an incumbent in three years and made the ninety per cent the brief
+       * describes as a wall feel like a formality. A third is still fast — it
+       * is the outer limit of what a genuinely better product achieves against
+       * an inattentive rival — and it makes the years in between matter.
+       */
       const tolerance = 0.06 + segment.loyalty * 0.34;
       const excess = Math.max(0, gap - tolerance);
-      const leaveRate = Math.min(0.55, excess * (1.8 - segment.loyalty));
+      const leaveRate = Math.min(0.35, excess * (1.8 - segment.loyalty));
       const leaving = Math.round(current * leaveRate);
 
       held[c.id][segment.id] = current - leaving;
@@ -201,7 +248,16 @@ export function allocate(
      * slightly more customers, which is what makes a genuinely better offer
      * worth the years it takes to build.
      */
-    const weights = companies.map((c) => ({ id: c.id, weight: Math.pow(appeal[c.id], 2) }));
+    /*
+     * Reach multiplies appeal for new customers only. Whoever you already have
+     * stays yours — leaving a city does not repossess its customers — but the
+     * people choosing this year can only choose a company that sells where
+     * they live.
+     */
+    const weights = companies.map((c) => ({
+      id: c.id,
+      weight: Math.pow(appeal[c.id], 2) * reachOf(c, niche),
+    }));
     const totalWeight = weights.reduce((sum, w) => sum + w.weight, 0);
     if (totalWeight <= 0) continue;
 

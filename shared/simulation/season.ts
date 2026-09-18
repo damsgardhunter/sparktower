@@ -153,6 +153,16 @@ export function startingCompany(input: {
     customers: {},
     assets: [],
     seats,
+    /*
+     * One city to begin with, and the cheapest one.
+     *
+     * Starting everywhere would remove the most interesting early decision in
+     * the game — go deep somewhere small, or spend what little you have buying
+     * reach you cannot yet serve. Starting nowhere would be a puzzle rather
+     * than a company.
+     */
+    cities: [[...niche.cities].sort((a, b) => a.entryCost - b.entryCost)[0]?.id].filter(Boolean) as string[],
+    founderShare: 1,
   };
 }
 

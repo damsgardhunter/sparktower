@@ -582,10 +582,23 @@ export function registerSimulationMarketRoutes(app: Express): void {
     const total = world.companies.reduce(
       (sum, c) => sum + Object.values(c.customers).reduce((s, n) => s + n, 0), 0);
 
+    /*
+     * Ordered by what each side actually owns, matching how a year is ranked.
+     * Share is still here and still the thing people argue about — it is just
+     * no longer the only way to be winning.
+     */
+    const worth = (c: typeof world.companies[number]) => {
+      const units = Object.values(c.customers).reduce((sum, n) => sum + n, 0);
+      const assets = c.assets.reduce((sum, a) => sum + a.bookValue * 0.8, 0);
+      return Math.max(0, Math.round((units * c.price * 1.2 + assets - c.debt) * (c.founderShare ?? 1)));
+    };
+
     const rows = world.companies
       .map((c) => {
         const customers = Object.values(c.customers).reduce((sum, n) => sum + n, 0);
         return {
+          founderValue: worth(c),
+          founderShare: c.founderShare ?? 1,
           id: c.id,
           name: c.name,
           kind: c.kind,
@@ -600,7 +613,7 @@ export function registerSimulationMarketRoutes(app: Express): void {
           distress: c.kind === "player" ? distressOf(c) : null,
         };
       })
-      .sort((a, b) => b.customers - a.customers)
+      .sort((a, b) => b.founderValue - a.founderValue)
       .map((row, i) => ({ ...row, rank: i + 1 }));
 
     /** Each year's history for this company, so a season reads as a story. */
@@ -621,6 +634,12 @@ export function registerSimulationMarketRoutes(app: Express): void {
         customers: (h.report as any).customers,
         profit: (h.report as any).profit,
         rank: (h.report as any).rank,
+        /*
+         * The figure the table is actually ordered by. Without it a trajectory
+         * chart is share-shaped while the rank beside it is value-shaped, so a
+         * year that gains share and loses a place looks like a bug.
+         */
+        founderValue: (h.report as any).founderValue ?? null,
       })),
     });
   });

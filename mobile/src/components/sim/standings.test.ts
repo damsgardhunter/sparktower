@@ -10,8 +10,9 @@
  */
 import { describe, it, expect } from "vitest";
 import {
-  gapAhead, movementRead, ordinal, reputationRead, shareRead, soldUp, sortRows,
-  standingLine, trajectory, yourRow, type HistoryPoint, type StandingRow,
+  biggestNotBest, gapAhead, movementRead, ordinal, ownershipRead, reputationRead,
+  shareRead, soldAway, soldUp, sortRows, standingLine, trajectory, valueGapAhead,
+  wholeValue, yourRow, type HistoryPoint, type StandingRow,
 } from "./standings";
 
 const row = (over: Partial<StandingRow> = {}): StandingRow => ({
@@ -20,6 +21,10 @@ const row = (over: Partial<StandingRow> = {}): StandingRow => ({
   kind: "player",
   customers: 100_000,
   share: 0.1,
+  // The table is ordered by this now, so every fixture carries one. Whole
+  // ownership is the default; the rows that test dilution say so themselves.
+  founderValue: 3_600_000,
+  founderShare: 1,
   revenue: 3_000_000,
   reputation: 60,
   price: 30,
@@ -30,11 +35,11 @@ const row = (over: Partial<StandingRow> = {}): StandingRow => ({
 });
 
 const table = (): StandingRow[] => [
-  row({ id: "inc1", name: "Old Guard", kind: "incumbent", distress: null, customers: 600_000, share: 0.6, rank: 1 }),
-  row({ id: "inc2", name: "Second Hand", kind: "incumbent", distress: null, customers: 200_000, share: 0.2, rank: 2 }),
-  row({ id: "t1", name: "Rivals", customers: 120_000, share: 0.12, rank: 3 }),
-  row({ id: "you", name: "Us", customers: 60_000, share: 0.06, rank: 4, isYou: true }),
-  row({ id: "t2", name: "Stragglers", customers: 20_000, share: 0.02, rank: 5 }),
+  row({ id: "inc1", name: "Old Guard", kind: "incumbent", distress: null, customers: 600_000, share: 0.6, rank: 1, founderValue: 21_000_000 }),
+  row({ id: "inc2", name: "Second Hand", kind: "incumbent", distress: null, customers: 200_000, share: 0.2, rank: 2, founderValue: 7_000_000 }),
+  row({ id: "t1", name: "Rivals", customers: 120_000, share: 0.12, rank: 3, founderValue: 4_300_000 }),
+  row({ id: "you", name: "Us", customers: 60_000, share: 0.06, rank: 4, isYou: true, founderValue: 2_100_000 }),
+  row({ id: "t2", name: "Stragglers", customers: 20_000, share: 0.02, rank: 5, founderValue: 700_000 }),
 ];
 
 describe("a share, at the precision it deserves", () => {
@@ -214,5 +219,146 @@ describe("the rows that need a sentence", () => {
     expect(reputationRead(45)).toBe("Mixed");
     expect(reputationRead(30)).toBe("Shaky");
     expect(reputationRead(10)).toBe("Poor");
+  });
+});
+
+
+// --- The scoreboard, after it stopped being about volume -------------------
+/**
+ * What the table is ordered by now.
+ *
+ * Ranking by customers made volume the only strategy worth playing and told
+ * the smallest, most profitable company in the market that it was losing every
+ * day. These tests pin the two things that replaced it: the order, and the
+ * sentence that explains the order when the market produces a disagreement
+ * worth explaining.
+ */
+describe("ordering by what the founders own", () => {
+  it("falls back to founder value before customers when two rows share a rank", () => {
+    // A malformed response is one bad sort away from a league table that lies,
+    // so the tiebreak follows what the server actually ranked by.
+    const tied = [
+      row({ id: "a", name: "Anna Co", rank: 3, founderValue: 1_000_000, customers: 900_000 }),
+      row({ id: "b", name: "Bee Co", rank: 3, founderValue: 4_000_000, customers: 100_000 }),
+    ];
+    expect(sortRows(tied).map((r) => r.id)).toEqual(["b", "a"]);
+  });
+
+  it("still ranks by the rank the server sent", () => {
+    expect(sortRows(table()).map((r) => r.rank)).toEqual([1, 2, 3, 4, 5]);
+  });
+});
+
+describe("the gap to whoever is ahead", () => {
+  it("measures it in the terms the table is ordered by", () => {
+    const gap = valueGapAhead(table())!;
+    expect(gap.name).toBe("Rivals");
+    expect(gap.value).toBe(2_200_000);
+    expect(gap.line).toContain("founder-owned value");
+  });
+
+  it("says level rather than zero when two companies own the same", () => {
+    const rows = [
+      row({ id: "t1", name: "Rivals", rank: 1, founderValue: 2_000_000 }),
+      row({ id: "you", name: "Us", rank: 2, isYou: true, founderValue: 2_000_000 }),
+    ];
+    expect(valueGapAhead(rows)!.line).toContain("Level with Rivals");
+  });
+
+  it("has nothing to say to whoever is top, or to a table you are not in", () => {
+    expect(valueGapAhead([row({ id: "you", rank: 1, isYou: true })])).toBeNull();
+    expect(valueGapAhead(table().map((r) => ({ ...r, isYou: false })))).toBeNull();
+  });
+
+  it("keeps the customer gap available and separate, since the two disagree", () => {
+    // A team a hundred thousand customers behind and four million of value
+    // ahead is a strategy working, and only both numbers say so.
+    expect(gapAhead(table())!.line).toContain("customers behind Rivals");
+  });
+});
+
+describe("what a team gave away to get here", () => {
+  const diluted = row({ founderValue: 3_000_000, founderShare: 0.5 });
+
+  it("works back to what the whole business is worth", () => {
+    expect(wholeValue(diluted)).toBe(6_000_000);
+    expect(soldAway(diluted)).toBe(3_000_000);
+  });
+
+  it("treats an undiluted company as owning all of its own value", () => {
+    const whole = row({ founderValue: 3_000_000, founderShare: 1 });
+    expect(wholeValue(whole)).toBe(3_000_000);
+    expect(soldAway(whole)).toBe(0);
+  });
+
+  it("says nothing on a row where nothing was sold", () => {
+    // An ownership line under every undiluted row would train people to skip
+    // the ones where it is the whole story.
+    expect(ownershipRead(row({ founderShare: 1 }))).toBeNull();
+    expect(ownershipRead(diluted)).toContain("Founders hold 50%");
+  });
+
+  it("keeps a decimal for a stake small enough to be a footnote", () => {
+    expect(ownershipRead(row({ founderShare: 0.004 }))).toContain("0.4%");
+  });
+});
+
+describe("the sentence that explains the scoreboard", () => {
+  it("names both companies when the biggest one isn't top", () => {
+    const rows = [
+      row({ id: "small", name: "Few and Rich", rank: 1, customers: 40_000, founderValue: 9_000_000 }),
+      row({ id: "big", name: "Everywhere Ltd", rank: 2, customers: 500_000, founderValue: 3_000_000, founderShare: 0.2 }),
+    ];
+    const line = biggestNotBest(rows)!;
+    expect(line).toContain("Everywhere Ltd");
+    expect(line).toContain("Few and Rich");
+    expect(line).toContain("Owning less of a bigger company");
+  });
+
+  it("stays quiet when the biggest company is also the top one", () => {
+    // Nothing to explain, and an evergreen caption is read once and skipped
+    // for the rest of the season.
+    expect(biggestNotBest(table())).toBeNull();
+    expect(biggestNotBest([row({ id: "only", rank: 1 })])).toBeNull();
+  });
+
+  it("stays quiet in a market where nobody has any customers yet", () => {
+    expect(biggestNotBest([
+      row({ id: "a", rank: 1, customers: 0 }),
+      row({ id: "b", rank: 2, customers: 0 }),
+    ])).toBeNull();
+  });
+});
+
+
+describe("the shape of a season, in the unit it is scored in", () => {
+  const years = (over: Partial<HistoryPoint>[]): HistoryPoint[] =>
+    over.map((o, i) => ({ year: i + 1, share: 0.05, customers: 50_000, profit: 1, rank: 4, ...o }));
+
+  it("draws the bars from founder value when every year has one", () => {
+    const points = trajectory(years([
+      { founderValue: 2_000_000 },
+      { founderValue: 8_000_000 },
+      { founderValue: 4_000_000 },
+    ]));
+    expect(points.map((p) => p.basis)).toEqual(["value", "value", "value"]);
+    expect(points.map((p) => p.height)).toEqual([0.25, 1, 0.5]);
+    expect(points.map((p) => p.peak)).toEqual([false, true, false]);
+  });
+
+  it("falls back to share rather than drawing half a season in each unit", () => {
+    // A report written before the scoreboard changed has no founder value, and
+    // a chart that mixed the two would be the one lie this screen can't afford.
+    const points = trajectory(years([
+      { share: 0.04, founderValue: null },
+      { share: 0.08, founderValue: 6_000_000 },
+    ]));
+    expect(points.map((p) => p.basis)).toEqual(["share", "share"]);
+    expect(points.map((p) => p.height)).toEqual([0.5, 1]);
+  });
+
+  it("keeps a zero year visible as a year, whichever unit it is drawn in", () => {
+    const points = trajectory(years([{ founderValue: 0 }, { founderValue: 5_000_000 }]));
+    expect(points[0].height).toBe(0.06);
   });
 });

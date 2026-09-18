@@ -10,13 +10,15 @@
  */
 import { describe, it, expect } from "vitest";
 import {
-  bump, capUse, challengeProgress, challengeStanding, clampToField, commitment,
-  commitmentLevel, covenantProgress, discretionarySpend, dissolvableSeats,
-  draftMatches, exact, fixedCosts, formatUntil, inTrouble, metricRead, money,
-  percent, resolveIsImminent, rewardRead, secondsUntil, shortfall, signed,
-  stepFor, tableStatus, targetGoalRead, targetProgress, validateDraft,
+  bump, capUse, challengeProgress, challengeStanding, citiesOpening, clampToField,
+  commitment, commitmentLevel, covenantProgress, dilutionPreview, discretionarySpend,
+  dissolvableSeats, draftMatches, exact, fixedCosts, footprint, formatUntil, inTrouble,
+  metricRead, money, openingCost, percent, reachOf, reachRead, resolveIsImminent,
+  qualityRead, researchLanding, rewardRead, saturate, secondsUntil, selectedCities,
+  shareOwnedRead, shortfall, signed,
+  stepFor, tableStatus, targetGoalRead, targetProgress, toggleCity, validateDraft,
   validateRecovery, waitingOn, withYourDraft,
-  type Challenge, type DeskCompany, type DeskTableSeat, type FiledDecisions,
+  type Challenge, type DeskCity, type DeskCompany, type DeskTableSeat, type FiledDecisions,
   type LeverField, type Target,
 } from "./desk";
 
@@ -547,8 +549,25 @@ describe("the spend a cap and a challenge both mean", () => {
   it("counts the three seats that buy things and not the repayment", () => {
     // Mirrors both readMetric("spend") and the sum the tick reviews a covenant
     // against: 1.5m marketing + 0.5m product + 0.1m support, no CFO repayment.
-    expect(discretionarySpend(run())).toBe(2_100_000);
-    expect(run().spend - discretionarySpend(run())).toBe(250_000);
+    expect(discretionarySpend(table)).toBe(2_100_000);
+    expect(run().spend - discretionarySpend(table)).toBe(250_000);
+  });
+
+  it("leaves out the two things the meter counts and the rules don't", () => {
+    /*
+     * Research buys nothing this year and a city's entry fee comes out of
+     * cash, so neither is inside a creditor's cap or a "without spending your
+     * way there" target — however plainly both are money the table committed.
+     * Taking this sum off the meter instead would tell a CTO they had broken a
+     * ceiling they were nowhere near.
+     */
+    const withExtras: FiledDecisions = {
+      cmo: { price: 40, brandSpend: 1_000_000, performanceSpend: 0, celebritySpend: 0, targetCities: ["manchester"] },
+      cto: { featureSpend: 300_000, reliabilitySpend: 0, techDebtPaydown: 0, researchSpend: 900_000 },
+    };
+    expect(discretionarySpend(withExtras)).toBe(1_300_000);
+    const meter = commitment({ company, decisions: withExtras, costIndex: 1, cities: cities() });
+    expect(meter.spend).toBe(2_650_000);
   });
 });
 
@@ -625,5 +644,289 @@ describe("the covenant, which is the way out", () => {
     expect(capUse(600_000, covenant)).toMatchObject({ over: false, left: 200_000 });
     expect(capUse(900_000, covenant)).toMatchObject({ over: true, left: -100_000 });
     expect(capUse(500_000, null)).toBeNull();
+  });
+});
+
+
+// --- Where you sell ------------------------------------------------------
+/**
+ * The city picker's arithmetic.
+ *
+ * Two failures worth a test each. The first is a tap that appears to close a
+ * city: there is no closing lever, the engine unions what you send with where
+ * you already are, and a control that let somebody think otherwise would be
+ * lying about a one-way door. The second is the entry fee, which is charged
+ * once, comes out of cash, and — because the engine takes it outside
+ * discretionary spend — never appears in the commitment meter. A cost that is
+ * real and invisible is the exact gotcha this whole screen exists to prevent.
+ */
+const cities = (): DeskCity[] => [
+  { id: "london", name: "London", weight: 0.3, entryCost: 900_000, note: "A third of the market.", open: true },
+  { id: "manchester", name: "Manchester", weight: 0.16, entryCost: 450_000, note: "Cheap enough to start.", open: false },
+  { id: "leeds", name: "Leeds", weight: 0.12, entryCost: 350_000, note: "The quietest door.", open: false },
+  { id: "bristol", name: "Bristol", weight: 0.14, entryCost: 400_000, note: "First to try something new.", open: false },
+];
+
+describe("choosing where the company sells", () => {
+  it("keeps every open city in the selection whatever the draft says", () => {
+    expect(selectedCities(cities(), [])).toEqual(["london"]);
+    expect(selectedCities(cities(), ["leeds"])).toEqual(["london", "leeds"]);
+  });
+
+  it("refuses to close a city that is already open", () => {
+    // There is no closing lever. A tap here is a no-op rather than a removal
+    // the server would silently put back.
+    expect(toggleCity(cities(), ["london"], "london")).toEqual(["london"]);
+  });
+
+  it("ticks and unticks a city that isn't open yet", () => {
+    const once = toggleCity(cities(), [], "manchester");
+    expect(once).toEqual(["london", "manchester"]);
+    expect(toggleCity(cities(), once, "manchester")).toEqual(["london"]);
+  });
+
+  it("returns the payload's order, so two equal selections are one array", () => {
+    expect(toggleCity(cities(), ["bristol"], "manchester")).toEqual(["london", "manchester", "bristol"]);
+  });
+
+  it("ignores a city this market has never heard of", () => {
+    expect(toggleCity(cities(), [], "atlantis")).toEqual(["london"]);
+  });
+
+  it("counts only the places being opened, and totals what they cost", () => {
+    const chosen = ["london", "manchester", "leeds"];
+    expect(citiesOpening(cities(), chosen).map((c) => c.id)).toEqual(["manchester", "leeds"]);
+    expect(openingCost(cities(), chosen)).toBe(800_000);
+  });
+
+  it("charges nothing for standing still, open cities included", () => {
+    expect(openingCost(cities(), ["london"])).toBe(0);
+    expect(openingCost(cities(), [])).toBe(0);
+  });
+});
+
+describe("how much of the market can even consider you", () => {
+  it("reads the open cities when no selection is given", () => {
+    expect(reachOf(cities())).toBeCloseTo(0.3, 5);
+  });
+
+  it("adds the weights of a draft's selection", () => {
+    expect(reachOf(cities(), ["london", "manchester"])).toBeCloseTo(0.46, 5);
+  });
+
+  it("treats a market with no map as the whole market, as the engine does", () => {
+    // A company from before cities existed sells everywhere. The alternative
+    // to this default is somebody's season collapsing to zero reach because a
+    // feature shipped underneath it.
+    expect(reachOf([])).toBe(1);
+    expect(reachOf(undefined)).toBe(1);
+  });
+
+  it("says what reach means rather than printing a score", () => {
+    expect(reachRead(1)).toContain("Everyone");
+    expect(reachRead(0.3)).toContain("30%");
+    expect(reachRead(0.3)).toContain("however good you are");
+    expect(reachRead(0.004)).toContain("<1%");
+  });
+
+  it("charges the fixed bill against the footprint, not the whole country", () => {
+    // 0.4 owed wherever you sell, 0.6 scaled by reach. Mirrors fixedCosts()
+    // in shared/simulation/decisions.ts.
+    expect(footprint(1)).toBe(1);
+    expect(footprint(0)).toBeCloseTo(0.4, 5);
+    expect(footprint(0.5)).toBeCloseTo(0.7, 5);
+    expect(fixedCosts(0, 1, 5, 0.5)).toBe(700_000 * 0.7);
+  });
+
+  it("leaves the bill alone for a company that sells everywhere", () => {
+    expect(fixedCosts(20, 1.05, 5, 1)).toBe(fixedCosts(20, 1.05, 5));
+  });
+
+  it("shrinks the table's fixed cost when the company is only in one city", () => {
+    const national = commitment({ company, decisions: { coo: { headcount: 10 } }, costIndex: 1 });
+    const regional = commitment({ company, decisions: { coo: { headcount: 10 } }, costIndex: 1, reach: 0.3 });
+    expect(regional.fixed).toBeCloseTo(national.fixed * (0.4 + 0.6 * 0.3), 5);
+  });
+});
+
+describe("research, which is spent this year and lands in the next", () => {
+  it("counts against the table like any other committed money", () => {
+    const c = commitment({
+      company,
+      decisions: { cto: { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0, researchSpend: 600_000 } },
+      costIndex: 1,
+    });
+    expect(c.bySeat.find((s) => s.role === "cto")!.spend).toBe(600_000);
+  });
+});
+
+describe("what a raise costs in ownership", () => {
+  it("prices the dilution against what the company is worth now", () => {
+    // 2m raised against a 2m company is half of it, which is the entire point
+    // of the lever. Mirrors the sum in shared/simulation/resolve.ts.
+    const preview = dilutionPreview({ founderShare: 1, worth: 2_000_000, raise: 2_000_000 })!;
+    expect(preview.nextShare).toBeCloseTo(0.5, 5);
+    expect(preview.given).toBeCloseTo(0.5, 5);
+  });
+
+  it("costs far less against a company that is already worth something", () => {
+    const early = dilutionPreview({ founderShare: 1, worth: 1_000_000, raise: 1_000_000 })!;
+    const later = dilutionPreview({ founderShare: 1, worth: 20_000_000, raise: 1_000_000 })!;
+    expect(later.given).toBeLessThan(early.given);
+    expect(later.nextShare).toBeGreaterThan(0.95);
+  });
+
+  it("dilutes what is left rather than the whole company", () => {
+    const preview = dilutionPreview({ founderShare: 0.5, worth: 4_000_000, raise: 4_000_000 })!;
+    expect(preview.nextShare).toBeCloseTo(0.25, 5);
+  });
+
+  it("keeps the engine's floor under a worthless company's valuation", () => {
+    // Without the floor, raising against a company worth nothing takes
+    // everything — and the engine holds the founders at 5% regardless.
+    const preview = dilutionPreview({ founderShare: 1, worth: 0, raise: 500_000 })!;
+    expect(preview.nextShare).toBeCloseTo(0.5, 5);
+    expect(dilutionPreview({ founderShare: 1, worth: 0, raise: 100_000_000 })!.nextShare).toBe(0.05);
+  });
+
+  it("says nothing at all when there is no raise or no valuation to price it against", () => {
+    expect(dilutionPreview({ founderShare: 1, worth: 5_000_000, raise: 0 })).toBeNull();
+    expect(dilutionPreview({ founderShare: 1, worth: null, raise: 1_000_000 })).toBeNull();
+  });
+});
+
+describe("ownership, at the precision people argue at", () => {
+  it("rounds to a whole percent, because no decision turns on a tenth", () => {
+    expect(shareOwnedRead(0.617)).toBe("62%");
+    expect(shareOwnedRead(1)).toBe("100%");
+  });
+
+  it("keeps a decimal where the difference is a footnote versus a founder", () => {
+    expect(shareOwnedRead(0.004)).toBe("0.4%");
+  });
+
+  it("has an answer for a company that has never sent the field", () => {
+    expect(shareOwnedRead(undefined)).toBe("—");
+    expect(shareOwnedRead(Number.NaN)).toBe("—");
+  });
+});
+
+describe("validating the four new levers", () => {
+  const cityField: LeverField = { id: "targetCities", label: "Where you sell", help: "", kind: "cities" };
+  const segmentField: LeverField = {
+    id: "positioning", label: "Who it's for", help: "", kind: "segment",
+    options: [{ value: "", label: "Everybody", help: "" }, { value: "pros", label: "Pros", help: "" }],
+  };
+  const rehire: LeverField = { id: "rehire", label: "Bring a seat back", help: "", kind: "choice", options: [] };
+
+  it("accepts a list of places, and an empty one", () => {
+    expect(validateDraft([cityField], { targetCities: [] }, { debt: 0 }, "cmo").ok).toBe(true);
+    expect(validateDraft([cityField], { targetCities: ["leeds"] }, { debt: 0 }, "cmo").ok).toBe(true);
+  });
+
+  it("refuses a selection that isn't a list at all", () => {
+    expect(validateDraft([cityField], { targetCities: "leeds" }, { debt: 0 }, "cmo").ok).toBe(false);
+  });
+
+  it("lets a company be for everybody, which is what the empty segment means", () => {
+    expect(validateDraft([segmentField], { positioning: "" }, { debt: 0 }, "ceo").ok).toBe(true);
+    expect(validateDraft([segmentField], {}, { debt: 0 }, "ceo").ok).toBe(true);
+    expect(validateDraft([segmentField], { positioning: "pros" }, { debt: 0 }, "ceo").ok).toBe(true);
+  });
+
+  it("never blocks filing on a choice the season has no options for", () => {
+    // Every table with five filled seats has an empty rehire list. An error
+    // here would disable the file button for almost everybody, over a question
+    // the form never actually asked.
+    expect(validateDraft([rehire], {}, { debt: 0 }, "ceo").ok).toBe(true);
+    expect(validateDraft([rehire], { rehire: "" }, { debt: 0 }, "ceo").ok).toBe(true);
+  });
+
+  it("still insists on one of the offered seats when there are some", () => {
+    const filled: LeverField = { ...rehire, options: [{ value: "cto", label: "CTO", help: "" }] };
+    expect(validateDraft([filled], { rehire: "cto" }, { debt: 0 }, "ceo").ok).toBe(true);
+    expect(validateDraft([filled], { rehire: "" }, { debt: 0 }, "ceo").ok).toBe(true);
+    expect(validateDraft([filled], { rehire: "ceo" }, { debt: 0 }, "ceo").ok).toBe(false);
+  });
+});
+
+
+describe("opening a city, on the table's bill", () => {
+  const open3 = (targetCities: string[]) => commitment({
+    company,
+    decisions: { cmo: { price: 40, brandSpend: 200_000, performanceSpend: 0, celebritySpend: 0, targetCities } },
+    costIndex: 1,
+    cities: cities(),
+  });
+
+  it("puts the entry fee on the seat that decided to spend it", () => {
+    // Mirrors the openingCost term in commitment() in
+    // shared/simulation/levers.ts: the marketing line carries it, because
+    // marketing is who opened the city.
+    const c = open3(["london", "manchester", "leeds"]);
+    expect(c.openingCost).toBe(800_000);
+    expect(c.bySeat.find((s) => s.role === "cmo")!.spend).toBe(1_000_000);
+    expect(c.spend).toBe(1_000_000);
+  });
+
+  it("charges nothing for the cities the company is already in", () => {
+    const c = open3(["london"]);
+    expect(c.openingCost).toBe(0);
+    expect(c.bySeat.find((s) => s.role === "cmo")!.spend).toBe(200_000);
+  });
+
+  it("leaves the total alone when the market's map hasn't arrived", () => {
+    // An older payload, or a response that lost a field: the meter falls back
+    // to what it can prove rather than inventing a fee.
+    const c = commitment({
+      company,
+      decisions: { cmo: { price: 40, brandSpend: 200_000, performanceSpend: 0, celebritySpend: 0, targetCities: ["leeds"] } },
+      costIndex: 1,
+    });
+    expect(c.openingCost).toBe(0);
+    expect(c.spend).toBe(200_000);
+  });
+
+  it("stays out of the sum a covenant's cap is reviewed against", () => {
+    // On the meter, because it is the table's money leaving; outside the cap,
+    // because the engine charges it against cash rather than counting it as
+    // discretionary spending. Both of those are true at once and the screen
+    // has to say both.
+    const opening = open3(["london", "bristol"]);
+    expect(opening.spend).toBe(600_000);
+    expect(discretionarySpend({
+      cmo: { price: 40, brandSpend: 200_000, performanceSpend: 0, celebritySpend: 0, targetCities: ["london", "bristol"] },
+    })).toBe(200_000);
+  });
+});
+
+describe("what a year of research lands", () => {
+  it("mirrors the engine's saturation rather than approximating it", () => {
+    // saturate(spend, 150_000) × 24 × pace. Half the ceiling at the half-way
+    // spend, and never quite the ceiling however much is spent.
+    expect(saturate(150_000, 150_000)).toBe(0.5);
+    expect(researchLanding(150_000, 1)).toBeCloseTo(12, 6);
+    expect(researchLanding(450_000, 1)).toBeCloseTo(18, 6);
+  });
+
+  it("scales with how fast the market moves", () => {
+    expect(researchLanding(150_000, 1.5)).toBeCloseTo(18, 6);
+    expect(researchLanding(150_000, 0.5)).toBeCloseTo(6, 6);
+  });
+
+  it("lands nothing for nothing, and never a negative", () => {
+    expect(researchLanding(0, 1.2)).toBe(0);
+    expect(researchLanding(-500_000, 1.2)).toBe(0);
+    expect(researchLanding("", 1.2)).toBe(0);
+  });
+
+  it("assumes an ordinary pace when the market hasn't said", () => {
+    expect(researchLanding(150_000, undefined)).toBeCloseTo(12, 6);
+  });
+
+  it("reads quality points the way the report does", () => {
+    expect(qualityRead(12)).toBe("12");
+    expect(qualityRead(7.44)).toBe("7.4");
+    expect(qualityRead(Number.NaN)).toBe("—");
   });
 });
