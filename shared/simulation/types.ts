@@ -173,6 +173,13 @@ export interface Company {
 
   /** Set when a company has run out of money and credit. It does not end the game — see the recovery rules. */
   bankruptSince?: number;
+  /**
+   * Terms agreed with a creditor after a restructuring: a cap on spending, and
+   * the count of consecutive years it has been met. See `recovery.ts` — it
+   * lifts itself after two clear years, which is what makes distress an arc
+   * rather than a hole.
+   */
+  covenant?: { since: number; spendCap: number; met: number; rateRelief: number };
   /** Assets that can be sold, pledged, or bought by a rival. */
   assets: CompanyAsset[];
   /** Seats currently filled. A team that fires its CMO pays one fewer salary and loses the lever. */

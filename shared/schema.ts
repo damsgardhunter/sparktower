@@ -2611,6 +2611,93 @@ export const simDecisions = pgTable("sim_decisions", {
   once: unique("sim_decisions_once").on(table.ventureId, table.role, table.year),
 }));
 
+/**
+ * One person's objective for one year.
+ *
+ * Stored rather than recomputed on read, even though `challengeFor` is
+ * deterministic: the challenge is written against the company's position at
+ * the moment it was set, and that position changes the instant the year
+ * resolves. Recomputed later it would quietly become a different challenge,
+ * and a player would be marked against a target they were never shown.
+ */
+export const simChallenges = pgTable("sim_challenges", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ventureId: varchar("venture_id").notNull().references(() => simVentures.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  role: varchar("role").notNull(),
+  year: integer("year").notNull(),
+  /** The Challenge from @shared/simulation/challenges, as it was set. */
+  challenge: jsonb("challenge").notNull(),
+  /** The ChallengeResult, once the year has run. Null while it is still being played. */
+  result: jsonb("result"),
+  outcome: text("outcome", { enum: ["met", "partial", "missed"] }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /** One challenge per seat per year. */
+  once: unique("sim_challenges_once").on(table.ventureId, table.role, table.year),
+  byPerson: index("sim_challenges_user_idx").on(table.userId, table.year),
+}));
+
+/**
+ * Something a team has put up for sale.
+ *
+ * The open market's listings are generated deterministically from the season
+ * and year and are not stored — they are the same for everyone and can always
+ * be recomputed. These are the ones that only exist because a team decided to
+ * sell, so there is nothing to derive them from.
+ */
+export const simListings = pgTable("sim_listings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  seasonId: varchar("season_id").notNull().references(() => simSeasons.id, { onDelete: "cascade" }),
+  /** The venture selling it. */
+  sellerId: varchar("seller_id").notNull().references(() => simVentures.id, { onDelete: "cascade" }),
+  year: integer("year").notNull(),
+  /** The CompanyAsset being sold, whole. */
+  asset: jsonb("asset").notNull(),
+  reserve: integer("reserve").notNull(),
+  status: text("status", { enum: ["open", "sold", "unsold", "withdrawn"] }).default("open").notNull(),
+  buyerId: varchar("buyer_id").references(() => simVentures.id, { onDelete: "set null" }),
+  soldFor: integer("sold_for"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  bySeason: index("sim_listings_season_idx").on(table.seasonId, table.year, table.status),
+}));
+
+/**
+ * A sealed bid.
+ *
+ * Sealed is the whole point: nobody sees anyone else's number until the tick
+ * resolves them, which is what makes the marketplace a judgement about what a
+ * thing is worth to you rather than a race to press a button first.
+ */
+export const simBids = pgTable("sim_bids", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ventureId: varchar("venture_id").notNull().references(() => simVentures.id, { onDelete: "cascade" }),
+  /** Either a generated market listing id or a row in sim_listings. */
+  listingId: varchar("listing_id").notNull(),
+  year: integer("year").notNull(),
+  amount: integer("amount").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /** One bid per venture per listing — a team bids once, and may revise it. */
+  once: unique("sim_bids_once").on(table.ventureId, table.listingId, table.year),
+}));
+
+/** A recovery move a team has committed to, applied at the start of the next tick. */
+export const simRecoveryMoves = pgTable("sim_recovery_moves", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ventureId: varchar("venture_id").notNull().references(() => simVentures.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  year: integer("year").notNull(),
+  kind: text("kind", { enum: ["restructure", "fire_sale", "dissolve_seat", "rescue_raise"] }).notNull(),
+  /** Which seat, for dissolve_seat. */
+  seat: varchar("seat"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /** One move per year. These are not decisions you take several of at once. */
+  once: unique("sim_recovery_once").on(table.ventureId, table.year),
+}));
+
 /** What the engine said happened, kept so a season can be read back year by year. */
 export const simReports = pgTable("sim_reports", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

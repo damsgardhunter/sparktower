@@ -19,6 +19,7 @@ import type { Company, Economy, World } from "./types";
 import { allocate, marketShares } from "./market";
 import { incumbentYear } from "./incumbents";
 import { fixedCosts, focusEffects, interlock, lift, FOCUS_NOTES, type Focus, type TeamDecisions } from "./decisions";
+import { assetEffects, ageAssets } from "./assets";
 
 /** What one company is told about the year it just had. */
 export interface CompanyReport {
@@ -100,8 +101,17 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
     const capacity = Math.max(0, Math.round(d.coo?.capacityTarget ?? company.capacity));
     const price = Math.max(1, d.cmo?.price ?? company.price);
 
+    /*
+     * A year passes over what the company owns: licences run down, and the
+     * ones that lapse stop working. Done here rather than at settlement so the
+     * asset that expired this year is not still helping win customers in it.
+     */
+    const aged = ageAssets(company.assets);
+    notesFor[company.id].push(...aged.notes);
+
     return {
       ...company,
+      assets: aged.assets,
       price,
       capacity,
       brand: clamp(company.brand + brandGain + perfGain - decay.brand),
@@ -111,9 +121,38 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
     };
   });
 
+  /*
+   * What the company is worth facing, rather than what it built by itself.
+   *
+   * Assets carry an `effect` — a distribution deal is capacity, a patent is
+   * quality and a lower unit cost — and until now nothing read it: owning
+   * things made a company no better at anything, it only raised what a bank
+   * would lend. The effects apply from here on, through the market and the
+   * money, while the company's own numbers stay as they were.
+   *
+   * Kept separate on purpose. If the bonus were folded into the stored
+   * figures it would compound every year the asset was held, and selling the
+   * asset would leave the benefit behind — so a company could buy a patent,
+   * sell it back the next year, and keep the quality for ever.
+   */
+  const effectiveOf = (c: Company): Company => {
+    if (c.kind !== "player" || c.assets.length === 0) return c;
+    const e = assetEffects(c.assets);
+    return {
+      ...c,
+      brand: clamp(c.brand + e.brand),
+      quality: clamp(c.quality + e.quality),
+      service: clamp(c.service + e.service),
+      capacity: c.capacity + e.capacity,
+      unitCost: c.unitCost * e.unitCost,
+    };
+  };
+  const baseById = new Map(afterDecisions.map((c) => [c.id, c]));
+  const withEffects = afterDecisions.map(effectiveOf);
+
   /* 2. Incumbents decide, seeing the players as they now are. */
-  const players = afterDecisions.filter((c) => c.kind === "player");
-  const withIncumbents: Company[] = afterDecisions.map((company) => {
+  const players = withEffects.filter((c) => c.kind === "player");
+  const withIncumbents: Company[] = withEffects.map((company) => {
     if (company.kind !== "incumbent") return company;
     const moves = incumbentYear(company, players, niche, nextEconomy);
     spendFor[company.id] = moves.spend;
@@ -191,14 +230,24 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
       letDown * 26 -
       (profit < 0 && company.cash < 0 ? 2 : 0);
 
+    /*
+     * Back to the company's own numbers. Everything the assets lent it was for
+     * facing the market with; what it keeps is what it built, plus the result.
+     */
+    const base = baseById.get(company.id) ?? company;
     return {
       ...company,
+      brand: base.brand,
+      quality: base.quality,
+      service: base.service,
+      capacity: base.capacity,
+      unitCost: base.unitCost,
       customers,
       cash,
       debt,
       creditLimit,
       bankruptSince,
-      reputation: clamp(company.reputation + repChange),
+      reputation: clamp(base.reputation + repChange),
     };
   });
 

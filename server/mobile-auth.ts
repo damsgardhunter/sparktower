@@ -16,6 +16,7 @@ import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import { OAuth2Client } from "google-auth-library";
 import { db } from "./db";
+import { authStorage } from "./replit_integrations/auth/storage";
 import { users, mobileRefreshTokens } from "@shared/schema";
 import { eq, and, isNull, gt } from "drizzle-orm";
 import { storage } from "./storage";
@@ -349,10 +350,17 @@ export function registerMobileAuthRoutes(app: Express) {
       if (!user) {
         const [byEmail] = await db.select().from(users).where(eq(users.email, email));
         if (byEmail) {
-          [user] = await db.update(users)
-            .set({ googleId: payload.sub, profileImageUrl: byEmail.profileImageUrl || payload.picture || null })
-            .where(eq(users.id, byEmail.id))
-            .returning();
+          /*
+           * Through the same door the web uses, so the pre-registration
+           * takeover is closed on both: an account that never proved it owns
+           * this address loses its password to the Google identity that just
+           * did (server/replit_integrations/auth/storage.ts).
+           */
+          user = await authStorage.linkGoogleAccount(byEmail.id, payload.sub);
+          if (!byEmail.profileImageUrl && payload.picture) {
+            [user] = await db.update(users).set({ profileImageUrl: payload.picture })
+              .where(eq(users.id, byEmail.id)).returning();
+          }
         } else {
           [user] = await db.insert(users).values({
             email,
