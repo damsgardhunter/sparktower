@@ -9,6 +9,8 @@ import { Avatar, Btn, Card, Empty, Icon, Loading, Screen, timeAgo } from "../../
 import { Callout, Group, MenuRow, PageIntro, Pill, Stat, humanize, isSwitchedOff, tintSoft } from "../../src/components/MoreKit";
 import { PHASE_COLORS, PHASE_LABELS, formatWait, styleLabel } from "../../src/components/SprintKit";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
+import { useVentures } from "../../src/components/sim/useSim";
+import { liveVentures, ventureRoute, ventureTitle } from "../../src/components/sim/lobby";
 
 /**
  * Co-founder sprints: the matchmaking waiting room, your active and finished
@@ -31,6 +33,12 @@ export default function Sprints() {
     queryFn: () => api<any>("/api/sprints/queue/status"),
     refetchInterval: 5_000,
   });
+
+  // The simulation row is the only way into a fortnight-long season from the
+  // tab people actually open, so it says whether one is already running
+  // rather than describing the game to someone playing it.
+  const { data: simData } = useVentures();
+  const simVentures = liveVentures(simData?.ventures);
 
   const leave = useMutation({
     mutationFn: () => api("/api/sprints/queue", { method: "DELETE" }),
@@ -79,9 +87,17 @@ export default function Sprints() {
           <MenuRow
             icon="trending-up"
             title="Market simulation"
-            subtitle="Five strangers, one company, fourteen years"
+            subtitle={
+              simVentures.length === 1
+                ? `${ventureTitle(simVentures[0])} — pick up where you left off`
+                : simVentures.length > 1
+                  ? `${simVentures.length} companies running — pick one up`
+                  : "Five strangers, one company, fourteen years"
+            }
             tint={colors.novaEmerald}
-            onPress={() => router.push("/sim")}
+            // One live company goes straight there; none or several is a
+            // choice, and the lobby is the screen that lays it out.
+            onPress={() => router.push((simVentures.length === 1 ? ventureRoute(simVentures[0]) : "/sim") as any)}
             testID="sprints-market-simulation"
           />
         </Group>

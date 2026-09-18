@@ -338,7 +338,7 @@ export function Chip({
 
 export function Field({
   label, value, onChangeText, placeholder, multiline, secureTextEntry,
-  keyboardType, autoCapitalize, maxLength, numeric,
+  keyboardType, autoCapitalize, maxLength, numeric, testID,
 }: {
   label?: string;
   value: string;
@@ -349,6 +349,8 @@ export function Field({
   keyboardType?: "default" | "email-address" | "numeric";
   autoCapitalize?: "none" | "sentences" | "words";
   maxLength?: number;
+  /** So a test can find the input by name, as it can the buttons beside it. */
+  testID?: string;
   numeric?: boolean;
 }) {
   return (
@@ -365,6 +367,7 @@ export function Field({
         keyboardType={numeric ? "number-pad" : keyboardType}
         autoCapitalize={autoCapitalize}
         maxLength={maxLength}
+        testID={testID}
       />
     </View>
   );

@@ -7,9 +7,9 @@ import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
 import { Btn, Card, Empty, Icon, Loading, NovaGradient, Screen, errText } from "../../src/components/ui";
 import { Pill, isSwitchedOff, tintSoft } from "../../src/components/MoreKit";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
-import { Disclosure, IncumbentRow, LeverList, SegmentRow, SimSectionTitle } from "../../src/components/sim/SimKit";
-import { useNiches } from "../../src/components/sim/useSim";
-import { formatCount, incumbentHold, type SimNiche } from "../../src/components/sim/lobby";
+import { Disclosure, IncumbentRow, LeverList, SegmentRow, SimSectionTitle, VentureResumeRow } from "../../src/components/sim/SimKit";
+import { useNiches, useVentures } from "../../src/components/sim/useSim";
+import { formatCount, incumbentHold, liveVentures, ventureRoute, type LiveVenture, type SimNiche, type SimRole } from "../../src/components/sim/lobby";
 
 /**
  * Choosing a market, which is choosing a world.
@@ -21,12 +21,26 @@ import { formatCount, incumbentHold, type SimNiche } from "../../src/components/
  * decides whether a market is winnable — how loyal each segment is. A team
  * that reads this picks a fight it can win; a team that picks the nicer name
  * spends four years finding out.
+ *
+ * Above all of that, though, come the companies you are already running. A
+ * season is fourteen real days: someone opening this on day six has four
+ * people waiting on them, and a screen that offers only a list of markets to
+ * join has told them they are nowhere. Joining the same market does return
+ * the room they are in — the server is careful about that — but nobody would
+ * think to press it.
  */
 export default function PickMarket() {
   const router = useRouter();
   const { notice, show, clear } = useNotice();
   const { data, isLoading, isRefetching, refetch, error } = useNiches();
+  const { data: ventureData } = useVentures();
   const [openSeats, setOpenSeats] = useState(false);
+
+  const mine = liveVentures(ventureData?.ventures);
+  const roleTitles = roleTitleMap(data?.roles);
+  const resume = (
+    <ResumeList ventures={mine} roleTitles={roleTitles} onOpen={(v) => router.push(ventureRoute(v) as any)} />
+  );
 
   /*
    * Joining is not optimistic either: the server decides which room has space,
@@ -47,6 +61,9 @@ export default function PickMarket() {
       <>
         <Stack.Screen options={{ title: "Start a company" }} />
         <Screen canvas>
+          {/* A market list that won't load is no reason to strand somebody
+              outside a company they are already running. */}
+          {resume}
           {isSwitchedOff(error) ? (
             <Empty icon="pause-circle-outline" title="Simulations are paused"
               body="The market simulation is switched off right now. Check back soon." />
@@ -67,6 +84,9 @@ export default function PickMarket() {
     <View style={{ flex: 1 }}>
       <Stack.Screen options={{ title: "Start a company" }} />
       <Screen canvas onRefresh={refetch} refreshing={isRefetching}>
+        {resume}
+
+        {mine.length === 0 ? (
         <NovaGradient style={{ borderRadius: radius.md, padding: spacing.lg, gap: 6 }}>
           <Text style={{ color: "#FFFFFF", fontSize: font.xl, fontFamily: fontFamily.bold, letterSpacing: -0.3 }}>
             {lobbySize} strangers. One company.
@@ -76,6 +96,7 @@ export default function PickMarket() {
             A day is a year; a season is fourteen of them. Pick where you're starting — it decides what winning looks like.
           </Text>
         </NovaGradient>
+        ) : null}
 
         {niches.length === 0 ? (
           <Card style={{ borderStyle: "dashed" }}>
@@ -84,7 +105,10 @@ export default function PickMarket() {
           </Card>
         ) : (
           <>
-            <SimSectionTitle icon="map" title={`Markets (${niches.length})`} />
+            <SimSectionTitle
+              icon="map"
+              title={mine.length > 0 ? `Join another market (${niches.length})` : `Markets (${niches.length})`}
+            />
             {niches.map((niche) => (
               <NicheCard
                 key={niche.id}
@@ -203,4 +227,39 @@ function NicheCard({ niche, onJoin, joining, disabled }: {
       />
     </Card>
   );
+}
+
+/**
+ * The companies you already hold a seat in, above everything else.
+ *
+ * Renders nothing at all when there are none — the market picker is the whole
+ * screen for a first-time player, and an empty "your companies" heading is a
+ * box that says you have nothing.
+ */
+function ResumeList({ ventures, roleTitles, onOpen }: {
+  ventures: LiveVenture[];
+  roleTitles: Record<string, string>;
+  onOpen: (venture: LiveVenture) => void;
+}) {
+  if (ventures.length === 0) return null;
+  return (
+    <View style={{ gap: spacing.sm }}>
+      <SimSectionTitle icon="briefcase" title={ventures.length === 1 ? "Your company" : `Your companies (${ventures.length})`} />
+      {ventures.map((venture) => (
+        <VentureResumeRow
+          key={venture.id}
+          venture={venture}
+          roleTitle={venture.role ? roleTitles[venture.role] ?? null : null}
+          onPress={() => onOpen(venture)}
+        />
+      ))}
+    </View>
+  );
+}
+
+/** Seat id → the title the server gave it, so a row can say "you're the Chief Executive". */
+function roleTitleMap(roles: SimRole[] | undefined): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const role of roles ?? []) map[role.id] = role.title;
+  return map;
 }

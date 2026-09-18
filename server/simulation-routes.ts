@@ -316,6 +316,13 @@ function pgErrorCode(err: unknown): string | undefined {
         phase: r.phase,
         name: r.name,
         role: r.role,
+        /*
+         * The seat's title as well as its id. Without it a client can only
+         * show "CFO" until a second request for the market definitions lands,
+         * which is a lot of work to say "you're the Chief Financial Officer"
+         * on a row whose whole job is being recognised at a glance.
+         */
+        roleTitle: r.role ? ROLE_TITLES[r.role as Role] ?? null : null,
         niche: { id: r.nicheId, name: nicheById(r.nicheId)?.name ?? r.nicheId },
         secondsLeft: r.phaseEndsAt ? Math.max(0, secondsLeft(r.phaseEndsAt)) : null,
       })),

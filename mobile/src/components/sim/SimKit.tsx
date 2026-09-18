@@ -13,7 +13,8 @@ import { Avatar, Btn, Icon, NovaGradient } from "../ui";
 import { Pill, tintSoft } from "../MoreKit";
 import {
   POSTURE_COPY, clockIsUrgent, formatCount, loyaltyRead, seatStatus,
-  type RoomCopy, type SimIncumbent, type SimRole, type SimSeat, type SimSegment,
+  ventureAction, ventureSubtitle, ventureTitle,
+  type LiveVenture, type RoomCopy, type SimIncumbent, type SimRole, type SimSeat, type SimSegment,
 } from "./lobby";
 
 /**
@@ -264,6 +265,55 @@ export function Disclosure({ label, open, onPress, testID }: {
     >
       <Text style={{ color: colors.primary, fontSize: font.sm, fontFamily: fontFamily.semibold }}>{label}</Text>
       <Icon name={open ? "chevron-up" : "chevron-down"} size={15} color={colors.primary} />
+    </Pressable>
+  );
+}
+
+/**
+ * A company you are already running, as a way back into it.
+ *
+ * The chevron label says where the tap lands, because the room and the desk
+ * are different places and a player on day six of a fourteen-day season is
+ * not holding the phase in their head. Everything it says comes from the
+ * pure helpers in lobby.ts so the wording can be tested without a renderer.
+ */
+export function VentureResumeRow({ venture, roleTitle, onPress }: {
+  venture: LiveVenture;
+  roleTitle: string | null;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      testID={`sim-resume-${venture.id}`}
+      accessibilityRole="button"
+      accessibilityLabel={`${ventureTitle(venture)}. ${ventureAction(venture)}.`}
+      style={({ pressed }) => [{
+        flexDirection: "row", alignItems: "center", gap: spacing.md,
+        borderWidth: 1, borderColor: tintSoft(colors.primary, 0.35), borderRadius: radius.md,
+        backgroundColor: colors.surface, padding: spacing.md, ...shadow.card,
+      }, pressed && { opacity: 0.7 }]}
+    >
+      <View style={{
+        width: 36, height: 36, borderRadius: 10, backgroundColor: tintSoft(colors.primary),
+        alignItems: "center", justifyContent: "center",
+      }}>
+        <Icon name={venture.phase === "running" ? "briefcase" : "people"} size={17} color={colors.primary} />
+      </View>
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text numberOfLines={1} style={{ color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold }}>
+          {ventureTitle(venture)}
+        </Text>
+        <Text numberOfLines={1} style={{ color: colors.textSecondary, fontSize: font.sm, fontFamily: fontFamily.regular }}>
+          {ventureSubtitle(venture, roleTitle)}
+        </Text>
+      </View>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
+        <Text style={{ color: colors.primary, fontSize: font.sm, fontFamily: fontFamily.semibold }}>
+          {ventureAction(venture)}
+        </Text>
+        <Icon name="arrow-forward" size={14} color={colors.primary} />
+      </View>
     </Pressable>
   );
 }

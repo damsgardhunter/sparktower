@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useLocalSearchParams, useRouter, Stack } from "expo-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -10,7 +10,7 @@ import {
   Avatar, Btn, Chip, Empty, Field, Icon, IconButton, Loading, Progress, TabStrip, errText, plain, type IconName,
 } from "../../src/components/ui";
 import { Callout, OptionCard, Pill, TitledCard, tintSoft } from "../../src/components/MoreKit";
-import { NoticeBanner, useNotice } from "../../src/components/Sheet";
+import { NoticeBanner, Sheet, useNotice } from "../../src/components/Sheet";
 import { SprintIdeaPicker } from "../../src/components/SprintIdeaPicker";
 import {
   PHASE_ICONS, PHASE_LABELS, SPRINT_CREDIT_COSTS, SPRINT_PHASES, credits, planBlock, styleLabel, type SprintIdea,
@@ -107,6 +107,30 @@ export default function SprintDashboard() {
     });
   };
 
+  /*
+   * Leaving ends the sprint for both people, so it confirms first — in a sheet
+   * rather than a native alert, because the note for the partner needs
+   * somewhere to type. The web dialog offers the same field, and the two
+   * should not disagree about what leaving involves.
+   */
+  const [leaveOpen, setLeaveOpen] = useState(false);
+  const [leaveReason, setLeaveReason] = useState("");
+
+  const leave = useMutation({
+    mutationFn: () => api<any>(`/api/sprints/${id}/leave`, {
+      method: "POST",
+      body: { reason: leaveReason.trim() || undefined },
+    }),
+    onSuccess: (r: any) => {
+      setLeaveOpen(false);
+      qc.invalidateQueries({ queryKey: ["sprint", id] });
+      qc.invalidateQueries({ queryKey: ["sprints"] });
+      Alert.alert("You've left the sprint", r?.partnerNotified ? "Your partner has been told." : undefined);
+      router.back();
+    },
+    onError: (e: any) => Alert.alert("Couldn't leave", errText(e) || "Please try again."),
+  });
+
   const advance = useMutation({
     mutationFn: () => api<any>(`/api/sprints/${id}/advance`, { method: "POST" }),
     onSuccess: (r) => {
@@ -169,6 +193,20 @@ export default function SprintDashboard() {
               {sprint.productStyle ? <Pill label={styleLabel(sprint.productStyle)} color={colors.info} /> : null}
               <Pill label={PHASE_LABELS[status] ?? status} color={colors.primary} solid />
               {sprint.isPractice && <Pill label="Practice" color={colors.novaEmerald} />}
+              {/* Only while it's still running: a finished or ended sprint has nothing to leave. */}
+              {status !== "completed" && status !== "abandoned" && (
+                <Pressable
+                  onPress={() => setLeaveOpen(true)}
+                  disabled={leave.isPending}
+                  accessibilityRole="button"
+                  accessibilityLabel="Leave this sprint"
+                  style={{ flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 4, marginLeft: "auto", opacity: leave.isPending ? 0.5 : 1 }}
+                  testID="button-leave-sprint"
+                >
+                  <Icon name="exit-outline" size={14} color={colors.textTertiary} />
+                  <Text style={[meta, { color: colors.textTertiary }]}>{leave.isPending ? "Leaving…" : "Leave"}</Text>
+                </Pressable>
+              )}
             </View>
             <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
               <Avatar name={me?.firstName || "You"} uri={me?.profileImageUrl} size={28} />
@@ -217,6 +255,43 @@ export default function SprintDashboard() {
           </ScrollView>
         )}
         <NoticeBanner notice={notice} onDismiss={clear} />
+      {/*
+        * Leaving, with room to say why.
+        *
+        * A native alert would have been fewer lines, but it has nowhere to
+        * type — and the website asks for a note here, so the phone doing
+        * without one would make the same action mean two different things.
+        */}
+      <Sheet
+        visible={leaveOpen}
+        onClose={() => setLeaveOpen(false)}
+        title="Leave this sprint?"
+        subtitle={sprint?.isPractice
+          ? "This ends your practice sprint. The work stays here."
+          : "A sprint is two people, so leaving ends it for both of you. Your partner will be told, and the work stays on the page."}
+      >
+        <View style={{ gap: spacing.md }}>
+          {!sprint?.isPractice && (
+            <Field
+              label="Anything you'd like them to know? (optional)"
+              value={leaveReason}
+              onChangeText={setLeaveReason}
+              placeholder="Work got busy this week…"
+              multiline
+              maxLength={500}
+              testID="input-leave-reason"
+            />
+          )}
+          <Btn
+            label={leave.isPending ? "Leaving…" : "Leave sprint"}
+            onPress={() => leave.mutate()}
+            disabled={leave.isPending}
+            variant="danger"
+            testID="button-leave-confirm"
+          />
+          <Btn label="Stay" onPress={() => setLeaveOpen(false)} variant="ghost" testID="button-leave-cancel" />
+        </View>
+      </Sheet>
       </KeyboardAvoidingView>
     </>
   );

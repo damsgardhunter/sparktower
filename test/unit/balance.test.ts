@@ -216,6 +216,97 @@ describe("is there more than one way to play", () => {
   });
 });
 
+describe("five teams in one market, which is the actual game", () => {
+  /*
+   * Everything above runs one team against the incumbents. The product is
+   * five teams in the same market taking customers from each other as well,
+   * and that is a different question: a market can be perfectly balanced
+   * against the machines and still produce one runaway winner and four people
+   * who stopped opening the app on day five.
+   */
+  const niche = nicheById("fitness_app")!;
+
+  function crowdedSeason(seasonId = "crowd") {
+    const teams = STRATEGIES.map((s, i) => ({ id: `t${i}`, name: s.name, seats: [...ROLES] as Role[] }));
+    let world = buildWorld({ seasonId, niche, teams });
+    const previous = new Map<string, TeamDecisions>();
+    let reports: any[] = [];
+
+    for (let year = 1; year <= SEASON_YEARS; year++) {
+      const decisions: TeamDecisions[] = [];
+      for (const [i, strategy] of STRATEGIES.entries()) {
+        const id = `t${i}`;
+        const company = world.companies.find((c) => c.id === id)!;
+        const chosen = strategy.play(year, company, niche);
+        const submitted: Partial<Record<Role, any>> = {};
+        if (chosen) for (const role of ROLES) if ((chosen as any)[role]) submitted[role] = (chosen as any)[role];
+        const { decisions: theirs } = decisionsForYear({
+          company, niche, submitted, previous: previous.get(id),
+        });
+        decisions.push({ ...theirs, companyId: id });
+        if (chosen) previous.set(id, chosen);
+      }
+      const out = resolveYear({ ...world, year }, decisions, economyFor(seasonId, year));
+      world = out.world;
+      reports = out.reports;
+    }
+
+    const players = reports.filter((r) => STRATEGIES.some((s, i) => `t${i}` === r.companyId));
+    return { world, players: players.sort((a, b) => b.founderValue - a.founderValue) };
+  }
+
+  it("does not hand the whole market to one team", () => {
+    const { players } = crowdedSeason();
+    const best = players[0];
+    expect(best.marketShare, `${best.name} took the lot`).toBeLessThan(0.55);
+  });
+
+  it("leaves the team in last place with a company, not a crater", () => {
+    /*
+     * The retention question. Four people who finish fourteen days with
+     * nothing are four people who do not come back for the next season, and a
+     * multiplayer game that eliminates most of its players every fortnight
+     * runs out of players.
+     */
+    const { players } = crowdedSeason();
+    const last = players[players.length - 1];
+    expect(last.bankrupt, `${last.name} was wiped out`).toBe(false);
+    expect(last.customers, `${last.name} finished with nobody`).toBeGreaterThan(0);
+  });
+
+  it("keeps the gap between first and last worth playing for", () => {
+    /*
+     * Both failure modes at once. If the spread is tiny nothing anybody chose
+     * mattered; if it is enormous the season was decided early and the rest
+     * was homework.
+     */
+    const { players } = crowdedSeason();
+    const first = players[0].founderValue;
+    const last = players[players.length - 1].founderValue;
+    expect(first, "everybody finished in the same place").toBeGreaterThan(last * 1.3);
+    expect(first, "first place ran away with it").toBeLessThan(Math.max(last, 1) * 60);
+  });
+
+  it("still leaves the incumbents holding a real share of a contested market", () => {
+    // Four teams competing is not a reason for the companies that were here
+    // first to evaporate.
+    const { world } = crowdedSeason();
+    const total = world.companies.reduce((sum, c) => sum + Object.values(c.customers).reduce((s, n) => s + n, 0), 0);
+    const held = world.companies
+      .filter((c) => c.kind === "incumbent")
+      .reduce((sum, c) => sum + Object.values(c.customers).reduce((s, n) => s + n, 0), 0);
+    expect(held / total, "four teams emptied the market").toBeGreaterThan(0.2);
+  });
+
+  it("gives a different room a different season", () => {
+    const a = crowdedSeason("room-one").players.map((p) => p.companyId);
+    const b = crowdedSeason("room-two").players.map((p) => Math.round(p.customers));
+    const aCustomers = crowdedSeason("room-one").players.map((p) => Math.round(p.customers));
+    expect(aCustomers).not.toEqual(b);
+    expect(a.length).toBe(STRATEGIES.length);
+  });
+});
+
 describe("a season is a story, not a coin flip", () => {
   const niche = nicheById("fitness_app")!;
 

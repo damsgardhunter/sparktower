@@ -8,8 +8,9 @@
  */
 import { describe, it, expect } from "vitest";
 import {
-  clockIsUrgent, formatCount, formatCountdown, incumbentHold, loyaltyRead,
-  phaseCopy, remainingSeconds, seasonOver, seatStatus, type SimSeat,
+  clockIsUrgent, formatCount, formatCountdown, incumbentHold, liveVentures, loyaltyRead,
+  phaseCopy, remainingSeconds, seasonOver, seatStatus, ventureAction, ventureRoute,
+  ventureSubtitle, ventureTitle, type LiveVenture, type SimPhase, type SimSeat,
 } from "./lobby";
 
 const seat = (over: Partial<SimSeat> = {}): SimSeat => ({
@@ -154,5 +155,60 @@ describe("reading a market", () => {
     expect(seasonOver("paused-for-maintenance")).toBe(false);
     expect(seasonOver(null)).toBe(false);
     expect(seasonOver(undefined)).toBe(false);
+  });
+});
+
+const venture = (over: Partial<LiveVenture> = {}): LiveVenture => ({
+  id: "v1", phase: "running", name: "Ledgerly", role: "cfo",
+  niche: { id: "bookkeeping", name: "Bookkeeping software" }, secondsLeft: null, ...over,
+});
+
+describe("getting back into a company you are already running", () => {
+  it("sends a trading company to the desk and a lobby to the room", () => {
+    // Two different screens: the room for a trading company is a dead lobby,
+    // and the desk for a room still picking seats has no year to show.
+    expect(ventureRoute(venture({ phase: "running" }))).toBe("/sim/desk/v1");
+    for (const phase of ["filling", "claiming", "naming"] as SimPhase[]) {
+      expect(ventureRoute(venture({ phase }))).toBe("/sim/v1");
+    }
+  });
+
+  it("leaves retired rooms out of the list entirely", () => {
+    // A retired room is one that ended before it started; a "resume" pointing
+    // at it is an invitation to a screen that can only say no.
+    const kept = liveVentures([
+      venture({ id: "a", phase: "retired" }),
+      venture({ id: "b", phase: "claiming" }),
+      venture({ id: "c", phase: "running" }),
+    ]);
+    expect(kept.map((v) => v.id)).toEqual(["b", "c"]);
+  });
+
+  it("treats no ventures and no response as the same empty branch", () => {
+    // Empty means the market picker is the whole screen, so an absent
+    // response must not look like a company nobody can open.
+    expect(liveVentures([])).toEqual([]);
+    expect(liveVentures(undefined)).toEqual([]);
+    expect(liveVentures([venture()]).length).toBe(1);
+  });
+
+  it("names an unnamed company rather than showing a blank row", () => {
+    expect(ventureTitle(venture({ name: "Ledgerly" }))).toBe("Ledgerly");
+    expect(ventureTitle(venture({ name: null }))).toBe("Your company");
+    expect(ventureTitle(venture({ name: "   " }))).toBe("Your company");
+  });
+
+  it("says where the company trades and which seat is yours", () => {
+    expect(ventureSubtitle(venture(), "Chief Financial Officer")).toBe("Bookkeeping software · you're the Chief Financial Officer");
+    // Titles arrive with /api/sim/niches; until they do, the seat id in
+    // capitals still tells a player the row is theirs.
+    expect(ventureSubtitle(venture())).toBe("Bookkeeping software · you're the CFO");
+    expect(ventureSubtitle(venture({ role: null }))).toBe("Bookkeeping software · seat not settled yet");
+    expect(ventureSubtitle(venture({ niche: null }))).toBe("A market · you're the CFO");
+  });
+
+  it("says out loud which of the two screens the tap opens", () => {
+    expect(ventureAction(venture({ phase: "running" }))).toBe("Open your desk");
+    expect(ventureAction(venture({ phase: "filling" }))).toBe("Back to the room");
   });
 });

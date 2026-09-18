@@ -48,6 +48,12 @@ async function personIn(browser: Browser, ip: string, first: string) {
  * does, so there is nothing to click and nothing to await but the clock. The
  * job runs about once a minute; this polls rather than sleeping so a fast
  * machine is not punished for being fast.
+ *
+ * This is also the only test anywhere that the job actually runs. Nothing else
+ * exercises `startSimulationJobs` — the unit and integration suites call the
+ * pass directly, which proves the work is right and says nothing about whether
+ * anything ever calls it. If somebody removes the line from `server/index.ts`,
+ * or the interval stops firing, every desk spec below times out here.
  */
 async function waitForYearOne(api: APIRequestContext, ventureId: string): Promise<void> {
   const deadline = Date.now() + 150_000;
@@ -178,4 +184,66 @@ test("the chief executive's chair has a company to run, and the others cannot se
   await expect(cfo.getByText(/chief executive's call/i).first()).toBeVisible();
 
   for (const person of people) await person.context.close();
+});
+
+test("a sealed bid is placed, shown back, and tells you nothing about anyone else", async ({ browser }) => {
+  /*
+   * The marketplace's whole design rests on not knowing. Every instinct in an
+   * auction interface is to show you where you stand — the high bid, how many
+   * people are watching, whether you have been outbid — and all of it is
+   * deliberately absent, because a visible high bid turns this into a
+   * countdown won by whoever is awake last. In a game played across time zones
+   * for a fortnight, that means the market belongs to whoever sleeps least.
+   *
+   * So this checks the blank as carefully as the number: your own bid comes
+   * back, and a rival's does not appear anywhere in the page.
+   */
+  test.setTimeout(300_000);
+
+  const names = ["Xan", "Yves", "Zara", "Ana", "Bo"];
+  const people = [];
+  for (const [i, name] of names.entries()) {
+    people.push(await personIn(browser, `203.0.118.${80 + i}`, name));
+  }
+  const rival = await personIn(browser, "203.0.118.90", "Rival");
+
+  let ventureId = "";
+  for (const person of people) {
+    ventureId = (await (await person.api.post("/api/sim/join", { data: { nicheId: NICHE } })).json()).ventureId;
+  }
+  for (const [i, person] of people.entries()) {
+    await person.api.post(`/api/sim/ventures/${ventureId}/claim`, { data: { role: ROLES[i] } });
+  }
+  await people[0].api.post(`/api/sim/ventures/${ventureId}/name`, { data: { name: "Percolate", product: "Coffee" } });
+  await waitForYearOne(people[0].api, ventureId);
+
+  const ceo = await people[0].context.newPage();
+  await ceo.goto(`/simulation/${ventureId}/market`);
+  await ceo.getByTestId("btn-skip-onboarding").click({ timeout: 5_000 }).catch(() => {});
+  await expect(ceo.getByTestId("text-funds"), "what a bid can be backed by").toBeVisible({ timeout: 30_000 });
+
+  // Everyone in the season sees the same three things, priced and explained.
+  const listings = ceo.locator('[data-testid^="input-bid-"]');
+  await expect(listings.first()).toBeVisible();
+  const listingId = (await listings.first().getAttribute("data-testid"))!.replace("input-bid-", "");
+
+  /*
+   * A rival's bid, planted through the API from a team that is not this one.
+   * Nothing about it may reach the page below.
+   */
+  const rivalVenture = (await (await rival.api.post("/api/sim/join", { data: { nicheId: NICHE } })).json()).ventureId;
+  await rival.api.post(`/api/sim/ventures/${rivalVenture}/bids`, { data: { listingId, amount: 9_123_456 } })
+    .catch(() => { /* a lone joiner may still be in a lobby; the leak check below is the point */ });
+
+  await ceo.getByTestId(`input-bid-${listingId}`).fill("1250000");
+  await ceo.getByTestId(`button-bid-${listingId}`).click();
+
+  // Your own bid comes back, and says it is sealed.
+  await expect(ceo.getByTestId(`text-your-bid-${listingId}`)).toContainText(/sealed/i, { timeout: 20_000 });
+
+  const body = await ceo.locator("body").innerText();
+  expect(body, "a rival's bid must not appear anywhere").not.toContain("9,123,456");
+  expect(body).not.toMatch(/outbid|highest bid|other bidders|\d+ bids?\b/i);
+
+  for (const person of [...people, rival]) await person.context.close();
 });

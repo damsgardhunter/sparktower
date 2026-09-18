@@ -21,7 +21,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
-import { formatCountdown, remainingSeconds, seasonOver, type NichesResponse, type VentureView } from "./lobby";
+import { formatCountdown, remainingSeconds, seasonOver, type LiveVenture, type NichesResponse, type VentureView } from "./lobby";
 import type { DeskView } from "./desk";
 import type { MarketView } from "./market";
 import type { OffersView } from "./offers";
@@ -36,6 +36,26 @@ export function useNiches() {
     queryKey: ["sim-niches"],
     queryFn: () => api<NichesResponse>("/api/sim/niches"),
     staleTime: 10 * 60_000,
+    retry: false,
+  });
+}
+
+/**
+ * The companies you already hold a seat in.
+ *
+ * A season is fourteen real days, so the list of rooms someone is already in
+ * is the first thing the lobby has to answer — a player opening the app on
+ * day six wants today's decisions, not a market picker. Polled on the room's
+ * interval rather than cached, because a phase moving from `claiming` to
+ * `running` changes which screen the row opens, and a row that sends somebody
+ * to the wrong one is worse than no row.
+ */
+export function useVentures() {
+  return useQuery({
+    queryKey: ["sim-ventures"],
+    queryFn: () => api<{ ventures: LiveVenture[] }>("/api/sim/ventures"),
+    refetchInterval: ROOM_POLL_MS,
+    staleTime: 0,
     retry: false,
   });
 }

@@ -282,3 +282,70 @@ export function formatCount(n: number): string {
   if (n >= 1_000) return `${Math.round(n / 1000)}k`;
   return String(Math.round(n));
 }
+
+// --- The companies you are already running -------------------------------
+
+/**
+ * A venture you hold a seat in, as GET /api/sim/ventures lists it.
+ *
+ * Mirrors the payload built in server/simulation-routes.ts — the same
+ * arrangement as everything else in this file, because Metro can't resolve
+ * `@shared`. `secondsLeft` is null for a phase with no deadline (a running
+ * season's year is ticked by the season, not the room).
+ */
+export interface LiveVenture {
+  id: string;
+  phase: SimPhase;
+  name: string | null;
+  /** The seat id — "ceo", "cfo" — not its title; titles come with /api/sim/niches. */
+  role: string | null;
+  niche: { id: string; name?: string } | null;
+  secondsLeft: number | null;
+}
+
+/**
+ * Where tapping a venture should land.
+ *
+ * The room and the desk are different screens, and sending somebody to the
+ * wrong one is worse than not offering the link at all: the room for a
+ * company that is already trading is a dead lobby, and the desk for a company
+ * still picking seats has no year to show. `running` is the only phase with a
+ * desk behind it.
+ */
+export const ventureRoute = (venture: Pick<LiveVenture, "id" | "phase">): string =>
+  venture.phase === "running" ? `/sim/desk/${venture.id}` : `/sim/${venture.id}`;
+
+/**
+ * The ventures worth offering a way back into.
+ *
+ * The server already leaves retired rooms out, and this filters them again:
+ * a retired room is a room that ended before it started, and a "resume"
+ * pointing at one is an invitation to a screen that can only say no. Cheap
+ * insurance against a build of the server that stops filtering.
+ */
+export const liveVentures = (ventures: LiveVenture[] | undefined): LiveVenture[] =>
+  (ventures ?? []).filter((v) => v.phase !== "retired");
+
+/** The company's name, or the stand-in for one that hasn't been named yet. */
+export const ventureTitle = (venture: Pick<LiveVenture, "name">): string =>
+  venture.name?.trim() || "Your company";
+
+/**
+ * The line under the name: where the company trades, and what you hold there.
+ *
+ * `roleTitle` comes from /api/sim/niches when it has loaded; the seat id in
+ * capitals is the fallback, because a row that says "Bookkeeping software"
+ * and nothing else is a row that doesn't tell you it's yours.
+ */
+export function ventureSubtitle(
+  venture: Pick<LiveVenture, "role" | "niche">,
+  roleTitle?: string | null,
+): string {
+  const market = venture.niche?.name ?? venture.niche?.id ?? "A market";
+  if (!venture.role) return `${market} · seat not settled yet`;
+  return `${market} · you're the ${roleTitle ?? venture.role.toUpperCase()}`;
+}
+
+/** What tapping the row does, said out loud, because the two land differently. */
+export const ventureAction = (venture: Pick<LiveVenture, "phase">): string =>
+  venture.phase === "running" ? "Open your desk" : "Back to the room";
