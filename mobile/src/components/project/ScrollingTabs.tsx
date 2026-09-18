@@ -2,16 +2,19 @@
  * An underlined tab strip that keeps the selected tab in view — the project
  * page's and the manager's section tabs, which run well past a phone's width.
  * It looks like ui.tsx's TabStrip; the difference is the scroll-into-view,
- * so a link that opens `?tab=files` shows Files selected, not off-screen.
+ * so a link that opens `?tab=files` shows Files selected, not off-screen — and
+ * so a swipe through the project page's sections drags the strip along with it
+ * rather than leaving the selected tab somewhere off to the right.
  */
 import { useEffect, useRef } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { colors, font, fontFamily, spacing } from "../../theme";
 
-export function ScrollingTabs<T extends string>({ options, value, onChange }: {
+export function ScrollingTabs<T extends string>({ options, value, onChange, testID = "section-tabs" }: {
   options: { value: T; label: string; badge?: string | null }[];
   value: T;
   onChange: (v: T) => void;
+  testID?: string;
 }) {
   const ref = useRef<ScrollView>(null);
   const xs = useRef<Record<string, { x: number; width: number }>>({});
@@ -27,6 +30,7 @@ export function ScrollingTabs<T extends string>({ options, value, onChange }: {
   return (
     <ScrollView
       ref={ref}
+      testID={testID}
       horizontal
       showsHorizontalScrollIndicator={false}
       style={s.strip}
@@ -38,6 +42,7 @@ export function ScrollingTabs<T extends string>({ options, value, onChange }: {
         return (
           <Pressable
             key={o.value}
+            testID={`${testID}-${o.value}`}
             onPress={() => onChange(o.value)}
             onLayout={(e) => { xs.current[o.value] = { x: e.nativeEvent.layout.x, width: e.nativeEvent.layout.width }; if (on) reveal(false); }}
             style={[s.item, on && s.itemOn]}
