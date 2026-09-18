@@ -57,8 +57,10 @@ import { insertUserProfileSchema, insertProjectSchema, insertProjectBase, insert
 import { pickFields, WRITABLE } from "./body-fields";
 import { registerEmailVerificationRoutes, requireVerifiedEmail } from "./email-verification";
 import { registerPasswordResetRoutes } from "./password-reset";
+import { recordView, countViews } from "./views";
 import { registerSimulationRoutes } from "./simulation-routes";
 import { registerSimulationDeskRoutes } from "./simulation-desk-routes";
+import { registerSimulationMarketRoutes } from "./simulation-market-routes";
 import { z } from "zod";
 import OpenAI from "openai";
 import { eq, ne, and, sql, inArray, desc, isNull } from "drizzle-orm";
@@ -423,6 +425,8 @@ export async function registerRoutes(
   registerSimulationRoutes(app);
   // The desk a seat files its year from (server/simulation-desk-routes.ts).
   registerSimulationDeskRoutes(app);
+  // Buying, selling, and the moves a company makes in trouble.
+  registerSimulationMarketRoutes(app);
   registerSafetyRoutes(app);
   registerInvestmentRoutes(app);
   registerBackingRoutes(app);
@@ -760,7 +764,29 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       }
     }
 
-    await storage.incrementProjectViews(req.params.id);
+    /*
+     * A view, when it is one. This route is what the owner's own dashboard
+     * reads and the client refetches, and it used to increment on every call —
+     * so `projects.views` counted the owner refreshing their own page. In this
+     * database that produced 450 views on a project two people had ever
+     * opened, one of them the owner (server/views.ts).
+     */
+    const members = await storage.getProjectMembers(req.params.id).catch(() => []);
+    const outcome = await recordView({
+      kind: "project",
+      targetId: req.params.id,
+      ownerId: project.ownerId,
+      insiders: members.map((m: any) => m.userId),
+      viewer: {
+        userId: req.user?.id ?? null,
+        visitorId: req.visitorId ?? null,
+        sessionId: req.sessionId ?? null,
+        userAgent: req.headers["user-agent"] ?? null,
+        path: req.originalUrl,
+        referrer: req.headers.referer ?? null,
+      },
+    });
+    if (outcome === "counted") await storage.incrementProjectViews(req.params.id);
     res.json(project);
   });
 
@@ -3938,10 +3964,31 @@ RULES:
     for (const p of allProjects.filter((x) => x.ownerId === req.params.id)) {
       if (!p.isPrivate || (viewerId && (viewerId === p.ownerId || (await isProjectMember(viewerId, p.id))))) userProjects.push(p);
     }
+    /*
+     * Profile views were not recorded anywhere — the number simply did not
+     * exist, while the code carried a comment about LinkedIn's "profile
+     * viewers". Same rules as a project: not yourself, once per person per day,
+     * not a crawler.
+     */
+    await recordView({
+      kind: "profile",
+      targetId: req.params.id,
+      ownerId: req.params.id,
+      viewer: {
+        userId: viewerId ?? null,
+        visitorId: req.visitorId ?? null,
+        sessionId: req.sessionId ?? null,
+        userAgent: req.headers["user-agent"] ?? null,
+        path: req.originalUrl,
+        referrer: req.headers.referer ?? null,
+      },
+    });
+
     res.json({
       id: user.id, firstName: user.firstName, lastName: user.lastName,
       profileImageUrl: user.profileImageUrl, createdAt: user.createdAt,
       profile, projects: userProjects,
+      views: await countViews("profile", req.params.id),
     });
   });
 
