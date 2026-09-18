@@ -103,7 +103,7 @@ export default function More() {
         )}
 
         <Group title="Build">
-          {on("sprints") && <MenuRow icon="people" title="Sprints" subtitle="Co-founder trial sprints and matchmaking" onPress={() => go("/(tabs)/sprints")} testID="more-sprints" />}
+          {on("sprints") && <MenuRow icon="people" title="Sprints & simulations" subtitle="Trial sprints, matchmaking, and the market simulation" onPress={() => go("/(tabs)/sprints")} testID="more-sprints" />}
           {on("sprints") && <MenuRow icon="school" title="Practice sprint" subtitle="Rehearse the whole sprint with Nova" tint={colors.novaEmerald} onPress={() => go("/sprint/practice")} />}
           {on("contests") && <MenuRow icon="ribbon" title="Contests and Communities" subtitle="Compete, and join people building like you" tint="#E11D48" onPress={() => go("/contests")} testID="more-contests" />}
           <MenuRow icon="document-text" title="Build my profile" subtitle="Let Nova read your résumé" tint={colors.info} onPress={() => go("/profile-builder")} />

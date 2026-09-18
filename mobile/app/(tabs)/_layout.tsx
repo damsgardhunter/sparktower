@@ -52,7 +52,7 @@ export default function TabsLayout() {
           Projects joins them — off the bar, but the screen stays so its deep links still land. */}
       <Tabs.Screen name="projects" options={{ title: "Projects", href: null }} />
       <Tabs.Screen name="profile" options={{ title: "Profile", href: null }} />
-      <Tabs.Screen name="sprints" options={{ title: "Sprints", href: null }} />
+      <Tabs.Screen name="sprints" options={{ title: "Sprints & simulations", href: null }} />
       <Tabs.Screen name="leaderboard" options={{ title: "Leaderboard", href: null }} />
       </Tabs>
     </TabBarVisibilityProvider>
