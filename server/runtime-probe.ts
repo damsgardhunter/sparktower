@@ -6,6 +6,7 @@
  * is bounded, and a URL that could reach inside the network is refused.
  */
 import { isIP } from "net";
+import { safeFetch } from "./safe-fetch";
 
 export interface ProbeResult { url: string; ok: boolean; status: number | null; ms: number; error?: string }
 export interface RuntimeFacts {
@@ -34,15 +35,22 @@ export function safeProbeUrl(raw: string | null | undefined): URL | null {
 
 async function probe(url: string, method: "GET" | "HEAD", timeoutMs = 8000): Promise<ProbeResult> {
   const t0 = Date.now();
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { method, redirect: "follow", signal: ctrl.signal, headers: { "user-agent": "SparkTower-audit-probe/1" } });
+    /*
+     * Through the shared guard (server/safe-fetch.ts), which re-checks every
+     * redirect. This used to call fetch with `redirect: "follow"` after
+     * checking only the address it was given — so a live URL answering
+     * "302 Location: http://169.254.169.254/" walked the probe straight into
+     * the metadata service, and the report would have carried the status back.
+     */
+    const res = await safeFetch(url, { method, timeoutMs, allowHttp: true, maxBytes: 64 * 1024, userAgent: "SparkTower-audit-probe/1" });
     return { url, ok: res.ok, status: res.status, ms: Date.now() - t0 };
   } catch (err) {
-    return { url, ok: false, status: null, ms: Date.now() - t0, error: (err as Error)?.name === "AbortError" ? "timed out" : String((err as Error)?.message ?? err).slice(0, 120) };
-  } finally { clearTimeout(timer); }
+    const message = (err as Error)?.message ?? String(err);
+    return { url, ok: false, status: null, ms: Date.now() - t0, error: /abort|timeout/i.test(message) ? "timed out" : message.slice(0, 120) };
+  }
 }
+
 
 export async function probeRuntime(input: { liveUrl: string | null | undefined; envVarNames: string[]; instanceLabel?: string }): Promise<RuntimeFacts> {
   const base = safeProbeUrl(input.liveUrl);

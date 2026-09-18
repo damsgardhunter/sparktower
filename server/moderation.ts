@@ -222,7 +222,9 @@ async function isExempt(key: string): Promise<boolean> {
       return false; // Can't tell who this is, so the limit applies.
     }
   }
-  return who.role === "admin" || (!!who.email && exemptEmails().has(who.email));
+  // Lowercased on both sides: the allowlist already is, and a row written before
+  // addresses were normalised would otherwise miss its own exemption.
+  return who.role === "admin" || (!!who.email && exemptEmails().has(who.email.trim().toLowerCase()));
 }
 
 export interface RateCheck {

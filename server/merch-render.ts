@@ -18,6 +18,7 @@
  * fallback face in production.
  */
 import fs from "node:fs";
+import { safeFetch } from "./safe-fetch";
 import path from "node:path";
 import sharp, { type OverlayOptions } from "sharp";
 import opentype from "opentype.js";
@@ -187,27 +188,6 @@ function layout(
 }
 
 /** Blocks the obvious SSRF shapes before the server fetches a creator URL. */
-function assertFetchableUrl(raw: string): URL {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new Error("Logo URL is not a valid URL");
-  }
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new Error("Logo URL must be http or https");
-  }
-  const host = url.hostname.toLowerCase();
-  const blocked =
-    host === "localhost" || host === "0.0.0.0" || host.endsWith(".local") ||
-    host === "metadata.google.internal" ||
-    /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) ||
-    /^169\.254\./.test(host) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
-    host.startsWith("[");
-  if (blocked) throw new Error("Logo URL points at a private address");
-  return url;
-}
 
 const MAX_LOGO_BYTES = 12 * 1024 * 1024;
 
@@ -228,21 +208,23 @@ async function loadLogo(value: string): Promise<Buffer> {
 }
 
 async function fetchLogo(rawUrl: string): Promise<Buffer> {
-  const url = assertFetchableUrl(rawUrl);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15_000);
-  try {
-    const res = await fetch(url, { signal: controller.signal, redirect: "follow" });
-    if (!res.ok) throw new Error(`Logo fetch failed (${res.status})`);
-    const type = res.headers.get("content-type") || "";
-    if (!/^image\//.test(type)) throw new Error(`Logo URL returned ${type || "no content type"}, not an image`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.byteLength > MAX_LOGO_BYTES) throw new Error("Logo file is too large (max 12MB)");
-    return buf;
-  } finally {
-    clearTimeout(timer);
-  }
+  /*
+   * Through the shared guard (server/safe-fetch.ts). This used to check a
+   * blocklist of hostnames and then fetch with `redirect: "follow"`, so a logo
+   * URL that passed the check and answered "302 Location: http://127.0.0.1:5000/"
+   * was followed without anybody looking at it — and a hostname that simply
+   * resolved to a private address never had to redirect at all. The guard
+   * resolves the name, checks the addresses, and re-checks every hop.
+   *
+   * http is still allowed here: these are addresses people pasted before
+   * anyone asked them for https, and a logo is not a credential.
+   */
+  const res = await safeFetch(rawUrl, { maxBytes: MAX_LOGO_BYTES, timeoutMs: 15_000, allowHttp: true });
+  if (!res.ok) throw new Error(`Logo fetch failed (${res.status})`);
+  if (!/^image\//.test(res.contentType)) throw new Error(`Logo URL returned ${res.contentType || "no content type"}, not an image`);
+  return res.body;
 }
+
 
 export interface RenderOptions {
   config: MerchConfig;
