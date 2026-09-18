@@ -1,12 +1,12 @@
 import { Pressable, ScrollView, Text, View } from "react-native";
-import { useRouter, Stack } from "expo-router";
+import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
-import { api, fetchMe } from "../src/api/client";
-import { useAuth } from "../src/auth/AuthContext";
-import { useEntitlementsQuery } from "../src/hooks/useEntitlements";
-import { colors, font, fontFamily, spacing } from "../src/theme";
-import { Avatar, Icon, NovaGradient, Progress } from "../src/components/ui";
-import { Group, MenuRow, Pill, useSurfaces } from "../src/components/MoreKit";
+import { api, fetchMe } from "../../src/api/client";
+import { useAuth } from "../../src/auth/AuthContext";
+import { useEntitlementsQuery } from "../../src/hooks/useEntitlements";
+import { colors, font, fontFamily, spacing } from "../../src/theme";
+import { Avatar, Icon, NovaGradient, Progress, TAB_BAR_SPACE } from "../../src/components/ui";
+import { Group, MenuRow, Pill, useSurfaces } from "../../src/components/MoreKit";
 
 /**
  * Everything that doesn't earn a tab — the phone's version of the web sidebar.
@@ -54,8 +54,9 @@ export default function More() {
 
   return (
     <>
-      <Stack.Screen options={{ title: "More" }} />
-      <ScrollView style={{ flex: 1, backgroundColor: colors.canvas }} contentContainerStyle={{ paddingBottom: spacing.xxl * 2, gap: spacing.lg }}>
+      {/* A tab now, so the title and header come from the tabs layout — and the
+          floating bar sits over the scene, so the list ends above it. */}
+      <ScrollView style={{ flex: 1, backgroundColor: colors.canvas }} contentContainerStyle={{ paddingBottom: TAB_BAR_SPACE, gap: spacing.lg }}>
         {/* Who you are, linking to the profile. */}
         <Pressable
           onPress={() => go("/(tabs)/profile")}
