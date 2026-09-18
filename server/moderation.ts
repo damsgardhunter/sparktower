@@ -146,8 +146,33 @@ export function accountKey(email: unknown): string | null {
   return value && value.length <= 320 ? `account:${value}` : null;
 }
 
+/**
+ * Said once, loudly, if the address every limit is keyed on turns out to be our
+ * own proxy.
+ *
+ * `trust proxy` is set to one hop. If a deployment ever sits behind two — a CDN
+ * in front of the host, say — `req.ip` becomes the inner proxy's address, which
+ * is the *same* for every visitor. Every per-address limit then shares one
+ * bucket: one person's failed sign-ins lock out everybody, and a real attacker
+ * is throttled no more than anyone else. It is silent, and it looks exactly
+ * like the limits working.
+ */
+let warnedAboutProxy = false;
+function warnIfProxyAddress(address: string): void {
+  if (warnedAboutProxy || process.env.NODE_ENV !== "production") return;
+  if (!/^(10\.|127\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|::1$|fc|fd)/.test(address)) return;
+  warnedAboutProxy = true;
+  console.warn(
+    `[moderation] Every rate limit is being keyed on ${address}, which is a private address — ` +
+    `this server is seeing its proxy rather than the visitor, so all visitors share one limit. ` +
+    `Check the number of proxies in front of it against \`trust proxy\` (server/replit_integrations/auth/replitAuth.ts).`,
+  );
+}
+
 export function ipKey(req: any): string {
-  return `ip:${req.ip || req.socket?.remoteAddress || "unknown"}`;
+  const address = req.ip || req.socket?.remoteAddress || "unknown";
+  warnIfProxyAddress(String(address));
+  return `ip:${address}`;
 }
 
 /*

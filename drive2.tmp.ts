@@ -22,6 +22,15 @@ async function main(){
       data:{ email:`dv${stamp}_${i}@example.test`, password:"a-good-passphrase-here", firstName:`P${i}` }});
     if (r.status()!==201){ console.log("register", r.status(), (await r.text()).slice(0,150)); return; }
   }
+  // Confirm the addresses, the way a person would by clicking the link. Done
+  // in the database here only because the dev outbox lives in the server's
+  // process and this script is outside it.
+  const { users } = await import("@shared/schema");
+  const { like } = await import("drizzle-orm");
+  await db.update(users)
+    .set({ emailVerifiedAt: new Date(), isOnboarded: true })
+    .where(like(users.email, `dv${stamp}_%`));
+
   let vid = "";
   for (let i=0;i<5;i++){ const b = await (await pages[i].request.post(`${BASE}/api/sim/join`, { data:{nicheId:"fitness_app"} })).json(); vid = b.ventureId; }
   for (let i=0;i<5;i++) await pages[i].request.post(`${BASE}/api/sim/ventures/${vid}/claim`, { data:{role:ROLES[i]} });

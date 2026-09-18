@@ -1,27 +1,36 @@
 /**
  * One way to fetch a URL somebody else chose.
  *
- * Three places in this codebase reached out to an address a user supplied — the
+ * Three places in this codebase reach out to an address a user supplied — the
  * promotion sync, the audit's runtime probe, and merch logo rendering — and
- * each had written its own guard. The promotion sync's was right: it resolves
- * the hostname and checks the *addresses* it resolves to, refuses anything on
- * the network the server sits in, follows redirects by hand so every hop is
- * checked again, and stops reading at a size cap.
+ * each had written its own guard. Two of them matched a blocklist of hostnames
+ * and literal IPs and then called `fetch(url, { redirect: "follow" })`, which
+ * is the shape with the hole in it: `https://example.com/logo.png` passes the
+ * check and answers `302 Location: http://169.254.169.254/latest/meta-data/`,
+ * and the redirect is followed with nobody looking at it.
  *
- * The other two matched a blocklist of hostnames and literal IPs and then
- * called `fetch(url, { redirect: "follow" })`. That is the shape with the hole
- * in it: `https://example.com/logo.png` passes the check and answers `302
- * Location: http://169.254.169.254/latest/meta-data/`, and the redirect is
- * followed without anybody looking at it. A blocklist of hostnames also does
- * nothing about a name that simply resolves to 127.0.0.1, which costs an
- * attacker one DNS record.
+ * What this does instead, in order:
  *
- * So the good one lives here now, and all three use it. The part worth keeping
- * in mind: DNS is resolved, then fetched by URL, so a name that answers
- * differently between the two lookups is still a hole (DNS rebinding). Closing
- * that means pinning the connection to the address we checked, which needs a
- * custom agent; this is the honest limit of what is here.
+ *  1. Resolves the hostname and refuses if *any* address it resolves to is on
+ *     the network this server sits in. A blocklist of hostnames is no defence
+ *     against an ordinary name pointed at 127.0.0.1, which costs an attacker
+ *     one DNS record.
+ *  2. Connects to that address, pinned — `host` is the IP we just checked,
+ *     while TLS validates the certificate against the *name* (`servername`)
+ *     and the request carries the original `Host`. This is what closes DNS
+ *     rebinding: a name that answers publicly for the check and privately a
+ *     moment later cannot move the connection, because the connection was
+ *     already aimed at the address that passed.
+ *  3. Follows redirects by hand, running every hop through 1 and 2 again.
+ *  4. Stops reading at a size cap, whatever `content-length` claimed.
+ *
+ * It is written on `node:http`/`node:https` rather than `fetch` because that is
+ * the only way to say "connect *here* but verify *that name*" without adding a
+ * dependency: `fetch` gives no way to pin the address, and rewriting the URL to
+ * the IP would break certificate validation instead.
  */
+import http from "node:http";
+import https from "node:https";
 import { lookup } from "node:dns/promises";
 import { isPrivateAddress } from "@shared/promotion-sources";
 
@@ -32,13 +41,48 @@ export interface SafeFetchOptions {
   timeoutMs?: number;
   method?: "GET" | "HEAD";
   userAgent?: string;
-  /** http as well as https. Only for things people typed long before we asked for https. */
+  /** http as well as https. Only for addresses people typed long before we asked for https. */
   allowHttp?: boolean;
   /** Hops to follow, each re-checked. */
   maxRedirects?: number;
+  /** Test seam: how a single request is made, once its address has been checked. */
+  transport?: Transport;
 }
 
+/** One request to one already-checked address. Returns the status line, headers and body stream. */
+export type Transport = (args: {
+  url: URL;
+  address: string;
+  family: number;
+  method: "GET" | "HEAD";
+  headers: Record<string, string>;
+  timeoutMs: number;
+}) => Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: AsyncIterable<Buffer> }>;
+
 const DEFAULT_AGENT = "Mozilla/5.0 (compatible; SparkTowerBot/1.0; +https://sparktower.app)";
+
+const nodeTransport: Transport = ({ url, address, family, method, headers, timeoutMs }) =>
+  new Promise((resolve, reject) => {
+    const secure = url.protocol === "https:";
+    const request = (secure ? https : http).request(
+      {
+        // The address that passed the check, not the name — resolved once, connected once.
+        host: address,
+        family,
+        port: url.port ? Number(url.port) : secure ? 443 : 80,
+        path: `${url.pathname}${url.search}`,
+        method,
+        // The certificate is still checked against the hostname, not the IP.
+        ...(secure ? { servername: url.hostname } : {}),
+        headers: { ...headers, Host: url.host },
+        timeout: timeoutMs,
+      },
+      (res) => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: res as AsyncIterable<Buffer> }),
+    );
+    request.on("timeout", () => request.destroy(new Error("timed out")));
+    request.on("error", reject);
+    request.end();
+  });
 
 /**
  * Fetch a URL that a stranger chose, or throw saying why not.
@@ -54,6 +98,7 @@ export async function safeFetch(start: string, opts: SafeFetchOptions = {}): Pro
     userAgent = DEFAULT_AGENT,
     allowHttp = false,
     maxRedirects = 4,
+    transport = nodeTransport,
   } = opts;
 
   let url = start;
@@ -70,37 +115,43 @@ export async function safeFetch(start: string, opts: SafeFetchOptions = {}): Pro
       throw new Error(`refused address for ${parsed.hostname}`);
     }
 
-    const res = await fetch(url, {
+    const res = await transport({
+      url: parsed,
+      address: addresses[0].address,
+      family: addresses[0].family,
       method,
-      redirect: "manual",
-      signal: AbortSignal.timeout(timeoutMs),
       headers: { "user-agent": userAgent, "accept-language": "en" },
+      timeoutMs,
     });
 
-    if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
-      // Round the loop rather than letting fetch follow it: the next address gets checked too.
-      url = new URL(res.headers.get("location")!, url).toString();
+    const header = (name: string): string => {
+      const v = res.headers[name];
+      return Array.isArray(v) ? (v[0] ?? "") : String(v ?? "");
+    };
+
+    if (res.status >= 300 && res.status < 400 && header("location")) {
+      // Round the loop rather than letting the transport follow it: the next address gets checked too.
+      url = new URL(header("location"), url).toString();
       continue;
     }
 
-    const contentType = (res.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
-    if (method === "HEAD") return { ok: res.ok, status: res.status, url, contentType, body: Buffer.alloc(0) };
+    const contentType = header("content-type").split(";")[0].trim().toLowerCase();
+    const ok = res.status >= 200 && res.status < 300;
+    if (method === "HEAD") return { ok, status: res.status, url, contentType, body: Buffer.alloc(0) };
 
-    const declared = Number(res.headers.get("content-length") ?? 0);
+    const declared = Number(header("content-length") || 0);
     if (declared > maxBytes) throw new Error(`too large: ${url}`);
 
-    // Read in chunks and stop at the cap, because a content-length header is a claim.
-    const reader = res.body?.getReader();
+    // Read in pieces and stop at the cap, because a content-length header is a claim.
     const chunks: Buffer[] = [];
     let size = 0;
-    while (reader) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.length;
-      if (size > maxBytes) { await reader.cancel(); throw new Error(`too large: ${url}`); }
-      chunks.push(Buffer.from(value));
+    for await (const chunk of res.body) {
+      const piece = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      size += piece.length;
+      if (size > maxBytes) throw new Error(`too large: ${url}`);
+      chunks.push(piece);
     }
-    return { ok: res.ok, status: res.status, url, contentType, body: Buffer.concat(chunks) };
+    return { ok, status: res.status, url, contentType, body: Buffer.concat(chunks) };
   }
   throw new Error(`too many redirects: ${start}`);
 }

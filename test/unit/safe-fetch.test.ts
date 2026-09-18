@@ -18,45 +18,62 @@ const { safeFetch } = await import("../../server/safe-fetch");
 /** Every hostname resolves somewhere public unless a test says otherwise. */
 const resolvesTo = (address: string) => lookup.mockResolvedValue([{ address, family: address.includes(":") ? 6 : 4 }]);
 
-const reply = (status: number, headers: Record<string, string> = {}, body = "") =>
-  new Response(body, { status, headers });
+/**
+ * A stand-in for one request to one already-checked address. The real one
+ * connects to that address with the certificate checked against the hostname
+ * (server/safe-fetch.ts); what a test needs is the answer, plus a record of
+ * where the connection was actually aimed.
+ */
+function transportReturning(...replies: { status: number; headers?: Record<string, string>; body?: string }[]) {
+  const calls: { address: string; host: string }[] = [];
+  let i = 0;
+  const transport = async ({ url, address }: any) => {
+    calls.push({ address, host: url.hostname });
+    const r = replies[Math.min(i++, replies.length - 1)];
+    return {
+      status: r.status,
+      headers: r.headers ?? {},
+      body: (async function* () { if (r.body) yield Buffer.from(r.body); })(),
+    };
+  };
+  return { transport, calls };
+}
 
-afterEach(() => { vi.unstubAllGlobals(); lookup.mockReset(); });
+afterEach(() => { lookup.mockReset(); });
 
 describe("fetching what somebody else chose", () => {
   it("refuses a hostname that resolves onto our own network", async () => {
     resolvesTo("127.0.0.1");
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
+    const { transport, calls } = transportReturning({ status: 200 });
     // No blocklist would catch this: the name is ordinary, the address is not.
-    await expect(safeFetch("https://totally-normal.example/logo.png")).rejects.toThrow(/refused address/);
-    expect(fetchMock, "nothing should have been requested").not.toHaveBeenCalled();
+    await expect(safeFetch("https://totally-normal.example/logo.png", { transport })).rejects.toThrow(/refused address/);
+    expect(calls, "nothing should have been requested").toEqual([]);
   });
 
   it("refuses the cloud metadata address, however it is reached", async () => {
     resolvesTo("169.254.169.254");
-    vi.stubGlobal("fetch", vi.fn());
-    await expect(safeFetch("https://metadata.example/")).rejects.toThrow(/refused address/);
+    const { transport } = transportReturning({ status: 200 });
+    await expect(safeFetch("https://metadata.example/", { transport })).rejects.toThrow(/refused address/);
   });
 
   it("checks the redirect, not just the first address — the hole this closes", async () => {
     lookup
       .mockResolvedValueOnce([{ address: "93.184.216.34", family: 4 }])   // the URL somebody gave us
       .mockResolvedValueOnce([{ address: "169.254.169.254", family: 4 }]); // where it sends us
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      reply(302, { location: "http://169.254.169.254/latest/meta-data/" })));
-
-    await expect(safeFetch("https://example.com/logo.png", { allowHttp: true })).rejects.toThrow(/refused address/);
+    const { transport } = transportReturning({ status: 302, headers: { location: "http://169.254.169.254/latest/meta-data/" } });
+    await expect(safeFetch("https://example.com/logo.png", { allowHttp: true, transport })).rejects.toThrow(/refused address/);
   });
 
   it("follows a redirect that stays public", async () => {
     resolvesTo("93.184.216.34");
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(reply(301, { location: "https://cdn.example.com/logo.png" }))
-      .mockResolvedValueOnce(reply(200, { "content-type": "image/png; charset=binary" }, "PNGDATA"));
-    vi.stubGlobal("fetch", fetchMock);
+    const { transport, calls } = transportReturning(
+      { status: 301, headers: { location: "https://cdn.example.com/logo.png" } },
+      { status: 200, headers: { "content-type": "image/png; charset=binary" }, body: "PNGDATA" },
+    );
 
-    const res = await safeFetch("https://example.com/logo.png");
+    const res = await safeFetch("https://example.com/logo.png", { transport });
+    // Both hops were aimed at the address that passed the check, not at a name resolved again later.
+    expect(calls.map((c) => c.address)).toEqual(["93.184.216.34", "93.184.216.34"]);
     expect(res.status).toBe(200);
     expect(res.contentType).toBe("image/png");
     expect(res.body.toString()).toBe("PNGDATA");
@@ -65,34 +82,33 @@ describe("fetching what somebody else chose", () => {
 
   it("gives up rather than going round forever", async () => {
     resolvesTo("93.184.216.34");
-    vi.stubGlobal("fetch", vi.fn(async () => reply(302, { location: "https://example.com/again" })));
-    await expect(safeFetch("https://example.com/")).rejects.toThrow(/too many redirects/);
+    const { transport } = transportReturning({ status: 302, headers: { location: "https://example.com/again" } });
+    await expect(safeFetch("https://example.com/", { transport })).rejects.toThrow(/too many redirects/);
   });
 
   it("refuses credentials smuggled into the URL", async () => {
     resolvesTo("93.184.216.34");
-    vi.stubGlobal("fetch", vi.fn());
-    await expect(safeFetch("https://user:secret@example.com/")).rejects.toThrow(/credentials/);
+    const { transport } = transportReturning({ status: 200 });
+    await expect(safeFetch("https://user:secret@example.com/", { transport })).rejects.toThrow(/credentials/);
   });
 
   it("refuses anything that isn't http(s), and http only when asked", async () => {
     resolvesTo("93.184.216.34");
-    vi.stubGlobal("fetch", vi.fn());
-    await expect(safeFetch("file:///etc/passwd")).rejects.toThrow();
-    await expect(safeFetch("http://example.com/")).rejects.toThrow(/not https/);
+    const { transport } = transportReturning({ status: 200, headers: { "content-type": "image/png" }, body: "ok" });
+    await expect(safeFetch("file:///etc/passwd", { transport })).rejects.toThrow();
+    await expect(safeFetch("http://example.com/", { transport })).rejects.toThrow(/not https/);
     // And with allowHttp it goes through.
-    vi.stubGlobal("fetch", vi.fn(async () => reply(200, { "content-type": "image/png" }, "ok")));
-    expect((await safeFetch("http://example.com/", { allowHttp: true })).ok).toBe(true);
+    expect((await safeFetch("http://example.com/", { allowHttp: true, transport })).ok).toBe(true);
   });
 
   it("stops reading at the size cap, whatever the headers claimed", async () => {
     resolvesTo("93.184.216.34");
     // Honest header, too big.
-    vi.stubGlobal("fetch", vi.fn(async () => reply(200, { "content-length": "999999" }, "x")));
-    await expect(safeFetch("https://example.com/big", { maxBytes: 10 })).rejects.toThrow(/too large/);
+    const honest = transportReturning({ status: 200, headers: { "content-length": "999999" }, body: "x" });
+    await expect(safeFetch("https://example.com/big", { maxBytes: 10, transport: honest.transport })).rejects.toThrow(/too large/);
 
     // Lying header, still too big — the body is what counts.
-    vi.stubGlobal("fetch", vi.fn(async () => reply(200, { "content-length": "1" }, "x".repeat(50))));
-    await expect(safeFetch("https://example.com/liar", { maxBytes: 10 })).rejects.toThrow(/too large/);
+    const liar = transportReturning({ status: 200, headers: { "content-length": "1" }, body: "x".repeat(50) });
+    await expect(safeFetch("https://example.com/liar", { maxBytes: 10, transport: liar.transport })).rejects.toThrow(/too large/);
   });
 });
