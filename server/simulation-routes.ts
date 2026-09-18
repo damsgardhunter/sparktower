@@ -125,6 +125,28 @@ export function registerSimulationRoutes(app: Express) {
    * "you're the fifth": the insert is what decides, and the unique index on
    * (venture, user) makes a double-join a no-op rather than two seats.
    */
+/**
+ * The Postgres error code, wherever the driver buried it.
+ *
+ * Drizzle wraps driver errors in a `DrizzleQueryError` carrying the query and
+ * params, which is genuinely useful in a log and quietly disastrous in a
+ * `catch`: the code that says *why* the write failed is on the cause, not on
+ * the thing you caught. Checking `err.code` therefore matches nothing and
+ * every expected conflict falls through to the 500 branch.
+ *
+ * That is not a theoretical tidiness point. Five people grabbed the chief
+ * executive's chair at once; one won, three were told who beat them, and the
+ * fourth got "something went wrong" — the unique index had done exactly its
+ * job and the handler for it was reading the wrapper. Walking the chain is
+ * what makes a lost race read as a lost race.
+ */
+function pgErrorCode(err: unknown): string | undefined {
+  for (let e: any = err, hops = 0; e && hops < 5; e = e.cause, hops++) {
+    if (typeof e.code === "string") return e.code;
+  }
+  return undefined;
+}
+
   app.post("/api/sim/join", isAuthenticated, async (req: any, res) => {
     if (!(await enforceRateLimit(res, req.user.id, "session"))) return;
     const nicheId = String(req.body?.nicheId ?? "");
@@ -147,6 +169,30 @@ export function registerSimulationRoutes(app: Express) {
           .limit(1);
         if (existing) return existing.id;
 
+        /*
+         * One joiner at a time per market, for the whole choose-or-create step.
+         *
+         * Row locks cannot carry this, and it is worth being precise about why:
+         * `FOR UPDATE` locks rows that exist. Everything below is select-or-
+         * create — a season, then a room — so on a quiet market every joiner's
+         * select matches nothing, there is nothing to lock, and each one
+         * creates their own. Five friends press join together and land in two
+         * or three different rooms, which is the single outcome this feature
+         * exists to prevent. No row lock can exclude a row nobody has inserted
+         * yet.
+         *
+         * Locking the season is not enough either, for the same reason one
+         * level up: two joiners who both find no season both make one, take
+         * locks on two different seasons, and never see each other. The lock
+         * has to be on the one thing that exists before any row does, which is
+         * the market itself.
+         *
+         * Held for two selects and at most two inserts, released when the
+         * transaction ends, and per-market, so a queue for one never waits on
+         * another.
+         */
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${nicheId}, 0))`);
+
         const [season] = await tx
           .select()
           .from(simSeasons)
@@ -168,8 +214,16 @@ export function registerSimulationRoutes(app: Express) {
          * refuses `FOR UPDATE` with `GROUP BY` — grouping makes the returned
          * rows no longer correspond to single rows that could be locked. A
          * correlated count keeps one row per venture, so there is something to
-         * lock, and `skip locked` means a second person joining at the same
-         * moment moves to the next room instead of queueing behind the first.
+         * lock.
+         *
+         * It waits rather than skipping. `skip locked` was the first instinct —
+         * nobody queues, everybody gets a room immediately — and it was wrong
+         * for a lobby: five friends pressing join at the same moment skipped
+         * past each other's locked rows and landed in three different rooms.
+         *
+         * With the advisory lock above, this row lock is now belt and braces:
+         * it costs nothing and it still holds the line for any future caller
+         * that reaches this query without taking the season lock first.
          */
         const rooms = await tx.execute(sql`
           select v.id
@@ -179,12 +233,37 @@ export function registerSimulationRoutes(app: Express) {
             and (select count(*) from ${simSeats} s where s.venture_id = v.id) < ${LOBBY_SIZE}
           order by (select count(*) from ${simSeats} s where s.venture_id = v.id) desc
           limit 1
-          for update skip locked
+          for update
         `);
         const room = (rooms as unknown as { rows?: { id: string }[] }).rows?.[0]
           ?? (rooms as unknown as { id: string }[])[0];
 
-        const targetId = room?.id ?? (await tx.insert(simVentures).values({
+        /*
+         * Count again, now that the row is actually locked.
+         *
+         * The count above cannot be trusted and this is the subtle part: under
+         * READ COMMITTED, a `FOR UPDATE` that waits for another transaction
+         * re-checks the locked row's own columns against the new version — but
+         * the seat count is not one of its columns, it is a subquery over
+         * another table. So the second joiner woke up holding the lock and
+         * carrying a count from before the first joiner's insert, and a room
+         * with four seats took two more people. Six in a five-seat room, which
+         * is what the browsers showed and the sequential tests never could.
+         *
+         * Holding the lock is what makes this second count authoritative: every
+         * joiner must hold it before inserting, so nobody can be adding a seat
+         * to this room while we look.
+         */
+        let targetId: string | undefined = room?.id;
+        if (targetId) {
+          const [{ taken }] = await tx
+            .select({ taken: sql<number>`count(*)::int` })
+            .from(simSeats)
+            .where(eq(simSeats.ventureId, targetId));
+          if (taken >= LOBBY_SIZE) targetId = undefined;
+        }
+
+        targetId ??= (await tx.insert(simVentures).values({
           seasonId,
           phase: "filling",
           phaseEndsAt: phaseDeadline("filling"),
@@ -200,6 +279,42 @@ export function registerSimulationRoutes(app: Express) {
       console.error("[sim] join failed:", err);
       res.status(500).json({ message: "Couldn't get you into a room. Try again." });
     }
+  });
+
+  /**
+   * The rooms you're already in.
+   *
+   * Without this, someone who closes the app mid-lobby can only get back by
+   * joining the same market again — which works, because join returns the room
+   * you're in, but it is a rejoin rather than a resume and there is nowhere to
+   * show "you're in a room right now" before they think to press it.
+   */
+  app.get("/api/sim/ventures", isAuthenticated, async (req: any, res) => {
+    const rows = await db
+      .select({
+        id: simVentures.id,
+        phase: simVentures.phase,
+        name: simVentures.name,
+        phaseEndsAt: simVentures.phaseEndsAt,
+        nicheId: simSeasons.nicheId,
+        role: simSeats.role,
+      })
+      .from(simSeats)
+      .innerJoin(simVentures, eq(simVentures.id, simSeats.ventureId))
+      .innerJoin(simSeasons, eq(simSeasons.id, simVentures.seasonId))
+      .where(and(eq(simSeats.userId, req.user.id), sql`${simVentures.phase} <> 'retired'`))
+      .orderBy(desc(simVentures.createdAt));
+
+    res.json({
+      ventures: rows.map((r) => ({
+        id: r.id,
+        phase: r.phase,
+        name: r.name,
+        role: r.role,
+        niche: { id: r.nicheId, name: nicheById(r.nicheId)?.name ?? r.nicheId },
+        secondsLeft: r.phaseEndsAt ? Math.max(0, secondsLeft(r.phaseEndsAt)) : null,
+      })),
+    });
   });
 
   /** The room, as it stands. Polled by everyone in it, so it also moves the clock on. */
@@ -220,7 +335,13 @@ export function registerSimulationRoutes(app: Express) {
     res.json({
       id: venture.id,
       phase: venture.phase,
-      secondsLeft: Math.max(0, secondsLeft(venture.phaseEndsAt)),
+      /*
+       * Null rather than Infinity for a phase with no deadline. JSON.stringify
+       * turns Infinity into null regardless, so sending it deliberately means
+       * the wire format matches what the client actually receives instead of
+       * quietly differing from the server's own value.
+       */
+      secondsLeft: venture.phaseEndsAt ? Math.max(0, secondsLeft(venture.phaseEndsAt)) : null,
       name: venture.name,
       product: venture.product,
       niche: season ? { id: season.nicheId, name: nicheById(season.nicheId)?.name } : null,
@@ -298,7 +419,7 @@ export function registerSimulationRoutes(app: Express) {
       }
     } catch (err: any) {
       // The unique index, doing its job.
-      if (String(err?.code) === "23505") {
+      if (pgErrorCode(err) === "23505") {
         return res.status(409).json({ code: "role_taken", message: "Someone else claimed that seat a moment before you." });
       }
       console.error("[sim] claim failed:", err);

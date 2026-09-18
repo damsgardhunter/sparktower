@@ -78,6 +78,33 @@ describe("joining a market", () => {
     expect(seats, "a second join should not be a second seat").toHaveLength(1);
   }, 60_000);
 
+  it("puts five people who press join at the same moment in the SAME room", async () => {
+    /*
+     * Five friends deciding to play together will press join within the same
+     * second, and a lobby that scatters them across three rooms has failed at
+     * the only thing it is for.
+     *
+     * This is not the sequential case above: it caught a real bug that test
+     * could not. The room lookup originally used `skip locked`, so simultaneous
+     * joiners skipped past each other's locked rows and each started a room of
+     * their own. Five browsers found it; five sequential requests never would.
+     */
+    const app = await getTestApp();
+    const players = [];
+    for (let i = 0; i < 5; i++) players.push(await player(app));
+
+    const joins = await Promise.all(
+      players.map((p) => p.agent.post("/api/sim/join").send({ nicheId: NICHE })),
+    );
+    for (const join of joins) expect(join.status, JSON.stringify(join.body)).toBe(200);
+
+    const rooms = new Set(joins.map((j) => j.body.ventureId));
+    expect(rooms.size, "five simultaneous joins should be one room, not several").toBe(1);
+
+    const seats = await db.select().from(simSeats).where(eq(simSeats.ventureId, [...rooms][0]));
+    expect(seats).toHaveLength(5);
+  }, 120_000);
+
   it("refuses a market that doesn't exist", async () => {
     const app = await getTestApp();
     const p = await player(app);
@@ -104,8 +131,14 @@ describe("claiming a seat", () => {
 
     const winners = results.filter((r) => r.status === 200);
     const losers = results.filter((r) => r.status === 409);
-    expect(winners, "exactly one chief executive").toHaveLength(1);
-    expect(losers).toHaveLength(4);
+    /*
+     * Say what came back when this fails. A race test that flakes and reports
+     * only "expected 4 to be 3" is a test you end up re-running until it
+     * passes; the status and body of the odd one out is the whole diagnosis.
+     */
+    const seen = () => JSON.stringify(results.map((r) => ({ status: r.status, body: r.body })));
+    expect(winners, `exactly one chief executive, got ${seen()}`).toHaveLength(1);
+    expect(losers, `the other four told why, got ${seen()}`).toHaveLength(4);
 
     // The database agrees, which is the claim that actually matters.
     const held = await db.select().from(simSeats)
@@ -219,6 +252,45 @@ describe("a lobby nobody is looking after", () => {
   }, 120_000);
 });
 
+describe("coming back", () => {
+  it("shows you the room you are already in, so closing the tab is not leaving", async () => {
+    /*
+     * Someone joins, their phone locks, they come back four minutes later. If
+     * the only way back in is to press join on the same market again, then the
+     * room they are already sitting in is invisible until they guess right —
+     * and a lobby you cannot find your way back to is a lobby you leave.
+     */
+    const app = await getTestApp();
+    const p = await player(app);
+    const ventureId = (await p.agent.post("/api/sim/join").send({ nicheId: NICHE })).body.ventureId;
+
+    const mine = await p.agent.get("/api/sim/ventures");
+    expect(mine.status).toBe(200);
+    expect(mine.body.ventures).toHaveLength(1);
+    expect(mine.body.ventures[0].id).toBe(ventureId);
+    // Enough to render a "you're in a room" row without a second request.
+    expect(mine.body.ventures[0].niche.name).toBeTruthy();
+    expect(mine.body.ventures[0].phase).toBe("filling");
+
+    // Someone else's room is not on your list.
+    const stranger = await player(app);
+    const theirs = await stranger.agent.get("/api/sim/ventures");
+    expect(theirs.body.ventures.map((v: any) => v.id)).not.toContain(ventureId);
+  }, 120_000);
+
+  it("stops offering a room that closed", async () => {
+    const app = await getTestApp();
+    const p = await player(app);
+    const ventureId = (await p.agent.post("/api/sim/join").send({ nicheId: NICHE })).body.ventureId;
+
+    // Nobody else turned up and the clock ran out.
+    await db.update(simVentures).set({ phase: "retired" }).where(eq(simVentures.id, ventureId));
+
+    const mine = await p.agent.get("/api/sim/ventures");
+    expect(mine.body.ventures.map((v: any) => v.id)).not.toContain(ventureId);
+  }, 120_000);
+});
+
 describe("a room you are not in", () => {
   it("tells you nothing about who is in it", async () => {
     const app = await getTestApp();
@@ -230,4 +302,43 @@ describe("a room you are not in", () => {
     expect(res.status).toBe(404);
     expect(JSON.stringify(res.body)).not.toMatch(/seats|userId/);
   }, 120_000);
+});
+
+describe("a room that is nearly full", () => {
+  it("never takes a sixth person, however many arrive at once", async () => {
+    /*
+     * Found by five browsers, not by a test: a room showed "6/5".
+     *
+     * Locking the venture row is not enough on its own. Under READ COMMITTED a
+     * waiting `FOR UPDATE` re-checks the locked row's own columns — and the
+     * seat count is a subquery over another table, so the second joiner woke up
+     * holding the lock and a count from before the first joiner's insert. The
+     * fix counts again after the lock is held; this makes sure it stays fixed.
+     */
+    const app = await getTestApp();
+
+    // Four in, sequentially: one seat left.
+    const first = await player(app);
+    const ventureId = (await first.agent.post("/api/sim/join").send({ nicheId: NICHE })).body.ventureId;
+    for (let i = 0; i < 3; i++) {
+      const p = await player(app);
+      const join = await p.agent.post("/api/sim/join").send({ nicheId: NICHE });
+      expect(join.body.ventureId).toBe(ventureId);
+    }
+
+    // Now three people go for the last seat at the same moment.
+    const latecomers = [];
+    for (let i = 0; i < 3; i++) latecomers.push(await player(app));
+    await Promise.all(latecomers.map((p) => p.agent.post("/api/sim/join").send({ nicheId: NICHE })));
+
+    const seats = await db.select().from(simSeats).where(eq(simSeats.ventureId, ventureId));
+    expect(seats.length, "a five-seat room must never hold six").toBeLessThanOrEqual(5);
+    expect(seats).toHaveLength(5);
+
+    // And the two who missed out are in rooms of their own, not turned away.
+    for (const p of latecomers) {
+      const mine = await db.select().from(simSeats).where(eq(simSeats.userId, p.id));
+      expect(mine, "everyone who joined should have a seat somewhere").toHaveLength(1);
+    }
+  }, 180_000);
 });

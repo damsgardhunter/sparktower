@@ -6,7 +6,7 @@ import { api } from "../../src/api/client";
 import { useAuth } from "../../src/auth/AuthContext";
 import { colors, font, fontFamily, spacing } from "../../src/theme";
 import { Avatar, Btn, Card, Empty, Icon, Loading, Screen, timeAgo } from "../../src/components/ui";
-import { Callout, PageIntro, Pill, Stat, humanize, isSwitchedOff, tintSoft } from "../../src/components/MoreKit";
+import { Callout, Group, MenuRow, PageIntro, Pill, Stat, humanize, isSwitchedOff, tintSoft } from "../../src/components/MoreKit";
 import { PHASE_COLORS, PHASE_LABELS, formatWait, styleLabel } from "../../src/components/SprintKit";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
 
@@ -70,6 +70,21 @@ export default function Sprints() {
             <Btn label="Practice" icon="school-outline" variant="outline" style={{ flex: 1 }} onPress={() => router.push("/sprint/practice")} />
           </View>
         </Card>
+
+        {/* The market simulation. Its own thing rather than a sprint — five
+            strangers and a fortnight, not two people and a weekend — but this
+            is the tab people come to when they want to build with strangers,
+            so it is the honest place to reach it from. */}
+        <Group>
+          <MenuRow
+            icon="trending-up"
+            title="Market simulation"
+            subtitle="Five strangers, one company, fourteen years"
+            tint={colors.novaEmerald}
+            onPress={() => router.push("/sim")}
+            testID="sprints-market-simulation"
+          />
+        </Group>
 
         {waiting && (
           <Card style={{ borderColor: tintSoft(colors.primary, 0.4), backgroundColor: "#FCF8FE" }}>
