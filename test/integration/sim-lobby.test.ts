@@ -29,7 +29,16 @@ async function player(app: any) {
   const email = `sim-${Date.now()}-${n}-${Math.random().toString(36).slice(2, 6)}@example.test`;
   const res = await agent.post("/api/auth/register").set("x-forwarded-for", ip)
     .send({ email, password: "a-good-passphrase-here", firstName: `P${n}` });
-  expect(res.status, JSON.stringify(res.body)).toBe(201);
+  /*
+   * The raw text, not just the parsed body.
+   *
+   * A long combined run occasionally answers this with a 404 whose body is not
+   * JSON — so `res.body` is `{}` and the failure says nothing at all. The app
+   * is fully built when it happens (the helper checks), it is not the /api
+   * catch-all (that answers in JSON) and auth is behind no kill switch, so
+   * what actually came back is the next thing worth knowing.
+   */
+  expect(res.status, `${res.status}: ${(res.text ?? "").slice(0, 300)}`).toBe(201);
   await verifyEmail(app, email, ip);
   return { agent, id: res.body.id as string, email };
 }
