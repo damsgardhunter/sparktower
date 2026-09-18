@@ -31,17 +31,12 @@ const TABS: { name: string; label: string; icon: IconName; iconActive: IconName;
   // Named Chat on the bar and Messages everywhere else: "Chat" is a third the
   // width at a tenth-of-a-point font, which is what makes five labels fit.
   { name: "messages", label: "Chat", icon: "chatbubble-ellipses-outline", iconActive: "chatbubble-ellipses" },
-  // The same glyph the header used for it, so the move down doesn't cost anyone the habit.
-  // `tab-more` is already the manage screen's section chrome, so this one is
-  // spelled out rather than derived, to keep the two apart in a test.
-  { name: "more", label: "More", icon: "menu-outline", iconActive: "menu", testID: "tab-more-menu" },
 ];
 
 /**
- * Where the create dome splits the bar: Home and Discover to its left, Alerts,
- * Chat and More to its right. The odd tab goes right because the two on the
- * left are the ones people hit blind, and giving them the wider halves is worth
- * more than an even split.
+ * Where the dome splits the bar: Home and Discover to its left, Alerts and Chat
+ * to its right. Two and two, so the halves are genuinely symmetrical and the
+ * dome sits on the centre line rather than near it.
  */
 const SPLIT = Math.floor(TABS.length / 2);
 
@@ -51,17 +46,15 @@ const SPLIT = Math.floor(TABS.length / 2);
  * top bar. Same mark, same gradient, opposite direction — the phone's chrome is
  * at the bottom, so the shape is too.
  *
- * `DOME_W` is the crowding dial, and five tabs plus a dome is genuinely tight:
- * the row reserves exactly this width, so every point here comes off the tabs
- * either side. The halves keep equal flex so the dome stays centred, which
- * means the three-tab half sets the floor — at 375pt (SE, 13 mini) 104 leaves
- * Alerts, Chat and More ~45pt each and Home and Discover ~68pt, so the
- * narrowest target clears 44pt in both directions (the row is 48pt tall).
- * Anything wider than ~111 here would push those three under the floor.
+ * `DOME_W` is the crowding dial, and there is room for it now: More came off
+ * the bar, so two tabs sit either side instead of two and three. At 375pt (SE,
+ * 13 mini) a 124pt dome leaves each of the four tabs ~63pt, comfortably past
+ * the 44pt floor — and dropping the labels means the row no longer has to be
+ * wide enough to spell "Discover" either.
  */
-const DOME_W = 104;
+const DOME_W = 124;
 /** How far the dome stands proud of the bar's top edge. Enough to read as the main action, not so much that it covers content. */
-const DOME_RISE = 30;
+const DOME_RISE = 38;
 /**
  * How far the dome carries on past the bottom of the screen.
  *
@@ -71,18 +64,29 @@ const DOME_RISE = 30;
  * mark height without making the dome wider, which is the dimension the tabs
  * either side cannot spare.
  */
-const DOME_DROP = 24;
+const DOME_DROP = 30;
 
 /**
- * The bar's own height, which is also how far it slides away on scroll and
- * roughly what a scrolling screen leaves clear (TAB_BAR_SPACE in ui.tsx).
- * Shallower than it was: the icons lost 2pt, the pill lost 3pt of padding and
- * the label 1pt, which is 11pt off the footer without taking a tab target
- * under 44pt — the row below still measures 48pt before the safe-area inset.
+ * How tall the bar reads, and how far it slides away on scroll.
+ *
+ * Shorter again: 21pt icons to 20, and the label is gone. Four tabs whose
+ * meanings are a house, a compass, a bell and a speech bubble do not need
+ * naming — and the label was the row's tallest 12pt. What is left is the icon,
+ * its pill, and breathing room.
+ *
+ * The visible row is now 38pt, which is under Apple's 44pt minimum for a
+ * *target* — so the target no longer stops at the row. Each tab's Pressable
+ * reaches down through the safe-area padding beneath the bar (empty space on
+ * every phone with a home indicator, and padded to 12pt on those without), so
+ * the thing a thumb can hit stays at least 44pt tall while the thing an eye
+ * sees is 38. Shrinking the strip and shrinking the target are different
+ * changes, and only one of them is wanted.
  */
-const ICON = 21;
-const ROW_PAD = 4;
-const PILL_PAD = 3;
+const ICON = 20;
+const ROW_PAD = 3;
+const PILL_PAD = 4;
+/** What a tab's touch area must reach, whatever the row measures. */
+const MIN_TARGET = 44;
 
 function Badge({ value }: { value?: number | string }) {
   if (!value) return null;
@@ -145,7 +149,14 @@ export function NovaTabBar({ state, navigation }: BottomTabBarProps) {
           const event = navigation.emit({ type: "tabPress", target: route?.key ?? t.name, canPreventDefault: true });
           if (!focused && !event.defaultPrevented) navigation.navigate(t.name);
         }}
-        style={{ flex: 1, alignItems: "center", paddingVertical: ROW_PAD }}
+        /*
+         * `minHeight` plus the bar's own bottom padding is what keeps the
+         * target at 44pt while the visible row is 38 — the space below the
+         * icons is empty on every phone, so a thumb landing there is landing
+         * on the tab it was aiming at.
+         */
+        style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: ROW_PAD, minHeight: MIN_TARGET }}
+        hitSlop={{ bottom: 8 }}
         testID={t.testID ?? `tab-${t.name}`}
       >
         {/*
@@ -164,20 +175,6 @@ export function NovaTabBar({ state, navigation }: BottomTabBarProps) {
             <Badge value={badges[t.name]} />
           </View>
         </View>
-        {/*
-          * One line, always. Five labels in the width of a small phone leaves
-          * "Discover" a couple of points of slack, and a wrapped label would
-          * put the height back on the bar that this pass took off.
-          */}
-        <Text
-          numberOfLines={1}
-          style={{
-            marginTop: 1, color: "#FFFFFF", fontSize: 9.5, lineHeight: 12,
-            fontFamily: focused ? fontFamily.semibold : fontFamily.medium, opacity: focused ? 1 : 0.7,
-          }}
-        >
-          {t.label}
-        </Text>
       </Pressable>
     );
   };
@@ -202,7 +199,7 @@ export function NovaTabBar({ state, navigation }: BottomTabBarProps) {
    * read the tower by.
    */
   const markW = DOME_W - MARK_INSET * 2;
-  const markH = Math.max(markW, Math.min(markW * 1.3, domeH - MARK_INSET - bottomPad * 0.6));
+  const markH = Math.max(markW, Math.min(markW * 1.45, domeH - MARK_INSET - bottomPad * 0.45));
 
   return (
     /*
@@ -243,10 +240,13 @@ export function NovaTabBar({ state, navigation }: BottomTabBarProps) {
         * elevation before document order.
         */}
       <Pressable
-        onPress={() => router.push("/project/new")}
+        onPress={() => router.push("/more")}
         accessibilityRole="button"
-        accessibilityLabel="Create a project"
-        testID="tab-create-project"
+        accessibilityLabel="More"
+        // Renamed with the behaviour: this opens More now, and a testID that
+        // still said "create" would send the next person looking in the wrong
+        // place. Creating a project is the button on Home.
+        testID="tab-more-dome"
         style={({ pressed }) => [{
           // Below the edge on purpose: the part that hangs off the bottom is
           // what makes it read as rising out of the screen (DOME_DROP).

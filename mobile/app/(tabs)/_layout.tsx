@@ -27,9 +27,10 @@ export default function TabsLayout() {
       <Tabs.Screen name="notifications" options={{ title: "Notifications" }} />
       <Tabs.Screen name="messages" options={{ title: "Messages" }} />
       {/* More lives in this group so its URL stays `/more` — a group's name is
-          not part of the path, so every existing link to /more (the header's
-          menu button among them) lands on the tab rather than a pushed screen. */}
-      <Tabs.Screen name="more" options={{ title: "More" }} />
+          not part of the path, so every existing link to /more lands on the tab
+          rather than a pushed screen. It has no button of its own: the dome in
+          the middle of the bar is how you get here. */}
+      <Tabs.Screen name="more" options={{ title: "More", href: null }} />
       {/* Off the bar, still tabs: your profile from the header, the rest from More.
           Projects joins them — off the bar, but the screen stays so its deep links still land. */}
       <Tabs.Screen name="projects" options={{ title: "Projects", href: null }} />
