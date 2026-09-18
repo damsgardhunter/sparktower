@@ -9,6 +9,7 @@ import { useConnectionStates } from "../../src/components/ConnectActions";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
 import { appHref, notificationSection, useConnectionRequests, useInvitationActions } from "../../src/networkData";
 import { useHideTabBarOnScroll } from "../../src/components/tab-bar-visibility";
+import { useHeaderSpace } from "../../src/components/AppHeader";
 import { TAB_BAR_SPACE } from "./_layout";
 
 interface NotificationItem {
@@ -166,12 +167,14 @@ export default function Notifications() {
   if (query.isLoading) return <Loading />;
 
   const hideTabBar = useHideTabBarOnScroll();
+  // The header floats now, so the list leaves its room rather than sitting under it.
+  const headerSpace = useHeaderSpace();
 
   return (
     <>
       <FlatList
         {...hideTabBar}
-        contentContainerStyle={{ paddingBottom: TAB_BAR_SPACE }}
+        contentContainerStyle={{ paddingTop: headerSpace, paddingBottom: TAB_BAR_SPACE }}
         style={{ flex: 1, backgroundColor: colors.canvas }}
         data={lines}
         keyExtractor={(l) => l.key}

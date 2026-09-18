@@ -19,6 +19,7 @@ import { RAIL_SLOTS, RailModule, type RailModuleKind } from "../../src/component
 import { PromotionCard } from "../../src/components/feed/PromotionCard";
 import { useFeedPromotions, type PromotionSlot } from "../../src/components/feed/useFeedPromotions";
 import { useHideTabBarOnScroll } from "../../src/components/tab-bar-visibility";
+import { useHeaderSpace } from "../../src/components/AppHeader";
 import { TAB_BAR_SPACE } from "./_layout";
 
 type Scope = "everyone" | "following";
@@ -112,6 +113,8 @@ export default function Feed() {
   // An impression once half the card has been on screen, as the web counts it.
   // The bar slides away while you read the feed, and comes back on the way up.
   const hideTabBar = useHideTabBarOnScroll();
+  // The header floats now, so the list leaves its room rather than sitting under it.
+  const headerSpace = useHeaderSpace();
 
   // Held in a ref because FlatList refuses a callback that changes identity.
   const promoSeenRef = useRef(promoSeen);
@@ -303,7 +306,7 @@ export default function Feed() {
         onEndReached={() => { if (feed.hasNextPage && !feed.isFetchingNextPage) feed.fetchNextPage(); }}
         onEndReachedThreshold={0.6}
         {...hideTabBar}
-        contentContainerStyle={{ paddingTop: spacing.sm, paddingBottom: TAB_BAR_SPACE }}
+        contentContainerStyle={{ paddingTop: headerSpace + spacing.sm, paddingBottom: TAB_BAR_SPACE }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
       />
 

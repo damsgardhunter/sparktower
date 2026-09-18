@@ -160,6 +160,23 @@ function Stat({ label, value }: { label: string; value?: number | null }) {
 }
 
 /**
+ * How much room a scrolling screen must leave at the top of its content.
+ *
+ * The header floats over the scene (headerTransparent in the tabs layout),
+ * which is what lets it slide away and reveal content instead of the blank
+ * strip it used to leave behind — the scene never grew into the space the
+ * header vacated, because the header still owned it.
+ *
+ * Floating means the screen has to leave the room itself, and it has to be
+ * padding INSIDE the scroll content rather than around it: padding around it
+ * moves with the screen and the gap comes straight back.
+ */
+export function useHeaderSpace(): number {
+  const insets = useSafeAreaInsets();
+  return insets.top + COVER_H + INFO_H;
+}
+
+/**
  * How much photograph shows below the status bar.
  *
  * The one number to change if the header feels too tall or too short. On a
@@ -169,5 +186,7 @@ function Stat({ label, value }: { label: string; value?: number | null }) {
  */
 const COVER_H = 100;
 const AVATAR = 68;
+/** The band under the photo: half an avatar, the name, a headline and the three numbers. */
+const INFO_H = AVATAR / 2 + 86;
 
 const ABSOLUTE_FILL = { position: "absolute" as const, left: 0, right: 0, top: 0, bottom: 0 };

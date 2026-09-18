@@ -7,6 +7,8 @@ import { useEntitlementsQuery } from "../../src/hooks/useEntitlements";
 import { colors, font, fontFamily, spacing } from "../../src/theme";
 import { Avatar, Icon, NovaGradient, Progress, TAB_BAR_SPACE } from "../../src/components/ui";
 import { Group, MenuRow, Pill, useSurfaces } from "../../src/components/MoreKit";
+// The header floats over the scene, so this screen leaves its room in the scroll content.
+import { useHeaderSpace } from "../../src/components/AppHeader";
 
 /**
  * Everything that doesn't earn a tab — the phone's version of the web sidebar.
@@ -16,6 +18,7 @@ import { Group, MenuRow, Pill, useSurfaces } from "../../src/components/MoreKit"
  * (GET /api/surfaces) disappear when it's off, exactly as the sidebar does.
  */
 export default function More() {
+  const headerSpace = useHeaderSpace();
   const router = useRouter();
   const { signOut } = useAuth();
   const { on } = useSurfaces();
@@ -56,7 +59,7 @@ export default function More() {
     <>
       {/* A tab now, so the title and header come from the tabs layout — and the
           floating bar sits over the scene, so the list ends above it. */}
-      <ScrollView style={{ flex: 1, backgroundColor: colors.canvas }} contentContainerStyle={{ paddingBottom: TAB_BAR_SPACE, gap: spacing.lg }}>
+      <ScrollView style={{ flex: 1, backgroundColor: colors.canvas }} contentContainerStyle={{ paddingTop: headerSpace, paddingBottom: TAB_BAR_SPACE, gap: spacing.lg }}>
         {/* Who you are, linking to the profile. */}
         <Pressable
           onPress={() => go("/(tabs)/profile")}

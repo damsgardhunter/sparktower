@@ -52,9 +52,9 @@ const SPLIT = Math.floor(TABS.length / 2);
  * the 44pt floor — and dropping the labels means the row no longer has to be
  * wide enough to spell "Discover" either.
  */
-const DOME_W = 124;
+const DOME_W = 108;
 /** How far the dome stands proud of the bar's top edge. Enough to read as the main action, not so much that it covers content. */
-const DOME_RISE = 38;
+const DOME_RISE = 48;
 /**
  * How far the dome carries on past the bottom of the screen.
  *
@@ -64,7 +64,7 @@ const DOME_RISE = 38;
  * mark height without making the dome wider, which is the dimension the tabs
  * either side cannot spare.
  */
-const DOME_DROP = 30;
+const DOME_DROP = 22;
 
 /**
  * How tall the bar reads, and how far it slides away on scroll.
@@ -212,7 +212,12 @@ export function NovaTabBar({ state, navigation }: BottomTabBarProps) {
    * read the tower by.
    */
   const markW = DOME_W - MARK_INSET * 2;
-  const markH = Math.max(markW, Math.min(markW * 1.45, domeH - MARK_INSET - bottomPad * 0.45));
+  /*
+   * 1.05 rather than 1.45: the dome's height is no longer the thing limiting
+   * the mark, so the multiplier is what actually sets its size — raise this to
+   * grow the tower, `DOME_W` to widen the dome, `DOME_RISE` to lift both.
+   */
+  const markH = Math.max(markW, Math.min(markW * 1.05, domeH - MARK_INSET - bottomPad * 0.45));
 
   return (
     /*

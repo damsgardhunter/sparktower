@@ -4,9 +4,11 @@ import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { api, fetchMe } from "../../src/api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
-import { Avatar, Empty, Icon, IconButton, Loading, Segments } from "../../src/components/ui";
+import { Avatar, Empty, Icon, IconButton, Loading, Segments, TAB_BAR_SPACE } from "../../src/components/ui";
 import { Sheet } from "../../src/components/Sheet";
 import { inboxTime, personAvatar, personName, useConnections } from "../../src/networkData";
+// The header floats over the scene, so this screen leaves its room in the scroll content.
+import { useHeaderSpace } from "../../src/components/AppHeader";
 
 interface Conversation {
   userId: string;
@@ -24,6 +26,7 @@ type Filter = "all" | "unread";
  * a conversation with someone you're connected to.
  */
 export default function Messages() {
+  const headerSpace = useHeaderSpace();
   const router = useRouter();
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
@@ -79,7 +82,7 @@ export default function Messages() {
         keyExtractor={(c) => c.userId}
         refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={colors.primary} />}
         ItemSeparatorComponent={() => <View style={s.sep} />}
-        contentContainerStyle={{ paddingBottom: spacing.xxl * 2 }}
+        contentContainerStyle={{ paddingTop: headerSpace, paddingBottom: TAB_BAR_SPACE }}
         ListEmptyComponent={
           needle || filter === "unread" ? (
             <Empty icon="chatbubbles-outline" title={needle ? "No conversations found" : "You're all caught up"} />

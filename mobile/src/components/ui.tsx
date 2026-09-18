@@ -17,6 +17,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { API_URL } from "../api/client";
 import { colors, font, fontFamily, novaGradient, radius, shadow, spacing } from "../theme";
 import { useHideTabBarOnScroll } from "./tab-bar-visibility";
+import { useHeaderSpace } from "./AppHeader";
 // The floating bar's footprint, so a list's last row isn't stuck underneath it.
 export const TAB_BAR_SPACE = 112;
 
@@ -47,6 +48,13 @@ export function Screen({
   hideTabBar?: boolean;
 }) {
   const hiding = useHideTabBarOnScroll();
+  /*
+   * Both ends of the floating chrome. `hideTabBar` says "this screen sits
+   * under the bar and the header", so it pays for both: room at the top for a
+   * header that owns no layout, and room at the bottom for a bar that doesn't
+   * either.
+   */
+  const headerSpace = useHeaderSpace();
   const base = [s.screenBase, canvas && { backgroundColor: colors.canvas }];
   if (!scroll) {
     return <View style={[...base, contentStyle]}>{children}</View>;
@@ -54,7 +62,7 @@ export function Screen({
   return (
     <ScrollView
       style={base}
-      contentContainerStyle={[s.screenContent, hideTabBar && { paddingBottom: TAB_BAR_SPACE }, contentStyle]}
+      contentContainerStyle={[s.screenContent, hideTabBar && { paddingTop: headerSpace, paddingBottom: TAB_BAR_SPACE }, contentStyle]}
       keyboardShouldPersistTaps="handled"
       {...(hideTabBar ? hiding : null)}
       refreshControl={

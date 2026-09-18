@@ -28,6 +28,14 @@ export default function TabsLayout() {
          * replace.
          */
         headerStatusBarHeight: 0,
+        /*
+         * The header floats over the scene rather than sitting above it.
+         * Without this it keeps its slot in the layout, so sliding it away on
+         * scroll revealed an empty band where it used to be instead of the
+         * content underneath — space the scene could never grow into because
+         * the header still owned it. Screens leave room with useHeaderSpace().
+         */
+        headerTransparent: true,
         sceneStyle: { backgroundColor: colors.canvas },
       }}
     >
