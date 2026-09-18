@@ -39,23 +39,6 @@ type Item =
  * discovery modules (top projects, people to build with, new projects) dropped
  * in between posts rather than stacked on top.
  */
-/**
- * The filter row's labels.
- *
- * Deliberately not POST_TYPES' own labels: "Looking for a co-founder" is the
- * right name on a post's badge and far too long for one of five cells on a
- * phone. The full name goes to screen readers, so nothing is lost for the
- * people who most need it.
- */
-const FEED_FILTERS: { type: string; label: string; full: string }[] = [
-  { type: "all", label: "All", full: "Everything" },
-  { type: "project_update", label: "Updates", full: "Project updates" },
-  { type: "looking_for_help", label: "Help", full: "Looking for help" },
-  { type: "looking_for_cofounder", label: "Co-founder", full: "Looking for a co-founder" },
-  { type: "seeking_feedback", label: "Feedback", full: "Seeking feedback" },
-  { type: "milestone", label: "Wins", full: "Milestones" },
-];
-
 export default function Feed() {
   const router = useRouter();
   const qc = useQueryClient();
@@ -115,6 +98,7 @@ export default function Feed() {
   const hideTabBar = useHideTabBarOnScroll();
   // The header floats now, so the list leaves its room rather than sitting under it.
   const headerSpace = useHeaderSpace();
+  const [filtering, setFiltering] = useState(false);
 
   // Held in a ref because FlatList refuses a callback that changes identity.
   const promoSeenRef = useRef(promoSeen);
@@ -203,33 +187,24 @@ export default function Feed() {
             );
           })}
         </View>
-      </View>
-
-      {/*
-        * The post types across one row, rather than behind a Filter button and
-        * a sheet. Two taps and a modal to narrow a feed is two taps too many,
-        * and a filter you cannot see the state of is one people forget is on.
-        * Short labels and equal widths: the full names ("Looking for a
-        * co-founder") cannot fit five across a phone, and a row that wraps or
-        * scrolls sideways stops reading as a set of choices.
-        */}
-      <View style={s.types} testID="feed-type-filters">
-        {FEED_FILTERS.map((f) => {
-          const on = filter === f.type;
-          return (
-            <Pressable
-              key={f.type}
-              onPress={() => setFilter(f.type as PostType | "all")}
-              style={[s.type, on && s.typeOn]}
-              accessibilityRole="tab"
-              accessibilityState={{ selected: on }}
-              accessibilityLabel={f.full}
-              testID={`feed-type-${f.type}`}
-            >
-              <Text numberOfLines={1} style={[s.typeText, on && s.typeTextOn]}>{f.label}</Text>
-            </Pressable>
-          );
-        })}
+        <View style={s.filler} />
+        {/*
+          * One filter control, as the web has: a Filter button that opens the
+          * list, and the active one shown beside it so its state is never
+          * invisible. The row of chips this replaces put six choices on screen
+          * at all times to save a tap that nobody minded making.
+          */}
+        {filterLabel && (
+          <Pressable onPress={() => setFilter("all")} style={s.clear} hitSlop={6} testID="filter-clear">
+            <Text style={s.clearText} numberOfLines={1}>{filterLabel}</Text>
+            <Ionicons name="close" size={12} color={colors.primary} />
+          </Pressable>
+        )}
+        <Pressable onPress={() => setFiltering(true)} style={s.filterBtn} hitSlop={6} testID="button-feed-filter">
+          <Ionicons name="options-outline" size={13} color={colors.textTertiary} />
+          <Text style={s.filterText}>Filter</Text>
+          <Ionicons name="chevron-down" size={12} color={colors.textTertiary} />
+        </Pressable>
       </View>
 
       {/* The way back into the loop: progress from people you follow, since you last looked. */}
@@ -311,6 +286,26 @@ export default function Feed() {
       />
 
 
+      <Sheet visible={filtering} onClose={() => setFiltering(false)} title="Show posts">
+        <View style={{ marginHorizontal: -spacing.lg }}>
+          <ListItem
+            icon="newspaper-outline"
+            title="Everything"
+            onPress={() => { setFilter("all"); setFiltering(false); }}
+            right={filter === "all" ? <Ionicons name="checkmark" size={20} color={colors.primary} /> : <View />}
+          />
+          {POST_TYPES.map((pt) => (
+            <ListItem
+              key={pt.type}
+              icon={pt.icon}
+              title={pt.label}
+              onPress={() => { setFilter(pt.type); setFiltering(false); }}
+              right={filter === pt.type ? <Ionicons name="checkmark" size={20} color={colors.primary} /> : <View />}
+            />
+          ))}
+        </View>
+      </Sheet>
+
       <NoticeBanner notice={notice} onDismiss={clear} />
     </View>
   );
@@ -338,11 +333,6 @@ const s = StyleSheet.create({
   stack: { gap: spacing.sm, marginBottom: spacing.sm },
   filterBar: { flexDirection: "row", alignItems: "center", gap: 4, marginHorizontal: spacing.sm, paddingVertical: 2 },
   // Equal flex so the cells divide the width evenly however long the words are.
-  types: { flexDirection: "row", alignItems: "center", gap: 3, marginHorizontal: spacing.sm, marginTop: 2 },
-  type: { flex: 1, alignItems: "center", justifyContent: "center", height: 28, borderRadius: 7, backgroundColor: colors.surfaceRaised },
-  typeOn: { backgroundColor: "#000000" },
-  typeText: { color: colors.textSecondary, fontSize: 11, fontFamily: fontFamily.medium },
-  typeTextOn: { color: colors.primaryText },
   scopes: { flexDirection: "row", gap: 2 },
   scope: { flexDirection: "row", alignItems: "center", gap: 5, height: 30, paddingHorizontal: 10, borderRadius: 6 },
   scopeOn: { backgroundColor: "#000000" },

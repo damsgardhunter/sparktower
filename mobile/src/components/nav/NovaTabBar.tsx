@@ -54,7 +54,7 @@ const SPLIT = Math.floor(TABS.length / 2);
  */
 const DOME_W = 64;
 /** How far the dome stands proud of the bar's top edge. Enough to read as the main action, not so much that it covers content. */
-const DOME_RISE = 12;
+const DOME_RISE = 20;
 /**
  * How far the dome carries on past the bottom of the screen.
  *
@@ -213,11 +213,11 @@ export function NovaTabBar({ state, navigation }: BottomTabBarProps) {
    */
   const markW = DOME_W - MARK_INSET * 2;
   /*
-   * 1.3 rather than 1.45: the dome's height is no longer the thing limiting
+   * 1.24: the dome's height is no longer the thing limiting
    * the mark, so the multiplier is what actually sets its size — raise this to
    * grow the tower, `DOME_W` to widen the dome, `DOME_RISE` to lift both.
    */
-  const markH = Math.max(markW, Math.min(markW * 1.3, domeH - MARK_INSET - bottomPad * 0.45));
+  const markH = Math.max(markW, Math.min(markW * 1.24, domeH - MARK_INSET - bottomPad * 0.45));
 
   return (
     /*
@@ -279,6 +279,9 @@ export function NovaTabBar({ state, navigation }: BottomTabBarProps) {
           // its centre — so the dome and the bar meet with no seam, the same
           // trick the web header's hanging semicircle uses.
           backgroundColor: novaGradient[1],
+          // Centred across, and anchored to the top rather than the middle: the
+          // dome's lower half is below the screen edge, so centring vertically
+          // would push the tower down into the part nobody sees.
           alignItems: "center", justifyContent: "flex-start", paddingTop: MARK_INSET, overflow: "hidden",
           ...shadow.raised, zIndex: 1,
         }, pressed && { opacity: 0.9, transform: [{ scale: 0.97 }] }]}
