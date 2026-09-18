@@ -78,6 +78,8 @@ export interface DeskCompany {
   price: number;
   customers: number;
   bankruptSince: number | null;
+  /** The seats the engine still charges an executive salary for. Mirrors Company in shared/simulation/types.ts. */
+  seats: DeskRole[];
 }
 
 /** Mirrors Economy in shared/simulation/types.ts, plus the sentence the route adds. */
@@ -187,32 +189,16 @@ export const SALARY_PER_HEAD = 85_000;
 export const EXECUTIVE_SALARY = 140_000;
 
 /**
- * The part of `fixed` the phone can't derive, backed out of the server's own number.
+ * Mirrors fixedCosts() in shared/simulation/decisions.ts.
  *
- * `fixedCosts()` is `headcount × 85,000 × costIndex + seats.length × 140,000`,
- * and the desk response does not send `seats.length` — the engine's seat list
- * isn't the same thing as the `table` array, because a dissolved seat leaves
- * the table but stops costing a salary. Rather than guess with `table.length`
- * and be quietly wrong for any company that has dissolved a seat, the
- * executive half is recovered by subtracting the headcount half — computed
- * from the headcount the server itself was looking at — from the `fixed` it
- * returned. Anything the phone then changes about headcount moves the total
- * correctly, and the constant half comes from the engine rather than from a
- * hopeful assumption.
- *
- * Clamped at zero: a negative base could only come from a response and a
- * mirror that disagree, and a total that is too *low* is the dangerous
- * direction.
+ * Both halves are now computable on the phone: the desk sends `company.seats`,
+ * which is the engine's own seat list and not the same thing as the `table`
+ * array — a dissolved seat leaves the table but stops costing a salary, so the
+ * two can diverge and only one of them is the bill.
  */
-export function executiveSalariesFrom(serverFixed: number, filedHeadcount: number, costIndex: number): number {
-  if (!Number.isFinite(serverFixed)) return 0;
-  const salaries = num(filedHeadcount) * SALARY_PER_HEAD * (Number.isFinite(costIndex) ? costIndex : 1);
-  return Math.max(0, serverFixed - salaries);
-}
-
-/** Mirrors fixedCosts() in shared/simulation/decisions.ts, with the seat count supplied. */
-export function fixedCosts(headcount: number, costIndex: number, executiveSalaries: number): number {
-  return num(headcount) * SALARY_PER_HEAD * (Number.isFinite(costIndex) ? costIndex : 1) + Math.max(0, executiveSalaries);
+export function fixedCosts(headcount: number, costIndex: number, seatCount: number): number {
+  const salaries = num(headcount) * SALARY_PER_HEAD * (Number.isFinite(costIndex) ? costIndex : 1);
+  return salaries + Math.max(0, num(seatCount)) * EXECUTIVE_SALARY;
 }
 
 /** A value that may have arrived as a string from a text input, as a number. */
@@ -234,13 +220,11 @@ function num(value: any): number {
  * over-reads its own danger and under-spends the whole season.
  */
 export function commitment(input: {
-  company: Pick<DeskCompany, "cash" | "debt" | "creditLimit">;
+  company: Pick<DeskCompany, "cash" | "debt" | "creditLimit" | "seats">;
   decisions: FiledDecisions;
   costIndex: number;
-  /** From executiveSalariesFrom(), so the constant half of `fixed` is the engine's. */
-  executiveSalaries: number;
 }): Commitment {
-  const { company, decisions, costIndex, executiveSalaries } = input;
+  const { company, decisions, costIndex } = input;
   const cmo = decisions.cmo ?? {};
   const cto = decisions.cto ?? {};
   const coo = decisions.coo ?? {};
@@ -255,7 +239,7 @@ export function commitment(input: {
   ];
 
   const spend = bySeat.reduce((sum, s) => sum + s.spend, 0);
-  const fixed = fixedCosts(num(coo.headcount), costIndex, executiveSalaries);
+  const fixed = fixedCosts(num(coo.headcount), costIndex, company.seats?.length ?? 0);
   const borrowable = Math.max(0, company.creditLimit - company.debt);
   const available = Math.max(0, company.cash + num(cfo.borrow) + borrowable - num(cfo.cashBuffer));
 
@@ -312,21 +296,27 @@ export function secondsUntil(iso: string | null | undefined, nowMs: number): num
 }
 
 /**
- * "17h 40m", "42m", "0:41".
+ * "1d 23h", "3h 25m", "12:04", "9s".
  *
- * A year is a day away, so minutes and seconds ticking is noise for most of
- * it; under a minute it becomes a deadline and the seconds matter again.
+ * Mirrors longCountdown() in shared/simulation/lobby-copy.ts, thresholds
+ * included. The lobby's mm:ss is right for a phase that lasts minutes and
+ * wrong for a year that lasts a day — it rendered a deadline as "2878:46" on
+ * web, which is technically minutes and seconds and means nothing to anyone.
+ * Past an hour the units get spelled out; inside one, seconds still matter
+ * because that is when people are actually watching the number.
  */
 export function formatUntil(seconds: number | null): string {
   if (seconds == null || !Number.isFinite(seconds)) return "—";
-  const whole = Math.max(0, Math.floor(seconds));
-  if (whole >= 3600) {
-    const h = Math.floor(whole / 3600);
-    const m = Math.floor((whole % 3600) / 60);
-    return m > 0 ? `${h}h ${m}m` : `${h}h`;
-  }
-  if (whole >= 60) return `${Math.floor(whole / 60)}m`;
-  return `0:${String(whole).padStart(2, "0")}`;
+  const safe = Math.max(0, Math.floor(seconds));
+  if (safe < 60) return `${safe}s`;
+
+  const minutes = Math.floor(safe / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (hours < 1) return `${minutes}:${String(safe % 60).padStart(2, "0")}`;
+  if (days < 1) return `${hours}h ${minutes % 60}m`;
+  return `${days}d ${hours % 24}h`;
 }
 
 /** Inside the last half hour, filing stops being a plan and starts being a deadline. */
@@ -419,6 +409,8 @@ export function draftMatches(a: Record<string, any> | null | undefined, b: Recor
   for (const key of keys) {
     const l = a[key];
     const r = b[key];
+    // No lever sends a list today; kept because the comparison is cheap and a
+    // silent false-equal on one would show "nothing to change" over a real edit.
     if (Array.isArray(l) || Array.isArray(r)) {
       if (JSON.stringify(l ?? []) !== JSON.stringify(r ?? [])) return false;
       continue;

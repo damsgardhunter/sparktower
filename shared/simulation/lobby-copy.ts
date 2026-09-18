@@ -16,6 +16,29 @@ export function countdown(seconds: number): string {
   return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, "0")}`;
 }
 
+/**
+ * A wait measured in hours or days rather than minutes.
+ *
+ * `countdown` above is right for a lobby phase, where nothing lasts longer
+ * than fifteen minutes, and wrong for a year, which lasts a day: it rendered
+ * the desk's deadline as "2878:46", a number that is technically minutes and
+ * seconds and means nothing at all to the person reading it. Anything past an
+ * hour needs its units spelled out.
+ */
+export function longCountdown(seconds: number): string {
+  const safe = Math.max(0, Math.floor(seconds));
+  if (safe < 60) return `${safe}s`;
+
+  const minutes = Math.floor(safe / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  // Under an hour it is a countdown people watch, so seconds still matter.
+  if (hours < 1) return countdown(safe);
+  if (days < 1) return `${hours}h ${minutes % 60}m`;
+  return `${days}d ${hours % 24}h`;
+}
+
 export interface PhaseCopy {
   /** The heading: where the room is. */
   title: string;

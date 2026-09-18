@@ -14,7 +14,7 @@ import {
 } from "../../../src/components/sim/DeskKit";
 import { ROOM_POLL_MS, useDesk } from "../../../src/components/sim/useSim";
 import {
-  ROLE_ORDER, commitment, draftMatches, exact, executiveSalariesFrom, formatUntil,
+  ROLE_ORDER, commitment, draftMatches, exact, formatUntil,
   money, secondsUntil, tableStatus, validateDraft, withYourDraft,
   type DeskRole, type FileDecisionResult,
 } from "../../../src/components/sim/desk";
@@ -130,23 +130,25 @@ export default function Desk() {
   /**
    * The table's position, with your unsaved edits standing in for your seat.
    *
-   * The executive half of the fixed bill is backed out of the server's own
-   * `fixed` rather than guessed from the table's length — see
-   * executiveSalariesFrom() for why `table.length` is the wrong number.
+   * Wrapped, and falling back to the server's own `preview.commitment` if the
+   * mirror throws. A live total is a nicety; the desk is the screen a player
+   * opens to find out how their company is doing, and a white screen because
+   * one field of the payload changed shape is not a trade worth making. The
+   * web app already lost this argument once — `company.seats` arrived later
+   * than the code that read it, and `fixedCosts` took the whole screen down.
+   * A stale-by-one-poll number is a bad day; a blank screen is a bug report.
    */
   const live = useMemo(() => {
     if (!company || !economy || !data?.preview) return null;
-    const execs = executiveSalariesFrom(
-      data.preview.commitment.fixed,
-      Number(data.filed?.coo?.headcount ?? 0),
-      economy.costIndex,
-    );
-    return commitment({
-      company,
-      decisions: withYourDraft(data.filed, data.yourRole, data.yourRole ? draft : null),
-      costIndex: economy.costIndex,
-      executiveSalaries: execs,
-    });
+    try {
+      return commitment({
+        company,
+        decisions: withYourDraft(data.filed, data.yourRole, data.yourRole ? draft : null),
+        costIndex: economy.costIndex,
+      });
+    } catch {
+      return null;
+    }
   }, [company, economy, data?.preview, data?.filed, data?.yourRole, draft]);
 
   const localCheck = useMemo(
@@ -351,6 +353,21 @@ export default function Desk() {
                 <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
                   {(data.yourLevers ?? []).join(" · ")}
                 </Text>
+              )}
+
+              {/* The chief executive's seat is one control, and a seat with one
+                  control reads as decorative unless it is said outright that it
+                  isn't. It multiplies what the other four seats' money buys —
+                  FOCUS_EFFECTS in shared/simulation/decisions.ts — and every
+                  option gives something up, which is the part worth arguing
+                  about before the tick rather than reading about after it. */}
+              {data.yourRole === "ceo" && (
+                <Callout
+                  icon="flash"
+                  tone="info"
+                  title="One lever, and it moves all four of theirs"
+                  body="Your focus multiplies what everyone else's money buys — how far marketing reaches, how fast the product improves, what a unit costs, what the year's fixed bill is. Each one trades something away, and next year's report will name what yours did."
+                />
               )}
 
               <View style={{ gap: spacing.lg, paddingTop: spacing.xs }}>

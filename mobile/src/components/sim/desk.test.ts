@@ -11,13 +11,19 @@
 import { describe, it, expect } from "vitest";
 import {
   bump, clampToField, commitment, commitmentLevel, draftMatches, exact,
-  executiveSalariesFrom, fixedCosts, formatUntil, money, percent,
+  fixedCosts, formatUntil, money, percent,
   resolveIsImminent, secondsUntil, shortfall, signed, stepFor, tableStatus,
   validateDraft, waitingOn, withYourDraft,
   type DeskTableSeat, type FiledDecisions, type LeverField,
 } from "./desk";
 
-const company = { cash: 4_000_000, debt: 1_000_000, creditLimit: 3_000_000 };
+// Five filled seats: the engine charges 140,000 for each, so this is the
+// constant half of the fixed bill. It comes down in the payload now — see
+// company.seats in server/simulation-desk-routes.ts.
+const company = {
+  cash: 4_000_000, debt: 1_000_000, creditLimit: 3_000_000,
+  seats: ["ceo", "cmo", "cfo", "cto", "coo"] as const as any,
+};
 
 /** A full table, the numbers chosen so every term of the sum is distinguishable. */
 const table: FiledDecisions = {
@@ -28,11 +34,9 @@ const table: FiledDecisions = {
   ceo: { focus: "growth" },
 };
 
-// Five filled seats at 140,000 each, as fixedCosts() in
-// shared/simulation/decisions.ts charges them.
 const EXECS = 700_000;
 const run = (decisions: FiledDecisions = table, costIndex = 1.05) =>
-  commitment({ company, decisions, costIndex, executiveSalaries: EXECS });
+  commitment({ company, decisions, costIndex });
 
 describe("what the table has committed", () => {
   it("adds the four spending seats and leaves the chief executive at zero", () => {
@@ -61,7 +65,7 @@ describe("what the table has committed", () => {
   it("charges salaries at the cost index and adds the executive bill", () => {
     // 20 × 85,000 × 1.05 = 1,785,000, plus 700,000 of executive salaries.
     expect(run().fixed).toBe(2_485_000);
-    expect(fixedCosts(20, 1.05, EXECS)).toBe(2_485_000);
+    expect(fixedCosts(20, 1.05, 5)).toBe(2_485_000);
   });
 
   it("counts unused credit as available, and the buffer as unavailable", () => {
@@ -79,10 +83,9 @@ describe("what the table has committed", () => {
     // Division by zero would give NaN, and NaN renders as an empty bar rather
     // than as the loudest state on the screen.
     const c = commitment({
-      company: { cash: 0, debt: 5_000_000, creditLimit: 1_000_000 },
+      company: { ...company, cash: 0, debt: 5_000_000, creditLimit: 1_000_000 },
       decisions: { cto: { featureSpend: 50_000 } },
       costIndex: 1,
-      executiveSalaries: EXECS,
     });
     expect(c.available).toBe(0);
     expect(c.ratio).toBe(Infinity);
@@ -91,10 +94,9 @@ describe("what the table has committed", () => {
 
   it("clamps available at zero when the buffer exceeds everything the company has", () => {
     const c = commitment({
-      company: { cash: 500_000, debt: 3_000_000, creditLimit: 3_000_000 },
+      company: { ...company, cash: 500_000, debt: 3_000_000, creditLimit: 3_000_000, seats: [] },
       decisions: { cfo: { borrow: 0, repay: 0, cashBuffer: 9_000_000 } },
       costIndex: 1,
-      executiveSalaries: 0,
     });
     expect(c.available).toBe(0);
   });
@@ -117,30 +119,30 @@ describe("what the table has committed", () => {
   });
 });
 
-describe("the executive half of the fixed bill, backed out of the server's number", () => {
-  it("recovers the seat salaries the response doesn't send", () => {
-    expect(executiveSalariesFrom(2_485_000, 20, 1.05)).toBe(700_000);
+describe("the executive half of the fixed bill", () => {
+  it("charges a salary for every seat the engine still holds", () => {
+    expect(fixedCosts(0, 1.05, 5)).toBe(700_000);
+    expect(fixedCosts(0, 1.05, 0)).toBe(0);
   });
 
-  it("is the whole of fixed when nobody has filed a headcount", () => {
-    expect(executiveSalariesFrom(700_000, 0, 1.05)).toBe(700_000);
-  });
-
-  it("round-trips: the local sum reproduces the server's fixed before anything is edited", () => {
-    const serverFixed = 2_485_000;
-    const execs = executiveSalariesFrom(serverFixed, 20, 1.05);
-    expect(fixedCosts(20, 1.05, execs)).toBeCloseTo(serverFixed, 6);
+  it("comes off the bill when a seat is dissolved, which is the trade the CEO is offered", () => {
+    // The reason this counts company.seats and not the table: a dissolved seat
+    // leaves the table but stops costing a salary, and only one of those two
+    // numbers is the bill.
+    const four = commitment({ company: { ...company, seats: ["ceo", "cmo", "cfo", "cto"] as any }, decisions: table, costIndex: 1.05 });
+    expect(four.fixed).toBe(2_485_000 - 140_000);
   });
 
   it("moves with the headcount the player is editing", () => {
-    const execs = executiveSalariesFrom(2_485_000, 20, 1.05);
-    expect(fixedCosts(30, 1.05, execs)).toBe(700_000 + 30 * 85_000 * 1.05);
+    const edited = run({ ...table, coo: { ...table.coo, headcount: 30 } });
+    expect(edited.fixed).toBe(EXECS + 30 * 85_000 * 1.05);
   });
 
-  it("refuses to go negative if the response and the mirror ever disagree", () => {
-    // Too low a total is the dangerous direction; better to over-state the
-    // fixed bill than to quietly hide part of it.
-    expect(executiveSalariesFrom(100_000, 20, 1.05)).toBe(0);
+  it("treats a payload without a seat list as no executive salaries rather than as a crash", () => {
+    // The field arrived after the code that reads it once already. A total
+    // that is wrong is recoverable; a screen that threw is not.
+    const c = commitment({ company: { ...company, seats: undefined as any }, decisions: {}, costIndex: 1 });
+    expect(c.fixed).toBe(0);
   });
 });
 
@@ -192,12 +194,25 @@ describe("the clock to the tick", () => {
     expect(formatUntil(null)).toBe("—");
   });
 
-  it("drops the seconds while the deadline is a day away and finds them again at the end", () => {
+  it("spells out the units past an hour, mirroring longCountdown()", () => {
+    // The bug this replaces: a day-scale deadline rendered as mm:ss came out
+    // as "2878:46". Thresholds match longCountdown() in
+    // shared/simulation/lobby-copy.ts exactly, so the phone and the web never
+    // describe the same deadline differently.
+    expect(formatUntil(24 * 3_600)).toBe("1d 0h");
+    expect(formatUntil(47 * 3_600 + 60)).toBe("1d 23h");
     expect(formatUntil(63_600)).toBe("17h 40m");
-    expect(formatUntil(3_600)).toBe("1h");
-    expect(formatUntil(2_520)).toBe("42m");
-    expect(formatUntil(59)).toBe("0:59");
-    expect(formatUntil(0)).toBe("0:00");
+    expect(formatUntil(12_300)).toBe("3h 25m");
+    expect(formatUntil(3_600)).toBe("1h 0m");
+  });
+
+  it("keeps the seconds inside the last hour, where people are watching them", () => {
+    expect(formatUntil(3_599)).toBe("59:59");
+    expect(formatUntil(2_520)).toBe("42:00");
+    expect(formatUntil(60)).toBe("1:00");
+    expect(formatUntil(59)).toBe("59s");
+    expect(formatUntil(9)).toBe("9s");
+    expect(formatUntil(0)).toBe("0s");
   });
 
   it("calls the last half hour urgent and the rest of the day not", () => {
@@ -297,9 +312,11 @@ describe("whether anything has changed since you filed", () => {
     expect(draftMatches({ brandSpend: 50_000 }, { brandSpend: 100_000 })).toBe(false);
   });
 
-  it("compares the CMO's city list by content", () => {
-    expect(draftMatches({ targetCities: ["leeds"] }, { targetCities: ["leeds"] })).toBe(true);
-    expect(draftMatches({ targetCities: [] }, { targetCities: ["leeds"] })).toBe(false);
+  it("compares a list field by content rather than by identity", () => {
+    // No lever sends a list today; the comparison stays because a silent
+    // false-equal would show "nothing to change" over a real edit.
+    expect(draftMatches({ tags: ["a"] }, { tags: ["a"] })).toBe(true);
+    expect(draftMatches({ tags: [] }, { tags: ["a"] })).toBe(false);
   });
 
   it("is false when there is nothing filed to compare against", () => {

@@ -6,7 +6,7 @@
  * nobody checks until it is on everybody's screen showing "1:60".
  */
 import { describe, it, expect } from "vitest";
-import { countdown, phaseCopy, urgency } from "@shared/simulation/lobby-copy";
+import { countdown, longCountdown, phaseCopy, urgency } from "@shared/simulation/lobby-copy";
 
 describe("the countdown", () => {
   it("reads as minutes and seconds, and never as something impossible", () => {
@@ -61,5 +61,24 @@ describe("what each phase says", () => {
   it("admits when a company started without a name", () => {
     expect(phaseCopy({ ...base, phase: "running", named: false }).title).toMatch(/unnamed/i);
     expect(phaseCopy({ ...base, phase: "running", named: true }).title).not.toMatch(/unnamed/i);
+  });
+});
+
+describe("a wait measured in days", () => {
+  it("does not render a day as a pile of minutes", () => {
+    /*
+     * The desk's deadline is a day away, and the lobby's mm:ss formatter
+     * rendered it as "2878:46" — technically minutes and seconds, and
+     * meaningless to read.
+     */
+    expect(longCountdown(24 * 3600)).toBe("1d 0h");
+    expect(longCountdown(47 * 3600 + 59 * 60)).toBe("1d 23h");
+    expect(longCountdown(3 * 3600 + 25 * 60)).toBe("3h 25m");
+  });
+
+  it("goes back to watching the seconds once it is close", () => {
+    expect(longCountdown(90)).toBe("1:30");
+    expect(longCountdown(9)).toBe("9s");
+    expect(longCountdown(-5)).toBe("0s");
   });
 });

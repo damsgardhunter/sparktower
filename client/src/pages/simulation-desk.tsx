@@ -38,7 +38,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { NOVA_GRADIENT_CSS } from "@shared/backing";
-import { countdown } from "@shared/simulation/lobby-copy";
+import { longCountdown } from "@shared/simulation/lobby-copy";
 import { commitment, type LeverField } from "@shared/simulation/levers";
 import type { Role } from "@shared/simulation/types";
 import {
@@ -141,8 +141,23 @@ export default function SimulationDeskPage() {
    */
   const live = useMemo(() => {
     if (!desk || desk.phase !== "running" || !desk.yourRole || !draft) return desk?.preview.commitment ?? null;
-    const decisions: any = { ...desk.filed, companyId: desk.ventureId, [desk.yourRole]: draft };
-    return commitment(desk.company as any, decisions, desk.economy);
+    try {
+      const decisions: any = { ...desk.filed, companyId: desk.ventureId, [desk.yourRole]: draft };
+      return commitment(desk.company as any, decisions, desk.economy);
+    } catch {
+      /*
+       * Fall back to the server's own figure rather than taking the screen
+       * down with us.
+       *
+       * This is not hypothetical: the arithmetic needs `company.seats`, the
+       * payload did not carry it, and the whole desk rendered as a white
+       * screen — a total loss of the page over a number that was *already in
+       * the response* next to it. A live total is a nicety; the last year's
+       * results, the form and the deadline are not, and none of them should
+       * depend on it.
+       */
+      return desk.preview.commitment;
+    }
   }, [desk, draft]);
 
   if (isLoading || !desk) {
@@ -169,7 +184,7 @@ export default function SimulationDeskPage() {
       title={desk.name ?? "Your company"}
       subtitle={`${desk.niche.name} · Year ${desk.year} of ${desk.totalYears}`}
       onBack={() => navigate("/simulation")}
-      clock={desk.phase === "finished" ? "Season over" : secondsLeft !== null ? `${countdown(secondsLeft)} until this year resolves` : null}
+      clock={desk.phase === "finished" ? "Season over" : secondsLeft !== null ? `${longCountdown(secondsLeft)} until this year resolves` : null}
     >
       {/* 1. What happened last year, before anyone is asked to decide this one. */}
       {desk.lastYear ? <LastYear report={desk.lastYear} /> : (
