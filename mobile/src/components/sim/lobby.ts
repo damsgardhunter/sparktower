@@ -18,6 +18,29 @@ import { colors } from "../../theme";
 
 export type SimPhase = "filling" | "claiming" | "naming" | "running" | "retired";
 
+/**
+ * A season's own status, which is a different thing from a room's phase.
+ *
+ * Mirrors `simSeasons.status` in shared/schema.ts. The phase says what the
+ * five of them are doing right now; the status says whether the season is
+ * still a thing that can change. Two screens need the second question —
+ * offers and standings both carry it — so it lives here, with the rest of the
+ * season's vocabulary, rather than in whichever of them asked first.
+ */
+export type SeasonStatus = "forming" | "running" | "finished" | "abandoned";
+
+/**
+ * Whether anything can still happen.
+ *
+ * A finished season is a final answer and an abandoned one is a season nobody
+ * is playing; both mean the same thing to a screen with buttons on it, which
+ * is that the buttons are lying. Written as a positive check against the two
+ * closed states rather than `!== "running"`, so a status this build has not
+ * heard of leaves the screen live rather than silently dead.
+ */
+export const seasonOver = (status: SeasonStatus | string | null | undefined): boolean =>
+  status === "finished" || status === "abandoned";
+
 export interface SimSegment {
   id: string;
   name: string;

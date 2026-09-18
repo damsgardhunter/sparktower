@@ -321,7 +321,13 @@ export function MoneyInput({ value, onChange, disabled, testID, label }: {
   );
 }
 
-function StepSquare({ icon, label, onPress, disabled, testID }: {
+/**
+ * A stepper square, exported because the offers screen types money into the
+ * same kind of box for the same reason — a number nudged in round increments
+ * cannot come out looking like a typo, and the keyboard is still there for
+ * somebody who knows exactly what they want.
+ */
+export function StepSquare({ icon, label, onPress, disabled, testID }: {
   icon: React.ComponentProps<typeof Icon>["name"];
   label: string;
   onPress: () => void;

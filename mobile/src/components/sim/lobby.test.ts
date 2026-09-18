@@ -9,7 +9,7 @@
 import { describe, it, expect } from "vitest";
 import {
   clockIsUrgent, formatCount, formatCountdown, incumbentHold, loyaltyRead,
-  phaseCopy, remainingSeconds, seatStatus, type SimSeat,
+  phaseCopy, remainingSeconds, seasonOver, seatStatus, type SimSeat,
 } from "./lobby";
 
 const seat = (over: Partial<SimSeat> = {}): SimSeat => ({
@@ -141,5 +141,18 @@ describe("reading a market", () => {
     expect(formatCount(1_250_000)).toBe("1.3m");
     expect(formatCount(2_000_000)).toBe("2m");
     expect(formatCount(840)).toBe("840");
+  });
+
+  it("treats a finished or abandoned season as over, and anything else as live", () => {
+    // Positive check against the two closed states: a status this build
+    // hasn't heard of should leave a screen working rather than silently
+    // disable every button on it.
+    expect(seasonOver("finished")).toBe(true);
+    expect(seasonOver("abandoned")).toBe(true);
+    expect(seasonOver("running")).toBe(false);
+    expect(seasonOver("forming")).toBe(false);
+    expect(seasonOver("paused-for-maintenance")).toBe(false);
+    expect(seasonOver(null)).toBe(false);
+    expect(seasonOver(undefined)).toBe(false);
   });
 });

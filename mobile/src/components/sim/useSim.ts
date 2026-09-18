@@ -21,9 +21,11 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
-import { formatCountdown, remainingSeconds, type NichesResponse, type VentureView } from "./lobby";
+import { formatCountdown, remainingSeconds, seasonOver, type NichesResponse, type VentureView } from "./lobby";
 import type { DeskView } from "./desk";
 import type { MarketView } from "./market";
+import type { OffersView } from "./offers";
+import type { StandingsView } from "./standings";
 
 /** Short enough that a claimed seat shows up before someone else reaches for it. */
 export const ROOM_POLL_MS = 2_500;
@@ -135,6 +137,53 @@ export function useMarket(id: string | undefined) {
     queryFn: () => api<MarketView>(`/api/sim/ventures/${id}/market`),
     enabled: !!id,
     refetchInterval: ROOM_POLL_MS,
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+/**
+ * Offers, on the same interval as everything else.
+ *
+ * This one needs the poll more than the market does, and for a reason the
+ * market's doesn't have: an offer is a question put to five other people, and
+ * both the asking and the answering happen on somebody else's phone. A screen
+ * that only learned about an offer for the company on a manual refresh would
+ * be the screen where a team found out they had been asked to sell after the
+ * year had already resolved the question for them.
+ *
+ * Nothing here is optimistic for the same reason. An offer that looks accepted
+ * and wasn't is a company somebody thinks they sold.
+ */
+export function useOffers(id: string | undefined) {
+  return useQuery({
+    queryKey: ["sim-offers", id],
+    queryFn: () => api<OffersView>(`/api/sim/ventures/${id}/offers`),
+    enabled: !!id,
+    // A finished season is a final answer, and asking it again every couple of
+    // seconds is a battery bill for a number that cannot change.
+    refetchInterval: (query) => (seasonOver(query.state.data?.status) ? false : ROOM_POLL_MS),
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+/**
+ * The league table.
+ *
+ * Polled like the rest, though it only really changes on the tick: a year is a
+ * day long and the table is the same table for most of it. The interval is
+ * shared with every other simulation screen rather than tuned down, because
+ * one number to change is worth more than the handful of requests a slower one
+ * would save — and when the tick does land, this is the screen somebody is
+ * most likely to already be staring at.
+ */
+export function useStandings(id: string | undefined) {
+  return useQuery({
+    queryKey: ["sim-standings", id],
+    queryFn: () => api<StandingsView>(`/api/sim/ventures/${id}/standings`),
+    enabled: !!id,
+    refetchInterval: (query) => (seasonOver(query.state.data?.status) ? false : ROOM_POLL_MS),
     staleTime: 0,
     retry: false,
   });

@@ -482,6 +482,37 @@ export default function Desk() {
             </View>
           </Card>
 
+          {/* Where everybody stands, and who could be bought. Links rather
+              than sections, for the same reason the market is one: both are
+              decisions with their own screen, and both answer a question the
+              desk structurally cannot — whether the year was any good, and
+              what this company is worth to somebody else. */}
+          <Card onPress={() => router.push(`/sim/standings/${id}`)}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
+              <Icon name="podium" size={20} color={colors.info} />
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text style={{ color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold }}>Standings</Text>
+                <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>
+                  Every team and every incumbent in one table, and the shape of your season year by year.
+                </Text>
+              </View>
+              <Icon name="chevron-forward" size={18} color={colors.textTertiary} />
+            </View>
+          </Card>
+
+          <Card onPress={() => router.push(`/sim/offers/${id}`)}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
+              <Icon name="briefcase" size={20} color={colors.novaPurple} />
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text style={{ color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold }}>Acquisitions</Text>
+                <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>
+                  What every company is worth, offers on your table, and who you could buy. Nobody is bought without agreeing to it.
+                </Text>
+              </View>
+              <Icon name="chevron-forward" size={18} color={colors.textTertiary} />
+            </View>
+          </Card>
+
           {/* 3 & 4. The table's money, then your levers. The total sits above the
               form on purpose: it is the context every number below it changes. */}
           {live || preview ? (
