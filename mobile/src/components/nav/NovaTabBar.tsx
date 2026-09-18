@@ -213,11 +213,11 @@ export function NovaTabBar({ state, navigation }: BottomTabBarProps) {
    */
   const markW = DOME_W - MARK_INSET * 2;
   /*
-   * 1.05 rather than 1.45: the dome's height is no longer the thing limiting
+   * 1.15 rather than 1.45: the dome's height is no longer the thing limiting
    * the mark, so the multiplier is what actually sets its size — raise this to
    * grow the tower, `DOME_W` to widen the dome, `DOME_RISE` to lift both.
    */
-  const markH = Math.max(markW, Math.min(markW * 1.05, domeH - MARK_INSET - bottomPad * 0.45));
+  const markH = Math.max(markW, Math.min(markW * 1.15, domeH - MARK_INSET - bottomPad * 0.45));
 
   return (
     /*
