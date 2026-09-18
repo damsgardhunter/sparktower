@@ -24,7 +24,7 @@ import { and, eq, inArray, lte, sql } from "drizzle-orm";
 import { db, pool } from "./db";
 import {
   simSeasons, simVentures, simSeats, simDecisions, simReports,
-  simChallenges, simListings, simBids, simRecoveryMoves,
+  simChallenges, simListings, simBids, simRecoveryMoves, simOffers,
 } from "@shared/schema";
 import { nicheById } from "@shared/simulation/niches";
 import { resolveYear } from "@shared/simulation/resolve";
@@ -37,6 +37,7 @@ import { advanceVenture } from "./simulation-routes";
 import { marketListings, resolveBids, biddableFunds, type Bid, type Listing } from "@shared/simulation/assets";
 import { applyRecovery, reviewCovenant, type RecoveryKind } from "@shared/simulation/recovery";
 import { challengeFor, checkChallenge, applyReward, type Challenge } from "@shared/simulation/challenges";
+import { applyAcquisition } from "@shared/simulation/mergers";
 import type { Company, CompanyAsset } from "@shared/simulation/types";
 
 /** What the market did to one company in one year. */
@@ -221,12 +222,55 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
    * those assets, not after it — otherwise the move is free for one more year
    * and the whole arc has a twelve-month grace period in it.
    */
+  const recoveryNotes = new Map<string, string[]>();
+  const addNote = (id: string, ...lines: string[]) =>
+    recoveryNotes.set(id, [...(recoveryNotes.get(id) ?? []), ...lines]);
+
+  /*
+   * Acquisitions settle first, before anything else touches the world.
+   *
+   * A company that was bought has no customers this year and the buyer has
+   * twice as many; running the year first and then moving the business would
+   * resolve a market that no longer exists. Ordered ahead of recovery moves
+   * too, since being paid for the business is exactly the kind of thing that
+   * makes a fire sale unnecessary.
+   */
+  const accepted = await db
+    .select()
+    .from(simOffers)
+    .where(and(
+      eq(simOffers.seasonId, seasonId),
+      eq(simOffers.year, year),
+      eq(simOffers.status, "accepted"),
+    ));
+
+  for (const offer of accepted) {
+    const buyer = world.companies.find((c) => c.id === offer.fromVentureId);
+    const seller = world.companies.find((c) => c.id === offer.toVentureId);
+    if (!buyer || !seller || buyer.kind !== "player" || seller.kind !== "player") continue;
+
+    const out = applyAcquisition({ buyer, seller, amount: offer.amount });
+    world.companies = world.companies.map((c) =>
+      c.id === buyer.id ? out.buyer : c.id === seller.id ? out.seller : c);
+    addNote(buyer.id, ...out.buyerNotes);
+    addNote(seller.id, ...out.sellerNotes);
+  }
+
+  /*
+   * Everything still sitting unanswered stops being an offer. A live offer
+   * would otherwise tie up a rival's decision-making for a fortnight at no
+   * cost to the buyer, and the answer to "do you want to sell" changes every
+   * time the market does.
+   */
+  await db.update(simOffers)
+    .set({ status: "lapsed" })
+    .where(and(eq(simOffers.seasonId, seasonId), eq(simOffers.year, year), eq(simOffers.status, "pending")));
+
   const moves = await db
     .select()
     .from(simRecoveryMoves)
     .where(and(inArray(simRecoveryMoves.ventureId, teams.map((t) => t.id)), eq(simRecoveryMoves.year, year)));
 
-  const recoveryNotes = new Map<string, string[]>();
   const releasedByTeam = new Map<string, CompanyAsset[]>();
 
   for (const move of moves) {
@@ -234,7 +278,7 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
     if (!company || company.kind !== "player") continue;
     const out = applyRecovery({ company, kind: move.kind as RecoveryKind, year, seat: move.seat ?? undefined });
     world.companies = world.companies.map((c) => (c.id === company.id ? out.company : c));
-    recoveryNotes.set(company.id, out.notes);
+    addNote(company.id, ...out.notes);
     if (out.released.length > 0) releasedByTeam.set(company.id, out.released);
   }
   teams = world.companies.filter((c) => c.kind === "player");

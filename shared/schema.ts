@@ -2683,6 +2683,35 @@ export const simBids = pgTable("sim_bids", {
   once: unique("sim_bids_once").on(table.ventureId, table.listingId, table.year),
 }));
 
+/**
+ * One team's offer to buy another.
+ *
+ * An offer lives for one year. If the other team has not answered by the time
+ * the year resolves it lapses, which is deliberate: an offer that sat open
+ * indefinitely would let a buyer tie up a rival's decision-making for a
+ * fortnight at no cost, and the answer to "do you want to sell" changes every
+ * time the market does.
+ */
+export const simOffers = pgTable("sim_offers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  seasonId: varchar("season_id").notNull().references(() => simSeasons.id, { onDelete: "cascade" }),
+  year: integer("year").notNull(),
+  fromVentureId: varchar("from_venture_id").notNull().references(() => simVentures.id, { onDelete: "cascade" }),
+  toVentureId: varchar("to_venture_id").notNull().references(() => simVentures.id, { onDelete: "cascade" }),
+  amount: integer("amount").notNull(),
+  /** A note from the buyer, because this is a negotiation between people. */
+  message: text("message"),
+  status: text("status", { enum: ["pending", "accepted", "declined", "lapsed", "withdrawn"] })
+    .default("pending").notNull(),
+  respondedById: varchar("responded_by_id").references(() => users.id, { onDelete: "set null" }),
+  respondedAt: timestamp("responded_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /** One live offer from a buyer to a target in a year. */
+  once: unique("sim_offers_once").on(table.fromVentureId, table.toVentureId, table.year),
+  byTarget: index("sim_offers_target_idx").on(table.toVentureId, table.status),
+}));
+
 /** A recovery move a team has committed to, applied at the start of the next tick. */
 export const simRecoveryMoves = pgTable("sim_recovery_moves", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

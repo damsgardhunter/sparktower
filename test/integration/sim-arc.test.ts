@@ -238,9 +238,20 @@ describe("the marketplace", () => {
     await tickSeason(seasonId);
     const after = await companyIn(seasonId, ventureId);
 
-    // The company's own capacity is untouched — the asset lends it, and would
-    // take it back on sale.
-    expect(after.capacity).toBe(before.capacity);
+    /*
+     * The asset's capacity is lent, not given: it must not appear in the
+     * company's own figure, or selling the thing would leave the benefit
+     * behind.
+     *
+     * Stated as "the bonus is not in there" rather than "capacity did not
+     * change", because capacity legitimately moves for other reasons — a
+     * completed challenge can award a few per cent of it, and which challenge
+     * a seat draws varies per venture. The first version of this assertion
+     * failed about one run in four for exactly that reason.
+     */
+    const lent = listing.asset.effect.capacity ?? 0;
+    expect(lent).toBeGreaterThan(0);
+    expect(after.capacity).toBeLessThan(before.capacity + lent);
     expect(after.assets).toHaveLength(1);
   }, 180_000);
 });

@@ -35,6 +35,8 @@ import { PrivacyPolicy, TermsOfService, SecurityPolicy } from "@/pages/legal";
 import SimulationPage from "@/pages/simulation";
 import SimulationDeskPage from "@/pages/simulation-desk";
 import SimulationMarketPage from "@/pages/simulation-market";
+import SimulationStandingsPage from "@/pages/simulation-standings";
+import SimulationOffersPage from "@/pages/simulation-offers";
 import ResetPasswordPage from "@/pages/reset-password";
 import { MfaNotice } from "@/components/mfa";
 import { NOVA_GRADIENT, NOVA_GRADIENT_CSS } from "@shared/backing";
@@ -46,6 +48,7 @@ import PostDetail from "@/pages/post-detail";
 import AdminSurfaces from "@/pages/admin-surfaces";
 import AdminReports from "@/pages/admin-reports";
 import AdminSafety from "@/pages/admin-safety";
+import AdminSecurity from "@/pages/admin-security";
 import AdminAnalytics from "@/pages/admin-analytics";
 import { installAnalytics, trackPageView } from "@/lib/analytics";
 import Messages from "@/pages/messages";
@@ -285,6 +288,8 @@ function Router() {
             <Route path="/simulation" component={SimulationPage} />
             {/* One company's desk: the year this seat is deciding. */}
             <Route path="/simulation/:id/market" component={SimulationMarketPage} />
+            <Route path="/simulation/:id/standings" component={SimulationStandingsPage} />
+            <Route path="/simulation/:id/offers" component={SimulationOffersPage} />
             <Route path="/simulation/:id" component={SimulationDeskPage} />
             <Route path="/sprints/new" component={SprintMatchmaking} />
             <Route path="/sprints/practice" component={SprintPractice} />
@@ -298,6 +303,7 @@ function Router() {
             <Route path="/admin/surfaces" component={AdminSurfaces} />
             <Route path="/admin/reports" component={AdminReports} />
             <Route path="/admin/safety" component={AdminSafety} />
+            <Route path="/admin/security" component={AdminSecurity} />
             <Route path="/admin/analytics" component={AdminAnalytics} />
             <Route path="/admin/promotions" component={AdminPromotions} />
             <Route component={NotFound} />

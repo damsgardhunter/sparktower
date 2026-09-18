@@ -43,7 +43,7 @@ import { commitment, type LeverField } from "@shared/simulation/levers";
 import type { Role } from "@shared/simulation/types";
 import {
   Loader2, Clock, TrendingUp, TrendingDown, Minus, AlertTriangle, Info,
-  CheckCircle2, Circle, Banknote, Users, ArrowLeft, Target, LifeBuoy, Store,
+  CheckCircle2, Circle, Banknote, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy,
 } from "lucide-react";
 
 interface Desk {
@@ -362,20 +362,30 @@ export default function SimulationDeskPage() {
         </div>
       ) : null}
 
-      {/* A way to the market, where a bad year for somebody else is an opportunity. */}
-      <Card>
-        <CardContent className="p-5 flex items-center justify-between gap-4">
-          <div>
+      {/* The three rooms off this one: buying things, buying companies, and where you stand. */}
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Card>
+          <CardContent className="p-4">
             <h3 className="text-sm font-semibold flex items-center gap-2"><Store className="h-4 w-4 text-muted-foreground" /> The market</h3>
-            <p className="text-xs text-muted-foreground mt-1">
-              Three things come up each year, and every team bids blind. What you own is in there too.
-            </p>
-          </div>
-          <Button variant="outline" size="sm" onClick={() => navigate(`/simulation/${desk.ventureId}/market`)} data-testid="button-open-market">
-            Open
-          </Button>
-        </CardContent>
-      </Card>
+            <p className="text-xs text-muted-foreground mt-1 mb-3">Three things a year, and everyone bids blind.</p>
+            <Button variant="outline" size="sm" onClick={() => navigate(`/simulation/${desk.ventureId}/market`)} data-testid="button-open-market">Open</Button>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <h3 className="text-sm font-semibold flex items-center gap-2"><Handshake className="h-4 w-4 text-muted-foreground" /> The boardroom</h3>
+            <p className="text-xs text-muted-foreground mt-1 mb-3">Buy a rival, or take the money for yours.</p>
+            <Button variant="outline" size="sm" onClick={() => navigate(`/simulation/${desk.ventureId}/offers`)} data-testid="button-open-offers">Open</Button>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <h3 className="text-sm font-semibold flex items-center gap-2"><Trophy className="h-4 w-4 text-muted-foreground" /> Standings</h3>
+            <p className="text-xs text-muted-foreground mt-1 mb-3">Where you actually stand, incumbents included.</p>
+            <Button variant="outline" size="sm" onClick={() => navigate(`/simulation/${desk.ventureId}/standings`)} data-testid="button-open-standings">Open</Button>
+          </CardContent>
+        </Card>
+      </div>
 
       {/* 4. Everyone else. */}
       <Card>

@@ -17,7 +17,7 @@ import type { Express } from "express";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "./db";
 import {
-  simSeasons, simSeats, simVentures, simListings, simBids, simRecoveryMoves,
+  simSeasons, simSeats, simVentures, simListings, simBids, simRecoveryMoves, simOffers, simReports,
 } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { enforceRateLimit } from "./moderation";
@@ -25,6 +25,7 @@ import { nicheById } from "@shared/simulation/niches";
 import type { World, Company, CompanyAsset, Role } from "@shared/simulation/types";
 import { marketListings, resaleValue, biddableFunds } from "@shared/simulation/assets";
 import { distressOf, recoveryOptions, type RecoveryKind } from "@shared/simulation/recovery";
+import { valuation, canOffer, assessOffer, alreadySold } from "@shared/simulation/mergers";
 
 const KINDS: RecoveryKind[] = ["restructure", "fire_sale", "dissolve_seat", "rescue_raise"];
 
@@ -339,6 +340,289 @@ export function registerSimulationMarketRoutes(app: Express): void {
       });
 
     res.json({ ok: true, kind, seat: seatToDrop ?? null });
+  });
+
+  /**
+   * Who could be bought, what they are worth, and what is on the table.
+   *
+   * Valuations are published to everyone, including the company being valued.
+   * A negotiation where only one side can do the arithmetic is not a
+   * negotiation — it is a trick played on whoever is newer to the game, and
+   * the argument worth having is not "what is it worth" but "what is it worth
+   * to *you*", which only starts once the boring part is settled.
+   */
+  app.get("/api/sim/ventures/:id/offers", isAuthenticated, async (req: any, res) => {
+    const ctx = await context(req.params.id, req.user.id);
+    if (!ctx) return res.status(404).json({ message: "No such company." });
+    const { season, company, world, seat } = ctx;
+
+    const [made, received] = await Promise.all([
+      db.select().from(simOffers).where(and(
+        eq(simOffers.fromVentureId, company.id),
+        eq(simOffers.year, season.year),
+      )),
+      db.select().from(simOffers).where(and(
+        eq(simOffers.toVentureId, company.id),
+        eq(simOffers.year, season.year),
+      )),
+    ]);
+
+    const nameOf = (id: string) => world.companies.find((c) => c.id === id)?.name ?? "Another team";
+    const rivals = world.companies.filter((c) => c.kind === "player" && c.id !== company.id);
+
+    res.json({
+      year: season.year,
+      totalYears: season.totalYears,
+      yourRole: seat.role,
+      resolvesAt: season.nextTickAt,
+      /** Where the season is, so a finished one does not render as a live screen. */
+      status: season.status,
+      /** What your own company is worth, so you know what a number on the table means. */
+      you: {
+        name: company.name,
+        ...valuation(company),
+        /*
+         * Capacity, because it is the real constraint on buying anybody.
+         * Customers bought are customers who must be served, and an acquirer
+         * who cannot serve them turns them away — which costs reputation, in
+         * public, at the moment everyone is watching. A screen without this
+         * cannot warn about the one mistake this mechanic punishes hardest.
+         */
+        capacity: company.capacity,
+        customers: Object.values(company.customers).reduce((sum, n) => sum + n, 0),
+      },
+      reach: company.cash + Math.max(0, company.creditLimit - company.debt),
+
+      targets: rivals.map((rival) => ({
+        id: rival.id,
+        name: rival.name,
+        customers: Object.values(rival.customers).reduce((sum, n) => sum + n, 0),
+        distress: distressOf(rival),
+        ...valuation(rival),
+        /** Nothing left to buy: they have already sold the business to somebody. */
+        hollow: alreadySold(rival),
+      })),
+
+      made: made.map((o) => ({
+        id: o.id,
+        to: nameOf(o.toVentureId),
+        toId: o.toVentureId,
+        amount: o.amount,
+        message: o.message,
+        status: o.status,
+      })),
+
+      received: received.map((o) => {
+        const assessment = assessOffer(o.amount, company);
+        return {
+          id: o.id,
+          from: nameOf(o.fromVentureId),
+          fromId: o.fromVentureId,
+          amount: o.amount,
+          message: o.message,
+          status: o.status,
+          ...assessment,
+        };
+      }),
+    });
+  });
+
+  /**
+   * Offer to buy another team's company.
+   *
+   * The chief executive's, like the other moves that change what the company
+   * is. Refused outright when it cannot be paid for, unlike a sealed bid: an
+   * offer is a promise made to five other people who will spend a day
+   * deciding about it, and dangling a number you never had wastes the one
+   * thing this game is short of, which is everyone else's attention.
+   */
+  app.post("/api/sim/ventures/:id/offers", isAuthenticated, async (req: any, res) => {
+    if (!(await enforceRateLimit(res, req.user.id, "session"))) return;
+
+    const ctx = await context(req.params.id, req.user.id);
+    if (!ctx) return res.status(404).json({ message: "No such company." });
+    const { season, company, world, seat } = ctx;
+
+    if (seat.role !== "ceo") {
+      return res.status(403).json({ message: "Buying another company is the chief executive's call.", code: "not_ceo" });
+    }
+
+    const targetId = String(req.body?.targetId ?? "");
+    const amount = Math.round(Number(req.body?.amount));
+    const message = String(req.body?.message ?? "").trim().slice(0, 280);
+    if (!Number.isFinite(amount) || amount < 0) return res.status(400).json({ message: "How much?", field: "amount" });
+
+    const target = world.companies.find((c) => c.id === targetId);
+    if (!target) return res.status(404).json({ message: "No such company." });
+
+    const [pending] = await db.select().from(simOffers).where(and(
+      eq(simOffers.fromVentureId, company.id),
+      eq(simOffers.year, season.year),
+      eq(simOffers.status, "pending"),
+    ));
+
+    const allowed = canOffer({
+      from: company,
+      to: target,
+      amount,
+      pendingFrom: pending && pending.toVentureId !== targetId ? 1 : 0,
+      year: season.year,
+      totalYears: season.totalYears,
+    });
+    if (!allowed.ok) return res.status(409).json({ message: allowed.message, code: allowed.reason });
+
+    await db.insert(simOffers)
+      .values({
+        seasonId: season.id,
+        year: season.year,
+        fromVentureId: company.id,
+        toVentureId: targetId,
+        amount,
+        message: message || null,
+      })
+      .onConflictDoUpdate({
+        target: [simOffers.fromVentureId, simOffers.toVentureId, simOffers.year],
+        // Revising an offer puts it back on the table as a new question.
+        set: { amount, message: message || null, status: "pending", respondedAt: null, respondedById: null },
+      });
+
+    res.json({ ok: true, amount });
+  });
+
+  /**
+   * Answer an offer.
+   *
+   * Yes or no, and nobody else can answer for them. An acquisition that could
+   * happen without the target agreeing would take a fortnight of five people's
+   * decisions away from them without asking, and no amount of drama pays for
+   * that.
+   */
+  app.post("/api/sim/ventures/:id/offers/:offerId/respond", isAuthenticated, async (req: any, res) => {
+    if (!(await enforceRateLimit(res, req.user.id, "session"))) return;
+
+    const ctx = await context(req.params.id, req.user.id);
+    if (!ctx) return res.status(404).json({ message: "No such company." });
+    const { company, seat } = ctx;
+
+    if (seat.role !== "ceo") {
+      return res.status(403).json({ message: "Selling the company is the chief executive's call.", code: "not_ceo" });
+    }
+
+    const accept = req.body?.accept === true;
+    const [offer] = await db.select().from(simOffers).where(and(
+      eq(simOffers.id, req.params.offerId),
+      eq(simOffers.toVentureId, company.id),
+    ));
+    if (!offer) return res.status(404).json({ message: "No such offer." });
+    if (offer.status !== "pending") {
+      return res.status(409).json({ message: "That offer isn't on the table any more.", code: "not_pending" });
+    }
+
+    await db.update(simOffers)
+      .set({
+        status: accept ? "accepted" : "declined",
+        respondedById: req.user.id,
+        respondedAt: new Date(),
+      })
+      .where(eq(simOffers.id, offer.id));
+
+    res.json({
+      ok: true,
+      status: accept ? "accepted" : "declined",
+      // Said plainly, because accepting is the bigger decision anyone makes here.
+      message: accept
+        ? "Agreed. The business changes hands when the year resolves — you keep the company, every seat, your reputation and the money."
+        : "Declined.",
+    });
+  });
+
+  /** Take an offer back off the table. */
+  app.delete("/api/sim/ventures/:id/offers/:offerId", isAuthenticated, async (req: any, res) => {
+    const ctx = await context(req.params.id, req.user.id);
+    if (!ctx) return res.status(404).json({ message: "No such company." });
+    if (ctx.seat.role !== "ceo") return res.status(403).json({ message: "The chief executive's call.", code: "not_ceo" });
+
+    const withdrawn = await db.update(simOffers).set({ status: "withdrawn" }).where(and(
+      eq(simOffers.id, req.params.offerId),
+      eq(simOffers.fromVentureId, ctx.company.id),
+      eq(simOffers.status, "pending"),
+    )).returning({ id: simOffers.id });
+
+    /*
+     * 409 rather than a cheerful 200 when nothing matched. The offer was
+     * answered while the screen was being read, and telling somebody their
+     * offer was taken back when it had in fact just been accepted is the
+     * worst possible moment to be casually wrong.
+     */
+    if (withdrawn.length === 0) {
+      return res.status(409).json({
+        message: "That offer isn't on the table any more — they may have answered it.",
+        code: "not_pending",
+      });
+    }
+    res.json({ ok: true });
+  });
+
+  /**
+   * Where everyone stands.
+   *
+   * A multiplayer game with no way to see the other players is a single-player
+   * game with extra steps — and this is the screen that answers "was that a
+   * good year?", which no amount of detail about your own company can.
+   *
+   * Incumbents are in the table alongside the teams, because they hold most of
+   * the market and a league table that quietly omitted them would flatter
+   * everybody. Coming fourth out of nine is the honest position.
+   */
+  app.get("/api/sim/ventures/:id/standings", isAuthenticated, async (req: any, res) => {
+    const ctx = await context(req.params.id, req.user.id);
+    if (!ctx) return res.status(404).json({ message: "No such company." });
+    const { season, company, world } = ctx;
+
+    const total = world.companies.reduce(
+      (sum, c) => sum + Object.values(c.customers).reduce((s, n) => s + n, 0), 0);
+
+    const rows = world.companies
+      .map((c) => {
+        const customers = Object.values(c.customers).reduce((sum, n) => sum + n, 0);
+        return {
+          id: c.id,
+          name: c.name,
+          kind: c.kind,
+          customers,
+          share: total > 0 ? customers / total : 0,
+          revenue: Math.round(customers * c.price),
+          reputation: Math.round(c.reputation),
+          price: Math.round(c.price),
+          isYou: c.id === company.id,
+          /* Only a team's own trouble is its own business; a rival's solvency
+           * is visible because it is the thing everyone can see in a market. */
+          distress: c.kind === "player" ? distressOf(c) : null,
+        };
+      })
+      .sort((a, b) => b.customers - a.customers)
+      .map((row, i) => ({ ...row, rank: i + 1 }));
+
+    /** Each year's history for this company, so a season reads as a story. */
+    const history = await db
+      .select({ year: simReports.year, report: simReports.report })
+      .from(simReports)
+      .where(and(eq(simReports.seasonId, season.id), eq(simReports.ventureId, company.id)))
+      .orderBy(simReports.year);
+
+    res.json({
+      year: season.year,
+      totalYears: season.totalYears,
+      status: season.status,
+      rows,
+      history: history.map((h) => ({
+        year: h.year,
+        share: (h.report as any).marketShare,
+        customers: (h.report as any).customers,
+        profit: (h.report as any).profit,
+        rank: (h.report as any).rank,
+      })),
+    });
   });
 
   /** Change your mind before the year runs. */
