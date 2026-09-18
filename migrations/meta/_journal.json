@@ -183,6 +183,13 @@
       "when": 1789741697820,
       "tag": "0025_sim_lobby",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1789746529709,
+      "tag": "0026_sim_season_world",
+      "breakpoints": true
     }
   ]
 }

@@ -2510,6 +2510,16 @@ export const simSeasons = pgTable("sim_seasons", {
   totalYears: integer("total_years").default(14).notNull(),
   /** When the next year resolves. One day apart in a real season, minutes in a test one. */
   nextTickAt: timestamp("next_tick_at"),
+  /**
+   * The engine's World after the last resolved year: incumbents, economy,
+   * every company, whole.
+   *
+   * The season owns this rather than the ventures, because a year is resolved
+   * for everyone at once — the players' customers are the ones the incumbents
+   * did not keep. Split across five rows it would be five half-truths that can
+   * disagree; here there is one state, written once per tick.
+   */
+  world: jsonb("world"),
   startsAt: timestamp("starts_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
@@ -2613,4 +2623,13 @@ export const simReports = pgTable("sim_reports", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   bySeasonYear: index("sim_reports_season_year_idx").on(table.seasonId, table.year),
+  /**
+   * One report per company per year, enforced rather than assumed.
+   *
+   * The tick is built to be safely re-runnable — a process that dies between
+   * writing reports and advancing the year must be able to pick the year up
+   * again — and this is what makes re-running it harmless instead of a season
+   * with two conflicting accounts of year six.
+   */
+  once: unique("sim_reports_once").on(table.seasonId, table.companyId, table.year),
 }));

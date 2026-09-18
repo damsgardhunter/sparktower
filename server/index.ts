@@ -8,6 +8,7 @@ import { syncPlatformRoles } from "./platform-roles";
 import { backfillMissingProfiles } from "./user-provisioning";
 import { loadSurfaceFlags, startSurfaceFlagRefresh } from "./surfaces";
 import { startBackingJobs } from "./backing-jobs";
+import { startSimulationJobs } from "./simulation-tick";
 import { startAnalyticsJobs } from "./analytics";
 import { startPromotionJobs } from "./promotion-sync";
 import { startModerationJobs } from "./moderation";
@@ -142,6 +143,7 @@ let appReady = false;
   // Merch fulfillment and the refund window. Both take an advisory lock, so
   // running several server processes is safe.
   startBackingJobs();
+  startSimulationJobs();
   startAnalyticsJobs();
   startPromotionJobs();
   startModerationJobs();
@@ -178,6 +180,18 @@ let appReady = false;
   if (process.platform !== "darwin") {
     listenOptions.reusePort = true;
   }
+  /*
+   * Timeouts, so a stalled connection can't hold a slot indefinitely.
+   *
+   * Node's defaults are generous — and `headersTimeout` must stay above
+   * `keepAliveTimeout`, or a connection the server is about to reuse gets
+   * closed underneath a request that has already started, which surfaces as
+   * random 502s behind a proxy rather than as a timeout.
+   */
+  httpServer.requestTimeout = 60_000;
+  httpServer.headersTimeout = 35_000;
+  httpServer.keepAliveTimeout = 30_000;
+
   httpServer.listen(listenOptions, () => {
     appReady = true;
     log(`serving on port ${port}`);
@@ -199,4 +213,51 @@ let appReady = false;
       }
     }
   });
+
+  /*
+   * Shutting down without dropping what's in flight.
+   *
+   * A deploy sends SIGTERM and then waits a short while before SIGKILL. With no
+   * handler, the process dies at once: requests being served are cut mid-flight
+   * and the person sees a failed request, which reads as the site being flaky
+   * rather than as a deploy. `/_ready` is made to answer false first, so a load
+   * balancer stops sending new work while the old work finishes.
+   *
+   * The timer is unref'd and the whole thing runs once — a second SIGTERM
+   * during a drain must not start a second drain.
+   */
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    appReady = false;
+    log(`${signal} received — refusing new connections, finishing what's in flight`);
+
+    /*
+     * The deadline is the point of this: `close` waits for every idle
+     * keep-alive connection to go away on its own, which can outlast the
+     * platform's patience. Past it we stop waiting and let the exit be abrupt,
+     * because an abrupt exit at 10s is better than a SIGKILL at 30 with no log
+     * line saying why.
+     */
+    const deadline = setTimeout(() => {
+      log("shutdown took too long — exiting anyway");
+      process.exit(1);
+    }, 10_000);
+    deadline.unref();
+
+    httpServer.close((err) => {
+      if (err) console.error("[shutdown] server close failed:", err);
+      // The pool last: a request still finishing may need one more query.
+      pool.end()
+        .catch((e) => console.error("[shutdown] closing the database pool failed:", e))
+        .finally(() => {
+          clearTimeout(deadline);
+          log("shutdown complete");
+          process.exit(err ? 1 : 0);
+        });
+    });
+  };
+
+  for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => shutdown(signal));
 })();

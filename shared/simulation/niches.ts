@@ -17,9 +17,9 @@ export const NICHES: Niche[] = [
     baseUnitCost: 4,
     innovationPace: 1.25,
     segments: [
-      { id: "resolvers", name: "New year resolvers", description: "Arrive in a rush, leave quietly. Cheap to win, impossible to hold — they will try anything that looks like a deal, including yours.", size: 420_000, growth: 0.04, priceSensitivity: 0.9, qualityFocus: 0.25, brandFocus: 0.28, serviceFocus: 0.2, loyalty: 0.18, referencePrice: 12 },
-      { id: "committed", name: "Committed amateurs", description: "Train four days a week and will pay for something that works.", size: 260_000, growth: 0.07, priceSensitivity: 0.35, qualityFocus: 0.8, brandFocus: 0.35, serviceFocus: 0.5, loyalty: 0.72, referencePrice: 22 },
-      { id: "coached", name: "Coached athletes", description: "Want a person behind the product. Expensive to serve, nearly impossible to poach.", size: 90_000, growth: 0.09, priceSensitivity: 0.2, qualityFocus: 0.7, brandFocus: 0.25, serviceFocus: 0.9, loyalty: 0.86, referencePrice: 55 },
+      { id: "resolvers", name: "New year resolvers", description: "Arrive in a rush, leave quietly. Cheap to win, impossible to hold — they will try anything that looks like a deal, including yours.", size: 8_400_000, growth: 0.04, priceSensitivity: 0.9, qualityFocus: 0.25, brandFocus: 0.28, serviceFocus: 0.2, loyalty: 0.18, referencePrice: 12 },
+      { id: "committed", name: "Committed amateurs", description: "Train four days a week and will pay for something that works.", size: 5_200_000, growth: 0.07, priceSensitivity: 0.35, qualityFocus: 0.8, brandFocus: 0.35, serviceFocus: 0.5, loyalty: 0.72, referencePrice: 22 },
+      { id: "coached", name: "Coached athletes", description: "Want a person behind the product. Expensive to serve, nearly impossible to poach.", size: 1_800_000, growth: 0.09, priceSensitivity: 0.2, qualityFocus: 0.7, brandFocus: 0.25, serviceFocus: 0.9, loyalty: 0.86, referencePrice: 55 },
     ],
     incumbents: [
       { id: "inc_peak", name: "PeakForm", posture: "fortress", startingShare: 0.34, quality: 72, brand: 80, service: 68, priceIndex: 1.15 },
@@ -35,9 +35,9 @@ export const NICHES: Niche[] = [
     baseUnitCost: 38,
     innovationPace: 0.85,
     segments: [
-      { id: "solo", name: "Sole traders", description: "One van, one phone. Price is most of the decision.", size: 180_000, growth: 0.05, priceSensitivity: 0.8, qualityFocus: 0.4, brandFocus: 0.3, serviceFocus: 0.45, loyalty: 0.45, referencePrice: 45 },
-      { id: "small_fleet", name: "Small fleets", description: "Five to twenty vans. Wants it to work and someone to call.", size: 95_000, growth: 0.08, priceSensitivity: 0.45, qualityFocus: 0.7, brandFocus: 0.4, serviceFocus: 0.85, loyalty: 0.74, referencePrice: 120 },
-      { id: "enterprise", name: "National operators", description: "Hundreds of vans, a procurement process, and a two-year memory.", size: 22_000, growth: 0.06, priceSensitivity: 0.3, qualityFocus: 0.85, brandFocus: 0.65, serviceFocus: 0.9, loyalty: 0.9, referencePrice: 600 },
+      { id: "solo", name: "Sole traders", description: "One van, one phone. Price is most of the decision.", size: 1_800_000, growth: 0.05, priceSensitivity: 0.8, qualityFocus: 0.4, brandFocus: 0.3, serviceFocus: 0.45, loyalty: 0.45, referencePrice: 45 },
+      { id: "small_fleet", name: "Small fleets", description: "Five to twenty vans. Wants it to work and someone to call.", size: 950_000, growth: 0.08, priceSensitivity: 0.45, qualityFocus: 0.7, brandFocus: 0.4, serviceFocus: 0.85, loyalty: 0.74, referencePrice: 120 },
+      { id: "enterprise", name: "National operators", description: "Hundreds of vans, a procurement process, and a two-year memory.", size: 220_000, growth: 0.06, priceSensitivity: 0.3, qualityFocus: 0.85, brandFocus: 0.65, serviceFocus: 0.9, loyalty: 0.9, referencePrice: 600 },
     ],
     incumbents: [
       { id: "inc_dispatch", name: "Dispatchly", posture: "fortress", startingShare: 0.38, quality: 74, brand: 78, service: 76, priceIndex: 1.2 },

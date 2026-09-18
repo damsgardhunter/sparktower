@@ -26,10 +26,20 @@ function newTeam(id: string, name: string): Company {
     id, name, kind: "player", teamId: `team_${id}`,
     cash: 2_000_000, debt: 0, creditLimit: 500_000,
     reputation: 50, quality: 45, brand: 10, service: 45,
-    capacity: 40_000, unitCost: niche.baseUnitCost, price: 18,
+    capacity: Math.round(MARKET * 0.03), unitCost: niche.baseUnitCost, price: 18,
     customers: {}, assets: [], seats: ["ceo", "cmo", "cfo", "cto", "coo"],
   };
 }
+
+/*
+ * Fixtures size themselves against the market rather than in round numbers.
+ *
+ * Hard-coded capacities quietly stop meaning anything when the market is
+ * rebalanced: a "strong newcomer" built to hold 40,000 customers became a
+ * rounding error, the incumbent was correctly unbothered, and the test read as
+ * a broken concession rule rather than a fixture that had aged out.
+ */
+const MARKET = niche.segments.reduce((sum, s) => sum + s.size, 0);
 
 function worldWith(teams: Company[]): World {
   return {
@@ -44,7 +54,7 @@ const fullYear = (companyId: string, spend: number, price = 18): TeamDecisions =
   companyId,
   cmo: { price, brandSpend: spend * 0.25, performanceSpend: spend * 0.15, celebritySpend: 0, targetCities: ["Leeds"] },
   cto: { featureSpend: spend * 0.2, reliabilitySpend: spend * 0.15, techDebtPaydown: 0 },
-  coo: { capacityTarget: 90_000, supportSpend: spend * 0.15, efficiencySpend: spend * 0.1, headcount: 12 },
+  coo: { capacityTarget: Math.round(MARKET * 0.07), supportSpend: spend * 0.15, efficiencySpend: spend * 0.1, headcount: 12 },
   cfo: { borrow: 0, repay: 0, cashBuffer: 200_000 },
   ceo: { focus: "growth" },
 });

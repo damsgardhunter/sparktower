@@ -58,8 +58,13 @@ async function seatsOf(ventureId: string) {
  * Called from every read as well as every write, on purpose: a lobby whose
  * clock only advances when somebody acts is a lobby that hangs forever when
  * everybody is waiting. Reading the screen is enough to move it along.
+ *
+ * That still leaves the room nobody is reading — five people who all closed
+ * the tab — which is why the tick job in `simulation-tick.ts` calls this on
+ * every expired lobby as well. Between them, a phase ends on time whether or
+ * not there is anyone there to see it.
  */
-async function advance(ventureId: string): Promise<void> {
+export async function advanceVenture(ventureId: string): Promise<void> {
   const [venture] = await db.select().from(simVentures).where(eq(simVentures.id, ventureId));
   if (!venture || venture.phase === "running" || venture.phase === "retired") return;
 
@@ -273,7 +278,7 @@ function pgErrorCode(err: unknown): string | undefined {
         return targetId;
       });
 
-      await advance(ventureId);
+      await advanceVenture(ventureId);
       res.json({ ventureId });
     } catch (err) {
       console.error("[sim] join failed:", err);
@@ -319,7 +324,7 @@ function pgErrorCode(err: unknown): string | undefined {
 
   /** The room, as it stands. Polled by everyone in it, so it also moves the clock on. */
   app.get("/api/sim/ventures/:id", isAuthenticated, async (req: any, res) => {
-    await advance(req.params.id);
+    await advanceVenture(req.params.id);
 
     const [venture] = await db.select().from(simVentures).where(eq(simVentures.id, req.params.id));
     if (!venture) return res.status(404).json({ message: "No such room." });
@@ -372,7 +377,7 @@ function pgErrorCode(err: unknown): string | undefined {
    */
   app.post("/api/sim/ventures/:id/claim", isAuthenticated, async (req: any, res) => {
     if (!(await enforceRateLimit(res, req.user.id, "session"))) return;
-    await advance(req.params.id);
+    await advanceVenture(req.params.id);
 
     const role = String(req.body?.role ?? "");
     const [venture] = await db.select().from(simVentures).where(eq(simVentures.id, req.params.id));
@@ -426,7 +431,7 @@ function pgErrorCode(err: unknown): string | undefined {
       return res.status(500).json({ message: "Couldn't take that seat. Try again." });
     }
 
-    await advance(venture.id);
+    await advanceVenture(venture.id);
     res.json({ ok: true, role });
   });
 
@@ -449,7 +454,7 @@ function pgErrorCode(err: unknown): string | undefined {
    */
   app.post("/api/sim/ventures/:id/name", isAuthenticated, async (req: any, res) => {
     if (!(await enforceRateLimit(res, req.user.id, "session"))) return;
-    await advance(req.params.id);
+    await advanceVenture(req.params.id);
 
     const [venture] = await db.select().from(simVentures).where(eq(simVentures.id, req.params.id));
     if (!venture) return res.status(404).json({ message: "No such room." });
@@ -466,7 +471,7 @@ function pgErrorCode(err: unknown): string | undefined {
     if (name.length < 2) return res.status(400).json({ message: "Give it a name with at least two characters.", field: "name" });
 
     await db.update(simVentures).set({ name, product: product || null }).where(eq(simVentures.id, venture.id));
-    await advance(venture.id);
+    await advanceVenture(venture.id);
     res.json({ ok: true, name, product });
   });
 }
