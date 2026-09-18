@@ -54,7 +54,7 @@ const SPLIT = Math.floor(TABS.length / 2);
  */
 const DOME_W = 64;
 /** How far the dome stands proud of the bar's top edge. Enough to read as the main action, not so much that it covers content. */
-const DOME_RISE = 26;
+const DOME_RISE = 12;
 /**
  * How far the dome carries on past the bottom of the screen.
  *
@@ -64,7 +64,7 @@ const DOME_RISE = 26;
  * mark height without making the dome wider, which is the dimension the tabs
  * either side cannot spare.
  */
-const DOME_DROP = 14;
+const DOME_DROP = 18;
 
 /**
  * How tall the bar reads, and how far it slides away on scroll.
