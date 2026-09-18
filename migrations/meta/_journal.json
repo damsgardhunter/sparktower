@@ -176,6 +176,13 @@
       "when": 1789679674677,
       "tag": "0024_drop_mfa_recovery_codes",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1789741697820,
+      "tag": "0025_sim_lobby",
+      "breakpoints": true
     }
   ]
 }

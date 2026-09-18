@@ -57,6 +57,7 @@ import { insertUserProfileSchema, insertProjectSchema, insertProjectBase, insert
 import { pickFields, WRITABLE } from "./body-fields";
 import { registerEmailVerificationRoutes, requireVerifiedEmail } from "./email-verification";
 import { registerPasswordResetRoutes } from "./password-reset";
+import { registerSimulationRoutes } from "./simulation-routes";
 import { z } from "zod";
 import OpenAI from "openai";
 import { eq, ne, and, sql, inArray, desc, isNull } from "drizzle-orm";
@@ -417,6 +418,8 @@ export async function registerRoutes(
   // mounted here rather than behind the verification gate: someone locked out
   // can be neither signed in nor verified.
   registerPasswordResetRoutes(app);
+  // The market simulation: joining a market and claiming a seat (server/simulation-routes.ts).
+  registerSimulationRoutes(app);
   registerSafetyRoutes(app);
   registerInvestmentRoutes(app);
   registerBackingRoutes(app);

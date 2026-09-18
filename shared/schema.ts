@@ -2488,3 +2488,129 @@ export type InsertSprintBehavioralMetrics = z.infer<typeof insertSprintBehaviora
 export type SprintCompatibilityReport = typeof sprintCompatibilityReports.$inferSelect;
 export type InsertSprintCompatibilityReport = z.infer<typeof insertSprintCompatibilityReportSchema>;
 export type SprintMatchmakingQueueEntry = typeof sprintMatchmakingQueue.$inferSelect;
+
+/* ── Market simulation: seasons, ventures and the lobby ──────────────────── */
+
+/**
+ * A run of the market simulation: one niche, fourteen days, one day per
+ * simulated year.
+ *
+ * A season is the unit everything else hangs off, and it is per-niche because
+ * the whole point of the game is competing against the other teams in your
+ * market. Two ventures in different niches never meet.
+ */
+export const simSeasons = pgTable("sim_seasons", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  /** Which market — an id from @shared/simulation/niches. */
+  nicheId: varchar("niche_id").notNull(),
+  name: text("name").notNull(),
+  status: text("status", { enum: ["forming", "running", "finished", "abandoned"] }).default("forming").notNull(),
+  /** 1-based. The year the next tick will resolve. */
+  year: integer("year").default(1).notNull(),
+  totalYears: integer("total_years").default(14).notNull(),
+  /** When the next year resolves. One day apart in a real season, minutes in a test one. */
+  nextTickAt: timestamp("next_tick_at"),
+  startsAt: timestamp("starts_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  byStatus: index("sim_seasons_status_idx").on(table.status, table.nicheId),
+}));
+
+/**
+ * One company, run by up to five people.
+ *
+ * `state` is the world's view of this company between ticks — the shape in
+ * @shared/simulation/types. It is stored whole rather than as columns because
+ * the engine owns its meaning: a column per score would be two definitions of
+ * the same thing, and the one in the database would quietly go stale.
+ */
+export const simVentures = pgTable("sim_ventures", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  seasonId: varchar("season_id").notNull().references(() => simSeasons.id, { onDelete: "cascade" }),
+  /** Null until the CEO names it — naming is the CEO's, and the lobby waits for it. */
+  name: text("name"),
+  /** What they've decided to sell. The CEO's call, with the table shouting. */
+  product: text("product"),
+  /**
+   * Where this venture is in the lobby.
+   *
+   * filling → claiming → naming → running. Each step has a deadline, because a
+   * lobby with no clock is a lobby where one absent person holds four others
+   * hostage.
+   */
+  phase: text("phase", { enum: ["filling", "claiming", "naming", "running", "retired"] }).default("filling").notNull(),
+  /** When the current phase stops waiting and resolves itself. */
+  phaseEndsAt: timestamp("phase_ends_at"),
+  /** The engine's Company for this venture, after the last resolved year. */
+  state: jsonb("state"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  bySeason: index("sim_ventures_season_idx").on(table.seasonId, table.phase),
+}));
+
+/**
+ * A seat at a table.
+ *
+ * The unique indexes are the feature, not bookkeeping. Five people claim five
+ * seats at the same moment on five phones, and the database is the only place
+ * that can settle it: one row per (venture, role) means a second CEO is a
+ * constraint violation rather than a race nobody notices until the season is
+ * running. One row per (venture, user) means nobody quietly holds two seats.
+ *
+ * `role` is null between joining and claiming — a person in the room who
+ * hasn't taken a seat yet is a real state, and the one the whole lobby screen
+ * is about.
+ */
+export const simSeats = pgTable("sim_seats", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ventureId: varchar("venture_id").notNull().references(() => simVentures.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** ceo | cmo | cfo | cto | coo, or null while they're still arguing about it. */
+  role: varchar("role"),
+  /** Set when the lobby's clock ran out and the seat was assigned rather than chosen. */
+  assigned: boolean("assigned").default(false).notNull(),
+  joinedAt: timestamp("joined_at").defaultNow().notNull(),
+  claimedAt: timestamp("claimed_at"),
+}, (table) => ({
+  /** One person, one seat. */
+  onePerPerson: unique("sim_seats_venture_user").on(table.ventureId, table.userId),
+  /**
+   * One person per role — the constraint the whole lobby rests on.
+   *
+   * Postgres treats NULLs as distinct, which is exactly what is wanted here:
+   * any number of people can be sitting in the room without a seat, and the
+   * moment two of them reach for "ceo" the second one is a unique violation
+   * rather than a second chief executive nobody notices until the season runs.
+   */
+  oneRolePerVenture: unique("sim_seats_venture_role").on(table.ventureId, table.role),
+  bySeat: index("sim_seats_venture_idx").on(table.ventureId),
+}));
+
+/** What each seat decided in a given year — the input to the engine's tick. */
+export const simDecisions = pgTable("sim_decisions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ventureId: varchar("venture_id").notNull().references(() => simVentures.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  role: varchar("role").notNull(),
+  year: integer("year").notNull(),
+  /** The role's decision object from @shared/simulation/decisions. */
+  payload: jsonb("payload").notNull(),
+  submittedAt: timestamp("submitted_at").defaultNow().notNull(),
+}, (table) => ({
+  /** One submission per seat per year; a later one replaces it rather than stacking. */
+  once: unique("sim_decisions_once").on(table.ventureId, table.role, table.year),
+}));
+
+/** What the engine said happened, kept so a season can be read back year by year. */
+export const simReports = pgTable("sim_reports", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  seasonId: varchar("season_id").notNull().references(() => simSeasons.id, { onDelete: "cascade" }),
+  /** Null for the AI-run incumbents, which have no venture behind them. */
+  ventureId: varchar("venture_id").references(() => simVentures.id, { onDelete: "cascade" }),
+  companyId: varchar("company_id").notNull(),
+  year: integer("year").notNull(),
+  report: jsonb("report").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  bySeasonYear: index("sim_reports_season_year_idx").on(table.seasonId, table.year),
+}));
