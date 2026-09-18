@@ -43,7 +43,7 @@ import { commitment, type LeverField } from "@shared/simulation/levers";
 import type { Role } from "@shared/simulation/types";
 import {
   Loader2, Clock, TrendingUp, TrendingDown, Minus, AlertTriangle, Info,
-  CheckCircle2, Circle, Banknote, Users, ArrowLeft,
+  CheckCircle2, Circle, Banknote, Users, ArrowLeft, Target, LifeBuoy, Store,
 } from "lucide-react";
 
 interface Desk {
@@ -81,6 +81,29 @@ interface Desk {
     reputation: number; reputationChange: number; rank: number; notes: string[]; bankrupt: boolean;
   } | null;
   rivals: { id: string; name: string; kind: string; price: number; customers: number; posture: string | null; posturedAs: string | null }[];
+  challenge: Challenge | null;
+  lastChallenge: ChallengeResult | null;
+  distress: {
+    level: "healthy" | "strained" | "distressed" | "insolvent";
+    title: string;
+    body: string;
+    options: { kind: string; title: string; body: string; cost: string; raises: number }[];
+    covenant: { since: number; spendCap: number; met: number; rateRelief: number } | null;
+    filed: { kind: string; seat: string | null } | null;
+  };
+}
+
+interface Target { id: string; label: string; goal: number; compare: "at_least" | "at_most"; metric: string }
+interface Challenge {
+  id: string; role: Role; year: number; title: string; brief: string;
+  targets: Target[];
+  reward: { kind: string; amount: number; label: string };
+  partialReward: { kind: string; amount: number; label: string };
+}
+interface ChallengeResult {
+  outcome: "met" | "partial" | "missed";
+  targets: (Target & { actual: number; met: boolean })[];
+  note: string;
 }
 
 const money = (n: number) => `£${Math.round(n).toLocaleString()}`;
@@ -196,6 +219,9 @@ export default function SimulationDeskPage() {
         </CardContent></Card>
       )}
 
+      {/* Your own thing to win, and how last year's went. */}
+      {desk.challenge && <ChallengeCard challenge={desk.challenge} last={desk.lastChallenge} />}
+
       {/* 2. Where the company stands. */}
       <Card>
         <CardContent className="p-5">
@@ -219,6 +245,16 @@ export default function SimulationDeskPage() {
           </p>
         </CardContent>
       </Card>
+
+      {/* When things are going badly, this is the most important thing on the page. */}
+      {desk.distress.level !== "healthy" && (
+        <DistressCard
+          distress={desk.distress}
+          isCeo={desk.yourRole === "ceo"}
+          seats={desk.table.map((s) => s.role).filter(Boolean) as Role[]}
+          ventureId={desk.ventureId}
+        />
+      )}
 
       {/* 3. The decision. */}
       {desk.phase === "finished" ? (
@@ -325,6 +361,21 @@ export default function SimulationDeskPage() {
         </div>
       ) : null}
 
+      {/* A way to the market, where a bad year for somebody else is an opportunity. */}
+      <Card>
+        <CardContent className="p-5 flex items-center justify-between gap-4">
+          <div>
+            <h3 className="text-sm font-semibold flex items-center gap-2"><Store className="h-4 w-4 text-muted-foreground" /> The market</h3>
+            <p className="text-xs text-muted-foreground mt-1">
+              Three things come up each year, and every team bids blind. What you own is in there too.
+            </p>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => navigate(`/simulation/${desk.ventureId}/market`)} data-testid="button-open-market">
+            Open
+          </Button>
+        </CardContent>
+      </Card>
+
       {/* 4. Everyone else. */}
       <Card>
         <CardContent className="p-5">
@@ -390,6 +441,167 @@ export default function SimulationDeskPage() {
         </CardContent>
       </Card>
     </Shell>
+  );
+}
+
+/**
+ * The seat's own objective, and how the last one went.
+ *
+ * Placed above the company's numbers rather than below the form, because this
+ * is the one thing on the page that belongs to the person reading it. In a
+ * five-person team the company's result is four other people too; this is what
+ * tells them whether *they* played well.
+ */
+function ChallengeCard({ challenge, last }: { challenge: Challenge; last: ChallengeResult | null }) {
+  return (
+    <Card className="border-primary/40">
+      <CardContent className="p-5">
+        <div className="flex items-center gap-2">
+          <Target className="h-4 w-4 text-primary" />
+          <p className="text-[11px] uppercase tracking-widest text-muted-foreground">Yours this year</p>
+        </div>
+        <h2 className="font-semibold text-lg mt-1.5" data-testid="text-challenge-title">{challenge.title}</h2>
+        <p className="text-sm text-muted-foreground mt-1">{challenge.brief}</p>
+
+        <div className="mt-4 space-y-2">
+          {challenge.targets.map((t) => (
+            <div key={t.id} className="flex items-start gap-2.5 text-sm">
+              <Circle className="h-4 w-4 shrink-0 mt-0.5 text-muted-foreground" />
+              <span>{t.label}</span>
+            </div>
+          ))}
+        </div>
+
+        <p className="text-xs text-muted-foreground mt-4 border-t border-border pt-3">
+          <span className="font-medium text-foreground">If you do it: </span>{challenge.reward.label}
+          {" "}Everyone on the team gets it — that is why they want you to win yours.
+        </p>
+
+        {last && (
+          <div className="mt-3 rounded-lg bg-muted p-3">
+            <p className="text-xs font-medium flex items-center gap-1.5">
+              {last.outcome === "met" ? <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
+                : last.outcome === "partial" ? <Minus className="h-3.5 w-3.5 text-amber-600" />
+                : <AlertTriangle className="h-3.5 w-3.5 text-muted-foreground" />}
+              Last year
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">{last.note}</p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Where the company stands when it is not standing well, and what can be done.
+ *
+ * Every option states its cost before it is chosen, because all of them are
+ * trades and a rescue that looked free would make the careful teams' caution
+ * pointless. Shown to the whole table rather than only to the chief executive:
+ * the person deciding how much to spend this year needs to know there is less
+ * than a year of costs in reach, even though only one of them can act on it.
+ */
+function DistressCard({ distress, isCeo, seats, ventureId }: {
+  distress: Desk["distress"]; isCeo: boolean; seats: Role[]; ventureId: string;
+}) {
+  const { toast } = useToast();
+  const [seat, setSeat] = useState<Role | "">("");
+
+  const file = useMutation({
+    mutationFn: (body: { kind: string; seat?: string }) =>
+      apiRequest("POST", `/api/sim/ventures/${ventureId}/recovery`, body),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/desk`] }),
+    onError: (err: any) => toast({
+      title: "Couldn't commit to that",
+      description: err?.body?.message ?? "Try again.",
+      variant: "destructive",
+    }),
+  });
+  const clear = useMutation({
+    mutationFn: () => apiRequest("DELETE", `/api/sim/ventures/${ventureId}/recovery`, undefined),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/desk`] }),
+  });
+
+  const severe = distress.level === "insolvent" || distress.level === "distressed";
+
+  return (
+    <Card className={severe ? "border-destructive" : "border-amber-500/60"}>
+      <CardContent className="p-5">
+        <div className="flex items-center gap-2">
+          <LifeBuoy className={`h-4 w-4 ${severe ? "text-destructive" : "text-amber-600"}`} />
+          <h2 className="font-semibold" data-testid="text-distress">{distress.title}</h2>
+        </div>
+        <p className="text-sm text-muted-foreground mt-1.5">{distress.body}</p>
+
+        {distress.covenant && (
+          <div className="mt-3 rounded-lg bg-muted p-3">
+            <p className="text-xs font-medium">The creditor's terms</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Spending capped at {compact(distress.covenant.spendCap)}. {distress.covenant.met} of 2 clear years —
+              {distress.covenant.met >= 1 ? " one more and it lifts." : " two and it lifts."}
+            </p>
+          </div>
+        )}
+
+        {distress.filed ? (
+          <div className="mt-4 rounded-lg border border-border p-3">
+            <p className="text-sm font-medium">Committed: {distress.filed.kind.replace(/_/g, " ")}{distress.filed.seat ? ` (${distress.filed.seat})` : ""}</p>
+            <p className="text-xs text-muted-foreground mt-1">It takes effect when the year resolves, before the year runs.</p>
+            {isCeo && (
+              <Button variant="outline" size="sm" className="mt-2" onClick={() => clear.mutate()} data-testid="button-clear-recovery">
+                Change your mind
+              </Button>
+            )}
+          </div>
+        ) : (
+          <div className="mt-4 space-y-3">
+            {distress.options.map((option) => (
+              <div key={option.kind} className="rounded-lg border border-border p-3">
+                <div className="flex items-baseline justify-between gap-3">
+                  <p className="text-sm font-medium">{option.title}</p>
+                  <p className="text-xs text-muted-foreground tabular-nums shrink-0">frees ~{compact(option.raises)}</p>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">{option.body}</p>
+                <p className="text-xs text-destructive mt-1.5">{option.cost}</p>
+
+                {isCeo && option.kind === "dissolve_seat" && (
+                  <select
+                    className="mt-2 w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+                    value={seat}
+                    onChange={(e) => setSeat(e.target.value as Role)}
+                    data-testid="select-dissolve-seat"
+                  >
+                    <option value="">Which seat…</option>
+                    {seats.filter((s) => s !== "ceo").map((s) => (
+                      <option key={s} value={s}>{s.toUpperCase()}</option>
+                    ))}
+                  </select>
+                )}
+
+                {isCeo ? (
+                  <Button
+                    size="sm"
+                    variant={option.kind === "rescue_raise" ? "destructive" : "outline"}
+                    className="mt-2"
+                    disabled={file.isPending || (option.kind === "dissolve_seat" && !seat)}
+                    onClick={() => file.mutate({ kind: option.kind, seat: option.kind === "dissolve_seat" ? seat : undefined })}
+                    data-testid={`button-recovery-${option.kind}`}
+                  >
+                    Commit to this
+                  </Button>
+                ) : null}
+              </div>
+            ))}
+            {!isCeo && (
+              <p className="text-xs text-muted-foreground">
+                These change what the company is, so they are the chief executive's call. Worth a conversation.
+              </p>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

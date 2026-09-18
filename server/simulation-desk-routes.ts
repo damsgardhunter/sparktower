@@ -22,7 +22,7 @@
 import type { Express } from "express";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db";
-import { simSeasons, simSeats, simVentures, simDecisions, simReports, users, userProfiles } from "@shared/schema";
+import { simSeasons, simSeats, simVentures, simDecisions, simReports, simChallenges, simRecoveryMoves, users, userProfiles } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { enforceRateLimit } from "./moderation";
 import { nicheById } from "@shared/simulation/niches";
@@ -31,6 +31,7 @@ import type { TeamDecisions } from "@shared/simulation/decisions";
 import { LEVER_FIELDS, defaultDraft, validateDecision, draftPreview } from "@shared/simulation/levers";
 import { economyFor } from "@shared/simulation/season";
 import { postureBlurb } from "@shared/simulation/incumbents";
+import { distressOf, DISTRESS_COPY, recoveryOptions } from "@shared/simulation/recovery";
 
 /** The seat this person holds in this venture, or nothing. */
 async function seatOf(ventureId: string, userId: string) {
@@ -103,6 +104,25 @@ export function registerSimulationDeskRoutes(app: Express): void {
       .where(eq(simSeats.ventureId, venture.id));
 
     const preview = draftPreview({ company, niche, decisions, economy });
+
+    const [mine] = seat.role
+      ? await db.select().from(simChallenges).where(and(
+          eq(simChallenges.ventureId, venture.id),
+          eq(simChallenges.role, seat.role),
+          eq(simChallenges.year, year),
+        ))
+      : [];
+    const [previousChallenge] = seat.role && year > 1
+      ? await db.select().from(simChallenges).where(and(
+          eq(simChallenges.ventureId, venture.id),
+          eq(simChallenges.role, seat.role),
+          eq(simChallenges.year, year - 1),
+        ))
+      : [];
+    const [recoveryFiled] = await db.select().from(simRecoveryMoves).where(and(
+      eq(simRecoveryMoves.ventureId, venture.id),
+      eq(simRecoveryMoves.year, year),
+    ));
 
     /*
      * Rivals are shown as they were at the end of last year — their share,
@@ -187,6 +207,34 @@ export function registerSimulationDeskRoutes(app: Express): void {
       preview,
       lastYear: lastReport?.report ?? null,
       rivals,
+
+      /*
+       * This seat's own objective for the year.
+       *
+       * Read from the row that was written when the year began rather than
+       * regenerated here: the challenge is phrased against the company's
+       * position at the moment it was set, and regenerating it after anything
+       * has moved would quietly mark the player against a target they were
+       * never shown.
+       */
+      challenge: mine?.challenge ?? null,
+      lastChallenge: previousChallenge?.result ?? null,
+
+      /*
+       * How much trouble the company is in, and what can be done about it.
+       *
+       * On the desk rather than behind a separate screen, because the moment
+       * that matters is the one where somebody is deciding how much to spend —
+       * and "there is less than a year of costs in reach" is the single most
+       * relevant thing on the page when it is true.
+       */
+      distress: {
+        level: distressOf(company),
+        ...DISTRESS_COPY[distressOf(company)],
+        options: recoveryOptions(company, year),
+        covenant: company.covenant ?? null,
+        filed: recoveryFiled ? { kind: recoveryFiled.kind, seat: recoveryFiled.seat } : null,
+      },
     });
   });
 
