@@ -9,14 +9,17 @@ import { Callout, Pill, isSwitchedOff } from "../../../src/components/MoreKit";
 import { NoticeBanner, useNotice } from "../../../src/components/Sheet";
 import { SimSectionTitle } from "../../../src/components/sim/SimKit";
 import {
-  ChoiceField, CommitmentMeter, DeskBanner, EconomyStrip, FiledRow, NumberField,
-  ReportCard, RivalRow, ScoreBar, Stat,
+  ChallengeCard, ChoiceField, CommitmentMeter, DeskBanner, DistressCard, EconomyStrip,
+  FiledRow, LastChallengeCard, NumberField, ReportCard, RivalRow, ScoreBar, Stat,
 } from "../../../src/components/sim/DeskKit";
+import { MarketResultCard } from "../../../src/components/sim/MarketKit";
+import { marketNotesRead } from "../../../src/components/sim/market";
 import { ROOM_POLL_MS, useDesk } from "../../../src/components/sim/useSim";
 import {
-  ROLE_ORDER, commitment, draftMatches, exact, formatUntil,
-  money, secondsUntil, tableStatus, validateDraft, withYourDraft,
-  type DeskRole, type FileDecisionResult,
+  ROLE_ORDER, challengeProgress, challengeStanding, commitment, discretionarySpend,
+  draftMatches, exact, formatUntil, inTrouble, money, secondsUntil, tableStatus,
+  validateDraft, validateRecovery, withYourDraft,
+  type DeskDistress, type DeskRole, type FileDecisionResult, type RecoveryKind,
 } from "../../../src/components/sim/desk";
 
 /**
@@ -123,6 +126,61 @@ export default function Desk() {
     },
   });
 
+  /*
+   * The recovery move the chief executive is considering.
+   *
+   * Seeded from what is already filed, once, and then left alone: the desk
+   * re-polls every couple of seconds, and a picker that re-seeded on every
+   * response would drag somebody's half-made choice back to the committed one
+   * while they were still reading the costs. `null` means "nothing filed and
+   * nothing chosen", which is a different state from "the filed one".
+   */
+  const [recoveryKind, setRecoveryKind] = useState<RecoveryKind | null>(null);
+  const [recoverySeat, setRecoverySeat] = useState<DeskRole | null>(null);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const seededRecovery = useRef<string | null>(null);
+
+  useEffect(() => {
+    const filed = data?.distress?.filed ?? null;
+    const key = `${data?.year ?? ""}:${filed?.kind ?? ""}:${filed?.seat ?? ""}`;
+    if (seededRecovery.current === key) return;
+    seededRecovery.current = key;
+    setRecoveryKind(filed?.kind ?? null);
+    setRecoverySeat((filed?.seat as DeskRole | null) ?? null);
+    setRecoveryError(null);
+  }, [data?.year, data?.distress?.filed?.kind, data?.distress?.filed?.seat]);
+
+  const recovery = useMutation({
+    mutationFn: (body: { kind: RecoveryKind; seat?: string }) =>
+      api(`/api/sim/ventures/${id}/recovery`, { method: "POST", body }),
+    onSuccess: () => {
+      setRecoveryError(null);
+      show({ tone: "success", text: "Committed. It takes effect before next year runs, and you can change it until the tick." });
+      void qc.invalidateQueries({ queryKey: ["sim-desk", id] });
+    },
+    onError: (err: any) => {
+      // 403 not_ceo and 409 not_available are both the server saying something
+      // true about the position, so they are shown where the choice was made
+      // rather than as a transient banner that scrolls away with the reason.
+      setRecoveryError(errText(err, "Couldn't commit to that."));
+      show({ tone: "error", text: errText(err, "Couldn't commit to that.") });
+      if (err?.status === 409) void qc.invalidateQueries({ queryKey: ["sim-desk", id] });
+    },
+  });
+
+  const clearRecovery = useMutation({
+    mutationFn: () => api(`/api/sim/ventures/${id}/recovery`, { method: "DELETE" }),
+    onSuccess: () => {
+      setRecoveryKind(null);
+      setRecoverySeat(null);
+      setRecoveryError(null);
+      seededRecovery.current = null;
+      show({ tone: "info", text: "Cleared. Nothing is committed for this year." });
+      void qc.invalidateQueries({ queryKey: ["sim-desk", id] });
+    },
+    onError: (err: any) => show({ tone: "error", text: errText(err, "Couldn't clear that.") }),
+  });
+
   const fields = data?.fields ?? [];
   const company = data?.company;
   const economy = data?.economy;
@@ -218,6 +276,72 @@ export default function Desk() {
   const titleOf = (role: string) =>
     data.table?.find((s) => s.role === role)?.title ?? role.toUpperCase();
 
+  /*
+   * The three things the year is about besides the levers: your own objective,
+   * the money the covenant cares about, and how much trouble the company is in.
+   *
+   * `committedSpend` is the live discretionary sum — the same number the
+   * commitment meter is drawing — so a "without spending your way there"
+   * target and a creditor's cap both answer to what is being typed right now
+   * rather than to what was filed an hour ago.
+   */
+  const distress: DeskDistress | undefined = data.distress;
+  const committed = live ?? preview?.commitment ?? null;
+  const committedSpend = committed ? discretionarySpend(committed) : null;
+
+  /*
+   * Last year's market outcomes, as the report carries them.
+   *
+   * Their own field rather than a slice of `notes`: the one line somebody has
+   * been waiting a day for shouldn't read as a footnote among the year's other
+   * prose, and each outcome arrives with its own `kind` so nothing here has to
+   * work out from a sentence whether it was good news. Absent on a year with
+   * no bids, in which case the card simply isn't there.
+   */
+  const marketNews = data.lastYear?.market ?? [];
+
+  const challenge = data.challenge ?? null;
+  const progress = challenge ? challengeProgress(challenge, { company: company ?? null, committedSpend }) : [];
+  const standing = challenge ? challengeStanding(progress).line : null;
+
+  const recoveryCheck = validateRecovery({
+    kind: recoveryKind,
+    seat: recoverySeat,
+    options: distress?.options ?? [],
+    seats: company?.seats,
+    role: data.yourRole,
+  });
+
+  /** The state is worth putting above the year's results only when it's the year's news. */
+  const severeTrouble = distress?.level === "distressed" || distress?.level === "insolvent";
+
+  const distressCard = distress && inTrouble(distress.level) ? (
+    <DistressCard
+      distress={distress}
+      yourRole={data.yourRole}
+      seats={company?.seats}
+      spend={committedSpend}
+      chosen={recoveryKind}
+      chosenSeat={recoverySeat}
+      onChoose={(kind) => {
+        setRecoveryKind(kind);
+        setRecoveryError(null);
+        // A move that doesn't take a seat shouldn't quietly carry one into the
+        // request, where the server would ignore it and the screen would keep
+        // showing it as part of the choice.
+        if (kind !== "dissolve_seat") setRecoverySeat(null);
+      }}
+      onChooseSeat={(seat) => { setRecoverySeat(seat); setRecoveryError(null); }}
+      onFile={() => {
+        if (!recoveryCheck.ok || !recoveryKind) { setRecoveryError(recoveryCheck.error); return; }
+        recovery.mutate(recoverySeat ? { kind: recoveryKind, seat: recoverySeat } : { kind: recoveryKind });
+      }}
+      onClear={() => clearRecovery.mutate()}
+      filing={recovery.isPending || clearRecovery.isPending}
+      error={recoveryError ?? (recoveryKind ? recoveryCheck.error : null)}
+    />
+  ) : null;
+
   const dirty = !draftMatches(data.yourRole ? (data.filed?.[data.yourRole] ?? null) : null, draft);
   const canFile = !finished && !!data.yourRole && localCheck.ok && !file.isPending;
 
@@ -246,6 +370,13 @@ export default function Desk() {
             />
           )}
 
+          {/* A company in real trouble is told before it is told anything else:
+              at this point "how did last year go" is a less useful question
+              than "how much runway is there", and the answer changes every
+              number below it. A merely stretched company gets the same card
+              lower down, beside the money it applies to. */}
+          {severeTrouble ? distressCard : null}
+
           {/* 1. What happened. Before anything about what to do next. */}
           {data.lastYear ? (
             <ReportCard report={data.lastYear} />
@@ -258,6 +389,31 @@ export default function Desk() {
               </Text>
             </Card>
           )}
+
+          {/* 1a. What the bids you filed a day ago actually did. Directly under
+              the report, because it is the other half of a mechanic that is
+              deliberately silent until it settles. */}
+          {marketNews.length > 0 ? (
+            <MarketResultCard
+              market={marketNews}
+              summary={marketNotesRead(marketNews)}
+              onOpen={() => router.push(`/sim/market/${id}`)}
+            />
+          ) : null}
+
+          {/* 1b. How your own year went, and what this one asks of you.
+              Directly under the company's report because that is the order the
+              question arrives in: the team's year, then mine. */}
+          {data.lastChallenge ? <LastChallengeCard result={data.lastChallenge} /> : null}
+
+          {challenge ? (
+            <ChallengeCard
+              challenge={challenge}
+              progress={progress}
+              standing={standing}
+              seatTitle={data.yourTitle ?? data.yourRole?.toUpperCase() ?? null}
+            />
+          ) : null}
 
           {/* 2. Where the company stands. */}
           {company && (
@@ -304,6 +460,27 @@ export default function Desk() {
               {economy ? <EconomyStrip economy={economy} /> : null}
             </Card>
           )}
+
+          {/* Stretched, rather than sinking: the moves are cheap now and
+              expensive later, which is a thing to read next to the money
+              rather than at the top of the screen. */}
+          {!severeTrouble ? distressCard : null}
+
+          {/* The market. A link rather than a section: bidding is a decision
+              with its own screen, and it is the one place a company in trouble
+              can turn what it owns into the cash the card above is about. */}
+          <Card onPress={() => router.push(`/sim/market/${id}`)}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
+              <Icon name="storefront" size={20} color={colors.primary} />
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text style={{ color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold }}>The market</Text>
+                <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>
+                  What's for sale this year, what you own, and what you've bid. Bids are sealed and settle on the tick.
+                </Text>
+              </View>
+              <Icon name="chevron-forward" size={18} color={colors.textTertiary} />
+            </View>
+          </Card>
 
           {/* 3 & 4. The table's money, then your levers. The total sits above the
               form on purpose: it is the context every number below it changes. */}

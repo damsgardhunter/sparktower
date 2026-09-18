@@ -49,6 +49,19 @@ export interface CompanyReport {
   rank: number;
   /** Plain-language explanation of what actually happened, and why. */
   notes: string[];
+  /**
+   * What the marketplace did to this company, typed rather than narrated.
+   *
+   * Filled in by the tick rather than by the engine — settlement happens after
+   * a year resolves, and `resolveYear` knows nothing about auctions. It lives
+   * here anyway because it belongs to the year the player is reading.
+   *
+   * Typed because two clients need to show a won bid differently from a lost
+   * one, and the alternative is each of them pattern-matching the prose below.
+   * That works right up until the copy is edited, at which point the matching
+   * silently stops matching and the feature degrades with nothing failing.
+   */
+  market?: { kind: "won" | "lost" | "sold" | "unsold"; text: string }[];
   bankrupt: boolean;
 }
 

@@ -170,6 +170,19 @@ describe("the marketplace", () => {
 
     expect(after.assets.map((a) => a.name)).toContain(listing.asset.name);
     expect(after.cash).toBeLessThan(before.cash);
+
+    /*
+     * And the team is told. A sealed bid that resolves silently leaves a
+     * player to work out what happened from the asset appearing in a list —
+     * the result of the bid has to come back as news.
+     */
+    const [report] = await db.select().from(simReportsTable)
+      .where(and(eq(simReportsTable.ventureId, ventureId), eq(simReportsTable.year, 1)));
+    const market = (report.report as any).market ?? [];
+    expect(market, "a win should come back typed, not buried in prose").toContainEqual(
+      expect.objectContaining({ kind: "won" }),
+    );
+    expect(market[0].text).toMatch(new RegExp(listing.asset.name, "i"));
   }, 180_000);
 
   it("buys nothing with a bid under the reserve, and says so", async () => {
@@ -190,7 +203,9 @@ describe("the marketplace", () => {
     // A sealed bid is never silent — the team is told it went nowhere.
     const [report] = await db.select().from(simReportsTable)
       .where(and(eq(simReportsTable.ventureId, ventureId), eq(simReportsTable.year, 1)));
-    expect(JSON.stringify(report.report)).toMatch(/unsold|reserve/i);
+    // Typed, so a client shows a lost bid differently from a won one without
+    // pattern-matching a sentence that may be reworded later.
+    expect((report.report as any).market).toContainEqual(expect.objectContaining({ kind: "lost" }));
   }, 180_000);
 
   it("clears the bids once they are resolved", async () => {

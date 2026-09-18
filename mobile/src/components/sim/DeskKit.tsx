@@ -9,13 +9,17 @@
 import React, { useEffect, useRef } from "react";
 import { Animated, Pressable, Text, TextInput, View } from "react-native";
 import { colors, font, fontFamily, radius, shadow, spacing } from "../../theme";
-import { Icon, NovaGradient } from "../ui";
+import { Btn, Icon, NovaGradient } from "../ui";
 import { Pill, tintSoft } from "../MoreKit";
 import {
-  OUTLOOK_LABEL, bump, clampToField, commitmentLevel, exact, formatUntil, money,
-  percent, resolveIsImminent, shortfall, signed,
-  type Commitment, type CompanyReport, type DeskEconomy, type DeskRival,
-  type DeskTableSeat, type LeverField,
+  OUTCOME_LABEL, OUTLOOK_LABEL, METRIC_PENDING, bump, capUse, clampToField,
+  commitmentLevel, covenantProgress, dissolvableSeats, exact, formatUntil,
+  metricRead, money, percent, resolveIsImminent, rewardRead, shortfall, signed,
+  targetGoalRead,
+  type Challenge, type ChallengeResult, type Commitment, type CompanyReport,
+  type Covenant, type DeskDistress, type DeskEconomy, type DeskRival, type DeskRole,
+  type DeskTableSeat, type LeverField, type RecoveryKind, type RecoveryOption,
+  type TargetProgress, type TargetResult,
 } from "./desk";
 
 type IconName = React.ComponentProps<typeof Icon>["name"];
@@ -564,6 +568,481 @@ export function EconomyStrip({ economy }: { economy: DeskEconomy }) {
       <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
         {economy.outlookMeans}
       </Text>
+    </View>
+  );
+}
+
+// --- Your year -----------------------------------------------------------
+
+/**
+ * The one thing on this screen that belongs to the person holding the phone.
+ *
+ * The company's result is four other people as well, and a seat dealt at
+ * random can have a quiet fortnight without anybody noticing. This is the
+ * answer to "did *I* play this well", so it sits directly under last year's
+ * report — above the company, above the levers — and it is drawn as a card
+ * about them rather than a section of the company's paperwork.
+ *
+ * The brief is the server's own sentence and appears whole. It is written
+ * against the company's position in the year it was set ("You hold 12,400 of
+ * them. The rest are somebody else's"), and paraphrasing it into a target
+ * would throw away the only part that makes it feel written for you.
+ */
+export function ChallengeCard({ challenge, progress, standing, seatTitle }: {
+  challenge: Challenge;
+  progress: TargetProgress[];
+  /** Where it stands, counted — see challengeStanding() in desk.ts. */
+  standing: string | null;
+  seatTitle: string | null;
+}) {
+  return (
+    <View
+      testID="desk-challenge"
+      style={{
+        borderRadius: radius.md, backgroundColor: colors.surface, padding: spacing.lg, gap: spacing.md,
+        borderWidth: 1, borderColor: tintSoft(colors.novaPurple, 0.35),
+        borderLeftWidth: 3, borderLeftColor: colors.novaPurple, ...shadow.card,
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+        <Icon name="trophy" size={16} color={colors.novaPurple} />
+        <Text style={{ flex: 1, color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.semibold, letterSpacing: 0.5 }}>
+          YOUR YEAR{seatTitle ? ` · ${seatTitle.toUpperCase()}` : ""}
+        </Text>
+        <Pill label={rewardRead(challenge.reward)} icon="gift" color={colors.novaPurple} />
+      </View>
+
+      <View style={{ gap: 5 }}>
+        <Text style={{ color: colors.text, fontSize: font.lg, fontFamily: fontFamily.bold, letterSpacing: -0.2 }}>
+          {challenge.title}
+        </Text>
+        <Text style={{ color: colors.textSecondary, fontSize: font.sm, lineHeight: 20, fontFamily: fontFamily.regular }}>
+          {challenge.brief}
+        </Text>
+      </View>
+
+      <View style={{ gap: spacing.md, paddingTop: spacing.xs, borderTopWidth: 1, borderColor: colors.borderSubtle }}>
+        {progress.map((p) => <TargetRow key={p.target.id} progress={p} />)}
+        {standing ? (
+          <Text testID="desk-challenge-standing" style={{ color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.medium }}>
+            {standing}
+          </Text>
+        ) : null}
+      </View>
+
+      {/* What it is worth, and what a near miss is worth. Both, because a
+          player deciding whether to chase a target at the cost of the year is
+          deciding between exactly these two lines. */}
+      <View style={{ gap: 4, paddingTop: spacing.xs, borderTopWidth: 1, borderColor: colors.borderSubtle }}>
+        <View style={{ flexDirection: "row", gap: 6 }}>
+          <Icon name="gift-outline" size={13} color={colors.novaPurple} />
+          <Text style={{ flex: 1, color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+            {challenge.reward.label}
+          </Text>
+        </View>
+        <View style={{ flexDirection: "row", gap: 6 }}>
+          <Icon name="remove-circle-outline" size={13} color={colors.textTertiary} />
+          <Text style={{ flex: 1, color: colors.textTertiary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+            One of the two and it's {rewardRead(challenge.partialReward).replace(/^\+/, "")} instead — {challenge.partialReward.label.toLowerCase()}
+          </Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+/**
+ * One target, with as much of an answer as honestly exists.
+ *
+ * Three states, and the third one is the point: a target on this year's profit
+ * cannot be known until the year runs, and the screen says so rather than
+ * quietly showing last year's figure under it. A progress bar that is lying is
+ * worse than no progress bar, because it is the same screen that will later
+ * tell somebody they missed.
+ */
+function TargetRow({ progress }: { progress: TargetProgress }) {
+  const { target, actual, source, met, fraction } = progress;
+  const pending = actual == null;
+  const color = pending ? colors.textTertiary : met ? colors.success : colors.warning;
+
+  return (
+    <View style={{ gap: 5 }} testID={`desk-target-${target.id}`}>
+      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: spacing.sm }}>
+        <Icon
+          name={pending ? "ellipse-outline" : met ? "checkmark-circle" : "alert-circle-outline"}
+          size={16}
+          color={color}
+        />
+        <Text style={{ flex: 1, color: colors.text, fontSize: font.sm, lineHeight: 19, fontFamily: fontFamily.medium, marginTop: -1 }}>
+          {target.label}
+        </Text>
+      </View>
+
+      {pending ? (
+        <Text style={{ color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.regular, paddingLeft: 24 }}>
+          {METRIC_PENDING[target.metric] ?? "Known when the year resolves"} · needs {targetGoalRead(target)}
+        </Text>
+      ) : (
+        <View style={{ gap: 4, paddingLeft: 24 }}>
+          <View style={{ height: 5, borderRadius: 3, backgroundColor: colors.surfaceRaised, overflow: "hidden" }}>
+            <View style={{ width: `${Math.round((fraction ?? 0) * 100)}%`, height: "100%", backgroundColor: color }} />
+          </View>
+          <Text style={{ color: colors.textSecondary, fontSize: font.xs, fontFamily: fontFamily.medium, fontVariant: ["tabular-nums"] }}>
+            {source === "committed" ? "Committed so far" : "Now"} {metricRead(target.metric, actual)}
+            <Text style={{ color: colors.textTertiary, fontFamily: fontFamily.regular }}>
+              {" · needs "}{targetGoalRead(target)}
+            </Text>
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+/**
+ * How last year's went.
+ *
+ * The engine's `note` is the whole point of this card — it names what fell
+ * short rather than announcing a failure ("customers were there, the price was
+ * not"), which is the only useful thing a result can say on day four of
+ * fourteen. The per-target numbers sit above it so the sentence has something
+ * to refer to.
+ */
+export function LastChallengeCard({ result }: { result: ChallengeResult }) {
+  const tone = result.outcome === "met" ? colors.success : result.outcome === "partial" ? colors.warning : colors.textTertiary;
+  return (
+    <View
+      testID="desk-last-challenge"
+      style={{
+        borderRadius: radius.md, backgroundColor: colors.surface, padding: spacing.md, gap: spacing.sm,
+        borderWidth: 1, borderColor: colors.border,
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+        <Icon name="medal-outline" size={15} color={tone} />
+        <Text style={{ flex: 1, color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.semibold, letterSpacing: 0.5 }}>
+          YEAR {result.year}, YOUR CHALLENGE
+        </Text>
+        <Pill label={OUTCOME_LABEL[result.outcome]} color={tone} solid={result.outcome === "met"} />
+      </View>
+
+      <View style={{ gap: 4 }}>
+        {result.targets.map((t) => <ResultRow key={t.id} target={t} />)}
+      </View>
+
+      <Text style={{ color: colors.textSecondary, fontSize: font.sm, lineHeight: 19, fontFamily: fontFamily.regular }}>
+        {result.note}
+      </Text>
+    </View>
+  );
+}
+
+/** What was asked, and what the year actually produced. */
+function ResultRow({ target }: { target: TargetResult }) {
+  return (
+    <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 6 }}>
+      <Icon name={target.met ? "checkmark" : "close"} size={14} color={target.met ? colors.success : colors.danger} />
+      <Text style={{ flex: 1, color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+        {target.label}
+        <Text style={{ color: target.met ? colors.success : colors.danger, fontFamily: fontFamily.semibold, fontVariant: ["tabular-nums"] }}>
+          {"  "}{metricRead(target.metric, target.actual)}
+        </Text>
+        <Text style={{ color: colors.textTertiary }}>{" of "}{metricRead(target.metric, target.goal)}</Text>
+      </Text>
+    </View>
+  );
+}
+
+// --- Trouble -------------------------------------------------------------
+
+/**
+ * Where the company stands when standing is the question.
+ *
+ * Everything here is the server's own copy, unedited. `DISTRESS_COPY` and the
+ * options in shared/simulation/recovery.ts are written to be read *before*
+ * choosing — each option states its cost in the same breath as what it raises
+ * — and a screen that trimmed those sentences to fit would be handing somebody
+ * an irreversible decision with the reasons removed.
+ *
+ * The one piece of editorialising is the order: the covenant goes above the
+ * options when there is one, because it is the way out and the options are the
+ * ways further in.
+ */
+export function DistressCard({
+  distress, yourRole, seats, spend, chosen, chosenSeat, onChoose, onChooseSeat,
+  onFile, onClear, filing, error,
+}: {
+  distress: DeskDistress;
+  yourRole: DeskRole | null;
+  seats: DeskRole[] | undefined;
+  /** This year's discretionary spend, for the covenant's cap. */
+  spend: number | null;
+  chosen: RecoveryKind | null;
+  chosenSeat: DeskRole | null;
+  onChoose: (kind: RecoveryKind) => void;
+  onChooseSeat: (seat: DeskRole) => void;
+  onFile: () => void;
+  onClear: () => void;
+  filing: boolean;
+  error: string | null;
+}) {
+  const severe = distress.level === "insolvent" || distress.level === "distressed";
+  const tone = distress.level === "insolvent" ? colors.danger
+    : distress.level === "distressed" ? colors.danger
+      : colors.warning;
+  const isCeo = yourRole === "ceo";
+
+  return (
+    <View
+      testID="desk-distress"
+      style={{
+        borderRadius: radius.md, backgroundColor: colors.surface, padding: spacing.lg, gap: spacing.md,
+        borderWidth: severe ? 2 : 1, borderColor: severe ? tone : colors.border,
+        borderLeftWidth: 3, borderLeftColor: tone, ...shadow.card,
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+        <Icon name={distress.level === "insolvent" ? "alert-circle" : "warning"} size={18} color={tone} />
+        <Text style={{ flex: 1, color: colors.text, fontSize: font.lg, fontFamily: fontFamily.bold }}>
+          {distress.title}
+        </Text>
+      </View>
+      <Text style={{ color: colors.textSecondary, fontSize: font.sm, lineHeight: 20, fontFamily: fontFamily.regular }}>
+        {distress.body}
+      </Text>
+
+      {distress.covenant ? <CovenantStrip covenant={distress.covenant} spend={spend} /> : null}
+
+      {distress.options.length === 0 ? null : (
+        <View style={{ gap: spacing.sm, paddingTop: spacing.xs, borderTopWidth: 1, borderColor: colors.borderSubtle }}>
+          <Text style={{ color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.semibold, letterSpacing: 0.4 }}>
+            WHAT CAN BE DONE
+          </Text>
+          {/* Said once, at the top, rather than under four disabled buttons:
+              four people reading "not yours" four times learn only that the
+              screen is scolding them. */}
+          {!isCeo ? (
+            <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+              These change what the company is, so they're the chief executive's to file. Worth having the argument before they do.
+            </Text>
+          ) : null}
+
+          {distress.options.map((option) => (
+            <RecoveryOptionCard
+              key={option.kind}
+              option={option}
+              selected={chosen === option.kind}
+              filed={distress.filed?.kind === option.kind}
+              filedSeat={distress.filed?.kind === option.kind ? distress.filed?.seat ?? null : null}
+              selectable={isCeo && !filing}
+              onPress={() => onChoose(option.kind)}
+            >
+              {/* The seat picker lives inside the option it belongs to, and
+                  only while that option is the one being considered. */}
+              {option.kind === "dissolve_seat" && isCeo && chosen === "dissolve_seat" ? (
+                <SeatPicker seats={dissolvableSeats(seats)} chosen={chosenSeat} onChoose={onChooseSeat} />
+              ) : null}
+            </RecoveryOptionCard>
+          ))}
+
+          {error ? (
+            <Text testID="desk-recovery-error" style={{ color: colors.danger, fontSize: font.xs, fontFamily: fontFamily.medium }}>
+              {error}
+            </Text>
+          ) : null}
+
+          {isCeo ? (
+            <View style={{ gap: spacing.xs }}>
+              <Btn
+                label={filing ? "Filing…" : distress.filed ? "Change what's committed" : "Commit to this"}
+                icon="hand-right-outline"
+                variant={severe ? "danger" : "outline"}
+                loading={filing}
+                disabled={!chosen || filing}
+                onPress={onFile}
+                testID="desk-recovery-file"
+              />
+              {distress.filed ? (
+                <Btn label="Clear it" icon="close-circle-outline" variant="ghost" small disabled={filing}
+                  onPress={onClear} testID="desk-recovery-clear" />
+              ) : null}
+              <Text style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular, textAlign: "center" }}>
+                It takes effect before next year runs, and can be changed until the tick.
+              </Text>
+            </View>
+          ) : null}
+        </View>
+      )}
+    </View>
+  );
+}
+
+/** One move, with what it raises and — the part that decides it — what it costs. */
+function RecoveryOptionCard({ option, selected, filed, filedSeat, selectable, onPress, children }: {
+  option: RecoveryOption;
+  selected: boolean;
+  filed: boolean;
+  filedSeat: string | null;
+  selectable: boolean;
+  onPress: () => void;
+  children?: React.ReactNode;
+}) {
+  return (
+    <Pressable
+      onPress={selectable ? onPress : undefined}
+      disabled={!selectable}
+      testID={`desk-recovery-${option.kind}`}
+      accessibilityRole="radio"
+      accessibilityState={{ selected, disabled: !selectable }}
+      style={({ pressed }) => [{
+        borderRadius: radius.sm, padding: spacing.md, gap: 6,
+        backgroundColor: selected ? tintSoft(colors.primary, 0.08) : colors.surfaceRaised,
+        borderWidth: selected ? 2 : 1,
+        borderColor: selected ? colors.primary : colors.border,
+      }, pressed && { opacity: 0.75 }]}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+        <Text style={{ flex: 1, color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>{option.title}</Text>
+        {filed ? <Pill label="Committed" icon="checkmark-circle" color={colors.primary} solid /> : null}
+        {option.raises > 0 ? (
+          <Text style={{ color: colors.success, fontSize: font.sm, fontFamily: fontFamily.bold, fontVariant: ["tabular-nums"] }}>
+            +{money(option.raises)}
+          </Text>
+        ) : null}
+      </View>
+
+      <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+        {option.body}
+      </Text>
+
+      {/* The cost, in the danger colour and never truncated. This sentence is
+          the reason the option list can be a list rather than a warning. */}
+      <View style={{ flexDirection: "row", gap: 6 }}>
+        <Icon name="alert-circle-outline" size={13} color={colors.danger} />
+        <Text style={{ flex: 1, color: colors.danger, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.medium }}>
+          {option.cost}
+        </Text>
+      </View>
+
+      {filed && filedSeat ? (
+        <Text style={{ color: colors.primary, fontSize: font.xs, fontFamily: fontFamily.semibold }}>
+          Committed: the {filedSeat.toUpperCase()} seat.
+        </Text>
+      ) : null}
+
+      {children}
+    </Pressable>
+  );
+}
+
+/** Which seat goes. The chair isn't on the list — the server refuses it. */
+function SeatPicker({ seats, chosen, onChoose }: {
+  seats: DeskRole[];
+  chosen: DeskRole | null;
+  onChoose: (seat: DeskRole) => void;
+}) {
+  return (
+    <View style={{ gap: 6, paddingTop: spacing.xs, borderTopWidth: 1, borderColor: colors.border }}>
+      <Text style={{ color: colors.text, fontSize: font.xs, fontFamily: fontFamily.semibold }}>
+        Which seat? Not your own — the chair can't be dissolved.
+      </Text>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.xs }}>
+        {seats.length === 0 ? (
+          <Text style={{ color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.regular }}>
+            There's nothing left to dissolve.
+          </Text>
+        ) : seats.map((seat) => {
+          const active = seat === chosen;
+          return (
+            <Pressable
+              key={seat}
+              onPress={() => onChoose(seat)}
+              testID={`desk-dissolve-${seat}`}
+              accessibilityRole="radio"
+              accessibilityState={{ selected: active }}
+              style={({ pressed }) => [{
+                paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: radius.pill,
+                borderWidth: 1, borderColor: active ? colors.danger : colors.border,
+                backgroundColor: active ? colors.danger : colors.surface,
+              }, pressed && { opacity: 0.7 }]}
+            >
+              <Text style={{ color: active ? "#FFFFFF" : colors.textSecondary, fontSize: font.xs, fontFamily: fontFamily.semibold }}>
+                {seat.toUpperCase()}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+/**
+ * The way out, drawn as progress.
+ *
+ * A covenant is a restriction, and it would be easy to render it as one. It is
+ * shown as two years with one of them possibly filled instead, because that is
+ * what makes distress an arc: the team can see the end of it from inside it,
+ * and "one more year inside the cap and it lifts" is a reason to open the app
+ * tomorrow.
+ */
+export function CovenantStrip({ covenant, spend }: { covenant: Covenant; spend: number | null }) {
+  const progress = covenantProgress(covenant);
+  const use = capUse(spend ?? 0, covenant);
+  const over = spend != null && !!use?.over;
+
+  return (
+    <View
+      testID="desk-covenant"
+      style={{
+        borderRadius: radius.sm, padding: spacing.md, gap: spacing.sm,
+        backgroundColor: tintSoft(colors.info, 0.08), borderWidth: 1, borderColor: tintSoft(colors.info, 0.3),
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+        <Icon name="document-text-outline" size={15} color={colors.info} />
+        <Text style={{ flex: 1, color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>
+          The creditor's terms, since year {covenant.since}
+        </Text>
+        <Text style={{ color: colors.info, fontSize: font.sm, fontFamily: fontFamily.bold, fontVariant: ["tabular-nums"] }}>
+          {progress.met}/{progress.of}
+        </Text>
+      </View>
+
+      {/* Years met, as boxes rather than a bar: two is a countable number and
+          "one of two" should be legible without reading a percentage. */}
+      <View style={{ flexDirection: "row", gap: 4 }}>
+        {Array.from({ length: progress.of }, (_, i) => (
+          <View key={i} style={{
+            flex: 1, height: 6, borderRadius: 3,
+            backgroundColor: i < progress.met ? colors.info : tintSoft(colors.info, 0.25),
+          }} />
+        ))}
+      </View>
+      <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+        {progress.line}
+      </Text>
+
+      <View style={{ gap: 3, paddingTop: 3, borderTopWidth: 1, borderColor: tintSoft(colors.info, 0.3) }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+          <Text style={{ flex: 1, color: colors.textSecondary, fontSize: font.xs, fontFamily: fontFamily.medium }}>
+            Spending may not go above
+          </Text>
+          <Text style={{ color: colors.text, fontSize: font.sm, fontFamily: fontFamily.bold, fontVariant: ["tabular-nums"] }}>
+            {money(covenant.spendCap)}
+          </Text>
+        </View>
+        {spend != null ? (
+          <Text style={{ color: over ? colors.danger : colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: over ? fontFamily.semibold : fontFamily.regular }}>
+            {over
+              ? `The table is at ${money(spend)} — ${money(-(use?.left ?? 0))} over the cap. File that and the clock resets to ${progress.of} clear years.`
+              : `The table is at ${money(spend)}, ${money(use?.left ?? 0)} inside it.`}
+          </Text>
+        ) : null}
+        <Text style={{ color: colors.textTertiary, fontSize: 10, lineHeight: 15, fontFamily: fontFamily.regular }}>
+          Counts what marketing, product and operations commit. Borrowing and repayment sit outside it.
+        </Text>
+      </View>
     </View>
   );
 }

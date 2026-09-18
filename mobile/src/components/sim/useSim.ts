@@ -23,6 +23,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import { formatCountdown, remainingSeconds, type NichesResponse, type VentureView } from "./lobby";
 import type { DeskView } from "./desk";
+import type { MarketView } from "./market";
 
 /** Short enough that a claimed seat shows up before someone else reaches for it. */
 export const ROOM_POLL_MS = 2_500;
@@ -110,6 +111,30 @@ export function useDesk(id: string | undefined) {
       const phase = query.state.data?.phase;
       return phase === "finished" || phase === "not_started" ? false : ROOM_POLL_MS;
     },
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+/**
+ * The market, on the same interval as everything else.
+ *
+ * It needs the poll for a different reason than the desk does: the open
+ * market's three listings are generated from the season and the year and
+ * cannot move, but another team can put one of its own assets up for sale at
+ * any moment, and a screen that only learned about it on a manual refresh
+ * would hide the most interesting listings in the game.
+ *
+ * Your own bid comes back in the same payload, which is why the bid inputs on
+ * the screen are seeded once per year rather than from every response — a poll
+ * landing mid-keystroke must not take the number out of somebody's hands.
+ */
+export function useMarket(id: string | undefined) {
+  return useQuery({
+    queryKey: ["sim-market", id],
+    queryFn: () => api<MarketView>(`/api/sim/ventures/${id}/market`),
+    enabled: !!id,
+    refetchInterval: ROOM_POLL_MS,
     staleTime: 0,
     retry: false,
   });

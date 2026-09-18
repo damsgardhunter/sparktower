@@ -108,8 +108,25 @@ export function registerSimulationMarketRoutes(app: Express): void {
         }),
     ];
 
+    const myOpen = await db.select().from(simListings).where(and(
+      eq(simListings.seasonId, season.id),
+      eq(simListings.sellerId, company.id),
+      eq(simListings.year, year),
+    ));
+    const listedAssetIds = new Set(myOpen.filter((r) => r.status === "open").map((r) => (r.asset as CompanyAsset).id));
+
     res.json({
       year,
+      /**
+       * The seat this person holds, and when the year settles.
+       *
+       * Both are already on the desk, and a client that needed them had to
+       * fetch that too just to know whether to show a sell button and what to
+       * count down to. Two fields here save a screen a second request for
+       * facts it cannot act without.
+       */
+      yourRole: ctx.seat.role,
+      resolvesAt: season.nextTickAt,
       /** Cash plus what is still borrowable — what a bid can actually be backed by. */
       funds: biddableFunds(company),
       /*
@@ -128,15 +145,18 @@ export function registerSimulationMarketRoutes(app: Express): void {
         bookValue: a.bookValue,
         willingSale: resaleValue(a, { forced: false }),
         forcedSale: resaleValue(a, { forced: true }),
-        listed: false,
+        /*
+         * Real rather than hardcoded false. A client matching a listing to a
+         * holding by name would cross-match two assets with the same name,
+         * which the open market can hand out in different years.
+         */
+        listed: listedAssetIds.has(a.id),
       })),
       /** Your own things currently up for sale. */
-      selling: (await db.select().from(simListings).where(and(
-        eq(simListings.seasonId, season.id),
-        eq(simListings.sellerId, company.id),
-        eq(simListings.year, year),
-      ))).map((row) => ({
+      selling: myOpen.map((row) => ({
         id: row.id,
+        // The asset's own id, so a client never has to match on the name.
+        assetId: (row.asset as CompanyAsset).id,
         name: (row.asset as CompanyAsset).name,
         reserve: row.reserve,
         status: row.status,

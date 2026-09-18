@@ -39,6 +39,9 @@ import { applyRecovery, reviewCovenant, type RecoveryKind } from "@shared/simula
 import { challengeFor, checkChallenge, applyReward, type Challenge } from "@shared/simulation/challenges";
 import type { Company, CompanyAsset } from "@shared/simulation/types";
 
+/** What the market did to one company in one year. */
+type MarketOutcome = { kind: "won" | "lost" | "sold" | "unsold"; text: string };
+
 /** Distinct from the backing jobs' lock ids so the two never wait on each other. */
 const LOCK_SIM_TICK = 918_2711;
 
@@ -327,9 +330,9 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
 
   // The marketplace settles, and things change hands.
   const marketNotes = await settleMarket({ seasonId, year, niche, world: nextWorld, releasedByTeam });
-  for (const [ventureId, notes] of marketNotes) {
+  for (const [ventureId, outcomes] of marketNotes) {
     const report = reports.find((r) => r.companyId === ventureId);
-    if (report) report.notes.push(...notes);
+    if (report) report.market = outcomes;
   }
 
   const finished = seasonOver(year + 1, season.totalYears);
@@ -476,10 +479,11 @@ async function settleMarket(input: {
   niche: NonNullable<ReturnType<typeof nicheById>>;
   world: World;
   releasedByTeam: Map<string, CompanyAsset[]>;
-}): Promise<Map<string, string[]>> {
+}): Promise<Map<string, MarketOutcome[]>> {
   const { seasonId, year, niche, world, releasedByTeam } = input;
-  const notes = new Map<string, string[]>();
-  const add = (id: string, note: string) => notes.set(id, [...(notes.get(id) ?? []), note]);
+  const notes = new Map<string, MarketOutcome[]>();
+  const add = (id: string, kind: MarketOutcome["kind"], text: string) =>
+    notes.set(id, [...(notes.get(id) ?? []), { kind, text }]);
 
   const open = await db
     .select()
@@ -516,9 +520,9 @@ async function settleMarket(input: {
 
     if (!award.winnerId) {
       // Everyone who tried is told it went nowhere, so a sealed bid is never silent.
-      for (const b of bids.filter((x) => x.listingId === listing.id)) add(b.ventureId, award.note);
+      for (const b of bids.filter((x) => x.listingId === listing.id)) add(b.ventureId, "lost", award.note);
       if (listing.sellerId) {
-        add(listing.sellerId, `Nobody met your reserve on ${listing.asset.name}.`);
+        add(listing.sellerId, "unsold", `Nobody met your reserve on ${listing.asset.name}.`);
         await db.update(simListings).set({ status: "unsold" }).where(eq(simListings.id, listing.id));
       }
       continue;
@@ -539,12 +543,12 @@ async function settleMarket(input: {
       return c;
     });
 
-    add(award.winnerId, `Won ${listing.asset.name} for ${award.price.toLocaleString()}.`);
+    add(award.winnerId, "won", `Won ${listing.asset.name} for ${award.price.toLocaleString()}.`);
     for (const b of bids.filter((x) => x.listingId === listing.id && x.ventureId !== award.winnerId)) {
-      add(b.ventureId, `${listing.asset.name} went to somebody who bid more. Your money stays where it is.`);
+      add(b.ventureId, "lost", `${listing.asset.name} went to somebody who bid more. Your money stays where it is.`);
     }
     if (listing.sellerId) {
-      add(listing.sellerId, `Sold ${listing.asset.name} for ${award.price.toLocaleString()}.`);
+      add(listing.sellerId, "sold", `Sold ${listing.asset.name} for ${award.price.toLocaleString()}.`);
       await db.update(simListings)
         .set({ status: "sold", buyerId: award.winnerId, soldFor: award.price })
         .where(eq(simListings.id, listing.id));

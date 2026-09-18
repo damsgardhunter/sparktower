@@ -10,11 +10,14 @@
  */
 import { describe, it, expect } from "vitest";
 import {
-  bump, clampToField, commitment, commitmentLevel, draftMatches, exact,
-  fixedCosts, formatUntil, money, percent,
-  resolveIsImminent, secondsUntil, shortfall, signed, stepFor, tableStatus,
-  validateDraft, waitingOn, withYourDraft,
-  type DeskTableSeat, type FiledDecisions, type LeverField,
+  bump, capUse, challengeProgress, challengeStanding, clampToField, commitment,
+  commitmentLevel, covenantProgress, discretionarySpend, dissolvableSeats,
+  draftMatches, exact, fixedCosts, formatUntil, inTrouble, metricRead, money,
+  percent, resolveIsImminent, rewardRead, secondsUntil, shortfall, signed,
+  stepFor, tableStatus, targetGoalRead, targetProgress, validateDraft,
+  validateRecovery, waitingOn, withYourDraft,
+  type Challenge, type DeskCompany, type DeskTableSeat, type FiledDecisions,
+  type LeverField, type Target,
 } from "./desk";
 
 // Five filled seats: the engine charges 140,000 for each, so this is the
@@ -394,5 +397,233 @@ describe("who the table is waiting on", () => {
   it("doesn't pretend an empty table is a finished one", () => {
     expect(tableStatus([])).toBe("Nobody at the table yet.");
     expect(tableStatus(undefined)).toBe("Nobody at the table yet.");
+  });
+});
+
+// --- Your own year -------------------------------------------------------
+
+/**
+ * A company mid-year, with a distinguishable value in every field the
+ * challenge metrics can read.
+ */
+const standing: DeskCompany = {
+  cash: 2_000_000, debt: 500_000, creditLimit: 3_000_000,
+  reputation: 54, quality: 61, brand: 38, service: 47,
+  capacity: 120_000, unitCost: 23.4, price: 40, customers: 88_000,
+  bankruptSince: null, seats: ["ceo", "cmo", "cfo", "cto", "coo"],
+};
+
+const target = (over: Partial<Target> = {}): Target => ({
+  id: "t", label: "Do the thing", goal: 100_000, compare: "at_least", metric: "customers", ...over,
+});
+
+describe("how far along a target is", () => {
+  it("reads the metrics the company already carries, as they stand now", () => {
+    const p = targetProgress(target({ metric: "brand", goal: 50 }), { company: standing });
+    expect(p).toMatchObject({ actual: 38, source: "now", met: false });
+    expect(p.fraction).toBeCloseTo(38 / 50, 10);
+  });
+
+  it("refuses to invent the numbers only the tick can produce", () => {
+    // The four that are outcomes of a year rather than states of a company.
+    for (const metric of ["profit", "revenue", "market_share", "turned_away"] as const) {
+      const p = targetProgress(target({ metric }), { company: standing });
+      expect(p).toMatchObject({ actual: null, source: "unknown", met: null, fraction: null });
+    }
+  });
+
+  it("answers a spending ceiling from what the table has committed this year", () => {
+    // The point of the live number: a CMO about to break their own ceiling
+    // finds out while their thumb is still on it.
+    const p = targetProgress(
+      target({ metric: "spend", goal: 500_000, compare: "at_most" }),
+      { company: standing, committedSpend: 620_000 },
+    );
+    expect(p).toMatchObject({ actual: 620_000, source: "committed", met: false });
+  });
+
+  it("says nothing about spend when there is no draft to say it from", () => {
+    expect(targetProgress(target({ metric: "spend" }), { company: standing }).source).toBe("unknown");
+  });
+
+  it("knows nothing at all without a company", () => {
+    expect(targetProgress(target(), { company: null }).actual).toBeNull();
+  });
+
+  it("draws an at-most target as room left, not distance travelled", () => {
+    // A budget bar fills as you spend it, so inside the cap is a full bar.
+    const inside = targetProgress(target({ metric: "unit_cost", goal: 25, compare: "at_most" }), { company: standing });
+    expect(inside.met).toBe(true);
+    expect(inside.fraction).toBe(1);
+
+    const over = targetProgress(target({ metric: "unit_cost", goal: 20, compare: "at_most" }), { company: standing });
+    expect(over.met).toBe(false);
+    expect(over.fraction).toBeCloseTo(20 / 23.4, 10);
+  });
+
+  it("handles the zero goals the engine actually writes", () => {
+    // "Turn nobody away" is goal 0 at_most; "still solvent" is goal 1 at_least.
+    const solvent = targetProgress(target({ metric: "cash", goal: 1, compare: "at_least" }), { company: standing });
+    expect(solvent.met).toBe(true);
+
+    const broke = targetProgress(
+      target({ metric: "cash", goal: 1, compare: "at_least" }),
+      { company: { ...standing, cash: 0 } },
+    );
+    expect(broke.met).toBe(false);
+    expect(broke.fraction).toBe(0);
+  });
+});
+
+describe("where a challenge stands", () => {
+  const challenge = (targets: Target[]): Challenge => ({
+    id: "c", role: "cmo", year: 3, title: "Take the amateurs", brief: "…",
+    targets,
+    reward: { kind: "reputation", amount: 5, label: "Reputation." },
+    partialReward: { kind: "reputation", amount: 2, label: "Some of it." },
+  });
+
+  it("counts what is met, missed and not yet knowable, separately", () => {
+    const progress = challengeProgress(
+      challenge([
+        target({ id: "a", metric: "brand", goal: 20 }),
+        target({ id: "b", metric: "profit", goal: 1 }),
+      ]),
+      { company: standing },
+    );
+    expect(challengeStanding(progress)).toMatchObject({ met: 1, missing: 0, pending: 1, of: 2 });
+  });
+
+  it("does not describe a year that hasn't run as a half-failure", () => {
+    const progress = challengeProgress(
+      challenge([target({ id: "a", metric: "profit" }), target({ id: "b", metric: "revenue" })]),
+      { company: standing },
+    );
+    expect(challengeStanding(progress).line).toBe("Both settle when the year runs.");
+  });
+
+  it("says so plainly when both are on", () => {
+    const progress = challengeProgress(
+      challenge([target({ id: "a", metric: "brand", goal: 10 }), target({ id: "b", metric: "quality", goal: 10 })]),
+      { company: standing },
+    );
+    expect(challengeStanding(progress).line).toBe("On both, as things stand.");
+  });
+});
+
+describe("reading a metric in its own units", () => {
+  it("keeps the pennies on the two metrics that have them", () => {
+    // The engine sets unit-cost goals to two decimals; rounding to 23 would
+    // mark a missed target as met.
+    expect(metricRead("unit_cost", 23.4)).toBe("23.4");
+    expect(metricRead("unit_cost", 23.15)).toBe("23.15");
+    expect(metricRead("price", 40)).toBe("40");
+  });
+
+  it("rounds the 0-100 scores and abbreviates the money", () => {
+    expect(metricRead("reputation", 54.6)).toBe("55");
+    expect(metricRead("customers", 88_000)).toBe("88k");
+    expect(metricRead("market_share", 12.42)).toBe("12.4%");
+  });
+
+  it("says the goal the way a person would read it aloud", () => {
+    expect(targetGoalRead(target({ metric: "customers", goal: 45_000 }))).toBe("at least 45k");
+    expect(targetGoalRead(target({ metric: "price", goal: 24, compare: "at_most" }))).toBe("at most 24");
+  });
+});
+
+describe("what a challenge is worth", () => {
+  it("says a capacity reward as the percentage the engine applies", () => {
+    // applyReward multiplies capacity by 1 + amount, so 0.08 is eight per cent
+    // and showing "+0.08 capacity" would be meaningless.
+    expect(rewardRead({ kind: "capacity", amount: 0.08, label: "" })).toBe("+8% capacity");
+    expect(rewardRead({ kind: "reputation", amount: 5, label: "" })).toBe("+5 reputation");
+    expect(rewardRead({ kind: "credit", amount: 750_000, label: "" })).toBe("+750k credit");
+    expect(rewardRead({ kind: "cash", amount: 150_000, label: "" })).toBe("+150k cash");
+  });
+});
+
+describe("the spend a cap and a challenge both mean", () => {
+  it("counts the three seats that buy things and not the repayment", () => {
+    // Mirrors both readMetric("spend") and the sum the tick reviews a covenant
+    // against: 1.5m marketing + 0.5m product + 0.1m support, no CFO repayment.
+    expect(discretionarySpend(run())).toBe(2_100_000);
+    expect(run().spend - discretionarySpend(run())).toBe(250_000);
+  });
+});
+
+// --- Trouble -------------------------------------------------------------
+
+describe("the moves a company in trouble can make", () => {
+  const options = [
+    { kind: "restructure" as const, title: "", body: "", cost: "", raises: 40_000, from: ["strained" as const] },
+    { kind: "dissolve_seat" as const, title: "", body: "", cost: "", raises: 140_000, from: ["distressed" as const] },
+  ];
+  const seats = ["ceo", "cmo", "cfo", "cto", "coo"] as const;
+
+  it("is the chief executive's call, and says so before anything else", () => {
+    const check = validateRecovery({ kind: "restructure", seat: null, options, seats: [...seats], role: "cfo" });
+    expect(check.ok).toBe(false);
+    expect(check.error).toMatch(/chief executive/);
+  });
+
+  it("holds its tongue when the chair hasn't chosen anything yet", () => {
+    expect(validateRecovery({ kind: null, seat: null, options, seats: [...seats], role: "ceo" }))
+      .toEqual({ ok: false, error: null });
+  });
+
+  it("refuses a move this position doesn't offer", () => {
+    const check = validateRecovery({ kind: "rescue_raise", seat: null, options, seats: [...seats], role: "ceo" });
+    expect(check).toMatchObject({ ok: false });
+    expect(check.error).toMatch(/isn't available/);
+  });
+
+  it("wants a seat before dissolving one, and never the chair", () => {
+    expect(validateRecovery({ kind: "dissolve_seat", seat: null, options, seats: [...seats], role: "ceo" }).ok).toBe(false);
+    // The server answers this one with a 400; offering it at all would be the
+    // screen teaching people to distrust its own controls.
+    expect(validateRecovery({ kind: "dissolve_seat", seat: "ceo", options, seats: [...seats], role: "ceo" }).error)
+      .toMatch(/your own chair/);
+    expect(validateRecovery({ kind: "dissolve_seat", seat: "cmo", options, seats: [...seats], role: "ceo" }).ok).toBe(true);
+  });
+
+  it("won't dissolve a seat that has already gone", () => {
+    expect(validateRecovery({ kind: "dissolve_seat", seat: "cto", options, seats: ["ceo", "cmo"], role: "ceo" }).ok).toBe(false);
+  });
+
+  it("offers every filled seat except the chair, in the order seats are always listed", () => {
+    expect(dissolvableSeats(["coo", "cmo", "ceo", "cfo"])).toEqual(["cmo", "cfo", "coo"]);
+    expect(dissolvableSeats(["ceo"])).toEqual([]);
+    expect(dissolvableSeats(undefined)).toEqual([]);
+  });
+
+  it("treats every state but healthy as worth saying out loud", () => {
+    expect(inTrouble("healthy")).toBe(false);
+    expect(inTrouble("strained")).toBe(true);
+    expect(inTrouble(undefined)).toBe(false);
+  });
+});
+
+describe("the covenant, which is the way out", () => {
+  const covenant = { since: 4, spendCap: 800_000, met: 1, rateRelief: 0.03 };
+
+  it("counts the years met against the two that lift it", () => {
+    expect(covenantProgress(covenant)).toMatchObject({ met: 1, of: 2, remaining: 1, fraction: 0.5 });
+    expect(covenantProgress(covenant).line).toMatch(/One more year/);
+  });
+
+  it("says how many clear years it takes when none have been met", () => {
+    expect(covenantProgress({ ...covenant, met: 0 }).line).toMatch(/2 clear years/);
+  });
+
+  it("never reads as more than met, however the server counts it", () => {
+    expect(covenantProgress({ ...covenant, met: 9 })).toMatchObject({ met: 2, remaining: 0 });
+    expect(covenantProgress({ ...covenant, met: -1 }).met).toBe(0);
+  });
+
+  it("measures this year's spending against the cap, and knows when it's over", () => {
+    expect(capUse(600_000, covenant)).toMatchObject({ over: false, left: 200_000 });
+    expect(capUse(900_000, covenant)).toMatchObject({ over: true, left: -100_000 });
+    expect(capUse(500_000, null)).toBeNull();
   });
 });

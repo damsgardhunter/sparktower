@@ -140,8 +140,31 @@ export interface CompanyReport {
   brand: number;
   service: number;
   rank: number;
+  /** The year's prose. Market outcomes are not in here — they have their own field. */
   notes: string[];
+  /**
+   * What the year's sealed bids did, typed rather than described.
+   *
+   * Filled in by the tick rather than the engine (settlement happens after a
+   * year resolves), and typed so a won bid can be shown differently from a
+   * lost one without any client pattern-matching the sentence. Absent on a
+   * year with no bids, and on any report written before the field existed.
+   */
+  market?: ReportMarketNote[];
   bankrupt: boolean;
+}
+
+/**
+ * One settled bid, as the report carries it.
+ *
+ * Mirrors CompanyReport["market"] in shared/simulation/resolve.ts. `lost`
+ * covers both being outbid and nothing clearing the reserve: the company's
+ * position is identical either way — no asset, money untouched — and the
+ * sentence in `text` still says which of the two happened.
+ */
+export interface ReportMarketNote {
+  kind: "won" | "lost" | "sold" | "unsold";
+  text: string;
 }
 
 /** One year's decisions from every seat. Mirrors TeamDecisions in shared/simulation/decisions.ts. */
@@ -171,6 +194,12 @@ export interface DeskView {
   preview?: DraftPreview;
   lastYear?: CompanyReport | null;
   rivals?: DeskRival[];
+  /** This seat's own objective for the year, or null before one is set. */
+  challenge?: Challenge | null;
+  /** How last year's went. Null in year one. */
+  lastChallenge?: ChallengeResult | null;
+  /** How much trouble the company is in, and what can be done about it. */
+  distress?: DeskDistress;
 }
 
 /** What POST /api/sim/ventures/:id/decisions answers with. */
@@ -276,6 +305,19 @@ export function commitmentLevel(ratio: number): CommitmentLevel {
 
 /** How short the table is, or how much is left. Positive means short. */
 export const shortfall = (c: Commitment): number => c.spend + c.fixed - c.available;
+
+/**
+ * The part of the spend the engine calls "discretionary".
+ *
+ * The three seats that buy things, and not the finance seat's repayment.
+ * Mirrors both the `spend` metric in shared/simulation/challenges.ts and the
+ * sum the tick reviews a covenant against (server/simulation-tick.ts), which
+ * are deliberately the same number — a spending cap and a "without spending
+ * your way there" target have to mean the same thing or one of them is lying.
+ */
+export const discretionarySpend = (c: Commitment): number =>
+  c.bySeat.filter((s) => s.role === "cmo" || s.role === "cto" || s.role === "coo")
+    .reduce((sum, s) => sum + s.spend, 0);
 
 // --- The clock -----------------------------------------------------------
 
@@ -499,4 +541,388 @@ export function tableStatus(table: DeskTableSeat[] | undefined): string {
     : `${others.slice(0, -1).join(", ")} and ${others[others.length - 1]}`;
 
   return pending.some((s) => s.isYou) ? `Waiting on ${list} — and on you.` : `Waiting on ${list}.`;
+}
+
+// --- Your own year, inside five people's company -------------------------
+// Mirrors shared/simulation/challenges.ts. The challenge is the one thing on
+// this screen that is *yours*: the company's result is four other people too,
+// and a seat that was dealt at random needs its own answer to "did I play this
+// well". Which is also why none of it is paraphrased here — the server writes
+// the brief against the company's actual position, and a screen that
+// summarises it away turns a sentence written for you into a status line.
+
+/** Mirrors MetricId in shared/simulation/challenges.ts. */
+export type MetricId =
+  | "customers" | "market_share" | "revenue" | "profit" | "reputation" | "quality"
+  | "brand" | "service" | "price" | "unit_cost" | "cash" | "debt" | "turned_away"
+  | "capacity" | "spend";
+
+/** Mirrors Target in shared/simulation/challenges.ts. */
+export interface Target {
+  id: string;
+  label: string;
+  goal: number;
+  compare: "at_least" | "at_most";
+  metric: MetricId;
+}
+
+/** Mirrors Reward in shared/simulation/challenges.ts. */
+export interface Reward {
+  kind: "reputation" | "cash" | "capacity" | "credit";
+  amount: number;
+  label: string;
+}
+
+/** Mirrors Challenge in shared/simulation/challenges.ts. */
+export interface Challenge {
+  id: string;
+  role: DeskRole;
+  year: number;
+  title: string;
+  brief: string;
+  targets: Target[];
+  reward: Reward;
+  partialReward: Reward;
+}
+
+/** Mirrors TargetResult in shared/simulation/challenges.ts. */
+export interface TargetResult extends Target {
+  actual: number;
+  met: boolean;
+}
+
+/** Mirrors ChallengeResult in shared/simulation/challenges.ts. */
+export interface ChallengeResult {
+  challengeId: string;
+  role: DeskRole;
+  year: number;
+  outcome: "met" | "partial" | "missed";
+  targets: TargetResult[];
+  note: string;
+  reward: Reward | null;
+}
+
+/**
+ * Where a target's number can be read from today.
+ *
+ * `now` is the company as it stands — a live figure the player can act on.
+ * `committed` is this year's draft spending, which is a real number about the
+ * year in progress rather than a guess at its outcome. `unknown` is the honest
+ * answer for everything the year has to actually *run* to produce.
+ */
+export type ProgressSource = "now" | "committed" | "unknown";
+
+export interface TargetProgress {
+  target: Target;
+  /** Null when the number can't be known before the tick. */
+  actual: number | null;
+  source: ProgressSource;
+  /** Whether it would pass if the year ended on today's figure. Null when unknown. */
+  met: boolean | null;
+  /** 0–1 for a bar. Null when unknown. */
+  fraction: number | null;
+}
+
+/** The metrics the desk payload already carries a live value for. */
+const LIVE_METRICS: Partial<Record<MetricId, (c: DeskCompany) => number>> = {
+  customers: (c) => c.customers,
+  reputation: (c) => c.reputation,
+  quality: (c) => c.quality,
+  brand: (c) => c.brand,
+  service: (c) => c.service,
+  price: (c) => c.price,
+  unit_cost: (c) => c.unitCost,
+  cash: (c) => c.cash,
+  debt: (c) => c.debt,
+  capacity: (c) => c.capacity,
+};
+
+/**
+ * Why a target has no number yet, said as a fact rather than an apology.
+ *
+ * These four are outcomes of the year rather than states of the company:
+ * nothing the phone holds could produce them, and inventing a stand-in — last
+ * year's profit shown under this year's target — would be a screen quietly
+ * telling somebody they were 40% of the way to something they hadn't started.
+ */
+export const METRIC_PENDING: Partial<Record<MetricId, string>> = {
+  market_share: "Known when the year resolves",
+  revenue: "Known when the year resolves",
+  profit: "Known when the year resolves",
+  turned_away: "Known when the year resolves",
+};
+
+const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
+
+/**
+ * How far along one target is, from what the desk already knows.
+ *
+ * `spend` is the interesting case: it is not a state of the company, but it
+ * *is* this year's committed discretionary spending, which the phone computes
+ * anyway for the commitment meter. So a "without spending your way there"
+ * target can be answered live, from the same sum — the CMO who is about to
+ * break their own ceiling finds out while their thumb is on the number.
+ */
+export function targetProgress(target: Target, from: {
+  company?: Pick<DeskCompany, "customers" | "reputation" | "quality" | "brand" | "service" | "price" | "unitCost" | "cash" | "debt" | "capacity"> | null;
+  /** This year's discretionary spend, as the commitment meter computes it. */
+  committedSpend?: number | null;
+}): TargetProgress {
+  const read = LIVE_METRICS[target.metric];
+  let actual: number | null = null;
+  let source: ProgressSource = "unknown";
+
+  if (target.metric === "spend" && from.committedSpend != null && Number.isFinite(from.committedSpend)) {
+    actual = from.committedSpend;
+    source = "committed";
+  } else if (read && from.company) {
+    const value = read(from.company as DeskCompany);
+    if (Number.isFinite(value)) { actual = value; source = "now"; }
+  }
+
+  if (actual == null) return { target, actual: null, source: "unknown", met: null, fraction: null };
+
+  const met = target.compare === "at_least" ? actual >= target.goal : actual <= target.goal;
+  return { target, actual, source, met, fraction: fractionOf(target, actual) };
+}
+
+/**
+ * The bar, for targets that have one.
+ *
+ * An "at most" target is drawn as room left rather than distance travelled —
+ * full while you are inside it, and shrinking as you approach the ceiling —
+ * because "don't go above 24" is a budget, and a budget bar that fills up as
+ * you spend is the one everybody already knows how to read.
+ */
+function fractionOf(target: Target, actual: number): number {
+  if (target.compare === "at_least") {
+    if (target.goal <= 0) return actual >= target.goal ? 1 : 0;
+    return clamp01(actual / target.goal);
+  }
+  if (actual <= target.goal) return 1;
+  if (target.goal <= 0 || actual <= 0) return 0;
+  return clamp01(target.goal / actual);
+}
+
+/** Every target, in the order the challenge lists them. */
+export const challengeProgress = (
+  challenge: Challenge,
+  from: Parameters<typeof targetProgress>[1],
+): TargetProgress[] => challenge.targets.map((t) => targetProgress(t, from));
+
+/**
+ * Where the challenge stands, counted rather than judged.
+ *
+ * `pending` matters as much as `met`: "one of two, one still to settle" is a
+ * true sentence, where "one of two" alone reads as a half-failure to somebody
+ * whose other target simply cannot be known until the tick.
+ */
+export function challengeStanding(progress: TargetProgress[]): {
+  met: number; missing: number; pending: number; of: number; line: string;
+} {
+  const met = progress.filter((p) => p.met === true).length;
+  const missing = progress.filter((p) => p.met === false).length;
+  const pending = progress.filter((p) => p.met == null).length;
+  const of = progress.length;
+
+  const line = of === 0 ? "Nothing set this year."
+    : pending === of ? "Both settle when the year runs."
+      : missing === 0 && pending === 0 ? "On both, as things stand."
+        : met === 0 && pending === 0 ? "Neither, on today's numbers."
+          : `${met} of ${of} on today's numbers${pending > 0 ? `, ${pending} still to settle` : ""}.`;
+
+  return { met, missing, pending, of, line };
+}
+
+/**
+ * A metric's value, in the units that metric is actually read in.
+ *
+ * Mirrors fmt() in shared/simulation/challenges.ts closely enough that the
+ * server's own note ("got 23.40") and the number above it agree. A unit cost
+ * of 23.4 shown as "23" beside a goal of 23.15 would be a screen telling
+ * somebody they had hit a target they had missed.
+ */
+/** "23.40" → "23.4", "24.00" → "24". The pennies only when there are any. */
+const trimZeros = (s: string): string => (s.includes(".") ? s.replace(/0+$/, "").replace(/\.$/, "") : s);
+
+export function metricRead(metric: MetricId, value: number): string {
+  if (!Number.isFinite(value)) return "—";
+  switch (metric) {
+    case "market_share": return `${value.toFixed(1)}%`;
+    case "price":
+    case "unit_cost": return Math.abs(value) >= 1_000 ? exact(value) : trimZeros(value.toFixed(2));
+    case "reputation":
+    case "quality":
+    case "brand":
+    case "service": return String(Math.round(value));
+    default: return money(value);
+  }
+}
+
+/** "at least 45,000" / "at most 24.20", as the target would be said aloud. */
+export const targetGoalRead = (target: Target): string =>
+  `${target.compare === "at_least" ? "at least" : "at most"} ${metricRead(target.metric, target.goal)}`;
+
+/**
+ * The prize, in four words.
+ *
+ * The reward's own `label` is the sentence and stays the sentence; this is the
+ * badge that goes beside the title, because "+750k credit" is what a player
+ * compares against the risk of missing.
+ */
+export function rewardRead(reward: Reward): string {
+  switch (reward.kind) {
+    case "reputation": return `+${Math.round(reward.amount)} reputation`;
+    case "capacity": return `+${Math.round(reward.amount * 100)}% capacity`;
+    case "cash": return `+${money(reward.amount)} cash`;
+    case "credit": return `+${money(reward.amount)} credit`;
+  }
+}
+
+/** How a finished challenge is coloured and named. Mirrors the outcomes in checkChallenge(). */
+export const OUTCOME_LABEL: Record<ChallengeResult["outcome"], string> = {
+  met: "Done",
+  partial: "Half of it",
+  missed: "Missed",
+};
+
+// --- Trouble, and the way out of it --------------------------------------
+// Mirrors shared/simulation/recovery.ts. The copy there is written to be read
+// before choosing — every option states what it costs in the same breath as
+// what it raises — so this file carries the shapes and the arithmetic and
+// leaves every sentence to the server.
+
+/** Mirrors Distress in shared/simulation/recovery.ts. */
+export type Distress = "healthy" | "strained" | "distressed" | "insolvent";
+
+/** Mirrors RecoveryKind in shared/simulation/recovery.ts. */
+export type RecoveryKind = "restructure" | "fire_sale" | "dissolve_seat" | "rescue_raise";
+
+/** Mirrors RecoveryOption in shared/simulation/recovery.ts. */
+export interface RecoveryOption {
+  kind: RecoveryKind;
+  title: string;
+  body: string;
+  /** What it costs, said out loud before they choose it. Never summarised away. */
+  cost: string;
+  raises: number;
+  from: Distress[];
+}
+
+/** Mirrors Covenant in shared/simulation/recovery.ts. */
+export interface Covenant {
+  since: number;
+  spendCap: number;
+  /** Consecutive years met so far. */
+  met: number;
+  rateRelief: number;
+}
+
+/** What GET /api/sim/ventures/:id/desk sends under `distress`. */
+export interface DeskDistress {
+  level: Distress;
+  title: string;
+  body: string;
+  options: RecoveryOption[];
+  covenant: Covenant | null;
+  filed: { kind: RecoveryKind; seat: string | null } | null;
+}
+
+/** Mirrors COVENANT_YEARS in shared/simulation/recovery.ts. */
+export const COVENANT_YEARS = 2;
+
+/** Worst first, so a comparison between two states is an ordering and not a lookup. */
+export const DISTRESS_RANK: Record<Distress, number> = { healthy: 0, strained: 1, distressed: 2, insolvent: 3 };
+
+/** True when the state is worth putting at the top of the desk. */
+export const inTrouble = (level: Distress | undefined): boolean => !!level && level !== "healthy";
+
+/** Only the chief executive files one — see the 403 in server/simulation-market-routes.ts. */
+export const canFileRecovery = (role: DeskRole | null | undefined): boolean => role === "ceo";
+
+/** The one move that needs an answer before it can be filed. */
+export const recoveryNeedsSeat = (kind: RecoveryKind): boolean => kind === "dissolve_seat";
+
+/**
+ * The seats that can be dissolved: every filled one except the chair.
+ *
+ * The server refuses `ceo` with a 400, and a picker that offers a choice the
+ * server will refuse is a picker that teaches people to distrust it.
+ */
+export const dissolvableSeats = (seats: DeskRole[] | undefined): DeskRole[] =>
+  (seats ?? []).filter((s) => s !== "ceo").sort((a, b) => ROLE_ORDER.indexOf(a) - ROLE_ORDER.indexOf(b));
+
+/**
+ * Whether this move can be filed, and what to say instead.
+ *
+ * Mirrors the checks in POST /api/sim/ventures/:id/recovery, in the order the
+ * server applies them, so the reason shown before the request is the reason
+ * that would come back from it.
+ */
+export function validateRecovery(input: {
+  kind: RecoveryKind | null;
+  seat: DeskRole | null;
+  options: RecoveryOption[];
+  seats: DeskRole[] | undefined;
+  role: DeskRole | null;
+}): { ok: boolean; error: string | null } {
+  const { kind, seat, options, seats, role } = input;
+  if (!canFileRecovery(role)) {
+    return { ok: false, error: "These change what the company is. They're the chief executive's call." };
+  }
+  if (!kind) return { ok: false, error: null };
+  if (!options.some((o) => o.kind === kind)) {
+    return { ok: false, error: "That move isn't available in this position." };
+  }
+  if (recoveryNeedsSeat(kind)) {
+    if (!seat) return { ok: false, error: "Pick the seat to dissolve." };
+    if (seat === "ceo") return { ok: false, error: "You can't dissolve your own chair." };
+    if (!(seats ?? []).includes(seat)) return { ok: false, error: "That seat isn't filled." };
+  }
+  return { ok: true, error: null };
+}
+
+/**
+ * How far through the covenant the company is, and what is left of it.
+ *
+ * This is the visible way out, and it is the thing that makes distress an arc
+ * rather than a hole: two years inside the cap and the creditor lets go. So it
+ * is drawn as progress — met/2 — rather than reported as a restriction.
+ */
+export function covenantProgress(covenant: Covenant): {
+  met: number; of: number; remaining: number; fraction: number; line: string;
+} {
+  const met = Math.max(0, Math.min(COVENANT_YEARS, Math.round(covenant.met)));
+  const remaining = Math.max(0, COVENANT_YEARS - met);
+  return {
+    met,
+    of: COVENANT_YEARS,
+    remaining,
+    fraction: met / COVENANT_YEARS,
+    line: remaining === 0
+      ? "The terms are met. The cap lifts."
+      : met === 0
+        ? `${COVENANT_YEARS} clear years inside the cap and it lifts.`
+        : `One more year inside the cap and it lifts.`,
+  };
+}
+
+/**
+ * How much of the spending cap this year's draft has used.
+ *
+ * The cap is on discretionary spend — what the four spending seats commit —
+ * and the covenant is reviewed against what was actually spent, so the number
+ * that matters is the same one the commitment meter is already showing.
+ */
+export function capUse(spend: number, covenant: Covenant | null | undefined): {
+  over: boolean; fraction: number; left: number;
+} | null {
+  if (!covenant) return null;
+  const cap = Math.max(0, covenant.spendCap);
+  const used = Math.max(0, Number.isFinite(spend) ? spend : 0);
+  return {
+    over: used > cap,
+    fraction: cap > 0 ? used / cap : used > 0 ? Infinity : 0,
+    left: cap - used,
+  };
 }

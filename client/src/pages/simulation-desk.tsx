@@ -79,6 +79,7 @@ interface Desk {
     year: number; customers: number; marketShare: number; shareChange: number; turnedAway: number;
     revenue: number; costs: number; profit: number; cash: number; debt: number;
     reputation: number; reputationChange: number; rank: number; notes: string[]; bankrupt: boolean;
+    market?: { kind: "won" | "lost" | "sold" | "unsold"; text: string }[];
   } | null;
   rivals: { id: string; name: string; kind: string; price: number; customers: number; posture: string | null; posturedAs: string | null }[];
   challenge: Challenge | null;
@@ -667,6 +668,21 @@ function LastYear({ report }: { report: NonNullable<Desk["lastYear"]> }) {
           <Stat label="Profit" value={compact(report.profit)} tone={report.profit < 0 ? "bad" : "plain"} />
           <Stat label="Turned away" value={report.turnedAway.toLocaleString()} tone={report.turnedAway > 0 ? "warn" : "plain"} />
         </div>
+
+        {report.market && report.market.length > 0 && (
+          <div className="mt-4 border-t border-border pt-3 space-y-1.5">
+            <p className="text-xs font-medium flex items-center gap-1.5"><Store className="h-3.5 w-3.5" /> At the market</p>
+            {report.market.map((m, i) => (
+              <p
+                key={i}
+                className={`text-sm ${m.kind === "won" || m.kind === "sold" ? "text-foreground" : "text-muted-foreground"}`}
+                data-testid={`text-market-${m.kind}`}
+              >
+                {m.text}
+              </p>
+            ))}
+          </div>
+        )}
 
         <div className="mt-4 space-y-2 border-t border-border pt-3">
           {report.notes.length === 0 && <p className="text-sm text-muted-foreground">A quiet year.</p>}
