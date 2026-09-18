@@ -136,7 +136,7 @@ export const ENV_RULES: EnvRule[] = [
     name: "PRIVATE_OBJECT_DIR",
     severity: "degraded",
     productionOnly: true,
-    breaks: "uploads: avatars, covers and artifact images fail, and production does not fall back to local disk",
+    breaks: "every image in the product, not just new uploads — avatars, covers, post media and anything Nova drew are all served through the object route, and without a bucket each one fails. On a phone a failed image is blank space with no error",
   },
   {
     name: "STRIPE_SECRET_KEY",

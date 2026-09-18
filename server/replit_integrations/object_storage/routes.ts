@@ -19,6 +19,9 @@ import { consumeLocalUpload, LOCAL_UPLOAD_MAX_BYTES } from "./local-uploads";
  * - Add file metadata storage (save to database after upload)
  * - Add ACL policies for access control
  */
+/** Said once per process, not once per broken image. */
+let warnedNoBucket = false;
+
 export function registerObjectStorageRoutes(app: Express): void {
   const objectStorageService = new ObjectStorageService();
 
@@ -158,10 +161,32 @@ export function registerObjectStorageRoutes(app: Express): void {
 
       await objectStorageService.downloadObject(objectFile, res);
     } catch (error) {
-      console.error("Error serving object:", error);
       if (error instanceof ObjectNotFoundError) {
         return res.status(404).json({ error: "Object not found" });
       }
+      /*
+       * The failure worth naming: no bucket configured. Every image in the
+       * product — avatars, covers, post media, anything Nova drew — is a path
+       * through this route, so an unset PRIVATE_OBJECT_DIR doesn't break
+       * uploads alone, it breaks every picture already uploaded. It surfaced as
+       * a 500 per image with "Failed to serve object" in the log, which reads
+       * like a storage outage rather than a missing setting, and on a phone it
+       * reads as nothing at all: React Native renders a failed image as empty
+       * space with no error anywhere.
+       */
+      const message = String((error as Error)?.message ?? error);
+      if (message.includes("PRIVATE_OBJECT_DIR")) {
+        if (!warnedNoBucket) {
+          warnedNoBucket = true;
+          console.error(
+            "[objects] No object storage configured, so every image in the product will fail to load — " +
+            "not just new uploads. Set PRIVATE_OBJECT_DIR and GCS_SERVICE_ACCOUNT_KEY (docs/ops/deploy.md). " +
+            "Check with: npm run check:env",
+          );
+        }
+        return res.status(503).json({ error: "Image storage isn't configured on this deployment.", code: "storage_unconfigured" });
+      }
+      console.error("Error serving object:", error);
       return res.status(500).json({ error: "Failed to serve object" });
     }
   });
