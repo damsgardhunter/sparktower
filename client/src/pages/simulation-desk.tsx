@@ -40,10 +40,11 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { NOVA_GRADIENT_CSS } from "@shared/backing";
 import { longCountdown } from "@shared/simulation/lobby-copy";
 import { commitment, type LeverField } from "@shared/simulation/levers";
+import { saturate } from "@shared/simulation/market";
 import type { Role } from "@shared/simulation/types";
 import {
   Loader2, Clock, TrendingUp, TrendingDown, Minus, AlertTriangle, Info,
-  CheckCircle2, Circle, Banknote, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy,
+  CheckCircle2, Circle, Banknote, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy, Newspaper,
 } from "lucide-react";
 
 interface Desk {
@@ -71,10 +72,14 @@ interface Desk {
   cities: { id: string; name: string; weight: number; entryCost: number; note: string; open: boolean }[];
   dissolvedSeats: string[];
   economy: { demand: number; interestRate: number; costIndex: number; outlook: string; outlookMeans: string };
+  /** What the company is worth today — what a raise is priced against. */
+  valuation: number;
+  /** How fast this market's products move, which scales what research buys. */
+  innovationPace: number;
   table: { userId: string; name: string; role: Role | null; title: string | null; filed: boolean; isYou: boolean }[];
   filed: Record<string, any>;
   preview: {
-    commitment: { spend: number; fixed: number; available: number; ratio: number; bySeat: { role: Role; spend: number }[] };
+    commitment: { spend: number; fixed: number; available: number; ratio: number; bySeat: { role: Role; spend: number }[]; openingCost: number };
     notes: string[];
     warnings: string[];
   };
@@ -83,6 +88,8 @@ interface Desk {
     revenue: number; costs: number; profit: number; cash: number; debt: number;
     reputation: number; reputationChange: number; rank: number; notes: string[]; bankrupt: boolean;
     market?: { kind: "won" | "lost" | "sold" | "unsold"; text: string }[];
+    event?: { headline: string; body: string; advice: string; scope: "market" | "company"; mine: boolean };
+    founderValue?: number; founderShare?: number;
   } | null;
   rivals: { id: string; name: string; kind: string; price: number; customers: number; posture: string | null; posturedAs: string | null }[];
   challenge: Challenge | null;
@@ -167,7 +174,17 @@ export default function SimulationDeskPage() {
    * changes anybody's mind.
    */
   const live = useMemo(() => {
-    if (!desk || desk.phase !== "running" || !desk.yourRole || !draft) return desk?.preview.commitment ?? null;
+    /*
+     * Optional all the way down, because a desk before its season starts has
+     * no preview at all.
+     *
+     * `not_started` sends a handful of fields and nothing else, so reading
+     * `desk.preview.commitment` threw — and this runs before the early return
+     * that handles that phase, so the whole screen went white for every team
+     * between naming their company and the job starting the season. That is
+     * the first thing anybody does after the lobby.
+     */
+    if (!desk || desk.phase !== "running" || !desk.yourRole || !draft) return desk?.preview?.commitment ?? null;
     try {
       const decisions: any = { ...desk.filed, companyId: desk.ventureId, [desk.yourRole]: draft };
       /*
@@ -202,9 +219,16 @@ export default function SimulationDeskPage() {
 
   if (desk.phase === "not_started") {
     return (
-      <Shell title={desk.name ?? "Your company"} subtitle="The season hasn't started yet">
-        <Card><CardContent className="p-6 text-sm text-muted-foreground">
-          Year one begins once every room in this market has finished choosing seats. Check back shortly.
+      <Shell title={desk.name ?? "Your company"} subtitle="Waiting for year one">
+        <Card><CardContent className="p-6 space-y-2">
+          <p className="text-sm">
+            The company exists. Year one begins once every room in this market has finished choosing seats — usually a
+            minute or two, and never more than twenty.
+          </p>
+          <p className="text-sm text-muted-foreground">
+            {desk.yourTitle ? `You have the ${desk.yourTitle.toLowerCase()}'s chair. ` : ""}
+            Nothing is lost by closing this; the season will be here when it starts.
+          </p>
         </CardContent></Card>
       </Shell>
     );
@@ -231,6 +255,9 @@ export default function SimulationDeskPage() {
           </p>
         </CardContent></Card>
       )}
+
+      {/* What happened to the market, which is the thing people talk about. */}
+      {desk.lastYear?.event && <EventCard event={desk.lastYear.event} />}
 
       {/* Your own thing to win, and how last year's went. */}
       {desk.challenge && <ChallengeCard challenge={desk.challenge} last={desk.lastChallenge} />}
@@ -310,6 +337,20 @@ export default function SimulationDeskPage() {
                 ))}
               </div>
 
+              {desk.yourRole === "cfo" && Number(draft.raiseAmount) > 0 && (
+                <p className="text-xs text-amber-600 mt-4" data-testid="text-dilution">
+                  Raising {compact(Number(draft.raiseAmount))} against a company worth about {compact(desk.valuation)} leaves the
+                  founders with roughly {Math.round((desk.company.founderShare * desk.valuation / (desk.valuation + Number(draft.raiseAmount))) * 100)}%
+                  of whatever this becomes. It never has to be repaid, and it never comes back.
+                </p>
+              )}
+              {desk.yourRole === "cto" && Number(draft.researchSpend) > 0 && (
+                <p className="text-xs text-muted-foreground mt-4" data-testid="text-research">
+                  Roughly +{(saturate(Number(draft.researchSpend), 150_000) * 24 * desk.innovationPace).toFixed(1)} quality,
+                  landing next year. None of it arrives in this one.
+                </p>
+              )}
+
               <Button
                 className="w-full mt-6"
                 onClick={() => submit.mutate()}
@@ -351,6 +392,12 @@ export default function SimulationDeskPage() {
                     </div>
 
                     <div className="mt-4 space-y-1.5">
+                      {live.openingCost > 0 && (
+                        <div className="flex justify-between text-xs text-amber-600" data-testid="text-opening-cost">
+                          <span>opening new places</span>
+                          <span className="tabular-nums">{compact(live.openingCost)}</span>
+                        </div>
+                      )}
                       {live.bySeat.filter((s) => s.spend > 0).map((s) => (
                         <div key={s.role} className="flex justify-between text-xs">
                           <span className="text-muted-foreground uppercase">{s.role}</span>
@@ -631,6 +678,36 @@ function DistressCard({ distress, isCeo, seats, ventureId }: {
             )}
           </div>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * The year's news.
+ *
+ * Above the company's own numbers, because it is the thing a team messages
+ * each other about and the reason a plan made on day three has to survive day
+ * seven. The advice is shown as prominently as the headline: an event a team
+ * can do nothing about is a punishment, and every one of these has an answer.
+ */
+function EventCard({ event }: { event: NonNullable<Desk["lastYear"]>["event"] }) {
+  if (!event) return null;
+  return (
+    <Card className={event.mine && event.scope === "company" ? "border-primary/50" : ""}>
+      <CardContent className="p-5">
+        <div className="flex items-center gap-2">
+          <Newspaper className="h-4 w-4 text-muted-foreground" />
+          <p className="text-[11px] uppercase tracking-widest text-muted-foreground">
+            {event.scope === "market" ? "The market, last year" : "About you, last year"}
+          </p>
+        </div>
+        <h2 className="font-semibold text-lg mt-1.5" data-testid="text-event">{event.headline}</h2>
+        <p className="text-sm text-muted-foreground mt-1">{event.body}</p>
+        <p className="text-sm mt-3 border-t border-border pt-3">{event.advice}</p>
+        <p className="text-[11px] text-muted-foreground mt-2">
+          Things like this are drawn from where a company already stood. The year chose which one arrived, not whether one was owed.
+        </p>
       </CardContent>
     </Card>
   );

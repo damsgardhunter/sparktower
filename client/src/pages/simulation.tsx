@@ -63,6 +63,32 @@ interface Room {
 
 export default function SimulationPage() {
   const [ventureId, setVentureId] = useState<string | null>(null);
+
+  /*
+   * The room you are already in, found on the way in.
+   *
+   * Without this the only thing holding your place was a piece of component
+   * state: reload the page, come back on a different device, or simply open the
+   * tab again, and the app showed you the list of markets as though the four
+   * people waiting on you did not exist. Joining again would have found the
+   * same room — the server is careful about that — but nobody would think to,
+   * because the screen had already told them they were nowhere.
+   */
+  const { data: mine, isLoading } = useQuery<{ ventures: { id: string; phase: string }[] }>({
+    queryKey: ["/api/sim/ventures"],
+  });
+
+  useEffect(() => {
+    if (ventureId || !mine?.ventures?.length) return;
+    // The most recent room that has not been retired. The server orders them.
+    const open = mine.ventures.find((v) => v.phase !== "retired");
+    if (open) setVentureId(open.id);
+  }, [mine, ventureId]);
+
+  if (isLoading && !ventureId) {
+    return <Centered><Loader2 className="h-6 w-6 animate-spin text-primary" /></Centered>;
+  }
+
   return ventureId
     ? <Room ventureId={ventureId} onLeave={() => setVentureId(null)} />
     : <MarketPicker onJoined={setVentureId} />;

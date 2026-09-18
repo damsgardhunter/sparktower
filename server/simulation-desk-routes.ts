@@ -76,7 +76,13 @@ export function registerSimulationDeskRoutes(app: Express): void {
     if (!season) return res.status(404).json({ message: "No such season." });
 
     if (season.status === "forming" || !season.world) {
-      return res.json({ phase: "not_started", ventureId: venture.id, name: venture.name, yourRole: seat.role });
+      return res.json({
+        phase: "not_started",
+        ventureId: venture.id,
+        name: venture.name,
+        yourRole: seat.role,
+        yourTitle: seat.role ? ROLE_TITLES[seat.role as Role] : null,
+      });
     }
 
     const niche = nicheById(season.nicheId)!;

@@ -32,11 +32,14 @@ interface Row {
   id: string; name: string; kind: "player" | "incumbent";
   customers: number; share: number; revenue: number; reputation: number; price: number;
   isYou: boolean; distress: string | null; rank: number;
+  /** What this side's owners actually hold. The table is ordered by it. */
+  founderValue: number;
+  founderShare: number;
 }
 interface Standings {
   year: number; totalYears: number; status: string;
   rows: Row[];
-  history: { year: number; share: number; customers: number; profit: number; rank: number }[];
+  history: { year: number; share: number; customers: number; profit: number; rank: number; founderValue: number | null }[];
 }
 
 const compact = (n: number) =>
@@ -56,7 +59,14 @@ export default function SimulationStandingsPage() {
   }
 
   const you = data.rows.find((r) => r.isYou);
-  const peak = Math.max(...data.history.map((h) => h.share), 0.01);
+  /*
+   * Draw the trajectory in the same currency as the ranking when every year
+   * has one. A share-shaped chart beside a value-shaped rank means a year that
+   * gained share and lost a place looks like a mistake.
+   */
+  const byValue = data.history.length > 0 && data.history.every((h) => typeof h.founderValue === "number");
+  const seriesOf = (h: Standings["history"][number]) => (byValue ? (h.founderValue ?? 0) : h.share);
+  const peak = Math.max(...data.history.map(seriesOf), byValue ? 1 : 0.01);
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8 space-y-4">
@@ -74,11 +84,17 @@ export default function SimulationStandingsPage() {
               : `Year ${data.year} of ${data.totalYears}. Everyone in this market, including the companies that were here first.`}
           </p>
           {you && (
-            <p className="text-sm mt-3" data-testid="text-your-rank">
-              <span className="text-muted-foreground">You are </span>
-              <span className="font-semibold">#{you.rank} of {data.rows.length}</span>
-              <span className="text-muted-foreground">, holding {(you.share * 100).toFixed(1)}% of the market.</span>
-            </p>
+            <>
+              <p className="text-sm mt-3" data-testid="text-your-rank">
+                <span className="text-muted-foreground">You are </span>
+                <span className="font-semibold">#{you.rank} of {data.rows.length}</span>
+                <span className="text-muted-foreground">, holding {(you.share * 100).toFixed(1)}% of the market.</span>
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                The table is ordered by what each side's owners hold — {compact(you.founderValue)} of yours.
+                A bigger company you own less of can be worth less than a smaller one you own all of.
+              </p>
+            </>
           )}
         </div>
       </div>
@@ -113,8 +129,19 @@ export default function SimulationStandingsPage() {
                 </div>
 
                 <div className="text-right shrink-0">
-                  <p className="font-semibold tabular-nums">{(row.share * 100).toFixed(1)}%</p>
-                  <p className="text-xs text-muted-foreground tabular-nums">{compact(row.revenue)}</p>
+                  {/*
+                    * The figure the table is ordered by, leading.
+                    *
+                    * The ranking moved to what each side's owners actually hold
+                    * and this column did not, so the list was sorted by a number
+                    * it never showed — which reads as the order being arbitrary,
+                    * or worse, wrong.
+                    */}
+                  <p className="font-semibold tabular-nums" data-testid={`text-value-${row.rank}`}>{compact(row.founderValue)}</p>
+                  <p className="text-xs text-muted-foreground tabular-nums">
+                    {(row.share * 100).toFixed(1)}% share
+                    {row.founderShare < 1 && ` · owns ${Math.round(row.founderShare * 100)}%`}
+                  </p>
                 </div>
               </div>
             ))}
@@ -127,24 +154,26 @@ export default function SimulationStandingsPage() {
           <CardContent className="p-5">
             <h2 className="text-sm font-semibold">Your season so far</h2>
             <p className="text-xs text-muted-foreground mt-0.5 mb-4">
-              A ranking is a snapshot. This is whether you are climbing.
+              A ranking is a snapshot. This is whether you are climbing — {byValue ? "measured in what you own" : "measured in share"}.
             </p>
 
             <div className="space-y-2">
               {data.history.map((h, i) => {
                 const previous = data.history[i - 1];
-                const up = previous && h.share > previous.share;
-                const down = previous && h.share < previous.share;
+                const up = previous && seriesOf(h) > seriesOf(previous);
+                const down = previous && seriesOf(h) < seriesOf(previous);
                 return (
                   <div key={h.year} className="flex items-center gap-3" data-testid={`row-history-${h.year}`}>
                     <span className="w-14 text-xs text-muted-foreground shrink-0">Year {h.year}</span>
                     <div className="flex-1 h-5 rounded bg-muted overflow-hidden">
                       <div
                         className="h-full bg-primary/70"
-                        style={{ width: `${Math.max(1.5, (h.share / peak) * 100)}%` }}
+                        style={{ width: `${Math.max(1.5, (seriesOf(h) / peak) * 100)}%` }}
                       />
                     </div>
-                    <span className="w-14 text-right text-xs tabular-nums shrink-0">{(h.share * 100).toFixed(1)}%</span>
+                    <span className="w-16 text-right text-xs tabular-nums shrink-0">
+                      {byValue ? compact(h.founderValue ?? 0) : `${(h.share * 100).toFixed(1)}%`}
+                    </span>
                     <span className="w-6 shrink-0">
                       {up ? <TrendingUp className="h-3.5 w-3.5 text-primary" />
                         : down ? <TrendingDown className="h-3.5 w-3.5 text-destructive" />
