@@ -5,7 +5,8 @@ import { api, fetchMe } from "../../src/api/client";
 import { useAuth } from "../../src/auth/AuthContext";
 import { useEntitlementsQuery } from "../../src/hooks/useEntitlements";
 import { colors, font, fontFamily, spacing } from "../../src/theme";
-import { Avatar, Icon, NovaGradient, Progress, TAB_BAR_SPACE } from "../../src/components/ui";
+import { Icon, Progress, TAB_BAR_SPACE } from "../../src/components/ui";
+import { GlossyButton } from "../../src/components/feed/Box";
 import { Group, MenuRow, Pill, useSurfaces } from "../../src/components/MoreKit";
 // The header floats over the scene, so this screen leaves its room in the scroll content.
 import { useHeaderSpace } from "../../src/components/AppHeader";
@@ -43,11 +44,6 @@ export default function More() {
     retry: false,
   });
 
-  const name = me?.profile?.displayName
-    || [me?.user?.firstName, me?.user?.lastName].filter(Boolean).join(" ")
-    || me?.user?.email || "You";
-  const headline = me?.profile?.headline;
-  const avatar = me?.profile?.avatarUrl ?? me?.user?.profileImageUrl;
 
   const planList: any[] = plans?.plans ?? [];
   const plan = planList.find((p) => p.tier === ent.tier);
@@ -60,29 +56,24 @@ export default function More() {
       {/* A tab now, so the title and header come from the tabs layout — and the
           floating bar sits over the scene, so the list ends above it. */}
       <ScrollView style={{ flex: 1, backgroundColor: colors.canvas }} contentContainerStyle={{ paddingTop: headerSpace, paddingBottom: TAB_BAR_SPACE, gap: spacing.lg }}>
-        {/* Who you are, linking to the profile. */}
-        <Pressable
-          onPress={() => go("/(tabs)/profile")}
-          testID="more-profile"
-          style={({ pressed }) => [{ backgroundColor: colors.surface, borderBottomWidth: 1, borderColor: colors.border }, pressed && { opacity: 0.85 }]}
-        >
-          <NovaGradient style={{ height: 56 }} />
-          <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.lg, marginTop: -30 }}>
-            <Avatar name={name} uri={avatar} size={64} ring />
-            <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.sm }}>
-              <View style={{ flex: 1, gap: 2 }}>
-                <Text style={{ color: colors.text, fontSize: font.lg, fontFamily: fontFamily.bold }} numberOfLines={1}>{name}</Text>
-                {headline ? (
-                  <Text style={{ color: colors.textSecondary, fontSize: font.sm, fontFamily: fontFamily.regular }} numberOfLines={2}>{headline}</Text>
-                ) : (
-                  <Text style={{ color: colors.textTertiary, fontSize: font.sm, fontFamily: fontFamily.regular }}>Add a headline so builders know what you do</Text>
-                )}
-                <Text style={{ color: colors.primary, fontSize: font.sm, fontFamily: fontFamily.semibold, marginTop: 4 }}>View profile</Text>
-              </View>
-              <Icon name="chevron-forward" size={18} color={colors.textTertiary} />
-            </View>
-          </View>
-        </Pressable>
+        {/*
+          * Create a project, where the profile block used to be.
+          *
+          * That block was your photo, your name and a "View profile" button —
+          * all three of which the header above this screen now is, so it was
+          * the same card twice on one screen. The most useful thing to put in
+          * the place people's eyes already go is the one action the whole
+          * product is for, and the same button Home has, so it looks like the
+          * same button rather than a second way in.
+          */}
+        <View style={{ paddingHorizontal: spacing.lg }}>
+          <GlossyButton
+            label="Create Project"
+            icon="add"
+            onPress={() => go("/project/new")}
+            testID="button-create-project-more"
+          />
+        </View>
 
         {/* Plan and credits, as in the web sidebar's footer. */}
         {!ent.isLoading && (

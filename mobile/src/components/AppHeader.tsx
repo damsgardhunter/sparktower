@@ -184,7 +184,7 @@ export function useHeaderSpace(): number {
  * status bar, and the whole header at roughly a quarter of the screen — which
  * is only affordable because it slides away the moment you start reading.
  */
-const COVER_H = 100;
+const COVER_H = 84;
 const AVATAR = 68;
 /** The band under the photo: half an avatar, the name, a headline and the three numbers. */
 const INFO_H = AVATAR / 2 + 86;
