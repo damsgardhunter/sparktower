@@ -11,7 +11,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { CofounderSprint, User } from "@shared/schema";
 import {
   Loader2, Plus, Users, Timer, Sparkles,
-  CheckCircle2, Clock, ArrowRight, XCircle, Cpu, GraduationCap, Bot,
+  CheckCircle2, Clock, ArrowRight, XCircle, Cpu, GraduationCap, Bot, Building2,
 } from "lucide-react";
 
 type SprintWithUsers = CofounderSprint & { user1?: User; user2?: User };
@@ -33,6 +33,79 @@ const STATUS_STYLES: Record<string, { label: string; variant: "default" | "secon
   review: { label: "Review", variant: "secondary" },
   completed: { label: "Completed", variant: "outline" },
 };
+
+/**
+ * A door into the market simulation, and a way back to a company you are
+ * already running.
+ *
+ * The second half matters more than the first. A season is fourteen real days
+ * and a team only stays together if getting back to today's decisions takes
+ * one tap — a returning player who has to remember where their company lives
+ * is a player who stops returning.
+ */
+function SimulationEntry() {
+  const [, navigate] = useLocation();
+  const { data } = useQuery<{ ventures: { id: string; name: string | null; phase: string; role: string | null; niche: { name: string } }[] }>({
+    queryKey: ["/api/sim/ventures"],
+  });
+
+  const running = data?.ventures?.filter((v) => v.phase !== "retired") ?? [];
+
+  return (
+    <section className="mb-8">
+      <Card className="border-primary/30" data-testid="card-simulation-entry">
+        <CardContent className="p-5">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div className="min-w-0">
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                <Building2 className="h-5 w-5 text-primary" /> Market simulations
+              </h2>
+              <p className="text-sm text-muted-foreground mt-1 max-w-xl">
+                Five people run one company between them — marketing, finance, product, operations and the chief
+                executive's chair. One real day is one year of trading, over a fortnight, against four companies that
+                already hold ninety per cent of the market.
+              </p>
+            </div>
+            {running.length === 0 && (
+              <Button onClick={() => navigate("/simulation")} data-testid="button-open-simulation">
+                Join a market
+              </Button>
+            )}
+          </div>
+
+          {running.length > 0 && (
+            <div className="mt-4 space-y-2">
+              {running.map((venture) => (
+                <button
+                  key={venture.id}
+                  onClick={() => navigate(venture.phase === "running" ? `/simulation/${venture.id}` : "/simulation")}
+                  className="w-full text-left rounded-lg border border-border hover:border-primary/50 p-3 transition"
+                  data-testid={`button-resume-${venture.id}`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-medium truncate">{venture.name ?? "Your company"}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {venture.niche?.name}
+                        {venture.role && ` · you have the ${venture.role.toUpperCase()} chair`}
+                      </p>
+                    </div>
+                    <span className="text-xs text-muted-foreground shrink-0">
+                      {venture.phase === "running" ? "Open your desk" : "Back to the room"}
+                    </span>
+                  </div>
+                </button>
+              ))}
+              <Button variant="outline" size="sm" onClick={() => navigate("/simulation")} data-testid="button-open-simulation">
+                Join another market
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
 
 export default function Sprints() {
   const { user } = useAuth();
@@ -95,8 +168,8 @@ export default function Sprints() {
       <div className="max-w-5xl mx-auto">
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight" data-testid="text-sprints-title">Co-Founder Sprints</h1>
-            <p className="text-muted-foreground mt-1">Trial collaborations to find your perfect co-founder</p>
+            <h1 className="text-3xl font-bold tracking-tight" data-testid="text-sprints-title">Sprints &amp; simulations</h1>
+            <p className="text-muted-foreground mt-1">Trial collaborations to find a co-founder, and a market to run a company in</p>
           </div>
           <div className="flex items-center gap-2">
             <Button variant="outline" onClick={() => setLocation("/sprints/practice")} data-testid="button-practice-sprint">
@@ -109,6 +182,18 @@ export default function Sprints() {
             </Button>
           </div>
         </div>
+
+        {/*
+          * The way into the simulation.
+          *
+          * It had none. The sidebar has said "Sprints & simulations" since the
+          * feature was built and this page said "Co-Founder Sprints" and
+          * mentioned no simulation at all — so the only way to reach a
+          * fortnight-long game that five people play together was to know the
+          * address and type it. Everything downstream of this was finished and
+          * unreachable.
+          */}
+        <SimulationEntry />
 
         {queueStatus?.inQueue && queueStatus.entry && (
           <section className="mb-8">

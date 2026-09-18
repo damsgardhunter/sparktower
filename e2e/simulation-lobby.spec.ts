@@ -115,6 +115,45 @@ test("five people fill a room, race for the same chair, and come out with a comp
   for (const person of people) await person.context.close();
 });
 
+test("a new player can find the simulation from the app, join, and get back to it", async ({ browser }) => {
+  /*
+   * The path a person actually takes, which for a long time did not exist.
+   *
+   * Everything downstream of this was built and tested — the lobby, five
+   * desks, a marketplace, a boardroom, standings — and there was no link to
+   * any of it anywhere in the web app. The sidebar said "Sprints &
+   * simulations", the page it opened said "Co-Founder Sprints" and mentioned
+   * no simulation at all, so the only way in was to know the address.
+   *
+   * The second half is the half that keeps a season alive: a fortnight-long
+   * game is only played if getting back to today's decisions takes one tap.
+   */
+  test.setTimeout(120_000);
+  const person = await personIn(browser, "203.0.117.70", "Newcomer");
+  const page = await person.context.newPage();
+
+  await page.goto("/sprints");
+  await page.getByTestId("btn-skip-onboarding").click({ timeout: 5_000 }).catch(() => {});
+  await expect(page.getByTestId("text-sprints-title")).toContainText(/simulations/i);
+
+  await expect(page.getByTestId("card-simulation-entry")).toBeVisible();
+  await page.getByTestId("button-open-simulation").click();
+
+  // The markets, and a room.
+  await expect(page.getByTestId(`niche-${NICHE}`)).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId(`button-join-${NICHE}`).click();
+  await expect(page.getByTestId("text-phase-title")).toBeVisible({ timeout: 20_000 });
+
+  // And a way back to it from where they started.
+  await page.goto("/sprints");
+  const resume = page.locator('[data-testid^="button-resume-"]').first();
+  await expect(resume, "a company you are in should be waiting for you").toBeVisible({ timeout: 20_000 });
+  await resume.click();
+  await expect(page.getByTestId("text-phase-title")).toBeVisible({ timeout: 20_000 });
+
+  await person.context.close();
+});
+
 test("somebody who is not in the room is told nothing about it", async ({ browser }) => {
   test.setTimeout(120_000);
 

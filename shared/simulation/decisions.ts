@@ -286,11 +286,21 @@ export const FOCUS_NOTES: Record<Focus, string> = {
  * The floor matters as much as the scale: even a single-city company has five
  * executives and a head office, so the base never falls below 40%.
  */
+/**
+ * What one person costs for a year, and what one executive chair costs.
+ *
+ * Named because the phone re-implements this arithmetic by hand and there was
+ * nothing for its copy to be checked against — two bare literals in a function
+ * body cannot be imported by the test that proves the two sides agree.
+ */
+export const SALARY = 85_000;
+export const EXECUTIVE = 140_000;
+
 export function fixedCosts(company: Company, headcount: number, economy: Economy, reach = 1): number {
   const footprint = 0.4 + 0.6 * Math.max(0, Math.min(1, reach));
-  const salaries = headcount * 85_000 * economy.costIndex;
+  const salaries = headcount * SALARY * economy.costIndex;
   // Each filled seat is an executive salary. Dissolving one is a real saving
   // and a real loss — which is the trade the CEO is being offered.
-  const executives = company.seats.length * 140_000;
+  const executives = company.seats.length * EXECUTIVE;
   return (salaries + executives) * footprint;
 }
