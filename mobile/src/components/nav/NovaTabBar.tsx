@@ -46,15 +46,15 @@ const SPLIT = Math.floor(TABS.length / 2);
  * top bar. Same mark, same gradient, opposite direction — the phone's chrome is
  * at the bottom, so the shape is too.
  *
- * `DOME_W` is the crowding dial, and there is room for it now: More came off
- * the bar, so two tabs sit either side instead of two and three. At 375pt (SE,
- * 13 mini) a 124pt dome leaves each of the four tabs ~63pt, comfortably past
- * the 44pt floor — and dropping the labels means the row no longer has to be
- * wide enough to spell "Discover" either.
+ * Sized to read as one step up from a tab, not as a centrepiece: a tab's icon
+ * pill is 28pt, so a 64pt dome carrying a ~50pt tower is plainly the bigger
+ * target without dominating the bar. Crowding stopped being the constraint
+ * when More came off — four tabs share the width either side of a dome this
+ * narrow with room to spare.
  */
-const DOME_W = 108;
+const DOME_W = 64;
 /** How far the dome stands proud of the bar's top edge. Enough to read as the main action, not so much that it covers content. */
-const DOME_RISE = 48;
+const DOME_RISE = 26;
 /**
  * How far the dome carries on past the bottom of the screen.
  *
@@ -64,7 +64,7 @@ const DOME_RISE = 48;
  * mark height without making the dome wider, which is the dimension the tabs
  * either side cannot spare.
  */
-const DOME_DROP = 22;
+const DOME_DROP = 14;
 
 /**
  * How tall the bar reads, and how far it slides away on scroll.
@@ -240,7 +240,9 @@ export function NovaTabBar({ state, navigation }: BottomTabBarProps) {
         }],
       }}
     >
-      <NovaGradient style={{ flexDirection: "row", alignItems: "flex-start", paddingTop: 2, paddingBottom: bottomPad, borderTopLeftRadius: 22, borderTopRightRadius: 22 }}>
+      {/* Square across the full width: the rounded top corners made it read as a
+          sheet resting on the screen rather than the screen's own edge. */}
+      <NovaGradient style={{ flexDirection: "row", alignItems: "flex-start", paddingTop: 2, paddingBottom: bottomPad }}>
         {/* Halves of equal flex, so the dome stays centred whether or not the two sides hold the same number of tabs. */}
         <View style={{ flex: 1, flexDirection: "row" }}>{TABS.slice(0, SPLIT).map(tab)}</View>
         {/*
