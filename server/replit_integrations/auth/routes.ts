@@ -12,6 +12,9 @@ import { mobileRefreshTokens, users } from "@shared/models/auth";
 import { mfaEnabledFor, mfaRequiredFor } from "../../mfa";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { checkPassword } from "@shared/passwords";
+import { checkEmailShape, normalizeEmail } from "@shared/email-address";
+import { domainCanReceiveMail } from "../../email-deliverable";
+import { domainOf } from "../../public-url";
 import { isBreached, BREACHED_MESSAGE } from "../../password-breach";
 /** The session cookie's name, as express-session is configured. */
 const SESSION_COOKIE = "connect.sid";
@@ -37,6 +40,23 @@ export function registerAuthRoutes(app: Express): void {
       const { email, password, firstName, lastName } = req.body;
       if (!email || !password) {
         return res.status(400).json({ message: "Email and password are required" });
+      }
+      /*
+       * Before an account exists and a confirmation goes out. This route used
+       * to accept anything non-empty — `notanemail`, `a@b`, `spaces here@x.com`
+       * all made accounts — and each one started an email to an address that
+       * cannot receive one. Every bounce is counted against the sending domain
+       * by the providers deciding whether the next invite reaches an inbox.
+       */
+      const badShape = checkEmailShape(email);
+      if (badShape) return res.status(400).json({ message: badShape.message, code: "invalid_input", field: badShape.field });
+
+      const deliverable = await domainCanReceiveMail(domainOf(normalizeEmail(email)) ?? "");
+      if (deliverable === "no-mail-exchanger") {
+        return res.status(400).json({
+          message: "That domain can't receive email, so the confirmation would never arrive. Check the part after the @.",
+          code: "invalid_input", field: "email",
+        });
       }
       const weak = checkPassword(password, { email });
       if (weak) return res.status(400).json({ message: weak.message, code: "invalid_input", field: weak.field });

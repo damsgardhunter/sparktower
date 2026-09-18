@@ -17,6 +17,9 @@ import bcrypt from "bcryptjs";
 import { OAuth2Client } from "google-auth-library";
 import { db } from "./db";
 import { authStorage } from "./replit_integrations/auth/storage";
+import { checkEmailShape, normalizeEmail } from "@shared/email-address";
+import { domainCanReceiveMail } from "./email-deliverable";
+import { domainOf } from "./public-url";
 import { users, mobileRefreshTokens } from "@shared/schema";
 import { eq, and, isNull, gt } from "drizzle-orm";
 import { storage } from "./storage";
@@ -269,6 +272,16 @@ export function registerMobileAuthRoutes(app: Express) {
       const { email, password, firstName, lastName, device } = req.body as Record<string, string>;
       if (!email || !password) {
         return res.status(400).json({ message: "Email and password are required" });
+      }
+      // The same bar as the web signup: shaped like an address, and a domain
+      // that can actually take delivery (shared/email-address.ts).
+      const badShape = checkEmailShape(email);
+      if (badShape) return res.status(400).json({ message: badShape.message, code: "invalid_input", field: badShape.field });
+      if (await domainCanReceiveMail(domainOf(normalizeEmail(email)) ?? "") === "no-mail-exchanger") {
+        return res.status(400).json({
+          message: "That domain can't receive email, so the confirmation would never arrive. Check the part after the @.",
+          code: "invalid_input", field: "email",
+        });
       }
       const weak = checkPassword(password, { email });
       if (weak) return res.status(400).json({ message: weak.message, code: "invalid_input", field: weak.field });

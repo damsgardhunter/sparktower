@@ -92,3 +92,37 @@ describe("addresses, whatever case they arrive in", () => {
     expect(sent.length, "a reset email should have gone out").toBeGreaterThan(0);
   });
 });
+
+describe("addresses that can't receive a confirmation", () => {
+  it("refuses them at sign-up instead of sending into a void", async () => {
+    const app = await getTestApp();
+    // All of these made accounts before, each one starting an email nobody could receive.
+    for (const [email, why] of [
+      ["notanemail", "no @"],
+      ["a@b", "no dot in the domain"],
+      ["x@@y.com", "two @"],
+      ["spaces here@x.com", "a space"],
+      ["casey@gmial.com", "a typo of gmail"],
+    ]) {
+      const res = await request(app).post("/api/auth/register").set("x-forwarded-for", ip())
+        .send({ email, password, firstName: "Junk" });
+      expect(res.status, `${email} (${why}) should be refused: ${JSON.stringify(res.body)}`).toBe(400);
+      expect(res.body.field).toBe("email");
+    }
+  });
+
+  it("refuses a domain with nowhere to deliver, and lets a real one through", async () => {
+    const app = await getTestApp();
+
+    // A name nobody has registered: no MX, no address record, nothing.
+    const nowhere = await request(app).post("/api/auth/register").set("x-forwarded-for", ip())
+      .send({ email: `casey@nosuchdomain-zzzz9876.com`, password, firstName: "Nowhere" });
+    expect(nowhere.status).toBe(400);
+    expect(nowhere.body.message).toMatch(/can't receive email/);
+
+    // And a domain that plainly can.
+    const real = await request(app).post("/api/auth/register").set("x-forwarded-for", ip())
+      .send({ email: `sparktower-check-${Date.now()}@gmail.com`, password, firstName: "Real" });
+    expect(real.status, JSON.stringify(real.body)).toBe(201);
+  });
+});
