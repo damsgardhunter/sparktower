@@ -19,6 +19,15 @@ export default function TabsLayout() {
         tabBar={(props) => <NovaTabBar {...props} />}
       screenOptions={{
         header: () => <AppHeader />,
+        /*
+         * Zero, because the header draws its own: the cover photo runs from the
+         * very top of the screen so the time and wifi icon sit on the
+         * photograph. Left at its default, react-navigation pads the header
+         * down by the status bar's height and the photo starts below it, which
+         * is the banner-pasted-under-the-furniture look the cover is meant to
+         * replace.
+         */
+        headerStatusBarHeight: 0,
         sceneStyle: { backgroundColor: colors.canvas },
       }}
     >

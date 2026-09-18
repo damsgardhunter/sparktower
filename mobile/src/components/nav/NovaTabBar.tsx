@@ -155,8 +155,15 @@ export function NovaTabBar({ state, navigation }: BottomTabBarProps) {
          * icons is empty on every phone, so a thumb landing there is landing
          * on the tab it was aiming at.
          */
-        style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: ROW_PAD, minHeight: MIN_TARGET }}
-        hitSlop={{ bottom: 8 }}
+        style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: ROW_PAD }}
+        /*
+         * The touch area, not the layout. `minHeight` here would push the row
+         * back to 44pt — it made the bar exactly as tall as the target I was
+         * trying to keep, which is the opposite of the point. hitSlop grows
+         * what a thumb can hit and nothing that occupies space, and it reaches
+         * down into the padding below the icons, which is empty on every phone.
+         */
+        hitSlop={{ top: 6, bottom: MIN_TARGET, left: 4, right: 4 }}
         testID={t.testID ?? `tab-${t.name}`}
       >
         {/*
@@ -189,7 +196,13 @@ export function NovaTabBar({ state, navigation }: BottomTabBarProps) {
    * MARK_INSET below the curve and clear of the home indicator at the bottom,
    * which is why it shrinks with the dome on a phone that has no indicator.
    */
-  const bottomPad = Math.max(insets.bottom, spacing.sm);
+  /*
+   * Just enough to clear the home indicator, not the whole inset it asks for.
+   * The full 34pt is sized for content you can touch; nothing lives down there
+   * but the bar's own floor, and reserving it put a band of empty gradient
+   * under the icons that read as a bar sitting too high off the bottom.
+   */
+  const bottomPad = insets.bottom > 0 ? Math.round(insets.bottom * 0.4) : spacing.sm;
   /*
    * A portrait box, not a square. The mark is a tall, narrow tower — its art
    * fills about 86% of the square's height and only 48% of its width — so a
@@ -222,7 +235,7 @@ export function NovaTabBar({ state, navigation }: BottomTabBarProps) {
         }],
       }}
     >
-      <NovaGradient style={{ flexDirection: "row", alignItems: "flex-start", paddingTop: 2, paddingBottom: Math.max(insets.bottom, spacing.sm), borderTopLeftRadius: 22, borderTopRightRadius: 22 }}>
+      <NovaGradient style={{ flexDirection: "row", alignItems: "flex-start", paddingTop: 2, paddingBottom: bottomPad, borderTopLeftRadius: 22, borderTopRightRadius: 22 }}>
         {/* Halves of equal flex, so the dome stays centred whether or not the two sides hold the same number of tabs. */}
         <View style={{ flex: 1, flexDirection: "row" }}>{TABS.slice(0, SPLIT).map(tab)}</View>
         {/*

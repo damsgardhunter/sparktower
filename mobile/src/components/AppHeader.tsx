@@ -1,114 +1,144 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Animated, ImageBackground, Pressable, Text, View } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
+import { StatusBar } from "expo-status-bar";
 import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api, fetchMe } from "../api/client";
-import { colors, font, fontFamily, spacing } from "../theme";
+import { colors, font, fontFamily, novaGradient, spacing } from "../theme";
 import { Avatar, assetUri } from "./ui";
 import { useTabBarVisibility } from "./tab-bar-visibility";
 
 /**
- * The top of the app is you: your cover photo, with your face on it.
+ * The top of the app is you: your cover photo, your face on it, and the three
+ * numbers that say whether any of this is working.
  *
- * It used to be a utility strip — avatar, a search pill, messages, a menu —
- * which is four controls competing for the most valuable row on the screen and
- * none of them the reason anyone opened the app. Search lives on Discover,
- * messages and More are on the bottom bar now, and the avatar was only ever a
- * doorway to the profile this header now IS.
+ * It used to be a utility strip — avatar, search pill, messages, menu — four
+ * controls competing for the most valuable row on the screen, none of them the
+ * reason anyone opened the app. Search lives on Discover; messages and More
+ * are on the bottom bar; the avatar was only ever a door to the profile this
+ * header now is.
  *
- * It answers the same scroll as the bottom bar, from the same source: reading
- * the feed slides both away, and coming back up brings both in — the header
- * dropping down from the top, the bar rising from the bottom, at the same
- * moment. One gesture, one response, no second thing to learn.
+ * Shaped like the More screen's profile block, because that shape already
+ * worked: a band of image, the avatar straddling its bottom edge, and the words
+ * below on a clean surface where they're legible without fighting the photo.
  *
- * When it's in view it carries the three numbers that answer "is any of this
- * working": views on your projects, people you're connected to, and your
- * builder index. The same three the web keeps in its profile rail, from the
- * same endpoint, so the two can't drift into telling you different things.
+ * The cover runs **under the status bar**. The time and the wifi icon sit on
+ * the photograph rather than on a strip of background above it, which is what
+ * makes it read as a cover rather than a banner someone pasted below the
+ * system's furniture — and it's why the status bar is forced light here.
+ *
+ * It answers the same scroll as the bottom bar, from the same value: reading
+ * slides both away, coming back brings both in together. One gesture, one
+ * response, nothing new to learn.
  */
 export function AppHeader() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const visibility = useTabBarVisibility();
+  const [height, setHeight] = useState(220);
 
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: fetchMe });
   const { data: summary } = useQuery({
     queryKey: ["/api/profile/summary"],
-    queryFn: () => api<{ profile: any; stats: Stats }>("/api/profile/summary"),
+    queryFn: () => api<{ profile: Profile; stats: Stats }>("/api/profile/summary"),
     staleTime: 60_000,
   });
 
-  const name = me?.profile?.displayName || me?.user?.firstName || "You";
-  const avatarUrl = assetUri(me?.profile?.avatarUrl ?? me?.user?.profileImageUrl) ?? undefined;
-  /*
-   * Through assetUri: an upload comes back as a path on this API, not an
-   * absolute URL, and a bare path renders as nothing on a phone with no
-   * console to tell you why.
-   */
-  const coverUrl = assetUri(summary?.profile?.coverUrl ?? me?.profile?.coverUrl ?? null);
+  const profile = summary?.profile ?? me?.profile;
+  const name = profile?.displayName || me?.user?.firstName || "You";
+  const headline = profile?.headline;
   const stats = summary?.stats;
 
   /*
-   * Slides up out of the way rather than down: a header leaves by the edge it
-   * lives on. Same 0→1 value the bottom bar reads, so the two move together
-   * instead of drifting a frame apart.
+   * Through assetUri, both of them: an upload comes back as a path on this API
+   * rather than an absolute URL, and a bare path renders as nothing at all on a
+   * phone — no broken-image icon, no console, just a blank where the photo was.
    */
+  const coverUrl = assetUri(profile?.coverUrl);
+  const avatarUrl = assetUri(profile?.avatarUrl ?? me?.user?.profileImageUrl) ?? undefined;
+
   const hidden = visibility?.hidden;
   const translateY = useMemo(
-    () => hidden?.interpolate({ inputRange: [0, 1], outputRange: [0, -(HEADER_HEIGHT + insets.top)] }),
-    [hidden, insets.top],
+    () => hidden?.interpolate({ inputRange: [0, 1], outputRange: [0, -height] }),
+    [hidden, height],
   );
 
   const body = (
     <Pressable
       onPress={() => router.push("/(tabs)/profile")}
       accessibilityRole="button"
-      accessibilityLabel="Your profile"
+      accessibilityLabel={`${name}. Your profile.`}
       testID="header-profile"
-      style={{ paddingTop: insets.top }}
     >
+      {/* Light, because it is sitting on a photograph now. */}
+      <StatusBar style="light" />
+
+      {/* The photo, from the very top of the screen down past the notch. */}
       <ImageBackground
         source={coverUrl ? { uri: coverUrl } : undefined}
-        style={{ height: HEADER_HEIGHT, justifyContent: "flex-end" }}
-        imageStyle={{ resizeMode: "cover" }}
+        resizeMode="cover"
+        style={{ height: insets.top + COVER_H, justifyContent: "flex-end", backgroundColor: novaGradient[1] }}
+        testID="header-cover"
       >
+        {!coverUrl && (
+          /* No cover yet: the brand gradient rather than a grey hole, and an
+             invitation rather than an explanation of the emptiness. */
+          <LinearGradient colors={[...novaGradient]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={ABSOLUTE_FILL} />
+        )}
         {/*
-         * A wash under the text, always — a cover photo is whatever the person
-         * uploaded, and white type over a bright sky is unreadable. It doubles
-         * as the background for anyone who hasn't set a cover at all.
+         * A scrim only along the bottom, and only faintly. The old version
+         * washed the entire photo at 42% black to make white text readable over
+         * it — which made every cover look like the same dark rectangle. The
+         * words moved below the photo instead, so the scrim now only has to
+         * soften the seam.
          */}
-        <View style={{ ...StyleSheetAbsolute, backgroundColor: coverUrl ? "rgba(17,17,20,0.42)" : colors.primary }} />
+        <LinearGradient colors={["transparent", "rgba(0,0,0,0.25)"]} style={{ height: 56 }} />
+      </ImageBackground>
 
-        <View style={{ flexDirection: "row", alignItems: "flex-end", gap: spacing.md, paddingHorizontal: spacing.md, paddingBottom: spacing.sm }}>
-          <View style={{ borderRadius: 999, borderWidth: 2, borderColor: "rgba(255,255,255,0.9)" }}>
-            <Avatar name={name} uri={avatarUrl} size={44} />
-          </View>
+      {/* The avatar straddles the edge, as it does on the More screen. */}
+      <View style={{ backgroundColor: colors.background, paddingHorizontal: spacing.md, paddingBottom: spacing.md }}>
+        <View style={{ marginTop: -AVATAR / 2 }}>
+          <Avatar name={name} uri={avatarUrl} size={AVATAR} ring />
+        </View>
 
-          <View style={{ flex: 1, paddingBottom: 2 }}>
-            <Text numberOfLines={1} style={{ color: "#FFFFFF", fontSize: font.base, fontFamily: fontFamily.semibold }}>
-              {name}
+        <View style={{ marginTop: spacing.sm, gap: 2 }}>
+          <Text numberOfLines={1} style={{ color: colors.text, fontSize: font.lg, fontFamily: fontFamily.bold }}>
+            {name}
+          </Text>
+          {headline ? (
+            <Text numberOfLines={1} style={{ color: colors.textSecondary, fontSize: font.sm, fontFamily: fontFamily.regular }}>
+              {headline}
             </Text>
-            {/* The three numbers, on one line: a header is not the place for a table. */}
-            <View style={{ flexDirection: "row", gap: spacing.md, marginTop: 1 }} testID="header-stats">
-              <Stat label="views" value={stats?.projectViews} />
-              <Stat label="connections" value={stats?.connections} />
-              <Stat label="index" value={stats?.reputationScore} />
-            </View>
+          ) : null}
+
+          {/* The three numbers, on one line: a header is not the place for a table. */}
+          <View style={{ flexDirection: "row", gap: spacing.lg, marginTop: 4 }} testID="header-stats">
+            <Stat label="views" value={stats?.projectViews} />
+            <Stat label="connections" value={stats?.connections} />
+            <Stat label="index" value={stats?.reputationScore} />
           </View>
         </View>
-      </ImageBackground>
+      </View>
     </Pressable>
   );
 
-  // No provider (a screen outside the tabs): render it still, just fixed.
-  if (!translateY) return <View style={{ backgroundColor: colors.background }}>{body}</View>;
+  // Outside the tabs there's no scroll driving it: render it fixed.
+  if (!translateY) return <View>{body}</View>;
 
   return (
-    <Animated.View style={{ backgroundColor: colors.background, transform: [{ translateY }] }}>
+    <Animated.View onLayout={(e) => setHeight(e.nativeEvent.layout.height)} style={{ transform: [{ translateY }] }}>
       {body}
     </Animated.View>
   );
+}
+
+interface Profile {
+  displayName?: string | null;
+  headline?: string | null;
+  coverUrl?: string | null;
+  avatarUrl?: string | null;
 }
 
 interface Stats {
@@ -117,19 +147,27 @@ interface Stats {
   reputationScore: number | null;
 }
 
-/** Bare numbers, because the label under them is the explanation. A dash while loading, never a zero that isn't one. */
+/** Bare numbers, because the word under them is the explanation. A dash while loading, never a zero that isn't one. */
 function Stat({ label, value }: { label: string; value?: number | null }) {
   return (
-    <View style={{ flexDirection: "row", alignItems: "baseline", gap: 3 }}>
-      <Text style={{ color: "#FFFFFF", fontSize: font.sm, fontFamily: fontFamily.semibold }}>
+    <View style={{ flexDirection: "row", alignItems: "baseline", gap: 4 }}>
+      <Text style={{ color: colors.text, fontSize: font.base, fontFamily: fontFamily.bold }}>
         {value == null ? "—" : value.toLocaleString()}
       </Text>
-      <Text style={{ color: "rgba(255,255,255,0.75)", fontSize: font.xs, fontFamily: fontFamily.regular }}>{label}</Text>
+      <Text style={{ color: colors.textSecondary, fontSize: font.xs, fontFamily: fontFamily.regular }}>{label}</Text>
     </View>
   );
 }
 
-/** The header's own height, not counting the status bar above it. */
-export const HEADER_HEIGHT = 92;
+/**
+ * How much photograph shows below the status bar.
+ *
+ * The one number to change if the header feels too tall or too short. On a
+ * 6.9" phone this puts the cover at about 160pt including the part behind the
+ * status bar, and the whole header at roughly a quarter of the screen — which
+ * is only affordable because it slides away the moment you start reading.
+ */
+const COVER_H = 100;
+const AVATAR = 68;
 
-const StyleSheetAbsolute = { position: "absolute" as const, left: 0, right: 0, top: 0, bottom: 0 };
+const ABSOLUTE_FILL = { position: "absolute" as const, left: 0, right: 0, top: 0, bottom: 0 };
