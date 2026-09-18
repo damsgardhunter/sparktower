@@ -58,6 +58,7 @@ import { pickFields, WRITABLE } from "./body-fields";
 import { registerEmailVerificationRoutes, requireVerifiedEmail } from "./email-verification";
 import { registerPasswordResetRoutes } from "./password-reset";
 import { recordView, countViews } from "./views";
+import { registerAdminSecurityRoutes } from "./admin-security-routes";
 import { registerSimulationRoutes } from "./simulation-routes";
 import { registerSimulationDeskRoutes } from "./simulation-desk-routes";
 import { registerSimulationMarketRoutes } from "./simulation-market-routes";
@@ -388,6 +389,7 @@ export async function registerRoutes(
   // The starter communities exist before anyone can open the page. Non-fatal: the list is just shorter without them.
   await seedCommunities().catch((err) => console.error("[communities] seed failed (non-fatal):", err));
   registerArtifactRoutes(app);
+  registerAdminSecurityRoutes(app);
   registerPromotionRoutes(app);
   registerInviteRoutes(app);
   // Your data: export it, or close the account (server/account-data.ts).
