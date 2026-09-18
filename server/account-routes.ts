@@ -16,7 +16,7 @@ import { users } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
 import { deleteAccount, exportAccount } from "./account-data";
-import { checkSecondFactor, limitMfaAttempts, mfaEnabledFor } from "./mfa";
+import { checkSecondFactor, countWrongMfaCode, limitMfaAttempts, mfaEnabledFor } from "./mfa";
 
 export function registerAccountRoutes(app: Express) {
   /** Everything we hold on the account, as a JSON file. */
@@ -60,7 +60,10 @@ export function registerAccountRoutes(app: Express) {
       if (mfaEnabledFor(user)) {
         if (!(await limitMfaAttempts(req, res, userId))) return;
         const method = await checkSecondFactor(userId, String(req.body?.code ?? ""));
-        if (!method) return res.status(401).json({ message: "That code isn't right.", code: "mfa_invalid_code", field: "code" });
+        if (!method) {
+          await countWrongMfaCode(userId);
+          return res.status(401).json({ message: "That code isn't right.", code: "mfa_invalid_code", field: "code" });
+        }
       }
 
       const outcome = await deleteAccount(userId, { keepPosts: req.body?.keepPosts === true });

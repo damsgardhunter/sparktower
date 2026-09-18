@@ -50,9 +50,19 @@ export const ROLE_TITLES: Record<Role, string> = {
  * argues over in the lobby — and arguing over the seats is the first thing
  * that makes a team a team.
  */
+/*
+ * What each seat can do — and only what it can actually do.
+ *
+ * This list is read out to five people while they are choosing which chair to
+ * fight over, so everything in it is a promise. It previously promised the
+ * chief executive mergers, acquisitions and the power to dissolve a seat,
+ * none of which the engine reads, which made the most contested chair in the
+ * lobby the one with the least to do. Those come back to this list when they
+ * come back to `resolveYear`, and not before.
+ */
 export const ROLE_LEVERS: Record<Role, string[]> = {
-  ceo: ["Where the company's effort goes", "Hiring and firing the other seats", "Mergers, acquisitions and selling parts of the company", "The final word when the table deadlocks"],
-  cmo: ["Price", "Brand and performance marketing", "Celebrity and sponsorship deals", "Which cities to go after"],
+  ceo: ["Where the company's effort goes, and what everyone else gives up for it", "The final word when the table deadlocks"],
+  cmo: ["Price", "Brand and performance marketing", "Celebrity and sponsorship deals"],
   cfo: ["Drawing and repaying debt", "Raising from investors", "How much cash to hold", "What the company reports"],
   cto: ["Product quality and reliability", "Research into next year's product", "Paying down or taking on technical debt"],
   coo: ["How much the company can actually deliver", "Support quality", "Cost of goods and headcount", "Supply agreements"],

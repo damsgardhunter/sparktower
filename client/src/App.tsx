@@ -33,6 +33,7 @@ import SecuritySettings from "@/pages/security-settings";
 import ForgotPasswordPage from "@/pages/forgot-password";
 import { PrivacyPolicy, TermsOfService, SecurityPolicy } from "@/pages/legal";
 import SimulationPage from "@/pages/simulation";
+import SimulationDeskPage from "@/pages/simulation-desk";
 import ResetPasswordPage from "@/pages/reset-password";
 import { MfaNotice } from "@/components/mfa";
 import { NOVA_GRADIENT, NOVA_GRADIENT_CSS } from "@shared/backing";
@@ -281,6 +282,8 @@ function Router() {
             <Route path="/sprints" component={Sprints} />
             {/* The market simulation lives under sprints, which is now "Sprints & simulations". */}
             <Route path="/simulation" component={SimulationPage} />
+            {/* One company's desk: the year this seat is deciding. */}
+            <Route path="/simulation/:id" component={SimulationDeskPage} />
             <Route path="/sprints/new" component={SprintMatchmaking} />
             <Route path="/sprints/practice" component={SprintPractice} />
             <Route path="/sprints/:id" component={SprintDashboard} />

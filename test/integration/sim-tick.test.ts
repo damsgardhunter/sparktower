@@ -13,7 +13,7 @@
  */
 import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
@@ -40,11 +40,26 @@ const NICHE = "fitness_app";
 
 /** Five players, seated, named, and running — a room ready for year one. */
 async function readyRoom(app: any) {
+  /*
+   * Close any room still standing open from an earlier test first.
+   *
+   * Joining puts you in whichever room in the market has space, which is the
+   * product behaving correctly and a trap for a helper that assumes its five
+   * players get a room to themselves: a half-filled room left by the lobby
+   * tests swallows the first few, the rest start a second room, and the seats
+   * get claimed across two ventures that then never reach `running`. It failed
+   * about one combined run in three and passed every time each file was run on
+   * its own, which is the most annoying shape a test failure has.
+   */
+  await db.update(simVentures).set({ phase: "retired" })
+    .where(inArray(simVentures.phase, ["filling", "claiming", "naming"]));
+
   const players = [];
   let ventureId = "";
   for (let i = 0; i < 5; i++) {
     const p = await player(app);
     const join = await p.agent.post("/api/sim/join").send({ nicheId: NICHE });
+    expect(join.body.ventureId, "all five should land in one room").toBe(ventureId || join.body.ventureId);
     ventureId = join.body.ventureId;
     players.push(p);
   }

@@ -22,6 +22,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import { formatCountdown, remainingSeconds, type NichesResponse, type VentureView } from "./lobby";
+import type { DeskView } from "./desk";
 
 /** Short enough that a claimed seat shows up before someone else reaches for it. */
 export const ROOM_POLL_MS = 2_500;
@@ -82,4 +83,34 @@ export function useCountdown(secondsLeft: number | undefined, anchoredAt: number
 
   const seconds = secondsLeft == null ? 0 : remainingSeconds({ secondsLeft, atMs: anchoredAt }, Date.now());
   return { seconds, text: formatCountdown(seconds) };
+}
+
+/**
+ * The desk, re-asked on the room's interval.
+ *
+ * The same 2.5 seconds as the lobby, and for a weaker reason: a year is a day
+ * long, so nothing here is a race the way a seat is. What it buys is that the
+ * table's commitment total moves *while the five of them are arguing about
+ * it* — someone in the group chat saying "fine, I'll drop brand to one" should
+ * show up on four other screens within a breath, because the argument is the
+ * feature. One interval across both screens also means one thing to change if
+ * it turns out to be wrong.
+ *
+ * Polling stops on the two phases that can't move again on their own: a season
+ * that hasn't started has nothing to report, and a finished one is a final
+ * answer. `running` keeps asking — the year resolving underneath the screen is
+ * precisely what a player wants to be told about.
+ */
+export function useDesk(id: string | undefined) {
+  return useQuery({
+    queryKey: ["sim-desk", id],
+    queryFn: () => api<DeskView>(`/api/sim/ventures/${id}/desk`),
+    enabled: !!id,
+    refetchInterval: (query) => {
+      const phase = query.state.data?.phase;
+      return phase === "finished" || phase === "not_started" ? false : ROOM_POLL_MS;
+    },
+    staleTime: 0,
+    retry: false,
+  });
 }

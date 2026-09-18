@@ -18,7 +18,7 @@
 import type { Company, Economy, World } from "./types";
 import { allocate, marketShares } from "./market";
 import { incumbentYear } from "./incumbents";
-import { fixedCosts, interlock, lift, type TeamDecisions } from "./decisions";
+import { fixedCosts, focusEffects, interlock, lift, FOCUS_NOTES, type Focus, type TeamDecisions } from "./decisions";
 
 /** What one company is told about the year it just had. */
 export interface CompanyReport {
@@ -76,15 +76,26 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
     const lock = interlock(company, d, niche);
     notesFor[company.id] = [...lock.notes];
 
-    const brandGain = lift((d.cmo?.brandSpend ?? 0) + (d.cmo?.celebritySpend ?? 0) * 1.4, 220_000, 16) * lock.deliverable;
-    const perfGain = lift(d.cmo?.performanceSpend ?? 0, 180_000, 9) * lock.deliverable;
-    const qualityGain = lift((d.cto?.featureSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 1.2, 200_000, 14) * niche.innovationPace;
-    const serviceGain = lift((d.coo?.supportSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 0.5, 150_000, 15);
+    /*
+     * The chief executive's focus is a thumb on everyone else's scale rather
+     * than a sixth budget: it cannot win a year by itself, and it cannot save a
+     * company whose other four seats decided nothing. Each option gives up
+     * something, so there is no safe default to pick without thinking.
+     */
+    const focus = focusEffects(d.ceo?.focus);
+    if (d.ceo?.focus && FOCUS_NOTES[d.ceo.focus as Focus]) {
+      notesFor[company.id].push(FOCUS_NOTES[d.ceo.focus as Focus]);
+    }
+
+    const brandGain = lift((d.cmo?.brandSpend ?? 0) + (d.cmo?.celebritySpend ?? 0) * 1.4, 220_000, 16) * lock.deliverable * focus.marketing;
+    const perfGain = lift(d.cmo?.performanceSpend ?? 0, 180_000, 9) * lock.deliverable * focus.marketing;
+    const qualityGain = lift((d.cto?.featureSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 1.2, 200_000, 14) * niche.innovationPace * focus.quality;
+    const serviceGain = lift((d.coo?.supportSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 0.5, 150_000, 15) * focus.quality;
     const costCut = lift(d.coo?.efficiencySpend ?? 0, 180_000, 0.18);
 
     // Everything decays. A company that stands still goes backwards, which is
     // what stops a good year in year two carrying a team to year fourteen.
-    const decay = { brand: 4.5, quality: 3, service: 3.5 };
+    const decay = { brand: 4.5 * focus.decay, quality: 3 * focus.decay, service: 3.5 * focus.decay };
 
     const capacity = Math.max(0, Math.round(d.coo?.capacityTarget ?? company.capacity));
     const price = Math.max(1, d.cmo?.price ?? company.price);
@@ -96,7 +107,7 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
       brand: clamp(company.brand + brandGain + perfGain - decay.brand),
       quality: clamp(company.quality + qualityGain - decay.quality),
       service: clamp(company.service + serviceGain - decay.service),
-      unitCost: Math.max(niche.baseUnitCost * 0.45, company.unitCost * (1 - costCut) * nextEconomy.costIndex),
+      unitCost: Math.max(niche.baseUnitCost * 0.45, company.unitCost * (1 - costCut) * nextEconomy.costIndex * focus.cost),
     };
   });
 
@@ -125,7 +136,9 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
     const marketing = (d?.cmo?.brandSpend ?? 0) + (d?.cmo?.performanceSpend ?? 0) + (d?.cmo?.celebritySpend ?? 0);
     const product = (d?.cto?.featureSpend ?? 0) + (d?.cto?.reliabilitySpend ?? 0) + (d?.cto?.techDebtPaydown ?? 0);
     const ops = (d?.coo?.supportSpend ?? 0) + (d?.coo?.efficiencySpend ?? 0);
-    const fixed = company.kind === "player" ? fixedCosts(company, d?.coo?.headcount ?? 0, nextEconomy) : 0;
+    const fixed = company.kind === "player"
+      ? fixedCosts(company, d?.coo?.headcount ?? 0, nextEconomy) * focusEffects(d?.ceo?.focus).fixed
+      : 0;
     const discretionary = company.kind === "player" ? marketing + product + ops + fixed : (spendFor[company.id] ?? 0);
 
     const borrowed = Math.max(0, d?.cfo?.borrow ?? 0);

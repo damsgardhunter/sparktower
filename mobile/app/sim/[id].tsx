@@ -266,15 +266,20 @@ export default function Room() {
                 {venture.niche?.name ? ` in ${venture.niche.name}` : ""}. Your seat is
                 {venture.you?.role ? ` ${titleOf(venture.you.role)}` : " settled"}, and it's yours for the season.
               </Text>
-              {/* Honest rather than a link to nothing: the screens for playing
-                  a year aren't built on the phone yet, and a dead button is a
-                  worse hand-off than a sentence. */}
-              <Callout
-                icon="construct-outline"
-                tone="warn"
-                title="Playing the year isn't on the phone yet"
-                body="The lobby is where the app stops for now — the decision screens for a year don't exist here. Nothing is lost: the venture is real, the seats are settled, and this room will show you where you ended up."
+              {/* The room's job is done the moment the seats are settled, so
+                  this is a hand-off rather than a destination: `replace`, not
+                  `push`, because backing out of the desk should reach the
+                  markets and not a lobby phase that has already ended. */}
+              <Btn
+                label="Open your desk"
+                icon="arrow-forward"
+                onPress={() => router.replace(`/sim/desk/${id}`)}
+                testID="sim-open-desk"
               />
+              <Text style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>
+                One real day is one year of trading. Each of you files a decision for your own seat; the year resolves for all
+                five of you at once.
+              </Text>
               <Btn label="Back to the markets" icon="arrow-back" variant="outline" onPress={() => router.replace("/sim")} testID="sim-back-to-markets" />
             </Card>
           )}

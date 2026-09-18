@@ -69,7 +69,9 @@ export async function sendPasswordResetEmail(
 
   try {
     const [user] = await db.select({ id: users.id, email: users.email, firstName: users.firstName, passwordHash: users.passwordHash })
-      .from(users).where(eq(users.email, email));
+      // Case-insensitively: somebody who types their address with a capital
+      // still gets the email, rather than a silent "no account".
+      .from(users).where(sql`lower(${users.email}) = ${String(email).trim().toLowerCase()}`);
     if (!user?.email) return { outcome: "no_account" };
 
     /*

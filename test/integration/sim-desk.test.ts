@@ -1,0 +1,255 @@
+/**
+ * Filing a year, against a real database.
+ *
+ * Two things worth testing here beyond the happy path. One is a security
+ * claim: the engine reads decisions by role, so if a request could name its
+ * own role or smuggle extra fields, a marketing seat could take out a loan the
+ * finance seat never agreed to. The other is the whole point of the screen —
+ * that what the five of them have committed between them is visible to each of
+ * them before the tick rather than after it.
+ */
+import { describe, it, expect, afterAll } from "vitest";
+import request from "supertest";
+import { and, eq, inArray } from "drizzle-orm";
+import { getTestApp, closeTestApp } from "../helpers/app";
+import { verifyEmail } from "../helpers/verify-email";
+import { db } from "../../server/db";
+import { simSeasons, simVentures, simDecisions } from "@shared/schema";
+import { startReadySeasons, tickSeason } from "../../server/simulation-tick";
+
+afterAll(async () => { await closeTestApp(); });
+
+let n = 0;
+async function player(app: any) {
+  const agent = request.agent(app);
+  n += 1;
+  const ip = `198.51.152.${(n % 200) + 20}`;
+  const email = `desk-${Date.now()}-${n}-${Math.random().toString(36).slice(2, 6)}@example.test`;
+  const res = await agent.post("/api/auth/register").set("x-forwarded-for", ip)
+    .send({ email, password: "a-good-passphrase-here", firstName: `D${n}` });
+  expect(res.status, JSON.stringify(res.body)).toBe(201);
+  await verifyEmail(app, email, ip);
+  return { agent, id: res.body.id as string };
+}
+
+const NICHE = "fitness_app";
+const ROLES = ["ceo", "cmo", "cfo", "cto", "coo"] as const;
+
+/** A running company with five seated players. */
+async function runningCompany(app: any) {
+  /*
+   * Close any room still standing open from an earlier test first.
+   *
+   * Joining puts you in whichever room in the market has space, which is the
+   * product behaving correctly and a trap for a helper that assumes its five
+   * players get a room to themselves: a half-filled room left by the lobby
+   * tests swallows the first few, the rest start a second room, and the seats
+   * get claimed across two ventures that then never reach `running`. It failed
+   * about one combined run in three and passed every time each file was run on
+   * its own, which is the most annoying shape a test failure has.
+   */
+  await db.update(simVentures).set({ phase: "retired" })
+    .where(inArray(simVentures.phase, ["filling", "claiming", "naming"]));
+
+  const players = [];
+  let ventureId = "";
+  for (let i = 0; i < 5; i++) {
+    const p = await player(app);
+    const join = await p.agent.post("/api/sim/join").send({ nicheId: NICHE });
+    expect(join.body.ventureId, "all five should land in one room").toBe(ventureId || join.body.ventureId);
+    ventureId = join.body.ventureId;
+    players.push(p);
+  }
+  for (const [i, p] of players.entries()) {
+    await p.agent.post(`/api/sim/ventures/${ventureId}/claim`).send({ role: ROLES[i] });
+  }
+  await players[0].agent.post(`/api/sim/ventures/${ventureId}/name`).send({ name: "Northbound", product: "Training" });
+  await startReadySeasons();
+
+  const [venture] = await db.select().from(simVentures).where(eq(simVentures.id, ventureId));
+  const seat = (role: typeof ROLES[number]) => players[ROLES.indexOf(role)];
+  return { players, ventureId, seasonId: venture.seasonId, seat };
+}
+
+describe("opening the desk", () => {
+  it("gives a seat its own levers and the company's position in one request", async () => {
+    const app = await getTestApp();
+    const { ventureId, seat } = await runningCompany(app);
+
+    const res = await seat("cmo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.phase).toBe("running");
+    expect(res.body.year).toBe(1);
+    expect(res.body.yourRole).toBe("cmo");
+
+    // The marketing seat gets marketing levers, not everyone's.
+    const ids = res.body.fields.map((f: any) => f.id);
+    expect(ids).toContain("price");
+    expect(ids).not.toContain("borrow");
+
+    // Enough to decide with, without a second request.
+    expect(res.body.company.cash).toBeGreaterThan(0);
+    expect(res.body.segments.length).toBeGreaterThan(0);
+    expect(res.body.rivals.length).toBeGreaterThan(0);
+    expect(res.body.table).toHaveLength(5);
+    // Year one has nothing behind it, and says so rather than inventing one.
+    expect(res.body.lastYear).toBeNull();
+  }, 120_000);
+
+  it("tells a stranger nothing, including that the company exists", async () => {
+    const app = await getTestApp();
+    const { ventureId } = await runningCompany(app);
+    const stranger = await player(app);
+
+    const res = await stranger.agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    expect(res.status).toBe(404);
+    expect(JSON.stringify(res.body)).not.toMatch(/cash|Northbound|seats/);
+  }, 120_000);
+});
+
+describe("filing a decision", () => {
+  it("stores it, and shows it to the rest of the table", async () => {
+    const app = await getTestApp();
+    const { ventureId, seat } = await runningCompany(app);
+
+    const filed = await seat("cmo").agent.post(`/api/sim/ventures/${ventureId}/decisions`).send({
+      decision: { price: 19, brandSpend: 400_000, performanceSpend: 200_000, celebritySpend: 0 },
+    });
+    expect(filed.status, JSON.stringify(filed.body)).toBe(200);
+
+    // The operations seat can see what marketing committed — which is the
+    // entire point, because they are the one who has to serve it.
+    const theirs = await seat("coo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    expect(theirs.body.filed.cmo.brandSpend).toBe(400_000);
+    expect(theirs.body.table.find((t: any) => t.role === "cmo").filed).toBe(true);
+    expect(theirs.body.table.find((t: any) => t.role === "coo").filed).toBe(false);
+  }, 120_000);
+
+  it("lets someone change their mind right up to the tick", async () => {
+    const app = await getTestApp();
+    const { ventureId, seat } = await runningCompany(app);
+
+    await seat("cmo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { price: 19, brandSpend: 400_000, performanceSpend: 0, celebritySpend: 0 } });
+    await seat("cmo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { price: 25, brandSpend: 100_000, performanceSpend: 0, celebritySpend: 0 } });
+
+    const rows = await db.select().from(simDecisions)
+      .where(and(eq(simDecisions.ventureId, ventureId), eq(simDecisions.role, "cmo")));
+    // Replaced, not stacked.
+    expect(rows).toHaveLength(1);
+    expect((rows[0].payload as any).price).toBe(25);
+  }, 120_000);
+
+  it("will not let one seat file another seat's levers", async () => {
+    /*
+     * The engine reads decisions by role. A marketing seat that could smuggle a
+     * `borrow` into its payload would be taking out a loan in the finance
+     * seat's name, and the CFO would find out on the tick.
+     */
+    const app = await getTestApp();
+    const { ventureId, seat } = await runningCompany(app);
+
+    const res = await seat("cmo").agent.post(`/api/sim/ventures/${ventureId}/decisions`).send({
+      decision: { price: 19, brandSpend: 0, performanceSpend: 0, celebritySpend: 0, borrow: 5_000_000, capacityTarget: 1 },
+    });
+    expect(res.status).toBe(200);
+
+    const [row] = await db.select().from(simDecisions)
+      .where(and(eq(simDecisions.ventureId, ventureId), eq(simDecisions.role, "cmo")));
+    expect(row.payload).not.toHaveProperty("borrow");
+    expect(row.payload).not.toHaveProperty("capacityTarget");
+  }, 120_000);
+
+  it("refuses what the engine could not act on, and says which field", async () => {
+    const app = await getTestApp();
+    const { ventureId, seat } = await runningCompany(app);
+
+    const res = await seat("cfo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { borrow: 0, repay: 9_000_000, cashBuffer: 0 } });
+    expect(res.status).toBe(400);
+    // Nobody owes anything in year one.
+    expect(res.body.errors.repay).toBeTruthy();
+  }, 120_000);
+
+  it("refuses a seat that is not yours to file from", async () => {
+    const app = await getTestApp();
+    const { ventureId } = await runningCompany(app);
+    const stranger = await player(app);
+
+    const res = await stranger.agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { focus: "growth" } });
+    expect(res.status).toBe(404);
+  }, 120_000);
+});
+
+describe("what the table has committed", () => {
+  it("shows every seat the sum none of them could see alone", async () => {
+    /*
+     * Three people each commit two million, which is reasonable on each of
+     * their own screens. The fourth opens theirs and the company has committed
+     * six million against six million of cash plus a salary bill. That number
+     * has to be on the screen before the tick, not explained after it.
+     */
+    const app = await getTestApp();
+    const { ventureId, seat } = await runningCompany(app);
+
+    await seat("cmo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { price: 22, brandSpend: 2_000_000, performanceSpend: 0, celebritySpend: 0 } });
+    await seat("cto").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { featureSpend: 2_000_000, reliabilitySpend: 0, techDebtPaydown: 0 } });
+    const last = await seat("coo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { capacityTarget: 400_000, supportSpend: 2_000_000, efficiencySpend: 0, headcount: 0 } });
+
+    // The seat that files last is told immediately, without another request.
+    expect(last.body.preview.commitment.spend).toBe(6_000_000);
+
+    // And so is everyone else when they look.
+    const cfo = await seat("cfo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    const money = cfo.body.preview.commitment;
+    expect(money.spend).toBe(6_000_000);
+    expect(money.bySeat.find((s: any) => s.role === "cmo").spend).toBe(2_000_000);
+    expect(money.fixed).toBeGreaterThan(0);
+    expect(cfo.body.preview.warnings.length).toBeGreaterThan(0);
+  }, 120_000);
+
+  it("warns operations before marketing outruns them, not after", async () => {
+    const app = await getTestApp();
+    const { ventureId, seat } = await runningCompany(app);
+
+    await seat("cmo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { price: 22, brandSpend: 3_000_000, performanceSpend: 3_000_000, celebritySpend: 0 } });
+    await seat("coo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { capacityTarget: 1_000, supportSpend: 0, efficiencySpend: 0, headcount: 0 } });
+
+    const desk = await seat("coo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    expect(desk.body.preview.notes.join(" ")).toMatch(/more people than operations could serve/i);
+  }, 120_000);
+});
+
+describe("the year after", () => {
+  it("resolves what was filed and hands back a desk for the next year", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+
+    await seat("cmo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { price: 17, brandSpend: 800_000, performanceSpend: 400_000, celebritySpend: 0 } });
+
+    await db.update(simSeasons)
+      .set({ nextTickAt: new Date(Date.now() - 1000), startsAt: new Date(Date.now() - 60_000) })
+      .where(eq(simSeasons.id, seasonId));
+    expect(await tickSeason(seasonId)).toBe(1);
+
+    const desk = await seat("cmo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    expect(desk.body.year).toBe(2);
+    // Last year is there to read before deciding this one.
+    expect(desk.body.lastYear).toBeTruthy();
+    expect(desk.body.lastYear.year).toBe(1);
+    expect(Array.isArray(desk.body.lastYear.notes)).toBe(true);
+    // The price they chose is the company's price now.
+    expect(desk.body.company.price).toBe(17);
+    // And the new year's form starts from what they did, not from zero.
+    expect(desk.body.draft.brandSpend).toBe(800_000);
+    expect(desk.body.submitted, "a new year is not already filed").toBe(false);
+  }, 180_000);
+});

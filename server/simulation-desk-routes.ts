@@ -1,0 +1,260 @@
+/**
+ * The desk: what a seat sees on the day, and what it files.
+ *
+ * Two routes. One assembles everything a person needs to make this year's
+ * decision — where the company stands, what last year did to it, what their
+ * four colleagues have already committed, and how long is left. The other
+ * takes their decision and replaces whatever they filed before.
+ *
+ * ## Why the whole table's draft is visible
+ *
+ * The obvious design is that each seat sees only its own levers. It is also
+ * the design that makes the game unplayable: the CMO cannot know the company
+ * is out of money, the COO cannot know marketing is about to bring in three
+ * times what they can serve, and everybody finds out together on the daily
+ * tick when it is a fortnight too late to argue.
+ *
+ * So a seat sees every filed decision and the running total against the bank
+ * balance. Not to remove the difficulty — the difficulty is that five people
+ * want different things — but to move it to where it belongs, which is an
+ * argument between them rather than an ambush by the engine.
+ */
+import type { Express } from "express";
+import { and, desc, eq, inArray } from "drizzle-orm";
+import { db } from "./db";
+import { simSeasons, simSeats, simVentures, simDecisions, simReports, users, userProfiles } from "@shared/schema";
+import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
+import { enforceRateLimit } from "./moderation";
+import { nicheById } from "@shared/simulation/niches";
+import { ROLE_TITLES, ROLE_LEVERS, type Role, type World, type Company } from "@shared/simulation/types";
+import type { TeamDecisions } from "@shared/simulation/decisions";
+import { LEVER_FIELDS, defaultDraft, validateDecision, draftPreview } from "@shared/simulation/levers";
+import { economyFor } from "@shared/simulation/season";
+import { postureBlurb } from "@shared/simulation/incumbents";
+
+/** The seat this person holds in this venture, or nothing. */
+async function seatOf(ventureId: string, userId: string) {
+  const [seat] = await db.select().from(simSeats)
+    .where(and(eq(simSeats.ventureId, ventureId), eq(simSeats.userId, userId)));
+  return seat ?? null;
+}
+
+/** Everything filed for a venture in a given year, as the engine's shape. */
+async function draftFor(ventureId: string, year: number): Promise<{ decisions: TeamDecisions; filedBy: Record<string, string> }> {
+  const rows = await db
+    .select({ role: simDecisions.role, payload: simDecisions.payload, userId: simDecisions.userId })
+    .from(simDecisions)
+    .where(and(eq(simDecisions.ventureId, ventureId), eq(simDecisions.year, year)));
+
+  const decisions: TeamDecisions = { companyId: ventureId };
+  const filedBy: Record<string, string> = {};
+  for (const r of rows) {
+    (decisions as any)[r.role] = r.payload;
+    filedBy[r.role] = r.userId;
+  }
+  return { decisions, filedBy };
+}
+
+export function registerSimulationDeskRoutes(app: Express): void {
+  /**
+   * Everything one seat needs to decide this year.
+   *
+   * One request rather than five, because this is the screen someone opens on
+   * their phone on the way to work and a screen that arrives in pieces is a
+   * screen they close.
+   */
+  app.get("/api/sim/ventures/:id/desk", isAuthenticated, async (req: any, res) => {
+    const [venture] = await db.select().from(simVentures).where(eq(simVentures.id, req.params.id));
+    if (!venture) return res.status(404).json({ message: "No such company." });
+
+    const seat = await seatOf(venture.id, req.user.id);
+    // A stranger is told nothing, including whether this exists.
+    if (!seat) return res.status(404).json({ message: "No such company." });
+
+    const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, venture.seasonId));
+    if (!season) return res.status(404).json({ message: "No such season." });
+
+    if (season.status === "forming" || !season.world) {
+      return res.json({ phase: "not_started", ventureId: venture.id, name: venture.name, yourRole: seat.role });
+    }
+
+    const niche = nicheById(season.nicheId)!;
+    const world = season.world as World;
+    const company = world.companies.find((c) => c.id === venture.id);
+    if (!company) return res.status(404).json({ message: "No such company." });
+
+    const year = season.year;
+    const { decisions, filedBy } = await draftFor(venture.id, year);
+    const economy = economyFor(season.id, year);
+
+    // Last year's result, and what each seat filed then, so a draft can start
+    // from what they actually did rather than from zero.
+    const [lastReport] = year > 1
+      ? await db.select().from(simReports)
+        .where(and(eq(simReports.ventureId, venture.id), eq(simReports.year, year - 1)))
+      : [];
+    const previous = year > 1 ? (await draftFor(venture.id, year - 1)).decisions : undefined;
+
+    const seats = await db
+      .select({ userId: simSeats.userId, role: simSeats.role, firstName: users.firstName, displayName: userProfiles.displayName })
+      .from(simSeats)
+      .leftJoin(users, eq(users.id, simSeats.userId))
+      .leftJoin(userProfiles, eq(userProfiles.userId, simSeats.userId))
+      .where(eq(simSeats.ventureId, venture.id));
+
+    const preview = draftPreview({ company, niche, decisions, economy });
+
+    /*
+     * Rivals are shown as they were at the end of last year — their share,
+     * their price, and how they behave. Not their plans: an incumbent whose
+     * next move was visible would be a puzzle rather than an opponent, and the
+     * player teams' drafts are their own business until the tick.
+     */
+    const rivals = world.companies
+      .filter((c) => c.id !== company.id)
+      .map((c) => ({
+        id: c.id,
+        name: c.name,
+        kind: c.kind,
+        price: Math.round(c.price),
+        customers: Object.values(c.customers).reduce((sum, n) => sum + n, 0),
+        posture: c.posture ?? null,
+        posturedAs: c.posture ? postureBlurb(c.posture) : null,
+      }))
+      .sort((a, b) => b.customers - a.customers);
+
+    res.json({
+      phase: season.status === "finished" ? "finished" : "running",
+      ventureId: venture.id,
+      name: venture.name,
+      product: venture.product,
+      niche: { id: niche.id, name: niche.name, premise: niche.premise },
+      year,
+      totalYears: season.totalYears,
+      /** Null when the season has finished; otherwise when this year resolves. */
+      resolvesAt: season.nextTickAt,
+
+      yourRole: seat.role,
+      yourTitle: seat.role ? ROLE_TITLES[seat.role as Role] : null,
+      yourLevers: seat.role ? ROLE_LEVERS[seat.role as Role] : [],
+      fields: seat.role ? LEVER_FIELDS[seat.role as Role] : [],
+      /** What to show in the form: what they filed already, else last year's, else a sensible opening. */
+      draft: seat.role
+        ? (decisions as any)[seat.role] ?? defaultDraft(seat.role as Role, company, (previous as any)?.[seat.role])
+        : null,
+      submitted: seat.role ? !!(decisions as any)[seat.role] : false,
+
+      company: {
+        cash: Math.round(company.cash),
+        debt: Math.round(company.debt),
+        creditLimit: Math.round(company.creditLimit),
+        reputation: Math.round(company.reputation),
+        quality: Math.round(company.quality),
+        brand: Math.round(company.brand),
+        service: Math.round(company.service),
+        capacity: company.capacity,
+        unitCost: Math.round(company.unitCost * 100) / 100,
+        price: Math.round(company.price),
+        customers: Object.values(company.customers).reduce((sum, n) => sum + n, 0),
+        bankruptSince: company.bankruptSince ?? null,
+        /*
+         * The seats the engine still charges a salary for. Sent because the
+         * fixed-cost arithmetic cannot be reproduced without it — a client
+         * recomputing the table's commitment as someone types would otherwise
+         * have to back the executive half out of the server's own total, which
+         * is a derivation that silently stops being true the moment a seat is
+         * dissolved.
+         */
+        seats: company.seats,
+      },
+      segments: niche.segments.map((s) => ({
+        id: s.id, name: s.name, description: s.description,
+        referencePrice: s.referencePrice, loyalty: s.loyalty,
+        yours: company.customers[s.id] ?? 0,
+      })),
+      economy: { ...economy, outlookMeans: OUTLOOK_MEANS[economy.outlook] },
+
+      table: seats.map((s) => ({
+        userId: s.userId,
+        name: s.displayName || s.firstName || "Someone",
+        role: s.role,
+        title: s.role ? ROLE_TITLES[s.role as Role] : null,
+        filed: !!(s.role && filedBy[s.role]),
+        isYou: s.userId === req.user.id,
+      })),
+      /** Every filed decision, so nobody has to guess what the others committed. */
+      filed: decisions,
+      preview,
+      lastYear: lastReport?.report ?? null,
+      rivals,
+    });
+  });
+
+  /**
+   * File this year's decision for your seat.
+   *
+   * Replaces whatever was there: a decision is changeable right up to the tick
+   * on purpose, because the argument that makes this game worth playing
+   * usually happens after somebody has already filed.
+   */
+  app.post("/api/sim/ventures/:id/decisions", isAuthenticated, async (req: any, res) => {
+    if (!(await enforceRateLimit(res, req.user.id, "session"))) return;
+
+    const [venture] = await db.select().from(simVentures).where(eq(simVentures.id, req.params.id));
+    if (!venture) return res.status(404).json({ message: "No such company." });
+
+    const seat = await seatOf(venture.id, req.user.id);
+    if (!seat) return res.status(404).json({ message: "No such company." });
+    if (!seat.role) return res.status(409).json({ message: "You don't have a seat yet.", code: "no_seat" });
+
+    const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, venture.seasonId));
+    if (!season || season.status !== "running" || !season.world) {
+      return res.status(409).json({ message: "This season isn't running.", code: "not_running" });
+    }
+
+    const niche = nicheById(season.nicheId)!;
+    const world = season.world as World;
+    const company = world.companies.find((c) => c.id === venture.id);
+    if (!company) return res.status(404).json({ message: "No such company." });
+
+    const role = seat.role as Role;
+    const payload = req.body?.decision;
+    const check = validateDecision(role, payload, company);
+    if (!check.ok) return res.status(400).json({ message: "Some of that doesn't add up.", errors: check.errors });
+
+    /*
+     * Only the fields this seat owns are stored, taken from the lever list
+     * rather than from the request. Otherwise a crafted body could file a
+     * `borrow` alongside a marketing decision and the engine — which reads
+     * decisions by role — would honour it, letting a CMO quietly take out a
+     * loan the CFO never agreed to.
+     */
+    const clean: Record<string, any> = {};
+    for (const field of LEVER_FIELDS[role]) {
+      clean[field.id] = field.kind === "choice" ? String(payload[field.id]) : Number(payload[field.id]);
+    }
+
+    await db.insert(simDecisions)
+      .values({ ventureId: venture.id, userId: req.user.id, role, year: season.year, payload: clean })
+      .onConflictDoUpdate({
+        target: [simDecisions.ventureId, simDecisions.role, simDecisions.year],
+        set: { payload: clean, userId: req.user.id, submittedAt: new Date() },
+      });
+
+    // Hand back the table's new position, so the screen updates without a second request.
+    const { decisions } = await draftFor(venture.id, season.year);
+    res.json({
+      ok: true,
+      year: season.year,
+      draft: clean,
+      preview: draftPreview({ company, niche, decisions, economy: economyFor(season.id, season.year) }),
+    });
+  });
+}
+
+/** What the coming year's weather means for someone who has not played before. */
+const OUTLOOK_MEANS: Record<string, string> = {
+  expansion: "Next year looks busier. Capacity built now gets used; capacity built late gets used by somebody else.",
+  steady: "Next year looks much like this one.",
+  tightening: "Next year looks thinner. Debt taken now is repaid into a worse market.",
+};

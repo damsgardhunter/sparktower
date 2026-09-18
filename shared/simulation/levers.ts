@@ -1,0 +1,282 @@
+/**
+ * What each seat can actually move, and what the table is about to do to
+ * itself.
+ *
+ * The engine takes five decision objects and resolves a year. This is the
+ * layer between that and a person: what the fields are, what they mean in
+ * plain words, what a sensible starting position is, and — the part that
+ * matters most — what the five of them add up to *before* anyone commits.
+ *
+ * ## The failure this file exists to prevent
+ *
+ * Five people each open their own screen. The CMO commits £2m to marketing,
+ * the CTO £2m to the product, the COO £2m to capacity, and the CFO — who is
+ * the only one who can see the bank balance — has already gone to bed. Nobody
+ * did anything unreasonable. The company has £6m and has just committed £6m
+ * of discretionary spend on top of a £1.1m salary bill, and finds out on the
+ * daily tick.
+ *
+ * That is not a difficulty, it is a gotcha: the information needed to avoid it
+ * was never on anyone's screen. So every seat sees the table's total
+ * commitment against what the company actually has, live, while they are still
+ * deciding — and the interlock notes that the engine already writes after the
+ * fact are shown *before* it, where they can still change someone's mind.
+ *
+ * Being able to see the trap is what makes walking into it a decision.
+ */
+import type { Company, Niche, Role } from "./types";
+import type { TeamDecisions } from "./decisions";
+import { interlock, fixedCosts } from "./decisions";
+
+/** How a lever is presented and bounded. */
+export interface LeverField {
+  /** Key inside the role's decision object. */
+  id: string;
+  label: string;
+  /** One line on what moving it actually does. */
+  help: string;
+  kind: "money" | "price" | "count" | "choice";
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: { value: string; label: string; help: string }[];
+}
+
+/**
+ * The fields each seat fills in.
+ *
+ * Deliberately few. A screen with fourteen sliders is a screen people scroll
+ * past; four or five levers that visibly collide with each other is a game.
+ * Everything here maps directly onto a field the engine reads — there are no
+ * decorative controls, because a control that changes nothing is a lie the
+ * first spreadsheet will expose.
+ */
+export const LEVER_FIELDS: Record<Role, LeverField[]> = {
+  cmo: [
+    { id: "price", label: "Price", kind: "price", min: 1, step: 1,
+      help: "What one customer pays. Segments differ wildly in how much they care — the bargain hunters leave over a pound, the coached athletes barely look." },
+    { id: "brandSpend", label: "Brand marketing", kind: "money", min: 0, step: 50_000,
+      help: "Being known. Slow, compounding, and the thing that makes every other pound work harder." },
+    { id: "performanceSpend", label: "Performance marketing", kind: "money", min: 0, step: 50_000,
+      help: "Buying customers now. Faster than brand and it stops the moment you stop paying." },
+    { id: "celebritySpend", label: "Sponsorship", kind: "money", min: 0, step: 100_000,
+      help: "A shortcut to being known, at a premium. Worth more than the same money on brand, and it does not repeat itself." },
+  ],
+  cto: [
+    { id: "featureSpend", label: "New features", kind: "money", min: 0, step: 50_000,
+      help: "What the product can do. Moves quality, and quality nobody has heard of moves nothing." },
+    { id: "reliabilitySpend", label: "Reliability", kind: "money", min: 0, step: 50_000,
+      help: "Whether it works. Counts for quality and for service, so it is the cheapest way to move two numbers." },
+    { id: "techDebtPaydown", label: "Technical debt", kind: "money", min: 0, step: 50_000,
+      help: "Buying back the speed you sold. Nothing visible this year." },
+  ],
+  coo: [
+    { id: "capacityTarget", label: "Capacity", kind: "count", min: 0, step: 10_000,
+      help: "How many customers you can actually serve. Win more than this and they are turned away — which costs reputation, not just revenue." },
+    { id: "supportSpend", label: "Support", kind: "money", min: 0, step: 50_000,
+      help: "What happens after someone buys. The segments that pay most are the ones that care about this most." },
+    { id: "efficiencySpend", label: "Efficiency", kind: "money", min: 0, step: 50_000,
+      help: "Cuts what each unit costs to make, permanently. Pays back over years rather than this one." },
+    { id: "headcount", label: "Headcount", kind: "count", min: 0, max: 400, step: 1,
+      help: "Staff beyond the five of you. Each one is a salary every year, in good years and bad." },
+  ],
+  cfo: [
+    { id: "borrow", label: "Draw down", kind: "money", min: 0, step: 100_000,
+      help: "Money now against interest every year after. Bounded by what the company can borrow, which rises with reputation." },
+    { id: "repay", label: "Repay", kind: "money", min: 0, step: 100_000,
+      help: "Less owed, less interest, less cash. The boring move that keeps a bad year from being fatal." },
+    { id: "cashBuffer", label: "Cash to hold back", kind: "money", min: 0, step: 100_000,
+      help: "What you refuse to let the others spend. A statement of intent rather than a lock." },
+  ],
+  ceo: [
+    { id: "focus", label: "Where the year goes", kind: "choice", options: [
+      { value: "growth", label: "Growth", help: "Take share now and worry about the margin later." },
+      { value: "margin", label: "Margin", help: "Make the customers you have pay properly." },
+      { value: "quality", label: "Quality", help: "Build something worth switching to, and wait for it." },
+      { value: "survival", label: "Survival", help: "Stop the bleeding. Everything else can wait for next year." },
+    ], help: "What the company is for this year. It does not override anyone — it is what you have told them all to weigh." },
+  ],
+};
+
+/** A sensible starting position for a seat, from last year rather than from zero. */
+export function defaultDraft(role: Role, company: Company, previous?: any): Record<string, any> {
+  if (previous) {
+    // What they did last year, minus the moves that should never repeat by default.
+    const carried = { ...previous };
+    if (role === "cfo") { carried.borrow = 0; carried.repay = 0; delete carried.raise; }
+    if (role === "cmo") carried.celebritySpend = 0;
+    if (role === "ceo") { delete carried.offer; delete carried.dissolveSeats; }
+    return carried;
+  }
+
+  switch (role) {
+    case "cmo": return { price: company.price, brandSpend: 0, performanceSpend: 0, celebritySpend: 0 };
+    case "cto": return { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0 };
+    case "coo": return { capacityTarget: company.capacity, supportSpend: 0, efficiencySpend: 0, headcount: 0 };
+    case "cfo": return { borrow: 0, repay: 0, cashBuffer: 0 };
+    case "ceo": return { focus: "growth" };
+  }
+}
+
+export interface ValidationResult {
+  ok: boolean;
+  /** Keyed by field id, so a screen can put the message under the control that caused it. */
+  errors: Record<string, string>;
+}
+
+/**
+ * Whether one seat's decision is submittable at all.
+ *
+ * This is the narrow check: numbers that are numbers, within their own bounds.
+ * It deliberately does *not* refuse an expensive year — spending more than the
+ * company has is a decision a team is allowed to make, and telling them what
+ * it will cost is `commitment()`'s job. A validator that refuses risk turns a
+ * business simulation into a form that only accepts the safe answer.
+ */
+export function validateDecision(role: Role, payload: any, company: Company): ValidationResult {
+  const errors: Record<string, string> = {};
+  if (!payload || typeof payload !== "object") {
+    return { ok: false, errors: { _: "Nothing to submit." } };
+  }
+
+  for (const field of LEVER_FIELDS[role]) {
+    const value = payload[field.id];
+
+    if (field.kind === "choice") {
+      if (!field.options?.some((o) => o.value === value)) errors[field.id] = "Pick one.";
+      continue;
+    }
+
+    if (value === undefined || value === null || value === "") { errors[field.id] = "Needs a number."; continue; }
+    const n = Number(value);
+    if (!Number.isFinite(n)) { errors[field.id] = "Needs a number."; continue; }
+    if (field.min !== undefined && n < field.min) errors[field.id] = `Can't go below ${field.min}.`;
+    if (field.max !== undefined && n > field.max) errors[field.id] = `Can't go above ${field.max}.`;
+  }
+
+  // The one hard stop: you cannot repay money you do not owe.
+  if (role === "cfo" && Number(payload.repay) > company.debt) {
+    errors.repay = `You only owe ${Math.round(company.debt).toLocaleString()}.`;
+  }
+
+  return { ok: Object.keys(errors).length === 0, errors };
+}
+
+export interface Commitment {
+  /** Discretionary spend the five of them have committed between them. */
+  spend: number;
+  /** Salaries and seats, which are owed whatever anyone decides. */
+  fixed: number;
+  /** Cash plus what is still borrowable, minus what finance has ring-fenced. */
+  available: number;
+  /** Spend plus fixed, against available. Over 1 means the year is funded by credit or not at all. */
+  ratio: number;
+  /** How each seat contributed, so the number is arguable rather than mysterious. */
+  bySeat: { role: Role; spend: number }[];
+}
+
+/**
+ * What the table has committed, and what it has.
+ *
+ * The single most useful number on the screen, and the one no individual seat
+ * could work out for themselves: each person sees their own spend, nobody sees
+ * the sum. Shown live, it turns "I'll take two million for marketing" from a
+ * private decision into a thing the other four can see happening.
+ */
+export function commitment(company: Company, decisions: TeamDecisions, economy: { costIndex: number }): Commitment {
+  const bySeat: { role: Role; spend: number }[] = [
+    { role: "cmo", spend: (decisions.cmo?.brandSpend ?? 0) + (decisions.cmo?.performanceSpend ?? 0) + (decisions.cmo?.celebritySpend ?? 0) },
+    { role: "cto", spend: (decisions.cto?.featureSpend ?? 0) + (decisions.cto?.reliabilitySpend ?? 0) + (decisions.cto?.techDebtPaydown ?? 0) },
+    { role: "coo", spend: (decisions.coo?.supportSpend ?? 0) + (decisions.coo?.efficiencySpend ?? 0) },
+    { role: "cfo", spend: Math.max(0, decisions.cfo?.repay ?? 0) },
+    { role: "ceo", spend: 0 },
+  ];
+
+  const spend = bySeat.reduce((sum, s) => sum + s.spend, 0);
+  const fixed = fixedCosts(company, decisions.coo?.headcount ?? 0, { costIndex: economy.costIndex } as any);
+  const borrowable = Math.max(0, company.creditLimit - company.debt);
+  const available = Math.max(0,
+    company.cash + (decisions.cfo?.borrow ?? 0) + borrowable - (decisions.cfo?.cashBuffer ?? 0));
+
+  return {
+    spend,
+    fixed,
+    available,
+    ratio: available > 0 ? (spend + fixed) / available : Infinity,
+    bySeat,
+  };
+}
+
+export interface DraftPreview {
+  commitment: Commitment;
+  /**
+   * What the engine would say about these decisions together, said before the
+   * year runs instead of after it.
+   */
+  notes: string[];
+  /** Loud, specific warnings that a screen should show differently from advice. */
+  warnings: string[];
+}
+
+/**
+ * The table's year, previewed.
+ *
+ * Not a forecast of the result — deliberately. A screen that told you your
+ * market share before you committed would turn fourteen days of argument into
+ * an optimisation problem solved on day one, and the incumbents' reactions
+ * cannot be known in advance anyway. What it shows is what the five of you
+ * have done *to each other*: money that does not exist, marketing that
+ * outruns delivery, a product improvement nobody will hear about, a price
+ * below cost. All of those are knowable now, and all of them are arguments
+ * worth having before the tick rather than after it.
+ */
+export function draftPreview(input: {
+  company: Company;
+  niche: Niche;
+  decisions: TeamDecisions;
+  economy: { costIndex: number };
+}): DraftPreview {
+  const { company, niche, decisions, economy } = input;
+  const money = commitment(company, decisions, economy);
+  const lock = interlock(company, decisions, niche);
+  const warnings: string[] = [];
+
+  if (money.ratio > 1) {
+    const short = Math.round(money.spend + money.fixed - money.available);
+    warnings.push(
+      `The table has committed ${Math.round(money.spend + money.fixed).toLocaleString()} against ${Math.round(money.available).toLocaleString()} available — ${short.toLocaleString()} short. The year still runs; the shortfall comes out of credit, and past that the company is insolvent.`,
+    );
+  } else if (money.ratio > 0.9) {
+    warnings.push("This spends almost everything the company has. A bad year after this one has nothing left to absorb it.");
+  } else if (money.spend + money.fixed > company.cash) {
+    /*
+     * The line between spending money and borrowing it.
+     *
+     * A single ratio against cash-plus-credit misses this: a team can commit
+     * every pound in the bank, still sit at 0.84 of what they could technically
+     * raise, and be told nothing — even though they have just quietly moved
+     * from spending their own money to spending the bank's, which costs
+     * interest every year afterwards and is the first step toward insolvency.
+     * It is a change in kind, not in degree, so it gets said out loud.
+     */
+    const drawn = Math.round(money.spend + money.fixed - company.cash);
+    warnings.push(
+      `This costs more than the ${Math.round(company.cash).toLocaleString()} in the bank. About ${drawn.toLocaleString()} of it comes out of the credit line, and carries interest every year until it is repaid.`,
+    );
+  }
+
+  /*
+   * Notes about seats that have not filed yet are noise on a screen where
+   * people are still filing — of course the CFO hasn't decided, it is nine in
+   * the morning. The engine's after-the-fact wording ("no finance decision was
+   * made this year") is correct once the year has run and wrong before it, so
+   * it is dropped here and the empty seats are shown as empty seats instead.
+   */
+  const notes = lock.notes.filter((n) => !/^No \w+ decision was made/.test(n));
+
+  return { commitment: money, notes, warnings };
+}
+
+/** Which roles have filed, for the "who is still deciding" line. */
+export const filedRoles = (decisions: TeamDecisions): Role[] =>
+  (["ceo", "cmo", "cfo", "cto", "coo"] as Role[]).filter((r) => !!(decisions as any)[r]);

@@ -130,4 +130,16 @@ export default tseslint.config(
       "@typescript-eslint/no-explicit-any": "off", // Pervasive and deliberate.
     },
   },
+  {
+    /*
+     * Playwright fixtures are declared as `async ({ … }, use) => { await use(x) }`.
+     * The React hooks rule sees a bare call named `use` — which is a React hook
+     * now — and reports every fixture as a hook called outside a component.
+     * There is no React in this folder.
+     */
+    files: ["e2e/**/*.ts"],
+    rules: {
+      "react-hooks/rules-of-hooks": "off",
+    },
+  },
 );

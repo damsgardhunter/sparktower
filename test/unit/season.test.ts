@@ -272,6 +272,77 @@ describe("a whole season", () => {
   });
 });
 
+describe("the chief executive's chair", () => {
+  /*
+   * The seat five people race each other for in the lobby. Its decision was
+   * declared, displayed, and read by nothing — so the most contested chair in
+   * the game was the only one that could not change the outcome. These tests
+   * exist to stop that being true again.
+   */
+  const withFocus = (focus: string) => playSeason((_, company) => ({
+    ...playedYear(company),
+    ceo: { focus } as any,
+  }));
+
+  it("changes the outcome at all", () => {
+    const growth = withFocus("growth");
+    const margin = withFocus("margin");
+    const end = (r: ReturnType<typeof withFocus>) => r.history[r.history.length - 1];
+    expect(end(growth).marketShare).not.toBe(end(margin).marketShare);
+  });
+
+  it("trades reach against cost, in the year it is chosen", () => {
+    /*
+     * One year, not fourteen. Over a whole season a cash-proportional strategy
+     * turns margin's lower costs into more money to spend, which out-grows
+     * growth — a real and interesting outcome, and not a test of what the
+     * lever does. The lever's own effect is a single year: the same company,
+     * the same spending, one word different.
+     */
+    const world = buildWorld({ seasonId: "s", niche, teams: [{ id: "team", name: "T", seats: ["ceo", "cmo", "cto"] as Role[] }] });
+    const company = world.companies.find((c) => c.id === "team")!;
+    const base = playedYear(company);
+
+    const year = (focus: string) => {
+      const { reports, world: after } = resolveYear(world, [{ ...base, ceo: { focus } as any }], economyFor("s", 1));
+      return { report: reports.find((r) => r.companyId === "team")!, company: after.companies.find((c) => c.id === "team")! };
+    };
+
+    const growth = year("growth");
+    const margin = year("margin");
+
+    // Growth reaches further for the same money.
+    expect(growth.report.brand).toBeGreaterThan(margin.report.brand);
+    // Margin makes each unit cheaper to produce.
+    expect(margin.company.unitCost).toBeLessThan(growth.company.unitCost);
+  });
+
+  it("makes survival the cheapest year and the one you come out of behind", () => {
+    const survival = withFocus("survival");
+    const growth = withFocus("growth");
+    const end = (r: ReturnType<typeof withFocus>) => r.history[r.history.length - 1];
+
+    expect(end(survival).costs).toBeLessThan(end(growth).costs);
+    expect(end(survival).marketShare).toBeLessThan(end(growth).marketShare);
+  });
+
+  it("cannot win a year on its own", () => {
+    /*
+     * A chief executive who could out-decide the other four would make their
+     * seats decorative. A focus with nothing behind it does nothing much.
+     */
+    const idle = playSeason(() => null);
+    const focusOnly = playSeason((_, company) => ({ companyId: "team", ceo: { focus: "growth" } } as any));
+    const end = (r: any) => r.history[r.history.length - 1];
+    expect(end(focusOnly).marketShare).toBeLessThan(0.02);
+  });
+
+  it("tells the team what it did", () => {
+    const { history } = withFocus("quality");
+    expect(history[0].notes.join(" ")).toMatch(/run for quality/i);
+  });
+});
+
 describe("the clock", () => {
   it("puts a year between years and stops at the end of the season", () => {
     const start = new Date("2026-01-01T12:00:00Z");

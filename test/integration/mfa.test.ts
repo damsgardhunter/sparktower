@@ -16,6 +16,7 @@ import { getTestApp, closeTestApp } from "../helpers/app";
 import { db } from "../../server/db";
 import { users } from "@shared/schema";
 import { passMfa, codeFor } from "../helpers/mfa";
+import { RATE_LIMITS } from "@shared/moderation";
 
 const password = "Testpass123!";
 let n = 0;
@@ -154,6 +155,43 @@ describe("two-factor sign-in", () => {
     const ordinary = await request(app).post("/api/auth/mobile/login").set("x-forwarded-for", ip()).send({ email: user.email, password });
     expect(ordinary.body).toMatchObject({ accessToken: expect.any(String), mfaEnrollmentRequired: false });
   });
+
+  it("counts wrong codes, not every attempt — enrolling doesn't spend your sign-ins", async () => {
+    /*
+     * The bug: the limiter counted every call against eight in fifteen minutes,
+     * shared between turning 2FA on and using it, successes included. Somebody
+     * enrolling could spend the whole budget on the setup screen and then be
+     * told "too many sign-in attempts" on their first real code, with a quarter
+     * of an hour to wait. Guessing six digits is what the limit is for, and a
+     * guess that works is not a guess.
+     */
+    const app = await getTestApp();
+    const me = await account(app, "Counted");
+    const { secret } = await passMfa(me.agent);
+
+    /*
+     * Enrolling is done — which under the old limiter had already spent two of
+     * eight — and here is a correct code on top of it. A code is accepted
+     * within one step of now, so this is the one success the clock allows in a
+     * single test; what matters is what it costs, which is nothing.
+     */
+    const signedIn = login(app, me.email);
+    await signedIn.res;
+    const good = await signedIn.agent.post("/api/auth/mfa/verify").send({ code: codeFor(secret, 1) });
+    expect(good.status, JSON.stringify(good.body)).toBe(200);
+
+    // The full budget of wrong codes is still there afterwards, which is the proof:
+    // enrolling and succeeding took none of it.
+    const guessing = login(app, me.email);
+    await guessing.res;
+    let refused = 0;
+    for (let i = 0; i < RATE_LIMITS.mfaCode.max + 1; i++) {
+      const res = await guessing.agent.post("/api/auth/mfa/verify").send({ code: "000000" });
+      if (res.status === 429) { refused = i + 1; break; }
+      expect(res.status, `wrong code ${i + 1}`).toBe(401);
+    }
+    expect(refused, "wrong codes must run out").toBe(RATE_LIMITS.mfaCode.max + 1);
+  }, 120_000);
 
   it("has no second way in: the route that minted recovery codes is gone", async () => {
     const app = await getTestApp();

@@ -329,15 +329,12 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
             </h2>
             {room.product && <p className="text-sm text-muted-foreground">{room.product}</p>}
             <p className="text-sm text-muted-foreground">{copy.body}</p>
-            {/*
-              * Honest rather than a dead link: the screens for playing a year
-              * are not built. Saying so beats a button that goes nowhere.
-              */}
-            <p className="text-xs text-muted-foreground border-t border-border pt-3">
-              The screens for making a year's decisions aren't built yet — your company and its seats are saved, and
-              year one is waiting for them.
-            </p>
-            <Button variant="outline" size="sm" onClick={() => navigate("/sprints")}>Back to sprints</Button>
+            <div className="flex gap-2 pt-1">
+              <Button size="sm" onClick={() => navigate(`/simulation/${ventureId}`)} data-testid="button-open-desk">
+                Open your desk <ArrowRight className="h-4 w-4 ml-1" />
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => navigate("/sprints")}>Back to sprints</Button>
+            </div>
           </CardContent>
         </Card>
       )}

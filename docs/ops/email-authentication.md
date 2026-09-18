@@ -251,5 +251,6 @@ repository as an intention rather than a fact.
 
 | date | domain | SPF | DKIM | DMARC policy | checked by |
 |---|---|---|---|---|---|
+| 2026-09-18 | sparktower.app | published | resend | p=quarantine | scripts/check-email-auth.mjs — SPF via send.* CNAME, DKIM resend TXT, DMARC rua on-domain |
 | 2026-09-17 | sparktower.app | MISSING | MISSING | p=quarantine (BROKEN — nothing aligns) | scripts/check-email-auth.mjs — GoDaddy's default record, rua to onsecureserver.net |
 | 2026-09-16 | sparktower.app | MISSING | MISSING | MISSING | scripts/check-email-auth.mjs — domain does not resolve (NXDOMAIN) |

@@ -58,6 +58,7 @@ import { pickFields, WRITABLE } from "./body-fields";
 import { registerEmailVerificationRoutes, requireVerifiedEmail } from "./email-verification";
 import { registerPasswordResetRoutes } from "./password-reset";
 import { registerSimulationRoutes } from "./simulation-routes";
+import { registerSimulationDeskRoutes } from "./simulation-desk-routes";
 import { z } from "zod";
 import OpenAI from "openai";
 import { eq, ne, and, sql, inArray, desc, isNull } from "drizzle-orm";
@@ -420,6 +421,8 @@ export async function registerRoutes(
   registerPasswordResetRoutes(app);
   // The market simulation: joining a market and claiming a seat (server/simulation-routes.ts).
   registerSimulationRoutes(app);
+  // The desk a seat files its year from (server/simulation-desk-routes.ts).
+  registerSimulationDeskRoutes(app);
   registerSafetyRoutes(app);
   registerInvestmentRoutes(app);
   registerBackingRoutes(app);

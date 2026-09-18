@@ -185,6 +185,50 @@ export function lift(spend: number, half: number, ceiling: number): number {
 }
 
 /** What the company pays every year before it does anything at all. */
+/**
+ * What the chief executive's focus actually does.
+ *
+ * It had to do something. `focus` was declared, shown in the lobby as the
+ * chair five people race each other for, and then read by nothing at all — so
+ * the most contested seat in the game was the one seat whose decision could
+ * not change the outcome. That is worse than an unbalanced lever; it is a
+ * promise the simulation quietly refused to keep.
+ *
+ * The shape of it: a focus is not a sixth set of spending, it is a thumb on
+ * everyone else's scale. It cannot win a year on its own and it cannot save a
+ * company that has decided nothing, which is right — a chief executive who
+ * could out-decide four other people would make their seats decorative
+ * instead. Every one of them trades something away, so there is no default
+ * answer and choosing is a real argument rather than a lookup.
+ */
+export const FOCUS_EFFECTS = {
+  /** Take share now, and pay for it in efficiency. */
+  growth: { marketing: 1.18, quality: 0.95, cost: 1.04, fixed: 1.05, decay: 1 },
+  /** Make the customers you have pay properly, and grow slower for it. */
+  margin: { marketing: 0.82, quality: 0.95, cost: 0.93, fixed: 0.97, decay: 1 },
+  /** Build something worth switching to, and wait to be noticed. */
+  quality: { marketing: 0.88, quality: 1.25, cost: 1.01, fixed: 1, decay: 1 },
+  /**
+   * Stop the bleeding. A hiring freeze and deferred everything: the cheapest
+   * year the company can have, and the one it comes out of behind.
+   */
+  survival: { marketing: 0.7, quality: 0.75, cost: 0.9, fixed: 0.78, decay: 1.15 },
+} as const;
+
+export type Focus = keyof typeof FOCUS_EFFECTS;
+
+/** The multipliers for a focus, or a neutral year when no chief executive filed. */
+export const focusEffects = (focus?: string) =>
+  FOCUS_EFFECTS[(focus ?? "") as Focus] ?? { marketing: 1, quality: 1, cost: 1, fixed: 1, decay: 1 };
+
+/** What the focus did, in the words the team will read afterwards. */
+export const FOCUS_NOTES: Record<Focus, string> = {
+  growth: "The year was run for growth: marketing went further than it otherwise would, and everything cost a little more to do.",
+  margin: "The year was run for margin: each unit cost less to make and to serve, and the marketing did not reach as far.",
+  quality: "The year was run for quality: the product moved faster than the spending alone would explain, and fewer people heard about it.",
+  survival: "The year was run for survival: a hiring freeze and deferred everything. Much cheaper, and the company comes out of it behind where it would otherwise be.",
+};
+
 export function fixedCosts(company: Company, headcount: number, economy: Economy): number {
   const salaries = headcount * 85_000 * economy.costIndex;
   // Each filled seat is an executive salary. Dissolving one is a real saving

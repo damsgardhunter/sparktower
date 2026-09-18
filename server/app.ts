@@ -240,7 +240,15 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
    */
   app.post(
     "/api/stripe/webhook",
-    express.raw({ type: "application/json" }),
+    /*
+     * Deliberately larger than the 100kb the rest of the API allows. A Stripe
+     * event carries the whole object it is about, and an invoice with many
+     * lines is bigger than a request a person makes — refusing one loses a
+     * payment event, and Stripe's retries would refuse it again. The exposure
+     * is bounded differently here: the body is verified against a signature,
+     * and repeated failures are rate-limited per address.
+     */
+    express.raw({ type: "application/json", limit: "1mb" }),
     async (req, res) => {
       // public-write: Stripe's signature over the raw body (WebhookHandlers.processWebhook, test/integration/stripe-webhook.test.ts); failed deliveries limited per address
       /*
@@ -280,14 +288,29 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
     },
   );
 
+  /*
+   * Body size limits, written down rather than inherited.
+   *
+   * Express defaults to 100kb, which is the right number here — the largest
+   * thing this API accepts is a post, and uploads never come through it (they
+   * go to object storage through a signed URL). But an inherited default is a
+   * limit nobody chose: it moves if Express changes it, and the next person to
+   * add `limit:` to one route has no stated baseline to compare against.
+   *
+   * The ceiling matters because it is reached before any handler runs. Without
+   * one, a single request can make the process buffer megabytes of JSON and
+   * then parse it, which is an easy way to exhaust memory on a small instance
+   * without authenticating first.
+   */
   app.use(
     express.json({
+      limit: "100kb",
       verify: (req, _res, buf) => {
         req.rawBody = buf;
       },
     }),
   );
-  app.use(express.urlencoded({ extended: false }));
+  app.use(express.urlencoded({ extended: false, limit: "100kb" }));
 
   // Every cookie-carrying write must come from this site's own pages (server/csrf.ts).
   app.use(sameOriginWrites());

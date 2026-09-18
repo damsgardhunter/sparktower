@@ -53,7 +53,7 @@ interface CountSource {
  * un-reacting deletes the row; a presign writes nothing; an AI call writes to
  * a dozen places.
  */
-const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai", "login", "loginAccount", "passwordReset", "write", "track", "post", "connect", "review", "payout", "webhookReject", "session", "workspace", "follow", "apply", "sprint", "checkout", "external", "invite", "inviteLookup"]);
+const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai", "login", "loginAccount", "passwordReset", "write", "track", "post", "connect", "review", "payout", "webhookReject", "mfaCode", "session", "workspace", "follow", "apply", "sprint", "checkout", "external", "invite", "inviteLookup"]);
 
 const hitSource = (action: RateLimitAction): CountSource => ({
   table: rateLimitHits, author: rateLimitHits.userId, created: rateLimitHits.createdAt,
@@ -114,6 +114,8 @@ const COUNTED: Record<RateLimitAction, CountSource[]> = {
   review: [hitSource("review")],
   payout: [hitSource("payout")],
   webhookReject: [hitSource("webhookReject")],
+  // Wrong second-factor codes, counted per account (server/mfa.ts).
+  mfaCode: [hitSource("mfaCode")],
   session: [hitSource("session")],
   workspace: [hitSource("workspace")],
   follow: [hitSource("follow")],
