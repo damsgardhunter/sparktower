@@ -191,6 +191,27 @@ export async function backingSignals(projectId: string) {
   };
 }
 
+/**
+ * Every transfer already sent for a project's pledges, keyed by the pledge it
+ * paid. Read from Stripe, not from our rows, because the case it exists for is
+ * the one where our row didn't get written. Reversed transfers don't count:
+ * that money came back.
+ */
+async function transfersByBacking(stripe: Awaited<ReturnType<typeof getUncachableStripeClient>>, projectId: string): Promise<Map<string, string>> {
+  const found = new Map<string, string>();
+  let startingAfter: string | undefined;
+  for (;;) {
+    const page = await stripe.transfers.list({ transfer_group: `backing_${projectId}`, limit: 100, ...(startingAfter ? { starting_after: startingAfter } : {}) });
+    for (const t of page.data) {
+      const backingId = t.metadata?.backingId;
+      if (backingId && !t.reversed) found.set(backingId, t.id);
+    }
+    if (!page.has_more || page.data.length === 0) break;
+    startingAfter = page.data[page.data.length - 1].id;
+  }
+  return found;
+}
+
 export function registerBackingRoutes(app: Express) {
   // Nested under /api/projects/:id, so the prefix guards in routes.ts can't
   // reach these — mounted here instead, same effect.
@@ -923,26 +944,53 @@ export function registerBackingRoutes(app: Express) {
       const failed: { id: string; error: string }[] = [];
       let totalCents = 0;
 
+      // What has already gone out for this project, by pledge — asked once, up front.
+      const paidOut = await transfersByBacking(stripe, projectId);
+
       // One transfer per backing rather than one lump sum: a single failure
       // then costs one pledge instead of the whole batch, and each transfer
       // carries the id of the pledge that funded it for reconciliation.
       for (const backing of pending) {
         try {
           const amount = creatorPayoutCents(backing.amountCents);
-          const transfer = await stripe.transfers.create({
-            amount,
-            currency: "usd",
-            destination: owner.stripeConnectAccountId,
-            transfer_group: `backing_${projectId}`,
-            metadata: { backingId: backing.id, projectId },
-          }, { idempotencyKey: `release_${backing.id}` });
+          /*
+           * Locked, re-checked, and asked of Stripe before any money moves.
+           *
+           * The row lock is what stops this and the refund sweep from both
+           * acting on one pledge — the sweep takes the same lock, so whichever
+           * gets it second finds the pledge no longer "held" and leaves it.
+           * Without it, a pledge could be refunded to the backer and paid to
+           * the creator: the platform paying for it twice.
+           *
+           * The Stripe lookup is what makes a retry safe. The idempotency key
+           * only holds for 24 hours; after that, a transfer that succeeded but
+           * wasn't recorded (the write below failing) would simply be sent
+           * again. A transfer already carrying this pledge's id is recorded
+           * instead of repeated, however long after.
+           */
+          const outcome = await db.transaction(async (tx) => {
+            const [row] = await tx.select({ id: projectBackings.id }).from(projectBackings)
+              .where(and(eq(projectBackings.id, backing.id), eq(projectBackings.status, "held")))
+              .for("update");
+            if (!row) return "gone" as const;
 
-          await db.update(projectBackings).set({
-            status: "released",
-            stripeTransferId: transfer.id,
-            releasedAt: new Date(),
-            resolvedAt: new Date(),
-          }).where(eq(projectBackings.id, backing.id));
+            const transferId = paidOut.get(backing.id) ?? (await stripe.transfers.create({
+              amount,
+              currency: "usd",
+              destination: owner.stripeConnectAccountId!,
+              transfer_group: `backing_${projectId}`,
+              metadata: { backingId: backing.id, projectId },
+            }, { idempotencyKey: `release_${backing.id}` })).id;
+
+            await tx.update(projectBackings).set({
+              status: "released",
+              stripeTransferId: transferId,
+              releasedAt: new Date(),
+              resolvedAt: new Date(),
+            }).where(eq(projectBackings.id, backing.id));
+            return "released" as const;
+          });
+          if (outcome === "gone") continue;
 
           released.push(backing.id);
           totalCents += amount;
