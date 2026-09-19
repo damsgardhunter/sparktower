@@ -332,7 +332,23 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
     const turnedAway = allocation.unserved[company.id] ?? 0;
     const served = units;
     const letDown = served + turnedAway > 0 ? turnedAway / (served + turnedAway) : 0;
-    const valueForMoney = company.price > 0 ? (company.quality / 100) / (company.price / niche.segments[0].referencePrice) : 0;
+    /*
+     * Value for money, against what this market charges on average and capped
+     * at twice a fair deal.
+     *
+     * Two things were wrong here. It measured against `segments[0]`, so which
+     * segment happened to be listed first decided the yardstick for the whole
+     * market — reordering a niche's segments silently changed every company's
+     * reputation. And it was uncapped, so a company charging a fifth of the
+     * going rate scored so far above fair that the penalty for turning
+     * customers away could not touch it: the more people it failed to serve,
+     * the better its reputation got.
+     */
+    const marketPrice = niche.segments.reduce((sum, s) => sum + s.referencePrice * s.size, 0)
+      / Math.max(1, niche.segments.reduce((sum, s) => sum + s.size, 0));
+    const valueForMoney = company.price > 0
+      ? Math.min(2, (company.quality / 100) / (company.price / marketPrice))
+      : 0;
     const repChange =
       (company.service - 50) * 0.06 +
       (valueForMoney - 0.8) * 6 -

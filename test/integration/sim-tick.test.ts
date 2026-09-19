@@ -45,7 +45,7 @@ async function player(app: any) {
   return { agent, id: res.body.id as string };
 }
 
-const NICHE = "fitness_app";
+const NICHE = "dating_apps";
 
 /** Five players, seated, named, and running — a room ready for year one. */
 async function readyRoom(app: any) {

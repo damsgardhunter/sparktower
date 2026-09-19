@@ -207,6 +207,57 @@ export function validateDecision(role: Role, payload: any, company: Company): Va
   return { ok: Object.keys(errors).length === 0, errors };
 }
 
+/**
+ * A decision reduced to the fields the seat actually owns.
+ *
+ * Taken from the lever list rather than from the submission, so nothing that
+ * wasn't asked for survives. Without this a crafted body could file a `borrow`
+ * alongside a marketing decision and the engine — which reads decisions by
+ * role — would honour it, letting a CMO quietly take out a loan the CFO never
+ * agreed to.
+ *
+ * It runs on bot decisions too. A bot files through the same door a person
+ * does, so there is one definition of what a seat may say and no second path
+ * that could drift from it.
+ */
+export function cleanDecision(
+  role: Role,
+  payload: any,
+  cityIds: readonly string[] = [],
+): Record<string, any> {
+  const source = payload ?? {};
+  const clean: Record<string, any> = {};
+  for (const field of LEVER_FIELDS[role]) {
+    const raw = source[field.id];
+    switch (field.kind) {
+      case "choice":
+      case "segment":
+        // A segment, or nobody. An unset choice is a real answer here.
+        clean[field.id] = raw === undefined || raw === null ? "" : String(raw);
+        break;
+      case "cities":
+        /*
+         * A list of ids, filtered to places that exist.
+         *
+         * The default `Number()` below turned this into NaN, which silently
+         * unset every city the marketing seat had chosen — the decision was
+         * accepted, stored as nonsense, and the team found out by not
+         * expanding. Anything the engine reads by shape rather than by number
+         * has to be handled by shape.
+         */
+        clean[field.id] = Array.isArray(raw)
+          ? raw.map(String).filter((id) => cityIds.includes(id)).slice(0, 20)
+          : [];
+        break;
+      default: {
+        const n = Number(raw);
+        clean[field.id] = Number.isFinite(n) ? n : 0;
+      }
+    }
+  }
+  return clean;
+}
+
 export interface Commitment {
   /** Discretionary spend the five of them have committed between them. */
   spend: number;

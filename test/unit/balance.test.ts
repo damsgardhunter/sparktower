@@ -49,6 +49,13 @@ function season(niche: Niche, play: Play, seasonId = "bal") {
   const final = history[history.length - 1];
   return {
     share: final.marketShare,
+    /*
+     * What the league table actually ranks by. Share is still checked — a
+     * market that falls over is a market that falls over — but "which strategy
+     * wins" has to be asked in the currency the game scores in, or these tests
+     * go on measuring a scoreboard the product stopped using.
+     */
+    value: final.founderValue,
     profit: final.profit,
     cash: final.cash,
     bankrupt: history.some((h) => h.bankrupt),
@@ -182,8 +189,8 @@ describe("is there more than one way to play", () => {
      * product.
      */
     const winners = NICHES.map((niche) => {
-      const scored = STRATEGIES.map((s) => ({ name: s.name, share: season(niche, s.play).share }));
-      return scored.sort((a, b) => b.share - a.share)[0].name;
+      const scored = STRATEGIES.map((s) => ({ name: s.name, value: season(niche, s.play).value }));
+      return scored.sort((a, b) => b.value - a.value)[0].name;
     });
     expect(new Set(winners).size, `the same strategy won everywhere: ${winners.join(", ")}`).toBeGreaterThan(1);
   });
@@ -192,8 +199,8 @@ describe("is there more than one way to play", () => {
     // Not necessarily a winner — but never a joke. A plan that is hopeless in
     // all four markets is a plan nobody should have been offered.
     for (const strategy of STRATEGIES) {
-      const bestForThem = Math.max(...NICHES.map((niche) => season(niche, strategy.play).share));
-      expect(bestForThem, `${strategy.name} is hopeless everywhere`).toBeGreaterThan(0.03);
+      const bestForThem = Math.max(...NICHES.map((niche) => season(niche, strategy.play).value));
+      expect(bestForThem, `${strategy.name} is hopeless everywhere`).toBeGreaterThan(50_000_000);
     }
   });
 
@@ -206,8 +213,8 @@ describe("is there more than one way to play", () => {
      */
     const ranking = (niche: Niche) =>
       STRATEGIES
-        .map((s) => ({ name: s.name, share: season(niche, s.play).share }))
-        .sort((a, b) => b.share - a.share)
+        .map((s) => ({ name: s.name, value: season(niche, s.play).value }))
+        .sort((a, b) => b.value - a.value)
         .map((s) => s.name)
         .join(">");
 
@@ -224,7 +231,7 @@ describe("five teams in one market, which is the actual game", () => {
    * against the machines and still produce one runaway winner and four people
    * who stopped opening the app on day five.
    */
-  const niche = nicheById("fitness_app")!;
+  const niche = nicheById("dating_apps")!;
 
   function crowdedSeason(seasonId = "crowd") {
     const teams = STRATEGIES.map((s, i) => ({ id: `t${i}`, name: s.name, seats: [...ROLES] as Role[] }));
@@ -256,9 +263,24 @@ describe("five teams in one market, which is the actual game", () => {
   }
 
   it("does not hand the whole market to one team", () => {
+    /*
+     * Share alone is the wrong question here and worth saying why. In a market
+     * whose flighty segment holds two customers in three, a volume strategy
+     * taking most of the *heads* is structurally expected and not the failure
+     * anybody would feel. What would be felt is one team finishing with a
+     * company and the rest finishing with nothing.
+     *
+     * So this checks both: a ceiling on share that catches a genuine runaway,
+     * and — the part that matters — that the teams who lost still have
+     * businesses worth something at the end of the fortnight.
+     */
     const { players } = crowdedSeason();
     const best = players[0];
-    expect(best.marketShare, `${best.name} took the lot`).toBeLessThan(0.55);
+    expect(best.marketShare, `${best.name} took the lot`).toBeLessThan(0.6);
+
+    const alsoRans = players.slice(1);
+    const standing = alsoRans.filter((p) => p.founderValue > 20_000_000);
+    expect(standing.length, `only ${best.name} came out of this with a company`).toBeGreaterThanOrEqual(2);
   });
 
   it("leaves the team in last place with a company, not a crater", () => {
@@ -308,7 +330,7 @@ describe("five teams in one market, which is the actual game", () => {
 });
 
 describe("a season is a story, not a coin flip", () => {
-  const niche = nicheById("fitness_app")!;
+  const niche = nicheById("dating_apps")!;
 
   it("takes years to build, so an early lead is not the whole game", () => {
     const out = season(niche, grower);

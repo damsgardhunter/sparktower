@@ -115,7 +115,20 @@ export function startingCompany(input: {
   seats: Role[];
 }): Company {
   const { id, name, niche, seats } = input;
-  const middle = [...niche.segments].sort((a, b) => a.referencePrice - b.referencePrice)[Math.floor(niche.segments.length / 2)];
+  /*
+   * Priced where most of the customers are.
+   *
+   * This used to take the middle segment by price, which is arbitrary and
+   * falls apart the moment a market has a wide spread: in construction, where
+   * jobs run from 900 to 14,000, it opened every company at 3,800 — more than
+   * four times what the segment holding six customers in seven expects to pay.
+   * Those companies won almost nobody, and a team that never touched the app
+   * bled to death by year five through no decision of their own.
+   *
+   * The largest segment's reference is a defensible opening that needs no
+   * thought on day one, which is exactly what a default is for.
+   */
+  const opening = [...niche.segments].sort((a, b) => b.size - a.size)[0];
 
   const market = niche.segments.reduce((sum, s) => sum + s.size, 0);
 
@@ -147,9 +160,24 @@ export function startingCompany(input: {
      * serve turns them away, which costs reputation — so the seat matters from
      * year one rather than becoming interesting in year six.
      */
-    capacity: Math.round(market * 0.03),
+    /*
+     * Enough capacity to earn a living, measured in money rather than heads.
+     *
+     * A share of the customer count looked even and was not: these markets
+     * differ by seventy times in what one customer pays, so three per cent of a
+     * podcast audience is a rounding error while three per cent of a
+     * construction market is a real business. A drone company could fill every
+     * slot it had and still not cover its salary bill. Sized against what it
+     * could earn, every market starts a company that can pay for itself if it
+     * wins — and winning is still the hard part. Capped as a share of the
+     * market so it never reads as absurd.
+     */
+    capacity: Math.min(
+      Math.round(market * 0.12),
+      Math.round(9_000_000 / Math.max(1, opening.referencePrice)),
+    ),
     unitCost: niche.baseUnitCost,
-    price: middle.referencePrice,
+    price: opening.referencePrice,
     customers: {},
     assets: [],
     seats,
@@ -196,7 +224,18 @@ export function buildWorld(input: {
  * benchmark.
  */
 export function openingDecisions(company: Company, niche: Niche): TeamDecisions {
-  const modest = Math.round(company.cash * 0.08);
+  /*
+   * Genuinely modest, which it was not.
+   *
+   * Eight per cent per lever is nearly half the company in a single year —
+   * spent on behalf of five people who have not arrived, in the year a company
+   * is least able to convert it, when nobody has heard of it and brand is
+   * eight. It cost an untouched team two and a half million to earn a hundred
+   * thousand, and killed them by year eight wherever customers are cheap. A
+   * default nobody chose should be cautious; a team that turns up can spend
+   * properly.
+   */
+  const modest = Math.round(company.cash * 0.04);
   return {
     companyId: company.id,
     cmo: {
@@ -240,7 +279,31 @@ export function openingDecisions(company: Company, niche: Niche): TeamDecisions 
  * player better off rather than worse.
  */
 export function caretakerDecisions(previous: TeamDecisions, company: Company): TeamDecisions {
-  const slow = (n: number | undefined) => Math.round(Math.max(0, n ?? 0) * CARETAKER_RATE);
+  /*
+   * Sixty per cent of last year's plan, and never more than the company can
+   * stand.
+   *
+   * The rate alone was not enough, because the plan a caretaker scales down is
+   * the last one a person actually filed — which for a team that never arrived
+   * is their opening year, for ever. They spent the same fraction of a
+   * six-million-pound opening every year for fourteen years while earning
+   * under a million, and bled to death by year nine in the markets where
+   * customers are cheap. Nobody made that decision; it was made on their
+   * behalf, repeatedly, by a function meant to keep the lights on.
+   *
+   * A caretaker holding a company with four hundred thousand in the bank does
+   * not spend seven hundred. The cap is a quarter of what is actually there.
+   */
+  const ceiling = Math.max(0, company.cash) * 0.25;
+  const raw =
+    (previous.cmo?.brandSpend ?? 0) + (previous.cmo?.performanceSpend ?? 0) +
+    (previous.cto?.featureSpend ?? 0) + (previous.cto?.reliabilitySpend ?? 0) + (previous.cto?.techDebtPaydown ?? 0) +
+    (previous.cto?.researchSpend ?? 0) +
+    (previous.coo?.supportSpend ?? 0) + (previous.coo?.efficiencySpend ?? 0);
+  const scaled = raw * CARETAKER_RATE;
+  const withinMeans = scaled > ceiling && scaled > 0 ? ceiling / scaled : 1;
+
+  const slow = (n: number | undefined) => Math.round(Math.max(0, n ?? 0) * CARETAKER_RATE * withinMeans);
 
   return {
     companyId: company.id,

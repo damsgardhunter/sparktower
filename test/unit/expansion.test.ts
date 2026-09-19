@@ -17,7 +17,7 @@ import { seedIncumbents } from "@shared/simulation/incumbents";
 import { nicheById } from "@shared/simulation/niches";
 import { ROLES, type Company, type World } from "@shared/simulation/types";
 
-const niche = nicheById("fitness_app")!;
+const niche = nicheById("dating_apps")!;
 const team = (over: Partial<Company> = {}): Company => ({
   ...startingCompany({ id: "t", name: "T", niche, seats: [...ROLES] }),
   ...over,
@@ -87,24 +87,24 @@ describe("where you sell", () => {
 
 describe("who the company is for", () => {
   it("helps where you aimed and costs you everywhere else", () => {
-    const c = team({ positioning: "committed" });
-    expect(positioningFor(c, "committed")).toBeGreaterThan(1);
-    expect(positioningFor(c, "resolvers")).toBeLessThan(1);
+    const c = team({ positioning: "recently_single" });
+    expect(positioningFor(c, "recently_single")).toBeGreaterThan(1);
+    expect(positioningFor(c, "swipers")).toBeLessThan(1);
     // Declaring nothing is neutral, not a penalty.
-    expect(positioningFor(team(), "committed")).toBe(1);
+    expect(positioningFor(team(), "recently_single")).toBe(1);
   });
 
   it("changes which segment a company actually wins", () => {
-    const aimed = resolveYear(world(team()), [spend({ ceo: { focus: "growth", positioning: "coached" } })]);
+    const aimed = resolveYear(world(team()), [spend({ ceo: { focus: "growth", positioning: "long_haulers" } })]);
     const broad = resolveYear(world(team()), [spend()]);
-    const coachedIn = (r: any) => r.world.companies.find((c: any) => c.id === "t").customers.coached ?? 0;
+    const coachedIn = (r: any) => r.world.companies.find((c: any) => c.id === "t").customers.long_haulers ?? 0;
     expect(coachedIn(aimed)).toBeGreaterThan(coachedIn(broad));
   });
 
   it("is a trade — aiming somewhere costs you the rest", () => {
-    const aimed = resolveYear(world(team()), [spend({ ceo: { focus: "growth", positioning: "coached" } })]);
+    const aimed = resolveYear(world(team()), [spend({ ceo: { focus: "growth", positioning: "long_haulers" } })]);
     const broad = resolveYear(world(team()), [spend()]);
-    const resolversIn = (r: any) => r.world.companies.find((c: any) => c.id === "t").customers.resolvers ?? 0;
+    const resolversIn = (r: any) => r.world.companies.find((c: any) => c.id === "t").customers.swipers ?? 0;
     expect(resolversIn(aimed)).toBeLessThan(resolversIn(broad));
   });
 });
@@ -124,7 +124,7 @@ describe("taking investors' money", () => {
      */
     const poor = resolveYear(world(team({ customers: {} })), [spend({ cfo: { raiseAmount: 4_000_000 } })]);
     const rich = resolveYear(
-      world(team({ customers: { committed: 400_000 } })),
+      world(team({ customers: { recently_single: 400_000 } })),
       [spend({ cfo: { raiseAmount: 4_000_000 } })],
     );
     const share = (r: any) => r.world.companies.find((c: any) => c.id === "t").founderShare;

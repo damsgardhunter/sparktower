@@ -83,8 +83,8 @@ describe("the incumbents' 90%", () => {
      * advantage in both segments. The only difference is loyalty: 0.18 against
      * 0.86. What moves is the difference loyalty makes, and nothing else.
      */
-    const flighty = niche.segments.find((s) => s.id === "resolvers")!;
-    const devoted = niche.segments.find((s) => s.id === "coached")!;
+    const flighty = niche.segments.find((s) => s.id === "swipers")!;
+    const devoted = niche.segments.find((s) => s.id === "long_haulers")!;
 
     const holder = (segmentId: string, size: number): Company => ({
       ...newTeam(`holder_${segmentId}`, "Holder"), kind: "incumbent", posture: "coaster",
@@ -184,7 +184,9 @@ describe("money alone doesn't win", () => {
 describe("the incumbents defend like incumbents", () => {
   it("ignores a rival too small to matter, and reacts when one isn't", () => {
     const world = worldWith([newTeam("t1", "Newcomer")]);
-    const fortress = world.companies.find((c) => c.id === "inc_peak")!;
+    // Found by posture rather than by id: these tests are about how a posture
+    // behaves, and naming a particular company ties them to one market.
+    const fortress = world.companies.find((c) => c.posture === "fortress")!;
     const tiny = { ...newTeam("tiny", "Tiny"), brand: 2, quality: 20 };
     const serious = { ...newTeam("serious", "Serious"), brand: 85, quality: 92, service: 88, price: 14 };
 
@@ -198,7 +200,8 @@ describe("the incumbents defend like incumbents", () => {
     world = resolveYear(world, [fullYear("t1", 2_000_000, 11)]).world;
     const { reports } = resolveYear(world, [fullYear("t1", 2_000_000, 11)]);
 
-    const coaster = reports.find((r) => r.companyId === "inc_still")!;
+    const coasterId = world.companies.find((c) => c.posture === "coaster")!.id;
+    const coaster = reports.find((r) => r.companyId === coasterId)!;
     expect(coaster.notes.join(" ")).toMatch(/stopped defending|pressure/i);
   });
 });

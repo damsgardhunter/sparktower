@@ -20,7 +20,7 @@ const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
 /** The market this spec plays in. One per spec, so two specs never share a season. */
-const NICHE = "fitness_app";
+const NICHE = "dating_apps";
 
 async function personIn(browser: Browser, ip: string, first: string) {
   const context = await browser.newContext({ extraHTTPHeaders: { "x-forwarded-for": ip } });
@@ -160,7 +160,7 @@ test("somebody who is not in the room is told nothing about it", async ({ browse
   const member = await personIn(browser, "203.0.117.60", "Member");
   const stranger = await personIn(browser, "203.0.117.61", "Stranger");
 
-  const ventureId = (await (await member.api.post("/api/sim/join", { data: { nicheId: "field_software" } })).json()).ventureId;
+  const ventureId = (await (await member.api.post("/api/sim/join", { data: { nicheId: "project_saas" } })).json()).ventureId;
 
   // 404 rather than 403: the existence of a room is not a stranger's business.
   const peek = await stranger.api.get(`/api/sim/ventures/${ventureId}`);

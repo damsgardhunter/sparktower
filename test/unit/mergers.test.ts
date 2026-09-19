@@ -13,7 +13,7 @@ import { seedIncumbents } from "@shared/simulation/incumbents";
 import { nicheById } from "@shared/simulation/niches";
 import { ROLES, type Company, type CompanyAsset } from "@shared/simulation/types";
 
-const niche = nicheById("fitness_app")!;
+const niche = nicheById("dating_apps")!;
 const company = (id: string, over: Partial<Company> = {}): Company => ({
   ...startingCompany({ id, name: id.toUpperCase(), niche, seats: [...ROLES] }),
   ...over,
@@ -26,7 +26,7 @@ const patent: CompanyAsset = {
 
 describe("what a company is worth", () => {
   it("prices it on what it earns, what it owns and what it owes", () => {
-    const c = company("t", { customers: { committed: 100_000 }, price: 20, assets: [patent], debt: 1_000_000 });
+    const c = company("t", { customers: { recently_single: 100_000 }, price: 20, assets: [patent], debt: 1_000_000 });
     const v = valuation(c);
     expect(v.revenue).toBe(2_000_000);
     expect(v.assets).toBe(1_600_000);
@@ -39,7 +39,7 @@ describe("what a company is worth", () => {
      * Published to buyer and seller alike. A negotiation where only one side
      * can do the arithmetic is a trick played on whoever is newer to the game.
      */
-    const v = valuation(company("t", { customers: { committed: 50_000 }, price: 22, debt: 500_000 }));
+    const v = valuation(company("t", { customers: { recently_single: 50_000 }, price: 22, debt: 500_000 }));
     expect(v.notes.join(" ")).toMatch(/50,000 customers/);
     expect(v.notes.join(" ")).toMatch(/owes/);
   });
@@ -51,14 +51,14 @@ describe("what a company is worth", () => {
   });
 
   it("says out loud that a cheap insolvent company may not be a bargain", () => {
-    const v = valuation(company("t", { bankruptSince: 4, customers: { committed: 1000 } }));
+    const v = valuation(company("t", { bankruptSince: 4, customers: { recently_single: 1000 } }));
     expect(v.notes.join(" ")).toMatch(/insolvent/i);
   });
 });
 
 describe("whether an offer can be made", () => {
   const rich = company("a", { cash: 50_000_000 });
-  const target = company("b", { customers: { committed: 10_000 } });
+  const target = company("b", { customers: { recently_single: 10_000 } });
   const base = { pendingFrom: 0, year: 5, totalYears: 14 };
 
   it("allows a funded offer to another team", () => {
@@ -110,7 +110,7 @@ describe("whether an offer can be made", () => {
 });
 
 describe("how an offer reads to the team deciding", () => {
-  const target = company("b", { customers: { committed: 100_000 }, price: 20 });
+  const target = company("b", { customers: { recently_single: 100_000 }, price: 20 });
   const fair = valuation(target).fair;
 
   it("calls a strong offer strong and a derisory one derisory", () => {
@@ -128,16 +128,16 @@ describe("how an offer reads to the team deciding", () => {
 });
 
 describe("the acquisition itself", () => {
-  const buyer = company("a", { cash: 20_000_000, customers: { committed: 50_000 }, capacity: 500_000 });
+  const buyer = company("a", { cash: 20_000_000, customers: { recently_single: 50_000 }, capacity: 500_000 });
   const seller = company("b", {
-    cash: 500_000, debt: 3_000_000, customers: { committed: 80_000, resolvers: 20_000 },
+    cash: 500_000, debt: 3_000_000, customers: { recently_single: 80_000, swipers: 20_000 },
     assets: [patent], reputation: 61,
   });
 
   it("moves the business across: customers, what it owned, what it owed", () => {
     const out = applyAcquisition({ buyer, seller, amount: 6_000_000 });
-    expect(out.buyer.customers.committed).toBe(130_000);
-    expect(out.buyer.customers.resolvers).toBe(20_000);
+    expect(out.buyer.customers.recently_single).toBe(130_000);
+    expect(out.buyer.customers.swipers).toBe(20_000);
     expect(out.buyer.assets.map((a) => a.id)).toContain("a1");
     // The debts come with the business, which is what stops a cheap company being cheap.
     expect(out.buyer.debt).toBe(buyer.debt + 3_000_000);
@@ -163,7 +163,7 @@ describe("the acquisition itself", () => {
   });
 
   it("makes selling a way out of insolvency rather than the end of it", () => {
-    const sinking = company("b", { cash: -1_000_000, debt: 5_000_000, bankruptSince: 6, customers: { committed: 30_000 } });
+    const sinking = company("b", { cash: -1_000_000, debt: 5_000_000, bankruptSince: 6, customers: { recently_single: 30_000 } });
     const out = applyAcquisition({ buyer, seller: sinking, amount: 2_000_000 });
     expect(out.seller.bankruptSince).toBeUndefined();
     expect(out.seller.cash).toBeGreaterThan(0);
@@ -192,6 +192,6 @@ describe("the acquisition itself", () => {
 describe("a company with nothing left", () => {
   it("is not worth approaching again", () => {
     expect(alreadySold(company("b", { customers: {}, assets: [] }))).toBe(true);
-    expect(alreadySold(company("b", { customers: { committed: 1 }, assets: [] }))).toBe(false);
+    expect(alreadySold(company("b", { customers: { recently_single: 1 }, assets: [] }))).toBe(false);
   });
 });

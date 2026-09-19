@@ -24,7 +24,7 @@ const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
 /** A market of this spec's own, so no other spec's room can hold up its season. */
-const NICHE = "coffee";
+const NICHE = "restaurant_chain";
 const ROLES = ["ceo", "cmo", "cfo", "cto", "coo"] as const;
 
 async function personIn(browser: Browser, ip: string, first: string) {

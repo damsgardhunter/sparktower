@@ -16,7 +16,7 @@ import { nicheById } from "@shared/simulation/niches";
 import { ROLES, type Role } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
 
-const niche = nicheById("fitness_app")!;
+const niche = nicheById("dating_apps")!;
 const economy = economyFor("s", 1);
 const company = () => startingCompany({ id: "t", name: "T", niche, seats: [...ROLES] });
 

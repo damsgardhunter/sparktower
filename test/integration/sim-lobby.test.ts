@@ -43,7 +43,7 @@ async function player(app: any) {
   return { agent, id: res.body.id as string, email };
 }
 
-const NICHE = "fitness_app";
+const NICHE = "dating_apps";
 
 /** Five players into one room. */
 async function roomOfFive(app: any) {

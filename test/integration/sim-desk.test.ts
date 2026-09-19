@@ -41,7 +41,7 @@ async function player(app: any) {
   return { agent, id: res.body.id as string };
 }
 
-const NICHE = "fitness_app";
+const NICHE = "dating_apps";
 const ROLES = ["ceo", "cmo", "cfo", "cto", "coo"] as const;
 
 /** A running company with five seated players. */

@@ -17,7 +17,7 @@ import { nicheById } from "@shared/simulation/niches";
 import { ROLE_TITLES, type Role } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
 
-const niche = nicheById("fitness_app")!;
+const niche = nicheById("dating_apps")!;
 
 /** Run a whole season, deciding each year with the given strategy. */
 function playSeason(decide: (year: number, company: any) => TeamDecisions | null, seasonId = "s-test") {

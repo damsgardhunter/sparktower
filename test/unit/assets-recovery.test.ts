@@ -20,7 +20,7 @@ import { seedIncumbents } from "@shared/simulation/incumbents";
 import { nicheById } from "@shared/simulation/niches";
 import { ROLES, type Company, type CompanyAsset } from "@shared/simulation/types";
 
-const niche = nicheById("fitness_app")!;
+const niche = nicheById("dating_apps")!;
 const company = (over: Partial<Company> = {}): Company => ({
   ...startingCompany({ id: "t", name: "T", niche, seats: [...ROLES] }),
   ...over,

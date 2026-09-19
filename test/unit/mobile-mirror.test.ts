@@ -32,7 +32,7 @@ import { startingCompany } from "@shared/simulation/season";
 import { nicheById } from "@shared/simulation/niches";
 import { ROLES, type Company } from "@shared/simulation/types";
 
-const niche = nicheById("fitness_app")!;
+const niche = nicheById("dating_apps")!;
 const company = (over: Partial<Company> = {}): Company => ({
   ...startingCompany({ id: "t", name: "T", niche, seats: [...ROLES] }),
   ...over,

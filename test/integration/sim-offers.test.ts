@@ -17,7 +17,7 @@ import type { World } from "@shared/simulation/types";
 
 afterAll(async () => { await closeTestApp(); });
 
-const NICHE = "fitness_app";
+const NICHE = "dating_apps";
 const ROLES = ["ceo", "cmo", "cfo", "cto", "coo"] as const;
 
 let n = 0;
@@ -102,7 +102,7 @@ describe("looking at who could be bought", () => {
   it("values every rival, and your own company, in the open", async () => {
     const app = await getTestApp();
     const { a, b, seasonId } = await twoTeams(app);
-    await shape(seasonId, b.ventureId, { customers: { committed: 80_000 }, price: 20 });
+    await shape(seasonId, b.ventureId, { customers: { recently_single: 80_000 }, price: 20 });
 
     const res = await a.ceo.agent.get(`/api/sim/ventures/${a.ventureId}/offers`);
     expect(res.status, JSON.stringify(res.body)).toBe(200);
@@ -125,7 +125,7 @@ describe("looking at who could be bought", () => {
      */
     const app = await getTestApp();
     const { a, b, seasonId } = await twoTeams(app);
-    await shape(seasonId, b.ventureId, { customers: { committed: 120_000 } });
+    await shape(seasonId, b.ventureId, { customers: { recently_single: 120_000 } });
 
     const res = await a.ceo.agent.get(`/api/sim/ventures/${a.ventureId}/offers`);
     expect(res.body.you.capacity).toBeGreaterThan(0);
@@ -217,7 +217,7 @@ describe("answering one", () => {
   it("shows the target what it is worth against what is being offered", async () => {
     const app = await getTestApp();
     const { a, b, seasonId } = await twoTeams(app);
-    await shape(seasonId, b.ventureId, { customers: { committed: 100_000 }, price: 20 });
+    await shape(seasonId, b.ventureId, { customers: { recently_single: 100_000 }, price: 20 });
     await shape(seasonId, a.ventureId, { cash: 50_000_000 });
 
     await a.ceo.agent.post(`/api/sim/ventures/${a.ventureId}/offers`)
@@ -275,7 +275,7 @@ describe("when it goes through", () => {
     const app = await getTestApp();
     const { a, b, seasonId } = await twoTeams(app);
     await shape(seasonId, a.ventureId, { cash: 50_000_000, capacity: 5_000_000 });
-    await shape(seasonId, b.ventureId, { customers: { committed: 100_000 }, debt: 2_000_000 });
+    await shape(seasonId, b.ventureId, { customers: { recently_single: 100_000 }, debt: 2_000_000 });
 
     await a.ceo.agent.post(`/api/sim/ventures/${a.ventureId}/offers`).send({ targetId: b.ventureId, amount: 4_000_000 });
     const [offer] = await db.select().from(simOffers).where(eq(simOffers.fromVentureId, a.ventureId));
@@ -315,7 +315,7 @@ describe("when it goes through", () => {
     const app = await getTestApp();
     const { a, b, seasonId } = await twoTeams(app);
     await shape(seasonId, a.ventureId, { cash: 50_000_000, capacity: 1_000 });
-    await shape(seasonId, b.ventureId, { customers: { committed: 200_000 } });
+    await shape(seasonId, b.ventureId, { customers: { recently_single: 200_000 } });
 
     await a.ceo.agent.post(`/api/sim/ventures/${a.ventureId}/offers`).send({ targetId: b.ventureId, amount: 4_000_000 });
     const [offer] = await db.select().from(simOffers).where(eq(simOffers.fromVentureId, a.ventureId));

@@ -20,7 +20,7 @@ import type { World } from "@shared/simulation/types";
 
 afterAll(async () => { await closeTestApp(); });
 
-const NICHE = "fitness_app";
+const NICHE = "dating_apps";
 const ROLES = ["ceo", "cmo", "cfo", "cto", "coo"] as const;
 const niche = nicheById(NICHE)!;
 

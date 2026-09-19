@@ -41,6 +41,16 @@ export interface SeatView {
   userId: string;
   role: Role | null;
   assigned: boolean;
+  /**
+   * A seat the product is playing, not a person.
+   *
+   * It changes when the room stops waiting. A bot never claims a seat — the
+   * whole point is that it takes whatever the people didn't want — so a room
+   * with a bot in it would otherwise sit out the full claiming clock and then
+   * the full naming clock, five minutes of a human watching nothing happen for
+   * choices nobody is going to make.
+   */
+  isBot?: boolean;
 }
 
 /**
@@ -130,12 +140,26 @@ export function nextPhase(input: {
 
   if (phase === "claiming") {
     if (allSeated(seats)) return { phase: "naming", assign: false, reason: "Every seat is taken." };
+    /*
+     * Everybody who was going to choose has chosen. The rest of the room is
+     * bots, which will never claim anything, so waiting out the clock only
+     * costs the people who are actually here.
+     */
+    if (seats.some((s) => !s.role) && seats.every((s) => s.role || s.isBot)) {
+      return { phase: "naming", assign: true, reason: "Everyone's chosen. The rest of the seats were dealt out." };
+    }
     if (expired) return { phase: "naming", assign: true, reason: "Time's up — the seats nobody claimed were dealt out." };
     return null;
   }
 
   if (phase === "naming") {
     if (named) return { phase: "running", assign: false, reason: "The company has a name. Year one begins." };
+    // A bot in the chief executive's seat is never going to name anything.
+    // Start on a placeholder now rather than two minutes from now; whoever is
+    // actually here can still rename it in year one.
+    if (seats.some((s) => s.role === "ceo" && s.isBot)) {
+      return { phase: "running", assign: false, reason: "Nobody here is naming it. Year one begins, and the name can still change." };
+    }
     // A CEO who wandered off cannot hold the season. The venture starts with a
     // placeholder name, which the CEO can still change in year one.
     if (expired) return { phase: "running", assign: false, reason: "Time's up — the company starts unnamed, and the chief executive can still fix that." };
