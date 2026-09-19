@@ -30,6 +30,7 @@ import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { mfaGate } from "./mfa";
 import { atLeast } from "./platform-roles";
 import { logModeration, rateLimit } from "./moderation";
+import { normalizeEmail } from "@shared/email-address";
 
 /** Admin, with a session that proved its second factor. Anything less doesn't learn this page exists. */
 const requireAdmin: RequestHandler = (req: any, res, next) => {
@@ -115,6 +116,44 @@ export function registerAdminSecurityRoutes(app: Express) {
     } catch (error) {
       console.error("[admin-security] overview failed:", error);
       res.status(500).json({ message: "Couldn't read the security overview" });
+    }
+  });
+
+  /**
+   * Finds one account by its exact address, so the two controls below can be
+   * used on anybody — not only on the admins and reviewers the overview lists.
+   *
+   * The console's main job is the person who lost their phone, and that person
+   * is almost never staff. Until this existed, the overview was the only way to
+   * reach the buttons, so an ordinary member locked out of their account could
+   * not be helped from here at all.
+   *
+   * An exact match, deliberately not a search: an operator who already knows
+   * whose account it is can find it, and nobody can page through the members.
+   * The address travels in the body rather than the URL so it is not written
+   * into access logs along the way.
+   */
+  app.post("/api/admin/security/lookup", isAuthenticated, requireAdmin, rateLimit("review"), async (req: any, res) => {
+    try {
+      const wanted = normalizeEmail(String(req.body?.email ?? ""));
+      if (!wanted || !wanted.includes("@")) {
+        return res.status(400).json({ message: "Enter the account's full email address.", code: "invalid_input", field: "email" });
+      }
+      const [found] = await db
+        .select({
+          id: users.id, email: users.email, firstName: users.firstName,
+          role: users.platformRole, mfaEnabledAt: users.mfaEnabledAt,
+          suspendedAt: users.suspendedAt, emailVerifiedAt: users.emailVerifiedAt,
+          createdAt: users.createdAt, deletedAt: users.deletedAt,
+        })
+        .from(users)
+        .where(sql`lower(${users.email}) = ${wanted}`);
+      if (!found || found.deletedAt) return res.status(404).json({ message: "No account with that address.", code: "not_found" });
+      const { deletedAt: _deleted, ...row } = found;
+      res.json({ account: { ...row, email: maskEmail(row.email), twoFactor: row.mfaEnabledAt ? "on" : "OFF" } });
+    } catch (error) {
+      console.error("[admin-security] lookup failed:", error);
+      res.status(500).json({ message: "Couldn't look that up" });
     }
   });
 

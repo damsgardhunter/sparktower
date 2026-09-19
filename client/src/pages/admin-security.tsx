@@ -43,6 +43,7 @@ export default function AdminSecurity() {
   const queryClient = useQueryClient();
   const [asking, setAsking] = useState<{ id: string; kind: "reset-mfa" | "sign-out" } | null>(null);
   const [reason, setReason] = useState("");
+  const [lookupEmail, setLookupEmail] = useState("");
 
   const { data, isLoading, error } = useQuery<Overview>({
     queryKey: ["/api/admin/security/overview"],
@@ -60,8 +61,19 @@ export default function AdminSecurity() {
       setAsking(null);
       setReason("");
       void queryClient.invalidateQueries({ queryKey: ["/api/admin/security/overview"] });
+      if (lookup.data?.account?.id === variables.id) lookup.mutate(lookupEmail.trim());
     },
     onError: (err) => toast({ title: "Didn't run", description: errorText(err), variant: "destructive" }),
+  });
+
+  /*
+   * Anybody, by exact address. The list below is only staff; the person who
+   * lost their phone usually isn't, and until this there was no way to reach
+   * the buttons for them.
+   */
+  const lookup = useMutation({
+    mutationFn: async (email: string) =>
+      (await apiRequest("POST", "/api/admin/security/lookup", { email })).json() as Promise<{ account: Privileged }>,
   });
 
   // A 404 is what this console says to anyone who shouldn't know it exists.
@@ -71,6 +83,31 @@ export default function AdminSecurity() {
   }
 
   const exposed = data.privileged.filter((p) => p.twoFactor === "OFF");
+
+  /* One account, with the two controls: the staff list and the lookup draw the same row. */
+  const AccountRow = ({ p, testId }: { p: Privileged; testId: string }) => (
+    <div className="flex flex-wrap items-center gap-2 justify-between border rounded-md p-3" data-testid={testId}>
+      <div className="min-w-0">
+        <div className="flex items-center gap-2 text-sm font-medium">
+          {p.firstName || "(no name)"}
+          {p.role && <Badge variant={p.role === "admin" ? "default" : "secondary"}>{p.role}</Badge>}
+          {p.twoFactor === "on"
+            ? <Badge variant="outline" className="text-green-600 border-green-600/40" data-testid={`badge-2fa-on-${p.id}`}>2FA on</Badge>
+            : <Badge variant="destructive" data-testid={`badge-no-2fa-${p.id}`}>2FA OFF</Badge>}
+          {p.suspendedAt && <Badge variant="destructive"><Ban className="h-3 w-3 mr-1" />suspended</Badge>}
+        </div>
+        <div className="text-xs text-muted-foreground mt-0.5">{p.email} · since {when(p.createdAt)}</div>
+      </div>
+      <div className="flex gap-2">
+        <Button size="sm" variant="outline" onClick={() => { setAsking({ id: p.id, kind: "reset-mfa" }); setReason(""); }} data-testid={`button-reset-mfa-${p.id}`}>
+          <KeyRound className="h-3.5 w-3.5 mr-1.5" /> Reset 2FA
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => { setAsking({ id: p.id, kind: "sign-out" }); setReason(""); }} data-testid={`button-sign-out-${p.id}`}>
+          <LogOut className="h-3.5 w-3.5 mr-1.5" /> Sign out everywhere
+        </Button>
+      </div>
+    </div>
+  );
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-8 space-y-6" data-testid="page-admin-security">
@@ -101,32 +138,36 @@ export default function AdminSecurity() {
         </Card>
       )}
 
+      <Card data-testid="card-find-account">
+        <CardHeader><CardTitle className="text-base">Find an account</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <form
+            className="flex gap-2"
+            onSubmit={(e) => { e.preventDefault(); if (lookupEmail.trim()) lookup.mutate(lookupEmail.trim()); }}
+          >
+            <Input
+              type="email" value={lookupEmail} onChange={(e) => setLookupEmail(e.target.value)}
+              placeholder="their full email address" aria-label="Email address to look up"
+              data-testid="input-lookup-email"
+            />
+            <Button type="submit" variant="outline" disabled={!lookupEmail.trim() || lookup.isPending} data-testid="button-lookup">
+              {lookup.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Find"}
+            </Button>
+          </form>
+          <p className="text-xs text-muted-foreground">
+            The exact address, not a search — for the person who wrote in about their own account.
+          </p>
+          {lookup.isError && (
+            <p className="text-sm text-destructive" data-testid="text-lookup-error">{errorText(lookup.error)}</p>
+          )}
+          {lookup.data?.account && <AccountRow p={lookup.data.account} testId={`row-lookup-${lookup.data.account.id}`} />}
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader><CardTitle className="text-base">Who holds power</CardTitle></CardHeader>
         <CardContent className="space-y-2">
-          {data.privileged.map((p) => (
-            <div key={p.id} className="flex flex-wrap items-center gap-2 justify-between border rounded-md p-3" data-testid={`row-privileged-${p.id}`}>
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  {p.firstName || "(no name)"}
-                  <Badge variant={p.role === "admin" ? "default" : "secondary"}>{p.role}</Badge>
-                  {p.twoFactor === "on"
-                    ? <Badge variant="outline" className="text-green-600 border-green-600/40">2FA on</Badge>
-                    : <Badge variant="destructive" data-testid={`badge-no-2fa-${p.id}`}>2FA OFF</Badge>}
-                  {p.suspendedAt && <Badge variant="destructive"><Ban className="h-3 w-3 mr-1" />suspended</Badge>}
-                </div>
-                <div className="text-xs text-muted-foreground mt-0.5">{p.email} · since {when(p.createdAt)}</div>
-              </div>
-              <div className="flex gap-2">
-                <Button size="sm" variant="outline" onClick={() => { setAsking({ id: p.id, kind: "reset-mfa" }); setReason(""); }} data-testid={`button-reset-mfa-${p.id}`}>
-                  <KeyRound className="h-3.5 w-3.5 mr-1.5" /> Reset 2FA
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => { setAsking({ id: p.id, kind: "sign-out" }); setReason(""); }} data-testid={`button-sign-out-${p.id}`}>
-                  <LogOut className="h-3.5 w-3.5 mr-1.5" /> Sign out everywhere
-                </Button>
-              </div>
-            </div>
-          ))}
+          {data.privileged.map((p) => <AccountRow key={p.id} p={p} testId={`row-privileged-${p.id}`} />)}
         </CardContent>
       </Card>
 

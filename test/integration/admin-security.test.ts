@@ -169,3 +169,58 @@ describe("signing an account out everywhere", () => {
     expect(logged.some((l) => l.action === "security.sign_out_everywhere")).toBe(true);
   });
 });
+
+describe("finding an account that isn't staff", () => {
+  /*
+   * The console's main job is the person who lost their phone, and that person
+   * is almost never an admin or reviewer — the only accounts the overview
+   * lists. Until the lookup existed, there was no way to reach the buttons
+   * for them.
+   */
+  it("finds an ordinary member by their exact address, and the controls work on them", async () => {
+    const app = await getTestApp();
+    const admin = await person(app, "Finder", "admin");
+    await passMfa(admin.agent);
+    const member = await person(app, "Member");
+    await passMfa(member.agent);
+
+    // Case doesn't matter; addresses are stored lowercased.
+    const found = await admin.agent.post("/api/admin/security/lookup").send({ email: member.email.toUpperCase() });
+    expect(found.status, JSON.stringify(found.body)).toBe(200);
+    expect(found.body.account.id).toBe(member.id);
+    expect(found.body.account.twoFactor).toBe("on");
+    // Masked like everywhere else in the console.
+    expect(found.body.account.email).not.toBe(member.email);
+
+    const reset = await admin.agent.post(`/api/admin/security/users/${member.id}/reset-mfa`)
+      .send({ reason: "Wrote in from their address on file; confirmed the project they own." });
+    expect(reset.status, JSON.stringify(reset.body)).toBe(200);
+    expect((await admin.agent.post("/api/admin/security/lookup").send({ email: member.email })).body.account.twoFactor).toBe("OFF");
+  });
+
+  it("is an exact match, not a way to browse the members", async () => {
+    const app = await getTestApp();
+    const admin = await person(app, "Browser", "admin");
+    await passMfa(admin.agent);
+    const member = await person(app, "Hidden");
+
+    // A fragment, a domain, a wildcard: none of them lists anybody.
+    for (const guess of [member.email.slice(0, 8), "@example.test", "%", "sec-%@example.test"]) {
+      const res = await admin.agent.post("/api/admin/security/lookup").send({ email: guess });
+      expect([400, 404], `"${guess}" found somebody`).toContain(res.status);
+      expect(res.body.account).toBeUndefined();
+    }
+  });
+
+  it("is as closed as the rest of the console", async () => {
+    const app = await getTestApp();
+    const member = await person(app, "Target");
+    const ordinary = await person(app, "Curious");
+    expect((await ordinary.agent.post("/api/admin/security/lookup").send({ email: member.email })).status).toBe(404);
+
+    const unverified = await person(app, "NoCode", "admin");
+    expect((await unverified.agent.post("/api/admin/security/lookup").send({ email: member.email })).status, "an admin session that hasn't passed 2FA").toBe(403);
+
+    expect((await request(app).post("/api/admin/security/lookup").send({ email: member.email })).status).toBe(401);
+  });
+});
