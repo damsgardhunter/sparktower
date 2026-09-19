@@ -66,7 +66,7 @@ export default function LandingPage() {
   };
 
   return (
-    <div className="flex flex-col min-h-screen bg-white text-foreground">
+    <div className="landing-type flex flex-col min-h-screen bg-white text-foreground">
       {/*
         * The same header a signed-in person gets (App.tsx) — Nova's gradient
         * with the logo hanging under it in a semicircle — scaled up, because
@@ -405,7 +405,12 @@ export default function LandingPage() {
 const TAGLINE = "The fastest growing startup community.";
 
 function TaglineBanner() {
-  /* The gradient, clipped to the glyphs plus a fat transparent stroke. */
+  /*
+   * The gradient, clipped to the glyphs plus a transparent stroke. The stroke
+   * is thin because the headline is now Instrument Serif (see .landing-type in
+   * index.css): the 4px rim drawn for heavy black letters filled the counters
+   * of a fine serif and smudged it.
+   */
   const gradientText = {
     backgroundImage: NOVA_GRADIENT_CSS,
     WebkitBackgroundClip: "text" as const,
@@ -430,11 +435,11 @@ function TaglineBanner() {
     <section className="relative bg-white px-4 pt-6 pb-14 sm:pb-20" data-testid="section-tagline">
       <h2 className="relative mx-auto max-w-4xl text-center font-black tracking-tight leading-[1.05] text-[2rem] sm:text-5xl md:text-[3.5rem]">
         {/* The glow: the same words, fattened and blurred, sitting underneath. */}
-        <span aria-hidden className="absolute inset-0 select-none" style={{ ...gradientText, WebkitTextStroke: "6px transparent", filter: "blur(18px)", opacity: 0.45 }}>
+        <span aria-hidden className="absolute inset-0 select-none" style={{ ...gradientText, WebkitTextStroke: "4px transparent", filter: "blur(16px)", opacity: 0.45 }}>
           {TAGLINE}
         </span>
         {/* The outline: gradient everywhere, about to be covered in the middle. */}
-        <span aria-hidden className="absolute inset-0 select-none" style={{ ...gradientText, WebkitTextStroke: "4px transparent" }}>
+        <span aria-hidden className="absolute inset-0 select-none" style={{ ...gradientText, WebkitTextStroke: "2px transparent" }}>
           {TAGLINE}
         </span>
         {/* The letters themselves. */}
