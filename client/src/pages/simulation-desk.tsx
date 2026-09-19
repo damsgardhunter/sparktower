@@ -67,6 +67,7 @@ interface Desk {
     quality: number; brand: number; service: number; capacity: number;
     unitCost: number; price: number; customers: number; bankruptSince: number | null;
     founderShare: number; pipeline: number; positioning: string | null;
+    techDebt: number; techDebtCost: { product: number; unitCost: number };
   };
   segments: { id: string; name: string; description: string; referencePrice: number; loyalty: number; yours: number }[];
   cities: { id: string; name: string; weight: number; entryCost: number; note: string; open: boolean }[];
@@ -281,6 +282,16 @@ export default function SimulationDeskPage() {
               tone={c.founderShare < 0.6 ? "warn" : "plain"}
             />
             {c.pipeline > 0 && <Stat label="Research due" value={`+${c.pipeline}`} sub="lands next year" />}
+            {c.techDebt > 0 && (
+              <Stat
+                label="Technical debt"
+                value={`${c.techDebt}`}
+                sub={c.techDebtCost.product > 0
+                  ? `product work buys ${c.techDebtCost.product}% less`
+                  : "nothing to worry about yet"}
+                tone={c.techDebt > 55 ? "warn" : "plain"}
+              />
+            )}
           </div>
           {c.bankruptSince !== null && (
             <p className="mt-4 rounded-lg bg-destructive/10 text-destructive text-sm p-3">
@@ -342,6 +353,14 @@ export default function SimulationDeskPage() {
                   Raising {compact(Number(draft.raiseAmount))} against a company worth about {compact(desk.valuation)} leaves the
                   founders with roughly {Math.round((desk.company.founderShare * desk.valuation / (desk.valuation + Number(draft.raiseAmount))) * 100)}%
                   of whatever this becomes. It never has to be repaid, and it never comes back.
+                </p>
+              )}
+              {desk.yourRole === "cto" && desk.company.techDebt > 40 && (
+                <p className="text-xs text-amber-600 mt-4" data-testid="text-tech-debt">
+                  The product owes itself {desk.company.techDebt}. Everything spent here buys{" "}
+                  {desk.company.techDebtCost.product}% less than it would, and every unit costs{" "}
+                  {desk.company.techDebtCost.unitCost}% more. Paying it down shows up in no number this year and in
+                  every number after it.
                 </p>
               )}
               {desk.yourRole === "cto" && Number(draft.researchSpend) > 0 && (

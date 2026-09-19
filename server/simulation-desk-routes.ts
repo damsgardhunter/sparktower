@@ -28,8 +28,9 @@ import { enforceRateLimit } from "./moderation";
 import { nicheById } from "@shared/simulation/niches";
 import { ROLE_TITLES, ROLE_LEVERS, type Role, type World, type Company } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
-import { LEVER_FIELDS, defaultDraft, validateDecision, draftPreview } from "@shared/simulation/levers";
+import { LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision, draftPreview } from "@shared/simulation/levers";
 import { economyFor } from "@shared/simulation/season";
+import { debtDrag } from "@shared/simulation/decisions";
 import { postureBlurb } from "@shared/simulation/incumbents";
 import { distressOf, DISTRESS_COPY, recoveryOptions } from "@shared/simulation/recovery";
 
@@ -103,7 +104,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
     const previous = year > 1 ? (await draftFor(venture.id, year - 1)).decisions : undefined;
 
     const seats = await db
-      .select({ userId: simSeats.userId, role: simSeats.role, firstName: users.firstName, displayName: userProfiles.displayName })
+      .select({ userId: simSeats.userId, role: simSeats.role, firstName: users.firstName, lastName: users.lastName, isBot: users.isBot, displayName: userProfiles.displayName })
       .from(simSeats)
       .leftJoin(users, eq(users.id, simSeats.userId))
       .leftJoin(userProfiles, eq(userProfiles.userId, simSeats.userId))
@@ -211,6 +212,19 @@ export function registerSimulationDeskRoutes(app: Express): void {
         founderShare: company.founderShare ?? 1,
         /** Research finished and not yet shipped — it lands next year, whatever happens. */
         pipeline: Math.round((company.pipeline ?? 0) * 10) / 10,
+        /*
+         * What the product owes itself, and what that is costing right now.
+         *
+         * Sent with its consequences already worked out rather than as a bare
+         * number, because "technical debt: 62" means nothing to four of the
+         * five people at the table. "Product spending buys 31% less and every
+         * unit costs 21% more" is a thing a marketing seat can argue about.
+         */
+        techDebt: Math.round(company.techDebt ?? 0),
+        techDebtCost: {
+          product: Math.round((1 - debtDrag(company.techDebt).product) * 100),
+          unitCost: Math.round((debtDrag(company.techDebt).unitCost - 1) * 100),
+        },
         positioning: company.positioning ?? null,
         /*
          * The seats the engine still charges a salary for. Sent because the
@@ -259,10 +273,13 @@ export function registerSimulationDeskRoutes(app: Express): void {
 
       table: seats.map((s) => ({
         userId: s.userId,
-        name: s.displayName || s.firstName || "Someone",
+        name: s.isBot ? [s.firstName, s.lastName].filter(Boolean).join(" ") : (s.displayName || s.firstName || "Someone"),
         role: s.role,
         title: s.role ? ROLE_TITLES[s.role as Role] : null,
         filed: !!(s.role && filedBy[s.role]),
+        // Said on the desk too, not only in the lobby: this is the table you
+        // spend a fortnight deciding things with.
+        isBot: !!s.isBot,
         isYou: s.userId === req.user.id,
       })),
       /** Every filed decision, so nobody has to guess what the others committed. */
@@ -333,42 +350,9 @@ export function registerSimulationDeskRoutes(app: Express): void {
     const check = validateDecision(role, payload, company);
     if (!check.ok) return res.status(400).json({ message: "Some of that doesn't add up.", errors: check.errors });
 
-    /*
-     * Only the fields this seat owns are stored, taken from the lever list
-     * rather than from the request. Otherwise a crafted body could file a
-     * `borrow` alongside a marketing decision and the engine — which reads
-     * decisions by role — would honour it, letting a CMO quietly take out a
-     * loan the CFO never agreed to.
-     */
-    const clean: Record<string, any> = {};
-    for (const field of LEVER_FIELDS[role]) {
-      const raw = payload[field.id];
-      switch (field.kind) {
-        case "choice":
-        case "segment":
-          // A segment, or nobody. An unset choice is a real answer here.
-          clean[field.id] = raw === undefined || raw === null ? "" : String(raw);
-          break;
-        case "cities":
-          /*
-           * A list of ids, filtered to places that exist.
-           *
-           * The default `Number()` below turned this into NaN, which silently
-           * unset every city the marketing seat had chosen — the decision was
-           * accepted, stored as nonsense, and the team found out by not
-           * expanding. Anything the engine reads by shape rather than by
-           * number has to be handled by shape.
-           */
-          clean[field.id] = Array.isArray(raw)
-            ? raw.map(String).filter((id) => niche.cities.some((c) => c.id === id)).slice(0, 20)
-            : [];
-          break;
-        default: {
-          const n = Number(raw);
-          clean[field.id] = Number.isFinite(n) ? n : 0;
-        }
-      }
-    }
+    // Only the fields this seat owns, taken from the lever list rather than
+    // from the request — the same cleaning a bot's decision goes through.
+    const clean = cleanDecision(role, payload, niche.cities.map((c) => c.id));
 
     await db.insert(simDecisions)
       .values({ ventureId: venture.id, userId: req.user.id, role, year: season.year, payload: clean })
