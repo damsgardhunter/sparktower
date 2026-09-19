@@ -518,13 +518,47 @@ export function registerSimulationMarketRoutes(app: Express): void {
       return res.status(409).json({ message: "That offer isn't on the table any more.", code: "not_pending" });
     }
 
-    await db.update(simOffers)
+    /*
+     * Accepting closes every other offer on the table, and only one acceptance
+     * can win.
+     *
+     * Neither was true. Nothing shut the other offers when one was accepted,
+     * and the unique index only stops the same buyer offering twice — so a
+     * team could accept offers from every rival in the market and be paid by
+     * all of them for a business they handed over once. The second buyer paid
+     * for an empty company.
+     *
+     * The update is conditional on the offer still being open, so two
+     * acceptances arriving in the same millisecond cannot both win: the
+     * database settles it, exactly as it does for a seat in the lobby.
+     */
+    const answered = await db.update(simOffers)
       .set({
         status: accept ? "accepted" : "declined",
         respondedById: req.user.id,
         respondedAt: new Date(),
       })
-      .where(eq(simOffers.id, offer.id));
+      .where(and(eq(simOffers.id, offer.id), eq(simOffers.status, "pending")))
+      .returning({ id: simOffers.id });
+
+    if (answered.length === 0) {
+      return res.status(409).json({
+        message: "That offer isn't on the table any more — it may already have been answered.",
+        code: "not_pending",
+      });
+    }
+
+    if (accept) {
+      // A company is sold once. Everybody else is told, rather than left
+      // waiting on a decision that has already been made.
+      await db.update(simOffers)
+        .set({ status: "declined", respondedById: req.user.id, respondedAt: new Date() })
+        .where(and(
+          eq(simOffers.toVentureId, company.id),
+          eq(simOffers.year, offer.year),
+          eq(simOffers.status, "pending"),
+        ));
+    }
 
     res.json({
       ok: true,

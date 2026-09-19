@@ -277,10 +277,19 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
       eq(simOffers.status, "accepted"),
     ));
 
+  const soldThisTick = new Set<string>();
   for (const offer of accepted) {
     const buyer = world.companies.find((c) => c.id === offer.fromVentureId);
     const seller = world.companies.find((c) => c.id === offer.toVentureId);
     if (!buyer || !seller || buyer.kind !== "player" || seller.kind !== "player") continue;
+    /*
+     * A company is sold once, however many acceptances reach here. The route
+     * closes the others now, but an acceptance recorded before that fix — or
+     * two arriving through some future path — must not transfer a business
+     * that has already changed hands and pay for it a second time.
+     */
+    if (soldThisTick.has(seller.id) || soldThisTick.has(buyer.id)) continue;
+    soldThisTick.add(seller.id);
 
     const out = applyAcquisition({ buyer, seller, amount: offer.amount, year });
     world.companies = world.companies.map((c) =>

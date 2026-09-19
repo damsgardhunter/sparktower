@@ -95,6 +95,35 @@ async function twoTeams(app: any) {
   return { a, b, seasonId: venture.seasonId };
 }
 
+/** One more team in the same season, for the cases that need three. */
+async function thirdTeam(app: any, seasonId: string) {
+  const players = [];
+  let ventureId = "";
+  for (let i = 0; i < 5; i++) {
+    const p = await player(app);
+    const join = await p.agent.post("/api/sim/join").send({ nicheId: NICHE });
+    ventureId = join.body.ventureId;
+    players.push(p);
+  }
+  for (const [i, p] of players.entries()) {
+    await p.agent.post(`/api/sim/ventures/${ventureId}/claim`).send({ role: ROLES[i] });
+  }
+  await players[0].agent.post(`/api/sim/ventures/${ventureId}/name`).send({ name: "Third Wheel", product: "Training" });
+  /*
+   * Placed into the season that is already running, because `startReadySeasons`
+   * will not start one that has a room still in the lobby and this team is
+   * joining after the fact.
+   */
+  await db.update(simVentures).set({ seasonId, phase: "running" }).where(eq(simVentures.id, ventureId));
+  const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+  const world = season.world as World;
+  const template = world.companies.find((x) => x.kind === "player")!;
+  world.companies = [...world.companies, { ...template, id: ventureId, name: "Third Wheel", customers: {}, assets: [] }];
+  await db.update(simSeasons).set({ world }).where(eq(simSeasons.id, seasonId));
+
+  return { players, ventureId, ceo: players[0] };
+}
+
 async function shape(seasonId: string, ventureId: string, over: Record<string, any>) {
   const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
   const world = season.world as World;
@@ -282,6 +311,74 @@ describe("answering one", () => {
     const again = await b.ceo.agent.post(`/api/sim/ventures/${b.ventureId}/offers/${offer.id}/respond`).send({ accept: true });
     expect(again.status).toBe(409);
   }, 180_000);
+});
+
+describe("two buyers, one company", () => {
+  it("cannot sell the same business twice", async () => {
+    /*
+     * Nothing closed the other offers when one was accepted, and the unique
+     * index only stops one buyer making two offers to the same target — so a
+     * team could accept offers from every rival in the market and be paid by
+     * all of them for a business they handed over once. The second buyer paid
+     * for an empty company, and the seller collected twice.
+     */
+    const app = await getTestApp();
+    const { a, b, seasonId } = await twoTeams(app);
+    const c = await thirdTeam(app, seasonId);
+
+    await shape(seasonId, a.ventureId, { cash: 50_000_000 });
+    await shape(seasonId, c.ventureId, { cash: 50_000_000 });
+    await shape(seasonId, b.ventureId, { customers: { recently_single: 90_000 } });
+
+    await a.ceo.agent.post(`/api/sim/ventures/${a.ventureId}/offers`)
+      .send({ targetId: b.ventureId, amount: 2_000_000 });
+    await c.ceo.agent.post(`/api/sim/ventures/${c.ventureId}/offers`)
+      .send({ targetId: b.ventureId, amount: 3_000_000 });
+
+    const offers = await db.select().from(simOffers).where(eq(simOffers.toVentureId, b.ventureId));
+    expect(offers, "two rivals both want them").toHaveLength(2);
+
+    // The seller's chief executive says yes to both.
+    for (const offer of offers) {
+      await b.ceo.agent.post(`/api/sim/ventures/${b.ventureId}/offers/${offer.id}/respond`).send({ accept: true });
+    }
+
+    const after = await db.select().from(simOffers).where(eq(simOffers.toVentureId, b.ventureId));
+    expect(
+      after.filter((o) => o.status === "accepted"),
+      "a company can only be sold once",
+    ).toHaveLength(1);
+
+    const sellerBefore = await companyIn(seasonId, b.ventureId);
+    await makeDue(seasonId);
+    await tickSeason(seasonId);
+    const sellerAfter = await companyIn(seasonId, b.ventureId);
+
+    // Paid once, not twice.
+    expect(sellerAfter.cash - sellerBefore.cash, "the seller collected more than one payment").toBeLessThan(3_500_000);
+  }, 240_000);
+
+  it("settles simultaneous acceptances to one answer", async () => {
+    // Two requests can read "pending" in the same millisecond. The database has
+    // to be the thing that decides, as it is for a seat in the lobby.
+    const app = await getTestApp();
+    const { a, b, seasonId } = await twoTeams(app);
+    const c = await thirdTeam(app, seasonId);
+
+    await shape(seasonId, a.ventureId, { cash: 50_000_000 });
+    await shape(seasonId, c.ventureId, { cash: 50_000_000 });
+    await shape(seasonId, b.ventureId, { customers: { recently_single: 60_000 } });
+
+    await a.ceo.agent.post(`/api/sim/ventures/${a.ventureId}/offers`).send({ targetId: b.ventureId, amount: 2_000_000 });
+    await c.ceo.agent.post(`/api/sim/ventures/${c.ventureId}/offers`).send({ targetId: b.ventureId, amount: 2_500_000 });
+    const pending = await db.select().from(simOffers).where(eq(simOffers.toVentureId, b.ventureId));
+
+    await Promise.all(pending.map((o) =>
+      b.ceo.agent.post(`/api/sim/ventures/${b.ventureId}/offers/${o.id}/respond`).send({ accept: true })));
+
+    const after = await db.select().from(simOffers).where(eq(simOffers.toVentureId, b.ventureId));
+    expect(after.filter((o) => o.status === "accepted")).toHaveLength(1);
+  }, 240_000);
 });
 
 describe("when it goes through", () => {
