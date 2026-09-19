@@ -37,6 +37,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { errorText } from "@/lib/api-error";
 import { NOVA_GRADIENT_CSS } from "@shared/backing";
 import { longCountdown } from "@shared/simulation/lobby-copy";
 import { commitment, type LeverField } from "@shared/simulation/levers";
@@ -84,6 +85,8 @@ interface Desk {
     unitCost: number; price: number; customers: number; bankruptSince: number | null;
     founderShare: number; pipeline: number; positioning: string | null;
     pipelineLater?: number; brandPipeline?: number; staff?: number;
+    /** The seats the company still has; a dissolved one is gone from here. */
+    seats?: Role[];
     techDebt: number; techDebtCost: { product: number; unitCost: number };
   };
   segments: {
@@ -177,9 +180,21 @@ export default function SimulationDeskPage() {
    * that overwrote the field someone was mid-way through typing into would be
    * the screen arguing with its own user.
    */
+  const seededYear = useRef<number | null>(null);
   useEffect(() => {
-    if (desk?.draft && draft === null) setDraft(desk.draft);
-  }, [desk?.draft, draft]);
+    if (!desk?.draft) return;
+    /*
+     * ...except when the year turns underneath the open page (the overnight
+     * tick, or somebody ending the year early). The draft then belongs to a
+     * year that has already resolved, and leaving it would re-file last
+     * year's numbers — a two-million borrow taken twice. The phone does the
+     * same (mobile/app/sim/desk/[id].tsx).
+     */
+    if (draft !== null && seededYear.current === desk.year) return;
+    seededYear.current = desk.year;
+    setDraft(desk.draft);
+    setErrors({});
+  }, [desk?.draft, desk?.year, draft]);
 
   const submit = useMutation({
     mutationFn: () => apiRequest("POST", `/api/sim/ventures/${id}/decisions`, { decision: draft }),
@@ -502,7 +517,8 @@ export default function SimulationDeskPage() {
           <DistressCard
             distress={desk.distress}
             isCeo={desk.yourRole === "ceo"}
-            seats={desk.table.map((s) => s.role).filter(Boolean) as Role[]}
+            // The company's seats, not the people: a seat already dissolved still has somebody in the table list.
+            seats={(desk.company.seats ?? desk.table.map((s) => s.role).filter(Boolean)) as Role[]}
             ventureId={desk.ventureId}
           />
         )}
@@ -823,6 +839,11 @@ function DistressCard({ distress, isCeo, seats, ventureId }: {
   const clear = useMutation({
     mutationFn: () => apiRequest("DELETE", `/api/sim/ventures/${ventureId}/recovery`, undefined),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/desk`] }),
+    onError: (err) => {
+      toast({ title: "Couldn't take that back", description: errorText(err), variant: "destructive" });
+      // Whatever the server now holds is what the card should show.
+      queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/desk`] });
+    },
   });
 
   const severe = distress.level === "insolvent" || distress.level === "distressed";
