@@ -24,6 +24,7 @@
  * **A nudge**, once per person per year. Not a message box: what people want
  * here is a tap, and anything they have to compose is a thing they close.
  */
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
@@ -107,6 +108,17 @@ export function TeammateProfile({ ventureId, userId, onClose }: {
   onClose: () => void;
 }) {
   const { toast } = useToast();
+  /*
+   * Said in the dialog, not only in a toast.
+   *
+   * The confirmation used to live in a toast alone, and a toast is its own
+   * dismissable layer sitting on top of the dialog — so the natural next
+   * move, pressing Escape to close the dialog, closed the toast instead and
+   * left the dialog standing, apparently ignoring the key. Showing the result
+   * where the button was means the dialog is complete on its own, and the
+   * toast is only a courtesy.
+   */
+  const [nudgedFor, setNudgedFor] = useState<string | null>(null);
   const { data, isLoading } = useQuery<TeammateProfileData>({
     queryKey: [`/api/sim/ventures/${ventureId}/seats/${userId}`],
     enabled: !!userId,
@@ -115,6 +127,7 @@ export function TeammateProfile({ ventureId, userId, onClose }: {
   const nudge = useMutation({
     mutationFn: async () => apiRequest("POST", `/api/sim/ventures/${ventureId}/nudge`, { userId }),
     onSuccess: () => {
+      setNudgedFor(userId);
       toast({ title: "Told them", description: "They will see it next time they open the app." });
       queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/seats/${userId}`] });
     },
@@ -223,7 +236,12 @@ export function TeammateProfile({ ventureId, userId, onClose }: {
             )}
 
             {/* The tap. */}
-            {!data.isYou && !data.isBot && !data.filed && (
+            {!data.isYou && !data.isBot && !data.filed && nudgedFor === data.userId && (
+              <p className="text-sm text-center text-muted-foreground flex items-center justify-center gap-1.5" data-testid="text-nudged">
+                <Bell className="h-4 w-4" /> Reminded. They will see it next time they open the app.
+              </p>
+            )}
+            {!data.isYou && !data.isBot && !data.filed && nudgedFor !== data.userId && (
               <Button
                 className="w-full"
                 onClick={() => nudge.mutate()}

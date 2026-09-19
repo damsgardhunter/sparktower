@@ -15,6 +15,7 @@
  */
 import { test, expect, type APIRequestContext, type Browser } from "./test";
 import { verifyEmail } from "./verify-email";
+import { clearStrayLobbies } from "./sim-lobbies";
 
 const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -92,6 +93,8 @@ test("a rival opens into somebody you can plan against, and a teammate into what
   }
 
   let ventureId = "";
+  // Nobody left sitting in this market's lobby from an earlier test — see e2e/sim-lobbies.ts.
+  await clearStrayLobbies(NICHE);
   for (const person of people) {
     ventureId = (await (await person.api.post("/api/sim/join", { data: { nicheId: NICHE } })).json()).ventureId;
   }
@@ -130,7 +133,7 @@ test("a rival opens into somebody you can plan against, and a teammate into what
   // And where the two of you actually meet, segment by segment.
   await expect(profile.getByText(/where you meet them/i)).toBeVisible();
 
-  await ceo.keyboard.press("Escape");
+  await profile.getByRole("button", { name: "Close" }).click({ timeout: 10_000 });
   await expect(profile).toBeHidden({ timeout: 10_000 });
 
   /*
@@ -149,18 +152,31 @@ test("a rival opens into somebody you can plan against, and a teammate into what
   await expect(ceo.getByTestId("button-nudge"), "and something to do about it").toBeVisible();
 
   await ceo.getByTestId("button-nudge").click();
-  await expect(ceo.getByText(/told them/i)).toBeVisible({ timeout: 20_000 });
+  // Confirmed in the dialog itself, where the button was.
+  await expect(ceo.getByTestId("text-nudged")).toBeVisible({ timeout: 20_000 });
 
-  await ceo.keyboard.press("Escape");
+  /*
+   * Closed with its own button, not Escape.
+   *
+   * The "Told them" toast is a dismissable layer on top of the dialog, so
+   * while it is still showing, Escape closes the toast and the dialog stays.
+   * This test pressed Escape and then clicked a button behind the dialog, and
+   * the click — with no timeout of its own — waited out the whole 400-second
+   * test roughly one run in four, depending on whether the toast had faded
+   * yet. That is where the intermittent 6.7-minute failure came from.
+   */
+  await mate.getByRole("button", { name: "Close" }).click({ timeout: 10_000 });
+  await expect(mate).toBeHidden({ timeout: 10_000 });
 
   /*
    * The same names on the standings, which is where somebody is most likely to
    * want them: they are looking at that table precisely because whoever is
    * above them is a stranger.
    */
-  await ceo.getByTestId("button-open-standings").click();
+  // Every click from here has its own limit, so a stuck element fails in seconds rather than eating the test.
+  await ceo.getByTestId("button-open-standings").click({ timeout: 20_000 });
   await expect(ceo.getByTestId("text-your-rank")).toBeVisible({ timeout: 40_000 });
-  await ceo.locator('[data-testid^="row-standing-"]').first().click();
+  await ceo.locator('[data-testid^="row-standing-"]').first().click({ timeout: 20_000 });
   await expect(ceo.getByTestId("dialog-company-profile")).toBeVisible({ timeout: 20_000 });
   await expect(ceo.getByTestId("text-profile-name")).toBeVisible();
 

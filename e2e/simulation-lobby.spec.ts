@@ -15,6 +15,7 @@
  */
 import { test, expect, type Browser } from "./test";
 import { verifyEmail } from "./verify-email";
+import { clearStrayLobbies } from "./sim-lobbies";
 
 const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -44,6 +45,9 @@ test("five people fill a room, race for the same chair, and come out with a comp
   for (const [i, name] of names.entries()) {
     people.push(await personIn(browser, `203.0.117.${40 + i}`, name));
   }
+
+  // An empty market, so "waiting for 4" is about these five — see e2e/sim-lobbies.ts.
+  await clearStrayLobbies(NICHE);
 
   // The first joins through the screen, so the market list is exercised too.
   const first = await people[0].context.newPage();
@@ -139,6 +143,7 @@ test("a new player can find the simulation from the app, join, and get back to i
   await page.getByTestId("button-open-simulation").click();
 
   // The markets, and a room.
+  await clearStrayLobbies(NICHE);
   await expect(page.getByTestId(`niche-${NICHE}`)).toBeVisible({ timeout: 20_000 });
   await page.getByTestId(`button-join-${NICHE}`).click();
   await expect(page.getByTestId("text-phase-title")).toBeVisible({ timeout: 20_000 });
@@ -159,6 +164,7 @@ test("somebody who is not in the room is told nothing about it", async ({ browse
   const member = await personIn(browser, "203.0.117.60", "Member");
   const stranger = await personIn(browser, "203.0.117.61", "Stranger");
 
+  await clearStrayLobbies("project_saas");
   const ventureId = (await (await member.api.post("/api/sim/join", { data: { nicheId: "project_saas" } })).json()).ventureId;
 
   // 404 rather than 403: the existence of a room is not a stranger's business.

@@ -31,6 +31,7 @@
  */
 import { test, expect, type APIRequestContext, type Browser } from "./test";
 import { verifyEmail } from "./verify-email";
+import { clearStrayLobbies } from "./sim-lobbies";
 import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";
 import { testDatabaseUrl } from "../test/setup/database";
@@ -96,6 +97,8 @@ test("a year is filed, resolves overnight, and comes back as something to read",
   }
 
   let ventureId = "";
+  // Nobody left sitting in this market's lobby from an earlier test — see e2e/sim-lobbies.ts.
+  await clearStrayLobbies(NICHE);
   for (const person of people) {
     ventureId = (await (await person.api.post("/api/sim/join", { data: { nicheId: NICHE } })).json()).ventureId;
   }

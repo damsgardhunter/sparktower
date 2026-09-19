@@ -11,6 +11,7 @@
  */
 import { test, expect, type APIRequestContext, type Browser } from "./test";
 import { verifyEmail } from "./verify-email";
+import { clearStrayLobbies } from "./sim-lobbies";
 
 const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -80,7 +81,9 @@ async function form(people: Awaited<ReturnType<typeof enlist>>, name: string) {
 test("one company offers to buy another, and the sellers are told what they keep", async ({ browser }) => {
   test.setTimeout(400_000);
 
-  // Everybody signed up before anybody joins, so both rooms land in one season.
+  // Everybody signed up before anybody joins, so both rooms land in one season —
+  // and nobody left in this market's lobby from before, so it is only these two.
+  await clearStrayLobbies(NICHE);
   const buyerPeople = await enlist(browser, 10, "B");
   const sellerPeople = await enlist(browser, 20, "S");
   const buyer = await form(buyerPeople, "Hartwell Rivals");
@@ -132,6 +135,7 @@ test("one company offers to buy another, and the sellers are told what they keep
 test("the standings put the teams and the incumbents on one table", async ({ browser }) => {
   test.setTimeout(300_000);
 
+  await clearStrayLobbies(NICHE);
   const team = await form(await enlist(browser, 40, "T"), "Northgate Rivals");
   if (!(await waitForYearOne(team.ceo.api, team.ventureId))) {
     test.skip(true, "the season had not started — the simulation job may not have run");

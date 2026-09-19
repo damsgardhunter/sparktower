@@ -19,6 +19,7 @@
  */
 import { test, expect, type APIRequestContext, type Browser } from "./test";
 import { verifyEmail } from "./verify-email";
+import { clearStrayLobbies, pullYearForward } from "./sim-lobbies";
 
 const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -75,6 +76,8 @@ test("a seat files a year, and the rest of the table can see what it cost", asyn
   }
 
   let ventureId = "";
+  // Nobody left sitting in this market's lobby from an earlier test — see e2e/sim-lobbies.ts.
+  await clearStrayLobbies(NICHE);
   for (const person of people) {
     ventureId = (await (await person.api.post("/api/sim/join", { data: { nicheId: NICHE } })).json()).ventureId;
   }
@@ -154,6 +157,8 @@ test("the chief executive's chair has a company to run, and the others cannot se
   }
 
   let ventureId = "";
+  // Nobody left sitting in this market's lobby from an earlier test — see e2e/sim-lobbies.ts.
+  await clearStrayLobbies(NICHE);
   for (const person of people) {
     ventureId = (await (await person.api.post("/api/sim/join", { data: { nicheId: NICHE } })).json()).ventureId;
   }
@@ -208,6 +213,8 @@ test("a sealed bid is placed, shown back, and tells you nothing about anyone els
   const rival = await personIn(browser, "203.0.118.90", "Rival");
 
   let ventureId = "";
+  // Nobody left sitting in this market's lobby from an earlier test — see e2e/sim-lobbies.ts.
+  await clearStrayLobbies(NICHE);
   for (const person of people) {
     ventureId = (await (await person.api.post("/api/sim/join", { data: { nicheId: NICHE } })).json()).ventureId;
   }
@@ -286,6 +293,8 @@ test("a company in trouble is told what it can do, and only the chief executive 
   const OWN_NICHE = "podcasts";
 
   let ventureId = "";
+  // Nobody left sitting in this market's lobby from an earlier test — see e2e/sim-lobbies.ts.
+  await clearStrayLobbies(OWN_NICHE);
   for (const person of people) {
     ventureId = (await (await person.api.post("/api/sim/join", { data: { nicheId: OWN_NICHE } })).json()).ventureId;
   }
@@ -305,7 +314,16 @@ test("a company in trouble is told what it can do, and only the chief executive 
     data: { decision: { price: 5, brandSpend: reach, performanceSpend: 0, celebritySpend: 0, targetCities: [] } },
   });
 
-  // Let the year land so the damage is real.
+  /*
+   * Let the year land so the damage is real — tonight rather than tomorrow.
+   *
+   * This used to wait for a real tick, which is a real day away, and so it
+   * skipped on every run after spending two and a half minutes waiting: the
+   * recovery arc had a browser test that had never once run. The year spec
+   * showed the way: pull the season's clock back in the database and let the
+   * ordinary background job do the ordinary thing.
+   */
+  expect(await pullYearForward(ventureId), "the season's clock was found and moved").toBe(1);
   const deadline = Date.now() + 150_000;
   let inTrouble = false;
   while (Date.now() < deadline && !inTrouble) {
