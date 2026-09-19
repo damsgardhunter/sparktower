@@ -18,6 +18,7 @@ import { db } from "./db";
 import { simSeasons, simSeats, simVentures, users, userProfiles } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { enforceRateLimit, ipKey } from "./moderation";
+import { fillVentureWithBots } from "./simulation-bots";
 import { NICHES, nicheById } from "@shared/simulation/niches";
 import { ROLES, ROLE_LEVERS, ROLE_TITLES, type Role } from "@shared/simulation/types";
 import {
@@ -42,6 +43,8 @@ async function seatsOf(ventureId: string) {
       assigned: simSeats.assigned,
       joinedAt: simSeats.joinedAt,
       firstName: users.firstName,
+      lastName: users.lastName,
+      isBot: users.isBot,
       displayName: userProfiles.displayName,
       avatarUrl: userProfiles.avatarUrl,
     })
@@ -68,8 +71,20 @@ export async function advanceVenture(ventureId: string): Promise<void> {
   const [venture] = await db.select().from(simVentures).where(eq(simVentures.id, ventureId));
   if (!venture || venture.phase === "running" || venture.phase === "retired") return;
 
+  /*
+   * Topping the room up happens here rather than only on the minute, so the
+   * person sitting on the lobby screen watches players arrive instead of
+   * waiting on a job they can't see. Only while the room is still gathering:
+   * this runs on every poll of every lobby, and a desk screen asking whether
+   * a running season needs bots is three round trips to be told no.
+   */
+  if (venture.phase === "filling") {
+    await fillVentureWithBots(ventureId).catch((err) =>
+      console.error(`[sim] filling lobby ${ventureId} failed:`, err));
+  }
+
   const rows = await seatsOf(ventureId);
-  const seats: SeatView[] = rows.map((r) => ({ userId: r.userId, role: r.role as Role | null, assigned: r.assigned }));
+  const seats: SeatView[] = rows.map((r) => ({ userId: r.userId, role: r.role as Role | null, assigned: r.assigned, isBot: !!r.isBot }));
 
   const move = nextPhase({
     phase: venture.phase as Phase,
@@ -115,7 +130,26 @@ export function registerSimulationRoutes(app: Express) {
         name: n.name,
         premise: n.premise,
         segments: n.segments.map((s) => ({ id: s.id, name: s.name, description: s.description, size: s.size, loyalty: s.loyalty })),
-        incumbents: n.incumbents.map((i) => ({ name: i.name, share: i.startingShare, posture: i.posture })),
+        /*
+         * With who they are, not only how big they are.
+         *
+         * This is the screen where somebody chooses a fortnight, and it used
+         * to offer them four names and four percentages to choose between —
+         * which is no choice at all, because every market looks like the same
+         * four percentages. What distinguishes a market is who is in it: a
+         * league of four bare numbers is not a reason to pick dating apps over
+         * drone delivery, and "the app your mum has heard of that nobody
+         * likes" is.
+         */
+        incumbents: n.incumbents.map((i) => ({
+          id: i.id,
+          name: i.name,
+          share: i.startingShare,
+          posture: i.posture,
+          tagline: i.persona.tagline,
+          known: i.persona.known,
+        })),
+        voice: n.voice,
       })),
       roles: ROLES.map((r) => ({ id: r, title: ROLE_TITLES[r], levers: ROLE_LEVERS[r] })),
       lobbySize: LOBBY_SIZE,
@@ -274,7 +308,20 @@ function pgErrorCode(err: unknown): string | undefined {
           phaseEndsAt: phaseDeadline("filling"),
         }).returning())[0].id;
 
-        await tx.insert(simSeats).values({ ventureId: targetId, userId: req.user.id }).onConflictDoNothing();
+        /*
+         * `joinedAt` is written here rather than left to the column's
+         * `DEFAULT now()`.
+         *
+         * It is a `timestamp` without a zone, and Postgres casts `now()` into
+         * one using the *session's* zone — so on a server running in, say, US
+         * Central, the default lands five hours behind every value Drizzle
+         * writes, which are UTC. Nothing noticed while the column was only
+         * ever displayed; the moment anything measures how long somebody has
+         * been waiting, half the rows are hours out.
+         */
+        await tx.insert(simSeats)
+          .values({ ventureId: targetId, userId: req.user.id, joinedAt: new Date() })
+          .onConflictDoNothing();
         return targetId;
       });
 
@@ -343,7 +390,7 @@ function pgErrorCode(err: unknown): string | undefined {
       return res.status(404).json({ message: "No such room." });
     }
 
-    const seats: SeatView[] = rows.map((r) => ({ userId: r.userId, role: r.role as Role | null, assigned: r.assigned }));
+    const seats: SeatView[] = rows.map((r) => ({ userId: r.userId, role: r.role as Role | null, assigned: r.assigned, isBot: !!r.isBot }));
     res.json({
       id: venture.id,
       phase: venture.phase,
@@ -362,10 +409,19 @@ function pgErrorCode(err: unknown): string | undefined {
       /** Who's here, what they hold, and whether they chose it. */
       seats: rows.map((r) => ({
         userId: r.userId,
-        name: r.displayName || r.firstName || "Someone",
+        name: r.isBot
+          ? [r.firstName, r.lastName].filter(Boolean).join(" ")
+          : (r.displayName || r.firstName || "Someone"),
         avatarUrl: r.avatarUrl,
         role: r.role,
         assigned: r.assigned,
+        /*
+         * Sent on every seat, always. A bot carries an ordinary name so the
+         * room reads like a room, and this is the flag every surface uses to
+         * say what it is — a bot passing for a person is the product telling
+         * somebody something untrue about who they are playing with.
+         */
+        isBot: !!r.isBot,
         isYou: r.userId === req.user.id,
       })),
       you: {
@@ -391,7 +447,7 @@ function pgErrorCode(err: unknown): string | undefined {
     if (!venture) return res.status(404).json({ message: "No such room." });
 
     const before = await seatsOf(venture.id);
-    const seats: SeatView[] = before.map((r) => ({ userId: r.userId, role: r.role as Role | null, assigned: r.assigned }));
+    const seats: SeatView[] = before.map((r) => ({ userId: r.userId, role: r.role as Role | null, assigned: r.assigned, isBot: !!r.isBot }));
     const allowed = canClaim(seats, req.user.id, role, venture.phase as Phase);
     if (!allowed.ok) {
       const held = before.find((r) => r.role === role);
@@ -455,9 +511,16 @@ function pgErrorCode(err: unknown): string | undefined {
   });
 
   /**
-   * Name the company and say what it sells. The chief executive's, and only
-   * theirs — the brief is explicit, and a naming right four people can
-   * overrule is not one.
+   * Name the company. The chief executive's call, and only theirs — the brief
+   * is explicit, and a naming right four people can overrule is not one.
+   *
+   * It used to ask for a one-line description of the product as well, in the
+   * same breath, before anyone had played a year. Nobody could answer it: what
+   * the company sells is the thing the five of them spend the season deciding,
+   * so the field asked for the answer as the price of starting. Nothing read it
+   * either — it was printed back on the desk and nowhere else. The column stays
+   * (older companies have one, and it is still shown), but the body is
+   * optional and the room is asked for a name and nothing more.
    */
   app.post("/api/sim/ventures/:id/name", isAuthenticated, async (req: any, res) => {
     if (!(await enforceRateLimit(res, req.user.id, "session"))) return;
@@ -474,10 +537,14 @@ function pgErrorCode(err: unknown): string | undefined {
     if (venture.phase !== "naming") return res.status(409).json({ message: "Not right now.", code: "wrong_phase" });
 
     const name = String(req.body?.name ?? "").trim().slice(0, 60);
-    const product = String(req.body?.product ?? "").trim().slice(0, 120);
     if (name.length < 2) return res.status(400).json({ message: "Give it a name with at least two characters.", field: "name" });
 
-    await db.update(simVentures).set({ name, product: product || null }).where(eq(simVentures.id, venture.id));
+    // Only sent by older clients now; an absent one leaves whatever is there.
+    const product = req.body?.product === undefined
+      ? venture.product
+      : String(req.body.product).trim().slice(0, 120) || null;
+
+    await db.update(simVentures).set({ name, product }).where(eq(simVentures.id, venture.id));
     await advanceVenture(venture.id);
     res.json({ ok: true, name, product });
   });

@@ -24,7 +24,7 @@
  *
  * Being able to see the trap is what makes walking into it a decision.
  */
-import type { Company, Niche, Role } from "./types";
+import type { Company, Niche, NicheVoice, Role } from "./types";
 import type { TeamDecisions } from "./decisions";
 import { interlock, fixedCosts } from "./decisions";
 import { reachOf } from "./market";
@@ -55,7 +55,7 @@ export interface LeverField {
 export const LEVER_FIELDS: Record<Role, LeverField[]> = {
   cmo: [
     { id: "price", label: "Price", kind: "price", min: 1, step: 1,
-      help: "What one customer pays. Segments differ wildly in how much they care — the bargain hunters leave over a pound, the coached athletes barely look." },
+      help: "What one customer pays. Segments differ wildly in how much they care — some leave over a pound, others barely look." },
     { id: "brandSpend", label: "Brand marketing", kind: "money", min: 0, step: 50_000,
       help: "Being known. Slow, compounding, and the thing that makes every other pound work harder." },
     { id: "performanceSpend", label: "Performance marketing", kind: "money", min: 0, step: 50_000,
@@ -410,3 +410,59 @@ export function draftPreview(input: {
 /** Which roles have filed, for the "who is still deciding" line. */
 export const filedRoles = (decisions: TeamDecisions): Role[] =>
   (["ceo", "cmo", "cfo", "cto", "coo"] as Role[]).filter((r) => !!(decisions as any)[r]);
+
+
+/**
+ * A lever, said in this market's own words.
+ *
+ * The engine has one set of nouns for the things every market has, and it has
+ * to: the arithmetic does not change between a restaurant and an MMO. What a
+ * player reads should change, and until this existed it did not — a chain of
+ * forty kitchens was asked to set its "Capacity", in units, and told that
+ * customers above it would be "turned away".
+ *
+ * Only the labels and help move. The ids, the bounds and the steps are what
+ * the engine and the validator agree on, and rewriting any of those per market
+ * would be a way of quietly changing the game.
+ *
+ * Not every lever wants this. Borrowing is borrowing, and dressing it up in
+ * trade idiom would make the one screen where precision matters harder to
+ * read. The ones here are the ones whose engine word is genuinely the wrong
+ * word on the ground.
+ */
+export function speak(field: LeverField, voice: NicheVoice): LeverField {
+  const many = voice.customers;
+  const one = voice.customer;
+  const cap = voice.capacityShort;
+
+  switch (field.id) {
+    case "price":
+      return {
+        ...field,
+        label: `Price ${voice.per}`,
+        help: `What one ${one} pays ${voice.per}. Segments differ wildly in how much they care — some leave over a pound, others barely look.`,
+      };
+    case "capacityTarget":
+      return {
+        ...field,
+        label: cap.charAt(0).toUpperCase() + cap.slice(1),
+        help: `${voice.capacity.charAt(0).toUpperCase()}${voice.capacity.slice(1)}. Win more than this and you get ${voice.turnedAway} — which costs reputation, not just revenue.`,
+      };
+    case "supportSpend":
+      return { ...field, help: `${voice.service.charAt(0).toUpperCase()}${voice.service.slice(1)}. The segments that pay most are the ones that care about this most.` };
+    case "featureSpend":
+      return { ...field, help: `${voice.quality.charAt(0).toUpperCase()}${voice.quality.slice(1)}. Moves quality, and quality nobody has heard of moves nothing.` };
+    case "brandSpend":
+      return { ...field, help: `${voice.brand.charAt(0).toUpperCase()}${voice.brand.slice(1)}. Slow, compounding, and the thing that makes every other pound work harder.` };
+    case "performanceSpend":
+      return { ...field, help: `Buying ${many} now. Faster than brand and it stops the moment you stop paying.` };
+    case "targetCities":
+      return {
+        ...field,
+        label: `Which ${voice.places}`,
+        help: `Only ${many} in a ${voice.place} you have opened can choose you, however good you are. Opening one costs money once and costs more to run for ever — spread faster than you can sell and you pay for reach you are not using.`,
+      };
+    default:
+      return field;
+  }
+}

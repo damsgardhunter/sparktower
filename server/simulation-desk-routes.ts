@@ -28,7 +28,7 @@ import { enforceRateLimit } from "./moderation";
 import { nicheById } from "@shared/simulation/niches";
 import { ROLE_TITLES, ROLE_LEVERS, type Role, type World, type Company } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
-import { LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision, draftPreview } from "@shared/simulation/levers";
+import { LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision, draftPreview, speak } from "@shared/simulation/levers";
 import { economyFor } from "@shared/simulation/season";
 import { debtDrag } from "@shared/simulation/decisions";
 import { postureBlurb } from "@shared/simulation/incumbents";
@@ -223,7 +223,10 @@ export function registerSimulationDeskRoutes(app: Express): void {
        * filled in: which seats could be rehired, and which segments this market
        * actually has. A static list cannot know either.
        */
-      fields: seat.role ? LEVER_FIELDS[seat.role as Role].map((field) => {
+      fields: seat.role ? LEVER_FIELDS[seat.role as Role].map((base) => {
+        // Said in this market's words first, then filled in with the choices
+        // that depend on this particular company.
+        const field = speak(base, niche.voice);
         if (field.id === "rehire") {
           return {
             ...field,

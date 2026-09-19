@@ -22,6 +22,8 @@
  * this possible at all — keep them that way.
  */
 import { describe, it, expect } from "vitest";
+import { readFileSync, existsSync, statSync } from "node:fs";
+import { resolve, dirname } from "node:path";
 import * as phone from "../../mobile/src/components/sim/desk";
 import * as phoneLobby from "../../mobile/src/components/sim/lobby";
 import { commitment, LEVER_FIELDS, validateDecision } from "@shared/simulation/levers";
@@ -191,6 +193,99 @@ describe("the clock", () => {
   it("formats a year the same way", () => {
     for (const seconds of [5, 59, 60, 3_600, 3_660, 86_400, 172_740]) {
       expect(phone.formatUntil(seconds), `${seconds}s`).toBe(longCountdown(seconds));
+    }
+  });
+});
+
+describe("what keeps this file able to run at all", () => {
+  /*
+   * The mirror modules must have no React Native anywhere in their import
+   * graph, and that is not a style preference — it is the precondition for
+   * every test above.
+   *
+   * This suite runs in the web app's test runner, which parses with Rollup.
+   * React Native ships Flow source. The moment one of these modules reaches
+   * `react-native`, directly or through six hops of theme file, the whole
+   * suite stops loading and says:
+   *
+   *     Error: Expected 'from', got 'typeOf'
+   *
+   * No file name, no line, no import path. Nothing that suggests React Native,
+   * nothing that suggests a mirror module. It took one `import { colors } from
+   * "../../theme"` — four colour names, in one function that turns a loyalty
+   * score into a label — to take the only check on phone/server agreement
+   * offline, and a while to work out why.
+   *
+   * So the constraint is checked directly, by walking the graph from each
+   * mirror module. A failure here names the file and the chain, which is the
+   * whole difference between a five-minute fix and an afternoon.
+   */
+  const ROOT = resolve(__dirname, "../..");
+  const ENTRIES = [
+    "mobile/src/components/sim/desk.ts",
+    "mobile/src/components/sim/lobby.ts",
+  ];
+
+  /**
+   * Every module specifier a file imports or re-exports from.
+   *
+   * Comments are stripped first. The comment a few lines up quotes the exact
+   * import that caused all this — `from "../../theme"` — and without this the
+   * scanner dutifully found it and failed on a sentence explaining the rule it
+   * was enforcing.
+   */
+  function importsOf(raw: string): string[] {
+    const source = raw.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+    const found: string[] = [];
+    const patterns = [
+      /\bfrom\s+["']([^"']+)["']/g,
+      /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
+      /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
+    ];
+    for (const re of patterns) {
+      for (const m of source.matchAll(re)) found.push(m[1]);
+    }
+    return found;
+  }
+
+  function resolveLocal(from: string, spec: string): string | null {
+    if (!spec.startsWith(".")) return null;
+    const base = resolve(dirname(from), spec);
+    for (const candidate of [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`]) {
+      if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
+    }
+    return null;
+  }
+
+  it("never reaches React Native, however indirectly", () => {
+    for (const entry of ENTRIES) {
+      const start = resolve(ROOT, entry);
+      const seen = new Set<string>();
+      // The chain, so a failure says how it got there rather than only that it did.
+      const how = new Map<string, string[]>([[start, [entry]]]);
+      const queue = [start];
+
+      while (queue.length > 0) {
+        const file = queue.shift()!;
+        if (seen.has(file)) continue;
+        seen.add(file);
+
+        const chain = how.get(file)!;
+        for (const spec of importsOf(readFileSync(file, "utf-8"))) {
+          if (!spec.startsWith(".")) {
+            expect(
+              spec,
+              `${chain.join(" → ")} imports "${spec}". A mirror module's graph must stay free of React Native and Expo, or this whole file stops loading with an error that names nothing.`,
+            ).not.toMatch(/^(react-native|expo|@expo|@react-native)/);
+            continue;
+          }
+          const next = resolveLocal(file, spec);
+          if (next && !seen.has(next)) {
+            how.set(next, [...chain, spec]);
+            queue.push(next);
+          }
+        }
+      }
     }
   });
 });

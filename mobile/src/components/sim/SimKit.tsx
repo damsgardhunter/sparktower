@@ -190,6 +190,9 @@ export function OpenSeatCard({ role, onClaim, claiming, disabled }: {
 /** A customer segment, with the loyalty that decides whether it's winnable. */
 export function SegmentRow({ segment, share }: { segment: SimSegment; share: number }) {
   const read = loyaltyRead(segment.loyalty);
+  // The logic module deals in tones so it stays free of React Native; the
+  // component, which may import the theme, is where a tone becomes a colour.
+  const tint = { danger: colors.danger, warning: colors.warning, info: colors.info, success: colors.success }[read.tone];
   return (
     <View style={{ gap: 4, paddingVertical: spacing.sm, borderTopWidth: 1, borderColor: colors.borderSubtle }}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
@@ -205,9 +208,9 @@ export function SegmentRow({ segment, share }: { segment: SimSegment; share: num
           in a glance, the words say what the bar means. */}
       <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
         <View style={{ flex: 1, height: 5, borderRadius: 3, backgroundColor: colors.surfaceRaised, overflow: "hidden" }}>
-          <View style={{ width: `${Math.round(segment.loyalty * 100)}%`, height: "100%", backgroundColor: read.color }} />
+          <View style={{ width: `${Math.round(segment.loyalty * 100)}%`, height: "100%", backgroundColor: tint }} />
         </View>
-        <Pill label={read.label} color={read.color} />
+        <Pill label={read.label} color={tint} />
       </View>
       <Text style={{ color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.regular }}>{read.hint}</Text>
     </View>

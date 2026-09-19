@@ -23,6 +23,7 @@
 import { describe, it, expect } from "vitest";
 import { NICHES } from "@shared/simulation/niches";
 import type { NicheVoice, Persona } from "@shared/simulation/types";
+import { lookOf } from "../../client/src/components/sim/market-look";
 
 const VOICE_FIELDS: (keyof NicheVoice)[] = [
   "customer", "customers", "unit", "per", "capacity", "capacityShort",
@@ -173,6 +174,86 @@ describe("the companies that already own the market", () => {
     for (const niche of NICHES) {
       const postures = niche.incumbents.map((i) => i.posture).sort();
       expect(postures, `${niche.id} has one of each`).toEqual(["brawler", "coaster", "fortress", "innovator"]);
+    }
+  });
+});
+
+
+describe("what the picker claims about each market", () => {
+  /*
+   * The band across the top of every market card states a number — "a clinic
+   * pays twenty-eight times a novelty order", "one public job is worth fifteen
+   * kitchens". It is the first thing anybody reads about a market and the
+   * thing they will plan a fortnight around.
+   *
+   * Which makes it the most dangerous copy in the feature: a reference price
+   * tuned by half in a balance pass leaves the sentence sitting there, still
+   * confident, now wrong. Nothing else would catch that — the balance tests
+   * check the market is playable, not that a paragraph about it is true.
+   *
+   * So the claims are derived from the data here and compared with the words.
+   */
+  const multiple = (nicheId: string) => {
+    const niche = NICHES.find((n) => n.id === nicheId)!;
+    const dearest = [...niche.segments].sort((a, b) => b.referencePrice - a.referencePrice)[0];
+    const cheapest = [...niche.segments].sort((a, b) => a.referencePrice - b.referencePrice)[0];
+    return dearest.referencePrice / cheapest.referencePrice;
+  };
+
+  const WORDS: Record<string, number> = {
+    four: 4, fifteen: 15, "twenty-seven": 27, "twenty-eight": 28, three: 3,
+  };
+
+  it("states a multiple the segments actually support", () => {
+    const claims: [string, string][] = [
+      ["dating_apps", "four"],
+      ["drone_delivery", "twenty-eight"],
+      ["podcasts", "twenty-seven"],
+      ["restaurant_chain", "three"],
+      ["construction", "fifteen"],
+    ];
+
+    for (const [nicheId, word] of claims) {
+      const said = lookOf(nicheId).shape;
+      expect(said, `${nicheId}'s line still says "${word}"`).toContain(word);
+      const real = multiple(nicheId);
+      /*
+       * Within a whole unit of the truth. Rounded prose about a ratio of 27.1
+       * saying "twenty-seven" is right; the same sentence after somebody
+       * doubles a reference price is not, and that is what this catches.
+       */
+      expect(Math.abs(real - WORDS[word]), `${nicheId}: the line says ${word}, the segments say ${real.toFixed(1)}`)
+        .toBeLessThan(1);
+    }
+  });
+
+  it("gives every market a mark of its own", () => {
+    // A market added to the engine and not to the picker should look plainly
+    // unfinished rather than get a colour picked by hashing its id — which
+    // would look finished and never be fixed.
+    const shapes = NICHES.map((n) => lookOf(n.id).shape);
+    expect(shapes.filter(Boolean), "every market says something").toHaveLength(NICHES.length);
+    expect(new Set(shapes).size, "and no two say the same thing").toBe(NICHES.length);
+
+    const tints = NICHES.map((n) => lookOf(n.id).tint);
+    expect(new Set(tints).size, "and no two look the same").toBe(NICHES.length);
+  });
+
+  it("does not repeat the premise printed underneath it", () => {
+    /*
+     * A band that restates the sentence below it is worse than an empty band:
+     * the reader stops to work out whether they missed something. Caught by
+     * looking for a long phrase shared between the two, which is what a
+     * restatement looks like and what a genuinely different sentence does not.
+     */
+    for (const niche of NICHES) {
+      const shape = lookOf(niche.id).shape.toLowerCase();
+      const premise = niche.premise.toLowerCase();
+      const words = shape.split(/\s+/);
+      for (let i = 0; i + 4 <= words.length; i++) {
+        const phrase = words.slice(i, i + 4).join(" ");
+        expect(premise, `${niche.id}'s band repeats its premise: "${phrase}"`).not.toContain(phrase);
+      }
     }
   });
 });

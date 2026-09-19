@@ -44,6 +44,7 @@ import { saturate } from "@shared/simulation/market";
 import type { Role } from "@shared/simulation/types";
 import { CompanyProfile } from "@/components/sim/company-profile";
 import { TeammateProfile } from "@/components/sim/teammate-profile";
+import { lookOf } from "@/components/sim/market-look";
 import {
   Loader2, Clock, TrendingUp, TrendingDown, Minus, AlertTriangle, Info,
   CheckCircle2, Circle, Banknote, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy, Newspaper,
@@ -287,6 +288,7 @@ export default function SimulationDeskPage() {
     <Shell
       title={desk.name ?? "Your company"}
       subtitle={`${desk.niche.name} · Year ${desk.year} of ${desk.totalYears}`}
+      nicheId={desk.niche.id}
       onBack={() => navigate("/simulation")}
       clock={desk.phase === "finished" ? "Season over" : secondsLeft !== null ? `${longCountdown(secondsLeft)} until this year resolves` : null}
     >
@@ -807,9 +809,10 @@ function EventCard({ event }: { event: NonNullable<Desk["lastYear"]>["event"] })
   );
 }
 
-function Shell({ title, subtitle, clock, onBack, children }: {
-  title: string; subtitle: string; clock?: string | null; onBack?: () => void; children: React.ReactNode;
+function Shell({ title, subtitle, clock, onBack, nicheId, children }: {
+  title: string; subtitle: string; clock?: string | null; onBack?: () => void; nicheId?: string; children: React.ReactNode;
 }) {
+  const look = nicheId ? lookOf(nicheId) : null;
   return (
     <div className="mx-auto max-w-4xl px-4 py-8 space-y-4">
       <div className="rounded-2xl p-[2px]" style={{ backgroundImage: NOVA_GRADIENT_CSS }}>
@@ -822,7 +825,15 @@ function Shell({ title, subtitle, clock, onBack, children }: {
                 </button>
               )}
               <h1 className="text-2xl font-bold tracking-tight truncate" data-testid="text-company-name">{title}</h1>
-              <p className="text-sm text-muted-foreground mt-1">{subtitle}</p>
+              {/*
+                * The market's mark next to its name. Fourteen days of opening
+                * the same screen is a long time to be unsure at a glance which
+                * of seven worlds you are in — and somebody may well be in two.
+                */}
+              <p className="text-sm text-muted-foreground mt-1 flex items-center gap-1.5">
+                {look && <look.Icon className={`h-3.5 w-3.5 shrink-0 ${look.ink}`} />}
+                <span className="truncate">{subtitle}</span>
+              </p>
             </div>
             {clock && (
               <p className="text-xs text-muted-foreground flex items-center gap-1 shrink-0" data-testid="text-resolves">

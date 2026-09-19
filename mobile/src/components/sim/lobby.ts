@@ -13,9 +13,21 @@
  * phone only draws it, and the arithmetic that keeps those two honest is
  * exactly the kind of thing that is wrong in a way nobody notices until a
  * phase ends nine seconds early on somebody's screen.
+ *
+ * ## Nothing here imports from React Native, and that is load-bearing
+ *
+ * This module is checked against `@shared` by test/unit/mobile-mirror.test.ts,
+ * which runs in the web app's test suite and is the only thing standing
+ * between the phone and the server quietly disagreeing. That test can only
+ * import this file if the file has no React Native in its graph — React
+ * Native's source is Flow, which the web bundler's parser refuses outright,
+ * and the failure it produces ("Expected 'from', got 'typeOf'") names no file
+ * and points at nothing.
+ *
+ * It took one `import { colors } from "../../theme"`, for four colour names in
+ * one function, to take the whole mirror test offline. So this file deals in
+ * tones — "danger", "success" — and the components turn those into colours.
  */
-import { colors } from "../../theme";
-
 export type SimPhase = "filling" | "claiming" | "naming" | "running" | "retired";
 
 /**
@@ -256,11 +268,13 @@ export function seatStatus(seat: SimSeat, roleTitle: string | null): {
  * below about 0.4 a segment is already halfway out of the door, above 0.8 it
  * takes years of consistency to move.
  */
-export function loyaltyRead(loyalty: number): { label: string; hint: string; color: string } {
-  if (loyalty >= 0.8) return { label: "Locked in", hint: "Years of consistency, or nothing.", color: colors.danger };
-  if (loyalty >= 0.6) return { label: "Sticky", hint: "Winnable, slowly, by being better for a long time.", color: colors.warning };
-  if (loyalty >= 0.4) return { label: "Persuadable", hint: "Moves for a real reason, and moves back just as easily.", color: colors.info };
-  return { label: "On the rope", hint: "Already half out of the door. Your first customers.", color: colors.success };
+export type LoyaltyTone = "danger" | "warning" | "info" | "success";
+
+export function loyaltyRead(loyalty: number): { label: string; hint: string; tone: LoyaltyTone } {
+  if (loyalty >= 0.8) return { label: "Locked in", hint: "Years of consistency, or nothing.", tone: "danger" };
+  if (loyalty >= 0.6) return { label: "Sticky", hint: "Winnable, slowly, by being better for a long time.", tone: "warning" };
+  if (loyalty >= 0.4) return { label: "Persuadable", hint: "Moves for a real reason, and moves back just as easily.", tone: "info" };
+  return { label: "On the rope", hint: "Already half out of the door. Your first customers.", tone: "success" };
 }
 
 /**

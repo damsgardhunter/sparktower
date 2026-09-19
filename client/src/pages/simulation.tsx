@@ -37,13 +37,14 @@ import { NOVA_GRADIENT_CSS } from "@shared/backing";
 import { countdown, phaseCopy, urgency } from "@shared/simulation/lobby-copy";
 import type { Role } from "@shared/simulation/types";
 import { Loader2, Users, Clock, ArrowRight, Sparkles, ShieldCheck, TrendingDown } from "lucide-react";
+import { lookOf } from "@/components/sim/market-look";
 
 interface NicheView {
   id: string;
   name: string;
   premise: string;
   segments: { id: string; name: string; description: string; size: number; loyalty: number }[];
-  incumbents: { name: string; share: number; posture: string }[];
+  incumbents: { id?: string; name: string; share: number; posture: string; tagline?: string; known?: string }[];
 }
 interface RoleView { id: Role; title: string; levers: string[] }
 interface Seat { userId: string; name: string; avatarUrl: string | null; role: Role | null; assigned: boolean; isBot: boolean; isYou: boolean }
@@ -123,8 +124,20 @@ function MarketPicker({ onJoined }: { onJoined: (ventureId: string) => void }) {
         </div>
       </header>
 
-      {data?.niches.map((niche) => (
-        <Card key={niche.id} data-testid={`niche-${niche.id}`}>
+      {data?.niches.map((niche) => {
+        const look = lookOf(niche.id);
+        return (
+        <Card key={niche.id} data-testid={`niche-${niche.id}`} className="overflow-hidden">
+          {/*
+            * A band across the top, so seven markets are seven things at a
+            * glance rather than seven paragraphs that have to be read to be
+            * told apart. The line on it is the *shape* of the market — the
+            * problem it poses — not a restatement of its subject.
+            */}
+          <div className={`flex items-center gap-2.5 border-b px-5 py-2.5 ${look.tint}`}>
+            <look.Icon className={`h-4 w-4 shrink-0 ${look.ink}`} />
+            <p className={`text-xs font-medium ${look.ink}`}>{look.shape}</p>
+          </div>
           <CardContent className="p-5 space-y-4">
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -159,17 +172,32 @@ function MarketPicker({ onJoined }: { onJoined: (ventureId: string) => void }) {
               ))}
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 pt-1">
-              <span className="text-xs text-muted-foreground">Already here:</span>
-              {niche.incumbents.map((i) => (
-                <Badge key={i.name} variant="secondary" className="text-[11px]">
-                  {i.name} · {Math.round(i.share * 100)}%
-                </Badge>
-              ))}
+            {/*
+              * Who is already here, with something to hold on to.
+              *
+              * This was four badges reading "Ember · 39%", which is the same
+              * shape of nothing in all seven markets — nobody picks a
+              * fortnight on a percentage. The line under each name is how they
+              * describe themselves, so the market arrives with four
+              * personalities in it and a player can already tell which one
+              * annoys them most.
+              */}
+            <div className="space-y-1.5 pt-1">
+              <p className="text-xs text-muted-foreground">Already here, holding nine tenths of it between them:</p>
+              <div className="grid gap-1.5 sm:grid-cols-2">
+                {niche.incumbents.map((i) => (
+                  <div key={i.name} className="flex items-baseline gap-2 min-w-0" data-testid={`incumbent-${i.id ?? i.name}`}>
+                    <span className="text-sm font-medium shrink-0">{i.name}</span>
+                    <span className="text-xs tabular-nums text-muted-foreground shrink-0">{Math.round(i.share * 100)}%</span>
+                    {i.tagline && <span className="text-xs text-muted-foreground italic truncate">“{i.tagline}”</span>}
+                  </div>
+                ))}
+              </div>
             </div>
           </CardContent>
         </Card>
-      ))}
+        );
+      })}
 
       {data?.roles && (
         <Card>
