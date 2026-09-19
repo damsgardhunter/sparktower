@@ -44,7 +44,8 @@
   --chart-3: 42 93% 56%;
   --chart-4: 147 79% 42%;
   --chart-5: 341 75% 51%;
-  --font-sans: 'Space Grotesk', sans-serif;
+  /* Plus Jakarta Sans everywhere: cleaner and friendlier than Space Grotesk, with none of its oddball letterforms. */
+  --font-sans: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
   --font-serif: 'Geist', sans-serif;
   --font-mono: 'Geist Mono', monospace;
   --radius: 0rem;
@@ -649,24 +650,14 @@
 }
 
 /*
- * The landing page's type: Instrument Serif headlines over DM Sans.
+ * The landing page's headlines: Plus Jakarta Sans at 800.
  *
- * A serif display face over a clean sans is the register of pages that ask
- * people to trust them with money, and the landing page asks exactly that.
- * Scoped to `.landing-type` so the product itself keeps its own typeface.
- *
- * Instrument Serif ships in one weight (400, with an italic), so the
- * headlines here set weight 400 explicitly: the `font-bold` / `font-black`
- * classes they carry would otherwise make the browser synthesize a fake bold,
- * which smears a serif. Only display text changes — the small h3/h4 labels
- * stay in DM Sans, where a single-weight serif at card-title size reads worse.
+ * The whole app is Jakarta now (--font-sans), 400 for body text. Display text
+ * on the landing page — the hero, section headings, the sign-up panel's
+ * heading, the pull-quote — goes to 800, the family's heaviest weight: the
+ * `font-bold` / `font-black` classes those headings carry would otherwise
+ * leave them at 700, or ask for a 900 Jakarta doesn't have.
  */
-.landing-type {
-  font-family: "DM Sans", ui-sans-serif, system-ui, sans-serif;
-}
 .landing-type :is(h1, h2, blockquote) {
-  font-family: "Instrument Serif", ui-serif, Georgia, "Times New Roman", serif;
-  font-weight: 400;
-  font-synthesis: none;
-  letter-spacing: -0.01em;
+  font-weight: 800;
 }
