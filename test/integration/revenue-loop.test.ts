@@ -23,6 +23,8 @@ vi.mock("../../server/stripeClient", async (importOriginal) => {
   const client: any = new StripeCtor(FAKE_STRIPE_TEST_KEY, { apiVersion: "2025-08-27.basil" });
   // What Stripe would answer for a Builder subscription, without the network.
   client.subscriptions.retrieve = async (id: string) => ({ id, status: "active", items: { data: [{ price: { id: "price_builder_test" } }] } });
+  // No other subscriptions on the customer: the plan is settled from the one the event carries.
+  client.subscriptions.list = async () => ({ data: [] });
   client.prices.retrieve = async () => ({ id: "price_builder_test", metadata: { tier: "builder" } });
   return {
     ...actual,

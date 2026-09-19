@@ -8,8 +8,8 @@
  * their plan, or pays and doesn't get one.
  *
  * The event used throughout is `customer.subscription.deleted`, chosen because
- * it is the only branch that changes a user's tier without calling the Stripe
- * API — so "was it processed?" is answerable by reading a row rather than by
+ * it changes a user's tier with the least of the Stripe API behind it — one
+ * list call, stubbed below — so "was it processed?" is answerable by reading a row rather than by
  * trusting a mock, and the whole suite runs with no network.
  *
  * What is stubbed and what is not: the sync layer is replaced, because its
@@ -41,6 +41,9 @@ vi.mock("../../server/stripeClient", async (importOriginal) => {
   const client = new StripeCtor(FAKE_STRIPE_TEST_KEY, {
     apiVersion: "2025-08-27.basil",
   });
+  // A cancellation now asks whether the customer still pays for anything else
+  // (server/subscription-state.ts). Here, nothing: this file is about the signature.
+  (client.subscriptions as any).list = async () => ({ data: [] });
 
   return {
     ...actual,

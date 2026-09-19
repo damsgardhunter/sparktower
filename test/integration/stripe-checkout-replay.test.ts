@@ -30,7 +30,11 @@ vi.mock("../../server/stripeClient", async (importOriginal) => {
   const StripeCtor = (await import("stripe")).default;
   const real = new StripeCtor(FAKE_STRIPE_TEST_KEY, { apiVersion: "2025-08-27.basil" });
   const fake: any = {
-    subscriptions: { retrieve: async (id: string) => ({ id, status: subscriptionStatus, items: { data: [{ price: { id: "price_builder" } }] } }) },
+    subscriptions: {
+      retrieve: async (id: string) => ({ id, status: subscriptionStatus, items: { data: [{ price: { id: "price_builder" } }] } }),
+      // No other subscriptions on the customer: the plan is settled from the one the event carries.
+      list: async () => ({ data: [] }),
+    },
     prices: { retrieve: async (id: string) => ({ id, metadata: { tier: "builder" }, product: { metadata: {} } }) },
     webhooks: real.webhooks,
   };

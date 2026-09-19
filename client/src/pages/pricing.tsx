@@ -74,7 +74,18 @@ export default function Pricing() {
       const res = await apiRequest("POST", "/api/checkout", { priceId });
       return res.json();
     },
-    onSuccess: (result: { url?: string }) => {
+    onSuccess: (result: { url?: string; switched?: boolean; tier?: string }) => {
+      /*
+       * Already subscribed: the plan was changed on the existing subscription
+       * rather than a second one started (which used to bill both, monthly).
+       * Nothing to pay here — the difference is prorated onto the next invoice.
+       */
+      if (result.switched) {
+        setPendingTier(null);
+        void queryClient.invalidateQueries({ queryKey: ["/api/subscription"] });
+        toast({ title: "Plan changed", description: "Your subscription was switched. The difference is prorated on your next invoice." });
+        return;
+      }
       if (result.url) window.location.href = result.url;
       else {
         setPendingTier(null);

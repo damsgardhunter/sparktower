@@ -1,5 +1,6 @@
 import { productNameNote } from "@shared/project-draft";
-import { tierForPrice, PriceTierMissingError } from "./webhookHandlers";
+import { tierForPrice, PriceTierMissingError, WebhookHandlers } from "./webhookHandlers";
+import { liveSubscriptions, settleTier } from "./subscription-state";
 import { paidSubscription } from "@shared/subscriptions";
 import { registerStripeHealthRoutes } from "./stripe-health";
 import { registerDeploymentRoutes } from "./deployment-info";
@@ -6344,6 +6345,48 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         });
         await storage.updateUserStripeInfo(userId, { stripeCustomerId: customer.id });
         customerId = customer.id;
+      }
+
+      /*
+       * Never a second subscription.
+       *
+       * This used to start a new subscription checkout for anybody who asked,
+       * including people already paying — so a Builder member who ran out of
+       * credits and pressed "upgrade" was billed for Builder and Pro, every
+       * month, indefinitely. Somebody already subscribed changes the plan on
+       * the subscription they have; Stripe prorates the difference onto the
+       * next invoice, and the webhook moves their tier when it lands.
+       */
+      const live = await liveSubscriptions(stripe, customerId);
+      if (live.length > 0) {
+        const current = live[0];
+        const item = current.items?.data?.[0];
+        if (!item) return res.status(409).json({ message: "Your subscription is in a state we can't change from here. Use Manage billing.", code: "manage_in_portal" });
+        if (item.price?.id === priceId) {
+          return res.status(409).json({ message: "You're already on this plan.", code: "already_subscribed" });
+        }
+        const switched = await stripe.subscriptions.update(current.id, {
+          items: [{ id: item.id, price: priceId }],
+          proration_behavior: "create_prorations",
+          metadata: { userId },
+        });
+        // Settle now rather than waiting on the webhook, so the page they return to is already right.
+        const settled = await settleTier({
+          userId, customer: customerId, stripe,
+          tierFor: (sub) => WebhookHandlers.tierForSubscription(sub),
+          fresh: switched as any,
+        });
+        return res.json({ switched: true, tier: settled.tier });
+      }
+
+      /*
+       * And no two checkouts racing to become two subscriptions. A checkout
+       * left open in another tab — or started twice by a double click —
+       * would otherwise complete alongside this one. Only the newest can.
+       */
+      const open = await stripe.checkout.sessions.list({ customer: customerId, status: "open", limit: 20 });
+      for (const stale of open.data) {
+        if (stale.mode === "subscription") await stripe.checkout.sessions.expire(stale.id).catch(() => {});
       }
 
       const session = await stripe.checkout.sessions.create({
