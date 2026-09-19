@@ -1,15 +1,17 @@
 /**
  * The people who act for a company, and what the company says about itself.
  *
- * Everyone sees the team. Admins also get the invite link, each person's role,
- * and the company's details to edit. Anyone may leave; the server refuses the
- * last owner, and the message it gives is shown as-is because it says what to
- * do instead.
+ * The everyday view. Everyone sees the team and can leave; whoever manages the
+ * team also gets the invite link, and leaders edit the company's details.
+ * Adding people directly, powers, roles and removals live on the Admin tab,
+ * so there is one place to look for them. The server refuses the last owner
+ * leaving, and the message it gives is shown as-is because it says what to do
+ * instead.
  */
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Check, Copy, Link2, Loader2, LogOut, Trash2 } from "lucide-react";
+import { Check, Copy, Link2, Loader2, LogOut, ShieldCheck } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
 import { useToast } from "@/hooks/use-toast";
@@ -22,17 +24,18 @@ import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { COMPANY_ROLES, COMPANY_SIZES, INDUSTRIES, type CompanyRole } from "@shared/companies";
+import { COMPANY_PERMISSIONS, COMPANY_SIZES, INDUSTRIES, type CompanyPermission, type CompanyRole } from "@shared/companies";
 import type { CompanyView } from "@/pages/company";
 
 const NONE = "__none";
 const ROLE_HELP: Record<CompanyRole, string> = {
   owner: "Can do anything, including deleting the company",
-  admin: "Runs seasons, invites people and edits the company",
+  admin: "Can do anything except delete the company",
   member: "Can see everything and join seasons",
 };
+const powerLabel = (p: CompanyPermission) => COMPANY_PERMISSIONS.find((x) => x.id === p)?.label ?? p;
 
-export function TeamTab({ companyId, canManage }: { companyId: string; canManage: boolean }) {
+export function TeamTab({ companyId, canManage, powers = [] }: { companyId: string; canManage: boolean; powers?: CompanyPermission[] }) {
   const key = [`/api/companies/${companyId}`];
   const { data } = useQuery<CompanyView>({ queryKey: key });
   const { user } = useAuth();
@@ -40,39 +43,39 @@ export function TeamTab({ companyId, canManage }: { companyId: string; canManage
   const [, navigate] = useLocation();
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: key });
-  const fail = (title: string) => (e: unknown) => toast({ title, description: errorText(e), variant: "destructive" });
-
-  const changeRole = useMutation({
-    mutationFn: (v: { userId: string; role: CompanyRole }) =>
-      apiRequest("PATCH", `/api/companies/${companyId}/members/${v.userId}`, { role: v.role }),
-    onSuccess: refresh,
-    onError: fail("Couldn't change that role"),
-  });
-  const remove = useMutation({
+  const leave = useMutation({
     mutationFn: (userId: string) => apiRequest("DELETE", `/api/companies/${companyId}/members/${userId}`),
-    onSuccess: (_r, userId) => {
-      if (userId === user?.id) {
-        queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
-        navigate("/companies");
-      } else refresh();
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      navigate("/companies");
     },
-    onError: fail("Couldn't do that"),
+    onError: (e) => toast({ title: "Couldn't leave", description: errorText(e), variant: "destructive" }),
   });
 
   if (!data) return null;
   const isOwner = data.role === "owner";
+  const managesTeam = powers.includes("manage_team");
 
   return (
     <div className="space-y-4">
-      {canManage && <InviteLink companyId={companyId} />}
+      {managesTeam && <InviteLink companyId={companyId} canInviteAdmins={canManage} />}
+
+      {managesTeam && (
+        <div className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm text-muted-foreground">
+          <ShieldCheck className="h-4 w-4 text-primary shrink-0" />
+          <span className="flex-1">To add someone by email, change what people can do, or remove someone, use the Admin tab.</span>
+          <Button variant="outline" size="sm" onClick={() => navigate(`/companies/${companyId}?tab=admin`, { replace: true })} data-testid="button-go-admin">
+            Open Admin
+          </Button>
+        </div>
+      )}
 
       <Card>
         <CardHeader><CardTitle className="text-base">People ({data.members.length})</CardTitle></CardHeader>
         <CardContent className="divide-y">
           {data.members.map((m) => {
             const you = m.userId === user?.id;
-            // Ownership is for owners to hand out; the server says the same.
-            const canEditThis = canManage && (isOwner || m.role !== "owner");
+            const leader = m.role === "owner" || m.role === "admin";
             return (
               <div key={m.userId} className="flex items-center gap-3 py-2.5" data-testid={`member-${m.userId}`}>
                 <Avatar className="h-8 w-8">
@@ -81,35 +84,18 @@ export function TeamTab({ companyId, canManage }: { companyId: string; canManage
                 </Avatar>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium truncate">{m.name}{you && <span className="text-muted-foreground font-normal"> (you)</span>}</p>
-                  <p className="text-xs text-muted-foreground">{ROLE_HELP[m.role]}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {leader || !m.permissions?.length ? ROLE_HELP[m.role] : `Can also: ${m.permissions.map(powerLabel).join(", ").toLowerCase()}`}
+                  </p>
                 </div>
-                {canEditThis ? (
-                  <Select value={m.role} onValueChange={(role) => changeRole.mutate({ userId: m.userId, role: role as CompanyRole })}>
-                    <SelectTrigger className="w-28 h-8" data-testid={`select-role-${m.userId}`}><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {COMPANY_ROLES.filter((r) => isOwner || r !== "owner").map((r) => (
-                        <SelectItem key={r} value={r} className="capitalize">{r[0].toUpperCase() + r.slice(1)}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                ) : (
-                  <Badge variant="secondary" className="capitalize">{m.role}</Badge>
-                )}
+                <Badge variant="secondary" className="capitalize">{m.role}</Badge>
                 {you ? (
                   <Button
                     variant="ghost" size="sm" title="Leave this company"
-                    onClick={() => { if (confirm(`Leave ${data.company.name}?`)) remove.mutate(m.userId); }}
+                    onClick={() => { if (confirm(`Leave ${data.company.name}?`)) leave.mutate(m.userId); }}
                     data-testid="button-leave-company"
                   >
                     <LogOut className="h-4 w-4" />
-                  </Button>
-                ) : canEditThis ? (
-                  <Button
-                    variant="ghost" size="sm" title={`Remove ${m.name}`}
-                    onClick={() => { if (confirm(`Remove ${m.name} from ${data.company.name}?`)) remove.mutate(m.userId); }}
-                    data-testid={`button-remove-${m.userId}`}
-                  >
-                    <Trash2 className="h-4 w-4" />
                   </Button>
                 ) : <span className="w-9" />}
               </div>
@@ -124,7 +110,8 @@ export function TeamTab({ companyId, canManage }: { companyId: string; canManage
   );
 }
 
-function InviteLink({ companyId }: { companyId: string }) {
+/** An admin link is only offered to leaders; the server refuses it to anyone else, since it would hand out a role. */
+function InviteLink({ companyId, canInviteAdmins }: { companyId: string; canInviteAdmins: boolean }) {
   const [role, setRole] = useState<"member" | "admin">("member");
   const [link, setLink] = useState<{ url: string; expiresAt: string; role: string } | null>(null);
   const [copied, setCopied] = useState(false);
@@ -144,6 +131,15 @@ function InviteLink({ companyId }: { companyId: string }) {
     },
     onError: (e) => toast({ title: "Couldn't make a link", description: errorText(e), variant: "destructive" }),
   });
+  const reset = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/companies/${companyId}/invite-link/reset`),
+    onSuccess: () => {
+      setLink(null);
+      queryClient.invalidateQueries({ queryKey: [`/api/companies/${companyId}/audit`] });
+      toast({ title: "Old invite links no longer work", description: "Make a new one for anyone who still needs to join." });
+    },
+    onError: (e) => toast({ title: "Couldn't reset the links", description: errorText(e), variant: "destructive" }),
+  });
 
   return (
     <Card>
@@ -157,7 +153,7 @@ function InviteLink({ companyId }: { companyId: string }) {
             <SelectTrigger className="w-40" data-testid="select-invite-role"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="member">Join as a member</SelectItem>
-              <SelectItem value="admin">Join as an admin</SelectItem>
+              {canInviteAdmins && <SelectItem value="admin">Join as an admin</SelectItem>}
             </SelectContent>
           </Select>
           <Button onClick={() => make.mutate()} disabled={make.isPending} data-testid="button-invite-link">
@@ -174,6 +170,18 @@ function InviteLink({ companyId }: { companyId: string }) {
           </div>
         )}
         {link && <p className="text-xs text-muted-foreground">Works until {new Date(link.expiresAt).toLocaleDateString()}.</p>}
+        <div className="flex items-center justify-between gap-3 flex-wrap border-t pt-3">
+          <p className="text-xs text-muted-foreground">
+            Shared a link with the wrong person? Resetting stops every link made so far. Removing someone does this too.
+          </p>
+          <Button
+            variant="outline" size="sm" disabled={reset.isPending}
+            onClick={() => { if (confirm("Stop every invite link made so far? Nobody new can join with them.")) reset.mutate(); }}
+            data-testid="button-reset-invite-links"
+          >
+            {reset.isPending && <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />} Reset invite links
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );

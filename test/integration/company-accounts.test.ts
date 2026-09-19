@@ -55,7 +55,7 @@ describe("making and reading a company", () => {
 
     const one = await owner.agent.get(`/api/companies/${companyId}`);
     expect(one.status).toBe(200);
-    expect(Object.keys(one.body).sort()).toEqual(["company", "members", "role"]);
+    expect(Object.keys(one.body).sort()).toEqual(["company", "me", "members", "role"]);
     expect(Object.keys(one.body.company).sort()).toEqual(["description", "id", "industry", "name", "projectId", "size", "slug", "website"]);
     expect(one.body.company).toMatchObject({
       id: companyId, name: "Acme Widgets", industry: "Fintech", size: "11-50",
@@ -63,7 +63,10 @@ describe("making and reading a company", () => {
     });
     expect(one.body.company.slug).toMatch(/^acme-widgets-[a-z0-9]{6}$/);
     expect(one.body.role).toBe("owner");
-    expect(one.body.members).toEqual([{ userId: owner.id, name: "Olive", role: "owner", avatarUrl: null }]);
+    expect(one.body.members).toEqual([{ userId: owner.id, name: "Olive", role: "owner", avatarUrl: null, permissions: [] }]);
+    // What the viewer can do, worked out once on the server: an owner holds every power.
+    expect(one.body.me).toMatchObject({ userId: owner.id, role: "owner", permissions: [] });
+    expect(one.body.me.powers).toHaveLength(7);
   }, 120_000);
 
   it("refuses a bad name, industry or size", async () => {

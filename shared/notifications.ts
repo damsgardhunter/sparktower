@@ -83,6 +83,10 @@ export function notificationText(n: NotificationShape): string {
     case "challenge_result": return "There's news on your challenge entry";
     case "scout_update": return n.projectTitle ? `${n.projectTitle} moved` : "A project you follow moved";
     case "scout_new_project": return "A new project in an industry you watch";
+    case "company_added": return `${who} added you to their company`;
+    case "company_powers": return `${who} changed what you can do for the company`;
+    case "job_due": return "A recurring job of yours is due";
+    case "checkin_due": return "It's check-in day";
     default: return `${who} did something`;
   }
 }
@@ -115,6 +119,10 @@ export function notificationHref(n: Pick<NotificationShape, "kind" | "actorId" |
   if (n.kind === "challenge_entry") return n.targetId ? `/companies/${n.targetId.split(":")[0]}?tab=challenges` : "/companies";
   if (n.kind === "challenge_result") return n.targetId ? `/challenges/${n.targetId.split(":")[0]}` : "/challenges";
   if (n.kind === "scout_update" || n.kind === "scout_new_project") return n.projectId ? `/projects/${n.projectId}` : "/companies";
+  // `companyId:…` targets: the company's page, on the tab the change was about.
+  if (n.kind === "company_added" || n.kind === "company_powers") return n.targetId ? `/companies/${n.targetId.split(":")[0]}` : "/companies";
+  // The Run section of the project, where the jobs and the check-in live.
+  if (n.kind === "job_due" || n.kind === "checkin_due") return n.projectId ? `/projects/${n.projectId}/manage?section=run_company` : "/";
   if (n.kind === "connection_request") return "/profile";
   return `/profile/${n.actorId}`;
 }

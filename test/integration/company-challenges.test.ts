@@ -122,9 +122,60 @@ describe("posting a challenge", () => {
     const founder = await person(app);
     expect((await founder.agent.post(`/api/challenges/${c.id}/enter`).send(entry())).status).toBe(201);
     expect((await owner.agent.patch(url).send({ prize: "$50" })).status).toBe(409);
-    expect((await owner.agent.patch(url).send({ criteria: "Clearer criteria now." })).status).toBe(200);
+    // What entrants answered holds still too: the brief and the criteria.
+    expect((await owner.agent.patch(url).send({ criteria: "Clearer criteria now." })).status).toBe(409);
+    expect((await owner.agent.patch(url).send({ brief: `${brief.brief} Also, do it by Friday.` })).status).toBe(409);
+    // More time is fine; less is not.
+    expect((await owner.agent.patch(url).send({ deadline: new Date(Date.now() + 40 * DAY).toISOString() })).status).toBe(200);
+    expect((await owner.agent.patch(url).send({ deadline: new Date(Date.now() + 10 * DAY).toISOString() })).status).toBe(409);
     await owner.agent.post(`${url}/close-entries`);
     expect((await owner.agent.patch(url).send({ criteria: "Too late." })).status).toBe(409);
+  });
+
+  it("won't move a deadline that has already passed, so an expired challenge can't be quietly reopened", async () => {
+    const c = await newChallenge();
+    await db.update(companyChallenges).set({ deadline: new Date(Date.now() - 1000) }).where(eq(companyChallenges.id, c.id));
+    const moved = await owner.agent.patch(`/api/companies/${acme.id}/challenges/${c.id}`).send({ deadline: inAMonth() });
+    expect(moved.status).toBe(409);
+    expect(moved.body.code).toBe("deadline_passed");
+    expect((await stranger.agent.get(`/api/challenges/${c.id}`)).body.acceptingEntries).toBe(false);
+  });
+});
+
+describe("the public list and results", () => {
+  it("finds live challenges even behind hundreds of expired ones", async () => {
+    const past = new Date(Date.now() - DAY);
+    await db.insert(companyChallenges).values(Array.from({ length: 205 }, (_, i) => ({
+      companyId: acme.id, title: `Old ${i}`, brief: brief.brief, terms: brief.terms, deadline: past,
+      status: "open" as const, createdBy: owner.id, createdAt: new Date(),
+    })));
+    const live = await newChallenge();
+    const open = (await stranger.agent.get("/api/challenges?status=open")).body.map((c: any) => c.id);
+    expect(open).toEqual([live.id]);
+    const judging = (await stranger.agent.get("/api/challenges?status=judging")).body;
+    expect(judging.length).toBeGreaterThan(0);
+    expect(judging.map((c: any) => c.id)).not.toContain(live.id);
+  });
+
+  it("names a winning project only if the project is public", async () => {
+    const c = await newChallenge();
+    const [pub, priv] = [await person(app), await person(app)];
+    const [open] = await db.insert(projects).values({ title: "Open Fit", description: "Public.", category: "SaaS", ownerId: pub.id, isPrivate: false } as any).returning();
+    const [secret] = await db.insert(projects).values({ title: "Stealth Fit", description: "Private.", category: "SaaS", ownerId: priv.id, isPrivate: true } as any).returning();
+    const a = await pub.agent.post(`/api/challenges/${c.id}/enter`).send(entry({ projectId: open.id }));
+    const b = await priv.agent.post(`/api/challenges/${c.id}/enter`).send(entry({ projectId: secret.id }));
+    expect([a.status, b.status]).toEqual([201, 201]);
+    const base = `/api/companies/${acme.id}/challenges/${c.id}`;
+    await owner.agent.post(`${base}/close-entries`).expect(200);
+    await owner.agent.post(`${base}/entries/${a.body.id}/status`).send({ status: "winner" }).expect(200);
+    await owner.agent.post(`${base}/entries/${b.body.id}/status`).send({ status: "winner" }).expect(200);
+    await owner.agent.post(`${base}/announce`).expect(200);
+
+    const winners = (await stranger.agent.get(`/api/challenges/${c.id}`)).body.winners;
+    const byEntry = new Map(winners.map((w: any) => [w.entryId, w]));
+    expect((byEntry.get(a.body.id) as any).project).toEqual({ id: open.id, title: "Open Fit" });
+    expect((byEntry.get(b.body.id) as any).project).toBeNull();
+    expect(JSON.stringify(winners)).not.toContain("Stealth Fit");
   });
 });
 

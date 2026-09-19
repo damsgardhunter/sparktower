@@ -12,13 +12,15 @@ import { useParams, useLocation, useSearch } from "wouter";
 import { Loader2, ArrowLeft, Building2 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { canCompany, type CompanyRole } from "@shared/companies";
+import { canCompany, type CompanyPermission, type CompanyRole } from "@shared/companies";
 import { TeamTab } from "@/components/company/team-tab";
 import { TrainingTab } from "@/components/company/training-tab";
 import { TalentTab } from "@/components/company/talent-tab";
 import { ScoutingTab } from "@/components/company/scouting-tab";
 import { ChallengesTab } from "@/components/company/challenges-tab";
 import { RunTab } from "@/components/company/run-tab";
+import { AdminTab } from "@/components/company/admin-tab";
+import { PostsTab } from "@/components/company/posts-tab";
 
 export interface CompanyView {
   company: {
@@ -26,7 +28,9 @@ export interface CompanyView {
     size: string | null; description: string | null; projectId: string | null;
   };
   role: CompanyRole;
-  members: { userId: string; name: string; role: CompanyRole; avatarUrl: string | null }[];
+  members: { userId: string; name: string; role: CompanyRole; avatarUrl: string | null; permissions: CompanyPermission[] }[];
+  /** The viewer: `permissions` is what was given to them, `powers` everything they can actually do (all of them for a leader). */
+  me: { userId: string; role: CompanyRole; permissions: CompanyPermission[]; powers: CompanyPermission[] };
 }
 
 const TABS = [
@@ -35,7 +39,9 @@ const TABS = [
   { id: "challenges", label: "Challenges" },
   { id: "scouting", label: "Scouting" },
   { id: "run", label: "Run the business" },
+  { id: "posts", label: "Posts" },
   { id: "team", label: "Team" },
+  { id: "admin", label: "Admin" },
 ] as const;
 
 export default function CompanyPage() {
@@ -54,8 +60,10 @@ export default function CompanyPage() {
     return <div className="mx-auto max-w-4xl px-4 py-8 text-sm text-muted-foreground">This company couldn't be found.</div>;
   }
 
+  // "Is a leader": what most tabs read. The Run tab is given its own power instead, since a member can be trusted with it alone.
   const canManage = canCompany(data.role, "manage");
   const props = { companyId: data.company.id, canManage };
+  const powers = data.me?.powers ?? [];
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-8 space-y-6">
@@ -80,8 +88,10 @@ export default function CompanyPage() {
         <TabsContent value="talent"><TalentTab {...props} /></TabsContent>
         <TabsContent value="challenges"><ChallengesTab {...props} /></TabsContent>
         <TabsContent value="scouting"><ScoutingTab {...props} /></TabsContent>
-        <TabsContent value="run"><RunTab {...props} /></TabsContent>
-        <TabsContent value="team"><TeamTab {...props} /></TabsContent>
+        <TabsContent value="run"><RunTab companyId={data.company.id} canManage={powers.includes("run_business")} /></TabsContent>
+        <TabsContent value="posts"><PostsTab {...props} /></TabsContent>
+        <TabsContent value="team"><TeamTab {...props} powers={powers} /></TabsContent>
+        <TabsContent value="admin"><AdminTab {...props} powers={powers} /></TabsContent>
       </Tabs>
     </div>
   );

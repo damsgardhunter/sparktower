@@ -14,6 +14,7 @@ import { startAnalyticsJobs } from "./analytics";
 import { startPromotionJobs } from "./promotion-sync";
 import { startModerationJobs } from "./moderation";
 import { startRetentionJobs } from "./retention";
+import { startRhythmJobs } from "./company-rhythm-jobs";
 import { checkMerchFonts } from "./merch-render";
 import { serveStatic } from "./static";
 import { createApp, log } from "./app";
@@ -153,6 +154,8 @@ let appReady = false;
   startModerationJobs();
   // Spent credentials and finished ledger rows (server/retention.ts).
   startRetentionJobs();
+  // Due-job and check-in-day reminders for companies on the Run path (server/company-rhythm-jobs.ts).
+  startRhythmJobs();
 
   const app = await createApp({
     httpServer,

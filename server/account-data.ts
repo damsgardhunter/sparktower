@@ -15,6 +15,7 @@
  * `deletedAt` set, nothing able to sign in as it again.
  */
 import { pool } from "./db";
+import { companiesOnAccountClose } from "./company-lifecycle";
 
 /** A table holding the person's own rows, and the column that says so. */
 interface Owned { table: string; column: string }
@@ -97,6 +98,10 @@ export const MINE: Owned[] = [
   { table: "sprint_messages", column: "user_id" },
   { table: "sprint_behavioral_metrics", column: "user_id" },
   { table: "sprint_matchmaking_queue", column: "user_id" },
+  // Companies: their place in one (handed on first, in companiesOnAccountClose), their talent profile, invites addressed to them.
+  { table: "company_members", column: "user_id" },
+  { table: "talent_profiles", column: "user_id" },
+  { table: "recruit_invites", column: "user_id" },
 ];
 
 export const CHOICE: Owned[] = [
@@ -104,6 +109,8 @@ export const CHOICE: Owned[] = [
   { table: "feed_comments", column: "author_id" },
   { table: "project_comments", column: "author_id" },
   { table: "path_artifacts", column: "author_id" },
+  // A company judged it and may have announced it, so it goes or stays with their posts.
+  { table: "challenge_entries", column: "user_id" },
 ];
 
 export const KEPT: Owned[] = [
@@ -112,6 +119,17 @@ export const KEPT: Owned[] = [
   // Moderation: a report and its outcome outlive the account, or deleting is a way to wipe a ban.
   { table: "moderation_log", column: "actor_id" },
   { table: "moderation_log", column: "target_user_id" },
+  /*
+   * A company's own records, which it goes on running on after one of its
+   * people leaves: who did what in it, the weekly numbers someone filed, and
+   * the jobs and goals they owned (unassigned on the way out, so the job's
+   * reminder goes to somebody still there).
+   */
+  { table: "company_audit_log", column: "actor_id" },
+  { table: "company_audit_log", column: "target_user_id" },
+  { table: "project_checkins", column: "user_id" },
+  { table: "recurring_jobs", column: "owner_id" },
+  { table: "quarter_goals", column: "owner_id" },
 ];
 
 /**
@@ -234,6 +252,9 @@ export async function deleteAccount(userId: string, opts: { keepPosts: boolean }
   const outcome: DeleteOutcome = { transferred: [], deletedProjects: [], posts: opts.keepPosts ? "kept-anonymous" : "deleted", rowsDeleted: 0 };
   try {
     await client.query("BEGIN");
+
+    // Companies first: their Run projects go to the company's next owner, not to the loop below.
+    await companiesOnAccountClose(client, userId);
 
     const owned = await client.query<{ id: string; title: string }>("SELECT id, title FROM projects WHERE owner_id = $1", [userId]);
     for (const project of owned.rows) {

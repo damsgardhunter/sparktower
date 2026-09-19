@@ -13,7 +13,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { FeedContent } from "@/components/mention-textarea";
 import { PrivateBadge } from "@/components/private-badge";
 import {
-  MessageSquare, Trash2, Sparkles, HelpCircle, Repeat, Compass, Globe,
+  MessageSquare, Trash2, Sparkles, HelpCircle, Repeat, Compass, Globe, Building2,
 } from "lucide-react";
 import { creditLine } from "@shared/feedback-loop";
 import * as Icons from "lucide-react";
@@ -33,6 +33,8 @@ export interface FeedPostWithDetails extends FeedPost {
   pathStep?: { taskId: string; title: string } | null;
   artifact?: { id: string; title: string; tags: string[]; public: boolean } | null;
   pathWeek?: { steps: { taskId: string; title: string }[] } | null;
+  /** Set when the post was made in a company's name: the card shows the company as the poster. */
+  company?: { id: string; name: string; slug: string } | null;
 }
 
 
@@ -85,7 +87,11 @@ export function FeedPostCard({ post, standalone = false }: { post: FeedPostWithD
   const authorName = post.profile?.displayName || post.author?.firstName || post.author?.email || "Someone";
   const isMine = user?.id === post.authorId;
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["/api/feed"] });
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/feed"] });
+    // A company post also sits on the company's own page.
+    if (post.company) queryClient.invalidateQueries({ queryKey: ["/api/companies", post.company.id, "posts"] });
+  };
 
   const react = useMutation({
     mutationFn: async (reaction: FeedReaction) => {
@@ -120,18 +126,34 @@ export function FeedPostCard({ post, standalone = false }: { post: FeedPostWithD
       <CardContent className="p-0 text-[13px]">
         {/* Author, and which project they're posting for */}
         <div className="flex items-start gap-3 px-4 pt-3.5 pb-2.5 border-b border-border">
-          <Link href={`/profile/${post.authorId}`}>
-            <UserAvatar
-              src={post.profile?.avatarUrl || post.author?.profileImageUrl}
-              name={authorName}
-              className="h-11 w-11 shrink-0"
-            />
-          </Link>
+          {post.company ? (
+            <Link href={`/companies/${post.company.id}`} aria-label={post.company.name}>
+              <span className="h-11 w-11 shrink-0 rounded-md border border-border bg-muted flex items-center justify-center" data-testid={`post-company-avatar-${post.id}`}>
+                <Building2 className="h-5 w-5 text-muted-foreground" />
+              </span>
+            </Link>
+          ) : (
+            <Link href={`/profile/${post.authorId}`}>
+              <UserAvatar
+                src={post.profile?.avatarUrl || post.author?.profileImageUrl}
+                name={authorName}
+                className="h-11 w-11 shrink-0"
+              />
+            </Link>
+          )}
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5 flex-wrap">
-              <Link href={`/profile/${post.authorId}`} className="font-semibold text-[13px] hover:underline" data-testid={`post-author-${post.id}`}>
-                {authorName}
-              </Link>
+              {/* Posted in a company's name: the company is who's speaking, so it takes the name line. */}
+              {post.company ? (
+                <Link href={`/companies/${post.company.id}`} className="font-semibold text-[13px] hover:underline inline-flex items-center gap-1" data-testid={`post-company-${post.id}`}>
+                  <Building2 className="h-3.5 w-3.5 text-muted-foreground" />
+                  {post.company.name}
+                </Link>
+              ) : (
+                <Link href={`/profile/${post.authorId}`} className="font-semibold text-[13px] hover:underline" data-testid={`post-author-${post.id}`}>
+                  {authorName}
+                </Link>
+              )}
               {/* What kind of post, on the same line as who posted it. */}
               <Badge variant="outline" className={`text-[10px] gap-1 font-normal ${def.accent}`} data-testid={`post-type-${post.id}`}>
                 <TypeIcon name={def.icon} className="h-2.5 w-2.5" />
@@ -143,7 +165,12 @@ export function FeedPostCard({ post, standalone = false }: { post: FeedPostWithD
                 </Badge>
               )}
             </div>
-            {post.profile?.headline && (
+            {/* Who wrote it stays visible: a company speaks through a person, and readers can see which one. */}
+            {post.company ? (
+              <p className="text-[11px] text-muted-foreground truncate">
+                Posted by <Link href={`/profile/${post.authorId}`} className="hover:underline" data-testid={`post-author-${post.id}`}>{authorName}</Link>
+              </p>
+            ) : post.profile?.headline && (
               <p className="text-[11px] text-muted-foreground truncate">{post.profile.headline}</p>
             )}
             <div className="flex items-center gap-1.5 mt-0.5">

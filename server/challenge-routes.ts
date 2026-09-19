@@ -3,8 +3,8 @@
  * founders answer it, and the company shortlists and picks winners.
  *
  * Two sides. The company side lives under /api/companies/:id/challenges and
- * goes through `companyFor`, so a stranger learns nothing (404) and a plain
- * member can look but not judge (403). The founder side lives under
+ * goes through `companyCan`, so a stranger learns nothing (404) and a member
+ * without the "run challenges" power can look but not judge (403). The founder side lives under
  * /api/challenges and is open to anyone signed in: a challenge is the one
  * place a company chooses to show up in public.
  *
@@ -17,12 +17,12 @@
  * idea of "now" and this process's are one misconfiguration apart.
  */
 import type { Express } from "express";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, lte, or, sql } from "drizzle-orm";
 import { db } from "./db";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
 import { notify } from "./notifications";
-import { companyFor } from "./company-access";
+import { companyCan, logCompany } from "./company-access";
 import {
   challengeEntries, companies, companyChallenges, companyMembers, projectMembers, projects, userProfiles, users,
   type Company,
@@ -32,7 +32,7 @@ import {
   JUDGED_STATUSES, ENTRY_LIMITS, LOCKED_ONCE_ENTERED, resultExcerpt, validateChallenge, validateEntry,
   type EntryStatus,
 } from "@shared/challenges";
-import { INDUSTRIES } from "@shared/companies";
+import { INDUSTRIES, hasPower } from "@shared/companies";
 
 type Challenge = typeof companyChallenges.$inferSelect;
 type Entry = typeof challengeEntries.$inferSelect;
@@ -99,7 +99,7 @@ export function registerChallengeRoutes(app: Express): void {
   /* ---------------- The company's side ---------------- */
 
   app.get("/api/companies/:id/challenges", isAuthenticated, async (req: any, res) => {
-    const access = await companyFor(res, req.params.id, req.user.id, "view");
+    const access = await companyCan(res, req.params.id, req.user.id, "view");
     if (!access) return;
     const rows = await db.select().from(companyChallenges)
       .where(eq(companyChallenges.companyId, access.company.id))
@@ -114,7 +114,7 @@ export function registerChallengeRoutes(app: Express): void {
   });
 
   app.post("/api/companies/:id/challenges", isAuthenticated, rateLimit("post"), async (req: any, res) => {
-    const access = await companyFor(res, req.params.id, req.user.id, "manage");
+    const access = await companyCan(res, req.params.id, req.user.id, "challenges");
     if (!access) return;
     const check = validateChallenge(req.body, Date.now());
     if (!check.ok) return res.status(400).json({ message: check.message });
@@ -124,11 +124,12 @@ export function registerChallengeRoutes(app: Express): void {
       prize: v.prize ?? null, terms: v.terms!, industry: v.industry ?? null, deadline: v.deadline!,
       status: "open", createdBy: req.user.id, createdAt: new Date(),
     }).returning();
+    await logCompany(access.company.id, req.user.id, "challenge_posted", null, { challengeId: created.id, title: created.title });
     res.status(201).json({ ...created, acceptingEntries: true, entryCount: 0 });
   });
 
   app.patch("/api/companies/:id/challenges/:cid", isAuthenticated, rateLimit("write"), async (req: any, res) => {
-    const access = await companyFor(res, req.params.id, req.user.id, "manage");
+    const access = await companyCan(res, req.params.id, req.user.id, "challenges");
     if (!access) return;
     const c = await challengeOf(access.company.id, req.params.cid);
     if (!c) return res.status(404).json({ message: "No such challenge." });
@@ -136,9 +137,26 @@ export function registerChallengeRoutes(app: Express): void {
     const check = validateChallenge(req.body ?? {}, Date.now(), { partial: true });
     if (!check.ok) return res.status(400).json({ message: check.message });
     const changes = check.value;
-    if (LOCKED_ONCE_ENTERED.some((k) => k in changes && changes[k] !== c[k])) {
-      const [any] = await db.select({ id: challengeEntries.id }).from(challengeEntries).where(eq(challengeEntries.challengeId, c.id)).limit(1);
-      if (any) return res.status(409).json({ message: "People have entered under these terms and this prize, so they can't change now." });
+    const now = Date.now();
+    const movesDeadline = "deadline" in changes && changes.deadline && new Date(changes.deadline).getTime() !== c.deadline.getTime();
+    // Once the deadline has passed, entries are closed; moving it would quietly reopen them.
+    if (movesDeadline && c.deadline.getTime() <= now) {
+      return res.status(409).json({ message: "The deadline has passed, so it can't be moved.", code: "deadline_passed" });
+    }
+    const [anyEntry] = await db.select({ id: challengeEntries.id }).from(challengeEntries).where(eq(challengeEntries.challengeId, c.id)).limit(1);
+    if (anyEntry) {
+      /*
+       * People entered against what the challenge said. What they answered
+       * (brief, criteria) and what they were promised (terms, prize) hold
+       * still; the only change allowed is more time.
+       */
+      const locked = [...LOCKED_ONCE_ENTERED, "brief", "criteria"] as const;
+      if (locked.some((k) => k in changes && (changes as any)[k] !== (c as any)[k])) {
+        return res.status(409).json({ message: "People have entered against this brief, these terms and this prize, so they can't change now.", code: "locked" });
+      }
+      if (movesDeadline && new Date(changes.deadline!).getTime() < c.deadline.getTime()) {
+        return res.status(409).json({ message: "People have entered, so the deadline can be extended but not brought forward.", code: "locked" });
+      }
     }
     if (!Object.keys(changes).length) return res.json(c);
     const [updated] = await db.update(companyChallenges).set(changes)
@@ -148,7 +166,7 @@ export function registerChallengeRoutes(app: Express): void {
   });
 
   app.post("/api/companies/:id/challenges/:cid/close-entries", isAuthenticated, rateLimit("write"), async (req: any, res) => {
-    const access = await companyFor(res, req.params.id, req.user.id, "manage");
+    const access = await companyCan(res, req.params.id, req.user.id, "challenges");
     if (!access) return;
     const c = await challengeOf(access.company.id, req.params.cid);
     if (!c) return res.status(404).json({ message: "No such challenge." });
@@ -161,7 +179,7 @@ export function registerChallengeRoutes(app: Express): void {
   });
 
   app.get("/api/companies/:id/challenges/:cid/entries", isAuthenticated, async (req: any, res) => {
-    const access = await companyFor(res, req.params.id, req.user.id, "view");
+    const access = await companyCan(res, req.params.id, req.user.id, "view");
     if (!access) return;
     const c = await challengeOf(access.company.id, req.params.cid);
     if (!c) return res.status(404).json({ message: "No such challenge." });
@@ -181,7 +199,7 @@ export function registerChallengeRoutes(app: Express): void {
   });
 
   app.post("/api/companies/:id/challenges/:cid/entries/:eid/status", isAuthenticated, rateLimit("write"), async (req: any, res) => {
-    const access = await companyFor(res, req.params.id, req.user.id, "manage");
+    const access = await companyCan(res, req.params.id, req.user.id, "challenges");
     if (!access) return;
     const c = await challengeOf(access.company.id, req.params.cid);
     if (!c) return res.status(404).json({ message: "No such challenge." });
@@ -207,7 +225,7 @@ export function registerChallengeRoutes(app: Express): void {
   });
 
   app.post("/api/companies/:id/challenges/:cid/announce", isAuthenticated, rateLimit("write"), async (req: any, res) => {
-    const access = await companyFor(res, req.params.id, req.user.id, "manage");
+    const access = await companyCan(res, req.params.id, req.user.id, "challenges");
     if (!access) return;
     const c = await challengeOf(access.company.id, req.params.cid);
     if (!c) return res.status(404).json({ message: "No such challenge." });
@@ -230,6 +248,7 @@ export function registerChallengeRoutes(app: Express): void {
       targetId: `${c.id}:${e.id}`, excerpt: resultExcerpt(access.company.name, c.title, e.status as EntryStatus),
       projectId: e.projectId,
     })));
+    await logCompany(access.company.id, req.user.id, "challenge_announced", null, { challengeId: c.id, title: c.title, notified: entries.length });
     res.json({ ...updated, notified: entries.length });
   });
 
@@ -241,11 +260,17 @@ export function registerChallengeRoutes(app: Express): void {
     const wanted = ["open", "judging", "closed"].includes(req.query.status) ? req.query.status as string : "open";
     /*
      * An open challenge past its deadline is filed under judging for a
-     * founder, so "open" reads stored "open" rows and then drops the expired
-     * ones here, in JavaScript, and "judging" reads both.
+     * founder. That is decided in the query, against a JS Date, not after it:
+     * filtering in JavaScript after `limit 200` let expired rows fill the page
+     * and crowd out live ones. The JS filter below stays as a second check.
      */
-    const stored = wanted === "judging" ? ["open", "judging"] : [wanted];
-    const conds = [inArray(companyChallenges.status, stored as any)];
+    const nowDate = new Date(now);
+    const byStatus = wanted === "open"
+      ? and(eq(companyChallenges.status, "open"), gt(companyChallenges.deadline, nowDate))
+      : wanted === "judging"
+        ? or(eq(companyChallenges.status, "judging"), and(eq(companyChallenges.status, "open"), lte(companyChallenges.deadline, nowDate)))
+        : eq(companyChallenges.status, "closed");
+    const conds = [byStatus!];
     if (industry) conds.push(eq(companyChallenges.industry, industry));
     const rows = await db.select({ c: companyChallenges, company: { id: companies.id, name: companies.name, industry: companies.industry, website: companies.website } })
       .from(companyChallenges)
@@ -288,7 +313,7 @@ export function registerChallengeRoutes(app: Express): void {
     // Winners are public once announced — that's the point of announcing — but never before.
     let winners: { entryId: string; title: string; entrantName: string; link: string | null; project: { id: string; title: string | null } | null }[] = [];
     if (row.c.status === "closed") {
-      const w = await db.select({ entry: challengeEntries, projectTitle: projects.title, ...personColumns })
+      const w = await db.select({ entry: challengeEntries, projectTitle: projects.title, projectPrivate: projects.isPrivate, ...personColumns })
         .from(challengeEntries)
         .innerJoin(users, eq(users.id, challengeEntries.userId))
         .leftJoin(userProfiles, eq(userProfiles.userId, challengeEntries.userId))
@@ -296,7 +321,8 @@ export function registerChallengeRoutes(app: Express): void {
         .where(and(eq(challengeEntries.challengeId, row.c.id), eq(challengeEntries.status, "winner")));
       winners = w.map((r) => ({
         entryId: r.entry.id, title: r.entry.title, entrantName: nameOf(r), link: r.entry.link,
-        project: r.entry.projectId ? { id: r.entry.projectId, title: r.projectTitle } : null,
+        // A private project stays private even when it wins: this page is public, and the company alone was shown it.
+        project: r.entry.projectId && r.projectPrivate === false ? { id: r.entry.projectId, title: r.projectTitle } : null,
       }));
     }
     res.json({
@@ -354,10 +380,11 @@ export function registerChallengeRoutes(app: Express): void {
       }
     }
 
-    const admins = await db.select({ userId: companyMembers.userId }).from(companyMembers)
-      .where(and(eq(companyMembers.companyId, c.companyId), inArray(companyMembers.role, ["owner", "admin"])));
+    // Whoever judges hears about it: the leaders, and any member given the "run challenges" power.
+    const team = await db.select({ userId: companyMembers.userId, role: companyMembers.role, permissions: companyMembers.permissions })
+      .from(companyMembers).where(eq(companyMembers.companyId, c.companyId));
     void notify({
-      recipients: admins.map((a) => a.userId), actorId: userId, kind: "challenge_entry",
+      recipients: team.filter((m) => hasPower(m, "challenges")).map((m) => m.userId), actorId: userId, kind: "challenge_entry",
       targetId: `${c.companyId}:${entry.id}`, excerpt: c.title,
     });
     res.status(201).json(myEntryView(entry));

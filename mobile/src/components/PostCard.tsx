@@ -90,6 +90,8 @@ export function PostCard({
   const def = postTypeDef(post.postType);
   const accent = postTypeAccent(post.postType);
   const name = authorName(post);
+  // Posted in a company's name: the company is who's speaking; the person stays named underneath.
+  const speaker = post.company?.name ?? name;
   const media = (post.mediaUrls ?? []).map((u) => assetUri(u)).filter(Boolean) as string[];
   const asks = post.asks ?? [];
   const long = post.content.length > FOLD_CHARS || post.content.split("\n").length > FOLD_LINES;
@@ -101,7 +103,7 @@ export function PostCard({
   const share = async () => {
     const excerpt = post.content.replace(/\*\*/g, "").slice(0, 140);
     try {
-      await Share.share({ message: `${name} on SparkTower: "${excerpt}${post.content.length > 140 ? "…" : ""}" ${postUrl(post.id)}`, url: postUrl(post.id) });
+      await Share.share({ message: `${speaker} on SparkTower: "${excerpt}${post.content.length > 140 ? "…" : ""}" ${postUrl(post.id)}`, url: postUrl(post.id) });
     } catch {
       onNotice?.({ text: "Sharing isn't available here.", tone: "error" });
     }
@@ -111,13 +113,16 @@ export function PostCard({
     <View style={[s.card, standalone && s.cardStandalone]}>
       {/* Who, and which project they're posting for */}
       <View style={s.header}>
-        <Pressable onPress={() => router.push(`/user/${post.authorId}` as any)} accessibilityLabel={`Open ${name}'s profile`}>
-          <Avatar name={name} uri={authorAvatar(post)} size={44} />
+        <Pressable onPress={() => router.push(`/user/${post.authorId}` as any)} accessibilityLabel={post.company ? `Posted by ${name}` : `Open ${name}'s profile`}>
+          {post.company
+            ? <View style={s.companyAvatar} testID={`post-company-avatar-${post.id}`}><Ionicons name="business" size={20} color={colors.textSecondary} /></View>
+            : <Avatar name={name} uri={authorAvatar(post)} size={44} />}
         </Pressable>
         <View style={{ flex: 1, minWidth: 0 }}>
           <View style={s.nameRow}>
-            <Text style={s.name} numberOfLines={1} onPress={() => router.push(`/user/${post.authorId}` as any)} testID={`post-author-${post.id}`}>
-              {name}
+            {post.company && <Ionicons name="business-outline" size={12} color={colors.textSecondary} />}
+            <Text style={s.name} numberOfLines={1} onPress={post.company ? undefined : () => router.push(`/user/${post.authorId}` as any)} testID={post.company ? `post-company-${post.id}` : `post-author-${post.id}`}>
+              {speaker}
             </Text>
             {post.project && (
               <>
@@ -129,7 +134,9 @@ export function PostCard({
               </>
             )}
           </View>
-          {post.profile?.headline ? <Text style={s.headline} numberOfLines={1}>{post.profile.headline}</Text> : null}
+          {post.company
+            ? <Text style={s.headline} numberOfLines={1} onPress={() => router.push(`/user/${post.authorId}` as any)} testID={`post-author-${post.id}`}>Posted by {name}</Text>
+            : post.profile?.headline ? <Text style={s.headline} numberOfLines={1}>{post.profile.headline}</Text> : null}
           <View style={s.metaRow}>
             <Text style={s.meta} onPress={standalone ? undefined : open}>
               {standalone
@@ -403,6 +410,10 @@ const s = StyleSheet.create({
   header: {
     flexDirection: "row", gap: spacing.md, paddingHorizontal: spacing.lg, paddingTop: 14, paddingBottom: 10, alignItems: "flex-start",
     borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
+  },
+  companyAvatar: {
+    width: 44, height: 44, borderRadius: radius.md, backgroundColor: colors.surfaceRaised,
+    borderWidth: 1, borderColor: colors.border, alignItems: "center", justifyContent: "center",
   },
   nameRow: { flexDirection: "row", alignItems: "center", gap: 5, minWidth: 0 },
   name: { color: colors.text, fontSize: font.sm + 1, fontFamily: fontFamily.semibold, flexShrink: 1 },

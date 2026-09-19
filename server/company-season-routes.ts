@@ -2,11 +2,11 @@
  * Private training seasons: the market simulation, run by a company for its
  * own people.
  *
- *   POST /api/companies/:id/seasons                              → a new private season and its join code (admins)
+ *   POST /api/companies/:id/seasons                              → a new private season and its join code (run_seasons)
  *   GET  /api/companies/:id/seasons                              → the company's seasons, with how far along each is
- *   POST /api/companies/:id/seasons/:seasonId/invite             → tell colleagues there's a seat for them (admins)
- *   POST /api/companies/:id/seasons/:seasonId/resolve-year-now   → end this year now rather than at its time (admins)
- *   GET  /api/companies/:id/seasons/:seasonId/report             → the staff report: who played, and how (admins)
+ *   POST /api/companies/:id/seasons/:seasonId/invite             → tell colleagues there's a seat for them (run_seasons)
+ *   POST /api/companies/:id/seasons/:seasonId/resolve-year-now   → end this year now rather than at its time (run_seasons)
+ *   GET  /api/companies/:id/seasons/:seasonId/report             → the staff report: who played, and how (run_seasons)
  *
  * Joining is POST /api/sim/join-code in server/simulation-routes.ts, next to
  * public matchmaking, because it fills rooms by the same rules. A private
@@ -28,7 +28,7 @@ import { simSeasons, simVentures, simSeats, simDecisions, simChallenges, simRepo
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
 import { notify } from "./notifications";
-import { companyFor } from "./company-access";
+import { companyCan, logCompany } from "./company-access";
 import { companyMembersOf } from "./company-routes";
 import { SEASON_CODE_ALPHABET } from "./simulation-routes";
 import { tickSeason, yearMsOf } from "./simulation-tick";
@@ -83,7 +83,7 @@ export function registerCompanySeasonRoutes(app: Express): void {
   /** Make a private season. It waits, forming, until people join with its code and their tables are ready. */
   app.post("/api/companies/:id/seasons", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
-      const found = await companyFor(res, String(req.params.id), req.user.id, "manage");
+      const found = await companyCan(res, String(req.params.id), req.user.id, "run_seasons");
       if (!found) return;
       const body = req.body ?? {};
       const niche = nicheById(String(body.nicheId ?? ""));
@@ -114,6 +114,7 @@ export function registerCompanySeasonRoutes(app: Express): void {
             nicheId: niche.id, name, status: "forming", totalYears, yearMinutes,
             companyId: found.company.id, inviteCode, createdAt: new Date(),
           }).returning();
+          await logCompany(found.company.id, req.user.id, "season_created", null, { seasonId: season.id, name, nicheId: niche.id });
           return res.status(201).json({ seasonId: season.id, inviteCode, joinUrl: joinPathFor(inviteCode) });
         } catch (err) {
           if (!isUniqueViolation(err)) throw err;
@@ -129,7 +130,7 @@ export function registerCompanySeasonRoutes(app: Express): void {
   /** The company's seasons. Every member sees them and their join links — joining is what members are for. */
   app.get("/api/companies/:id/seasons", isAuthenticated, async (req: any, res) => {
     try {
-      const found = await companyFor(res, String(req.params.id), req.user.id, "view");
+      const found = await companyCan(res, String(req.params.id), req.user.id, "view");
       if (!found) return;
       const seasons = await db.select().from(simSeasons)
         .where(eq(simSeasons.companyId, found.company.id)).orderBy(desc(simSeasons.createdAt)).limit(50);
@@ -181,7 +182,7 @@ export function registerCompanySeasonRoutes(app: Express): void {
    */
   app.post("/api/companies/:id/seasons/:seasonId/invite", isAuthenticated, rateLimit("invite"), async (req: any, res) => {
     try {
-      const found = await companyFor(res, String(req.params.id), req.user.id, "manage");
+      const found = await companyCan(res, String(req.params.id), req.user.id, "run_seasons");
       if (!found) return;
       const season = await seasonOf(res, found.company.id, String(req.params.seasonId));
       if (!season) return;
@@ -217,7 +218,7 @@ export function registerCompanySeasonRoutes(app: Express): void {
    */
   app.post("/api/companies/:id/seasons/:seasonId/resolve-year-now", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
-      const found = await companyFor(res, String(req.params.id), req.user.id, "manage");
+      const found = await companyCan(res, String(req.params.id), req.user.id, "run_seasons");
       if (!found) return;
       const season = await seasonOf(res, found.company.id, String(req.params.seasonId));
       if (!season) return;
@@ -257,7 +258,7 @@ export function registerCompanySeasonRoutes(app: Express): void {
    */
   app.get("/api/companies/:id/seasons/:seasonId/report", isAuthenticated, async (req: any, res) => {
     try {
-      const found = await companyFor(res, String(req.params.id), req.user.id, "manage");
+      const found = await companyCan(res, String(req.params.id), req.user.id, "run_seasons");
       if (!found) return;
       const season = await seasonOf(res, found.company.id, String(req.params.seasonId));
       if (!season) return;
@@ -265,8 +266,24 @@ export function registerCompanySeasonRoutes(app: Express): void {
       const members = await companyMembersOf(found.company.id);
       const memberIds = members.map((m) => m.userId);
       const ventures = await db.select().from(simVentures).where(eq(simVentures.seasonId, season.id));
-      const seats = ventures.length === 0 || memberIds.length === 0 ? [] : await db.select().from(simSeats)
+      const allSeats = ventures.length === 0 || memberIds.length === 0 ? [] : await db.select().from(simSeats)
         .where(and(inArray(simSeats.ventureId, ventures.map((v) => v.id)), inArray(simSeats.userId, memberIds)));
+      /*
+       * One row per person. Somebody whose first table closed in the lobby and
+       * who joined another holds two seats in the season; the report is about
+       * the table they actually played at, so a seat on a live table wins, and
+       * failing that their latest one.
+       */
+      const live = new Set(ventures.filter((v) => v.phase !== "retired").map((v) => v.id));
+      const bestSeat = new Map<string, (typeof allSeats)[number]>();
+      for (const seat of allSeats) {
+        const held = bestSeat.get(seat.userId);
+        const better = !held
+          || (live.has(seat.ventureId) && !live.has(held.ventureId))
+          || (live.has(seat.ventureId) === live.has(held.ventureId) && seat.joinedAt.getTime() > held.joinedAt.getTime());
+        if (better) bestSeat.set(seat.userId, seat);
+      }
+      const seats = [...bestSeat.values()];
 
       const played = yearsResolved(season);
       const ventureIds = [...new Set(seats.map((s) => s.ventureId))];

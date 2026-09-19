@@ -49,7 +49,7 @@ test("a company signs up, finds every tool, and a founder answers its challenge"
   const companyId = page.url().split("/companies/")[1].split("?")[0];
 
   // Every tab opens onto something, not a blank panel or an error.
-  for (const tab of ["training", "talent", "challenges", "scouting", "run", "team"]) {
+  for (const tab of ["training", "talent", "challenges", "scouting", "run", "posts", "team", "admin"]) {
     await page.getByTestId(`tab-${tab}`).click();
     await expect(page.getByRole("tabpanel")).not.toBeEmpty({ timeout: 15_000 });
     if (SHOTS) await page.screenshot({ path: `${SHOTS}/company-${tab}.png`, fullPage: true });

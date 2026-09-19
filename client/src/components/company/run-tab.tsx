@@ -5,7 +5,8 @@
  * the weekly check-in, the recurring jobs and the monthly report all live on
  * that project, because that is where the path, the board and Nova already
  * are. This tab is the doorway: a glance at whether this week's check-in is
- * in and what's overdue, and a link through. Before the project exists, an
+ * in (and which day it's due), what's overdue, how the quarter's goals are
+ * going, and this month's report in a line — and a link through. Before the project exists, an
  * admin can start it in one step — the company's people are put on it, so
  * nobody has to be invited twice.
  */
@@ -17,8 +18,9 @@ import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Loader2, CalendarCheck, ArrowRight, AlertTriangle, Check, Repeat, FileBarChart } from "lucide-react";
-import { useRhythm, shortDate } from "@/components/company-rhythm";
+import { Loader2, CalendarCheck, ArrowRight, AlertTriangle, Check, Repeat, FileBarChart, Target } from "lucide-react";
+import { useRhythm, useGoals, shortDate, quarterName, GoalProgressView } from "@/components/company-rhythm";
+import { CHECKIN_DAYS, daysOverdue, type MonthlyReport } from "@shared/company-rhythm";
 
 interface CompanyPayload { company: { id: string; name: string; projectId: string | null } }
 
@@ -65,6 +67,14 @@ export function RunTab({ companyId, canManage }: { companyId: string; canManage:
 function RunSummary({ projectId }: { projectId: string }) {
   const { data, isLoading, isError } = useRhythm(projectId);
   const href = `/projects/${projectId}/manage?section=run_company`;
+  const { data: goals } = useGoals(data ? projectId : null, data?.quarter);
+  const month = data?.today.slice(0, 7);
+  // `glance=1`: a headline on the company page isn't reading the report, so it doesn't tick the path's "read your first report".
+  const { data: report } = useQuery<MonthlyReport>({
+    queryKey: ["/api/projects", projectId, "rhythm", "report", `${month}?glance=1`],
+    enabled: !!data && !!month,
+  });
+  const activeGoals = goals?.goals.filter((g) => g.status !== "dropped") ?? [];
 
   return (
     <Card data-testid="run-tab-summary">
@@ -88,6 +98,7 @@ function RunSummary({ projectId }: { projectId: string }) {
               {data.current
                 ? <Badge variant="secondary" className="gap-1"><Check className="h-3 w-3" />Checked in</Badge>
                 : <Badge variant="outline">Check-in due</Badge>}
+              <span className="text-xs text-muted-foreground ml-auto" data-testid="run-checkin-day">Check-in day: {CHECKIN_DAYS[data.settings?.checkinDay ?? 0]}</span>
             </div>
             {data.current?.reply && (
               <p className="text-sm text-muted-foreground line-clamp-3 whitespace-pre-line">{data.current.reply}</p>
@@ -96,11 +107,39 @@ function RunSummary({ projectId }: { projectId: string }) {
               <div className="space-y-1" data-testid="run-overdue">
                 <p className="text-sm flex items-center gap-1.5"><AlertTriangle className="h-4 w-4 text-destructive" />{data.overdue.length} overdue job{data.overdue.length === 1 ? "" : "s"}</p>
                 <ul className="text-sm text-muted-foreground pl-6 list-disc">
-                  {data.overdue.slice(0, 5).map((j) => <li key={j.id}>{j.title} — due {shortDate(j.nextDue)}</li>)}
+                  {data.overdue.slice(0, 5).map((j) => <li key={j.id}>{j.title} — due {shortDate(j.nextDue)}, {daysOverdue(j.nextDue, data.today)}d late</li>)}
                 </ul>
               </div>
             ) : (
               <p className="text-sm text-muted-foreground" data-testid="run-no-overdue">{data.jobs.length ? "Every recurring job is up to date." : "No recurring jobs on the board yet."}</p>
+            )}
+
+            <div className="space-y-2 pt-1" data-testid="run-goals">
+              <p className="text-sm flex items-center gap-1.5"><Target className="h-4 w-4 text-primary" />Goals for {quarterName(data.quarter)}</p>
+              {!goals ? (
+                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+              ) : activeGoals.length === 0 ? (
+                <p className="text-sm text-muted-foreground" data-testid="run-no-goals">No goals set for this quarter yet.</p>
+              ) : (
+                <ul className="space-y-3">
+                  {activeGoals.map((g) => (
+                    <li key={g.id} className="space-y-1" data-testid={`run-goal-${g.id}`}>
+                      <p className="text-sm">{g.title}</p>
+                      <GoalProgressView goal={g} metrics={goals.metrics} />
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            {report && (
+              <div className="space-y-1 pt-1" data-testid="run-report-headline">
+                <p className="text-sm flex items-center gap-1.5"><FileBarChart className="h-4 w-4 text-primary" />This month so far</p>
+                <p className="text-sm text-muted-foreground">
+                  {report.filed} of {report.weeksSoFar || report.weeks.length} check-ins filed · {report.jobs.onTime} job{report.jobs.onTime === 1 ? "" : "s"} on time · {report.jobs.late + report.jobs.missed} late or missed
+                </p>
+                {report.fixNext && <p className="text-sm line-clamp-2" data-testid="run-report-fix-next">{report.fixNext.text}</p>}
+              </div>
             )}
           </div>
         )}

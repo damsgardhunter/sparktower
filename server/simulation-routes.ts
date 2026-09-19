@@ -428,9 +428,8 @@ function pgErrorCode(err: unknown): string | undefined {
     if (!season?.companyId) return res.status(404).json({ message: "That join link isn't valid.", code: "unknown_code" });
     const [member] = await db.select({ role: companyMembers.role }).from(companyMembers)
       .where(and(eq(companyMembers.companyId, season.companyId), eq(companyMembers.userId, req.user.id)));
-    if (!member) {
-      return res.status(403).json({ message: "This season is for the company's own people. Ask them to add you to their team first.", code: "not_company_member" });
-    }
+    // The same answer as a wrong code, as the comment above promises: a forwarded code must not confirm it works.
+    if (!member) return res.status(404).json({ message: "That join link isn't valid.", code: "unknown_code" });
 
     try {
       const outcome = await db.transaction(async (tx) => {

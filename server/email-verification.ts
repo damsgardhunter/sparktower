@@ -139,7 +139,11 @@ export const REACHES_OTHERS: RegExp[] = [
   /^\/api\/companies\/[^/]+\/talent\/[^/]+\/invite$/,
   /^\/api\/companies\/[^/]+\/seasons\/[^/]+\/invite$/,
   /^\/api\/companies\/[^/]+\/invite-link$/,
+  // Adding somebody straight to a company puts its name, and a notification, in front of them.
+  /^\/api\/companies\/[^/]+\/members$/,
   /^\/api\/companies\/[^/]+\/challenges$/,
+  // Posting as a company is a feed post under a company's name: the same gate as /api/feed.
+  /^\/api\/companies\/[^/]+\/posts$/,
   /^\/api\/challenges\/[^/]+\/enter$/,
 ];
 

@@ -9,6 +9,7 @@ import {
   weekOf, isMonday, isYmd, weeksInMonth, addMonthsClamped, advanceDue, completeJob, isOverdue, missedDueDates,
   buildCheckinReply, buildMonthlyReport, defaultMetricsFor, metricsForProject, cleanNumbers, customMetricId, metricFor,
   themesIn, DEFAULT_METRICS, RUN_SUBCATEGORIES, type RhythmMetric, type CheckinLike,
+  addMonthsAnchored, anchorFor, quarterOf, quarterRange, addQuarters, isQuarter, inQuarter, goalProgress, checkinDayOf, isCheckinDay,
 } from "@shared/company-rhythm";
 import { PROJECT_SUBCATEGORIES } from "@shared/goals";
 
@@ -201,5 +202,113 @@ describe("the monthly report", () => {
     });
     expect(worse.fixNext).toMatchObject({ kind: "metric", id: "revenue" });
     expect(worse.fixNext!.text).toMatch(/Revenue got 30% worse/);
+  });
+});
+
+describe("a monthly job keeps its day", () => {
+  it("goes 31 Jan → 28 Feb → 31 Mar, not 28 Mar", () => {
+    const anchor = anchorFor("month", "2026-01-31");
+    expect(anchor).toBe(31);
+    const feb = advanceDue("2026-01-31", "month", anchor);
+    expect(feb).toBe("2026-02-28");
+    const mar = advanceDue(feb, "month", anchor);
+    expect(mar).toBe("2026-03-31");
+    expect(advanceDue(mar, "month", anchor)).toBe("2026-04-30");
+    // A leap year lands on the 29th, and still comes back to the 31st.
+    expect(advanceDue("2028-01-31", "month", 31)).toBe("2028-02-29");
+    expect(advanceDue("2028-02-29", "month", 31)).toBe("2028-03-31");
+  });
+
+  it("walks the same way through completions, and across a year", () => {
+    let job = { nextDue: "2026-12-31", every: "month" as const, anchorDay: 31 };
+    const seen: string[] = [];
+    for (let i = 0; i < 3; i++) { job = { ...job, nextDue: completeJob(job, job.nextDue).nextDue }; seen.push(job.nextDue); }
+    expect(seen).toEqual(["2027-01-31", "2027-02-28", "2027-03-31"]);
+    expect(addMonthsAnchored("2026-11-30", 3, 30)).toBe("2027-02-28");
+  });
+
+  it("takes the anchor from the due date when a job has none", () => {
+    // Saved before anchors existed and already settled on the 28th: the 28th is all it knows.
+    expect(advanceDue("2026-02-28", "month", null)).toBe("2026-03-28");
+    expect(advanceDue("2026-01-15", "month")).toBe("2026-02-15");
+    expect(anchorFor("week", "2026-01-31")).toBeNull();
+  });
+
+  it("counts missed occurrences on the anchor day too", () => {
+    const job = { id: "j", title: "Rent", every: "month" as const, nextDue: "2026-01-31", active: true, anchorDay: 31 };
+    expect(missedDueDates(job, "2026-04-01", "2026-12-31")).toEqual(["2026-01-31", "2026-02-28", "2026-03-31"]);
+  });
+});
+
+describe("check-in days", () => {
+  it("counts Monday as 0 and Sunday as 6, in UTC", () => {
+    expect(checkinDayOf("2026-09-14")).toBe(0);
+    expect(checkinDayOf("2026-09-20")).toBe(6);
+    expect(checkinDayOf(new Date("2026-09-17T23:59:00Z"))).toBe(3);
+    expect(isCheckinDay(6)).toBe(true);
+    expect(isCheckinDay(7)).toBe(false);
+    expect(isCheckinDay(1.5)).toBe(false);
+  });
+});
+
+describe("quarters", () => {
+  it("keys a date by its quarter and knows each quarter's days", () => {
+    expect(quarterOf("2026-01-01")).toBe("2026-Q1");
+    expect(quarterOf("2026-09-30")).toBe("2026-Q3");
+    expect(quarterOf("2026-10-01")).toBe("2026-Q4");
+    expect(quarterOf(new Date("2026-06-30T23:30:00Z"))).toBe("2026-Q2");
+    expect(quarterRange("2026-Q1")).toEqual({ start: "2026-01-01", end: "2026-03-31" });
+    expect(quarterRange("2028-Q1").end).toBe("2028-03-31");
+    expect(quarterRange("2026-Q4")).toEqual({ start: "2026-10-01", end: "2026-12-31" });
+    expect(addQuarters("2026-Q4", 1)).toBe("2027-Q1");
+    expect(addQuarters("2026-Q1", -1)).toBe("2025-Q4");
+    expect(isQuarter("2026-Q3")).toBe(true);
+    expect(isQuarter("2026-Q5")).toBe(false);
+    expect(inQuarter("2026-06-29", "2026-Q3")).toBe(false); // that week's Monday is in June
+    expect(inQuarter("2026-07-06", "2026-Q3")).toBe(true);
+  });
+});
+
+describe("goal progress", () => {
+  const weeks = (vals: [string, number | null][]): CheckinLike[] => vals.map(([weekOf, v]) => ({ weekOf, numbers: { covers: v } }));
+  const goal = { metricId: "covers", target: 600, direction: "up" as const };
+
+  it("measures from where the quarter started to the target, not from zero", () => {
+    const p = goalProgress(goal, weeks([["2026-07-06", 500], ["2026-08-03", 520], ["2026-08-17", 550]]), "2026-Q3", "2026-08-20");
+    expect(p).toMatchObject({ first: 500, latest: 550, firstWeek: "2026-07-06", latestWeek: "2026-08-17", reached: false });
+    expect(p.fraction).toBeCloseTo(0.5);
+    // Seven weeks of thirteen gone and halfway there: on track.
+    expect(p.state).toBe("on track");
+  });
+
+  it("is behind when it has come less far than the quarter has gone", () => {
+    const p = goalProgress(goal, weeks([["2026-07-06", 500], ["2026-09-14", 510]]), "2026-Q3", "2026-09-19");
+    expect(p.fraction).toBeCloseTo(0.1);
+    expect(p.state).toBe("behind");
+  });
+
+  it("is reached once the number passes the target, either way round", () => {
+    expect(goalProgress(goal, weeks([["2026-07-06", 500], ["2026-07-13", 610]]), "2026-Q3", "2026-07-15")).toMatchObject({ reached: true, fraction: 1, state: "reached" });
+    const cost = { metricId: "prime_cost_pct", target: 30, direction: "down" as const };
+    const c = (v: number, w: string): CheckinLike => ({ weekOf: w, numbers: { prime_cost_pct: v } });
+    const half = goalProgress(cost, [c(36, "2026-07-06"), c(33, "2026-07-20")], "2026-Q3", "2026-07-22");
+    expect(half.fraction).toBeCloseTo(0.5);
+    expect(half.state).toBe("on track");
+    expect(goalProgress(cost, [c(36, "2026-07-06"), c(29, "2026-08-03")], "2026-Q3", "2026-08-05").state).toBe("reached");
+    // Moving the wrong way is no progress at all, not negative progress.
+    expect(goalProgress(cost, [c(36, "2026-07-06"), c(40, "2026-09-07")], "2026-Q3", "2026-09-10")).toMatchObject({ fraction: 0, state: "behind" });
+  });
+
+  it("only counts the quarter's own check-ins, and says when there is nothing to measure", () => {
+    const p = goalProgress(goal, weeks([["2026-06-29", 100], ["2026-07-06", 500], ["2026-07-13", null], ["2026-10-05", 900]]), "2026-Q3", "2026-07-15");
+    expect(p).toMatchObject({ first: 500, latest: 500, fraction: 0 });
+    expect(goalProgress(goal, [], "2026-Q3", "2026-07-15").state).toBe("no numbers yet");
+    expect(goalProgress({ metricId: null, target: null, direction: null }, weeks([["2026-07-06", 1]]), "2026-Q3", "2026-07-15").state).toBe("not measured");
+    expect(goalProgress({ metricId: "covers", target: null, direction: "up" }, weeks([["2026-07-06", 1]]), "2026-Q3", "2026-07-15").state).toBe("not measured");
+  });
+
+  it("gives an early quarter the benefit of the doubt", () => {
+    // Two weeks in with no movement yet: within the slack, so not behind.
+    expect(goalProgress(goal, weeks([["2026-07-06", 500]]), "2026-Q3", "2026-07-10").state).toBe("on track");
   });
 });

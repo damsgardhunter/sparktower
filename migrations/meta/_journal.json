@@ -246,6 +246,20 @@
       "when": 1789829690464,
       "tag": "0034_companies_and_company_rhythm",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1789833663536,
+      "tag": "0035_company_powers_posts_and_rhythm",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1789835292267,
+      "tag": "0036_company_fk_set_null",
+      "breakpoints": true
     }
   ]
 }

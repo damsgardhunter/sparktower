@@ -1049,6 +1049,13 @@ export const feedPosts = pgTable("feed_posts", {
   authorId: varchar("author_id").notNull().references(() => users.id),
   /** The project this post is about. Null for general founder chatter. */
   projectId: varchar("project_id").references(() => projects.id, { onDelete: "cascade" }),
+  /**
+   * Posted as a company rather than as the person. The person who wrote it is
+   * still `authorId` — for moderation, and so a company can see who posted in
+   * its name — but the feed shows the company. Only somebody the company has
+   * given the "post as the company" power can set it.
+   */
+  companyId: varchar("company_id").references(() => companies.id, { onDelete: "set null" }),
   postType: text("post_type", { enum: FEED_POST_TYPES }).notNull(),
   content: text("content").notNull(),
   mediaUrls: varchar("media_urls").array().default([]),
@@ -1208,6 +1215,13 @@ export const NOTIFICATION_KINDS = [
   "scout_update",
   // New projects in an industry your company watches.
   "scout_new_project",
+  // A company leader added you to their company, or changed what you can do there.
+  "company_added",
+  "company_powers",
+  // A recurring job of yours is due or overdue.
+  "job_due",
+  // It's check-in day for the company you help run.
+  "checkin_due",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
@@ -2497,7 +2511,18 @@ export const companies = pgTable("companies", {
   description: text("description"),
   /** The project it runs itself through, on the Run a company path, if any. */
   projectId: varchar("project_id").references(() => projects.id, { onDelete: "set null" }),
-  createdBy: varchar("created_by").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /*
+   * Who did it, for the record — and only for the record. Set null, not
+   * cascade, when that account goes: one person closing their account must
+   * never take the company's work with it while its other people remain.
+   */
+  createdBy: varchar("created_by").references(() => users.id, { onDelete: "set null" }),
+  /**
+   * Which generation of invite links is valid. Every link carries the number
+   * it was made under; raising it (a leader's "reset invite links", and every
+   * removal) makes every earlier link stop working at once.
+   */
+  inviteKeyVersion: integer("invite_key_version").default(0).notNull(),
   createdAt: timestamp("created_at").notNull(),
 }, (t) => ({
   bySlug: unique("companies_slug").on(t.slug),
@@ -2509,6 +2534,14 @@ export const companyMembers = pgTable("company_members", {
   companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   role: text("role", { enum: ["owner", "admin", "member"] }).notNull(),
+  /**
+   * Powers given to this member on top of what their role carries — see
+   * COMPANY_PERMISSIONS in shared/companies.ts. Owners and admins hold every
+   * power by virtue of the role; a member holds only what is listed here, so
+   * a leader can let one person run training seasons and another post for the
+   * company without making either of them an admin.
+   */
+  permissions: text("permissions").array().default(sql`'{}'::text[]`).notNull(),
   joinedAt: timestamp("joined_at").notNull(),
 }, (t) => ({
   pk: primaryKey({ columns: [t.companyId, t.userId] }),
@@ -2538,7 +2571,8 @@ export const recruitInvites = pgTable("recruit_invites", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  sentBy: varchar("sent_by").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** Who at the company sent it. Set null if their account goes; the invite is the company's. */
+  sentBy: varchar("sent_by").references(() => users.id, { onDelete: "set null" }),
   role: text("role"),
   message: text("message").notNull(),
   status: text("status", { enum: ["sent", "accepted", "declined"] }).default("sent").notNull(),
@@ -2569,7 +2603,12 @@ export const companyChallenges = pgTable("company_challenges", {
   industry: text("industry"),
   deadline: timestamp("deadline").notNull(),
   status: text("status", { enum: ["open", "judging", "closed"] }).default("open").notNull(),
-  createdBy: varchar("created_by").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /*
+   * Who did it, for the record — and only for the record. Set null, not
+   * cascade, when that account goes: one person closing their account must
+   * never take the company's work with it while its other people remain.
+   */
+  createdBy: varchar("created_by").references(() => users.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").notNull(),
 }, (t) => ({
   byStatus: index("company_challenges_status_idx").on(t.status, t.deadline),
@@ -2592,12 +2631,33 @@ export const challengeEntries = pgTable("challenge_entries", {
   once: unique("challenge_entries_once").on(t.challengeId, t.userId),
 }));
 
+/**
+ * Everything done to a company's people and powers, and by whom.
+ *
+ * Leaders can add, remove and empower people freely, which is the point — and
+ * exactly why it is written down. "Who removed Sam, and when" should never be
+ * a matter of memory.
+ */
+export const companyAuditLog = pgTable("company_audit_log", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  actorId: varchar("actor_id").references(() => users.id, { onDelete: "set null" }),
+  /** "member_added", "member_removed", "role_changed", "permissions_changed", "post_published", … */
+  action: text("action").notNull(),
+  targetUserId: varchar("target_user_id").references(() => users.id, { onDelete: "set null" }),
+  detail: jsonb("detail"),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  byCompany: index("company_audit_log_company_idx").on(t.companyId, t.createdAt),
+}));
+
 /** Startups a company is keeping an eye on. */
 export const companyFollows = pgTable("company_follows", {
   companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
   projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   note: text("note"),
-  createdBy: varchar("created_by").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** Who followed it. Set null if their account goes; the company still follows the project. */
+  createdBy: varchar("created_by").references(() => users.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").notNull(),
 }, (t) => ({
   pk: primaryKey({ columns: [t.companyId, t.projectId] }),
@@ -2649,10 +2709,55 @@ export const recurringJobs = pgTable("recurring_jobs", {
   backupId: varchar("backup_id").references(() => users.id, { onDelete: "set null" }),
   /** YYYY-MM-DD, for the same reason `weekOf` is. */
   nextDue: text("next_due").notNull(),
+  /**
+   * For a monthly job, the day of the month it belongs on. Without it a job
+   * due on the 31st was moved to the 28th by February and stayed there; with
+   * it, each month lands on the anchor day or the month's last day if shorter.
+   */
+  anchorDay: integer("anchor_day"),
+  /** The due date a reminder was last sent for, so each occurrence is announced once. */
+  remindedFor: text("reminded_for"),
   active: boolean("active").default(true).notNull(),
   createdAt: timestamp("created_at").notNull(),
 }, (t) => ({
   byProject: index("recurring_jobs_project_idx").on(t.projectId),
+}));
+
+/**
+ * How a company on the Run path keeps its rhythm: which day the weekly
+ * check-in happens and who is reminded. One row per project.
+ */
+export const rhythmSettings = pgTable("rhythm_settings", {
+  projectId: varchar("project_id").primaryKey().references(() => projects.id, { onDelete: "cascade" }),
+  /** 0 = Monday … 6 = Sunday. The day the check-in is due, and the reminder goes out. */
+  checkinDay: integer("checkin_day").default(0).notNull(),
+  /** Who is reminded; empty means every project member. */
+  remindUserIds: text("remind_user_ids").array().default(sql`'{}'::text[]`).notNull(),
+  /** The week a check-in reminder was last sent for. */
+  remindedWeek: text("reminded_week"),
+  updatedAt: timestamp("updated_at").notNull(),
+});
+
+/**
+ * The quarter's goals (RUN.S4.3), tracked against the numbers the weekly
+ * check-ins record rather than ticked by hand.
+ */
+export const quarterGoals = pgTable("quarter_goals", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  /** "2026-Q3". */
+  quarter: text("quarter").notNull(),
+  title: text("title").notNull(),
+  /** A check-in metric id the goal is measured by, or null for a goal ticked by hand. */
+  metricId: text("metric_id"),
+  /** The value that means done, and whether above or below it is good. */
+  target: real("target"),
+  direction: text("direction", { enum: ["up", "down"] }),
+  ownerId: varchar("owner_id").references(() => users.id, { onDelete: "set null" }),
+  status: text("status", { enum: ["active", "done", "dropped"] }).default("active").notNull(),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  byProject: index("quarter_goals_project_idx").on(t.projectId, t.quarter),
 }));
 
 /** Every time a recurring job was done, and whether it was on time — what the monthly report counts. */

@@ -16,7 +16,7 @@ import {
 } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
-import { companyFor } from "./company-access";
+import { companyCan } from "./company-access";
 import { feedDisplayName } from "./feed-routes";
 import { pathProgress } from "./path-return";
 import { INDUSTRIES } from "@shared/companies";
@@ -75,7 +75,7 @@ function summary(p: ProjectRow, lastActivityAt: Date | undefined) {
 export function registerScoutingRoutes(app: Express): void {
   /** What the company watches, what it follows, and what it might want to. */
   app.get("/api/companies/:id/scouting", isAuthenticated, async (req: any, res) => {
-    const found = await companyFor(res, req.params.id, req.user.id, "view");
+    const found = await companyCan(res, req.params.id, req.user.id, "view");
     if (!found) return;
     const { company } = found;
 
@@ -129,7 +129,7 @@ export function registerScoutingRoutes(app: Express): void {
 
   /** The industries to watch, as a whole set: what is sent is what is watched. */
   app.put("/api/companies/:id/watches", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
-    const found = await companyFor(res, req.params.id, req.user.id, "manage");
+    const found = await companyCan(res, req.params.id, req.user.id, "scouting");
     if (!found) return;
     const raw = req.body?.industries;
     if (!Array.isArray(raw)) return res.status(400).json({ message: "industries is a list.", field: "industries" });
@@ -149,7 +149,7 @@ export function registerScoutingRoutes(app: Express): void {
 
   /** Follow a public project, with an optional note on why. Following again updates the note. */
   app.post("/api/companies/:id/follows/:projectId", isAuthenticated, rateLimit("follow"), async (req: any, res) => {
-    const found = await companyFor(res, req.params.id, req.user.id, "manage");
+    const found = await companyCan(res, req.params.id, req.user.id, "scouting");
     if (!found) return;
     const [project] = await db.select({ id: projects.id, isPrivate: projects.isPrivate }).from(projects).where(eq(projects.id, req.params.projectId));
     // A private project reads as missing, the same as it does to anyone outside it.
@@ -166,7 +166,7 @@ export function registerScoutingRoutes(app: Express): void {
   });
 
   app.delete("/api/companies/:id/follows/:projectId", isAuthenticated, rateLimit("follow"), async (req: any, res) => {
-    const found = await companyFor(res, req.params.id, req.user.id, "manage");
+    const found = await companyCan(res, req.params.id, req.user.id, "scouting");
     if (!found) return;
     await db.delete(companyFollows).where(and(eq(companyFollows.companyId, found.company.id), eq(companyFollows.projectId, req.params.projectId)));
     res.json({ ok: true });

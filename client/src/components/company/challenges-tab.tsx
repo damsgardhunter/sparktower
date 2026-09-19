@@ -95,8 +95,12 @@ function CreateChallenge({ companyId, onDone }: { companyId: string; onDone: () 
     onError: (err) => toast({ title: "Couldn't post it", description: errorText(err), variant: "destructive" }),
   });
   const L = CHALLENGE_LIMITS;
-  const today = new Date().toISOString().slice(0, 10);
-  const lastDay = new Date(Date.now() + (L.maxDeadlineDays - 1) * 86_400_000).toISOString().slice(0, 10);
+  // The date input speaks the viewer's calendar, and so does the deadline built
+  // from it above; toISOString would give tomorrow's date to anyone west of UTC
+  // in the evening, and refuse today.
+  const localDay = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const today = localDay(new Date());
+  const lastDay = localDay(new Date(Date.now() + (L.maxDeadlineDays - 1) * 86_400_000));
   const ready = f.title.trim().length >= L.title.min && f.brief.trim().length >= L.brief.min && f.terms.trim().length >= L.terms.min && !!f.deadline;
 
   return (

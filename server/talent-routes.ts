@@ -18,10 +18,10 @@
  * company's (/api/companies/:id/talent...).
  */
 import type { Express } from "express";
-import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "./db";
 import {
-  talentProfiles, recruitInvites, companies, users, userProfiles, connections, directMessages,
+  talentProfiles, recruitInvites, companies, companyMembers, users, userProfiles, connections, directMessages,
   simSeats, simVentures, simSeasons, simDecisions, simReports, simChallenges,
   startupGames, startupGameVerdicts,
 } from "@shared/schema";
@@ -29,8 +29,9 @@ import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
 import { notify } from "./notifications";
 import { feedDisplayName } from "./feed-routes";
-import { companyFor } from "./company-access";
+import { companyCan, logCompany } from "./company-access";
 import { nicheById } from "@shared/simulation/niches";
+import { hasPower } from "@shared/companies";
 import {
   buildTrackRecord, summaryOf, ROLE_FOR_SEAT, type SeatPlay, type GamePlay, type TrackRecord,
 } from "@shared/track-record";
@@ -284,14 +285,27 @@ export function registerTalentRoutes(app: Express): void {
       const [company] = await db.select({ name: companies.name }).from(companies).where(eq(companies.id, invite.companyId));
       const [meRow] = await db.select({ firstName: users.firstName, lastName: users.lastName, displayName: userProfiles.displayName })
         .from(users).leftJoin(userProfiles, eq(userProfiles.userId, users.id)).where(eq(users.id, me));
+      /*
+       * The person who asked, or — if their account has since gone — someone
+       * at the company who recruits, so a yes never lands on nobody.
+       */
+      let contact = invite.sentBy;
+      if (!contact) {
+        const team = await db.select({ userId: companyMembers.userId, role: companyMembers.role, permissions: companyMembers.permissions })
+          .from(companyMembers).where(eq(companyMembers.companyId, invite.companyId)).orderBy(asc(companyMembers.joinedAt));
+        const order = { owner: 0, admin: 1, member: 2 } as const;
+        contact = team.filter((m) => hasPower(m, "recruit")).sort((a, b) => order[a.role] - order[b.role])[0]?.userId ?? null;
+      }
       await notify({
-        recipients: [invite.sentBy], actorId: me, kind: "recruit_answer",
+        recipients: [contact], actorId: me, kind: "recruit_answer",
         targetId: `${invite.companyId}:${invite.id}`,
         excerpt: `${meRow ? nameOf(meRow) : "They"} would like to talk${company ? ` with ${company.name}` : ""}. Your conversation is open in Messages.`,
       });
       try {
-        await openConversation(invite.sentBy, me, `${company?.name ?? "Our company"}: ${invite.message}`);
-        conversationWith = invite.sentBy;
+        if (contact) {
+          await openConversation(contact, me, `${company?.name ?? "Our company"}: ${invite.message}`);
+          conversationWith = contact;
+        }
       } catch (err) {
         // The answer stands either way; the notification already tells them.
         console.error("[talent] couldn't open the conversation (non-fatal):", err);
@@ -310,7 +324,7 @@ export function registerTalentRoutes(app: Express): void {
    * headline, location or roles.
    */
   app.get("/api/companies/:id/talent", isAuthenticated, async (req: any, res) => {
-    const found = await companyFor(res, req.params.id, req.user.id, "view");
+    const found = await companyCan(res, req.params.id, req.user.id, "view");
     if (!found) return;
 
     const role = clean(req.query.role, 40)?.toLowerCase() ?? null;
@@ -347,7 +361,7 @@ export function registerTalentRoutes(app: Express): void {
 
   /** One candidate, whole. A closed profile is a 404, the same as no profile at all. */
   app.get("/api/companies/:id/talent/:userId", isAuthenticated, async (req: any, res) => {
-    const found = await companyFor(res, req.params.id, req.user.id, "view");
+    const found = await companyCan(res, req.params.id, req.user.id, "view");
     if (!found) return;
     const [c] = await openCandidates({ userId: req.params.userId });
     if (!c) return res.status(404).json({ message: "Nobody by that name is open to companies." });
@@ -366,7 +380,7 @@ export function registerTalentRoutes(app: Express): void {
    * because someone else there tried.
    */
   app.post("/api/companies/:id/talent/:userId/invite", isAuthenticated, rateLimit("invite"), async (req: any, res) => {
-    const found = await companyFor(res, req.params.id, req.user.id, "manage");
+    const found = await companyCan(res, req.params.id, req.user.id, "recruit");
     if (!found) return;
     const { company } = found;
     const [c] = await openCandidates({ userId: req.params.userId });
@@ -389,12 +403,13 @@ export function registerTalentRoutes(app: Express): void {
       recipients: [c.profile.userId], actorId: req.user.id, kind: "recruit_invite",
       targetId: `${company.id}:${invite.id}`, excerpt: `${company.name}: ${firstLine}`,
     });
+    await logCompany(company.id, req.user.id, "candidate_invited", c.profile.userId, { role });
     res.status(201).json({ invite });
   });
 
   /** Who this company has asked, and what they said. */
   app.get("/api/companies/:id/talent-invites", isAuthenticated, async (req: any, res) => {
-    const found = await companyFor(res, req.params.id, req.user.id, "view");
+    const found = await companyCan(res, req.params.id, req.user.id, "view");
     if (!found) return;
     const rows = await db
       .select({
@@ -406,7 +421,7 @@ export function registerTalentRoutes(app: Express): void {
       .leftJoin(userProfiles, eq(userProfiles.userId, recruitInvites.userId))
       .where(eq(recruitInvites.companyId, found.company.id))
       .orderBy(desc(recruitInvites.createdAt));
-    const senders = [...new Set(rows.map((r) => r.invite.sentBy))];
+    const senders = [...new Set(rows.map((r) => r.invite.sentBy).filter((id): id is string => !!id))];
     const senderRows = senders.length
       ? await db.select({ id: users.id, firstName: users.firstName, lastName: users.lastName, displayName: userProfiles.displayName })
           .from(users).leftJoin(userProfiles, eq(userProfiles.userId, users.id)).where(inArray(users.id, senders))
@@ -416,7 +431,7 @@ export function registerTalentRoutes(app: Express): void {
       invites: rows.map((r) => ({
         id: r.invite.id, userId: r.invite.userId, name: nameOf(r), role: r.invite.role, message: r.invite.message,
         status: r.invite.status, createdAt: r.invite.createdAt, answeredAt: r.invite.answeredAt,
-        sentBy: { id: r.invite.sentBy, name: senderName.get(r.invite.sentBy) ?? "Someone" },
+        sentBy: { id: r.invite.sentBy, name: (r.invite.sentBy && senderName.get(r.invite.sentBy)) || "A former colleague" },
       })),
     });
   });

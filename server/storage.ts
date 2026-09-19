@@ -1268,7 +1268,16 @@ export class DatabaseStorage implements IStorage {
     const [row] = await db
       .select({ count: sql<number>`count(*)::int` })
       .from(projects)
-      .where(and(eq(projects.ownerId, userId), eq(projects.isPrivate, true)));
+      .where(and(
+        eq(projects.ownerId, userId),
+        eq(projects.isPrivate, true),
+        /*
+         * A company's Run project is private because it holds the business's
+         * cash and check-ins, not because its owner chose privacy from their
+         * plan — so it doesn't spend the person's own private-project allowance.
+         */
+        sql`not exists (select 1 from companies c where c.project_id = ${projects.id})`,
+      ));
     return row?.count || 0;
   }
 

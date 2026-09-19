@@ -9,6 +9,10 @@
  * numbers is hearing what changed; a form that only says "saved" teaches
  * people to stop filing.
  *
+ * Below the weekly work sit the quarter's goals, measured against the same
+ * check-in numbers, and the rhythm's settings — the day the check-in is due
+ * and who is reminded — because a rhythm nobody is reminded of stops.
+ *
  * All the arithmetic is shared/company-rhythm.ts; this file only lays it out.
  */
 import { useEffect, useMemo, useState } from "react";
@@ -23,11 +27,11 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Loader2, CalendarCheck, Sparkles, Plus, X, Check, AlertTriangle, ChevronLeft, ChevronRight, Repeat, FileBarChart,
-  TrendingUp, TrendingDown, Minus, History,
+  TrendingUp, TrendingDown, Minus, History, Target, Settings2, Pencil, Trash2,
 } from "lucide-react";
 import {
-  formatValue, customMetricId, metricFor, addMonthsToMonth, JOB_INTERVALS, JOB_INTERVAL_LABEL, daysOverdue,
-  type RhythmMetric, type JobInterval, type MonthlyReport,
+  formatValue, customMetricId, metricFor, addMonthsToMonth, JOB_INTERVALS, JOB_INTERVAL_LABEL, daysOverdue, CHECKIN_DAYS,
+  type RhythmMetric, type JobInterval, type MonthlyReport, type GoalProgress,
 } from "@shared/company-rhythm";
 
 interface Checkin {
@@ -38,12 +42,35 @@ interface Job {
   id: string; title: string; notes: string | null; every: JobInterval; ownerId: string | null; backupId: string | null; nextDue: string; active: boolean;
 }
 interface Member { id: string; name: string }
+export interface RhythmSettings { checkinDay: number; remindUserIds: string[] }
 export interface RhythmSummary {
   today: string; weekOf: string; subcategory: string; metrics: RhythmMetric[];
   current: Checkin | null; checkins: Checkin[]; jobs: Job[]; overdue: Job[]; members: Member[];
+  settings: RhythmSettings; quarter: string;
+}
+export interface QuarterGoal {
+  id: string; quarter: string; title: string; metricId: string | null; target: number | null; direction: "up" | "down" | null;
+  ownerId: string | null; status: "active" | "done" | "dropped"; progress: GoalProgress;
+}
+export interface GoalsPayload {
+  quarter: string; start: string; end: string; today: string; previousQuarter: string; nextQuarter: string;
+  metrics: RhythmMetric[]; goals: QuarterGoal[];
 }
 
 const rhythmKey = (projectId: string) => ["/api/projects", projectId, "rhythm"];
+
+/*
+ * Everything a check-in or a finished job can change: the summary, the month's
+ * report, and the quarter's goals (their progress is read off the check-ins).
+ * The report and goals keys start with the rhythm key, so the prefix match
+ * already reaches them; they are named here as well so a later change to
+ * either key can't quietly leave the report showing last week's numbers.
+ */
+function refreshRhythm(projectId: string) {
+  queryClient.invalidateQueries({ queryKey: rhythmKey(projectId) });
+  queryClient.invalidateQueries({ queryKey: [...rhythmKey(projectId), "report"] });
+  queryClient.invalidateQueries({ predicate: (q) => q.queryKey[1] === projectId && String(q.queryKey[3] ?? "").startsWith("goals") });
+}
 
 /** "14 Sep" from "2026-09-14", read as a UTC date so it never slips a day. */
 export function shortDate(ymd: string): string {
@@ -53,6 +80,53 @@ const monthName = (month: string) => new Date(`${month}-01T00:00:00Z`).toLocaleD
 
 export function useRhythm(projectId: string | null | undefined) {
   return useQuery<RhythmSummary>({ queryKey: rhythmKey(projectId ?? ""), enabled: !!projectId });
+}
+
+/** The goals of a quarter. Keyed under the rhythm so saving a check-in (which moves their progress) refreshes them too. */
+export function useGoals(projectId: string | null | undefined, quarter: string | null | undefined) {
+  return useQuery<GoalsPayload>({
+    queryKey: [...rhythmKey(projectId ?? ""), `goals?quarter=${quarter ?? ""}`],
+    enabled: !!projectId && !!quarter,
+  });
+}
+
+/** "2026-Q3" as people say it: "July–September 2026". */
+export function quarterName(quarter: string): string {
+  const [y, q] = quarter.split("-Q");
+  const names = ["January–March", "April–June", "July–September", "October–December"];
+  return `${names[Number(q) - 1] ?? quarter} ${y}`;
+}
+
+const GOAL_STATE_LABEL: Record<GoalProgress["state"], string> = {
+  reached: "Reached", "on track": "On track", behind: "Behind", "no numbers yet": "No numbers yet", "not measured": "Ticked by hand",
+};
+
+/** Where a goal stands, as a bar and a badge. Shared with the company page. */
+export function GoalProgressView({ goal, metrics }: { goal: QuarterGoal; metrics: RhythmMetric[] }) {
+  const p = goal.progress;
+  const metric = goal.metricId ? metrics.find((m) => m.id === goal.metricId) ?? metricFor(goal.metricId) : null;
+  const tone = goal.status !== "active" ? "secondary" : p.state === "behind" ? "destructive" : p.state === "reached" || p.state === "on track" ? "secondary" : "outline";
+  const label = goal.status === "done" ? "Done" : goal.status === "dropped" ? "Dropped" : GOAL_STATE_LABEL[p.state];
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2 flex-wrap text-xs text-muted-foreground">
+        {metric && goal.target != null && (
+          <span data-testid={`goal-measure-${goal.id}`}>
+            {metric.label}: {formatValue(p.latest, metric.unit)} {p.first != null && p.first !== p.latest ? `(from ${formatValue(p.first, metric.unit)}) ` : ""}→ {goal.direction === "down" ? "at most" : "at least"} {formatValue(goal.target, metric.unit)}
+          </span>
+        )}
+        <Badge variant={tone as any} className="ml-auto" data-testid={`goal-state-${goal.id}`}>{label}</Badge>
+      </div>
+      {p.fraction != null && (
+        <div className="relative h-2 rounded-full bg-muted overflow-hidden" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(p.fraction * 100)}
+          aria-label={`${goal.title}: ${Math.round(p.fraction * 100)}% of the way`} data-testid={`goal-bar-${goal.id}`}>
+          <div className={`h-full rounded-full ${p.state === "behind" ? "bg-destructive" : "bg-primary"}`} style={{ width: `${Math.round(p.fraction * 100)}%` }} />
+          {/* Where the goal should be by now, if it is to land by the quarter's end. */}
+          {p.state !== "reached" && <div className="absolute top-0 h-full w-0.5 bg-foreground/40" style={{ left: `${Math.round(p.elapsed * 100)}%` }} title="Where it should be by now" />}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function CompanyRhythm({ projectId }: { projectId: string }) {
@@ -70,7 +144,9 @@ export function CompanyRhythm({ projectId }: { projectId: string }) {
       <CheckinCard projectId={projectId} data={data} />
       <HistoryCard data={data} />
       <JobsCard projectId={projectId} data={data} />
+      <GoalsCard projectId={projectId} data={data} />
       <ReportCard projectId={projectId} today={data.today} />
+      <SettingsCard projectId={projectId} data={data} />
     </div>
   );
 }
@@ -106,7 +182,7 @@ function CheckinCard({ projectId, data }: { projectId: string; data: RhythmSumma
     onSuccess: (r) => {
       setReply(r.checkin.reply);
       setEditing(false);
-      queryClient.invalidateQueries({ queryKey: rhythmKey(projectId) });
+      refreshRhythm(projectId);
     },
     onError: (e) => toast({ title: "Couldn't save the check-in", description: errorText(e), variant: "destructive" }),
   });
@@ -138,7 +214,7 @@ function CheckinCard({ projectId, data }: { projectId: string; data: RhythmSumma
           <p className="font-semibold">Week of {shortDate(data.weekOf)}</p>
           {filed
             ? <Badge variant="secondary" className="gap-1" data-testid="badge-checkin-filed"><Check className="h-3 w-3" />Checked in</Badge>
-            : <Badge variant="outline" data-testid="badge-checkin-due">Due this week</Badge>}
+            : <Badge variant="outline" data-testid="badge-checkin-due">Due {CHECKIN_DAYS[data.settings?.checkinDay ?? 0]}</Badge>}
           {filed && !editing && (
             <Button size="sm" variant="ghost" className="ml-auto h-7 text-xs" onClick={() => setEditing(true)} data-testid="button-edit-checkin">Change this week's numbers</Button>
           )}
@@ -274,7 +350,7 @@ function JobsCard({ projectId, data }: { projectId: string; data: RhythmSummary 
   const [backupId, setBackupId] = useState("");
   const name = (id: string | null) => (id ? data.members.find((m) => m.id === id)?.name ?? "Someone who left" : null);
   const overdue = new Set(data.overdue.map((j) => j.id));
-  const refresh = () => queryClient.invalidateQueries({ queryKey: rhythmKey(projectId) });
+  const refresh = () => refreshRhythm(projectId);
 
   const add = useMutation({
     mutationFn: () => apiRequest("POST", `/api/projects/${projectId}/rhythm/jobs`, { title, every, nextDue, ownerId: ownerId || null, backupId: backupId || null }),
@@ -282,12 +358,13 @@ function JobsCard({ projectId, data }: { projectId: string; data: RhythmSummary 
     onError: (e) => toast({ title: "Couldn't add the job", description: errorText(e), variant: "destructive" }),
   });
   const done = useMutation({
-    mutationFn: (jobId: string) => apiRequest("POST", `/api/projects/${projectId}/rhythm/jobs/${jobId}/done`, {}).then((r) => r.json()),
+    // The due date on screen goes with it, so a tick from a stale screen is refused instead of skipping the next occurrence.
+    mutationFn: (job: Job) => apiRequest("POST", `/api/projects/${projectId}/rhythm/jobs/${job.id}/done`, { dueOn: job.nextDue }).then((r) => r.json()),
     onSuccess: (r: { run: { onTime: boolean }; job: Job }) => {
       toast({ title: r.run.onTime ? "Done, on time" : "Done, late", description: `Next due ${shortDate(r.job.nextDue)}.` });
       refresh();
     },
-    onError: (e) => toast({ title: "Couldn't mark it done", description: errorText(e), variant: "destructive" }),
+    onError: (e) => { toast({ title: "Couldn't mark it done", description: errorText(e), variant: "destructive" }); refresh(); },
   });
   const remove = useMutation({
     mutationFn: (jobId: string) => apiRequest("DELETE", `/api/projects/${projectId}/rhythm/jobs/${jobId}`),
@@ -349,7 +426,7 @@ function JobsCard({ projectId, data }: { projectId: string; data: RhythmSummary 
                   {late
                     ? <Badge variant="destructive" data-testid={`badge-job-overdue-${j.id}`}>{daysOverdue(j.nextDue, data.today)}d overdue</Badge>
                     : <span className="text-xs text-muted-foreground whitespace-nowrap">Due {shortDate(j.nextDue)}</span>}
-                  <Button size="sm" variant={late ? "default" : "outline"} className="h-7 text-xs gap-1" onClick={() => done.mutate(j.id)} disabled={done.isPending} data-testid={`button-job-done-${j.id}`}>
+                  <Button size="sm" variant={late ? "default" : "outline"} className="h-7 text-xs gap-1" onClick={() => done.mutate(j)} disabled={done.isPending} data-testid={`button-job-done-${j.id}`}>
                     <Check className="h-3 w-3" />Done
                   </Button>
                   <button className="text-muted-foreground hover:text-foreground" title="Stop this job coming round" aria-label={`Remove ${j.title}`}
@@ -359,6 +436,188 @@ function JobsCard({ projectId, data }: { projectId: string; data: RhythmSummary 
             })}
           </ul>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── The quarter's goals ─────────────────────────────────────────────────────
+
+interface GoalDraft { title: string; metricId: string; target: string; direction: "up" | "down" | ""; ownerId: string }
+const emptyDraft: GoalDraft = { title: "", metricId: "", target: "", direction: "", ownerId: "" };
+
+function GoalsCard({ projectId, data }: { projectId: string; data: RhythmSummary }) {
+  const { toast } = useToast();
+  const [quarter, setQuarter] = useState(data.quarter);
+  const { data: goals, isLoading } = useGoals(projectId, quarter);
+  const [editing, setEditing] = useState<string | "new" | null>(null);
+  const [draft, setDraft] = useState<GoalDraft>(emptyDraft);
+  const refresh = () => refreshRhythm(projectId);
+  const metrics = goals?.metrics ?? data.metrics;
+  const name = (id: string | null) => (id ? data.members.find((m) => m.id === id)?.name ?? "Someone who left" : null);
+  const active = goals?.goals.filter((g) => g.status === "active").length ?? 0;
+
+  const body = (d: GoalDraft) => ({
+    title: d.title, metricId: d.metricId || null, target: d.metricId && d.target.trim() ? d.target.trim() : null,
+    direction: d.metricId ? d.direction || null : null, ownerId: d.ownerId || null,
+  });
+  const save = useMutation({
+    mutationFn: () => editing === "new"
+      ? apiRequest("POST", `/api/projects/${projectId}/rhythm/goals`, { quarter, ...body(draft) })
+      : apiRequest("PATCH", `/api/projects/${projectId}/rhythm/goals/${editing}`, body(draft)),
+    onSuccess: () => { setEditing(null); setDraft(emptyDraft); refresh(); },
+    onError: (e) => toast({ title: "Couldn't save the goal", description: errorText(e), variant: "destructive" }),
+  });
+  const setStatus = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: QuarterGoal["status"] }) => apiRequest("PATCH", `/api/projects/${projectId}/rhythm/goals/${id}`, { status }),
+    onSuccess: refresh,
+    onError: (e) => toast({ title: "Couldn't update the goal", description: errorText(e), variant: "destructive" }),
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/projects/${projectId}/rhythm/goals/${id}`),
+    onSuccess: refresh,
+    onError: (e) => toast({ title: "Couldn't remove the goal", description: errorText(e), variant: "destructive" }),
+  });
+
+  const startEdit = (g: QuarterGoal) => {
+    setEditing(g.id);
+    setDraft({ title: g.title, metricId: g.metricId ?? "", target: g.target != null ? String(g.target) : "", direction: g.direction ?? "", ownerId: g.ownerId ?? "" });
+  };
+
+  const form = (
+    <div className="rounded-lg border border-border p-3 space-y-2" data-testid="form-goal">
+      <Input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder="e.g. 600 covers a week by the end of the quarter" data-testid="input-goal-title" />
+      <div className="flex flex-wrap gap-2 items-center">
+        <select className={selectClass} value={draft.metricId} onChange={(e) => setDraft({ ...draft, metricId: e.target.value, direction: "" })} data-testid="select-goal-metric">
+          <option value="">Ticked by hand</option>
+          {metrics.map((m) => <option key={m.id} value={m.id}>Measured by: {m.label}</option>)}
+        </select>
+        {draft.metricId && (
+          <>
+            <select className={selectClass} value={draft.direction || metricFor(draft.metricId).better} onChange={(e) => setDraft({ ...draft, direction: e.target.value as "up" | "down" })} data-testid="select-goal-direction">
+              <option value="up">at least</option>
+              <option value="down">at most</option>
+            </select>
+            <Input inputMode="decimal" className="h-9 w-32" value={draft.target} onChange={(e) => setDraft({ ...draft, target: e.target.value })} placeholder="Target" data-testid="input-goal-target" />
+          </>
+        )}
+        <select className={selectClass} value={draft.ownerId} onChange={(e) => setDraft({ ...draft, ownerId: e.target.value })} data-testid="select-goal-owner">
+          <option value="">Owner: nobody yet</option>
+          {data.members.map((m) => <option key={m.id} value={m.id}>Owner: {m.name}</option>)}
+        </select>
+      </div>
+      <div className="flex gap-2">
+        <Button size="sm" onClick={() => save.mutate()} disabled={!draft.title.trim() || save.isPending} data-testid="button-save-goal">
+          {save.isPending && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}{editing === "new" ? "Add goal" : "Save goal"}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => { setEditing(null); setDraft(emptyDraft); }}>Cancel</Button>
+      </div>
+    </div>
+  );
+
+  return (
+    <Card data-testid="rhythm-goals">
+      <CardContent className="p-5 space-y-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Target className="h-3.5 w-3.5 text-muted-foreground" />
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">The quarter's goals</p>
+          <div className="ml-auto flex items-center gap-1">
+            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => goals && setQuarter(goals.previousQuarter)} disabled={!goals} aria-label="Previous quarter" data-testid="button-goals-prev"><ChevronLeft className="h-4 w-4" /></Button>
+            <span className="text-sm whitespace-nowrap" data-testid="text-goals-quarter">{quarterName(quarter)}</span>
+            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => goals && setQuarter(goals.nextQuarter)} disabled={!goals || quarter >= data.quarter} aria-label="Next quarter" data-testid="button-goals-next"><ChevronRight className="h-4 w-4" /></Button>
+          </div>
+        </div>
+
+        {isLoading || !goals ? (
+          <div className="flex justify-center py-4"><Loader2 className="h-4 w-4 animate-spin text-primary" /></div>
+        ) : (
+          <>
+            {goals.goals.length === 0 && editing !== "new" && (
+              <p className="text-sm text-muted-foreground">No goals for this quarter yet. Pick up to three, each measured by one of your weekly numbers where you can, so the check-ins show whether it's happening.</p>
+            )}
+            <ul className="space-y-3">
+              {goals.goals.map((g) => editing === g.id ? <li key={g.id}>{form}</li> : (
+                <li key={g.id} className={`rounded-lg border border-border p-3 space-y-2 ${g.status !== "active" ? "opacity-70" : ""}`} data-testid={`goal-${g.id}`}>
+                  <div className="flex items-start gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p className={`text-sm font-medium ${g.status === "dropped" ? "line-through" : ""}`}>{g.title}</p>
+                      {g.ownerId && <p className="text-xs text-muted-foreground">Owner: {name(g.ownerId)}</p>}
+                    </div>
+                    {g.status === "active" ? (
+                      <>
+                        <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => setStatus.mutate({ id: g.id, status: "done" })} data-testid={`button-goal-done-${g.id}`}><Check className="h-3 w-3" />Done</Button>
+                        <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setStatus.mutate({ id: g.id, status: "dropped" })} data-testid={`button-goal-drop-${g.id}`}>Drop</Button>
+                      </>
+                    ) : (
+                      <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setStatus.mutate({ id: g.id, status: "active" })} data-testid={`button-goal-reopen-${g.id}`}>Reopen</Button>
+                    )}
+                    <button className="text-muted-foreground hover:text-foreground p-1" aria-label={`Edit ${g.title}`} onClick={() => startEdit(g)} data-testid={`button-goal-edit-${g.id}`}><Pencil className="h-3.5 w-3.5" /></button>
+                    <button className="text-muted-foreground hover:text-foreground p-1" aria-label={`Remove ${g.title}`} onClick={() => remove.mutate(g.id)} data-testid={`button-goal-remove-${g.id}`}><Trash2 className="h-3.5 w-3.5" /></button>
+                  </div>
+                  <GoalProgressView goal={g} metrics={metrics} />
+                </li>
+              ))}
+            </ul>
+            {editing === "new" ? form : (
+              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setDraft(emptyDraft); setEditing("new"); }} data-testid="button-add-goal">
+                <Plus className="h-3.5 w-3.5 mr-1" />{active >= 3 ? "Add another goal" : "Add a goal"}
+              </Button>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Settings ────────────────────────────────────────────────────────────────
+
+function SettingsCard({ projectId, data }: { projectId: string; data: RhythmSummary }) {
+  const { toast } = useToast();
+  const [day, setDay] = useState(data.settings.checkinDay);
+  const [who, setWho] = useState<string[]>(data.settings.remindUserIds);
+  useEffect(() => { setDay(data.settings.checkinDay); setWho(data.settings.remindUserIds); }, [data.settings.checkinDay, data.settings.remindUserIds.join("|")]);
+  const changed = day !== data.settings.checkinDay || [...who].sort().join("|") !== [...data.settings.remindUserIds].sort().join("|");
+
+  const save = useMutation({
+    mutationFn: () => apiRequest("PUT", `/api/projects/${projectId}/rhythm/settings`, { checkinDay: day, remindUserIds: who }),
+    onSuccess: () => {
+      toast({ title: "Rhythm saved", description: `The check-in is due every ${CHECKIN_DAYS[day]}.` });
+      queryClient.invalidateQueries({ queryKey: rhythmKey(projectId) });
+    },
+    onError: (e) => toast({ title: "Couldn't save the rhythm", description: errorText(e), variant: "destructive" }),
+  });
+  const toggle = (id: string) => setWho(who.includes(id) ? who.filter((x) => x !== id) : [...who, id]);
+
+  return (
+    <Card data-testid="rhythm-settings">
+      <CardContent className="p-5 space-y-3">
+        <div className="flex items-center gap-2">
+          <Settings2 className="h-3.5 w-3.5 text-muted-foreground" />
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">The rhythm</p>
+        </div>
+        <label className="flex items-center gap-2 text-sm flex-wrap">
+          Check-in day
+          <select className={selectClass} value={day} onChange={(e) => setDay(Number(e.target.value))} data-testid="select-checkin-day">
+            {CHECKIN_DAYS.map((d, i) => <option key={d} value={i}>{d}</option>)}
+          </select>
+        </label>
+        <div className="space-y-1.5">
+          <p className="text-sm">Who's reminded <span className="text-xs text-muted-foreground">{who.length === 0 ? "— everyone on the project" : ""}</span></p>
+          <div className="flex flex-wrap gap-2">
+            {data.members.map((m) => (
+              <label key={m.id} className="flex items-center gap-1.5 text-sm rounded-md border border-border px-2 py-1 cursor-pointer">
+                <input type="checkbox" checked={who.includes(m.id)} onChange={() => toggle(m.id)} data-testid={`checkbox-remind-${m.id}`} />
+                {m.name}
+              </label>
+            ))}
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">On the day, whoever is reminded hears about it if this week's check-in isn't in. Jobs remind their owner when they're due, and their backup two days after.</p>
+        {/* Always saveable: agreeing to the defaults is still choosing the rhythm, which is what the path's last step asks. */}
+        <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending} data-testid="button-save-settings">
+          {save.isPending && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}{changed ? "Save the rhythm" : "Keep this rhythm"}
+        </Button>
       </CardContent>
     </Card>
   );

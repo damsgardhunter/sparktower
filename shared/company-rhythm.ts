@@ -12,7 +12,8 @@
  * Monday so two people in different timezones filing on a Sunday night land
  * on the same week, and a month-end due date is clamped rather than rolled
  * forward, so a job due on 31 January is next due on 28 (or 29) February and
- * not quietly skipped into March.
+ * not quietly skipped into March — and back on 31 March after that, because a
+ * monthly job remembers the day it belongs on.
  *
  * The reply to a check-in is written from the numbers alone and always exists.
  * Nova can rewrite it in better prose when AI is available, but a company that
@@ -99,23 +100,45 @@ export const JOB_INTERVAL_LABEL: Record<JobInterval, string> = { week: "Every we
 
 export const isJobInterval = (v: unknown): v is JobInterval => typeof v === "string" && (JOB_INTERVALS as readonly string[]).includes(v);
 
-/** When a job is next due after the occurrence due on `ymd`. */
-export function advanceDue(ymd: string, every: JobInterval): string {
-  if (every === "week") return addDays(ymd, 7);
-  if (every === "fortnight") return addDays(ymd, 14);
-  return addMonthsClamped(ymd, 1);
+/**
+ * The same day `n` months on, using the job's anchor day rather than the day
+ * it last landed on: anchored to the 31st, January 31 goes to February 28 (or
+ * 29) and then back to March 31, where clamping from the last due date would
+ * have left it on the 28th for good.
+ */
+export function addMonthsAnchored(ymd: string, n: number, anchorDay: number): string {
+  const [y, m] = ymd.split("-").map(Number);
+  const total = (m - 1) + n;
+  const year = y + Math.floor(total / 12);
+  const month0 = ((total % 12) + 12) % 12;
+  const day = Math.min(Math.max(1, Math.floor(anchorDay)), daysInMonth(year, month0));
+  return ymdOf(new Date(Date.UTC(year, month0, day)));
 }
 
-/*
- * A month is "the same day next month, clamped", taken from the last due date:
- * there is no column for the day a job was first set, so a job due on the 31st
- * settles on the 28th after February. Owners notice and move it; a job that
- * silently skipped February would not be noticed until payroll was missed.
+/** The day of the month a monthly job belongs on, taken from a due date. */
+export const anchorDayOf = (ymd: string): number => Number(ymd.slice(8, 10));
+
+/**
+ * What a job's anchor day should be stored as: the day of its due date for a
+ * monthly job, nothing for the others (a week has no day of the month).
  */
+export const anchorFor = (every: JobInterval, nextDue: string): number | null => (every === "month" ? anchorDayOf(nextDue) : null);
+
+/**
+ * When a job is next due after the occurrence due on `ymd`. A monthly job
+ * lands on its anchor day, or the month's last day when the month is shorter.
+ * A job saved before anchors existed has none, so its current due date stands
+ * in — the best evidence of the day it was meant for.
+ */
+export function advanceDue(ymd: string, every: JobInterval, anchorDay?: number | null): string {
+  if (every === "week") return addDays(ymd, 7);
+  if (every === "fortnight") return addDays(ymd, 14);
+  return addMonthsAnchored(ymd, 1, anchorDay ?? anchorDayOf(ymd));
+}
 
 /** What marking a job done records, and where its due date moves to. */
-export function completeJob(job: { nextDue: string; every: JobInterval }, doneOn: string) {
-  return { dueOn: job.nextDue, doneOn, onTime: doneOn <= job.nextDue, nextDue: advanceDue(job.nextDue, job.every) };
+export function completeJob(job: { nextDue: string; every: JobInterval; anchorDay?: number | null }, doneOn: string) {
+  return { dueOn: job.nextDue, doneOn, onTime: doneOn <= job.nextDue, nextDue: advanceDue(job.nextDue, job.every, job.anchorDay) };
 }
 
 export const isOverdue = (job: { nextDue: string; active?: boolean }, today: string): boolean =>
@@ -444,7 +467,7 @@ export function themesIn(text: string | null | undefined): string[] {
 
 // ─── The monthly report ──────────────────────────────────────────────────────
 
-export interface ReportJob { id: string; title: string; every: JobInterval; nextDue: string; active: boolean; ownerId?: string | null }
+export interface ReportJob { id: string; title: string; every: JobInterval; nextDue: string; active: boolean; ownerId?: string | null; anchorDay?: number | null }
 export interface ReportRun { jobId: string; dueOn: string; doneOn: string; onTime: boolean }
 
 export interface MetricMonth {
@@ -483,7 +506,7 @@ export function missedDueDates(job: ReportJob, today: string, until: string): st
   let due = job.nextDue;
   for (let i = 0; due < today && due <= until && i < 400; i++) {
     out.push(due);
-    due = advanceDue(due, job.every);
+    due = advanceDue(due, job.every, job.anchorDay);
   }
   return out;
 }
@@ -579,4 +602,105 @@ export function buildMonthlyReport(input: {
     themes,
     fixNext,
   };
+}
+
+// ─── The rhythm's settings ───────────────────────────────────────────────────
+
+/** Monday first, matching `rhythm_settings.checkin_day` (0 = Monday … 6 = Sunday). */
+export const CHECKIN_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
+
+export const isCheckinDay = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 6;
+
+/** Which check-in day a date is, Monday = 0, read in UTC like every other date here. */
+export function checkinDayOf(date: Date | string): number {
+  const d = typeof date === "string" ? parse(date) : date;
+  return (d.getUTCDay() + 6) % 7;
+}
+
+/** The date of a week's check-in day: the week's Monday plus the chosen day. */
+export const checkinDateFor = (week: string, checkinDay: number): string => addDays(week, checkinDay);
+
+// ─── The quarter's goals ─────────────────────────────────────────────────────
+
+const QUARTER = /^(\d{4})-Q([1-4])$/;
+
+export const isQuarter = (v: unknown): v is string => typeof v === "string" && QUARTER.test(v);
+
+/** "2026-Q3" for any date from 1 July to 30 September 2026. */
+export function quarterOf(date: Date | string = new Date()): string {
+  const ymd = typeof date === "string" ? date : ymdOf(date);
+  return `${ymd.slice(0, 4)}-Q${Math.floor((Number(ymd.slice(5, 7)) - 1) / 3) + 1}`;
+}
+
+/** The first and last day of a quarter. */
+export function quarterRange(quarter: string): { start: string; end: string } {
+  const [, y, q] = QUARTER.exec(quarter) ?? [];
+  const firstMonth = (Number(q) - 1) * 3 + 1;
+  const start = `${y}-${String(firstMonth).padStart(2, "0")}-01`;
+  return { start, end: lastDayOfMonth(addMonthsToMonth(start.slice(0, 7), 2)) };
+}
+
+export function addQuarters(quarter: string, n: number): string {
+  return quarterOf(addMonthsClamped(quarterRange(quarter).start, n * 3));
+}
+
+/** Whether a check-in counts toward a quarter: its Monday falls inside it, the same rule a month uses. */
+export const inQuarter = (week: string, quarter: string): boolean => {
+  const { start, end } = quarterRange(quarter);
+  return week >= start && week <= end;
+};
+
+export interface GoalLike { metricId: string | null; target: number | null; direction: "up" | "down" | null; status?: string }
+
+export interface GoalProgress {
+  /** The first and latest values the quarter's check-ins recorded for the goal's number. */
+  first: number | null; firstWeek: string | null;
+  latest: number | null; latestWeek: string | null;
+  /** How far from the first value to the target the latest has come, 0 to 1. */
+  fraction: number | null;
+  /** How much of the quarter has gone by `today`, 0 to 1. */
+  elapsed: number;
+  reached: boolean;
+  state: "reached" | "on track" | "behind" | "no numbers yet" | "not measured";
+}
+
+/*
+ * About two weeks of a thirteen-week quarter's slack before calling a goal
+ * behind. Weekly numbers are noisy, and a goal marked "behind" in its second
+ * week because the number wobbled teaches people to ignore the badge.
+ */
+const ON_TRACK_SLACK = 0.15;
+
+/**
+ * Where a measured goal stands, from the quarter's check-ins alone.
+ *
+ * Progress runs from the quarter's first recorded value (where the company
+ * started) to the target, so a café aiming for 600 covers from 500 is halfway
+ * at 550 — not 92% of the way because 550 is 92% of 600. It is on track while
+ * it has come at least as far as the quarter has gone, give or take the
+ * slack above; a number already past its target is reached, whenever that was.
+ */
+export function goalProgress(goal: GoalLike, checkins: CheckinLike[], quarter: string, today: string): GoalProgress {
+  const { start, end } = quarterRange(quarter);
+  const span = daysOverdue(start, end) + 1;
+  const elapsed = today < start ? 0 : today > end ? 1 : (daysOverdue(start, today) + 1) / span;
+  const base = { first: null, firstWeek: null, latest: null, latestWeek: null, fraction: null, elapsed, reached: false };
+  if (!goal.metricId || goal.target == null) return { ...base, state: "not measured" };
+  const direction = goal.direction ?? metricFor(goal.metricId).better;
+  const withValue = checkins
+    .filter((c) => inQuarter(c.weekOf, quarter) && valueIn(c, goal.metricId!) != null)
+    .sort((a, b) => (a.weekOf < b.weekOf ? -1 : 1));
+  if (!withValue.length) return { ...base, state: "no numbers yet" };
+  const f = withValue[0];
+  const l = withValue[withValue.length - 1];
+  const first = valueIn(f, goal.metricId)!;
+  const latest = valueIn(l, goal.metricId)!;
+  const reached = direction === "up" ? latest >= goal.target : latest <= goal.target;
+  const distance = goal.target - first;
+  let fraction: number;
+  if (reached) fraction = 1;
+  else if (distance === 0) fraction = 0; // Started on the target and has since fallen off it.
+  else fraction = Math.min(1, Math.max(0, (latest - first) / distance));
+  const state: GoalProgress["state"] = reached ? "reached" : fraction + ON_TRACK_SLACK >= elapsed ? "on track" : "behind";
+  return { first, firstWeek: f.weekOf, latest, latestWeek: l.weekOf, fraction, elapsed, reached, state };
 }

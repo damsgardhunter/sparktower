@@ -14,7 +14,7 @@ import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
-import { simSeasons, simVentures, simReports, notifications } from "@shared/schema";
+import { simSeasons, simVentures, simSeats, simReports, notifications } from "@shared/schema";
 import { startReadySeasons, tickSeason } from "../../server/simulation-tick";
 
 afterAll(async () => { await closeTestApp(); });
@@ -116,8 +116,9 @@ describe("who can reach a private season", () => {
     expect(peek.body).toMatchObject({ isMember: false, company: { name: "Northwind Trading" }, niche: { id: NICHE } });
 
     const join = await stranger.agent.post("/api/sim/join-code").send({ code: inviteCode });
-    expect(join.status).toBe(403);
-    expect(join.body.code).toBe("not_company_member");
+    // Refused exactly as a wrong code is, so a forwarded code confirms nothing by being tried.
+    expect(join.status).toBe(404);
+    expect(join.body.code).toBe("unknown_code");
     expect((await stranger.agent.post("/api/sim/join-code").send({ code: "ZZZZZZZZ" })).status).toBe(404);
   }, 120_000);
 
@@ -207,6 +208,17 @@ describe("a private season's clock", () => {
     expect(idle).toMatchObject({ yearsFiled: 0, yearsPlayed: 1 });
     expect(idle.read).toMatch(/^Filed 0 of 1 years/);
     expect(report.body.notPlaying.map((p: any) => p.userId)).toEqual([owner.id]);
+
+    /*
+     * Somebody whose first table closed in the lobby and who sat down at
+     * another holds two seats in the season. The report shows them once, at
+     * the table they actually played — even when the dead seat is the newer.
+     */
+    const [dead] = await db.insert(simVentures).values({ seasonId, name: "Closed Table", phase: "retired" } as any).returning();
+    await db.insert(simSeats).values({ ventureId: dead.id, userId: cmo.id, role: "ceo", joinedAt: new Date(Date.now() + 60_000) });
+    const again = (await owner.agent.get(`/api/companies/${companyId}/seasons/${seasonId}/report`).expect(200)).body;
+    expect(again.players).toHaveLength(5);
+    expect(again.players.filter((p: any) => p.userId === cmo.id)).toEqual([expect.objectContaining({ ventureId, role: "cmo", teamName: "Blue Harbour" })]);
   }, 180_000);
 
   it("leaves a public season on a day a year", async () => {
