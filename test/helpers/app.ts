@@ -10,6 +10,7 @@
  * without racing each other for a fixed one.
  */
 import { createServer, type Server } from "http";
+import { pinServer } from "./loopback";
 import type { Express } from "express";
 import { createApp } from "../../server/app";
 import { loadSurfaceFlags, stopSurfaceFlagRefresh } from "../../server/surfaces";
@@ -75,12 +76,13 @@ function registered(stack: any[], path: string): boolean {
  * not on the app. It never reproduced with one file, only in long runs, and it
  * moved from test to test.
  *
- * The cause is still unidentified, and guessing at it in silence is how a
- * flake survives for months. What is fixed here is the *diagnosis*: an app
- * that comes back without a plausible number of routes now throws while it is
- * being built, naming what it found, instead of being cached and producing a
- * mystery 404 in whichever test happens to run next. If the build is fine and
- * the 404 still appears, that rules the build out and says so.
+ * The build turned out to be fine — which is what these checks eventually
+ * proved. The requests were not reaching this app at all: supertest listened
+ * on the IPv6 wildcard and connected to 127.0.0.1, and a port another process
+ * held on 127.0.0.1 took the connection. The fix and the whole story are in
+ * test/setup/each-test.ts. The checks below stay, because an app that really
+ * does come back half-built should still fail where it is built rather than
+ * in whichever test happens to run next.
  */
 export async function getTestApp(): Promise<Express> {
   if (cached) return cached.app;
@@ -133,6 +135,19 @@ export async function getTestApp(): Promise<Express> {
         `Requests to it would answer with Express's own 404 page. Refusing to cache this app.`,
       );
     }
+
+    /*
+     * Listening on loopback, once, before anything is sent to it — and handed
+     * to supertest in place of the fresh server it would otherwise make per
+     * request. See test/setup/each-test.ts: those fresh servers bound `::` and
+     * could lose their port to another process holding it on 127.0.0.1.
+     */
+    server.on("request", app);
+    await new Promise<void>((ok, fail) => {
+      server.once("error", fail);
+      server.listen(0, "127.0.0.1", () => ok());
+    });
+    pinServer(app, server);
 
     cached = { app, server };
     return app;

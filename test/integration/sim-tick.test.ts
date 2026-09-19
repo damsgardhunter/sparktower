@@ -99,13 +99,16 @@ async function readyRoom(app: any) {
   }
   const roles = ["ceo", "cmo", "cfo", "cto", "coo"];
   for (const [i, p] of players.entries()) {
-    await p.agent.post(`/api/sim/ventures/${ventureId}/claim`).send({ role: roles[i] });
+    const claim = await p.agent.post(`/api/sim/ventures/${ventureId}/claim`).send({ role: roles[i] });
+    expect(claim.status, `claiming ${roles[i]}: ${claim.status} ${JSON.stringify(claim.body)}`).toBe(200);
   }
-  await players[0].agent.post(`/api/sim/ventures/${ventureId}/name`)
-    .send({ name: "Northbound", product: "Training for people who hate training apps" });
+  const named = await players[0].agent.post(`/api/sim/ventures/${ventureId}/name`)
+    .send({ name: "Northbound" });
+  expect(named.status, `naming: ${named.status} ${JSON.stringify(named.body)}`).toBe(200);
 
   const [venture] = await db.select().from(simVentures).where(eq(simVentures.id, ventureId));
-  expect(venture.phase).toBe("running");
+  const seats = await db.select().from(simSeats).where(eq(simSeats.ventureId, ventureId));
+  expect(venture.phase, `room is ${venture.phase}; seats: ${JSON.stringify(seats.map((s) => [s.userId.slice(0, 6), s.role]))}`).toBe("running");
   return { players, ventureId, seasonId: venture.seasonId };
 }
 
@@ -207,7 +210,14 @@ describe("the clock the whole schema runs on", () => {
       const row = (raw.rows ?? raw)[0];
 
       // The convention itself: what is in the column is the UTC clock.
-      expect(row.stored.replace(" ", "T") + "Z").toBe(future.toISOString());
+      /*
+       * Compared as instants, not as strings. Postgres prints fractional
+       * seconds without trailing zeros — `.81`, or nothing at all on a round
+       * second — while `toISOString` always prints three digits, so the string
+       * form failed whenever the milliseconds happened to end in a zero: about
+       * one run in ten, with nothing wrong.
+       */
+      expect(new Date(row.stored.replace(" ", "T") + "Z").getTime()).toBe(future.getTime());
 
       // And it reads back as the same instant, whatever zone reads it.
       const [back] = await db.select().from(probe);
