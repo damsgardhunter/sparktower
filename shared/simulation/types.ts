@@ -216,6 +216,15 @@ export interface Company {
   /** The segment this company has declared itself for, if any. See `positioningFor`. */
   positioning?: string;
   /**
+   * What shipping fast has cost you, 0–100.
+   *
+   * Every year of building features adds a little; paying it down removes it.
+   * High debt makes every pound of product work buy less and every unit cost
+   * more, which is the whole argument the technology seat has with the other
+   * four: the bill arrives years after the decision that ran it up.
+   */
+  techDebt?: number;
+  /**
    * Research finished but not yet shipped, in quality points.
    *
    * Lands in full next year. It is why a team can look flat for a year and

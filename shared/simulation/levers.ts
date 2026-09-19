@@ -91,7 +91,7 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
     { id: "repay", label: "Repay", kind: "money", min: 0, step: 100_000,
       help: "Less owed, less interest, less cash. The boring move that keeps a bad year from being fatal." },
     { id: "cashBuffer", label: "Cash to hold back", kind: "money", min: 0, step: 100_000,
-      help: "What you refuse to let the others spend. A statement of intent rather than a lock." },
+      help: "What you refuse to let the others spend, and it holds — spending above it is cut back, everyone's by the same fraction. The only authority this seat has over the other four, so it is worth telling them." },
     { id: "raiseAmount", label: "Raise from investors", kind: "money", min: 0, step: 500_000,
       help: "Money that never has to be repaid, bought with a permanent share of everything the company becomes. Raising while the company is worth little is the most expensive money in the game." },
   ],

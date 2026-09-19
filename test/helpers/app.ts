@@ -27,6 +27,38 @@ let building: Promise<Express> | null = null;
 const FEWEST_PLAUSIBLE_LAYERS = 50;
 
 /**
+ * Whether a path is actually routable on this app.
+ *
+ * Walks the router stack, including routers mounted under a prefix, and asks
+ * each layer's matcher about the path. Express 4 and 5 disagree about where
+ * the stack lives and what a layer looks like, so this is deliberately
+ * forgiving: anything it cannot interpret is treated as "present", because a
+ * check that cannot see is not entitled to an opinion.
+ */
+function registered(stack: any[], path: string): boolean {
+  for (const layer of stack) {
+    try {
+      if (layer?.regexp?.fast_slash) {
+        if (Array.isArray(layer?.handle?.stack) && registered(layer.handle.stack, path)) return true;
+        continue;
+      }
+      if (typeof layer?.match === "function" && layer.match(path)) return true;
+      if (layer?.regexp instanceof RegExp && layer.regexp.test(path)) {
+        if (layer?.route) return true;
+        if (Array.isArray(layer?.handle?.stack)) {
+          const rest = path.replace(new RegExp(`^${layer.path ?? ""}`), "") || "/";
+          if (registered(layer.handle.stack, rest)) return true;
+        }
+      }
+    } catch {
+      // A layer this cannot interrogate is not evidence of absence.
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Builds the app once per worker and reuses it.
  *
  * Route registration opens database connections and reads feature flags; doing
@@ -79,6 +111,26 @@ export async function getTestApp(): Promise<Express> {
       throw new Error(
         `The test app finished building with only ${layers} route layers, which means registration did not complete. ` +
         `Every request against it would 404 with an empty body. Failing here rather than caching it.`,
+      );
+    }
+
+    /*
+     * And check a route that must exist, not just that there are many.
+     *
+     * The layer count never fired, and the thing it was meant to catch kept
+     * happening: `POST /api/auth/register` answering with Express's own
+     * "Cannot POST" page, which is what Express says when nothing matched.
+     * A count cannot tell a hundred middleware layers from a hundred
+     * middleware layers plus the routes, so this asks for the route itself.
+     *
+     * Registration is awaited inside `createApp`, so an app that reaches here
+     * without it is a genuine puzzle — and one worth failing loudly at the
+     * moment it is built rather than in whichever test happens to run next.
+     */
+    if (Array.isArray(stack) && !registered(stack, "/api/auth/register")) {
+      throw new Error(
+        `The test app was built without POST /api/auth/register, though it has ${layers} layers. ` +
+        `Requests to it would answer with Express's own 404 page. Refusing to cache this app.`,
       );
     }
 

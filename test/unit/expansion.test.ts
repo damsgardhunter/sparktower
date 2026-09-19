@@ -11,7 +11,7 @@
 import { describe, it, expect } from "vitest";
 import { resolveYear } from "@shared/simulation/resolve";
 import { reachOf, positioningFor } from "@shared/simulation/market";
-import { fixedCosts } from "@shared/simulation/decisions";
+import { fixedCosts, debtDrag, nextTechDebt } from "@shared/simulation/decisions";
 import { startingCompany, buildWorld, economyFor } from "@shared/simulation/season";
 import { seedIncumbents } from "@shared/simulation/incumbents";
 import { nicheById } from "@shared/simulation/niches";
@@ -246,5 +246,105 @@ describe("costs over a whole season", () => {
     const ended = w.companies.find((c) => c.id === "t")!.unitCost;
     expect(ended, "a season's drift should look like the index, not the index compounded").toBeLessThan(started * 1.5);
     expect(ended).toBeGreaterThan(started * 0.4);
+  });
+});
+
+describe("what the product owes itself", () => {
+  /*
+   * Technical debt was a lever that took money and gave nothing back, ever —
+   * strictly worse than not using it. These pin the mechanic that replaced it:
+   * shipping fast runs up a bill, carrying it makes every pound buy less and
+   * every unit cost more, and clearing it buys nothing you can see this year.
+   */
+  it("goes up when you ship and down when you pay", () => {
+    const shipping = nextTechDebt({ current: 20, featureSpend: 1_500_000, paydown: 0 });
+    expect(shipping).toBeGreaterThan(20);
+
+    const paying = nextTechDebt({ current: 20, featureSpend: 0, paydown: 1_000_000 });
+    expect(paying).toBeLessThan(20);
+  });
+
+  it("is not run up by doing the work properly", () => {
+    // Reliability work is the work of not accruing it.
+    const careful = nextTechDebt({ current: 30, featureSpend: 0, paydown: 0 });
+    expect(careful).toBeLessThanOrEqual(30);
+  });
+
+  it("stays inside its bounds however hard you try", () => {
+    expect(nextTechDebt({ current: 99, featureSpend: 50_000_000 })).toBeLessThanOrEqual(100);
+    expect(nextTechDebt({ current: 1, paydown: 90_000_000 })).toBeGreaterThanOrEqual(0);
+  });
+
+  it("makes product work buy less and units cost more while you carry it", () => {
+    const clean = debtDrag(0);
+    const heavy = debtDrag(80);
+    expect(heavy.product).toBeLessThan(clean.product);
+    expect(heavy.unitCost).toBeGreaterThan(clean.unitCost);
+  });
+
+  it("actually slows a company down over a year", () => {
+    const indebted = resolveYear(world(team({ techDebt: 85 })), [spend()]);
+    const clean = resolveYear(world(team({ techDebt: 0 })), [spend()]);
+    const q = (r: any) => r.reports.find((x: any) => x.companyId === "t").quality;
+    expect(q(indebted)).toBeLessThan(q(clean));
+  });
+
+  it("buys nothing you can see in the year you clear it", () => {
+    /*
+     * The decision the lever exists for: the seat that clears it gets no
+     * credit, and the seat that does not hands a slower company to whoever is
+     * still playing in year twelve.
+     */
+    const paying = resolveYear(
+      world(team({ techDebt: 60 })),
+      [spend({ cto: { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 1_500_000 } })],
+    );
+    const ignoring = resolveYear(
+      world(team({ techDebt: 60 })),
+      [spend({ cto: { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0 } })],
+    );
+
+    const q = (r: any) => r.reports.find((x: any) => x.companyId === "t").quality;
+    expect(q(paying), "nothing visible this year").toBeCloseTo(q(ignoring), 5);
+    // But the company is in better shape for next year.
+    const debtOf = (r: any) => r.world.companies.find((c: any) => c.id === "t").techDebt;
+    expect(debtOf(paying)).toBeLessThan(debtOf(ignoring));
+  });
+});
+
+describe("the money finance refuses to let go of", () => {
+  it("actually holds", () => {
+    /*
+     * `cashBuffer` was read by the commitment preview and by nothing else: the
+     * finance seat could ring-fence the company's last two million, watch the
+     * number change on their own screen, and watch it be spent anyway.
+     */
+    const c = team({ cash: 5_000_000 });
+    const lavish = {
+      cmo: { price: 22, brandSpend: 4_000_000, performanceSpend: 0, celebritySpend: 0, targetCities: [] },
+    };
+
+    const unguarded = resolveYear(world(c), [spend({ ...lavish, cfo: { borrow: 0, repay: 0, cashBuffer: 0 } })]);
+    const guarded = resolveYear(world(c), [spend({ ...lavish, cfo: { borrow: 0, repay: 0, cashBuffer: 4_500_000 } })]);
+
+    const costs = (r: any) => r.reports.find((x: any) => x.companyId === "t").costs;
+    expect(costs(guarded), "the buffer should have cut the spending").toBeLessThan(costs(unguarded));
+  });
+
+  it("says so, rather than quietly cutting everyone", () => {
+    const c = team({ cash: 5_000_000 });
+    const out = resolveYear(world(c), [spend({
+      cmo: { price: 22, brandSpend: 4_000_000, performanceSpend: 0, celebritySpend: 0, targetCities: [] },
+      cfo: { borrow: 0, repay: 0, cashBuffer: 4_500_000 },
+    })]);
+    expect(out.reports.find((r) => r.companyId === "t")!.notes.join(" ")).toMatch(/Finance held/i);
+  });
+
+  it("leaves a sensible buffer alone", () => {
+    const c = team({ cash: 5_000_000 });
+    const modest = spend({ cfo: { borrow: 0, repay: 0, cashBuffer: 200_000 } });
+    const none = spend({ cfo: { borrow: 0, repay: 0, cashBuffer: 0 } });
+    const costs = (r: any) => r.reports.find((x: any) => x.companyId === "t").costs;
+    expect(costs(resolveYear(world(c), [modest]))).toBeCloseTo(costs(resolveYear(world(c), [none])), 0);
   });
 });

@@ -296,6 +296,50 @@ export const FOCUS_NOTES: Record<Focus, string> = {
 export const SALARY = 85_000;
 export const EXECUTIVE = 140_000;
 
+/**
+ * What technical debt does while you carry it.
+ *
+ * Two effects, both quiet and both compounding: product work buys less,
+ * because a share of every engineer's year goes into working around what is
+ * already there; and each unit costs more to make and serve, because the same
+ * is true of operations. Neither is dramatic in one year, which is exactly why
+ * a team lets it run — and why a company at seventy is spending half again as
+ * much for the same result as one at ten.
+ *
+ * Paying it down buys nothing visible in the year you do it. That is the
+ * decision: the seat that clears it gets no credit, and the seat that does not
+ * hands a slower company to whoever is still playing in year twelve.
+ */
+export const debtDrag = (techDebt = 0): { product: number; unitCost: number } => {
+  const held = Math.max(0, Math.min(100, techDebt));
+  return {
+    // At 100, product spending is worth half what it would be at nothing.
+    product: 1 - held / 200,
+    // And every unit costs up to a third more to make.
+    unitCost: 1 + held / 300,
+  };
+};
+
+/**
+ * How debt moves in a year.
+ *
+ * Shipping features adds it; reliability work adds none, because that is the
+ * work of doing it properly. Paying it down removes roughly a point per
+ * seventy thousand, so clearing a badly-run decade is a real programme rather
+ * than a line item. And it decays slightly on its own — some of what rots is
+ * replaced in the course of ordinary work.
+ */
+export function nextTechDebt(input: {
+  current?: number;
+  featureSpend?: number;
+  paydown?: number;
+}): number {
+  const { current = 0, featureSpend = 0, paydown = 0 } = input;
+  const added = saturate(Math.max(0, featureSpend), 400_000) * 9;
+  const cleared = Math.max(0, paydown) / 70_000;
+  return Math.max(0, Math.min(100, current + added - cleared - 0.5));
+}
+
 export function fixedCosts(company: Company, headcount: number, economy: Economy, reach = 1): number {
   const footprint = 0.4 + 0.6 * Math.max(0, Math.min(1, reach));
   const salaries = headcount * SALARY * economy.costIndex;

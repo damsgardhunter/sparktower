@@ -18,7 +18,7 @@
 import type { Company, Economy, World } from "./types";
 import { allocate, marketShares } from "./market";
 import { incumbentYear } from "./incumbents";
-import { fixedCosts, focusEffects, interlock, lift, FOCUS_NOTES, type Focus, type TeamDecisions } from "./decisions";
+import { fixedCosts, focusEffects, interlock, lift, debtDrag, nextTechDebt, FOCUS_NOTES, type Focus, type TeamDecisions } from "./decisions";
 import { assetEffects, ageAssets } from "./assets";
 import { reachOf } from "./market";
 import { eventFor, economyWithEvent, companyWithEvent, type MarketEvent } from "./events";
@@ -156,7 +156,29 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
     if (landed > 0) {
       notesFor[company.id].push(`Last year's research shipped: ${landed.toFixed(1)} points of quality that no amount of spending this year could have bought.`);
     }
-    const qualityGain = lift((d.cto?.featureSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 1.2, 200_000, 14) * niche.innovationPace * focus.quality + landed;
+    /*
+     * What the company already owes itself. Carried debt means a share of
+     * every engineer's year goes on working around what is already there, so
+     * the same money buys less.
+     */
+    const drag = debtDrag(company.techDebt);
+    const techDebt = nextTechDebt({
+      current: company.techDebt,
+      featureSpend: d.cto?.featureSpend,
+      paydown: d.cto?.techDebtPaydown,
+    });
+    if (techDebt > 55 && (company.techDebt ?? 0) <= 55) {
+      notesFor[company.id].push(
+        "The product has got hard to work in. Everything the technology seat spends from here buys noticeably less, and every unit costs a little more, until somebody pays it down.",
+      );
+    }
+    if ((d.cto?.techDebtPaydown ?? 0) > 0 && techDebt < (company.techDebt ?? 0)) {
+      notesFor[company.id].push(
+        `Cleared some of what the product owed itself: technical debt is down to ${Math.round(techDebt)}. Nothing about this year looks different, and next year's work goes further.`,
+      );
+    }
+
+    const qualityGain = (lift((d.cto?.featureSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 1.2, 200_000, 14) * niche.innovationPace * focus.quality) * drag.product + landed;
     const serviceGain = lift((d.coo?.supportSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 0.5, 150_000, 15) * focus.quality;
     const costCut = lift(d.coo?.efficiencySpend ?? 0, 180_000, 0.18);
 
@@ -196,6 +218,7 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
       assets: aged.assets,
       cities,
       pipeline,
+      techDebt,
       positioning: d.ceo?.positioning ?? company.positioning,
       // Seats brought back cost a salary again, and the lever comes with them.
       seats: Array.from(new Set([
@@ -245,7 +268,18 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
    * sell it back the next year, and keep the quality for ever.
    */
   const effectiveOf = (c: Company): Company => {
-    if (c.kind !== "player" || c.assets.length === 0) return c;
+    if (c.kind !== "player") return c;
+    /*
+     * Technical debt is a condition, not a scar. Folding its cost drag into
+     * the stored unit cost compounded it every year the debt was carried —
+     * the same runaway the cost index had, reintroduced — and it meant paying
+     * the debt down left the expense permanently baked in. Applied here, a
+     * company that clears its debt is cheaper to run the moment it does.
+     */
+    const dragged = debtDrag(c.techDebt).unitCost;
+    if (c.assets.length === 0) {
+      return dragged === 1 ? c : { ...c, unitCost: c.unitCost * dragged };
+    }
     const e = assetEffects(c.assets);
     return {
       ...c,
@@ -253,7 +287,7 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
       quality: clamp(c.quality + e.quality),
       service: clamp(c.service + e.service),
       capacity: c.capacity + e.capacity,
-      unitCost: c.unitCost * e.unitCost,
+      unitCost: c.unitCost * dragged * e.unitCost,
     };
   };
   const baseById = new Map(afterDecisions.map((c) => [c.id, c]));
@@ -287,7 +321,35 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
     const fixed = company.kind === "player"
       ? fixedCosts(company, d?.coo?.headcount ?? 0, nextEconomy, reachOf(company, niche)) * focusEffects(d?.ceo?.focus).fixed
       : 0;
-    const discretionary = company.kind === "player" ? marketing + product + ops + fixed : (spendFor[company.id] ?? 0);
+    /*
+     * The finance seat's ring-fence, which now actually holds.
+     *
+     * `cashBuffer` was read by the on-screen preview and by nothing else: a
+     * chief financial officer could refuse to let the others spend the
+     * company's last two million, watch the number change on their own screen,
+     * and then watch it be spent anyway. It was the one lever on the desk that
+     * was purely decorative.
+     *
+     * Held for real, it is the only authority the finance seat has over the
+     * other four — and it is visible rather than silent, because the
+     * commitment meter already subtracts the buffer from what the table can
+     * spend, so nobody is surprised by it. Fixed costs are outside it: salaries
+     * are owed whatever anybody decided.
+     */
+    const buffer = Math.max(0, d?.cfo?.cashBuffer ?? 0);
+    const spendable = Math.max(0, company.cash + (d?.cfo?.borrow ?? 0) - buffer);
+    const wanted = marketing + product + ops;
+    const allowed = wanted > spendable && wanted > 0 ? spendable / wanted : 1;
+    if (company.kind === "player" && allowed < 1) {
+      notesFor[company.id] = [
+        ...(notesFor[company.id] ?? []),
+        `Finance held ${Math.round(buffer).toLocaleString()} back, so ${Math.round(wanted).toLocaleString()} of planned spending became ${Math.round(wanted * allowed).toLocaleString()}. Everyone's year was cut by the same fraction.`,
+      ];
+    }
+
+    const discretionary = company.kind === "player"
+      ? (marketing + product + ops) * allowed + fixed
+      : (spendFor[company.id] ?? 0);
 
     const borrowed = Math.max(0, d?.cfo?.borrow ?? 0);
     const repaid = Math.max(0, d?.cfo?.repay ?? 0);
