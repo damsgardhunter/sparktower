@@ -125,7 +125,7 @@ a failed migration fails the deploy and the old version keeps serving.
 Wait for the deploy to go live, then:
 
 ```sh
-curl -s $APP/_ready        # {"ready":true,"database":"ok","ms":…} — not just /_health
+curl -s $APP/_ready        # {"ready":true,"database":"ok","migrations":"ok","ms":…} — not just /_health
 ```
 
 `/_health` deliberately doesn't touch the database, so a 200 there proves only
@@ -140,7 +140,7 @@ result is in the comment.
 - [ ] **Boot, and then boot properly.**
       ```sh
       curl -s -o /dev/null -w '%{http_code}\n' $APP/_health          # 200 — the process is listening
-      curl -s $APP/_ready                                            # {"ready":true,"database":"ok","ms":…}
+      curl -s $APP/_ready                                            # {"ready":true,"database":"ok","migrations":"ok","ms":…}
       ```
       The second one is the one that matters: `/_health` answers 200 even when
       the database is unreachable, on purpose

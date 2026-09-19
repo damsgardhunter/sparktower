@@ -211,31 +211,35 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
        */
       const migrations = await migrationState();
       if (migrations.ok === false) {
-        return {
-          status: 503,
-          body: {
-            ready: false,
-            database: "ok",
-            migrations,
-            detail: `${migrations.pending} migration(s) not applied to this database. Run: npm run db:migrate`,
-            ms: Date.now() - started,
-          },
-        };
+        /*
+         * The numbers go to the log, not to the caller.
+         *
+         * This route is public and unauthenticated by design — a deploy check
+         * that needs a credential is a deploy check nobody runs — so what it
+         * says is read by anyone who asks. "Three migrations short" tells a
+         * stranger the deployment is mid-broken and roughly where, which is
+         * the moment to try things. The operator loses nothing: they are
+         * reading the log or the owner-only deployment page anyway, and both
+         * carry the count and the command.
+         */
+        console.warn(
+          `[ready] ${migrations.pending} migration(s) not applied to this database ` +
+          `(${migrations.applied} of ${migrations.expected}). Run: npm run db:migrate`,
+        );
+        return { status: 503, body: { ready: false, database: "ok", migrations: "behind", ms: Date.now() - started } };
       }
-      return { status: 200, body: { ready: true, database: "ok", migrations, ms: Date.now() - started } };
+      return { status: 200, body: { ready: true, database: "ok", migrations: "ok", ms: Date.now() - started } };
     } catch (err) {
       const message = String((err as Error)?.message ?? err);
-      return {
-        status: 503,
-        body: {
-          ready: false,
-          database: "unreachable",
-          // The address it tried is the answer nine times out of ten: a localhost
-          // here means the deployment carries a development connection string.
-          detail: redact(message).slice(0, 200),
-          ms: Date.now() - started,
-        },
-      };
+      /*
+       * The address it tried is the answer nine times out of ten — a localhost
+       * here means the deployment carries a development connection string —
+       * and it is also an internal hostname and port, which is not a public
+       * fact. `redact` removes credential-shaped strings, not topology. So it
+       * is logged in full and answered coarsely.
+       */
+      console.error(`[ready] database unreachable: ${redact(message).slice(0, 400)}`);
+      return { status: 503, body: { ready: false, database: "unreachable", ms: Date.now() - started } };
     }
   };
 

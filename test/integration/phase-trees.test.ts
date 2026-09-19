@@ -753,7 +753,7 @@ describe("verified by the audit", () => {
       id: "audit-1",
       signals: { serverEntry: "server/app.ts", stack: [{ name: "Express", evidence: "package.json" }, { name: "Drizzle ORM", evidence: "package.json" }] },
       findings: { capabilities: [{ area: "auth", status: "built", summary: "", evidence: [] }, { area: "data", status: "built", summary: "", evidence: [] }, { area: "analytics", status: "built", summary: "", evidence: [] }] },
-      runtime: { liveUrl: { url: "https://example.com/", ok: true, status: 200, ms: 120 }, health: null, surfaces: null, env: { referenced: 0, setHere: [], missingHere: [], instance: "test" } },
+      runtime: { liveUrl: { url: "https://example.com/", ok: true, status: 200, ms: 120 }, health: null, surfaces: null, env: { referenced: 0, setThere: null, missingThere: null, note: "not checked" } },
     };
     const r = await verifyMilestonesFromAudit(id, proof as any);
     expect(r.marked.sort()).toEqual(["SHIP.M1.5", "SHIP.M1.8", "SHIP.M2.4"]);

@@ -405,7 +405,7 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
   const findings = (audit?.findings as any) || {};
   const scan = findings.scan || {};
   type Probe = { url: string; ok: boolean; status: number | null; ms: number; error?: string } | null;
-  const runtime = ((audit as any)?.runtime ?? null) as { liveUrl: Probe; health: Probe; surfaces: { loaded: boolean; enabled: number; off: string[] } | null; env: { referenced: number; setHere: string[]; missingHere: string[]; instance: string } } | null;
+  const runtime = ((audit as any)?.runtime ?? null) as { liveUrl: Probe; health: Probe; surfaces: { loaded: boolean; enabled: number; off: string[] } | null; env: { referenced: number; setThere: string[] | null; missingThere: string[] | null; note: string } } | null;
   const delta = ((audit as any)?.delta ?? null) as AuditDelta | null;
   const ops = (Array.isArray(audit?.operations) ? audit!.operations : []) as any[];
   const waiting = !viewingOlder ? ops.filter((o) => !o?._status || o._status === "pending").length : 0;
@@ -694,8 +694,16 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
                         {label} {!r ? "—" : r.ok ? `${r.ms}ms` : "down"}
                       </Pill>
                     ))}
-                    <Pill className="border-black/[0.08] dark:border-white/10 text-foreground/80" title={runtime.env.missingHere?.length ? `Not set: ${runtime.env.missingHere.join(", ")}` : `On the ${runtime.env.instance} instance`}>
-                      Env {runtime.env.setHere.length}/{runtime.env.referenced}
+                    {/*
+                      * "3/12 set" used to be counted in SparkTower's own
+                      * process, which is not where this project runs — so the
+                      * number was about our server and read as though it were
+                      * about theirs. Unanswered now says unanswered.
+                      */}
+                    <Pill className="border-black/[0.08] dark:border-white/10 text-foreground/80" title={runtime.env.note}>
+                      {runtime.env.setThere
+                        ? <>Env {runtime.env.setThere.length}/{runtime.env.referenced}</>
+                        : <>Env {runtime.env.referenced} referenced</>}
                     </Pill>
                     {runtime.surfaces && (
                       <Pill className="border-black/[0.08] dark:border-white/10 text-foreground/80" title={runtime.surfaces.off?.length ? `Off: ${runtime.surfaces.off.join(", ")}` : undefined}>

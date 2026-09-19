@@ -48,37 +48,56 @@ describe("the two health questions", () => {
      */
     const app = await getTestApp();
     const res = await request(app).get("/_ready");
-    expect(res.body.migrations).toMatchObject({ ok: true, pending: 0 });
-    expect(res.body.migrations.applied).toBe(res.body.migrations.expected);
-    expect(res.body.migrations.applied).toBeGreaterThan(0);
+    /*
+     * Said coarsely on purpose. The route is public and unauthenticated — a
+     * deploy check that needs a credential is one nobody runs — so "three
+     * migrations short" would tell a stranger the deployment is mid-broken and
+     * roughly where. The count goes to the log instead; see below.
+     */
+    expect(res.body.migrations).toBe("ok");
+    expect(JSON.stringify(res.body)).not.toMatch(/pending|expected|applied/);
   });
 
-  it("says 503 and why when it can't, without leaking the connection string", async () => {
+  it("says 503 without telling the caller which address it tried", async () => {
+    /*
+     * The address is the answer nine times out of ten — a localhost here means
+     * the deployment carries a development connection string — and it is also
+     * an internal hostname and port, which is not a public fact about a
+     * publicly readable endpoint. So it goes to the log, where the operator
+     * already is, and not into the body.
+     */
     const app = await getTestApp();
+    const logged: string[] = [];
+    const log = vi.spyOn(console, "error").mockImplementation((...args: any[]) => { logged.push(args.join(" ")); });
     const spy = vi.spyOn(pool, "query")
       .mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:5433") as never);
     try {
       const res = await request(app).get("/_ready");
       expect(res.status).toBe(503);
       expect(res.body).toMatchObject({ ready: false, database: "unreachable" });
-      // The address it tried is the answer nine times out of ten.
-      expect(res.body.detail).toContain("127.0.0.1:5433");
+      expect(JSON.stringify(res.body), "no address in the answer").not.toContain("5433");
+      expect(logged.join("\n"), "but the operator still gets it").toContain("127.0.0.1:5433");
     } finally {
       spy.mockRestore();
+      log.mockRestore();
     }
   });
 
-  it("scrubs a connection string out of the reason, credentials and all", async () => {
+  it("scrubs a connection string out of the reason it logs, credentials and all", async () => {
     const app = await getTestApp();
+    const logged: string[] = [];
+    const log = vi.spyOn(console, "error").mockImplementation((...args: any[]) => { logged.push(args.join(" ")); });
     const spy = vi.spyOn(pool, "query")
       .mockRejectedValue(new Error("could not connect to postgresql://admin:hunter2@db.example.test/prod") as never);
     try {
       const res = await request(app).get("/_ready");
       expect(res.status).toBe(503);
-      expect(res.body.detail).not.toContain("hunter2");
-      expect(res.body.detail).toContain("<connection-string>");
+      const line = logged.join("\n");
+      expect(line).not.toContain("hunter2");
+      expect(line).toContain("<connection-string>");
     } finally {
       spy.mockRestore();
+      log.mockRestore();
     }
   });
 });
