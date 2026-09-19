@@ -86,17 +86,30 @@ export async function settleLobbies(): Promise<number> {
     .where(and(
       inArray(simVentures.phase, ["filling", "claiming", "naming"]),
       /*
-       * UTC explicitly, not bare `now()`.
+       * A Date, compared through the column — not SQL's `now()`.
        *
-       * `phase_ends_at` is a `timestamp` without a zone, and Drizzle writes JS
-       * Dates into it as UTC. `now()` is a `timestamptz`, and comparing the two
-       * converts it to the *session's* zone — so on a server running in, say,
-       * US Central, every deadline looked five hours further away than it was
-       * and abandoned rooms sat there half a day before anything swept them.
-       * It passes in a UTC-configured database and fails everywhere else,
-       * which is the worst way for a bug like this to behave.
+       * `phase_ends_at` is a `timestamp` without a zone, and Drizzle writes a
+       * JS Date into one as UTC. `now()` is a `timestamptz`, rendered in the
+       * *database session's* zone, so comparing the two is out by that zone's
+       * offset: on a database running in US Central every deadline looked five
+       * hours further away than it was, and abandoned rooms sat there half a
+       * day before anything swept them.
+       *
+       * Passing the Date to `lte` sends it through the same column mapper the
+       * deadline was written with, so both sides are UTC by construction and
+       * nothing depends on how either the database or this process is
+       * configured. `(now() at time zone 'utc')` is equally correct and was
+       * what stood here before; this is the version that does not require the
+       * reader to know which way Drizzle writes.
+       *
+       * What is *not* equivalent, and cost me an afternoon: interpolating a
+       * Date into a raw `sql` fragment. That skips the column mapper — the
+       * driver serialises it as this process's local wall clock instead — and
+       * puts the offset back in from the other direction. There is one such
+       * fragment left in server/simulation-bots.ts, and it builds its cutoff
+       * in SQL for exactly this reason.
        */
-      lte(simVentures.phaseEndsAt, sql`(now() at time zone 'utc')`),
+      lte(simVentures.phaseEndsAt, new Date()),
     ))
     .limit(200);
 

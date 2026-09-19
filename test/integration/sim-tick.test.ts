@@ -13,7 +13,8 @@
  */
 import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, lte, sql } from "drizzle-orm";
+import { pgTable, timestamp } from "drizzle-orm/pg-core";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
@@ -137,6 +138,122 @@ describe("a lobby nobody is watching", () => {
     // One person is not a company. The room closes rather than waiting on.
     expect(after.phase).toBe("retired");
   }, 120_000);
+
+  it("leaves a room alone while its clock is still running", async () => {
+    /*
+     * The other half of the sweep, which had nothing holding it.
+     *
+     * The test above proves an abandoned room does get closed. Nothing proved
+     * that a room still arguing does not, and that is the worse failure of the
+     * two: a room swept late is five people waiting, a room swept early is
+     * five people having the decision taken off them mid-sentence, with the
+     * countdown still showing on screen.
+     *
+     * It is a timezone away from happening at any moment — see the long note
+     * at the predicate in server/simulation-tick.ts, and the test below it
+     * here for why the comparison is written the way it is.
+     */
+    const app = await getTestApp();
+    const p = await player(app);
+    const join = await p.agent.post("/api/sim/join").send({ nicheId: NICHE });
+    const ventureId = join.body.ventureId;
+
+    const [before] = await db.select().from(simVentures).where(eq(simVentures.id, ventureId));
+    await db.update(simVentures)
+      .set({ phaseEndsAt: new Date(Date.now() + 15 * 60_000) })
+      .where(eq(simVentures.id, ventureId));
+
+    await settleLobbies();
+
+    const [after] = await db.select().from(simVentures).where(eq(simVentures.id, ventureId));
+    expect(after.phase, "a room with time left is not swept").toBe(before.phase);
+  }, 120_000);
+});
+
+describe("the clock the whole schema runs on", () => {
+  /*
+   * Not a test of this feature so much as of the assumption underneath it, and
+   * underneath all hundred and seventy-odd timestamp columns in the schema.
+   *
+   * Every one of them is `timestamp` without a zone, which stores a wall clock
+   * and no indication of whose. Drizzle's convention is that the wall clock is
+   * UTC. Nothing enforces that, nothing announces it, and a deadline compared
+   * against the wrong clock is wrong by a whole timezone offset — which is how
+   * abandoned lobbies came to sit half a day past a countdown that had visibly
+   * reached zero.
+   *
+   * So it is pinned here, against a real column, with the two near-misses that
+   * look like they would do the same job and do not.
+   */
+  const probe = pgTable("clock_probe", { t: timestamp("t") });
+
+  it("stores a Date as UTC, and only some ways of asking agree", async () => {
+    await getTestApp();
+    await db.execute(sql`create table if not exists clock_probe (t timestamp)`);
+    try {
+      await db.execute(sql`delete from clock_probe`);
+      // Comfortably in the future: nothing honest should call this due.
+      const future = new Date(Date.now() + 15 * 60_000);
+      await db.insert(probe).values({ t: future });
+
+      const raw: any = await db.execute(sql`
+        select t::text as stored,
+               (t <= now()) as due_now,
+               (t <= (now() at time zone 'utc')) as due_utc,
+               (t <= ${future}) as due_raw_param,
+               extract(timezone from now()) as session_offset_seconds
+        from clock_probe
+      `);
+      const row = (raw.rows ?? raw)[0];
+
+      // The convention itself: what is in the column is the UTC clock.
+      expect(row.stored.replace(" ", "T") + "Z").toBe(future.toISOString());
+
+      // And it reads back as the same instant, whatever zone reads it.
+      const [back] = await db.select().from(probe);
+      expect(back.t?.toISOString()).toBe(future.toISOString());
+
+      /*
+       * The form the code uses. Drizzle sends the Date through the column's
+       * own mapper, so both sides are UTC by construction.
+       */
+      const due = await db.select().from(probe).where(lte(probe.t, new Date()));
+      expect(due, "a deadline fifteen minutes out is not due").toHaveLength(0);
+
+      // Correct for the same reason, and what stood in the code before.
+      expect(row.due_utc, "explicit UTC agrees with the column").toBe(false);
+
+      /*
+       * The first near-miss. `now()` is rendered in the database session's
+       * zone, so it is a different clock from the one in the column. Only
+       * provable when that zone has an offset — on a UTC database the two
+       * happen to coincide, which is precisely why this bug survived so long.
+       */
+      const offset = Number(row.session_offset_seconds);
+      if (offset !== 0) {
+        expect(row.due_now, `bare now() misreads the column at offset ${offset}s`).toBe(offset > 0);
+      }
+
+      /*
+       * The second near-miss, and the one I actually wrote by accident: the
+       * *same Date*, interpolated into a raw `sql` fragment instead of handed
+       * to `lte`. It never reaches the column's mapper — the driver serialises
+       * it as this process's local wall clock — so a value that is equal to
+       * the stored one by definition does not compare equal to it.
+       *
+       * Only visible when this process is not in UTC, for the same reason.
+       */
+      const processOffset = -new Date().getTimezoneOffset();
+      if (processOffset !== 0) {
+        expect(
+          row.due_raw_param,
+          "a Date in raw SQL bypasses the column mapper and is out by the process offset",
+        ).toBe(processOffset > 0);
+      }
+    } finally {
+      await db.execute(sql`drop table if exists clock_probe`);
+    }
+  }, 60_000);
 });
 
 describe("starting a season", () => {
