@@ -45,6 +45,7 @@ import type { Role } from "@shared/simulation/types";
 import { CompanyProfile } from "@/components/sim/company-profile";
 import { TeammateProfile } from "@/components/sim/teammate-profile";
 import { lookOf } from "@/components/sim/market-look";
+import { capacityRisk, type Forecast } from "@shared/simulation/forecast";
 import {
   Loader2, Clock, TrendingUp, TrendingDown, Minus, AlertTriangle, Info,
   CheckCircle2, Circle, Banknote, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy, Newspaper,
@@ -75,7 +76,16 @@ interface Desk {
     founderShare: number; pipeline: number; positioning: string | null;
     techDebt: number; techDebtCost: { product: number; unitCost: number };
   };
-  segments: { id: string; name: string; description: string; referencePrice: number; loyalty: number; yours: number }[];
+  segments: {
+    id: string; name: string; description: string; referencePrice: number; loyalty: number; yours: number;
+    weights: { price: number; quality: number; brand: number; service: number };
+    taste: string;
+    floors: { axis: "quality" | "service"; atLeast: number }[];
+    priceCeiling: number;
+    shortOf: { axis: string; by: number }[];
+  }[];
+  forecast: Forecast | null;
+  idleCostPerUnit: number;
   cities: { id: string; name: string; weight: number; entryCost: number; note: string; open: boolean }[];
   dissolvedSeats: string[];
   economy: { demand: number; interestRate: number; costIndex: number; outlook: string; outlookMeans: string };
@@ -293,7 +303,7 @@ export default function SimulationDeskPage() {
       clock={desk.phase === "finished" ? "Season over" : secondsLeft !== null ? `${longCountdown(secondsLeft)} until this year resolves` : null}
     >
       {/* 1. What happened last year, before anyone is asked to decide this one. */}
-      {desk.lastYear ? <LastYear report={desk.lastYear} voice={v} /> : (
+      {desk.lastYear ? <LastYear report={desk.lastYear} voice={v} onOpen={() => navigate(`/simulation/${desk.ventureId}/report/${desk.lastYear!.year}`)} /> : (
         <Card><CardContent className="p-5">
           <p className="text-sm font-medium">Year one</p>
           <p className="text-sm text-muted-foreground mt-1">
@@ -307,6 +317,23 @@ export default function SimulationDeskPage() {
 
       {/* Your own thing to win, and how last year's went. */}
       {desk.challenge && <ChallengeCard challenge={desk.challenge} last={desk.lastChallenge} />}
+
+      {/*
+        * How many people will want you this year, next to the number that has
+        * to be right about it. Shown to every seat, because the forecast is
+        * the thing marketing moves and operations builds to — and the argument
+        * between them is the one this card exists to have before the tick.
+        */}
+      {desk.forecast && (
+        <ForecastCard
+          forecast={desk.forecast}
+          voice={v}
+          price={Number(desk.yourRole === "cmo" && draft ? draft.price : (desk.filed as any)?.cmo?.price ?? c.price)}
+          capacity={Number(desk.yourRole === "coo" && draft ? draft.capacityTarget : (desk.filed as any)?.coo?.capacityTarget ?? c.capacity)}
+          idleCostPerUnit={desk.idleCostPerUnit}
+          yours={desk.yourRole === "coo" ? "capacity" : desk.yourRole === "cmo" ? "price" : null}
+        />
+      )}
 
       {/* 2. Where the company stands. */}
       <Card>
@@ -594,7 +621,8 @@ export default function SimulationDeskPage() {
 
       <Card>
         <CardContent className="p-5">
-          <h3 className="text-sm font-semibold mb-3">The market</h3>
+          <h3 className="text-sm font-semibold">The market</h3>
+          <p className="text-xs text-muted-foreground mb-3">What each segment weighs when it chooses, and what it expects of you this year.</p>
           <div className="space-y-3">
             {desk.segments.map((s) => (
               <div key={s.id}>
@@ -606,6 +634,7 @@ export default function SimulationDeskPage() {
                 <p className="text-[11px] text-muted-foreground mt-0.5">
                   Pays around {money(s.referencePrice)} · {s.loyalty > 0.7 ? "very hard to move once settled" : s.loyalty > 0.4 ? "will switch for a reason" : "switches easily"}
                 </p>
+                <Criteria segment={s} company={c} />
               </div>
             ))}
           </div>
@@ -859,7 +888,7 @@ function Stat({ label, value, sub, tone = "plain" }: { label: string; value: str
 }
 
 /** Last year, said plainly, with the engine's own explanation of why. */
-function LastYear({ report, voice }: { report: NonNullable<Desk["lastYear"]>; voice: Record<string, string> }) {
+function LastYear({ report, voice, onOpen }: { report: NonNullable<Desk["lastYear"]>; voice: Record<string, string>; onOpen: () => void }) {
   const up = report.shareChange > 0.001;
   const down = report.shareChange < -0.001;
   return (
@@ -869,6 +898,14 @@ function LastYear({ report, voice }: { report: NonNullable<Desk["lastYear"]>; vo
           <h2 className="font-semibold" data-testid="text-last-year">Year {report.year}</h2>
           <Badge variant={report.rank <= 3 ? "default" : "secondary"} data-testid="text-last-rank">#{report.rank} in the market</Badge>
         </div>
+        {/*
+          * The way into the whole year. This card is the summary; the report
+          * is where a team finds out which line lost the money and who took
+          * the customers, which is what the next decision should be made on.
+          */}
+        <Button variant="outline" size="sm" className="mt-3 w-full sm:w-auto" onClick={onOpen} data-testid="button-open-report">
+          Read the full year — the accounts, the cash, and who took whom
+        </Button>
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4">
           <Stat
@@ -1029,5 +1066,159 @@ function Field({ field, value, error, onChange, cities }: {
       </div>
       {error && <p className="text-xs text-destructive mt-1.5">{error}</p>}
     </div>
+  );
+}
+
+
+/**
+ * What a segment weighs, and whether you clear what it expects.
+ *
+ * The weights are the engine's own — the exponents it chooses by — shown as one
+ * bar so the shape is readable at a glance: a segment that is mostly price is
+ * mostly one colour. Beneath them, this year's floors with a tick or a cross,
+ * because "long-haulers expect quality of 55" means nothing until it sits next
+ * to "you have 41".
+ */
+function Criteria({ segment: s, company: c }: {
+  segment: Desk["segments"][number];
+  company: Desk["company"];
+}) {
+  const parts: { key: keyof typeof s.weights; label: string; tone: string }[] = [
+    { key: "price", label: "price", tone: "bg-sky-500" },
+    { key: "quality", label: "quality", tone: "bg-violet-500" },
+    { key: "brand", label: "brand", tone: "bg-amber-500" },
+    { key: "service", label: "service", tone: "bg-emerald-500" },
+  ];
+  return (
+    <div className="mt-2 space-y-1.5" data-testid={`criteria-${s.id}`}>
+      <div className="flex h-2 rounded-full overflow-hidden" aria-hidden>
+        {parts.map((p) => <div key={p.key} className={p.tone} style={{ width: `${s.weights[p.key]}%` }} />)}
+      </div>
+      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+        {parts.map((p) => (
+          <span key={p.key} className="flex items-center gap-1">
+            <span className={`inline-block h-2 w-2 rounded-full ${p.tone}`} /> {p.label} {s.weights[p.key]}%
+          </span>
+        ))}
+      </div>
+      <p className="text-xs">{s.taste}</p>
+      <div className="flex flex-wrap gap-1.5">
+        {s.floors.map((f) => {
+          const have = c[f.axis];
+          const ok = have >= f.atLeast;
+          return (
+            <Badge key={f.axis} variant={ok ? "secondary" : "destructive"} className="text-[10px] font-normal" data-testid={`floor-${s.id}-${f.axis}`}>
+              expects {f.axis} {f.atLeast}+ · you {have} {ok ? "✓" : "✗"}
+            </Badge>
+          );
+        })}
+        <Badge variant={c.price <= s.priceCeiling ? "outline" : "destructive"} className="text-[10px] font-normal">
+          stops listening above {money(s.priceCeiling)} · you {money(c.price)}
+        </Badge>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The forecast, and the bet capacity makes against it.
+ *
+ * Demand is read off the forecast's price curve at whatever price is on the
+ * table — the marketing seat's draft as they type, everyone else's view of
+ * what marketing filed — so moving the price moves the range while a hand is
+ * still on the lever. The capacity verdict is then priced both ways, in money:
+ * what the empty shelves cost if the year comes in low, and what walks to a
+ * rival if it comes in high. That is the whole decision, and until now it had
+ * no cost on one side.
+ */
+function ForecastCard({ forecast, voice, price, capacity, idleCostPerUnit, yours }: {
+  forecast: Forecast; voice: Record<string, string>; price: number; capacity: number; idleCostPerUnit: number;
+  yours: "capacity" | "price" | null;
+}) {
+  const curve = [...forecast.curve].sort((a, b) => a.price - b.price);
+  const at = (p: number): number => {
+    if (!Number.isFinite(p) || curve.length === 0) return forecast.likely;
+    if (p <= curve[0].price) return curve[0].likely;
+    if (p >= curve[curve.length - 1].price) return curve[curve.length - 1].likely;
+    for (let i = 1; i < curve.length; i++) {
+      if (p <= curve[i].price) {
+        const a = curve[i - 1], b = curve[i];
+        const t = (p - a.price) / Math.max(1, b.price - a.price);
+        return Math.round(a.likely + (b.likely - a.likely) * t);
+      }
+    }
+    return forecast.likely;
+  };
+  const likely = at(price);
+  const live: Forecast = {
+    ...forecast,
+    likely,
+    low: Math.round(likely * (1 - forecast.band)),
+    high: Math.round(likely * (1 + forecast.band)),
+  };
+  const risk = capacityRisk({ capacity, forecast: live, price, idleCostPerUnit });
+  const verdict = {
+    short: { text: "Short. Even an ordinary year turns people away — straight to a rival.", tone: "text-destructive" },
+    tight: { text: "Tight. A good year will outrun it.", tone: "text-amber-600" },
+    balanced: { text: "Built for the range.", tone: "text-primary" },
+    generous: { text: "Generous. Room for a great year, paid for in an ordinary one.", tone: "text-amber-600" },
+    idle: { text: "Far more than the forecast. Most of it will sit empty and cost money.", tone: "text-destructive" },
+  }[risk.verdict];
+
+  // One scale for the range bar and the capacity marker.
+  const top = Math.max(live.high, capacity) * 1.1 || 1;
+  const x = (n: number) => `${Math.min(100, (n / top) * 100)}%`;
+
+  return (
+    <Card data-testid="card-forecast">
+      <CardContent className="p-5 space-y-3">
+        <div className="flex items-baseline justify-between gap-3">
+          <h3 className="text-sm font-semibold">The forecast</h3>
+          <p className="text-xs text-muted-foreground">at {money(price)} {voice.per}</p>
+        </div>
+        <p className="text-sm" data-testid="text-forecast-range">
+          Somewhere between <span className="font-semibold tabular-nums">{live.low.toLocaleString()}</span> and{" "}
+          <span className="font-semibold tabular-nums">{live.high.toLocaleString()}</span> {voice.customers} this year, most likely about{" "}
+          <span className="font-semibold tabular-nums">{live.likely.toLocaleString()}</span>.
+        </p>
+
+        <div className="relative h-8" aria-hidden>
+          <div className="absolute top-3 h-2 w-full rounded-full bg-muted" />
+          <div className="absolute top-3 h-2 rounded-full bg-primary/40" style={{ left: x(live.low), width: `calc(${x(live.high)} - ${x(live.low)})` }} />
+          <div className="absolute top-2 h-4 w-0.5 bg-primary" style={{ left: x(live.likely) }} />
+          <div className="absolute top-0 h-8 w-0.5 bg-foreground" style={{ left: x(capacity) }} />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          The shaded band is the forecast. The dark line is what you are built for: {Math.round(capacity).toLocaleString()} {voice.capacityShort}
+          {yours === "capacity" ? ", and it is yours to move" : ""}.
+        </p>
+
+        <p className={`text-sm font-medium ${verdict.tone}`} data-testid="text-capacity-verdict">{verdict.text}</p>
+        <div className="grid sm:grid-cols-2 gap-2 text-xs">
+          <div className="rounded-md bg-muted/50 p-2.5">
+            <p className="text-muted-foreground">If the year comes in low</p>
+            <p className="tabular-nums">{risk.idleAtLow.toLocaleString()} {voice.capacityShort} idle, costing {money(risk.idleCostAtLow)}</p>
+          </div>
+          <div className="rounded-md bg-muted/50 p-2.5">
+            <p className="text-muted-foreground">If the year comes in high</p>
+            <p className="tabular-nums">{risk.shortAtHigh.toLocaleString()} turned away — {money(risk.revenueLostAtHigh)} of sales handed to {voice.rivals}</p>
+          </div>
+        </div>
+
+        {/* The price curve, so "what if we charged a bit more" is answered before anyone asks. */}
+        <div className="flex gap-1.5 overflow-x-auto pt-1">
+          {curve.map((pt) => (
+            <div key={pt.price} className={`rounded-md border px-2 py-1 text-[11px] shrink-0 ${Math.abs(pt.price - price) < 1 ? "border-primary" : "border-border"}`}>
+              <p className="text-muted-foreground">{money(pt.price)}</p>
+              <p className="tabular-nums">{pt.likely.toLocaleString()}</p>
+            </div>
+          ))}
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          Worked out from the market as it stands, with the incumbents' likely response and the table's drafts so far. It
+          cannot see what the other teams decide tonight — which is why it is a range.
+        </p>
+      </CardContent>
+    </Card>
   );
 }

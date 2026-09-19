@@ -28,6 +28,7 @@
  * produces nothing. One seat pulling hard while the others idle moves very
  * little, which is the whole design.
  */
+import { expectationPenalty } from "./criteria";
 import type { Company, Economy, Niche, Segment } from "./types";
 
 /** What a company is offering a particular segment this year, after everything interacts. */
@@ -56,7 +57,7 @@ const unit = (score: number): number => Math.max(0, Math.min(100, score)) / 100;
  * rescues it. Teams learn this in year one and it is the lesson the whole game
  * is built to teach.
  */
-export function appealFor(company: Company, segment: Segment): number {
+export function appealFor(company: Company, segment: Segment, year?: number): number {
   // Price, relative to what this segment thinks is normal. Cheaper is better,
   // but only until it isn't — a price far under the reference reads as cheap
   // rather than good, and quality-led segments distrust it.
@@ -109,7 +110,18 @@ export function appealFor(company: Company, segment: Segment): number {
     1,
   );
 
-  return Math.max(0, Math.min(1, appeal * trust));
+  /*
+   * And what the segment expects this year. Below a floor on something it
+   * weighs heavily, a segment does not trade the shortfall off against a good
+   * price — it rules you out, most of the way. See criteria.ts.
+   *
+   * Only when the year is known: the incumbents' threat assessment calls this
+   * without one, and a defender reading the market should see preference, not
+   * this year's rules, which it is not the one being judged by.
+   */
+  const expected = year === undefined ? 1 : expectationPenalty(company, segment, year);
+
+  return Math.max(0, Math.min(1, appeal * trust * expected));
 }
 
 /** How big a segment is this year, before anyone competes for it. */
@@ -124,6 +136,23 @@ export interface AllocationResult {
   unserved: Record<string, number>;
   /** How much of each segment moved this year — the churn a team can actually see. */
   switched: Record<string, number>;
+  /**
+   * Who took whom: segment → the company they left → the company that won
+   * them. Never includes a company winning back its own leavers. Counted
+   * before the winner's capacity is applied — these are people who *chose*
+   * the winner, which is the thing a report is explaining.
+   */
+  flows: Record<string, Record<string, Record<string, number>>>;
+  /** New demand each company won in each segment, before capacity. */
+  fresh: Record<string, Record<string, number>>;
+  /** segment → company → customers it won and could not serve. */
+  turnedAway: Record<string, Record<string, number>>;
+  /**
+   * Where those turned-away customers went instead: segment → the company
+   * that turned them away → the rival that had room. Whatever fitted nowhere
+   * left the market for the year.
+   */
+  spill: Record<string, Record<string, Record<string, number>>>;
 }
 
 /**
@@ -188,15 +217,22 @@ export function allocate(
   const held: Record<string, Record<string, number>> = {};
   const unserved: Record<string, number> = {};
   const switched: Record<string, number> = {};
+  const flows: AllocationResult["flows"] = {};
+  const fresh: AllocationResult["fresh"] = {};
+  const turnedAway: AllocationResult["turnedAway"] = {};
+  const spill: AllocationResult["spill"] = {};
   for (const c of companies) { held[c.id] = {}; unserved[c.id] = 0; }
 
-  // What each company can still deliver, spent down as customers are assigned.
-  const capacityLeft: Record<string, number> = Object.fromEntries(companies.map((c) => [c.id, c.capacity]));
+  /** Appeal per segment, kept so the spill pass uses the same preferences the year was decided on. */
+  const appealBySegment: Record<string, Record<string, number>> = {};
 
   for (const segment of niche.segments) {
+    flows[segment.id] = {};
+    fresh[segment.id] = {};
     const demand = segmentDemand(segment, year, economy);
     const appeal: Record<string, number> = {};
-    for (const c of companies) appeal[c.id] = appealFor(c, segment) * positioningFor(c, segment.id);
+    for (const c of companies) appeal[c.id] = appealFor(c, segment, year) * positioningFor(c, segment.id);
+    appealBySegment[segment.id] = appeal;
 
     const bestAppeal = Math.max(...companies.map((c) => appeal[c.id]), 0.0001);
 
@@ -207,6 +243,7 @@ export function allocate(
      * change supplier slowly, and a simulation where they don't is a
      * simulation where brands are worthless.
      */
+    const leaving: Record<string, number> = {};
     let poolForNewcomers = 0;
     for (const c of companies) {
       const current = c.customers[segment.id] ?? 0;
@@ -229,15 +266,16 @@ export function allocate(
       const tolerance = 0.06 + segment.loyalty * 0.34;
       const excess = Math.max(0, gap - tolerance);
       const leaveRate = Math.min(0.35, excess * (1.8 - segment.loyalty));
-      const leaving = Math.round(current * leaveRate);
+      leaving[c.id] = Math.round(current * leaveRate);
 
-      held[c.id][segment.id] = current - leaving;
-      poolForNewcomers += leaving;
+      held[c.id][segment.id] = current - leaving[c.id];
+      poolForNewcomers += leaving[c.id];
     }
 
     const alreadyHeld = companies.reduce((sum, c) => sum + (held[c.id][segment.id] ?? 0), 0);
     // New demand this year, plus everyone who just left somebody.
-    const upForGrabs = Math.max(0, demand - alreadyHeld) + poolForNewcomers;
+    const newDemand = Math.max(0, demand - alreadyHeld);
+    const upForGrabs = newDemand + poolForNewcomers;
     switched[segment.id] = poolForNewcomers;
 
     if (upForGrabs <= 0) continue;
@@ -247,8 +285,7 @@ export function allocate(
      * not proportional — being slightly better than everyone wins more than
      * slightly more customers, which is what makes a genuinely better offer
      * worth the years it takes to build.
-     */
-    /*
+     *
      * Reach multiplies appeal for new customers only. Whoever you already have
      * stays yours — leaving a city does not repossess its customers — but the
      * people choosing this year can only choose a company that sells where
@@ -262,8 +299,27 @@ export function allocate(
     if (totalWeight <= 0) continue;
 
     for (const { id, weight } of weights) {
-      const won = Math.round(upForGrabs * (weight / totalWeight));
+      const share = weight / totalWeight;
+      const won = Math.round(upForGrabs * share);
       held[id][segment.id] = (held[id][segment.id] ?? 0) + won;
+
+      /*
+       * Who these people were, for the year's report. The pool is one pool, so
+       * each winner took the same slice of every company's leavers and of the
+       * new demand — which is what lets a report say "lost 41,000 to Pairwise"
+       * rather than only "lost 41,000".
+       */
+      let fromRivals = 0;
+      for (const [from, left] of Object.entries(leaving)) {
+        if (from === id || left <= 0) continue;
+        const taken = Math.round(left * share);
+        if (taken <= 0) continue;
+        ((flows[segment.id][from] ??= {})[id] = taken);
+        fromRivals += taken;
+      }
+      // Whatever is left of the win is new demand, or their own leavers won back.
+      const regained = Math.round((leaving[id] ?? 0) * share);
+      fresh[segment.id][id] = Math.max(0, won - fromRivals - regained);
     }
   }
 
@@ -273,19 +329,80 @@ export function allocate(
    * counted, because failing to deliver is a fact a team should be told about
    * rather than a number that quietly never appears.
    */
+  const room: Record<string, number> = {};
   for (const c of companies) {
     const total = Object.values(held[c.id]).reduce((sum, n) => sum + n, 0);
-    const room = capacityLeft[c.id];
-    if (total <= room) continue;
+    const capacity = Math.max(0, c.capacity);
+    if (total <= capacity) {
+      room[c.id] = capacity - total;
+      continue;
+    }
 
-    const ratio = room / total;
-    unserved[c.id] = total - room;
+    const ratio = capacity / total;
+    unserved[c.id] = total - capacity;
+    room[c.id] = 0;
+    let kept = 0;
     for (const segmentId of Object.keys(held[c.id])) {
-      held[c.id][segmentId] = Math.floor(held[c.id][segmentId] * ratio);
+      const before = held[c.id][segmentId];
+      held[c.id][segmentId] = Math.floor(before * ratio);
+      kept += held[c.id][segmentId];
+      (turnedAway[segmentId] ??= {})[c.id] = before - held[c.id][segmentId];
+    }
+    // Flooring leaves a few seats spare; they are room, not waste.
+    room[c.id] = Math.max(0, capacity - kept);
+  }
+
+  /*
+   * And where the turned-away go: straight to a rival with room.
+   *
+   * They used to vanish. A company that under-built lost the customers and a
+   * little reputation, and nobody else gained anything — so being short of
+   * capacity was a missed opportunity rather than a gift to the competition,
+   * and the forecast was a number nobody could get badly wrong. Now the
+   * people you could not serve go to whoever they would have chosen next,
+   * provided that company can take them, and they arrive as its customers.
+   *
+   * Split by the same appeal the year was decided on, and capped by each
+   * rival's remaining room. What fits nowhere leaves the market for the year.
+   */
+  for (const segment of niche.segments) {
+    const rejected = turnedAway[segment.id];
+    if (!rejected) continue;
+    const appeal = appealBySegment[segment.id] ?? {};
+    spill[segment.id] = {};
+
+    for (const [from, count] of Object.entries(rejected)) {
+      if (count <= 0) continue;
+      const takers = companies
+        .filter((c) => c.id !== from && room[c.id] > 0)
+        .map((c) => ({ id: c.id, weight: Math.pow(appeal[c.id] ?? 0, 2) * reachOf(c, niche) }))
+        .filter((t) => t.weight > 0);
+      const total = takers.reduce((sum, t) => sum + t.weight, 0);
+      if (total <= 0) continue;
+
+      /*
+       * Scaled by how the rival compares with the company that turned them
+       * away. Somebody who queued for Ember does not settle for a brand they
+       * have never heard of just because it had a free table; they settle for
+       * the next thing they would actually have chosen, or they go home. The
+       * first version of this handed every overflow to whoever had room, and an
+       * idle team with a large empty warehouse became profitable in year three
+       * for having done nothing.
+       */
+      const theirs = appeal[from] ?? 0;
+      for (const t of takers) {
+        const willing = theirs > 0 ? Math.min(1, (appeal[t.id] ?? 0) / theirs) : 1;
+        const wanted = Math.round(count * (t.weight / total) * willing);
+        const taken = Math.min(wanted, room[t.id]);
+        if (taken <= 0) continue;
+        room[t.id] -= taken;
+        held[t.id][segment.id] = (held[t.id][segment.id] ?? 0) + taken;
+        (spill[segment.id][from] ??= {})[t.id] = taken;
+      }
     }
   }
 
-  return { held, unserved, switched };
+  return { held, unserved, switched, flows, fresh, turnedAway, spill };
 }
 
 /** Everyone's share of the whole niche, 0–1, for the table everyone reads first. */

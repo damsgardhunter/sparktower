@@ -15,12 +15,13 @@
  *   4. Money settles: revenue, costs, interest, and what that does to credit.
  *   5. Reputation moves, last, because it is a consequence rather than a lever.
  */
-import type { Company, Economy, World } from "./types";
+import type { Company, Economy, Niche, World } from "./types";
 import { allocate, marketShares } from "./market";
 import { incumbentYear } from "./incumbents";
-import { fixedCosts, focusEffects, interlock, lift, debtDrag, nextTechDebt, sanitiseDecisions, FOCUS_NOTES, type Focus, type TeamDecisions } from "./decisions";
+import { fixedCosts, focusEffects, interlock, lift, debtDrag, nextTechDebt, sanitiseDecisions, idleCapacityCost, marketPriceOf, taxOn, FOCUS_NOTES, type Focus, type TeamDecisions } from "./decisions";
+import { shortfalls, expectationsFor, weightsOf } from "./criteria";
 import { assetEffects, ageAssets } from "./assets";
-import { reachOf } from "./market";
+import { reachOf, appealFor } from "./market";
 import { eventFor, economyWithEvent, companyWithEvent, type MarketEvent } from "./events";
 
 /** What one company is told about the year it just had. */
@@ -89,6 +90,106 @@ export interface CompanyReport {
    */
   event?: { headline: string; body: string; advice: string; scope: "market" | "company"; mine: boolean };
   bankrupt: boolean;
+
+  /**
+   * The year's accounts, line by line. Players only — a rival's cost base is
+   * its own business.
+   *
+   * Every one of these figures already existed at settlement and was summed
+   * into a single `costs` and thrown away. Without the breakdown a team could
+   * see that it lost two million and not which of the five of them lost it,
+   * which is the one thing a year is supposed to teach.
+   */
+  pnl?: ProfitAndLoss;
+  /** Why the bank balance moved from where it started to where it ended. */
+  cashBridge?: CashBridge;
+  /** Where every customer came from and went to, segment by segment. */
+  segments?: SegmentBridge[];
+  /** What everybody else in the market did this year. */
+  rivals?: RivalMove[];
+}
+
+export interface ProfitAndLoss {
+  revenue: number;
+  /** Making and delivering what was sold. */
+  costToServe: number;
+  /** The five seats and everyone else on the payroll, scaled by how widely the company sells. */
+  salaries: number;
+  marketing: number;
+  /** Features, reliability, research and paying down technical debt. */
+  product: number;
+  /** Support and efficiency. */
+  operations: number;
+  /** Capacity paid for and not used. */
+  idleCapacity: number;
+  interest: number;
+  /** Before tax. */
+  operatingProfit: number;
+  tax: number;
+  /** After tax: the figure the year is judged on. */
+  profit: number;
+  /** Losses still available to set against future profits. */
+  lossesCarried: number;
+}
+
+export interface CashLine {
+  label: string;
+  amount: number;
+}
+
+export interface CashBridge {
+  opening: number;
+  lines: CashLine[];
+  closing: number;
+}
+
+export interface Flow {
+  id: string;
+  name: string;
+  count: number;
+}
+
+export interface SegmentBridge {
+  segmentId: string;
+  name: string;
+  start: number;
+  /** Customers who chose a rival over you this year, by rival. */
+  lostTo: Flow[];
+  /** Customers who left a rival for you, by rival. */
+  wonFrom: Flow[];
+  /** New to the market this year, and chose you. */
+  fresh: number;
+  /** Chose you and could not be served. */
+  turnedAway: number;
+  /** Where the turned-away went instead. */
+  sentTo: Flow[];
+  /** Turned away by a rival who was full, and taken in by you. */
+  pickedUp: number;
+  /** Rounding across a market of millions; shown only when it is not trivial. */
+  other: number;
+  end: number;
+  /** The biggest loss, explained in one sentence. Null when nothing was lost. */
+  why: string | null;
+  /** Where you fell below what this segment expected this year. */
+  shortOf: { axis: string; by: number; expected: number }[];
+}
+
+export interface RivalMove {
+  id: string;
+  name: string;
+  kind: "player" | "incumbent";
+  priceBefore: number;
+  priceAfter: number;
+  /** The segment a team declared itself for, by name. */
+  positioning: string | null;
+  /** Segments an incumbent has stopped paying to defend, by name. */
+  conceded: string[];
+  /** Roughly what it spent on marketing, product and operations — rounded, because it is an estimate from outside. */
+  spent: number;
+  shareBefore: number;
+  shareAfter: number;
+  capacityBefore: number;
+  capacityAfter: number;
 }
 
 export interface YearResult {
@@ -100,6 +201,107 @@ export interface YearResult {
 
 /** Bounded 0–100. */
 const clamp = (n: number): number => Math.max(0, Math.min(100, n));
+
+
+const money = (n: number): string => `£${Math.round(n).toLocaleString()}`;
+
+/**
+ * Why the biggest single loss in a segment happened, in one sentence.
+ *
+ * "Lost 41,000 swipers to Pairwise" is a fact; "who undercut you by £9" is the
+ * lesson, and the lesson is what a year is for. The reason is the axis on which
+ * the rival beat you by the most *that this segment cares about* — a rival who
+ * was better known does not explain losing a segment that barely notices brand,
+ * however large the gap.
+ */
+function lossReason(me: Company, them: Company, segment: Niche["segments"][number]): string {
+  const w = weightsOf(segment);
+  const candidates = [
+    { axis: "price", score: (w.price / 100) * Math.max(0, me.price - them.price) / Math.max(1, segment.referencePrice),
+      text: `who undercut you by ${money(me.price - them.price)}` },
+    { axis: "quality", score: (w.quality / 100) * Math.max(0, them.quality - me.quality) / 100,
+      text: `who were ahead on quality, ${Math.round(them.quality)} to your ${Math.round(me.quality)}` },
+    { axis: "brand", score: (w.brand / 100) * Math.max(0, them.brand - me.brand) / 100,
+      text: `who were better known, ${Math.round(them.brand)} to your ${Math.round(me.brand)}` },
+    { axis: "service", score: (w.service / 100) * Math.max(0, them.service - me.service) / 100,
+      text: `who looked after people better, service ${Math.round(them.service)} to your ${Math.round(me.service)}` },
+  ].sort((a, b) => b.score - a.score);
+  if (candidates[0].score <= 0) {
+    return "who were no better on anything this segment weighs — they won on being everywhere you were not, or on who was already holding them";
+  }
+  return candidates[0].text;
+}
+
+/** Where every customer in every segment came from and went to, for one company. */
+function segmentBridges(input: {
+  company: Company;
+  before: Company;
+  effective: Map<string, Company>;
+  names: Map<string, string>;
+  niche: Niche;
+  year: number;
+  allocation: ReturnType<typeof allocate>;
+}): SegmentBridge[] {
+  const { company, before, effective, names, niche, year, allocation } = input;
+  const me = effective.get(company.id) ?? company;
+  const flowList = (m: Record<string, number> | undefined): Flow[] =>
+    Object.entries(m ?? {})
+      .filter(([, n]) => n > 0)
+      .map(([id, count]) => ({ id, name: names.get(id) ?? id, count }))
+      .sort((a, b) => b.count - a.count);
+
+  return niche.segments.map((segment) => {
+    const sid = segment.id;
+    const start = before.customers[sid] ?? 0;
+    const end = company.customers[sid] ?? 0;
+
+    const lostTo = flowList(allocation.flows[sid]?.[company.id]);
+    const wonFrom: Flow[] = [];
+    for (const [from, to] of Object.entries(allocation.flows[sid] ?? {})) {
+      const n = to[company.id] ?? 0;
+      if (from !== company.id && n > 0) wonFrom.push({ id: from, name: names.get(from) ?? from, count: n });
+    }
+    wonFrom.sort((a, b) => b.count - a.count);
+
+    const turnedAway = allocation.turnedAway[sid]?.[company.id] ?? 0;
+    const sentTo = flowList(allocation.spill[sid]?.[company.id]);
+    let pickedUp = 0;
+    for (const [from, to] of Object.entries(allocation.spill[sid] ?? {})) {
+      if (from !== company.id) pickedUp += to[company.id] ?? 0;
+    }
+
+    const lost = lostTo.reduce((sum, f) => sum + f.count, 0);
+    const won = wonFrom.reduce((sum, f) => sum + f.count, 0);
+    const freshWon = allocation.fresh[sid]?.[company.id] ?? 0;
+    /*
+     * Rounding, across markets of millions, split a dozen ways. Carried in its
+     * own line so the bridge adds up to the customer exactly — a bridge that is
+     * out by forty on a screen people will check with a calculator is a bridge
+     * nobody trusts afterwards.
+     */
+    const other = end - (start - lost + won + freshWon - turnedAway + pickedUp);
+
+    const biggest = lostTo[0];
+    const rival = biggest ? effective.get(biggest.id) : undefined;
+    const why = biggest && rival && biggest.count >= Math.max(50, start * 0.01)
+      ? `Lost ${biggest.count.toLocaleString()} ${segment.name.toLowerCase()} to ${biggest.name}, ${lossReason(me, rival, segment)}.`
+      : null;
+
+    const { floors } = expectationsFor(segment, year);
+    const shortOf = shortfalls(me, segment, year).map((sf) => ({
+      axis: sf.axis,
+      by: sf.by,
+      expected: sf.axis === "price"
+        ? expectationsFor(segment, year).priceCeiling
+        : floors.find((f) => f.axis === sf.axis)?.atLeast ?? 0,
+    }));
+
+    return {
+      segmentId: sid, name: segment.name, start, lostTo, wonFrom, fresh: freshWon,
+      turnedAway, sentTo, pickedUp, other, end, why, shortOf,
+    };
+  });
+}
 
 export function resolveYear(world: World, decisions: TeamDecisions[], economy?: Economy): YearResult {
   const { niche } = world;
@@ -124,6 +326,14 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
   const spendFor: Record<string, number> = {};
   /** What each company actually earned and spent trading, as opposed to what moved through its bank account. */
   const ledger: Record<string, { revenue: number; costs: number; profit: number }> = {};
+  /** The line-by-line version of the same thing, kept for the year's report. */
+  const accounts: Record<string, { pnl: ProfitAndLoss; lines: CashLine[]; opening: number }> = {};
+  /** Cities each team opened this year, and what that cost. */
+  const openedFor: Record<string, { cost: number; names: string[] }> = {};
+  /** Segments each incumbent gave up defending. */
+  const concededFor: Record<string, string[]> = {};
+  /** What each company spent on the things a rival can see it spending on. */
+  const visibleSpend: Record<string, number> = {};
 
   /* 1. Players become the company their decisions describe. */
   const afterDecisions: Company[] = world.companies.map((company) => {
@@ -144,8 +354,8 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
       notesFor[company.id].push(FOCUS_NOTES[d.ceo.focus as Focus]);
     }
 
-    const brandGain = lift((d.cmo?.brandSpend ?? 0) + (d.cmo?.celebritySpend ?? 0) * 1.4, 220_000, 16) * lock.deliverable * focus.marketing;
-    const perfGain = lift(d.cmo?.performanceSpend ?? 0, 180_000, 9) * lock.deliverable * focus.marketing;
+    const brandGain = lift((d.cmo?.brandSpend ?? 0) + (d.cmo?.celebritySpend ?? 0) * 1.4, 220_000, 16) * focus.marketing;
+    const perfGain = lift(d.cmo?.performanceSpend ?? 0, 180_000, 9) * focus.marketing;
     /*
      * This year's shipping, plus whatever last year's research finished.
      * Research buys more per pound than features do and buys it a year late —
@@ -219,6 +429,7 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
       );
     }
     const cities = Array.from(new Set([...here, ...opened.map((c) => c.id)]));
+    openedFor[company.id] = { cost: entryCost, names: opened.map((c) => c.name) };
 
     return {
       ...company,
@@ -306,6 +517,7 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
     if (company.kind !== "incumbent") return company;
     const moves = incumbentYear(company, players, niche, nextEconomy);
     spendFor[company.id] = moves.spend;
+    concededFor[company.id] = moves.conceded;
     notesFor[company.id] = [moves.note];
     return { ...company, price: moves.price, quality: moves.quality, brand: moves.brand, service: moves.service, capacity: moves.capacity };
   });
@@ -378,13 +590,33 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
     const discretionary = company.kind === "player"
       ? (marketing + product + ops) * allowed + fixed
       : (spendFor[company.id] ?? 0);
+    visibleSpend[company.id] = company.kind === "player"
+      ? (marketing + product + ops) * allowed
+      : (spendFor[company.id] ?? 0);
 
     const borrowed = Math.max(0, d?.cfo?.borrow ?? 0);
     const repaid = Math.max(0, d?.cfo?.repay ?? 0);
     const raised = Math.max(0, d?.cfo?.raiseAmount ?? d?.cfo?.raise?.amount ?? 0);
 
+    /*
+     * Headroom paid for and not used. The company's own capacity, not what a
+     * distribution deal lends it — a deal is somebody else's warehouse, and
+     * the point of buying one is that you do not pay for its empty shelves.
+     */
+    const ownCapacity = (baseById.get(company.id) ?? company).capacity;
+    const idle = company.kind === "player" ? Math.max(0, ownCapacity - units) : 0;
+    const idleCost = company.kind === "player" ? idleCapacityCost(idle, niche) : 0;
+    if (company.kind === "player" && idleCost > 50_000 && idle > ownCapacity * 0.25) {
+      notesFor[company.id] = [
+        ...(notesFor[company.id] ?? []),
+        `${Math.round(idle).toLocaleString()} of the ${Math.round(ownCapacity).toLocaleString()} ${niche.voice.capacityShort} went unused, and cost ${Math.round(idleCost).toLocaleString()} to keep ready.`,
+      ];
+    }
+
     const interest = company.debt * nextEconomy.interestRate;
-    const costs = variable + discretionary + interest;
+    const operatingProfit = revenue - (variable + discretionary + interest + idleCost);
+    const taxed = company.kind === "player" ? taxOn(operatingProfit, company.taxLosses ?? 0) : { tax: 0, carried: 0 };
+    const costs = variable + discretionary + interest + idleCost + taxed.tax;
     const profit = revenue - costs;
     /*
      * Kept, because the report used to throw this away and recompute profit as
@@ -403,9 +635,10 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
      * the recovery moves rather than closing the game.
      */
     let bankruptSince = company.bankruptSince;
+    let emergencyDrawn = 0;
     if (cash < 0) {
       const emergency = Math.min(company.creditLimit - debt, -cash);
-      if (emergency > 0) { cash += emergency; debt += emergency; }
+      if (emergency > 0) { cash += emergency; debt += emergency; emergencyDrawn = emergency; }
       if (cash < 0 && company.kind === "player") {
         bankruptSince ??= world.year;
         notesFor[company.id] = [
@@ -426,6 +659,16 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
      */
     const turnedAway = allocation.unserved[company.id] ?? 0;
     const served = units;
+    if (company.kind === "player" && turnedAway > 0) {
+      let wentToRivals = 0;
+      for (const bySource of Object.values(allocation.spill)) {
+        for (const n of Object.values(bySource[company.id] ?? {})) wentToRivals += n;
+      }
+      notesFor[company.id] = [
+        ...(notesFor[company.id] ?? []),
+        `${turnedAway.toLocaleString()} people wanted you and could not be served${wentToRivals > 0 ? ` — ${wentToRivals.toLocaleString()} of them went straight to a rival` : ""}. They are ${niche.voice.turnedAway}, and they remember.`,
+      ];
+    }
     const letDown = served + turnedAway > 0 ? turnedAway / (served + turnedAway) : 0;
     /*
      * Value for money, against what this market charges on average and capped
@@ -439,8 +682,7 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
      * customers away could not touch it: the more people it failed to serve,
      * the better its reputation got.
      */
-    const marketPrice = niche.segments.reduce((sum, s) => sum + s.referencePrice * s.size, 0)
-      / Math.max(1, niche.segments.reduce((sum, s) => sum + s.size, 0));
+    const marketPrice = marketPriceOf(niche);
     const valueForMoney = company.price > 0
       ? Math.min(2, (company.quality / 100) / (company.price / marketPrice))
       : 0;
@@ -453,8 +695,19 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
     /*
      * Back to the company's own numbers. Everything the assets lent it was for
      * facing the market with; what it keeps is what it built, plus the result.
+     *
+     * For a team, that is the figure from before the asset effects. For an
+     * incumbent it is the figure *after* its moves — and it used to be the
+     * figure before them, because `baseById` was snapshotted before the
+     * incumbents decided anything. So every incumbent in every season was
+     * frozen at its opening quality, brand, service and capacity for all
+     * fourteen years: a fortress could spend two and a half million a year on
+     * service and keep none of it, and Ember's quality read 66.0 in year one
+     * and 66.0 in year fourteen. Nobody could see it until the year-end report
+     * started listing what each rival did, and every one of them had
+     * apparently "held course" while spending millions.
      */
-    const base = baseById.get(company.id) ?? company;
+    const base = company.kind === "incumbent" ? company : baseById.get(company.id) ?? company;
 
     /*
      * What raising costs, which is not interest.
@@ -476,8 +729,50 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
       ];
     }
 
+    if (company.kind === "player") {
+      const allowedShare = (n: number) => n * allowed;
+      const opened = openedFor[company.id];
+      /*
+       * The opening balance is the one the year started from, which is not
+       * `company.cash`: opening a city has already come out of that by this
+       * point, and a bridge that began after the first withdrawal would not
+       * add up.
+       */
+      const opening = company.cash + (opened?.cost ?? 0);
+      const lines: CashLine[] = [];
+      if (opened && opened.cost > 0) lines.push({ label: `Opened in ${opened.names.join(", ")}`, amount: -opened.cost });
+      lines.push({ label: "Sales", amount: revenue });
+      lines.push({ label: "Running the business", amount: -(variable + discretionary + idleCost) });
+      if (interest > 0) lines.push({ label: "Interest", amount: -interest });
+      if (taxed.tax > 0) lines.push({ label: "Tax", amount: -taxed.tax });
+      if (borrowed > 0) lines.push({ label: "Borrowed", amount: borrowed });
+      if (repaid > 0) lines.push({ label: "Repaid", amount: -repaid });
+      if (raised > 0) lines.push({ label: "Raised from investors", amount: raised });
+      if (emergencyDrawn > 0) lines.push({ label: "Drawn on credit to stay solvent", amount: emergencyDrawn });
+
+      accounts[company.id] = {
+        opening,
+        lines,
+        pnl: {
+          revenue,
+          costToServe: variable,
+          salaries: fixed,
+          marketing: allowedShare(marketing),
+          product: allowedShare(product),
+          operations: allowedShare(ops),
+          idleCapacity: idleCost,
+          interest,
+          operatingProfit,
+          tax: taxed.tax,
+          profit,
+          lossesCarried: taxed.carried,
+        },
+      };
+    }
+
     return {
       ...company,
+      ...(company.kind === "player" ? { taxLosses: taxed.carried } : {}),
       founderShare,
       brand: base.brand,
       quality: base.quality,
@@ -499,6 +794,10 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
    */
   const afterEvent = settled.map((c) => {
     const touched = companyWithEvent(c, event);
+    const moved = touched.cash - c.cash;
+    if (Math.abs(moved) >= 1 && accounts[c.id] && event) {
+      accounts[c.id].lines.push({ label: event.headline, amount: moved });
+    }
     /*
      * Everyone hears about a market event; only the company it happened to
      * hears about a company one.
@@ -536,6 +835,34 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
   const founderValueOf = (c: Company): number => Math.round(valueOf(c) * (c.founderShare ?? 1));
 
   const ordered = [...afterEvent].sort((a, b) => founderValueOf(b) - founderValueOf(a));
+
+  /*
+   * What everybody did, once, for every report. Only what a company in the
+   * market could see or reasonably estimate from outside: price, who it
+   * declared itself for, what it gave up defending, whether it built capacity,
+   * and roughly what it spent — rounded to the nearest quarter of a million,
+   * because an exact figure would be a way of reading a rival's accounts.
+   */
+  const names = new Map(world.companies.map((c) => [c.id, c.name]));
+  const effective = new Map(withIncumbents.map((c) => [c.id, c]));
+  const segmentName = (id: string | undefined | null) => niche.segments.find((sg) => sg.id === id)?.name ?? null;
+  const moves: RivalMove[] = afterEvent.map((c) => {
+    const before = world.companies.find((b) => b.id === c.id)!;
+    return {
+      id: c.id,
+      name: c.name,
+      kind: c.kind,
+      priceBefore: Math.round(before.price),
+      priceAfter: Math.round(effective.get(c.id)?.price ?? c.price),
+      positioning: c.kind === "player" ? segmentName(c.positioning) : null,
+      conceded: (concededFor[c.id] ?? []).map((id) => segmentName(id) ?? id),
+      spent: Math.round((visibleSpend[c.id] ?? 0) / 250_000) * 250_000,
+      shareBefore: sharesBefore[c.id] ?? 0,
+      shareAfter: sharesAfter[c.id] ?? 0,
+      capacityBefore: Math.round(before.capacity),
+      capacityAfter: Math.round(c.capacity),
+    };
+  });
   const rankOf = new Map(ordered.map((c, i) => [c.id, i + 1]));
 
   const reports: CompanyReport[] = afterEvent.map((company) => {
@@ -589,6 +916,14 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
       founderShare: company.founderShare ?? 1,
       notes: notesFor[company.id] ?? [],
       bankrupt: !!company.bankruptSince,
+      ...(company.kind === "player" && accounts[company.id]
+        ? {
+            pnl: accounts[company.id].pnl,
+            cashBridge: { opening: accounts[company.id].opening, lines: accounts[company.id].lines, closing: company.cash },
+            segments: segmentBridges({ company, before, effective, names, niche, year: world.year, allocation }),
+            rivals: moves.filter((m) => m.id !== company.id),
+          }
+        : {}),
     };
   });
 

@@ -166,7 +166,13 @@ export interface NicheVoice {
   per: string;
   /** What being able to serve more people means here, in one line. */
   capacity: string;
-  /** The same thing as a label on a number. "kitchen seats", "drones in the air". */
+  /**
+   * The same thing as a label on a number — and the number is always a count
+   * of customers served in a year. "Diners you can seat", not "covers a week";
+   * "listeners you can serve", not "shows in production". The first versions
+   * named the physical thing instead of the unit, and the screen read "186,600
+   * shows in production" for a podcast network that makes eight.
+   */
   capacityShort: string;
   /** What a place is. "city", "region", "territory". */
   place: string;
@@ -288,6 +294,13 @@ export interface Company {
    * and the boardroom needs to tell them apart. See `alreadySold`.
    */
   soldBusinessIn?: number;
+  /**
+   * Trading losses not yet set against a profit. A company that loses money
+   * in its first three years pays no tax on its fourth until those losses are
+   * used up — the way tax actually works, and the difference between tax
+   * being a tax on success and a tax on recovering.
+   */
+  taxLosses?: number;
   /**
    * Terms agreed with a creditor after a restructuring: a cap on spending, and
    * the count of consecutive years it has been met. See `recovery.ts` — it

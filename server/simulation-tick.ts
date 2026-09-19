@@ -219,6 +219,7 @@ export async function startReadySeasons(): Promise<string[]> {
       // Year one's objectives, so nobody's first day is the one day they have
       // nothing of their own to aim at.
       await setChallenges({ world, year: 1 });
+      await fileBotDecisionsFor(world, 1, niche, season.id);
       started.push(season.id);
       console.log(`[sim] season ${season.id} (${niche.name}) starts with ${playing.length} team(s)`);
     }
@@ -260,6 +261,16 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
 
   let teams = world.companies.filter((c) => c.kind === "player");
   if (teams.length === 0) return null;
+
+  /*
+   * Each company's cash at every point the tick moves money, so the year's
+   * cash bridge can name every step. The engine accounts for the year itself;
+   * these are the steps either side of it — deals and rescues before, rewards
+   * and the marketplace after — and a bridge that left them out would not
+   * land on the bank balance the team actually has.
+   */
+  const cashNow = (companies: Company[]) => new Map(companies.map((c) => [c.id, c.cash]));
+  const cashAtStart = cashNow(world.companies);
 
   /*
    * Recovery moves happen before the year does.
@@ -355,6 +366,8 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
     addNote(seller.id, ...out.sellerNotes);
   }
 
+  const cashAfterDeals = cashNow(world.companies);
+
   /*
    * Everything still sitting unanswered stops being an offer. A live offer
    * would otherwise tie up a rival's decision-making for a fortnight at no
@@ -381,14 +394,14 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
     if (out.released.length > 0) releasedByTeam.set(company.id, out.released);
   }
   teams = world.companies.filter((c) => c.kind === "player");
+  const cashAfterRecovery = cashNow(world.companies);
 
   /*
-   * Bots file last, just before the year is read.
-   *
-   * Last because a person filing in the final seconds must not be overwritten
-   * by a seat the product is playing on their team's behalf, and before the
-   * read because a bot that abstains is a seat doing nothing — which is the
-   * thing filling the room was meant to prevent.
+   * A safety net: bots normally filed when the year opened (see
+   * `fileBotDecisionsFor`). This catches any seat that didn't — a filing that
+   * failed, a season from before bots filed early — so a bot never abstains,
+   * which is the thing filling the room was meant to prevent. Idempotent: a
+   * seat that has already filed is left exactly as it is.
    */
   await fileBotDecisions({
     companies: teams.map((t) => ({ id: t.id, company: t })),
@@ -473,6 +486,8 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
     }
   }
 
+  const cashAfterRewards = cashNow(nextWorld.companies);
+
   // Covenants, against what the team actually spent rather than what it planned.
   for (const company of nextWorld.companies) {
     if (company.kind !== "player" || !company.covenant) continue;
@@ -526,6 +541,36 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
     const company = nextWorld.companies.find((c) => c.id === report.companyId);
     if (!company) continue;
     const units = Object.values(company.customers).reduce((sum, n) => sum + n, 0);
+
+    /*
+     * The cash bridge, extended to the steps outside the engine. Each is the
+     * change in cash across one stage, named for what the stage was — so a
+     * team that sold its business, or won a lot at auction, sees that as a
+     * line rather than a total that silently disagrees with the one above it.
+     */
+    if (report.cashBridge) {
+      const bridge = report.cashBridge;
+      const step = (from: Map<string, number>, to: Map<string, number>) =>
+        (to.get(company.id) ?? 0) - (from.get(company.id) ?? 0);
+      const before: { label: string; amount: number }[] = [];
+      const deal = step(cashAtStart, cashAfterDeals);
+      if (Math.abs(deal) >= 1) before.push({ label: deal > 0 ? "Sold the business" : "Bought a business", amount: deal });
+      const rescue = step(cashAfterDeals, cashAfterRecovery);
+      if (Math.abs(rescue) >= 1) before.push({ label: "Recovery move", amount: rescue });
+
+      const after: { label: string; amount: number }[] = [];
+      const rewards = (cashAfterRewards.get(company.id) ?? 0) - bridge.closing;
+      if (Math.abs(rewards) >= 1) after.push({ label: "Objectives met", amount: rewards });
+      const market = company.cash - (cashAfterRewards.get(company.id) ?? company.cash);
+      if (Math.abs(market) >= 1) after.push({ label: "The marketplace", amount: market });
+
+      bridge.opening = cashAtStart.get(company.id) ?? bridge.opening;
+      bridge.lines = [...before, ...bridge.lines, ...after];
+      bridge.closing = company.cash;
+      // Anything else — there should be nothing — is shown rather than hidden.
+      const residual = bridge.closing - bridge.opening - bridge.lines.reduce((sum, l) => sum + l.amount, 0);
+      if (Math.abs(residual) >= 1) bridge.lines.push({ label: "Other", amount: residual });
+    }
     const assets = company.assets.reduce((sum, a) => sum + a.bookValue * 0.8, 0);
 
     report.cash = company.cash;
@@ -589,6 +634,7 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
 
   // Next year's objectives, set against where each company now stands.
   if (!finished) await setChallenges({ world: nextWorld, year: year + 1 });
+  if (!finished) await fileBotDecisionsFor(nextWorld, year + 1, niche, seasonId);
 
   return year;
 }
@@ -602,6 +648,25 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
  * different challenge and a player would be marked against a target they were
  * never shown.
  */
+/**
+ * Bots file the moment a year opens, not at the end of it.
+ *
+ * They used to file only as the year resolved. For the whole of the day in
+ * between, every bot seat sat on the desk as "still deciding" and the
+ * committed-spend preview — the number the finance seat reads to see whether
+ * the table is about to overspend — left out everything the bots were going to
+ * spend. A person cannot react to a plan they cannot see, and the day is
+ * exactly when they are trying to.
+ *
+ * Never fatal: a season must start, and a year must open, even if the bots'
+ * filing fails. The resolution-time call catches anything missed here.
+ */
+async function fileBotDecisionsFor(world: World, year: number, niche: any, seasonId: string): Promise<void> {
+  const teams = world.companies.filter((c) => c.kind === "player");
+  await fileBotDecisions({ companies: teams.map((t) => ({ id: t.id, company: t })), year, niche })
+    .catch((err) => console.error(`[sim] bot decisions for season ${seasonId} year ${year} failed:`, err));
+}
+
 async function setChallenges(input: { world: World; year: number }): Promise<void> {
   const { world, year } = input;
   const players = world.companies.filter((c) => c.kind === "player");

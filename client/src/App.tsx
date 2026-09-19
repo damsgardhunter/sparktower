@@ -37,6 +37,7 @@ import SimulationDeskPage from "@/pages/simulation-desk";
 import SimulationMarketPage from "@/pages/simulation-market";
 import SimulationStandingsPage from "@/pages/simulation-standings";
 import SimulationOffersPage from "@/pages/simulation-offers";
+import SimulationReportPage from "@/pages/simulation-report";
 import ResetPasswordPage from "@/pages/reset-password";
 import { MfaNotice } from "@/components/mfa";
 import { NOVA_GRADIENT, NOVA_GRADIENT_CSS } from "@shared/backing";
@@ -54,9 +55,8 @@ import { installAnalytics, trackPageView } from "@/lib/analytics";
 import Messages from "@/pages/messages";
 import ProjectManager from "@/pages/project-manager";
 import Sprints from "@/pages/sprints";
-import SprintMatchmaking from "@/pages/sprint-matchmaking";
-import SprintDashboard from "@/pages/sprint-dashboard";
-import SprintPractice from "@/pages/sprint-practice";
+import StartupGamePage from "@/pages/startup-game";
+import GameBoardsPage from "@/pages/game-boards";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "@tanstack/react-query";
 import type { UserProfile } from "@shared/schema";
@@ -290,10 +290,21 @@ function Router() {
             <Route path="/simulation/:id/market" component={SimulationMarketPage} />
             <Route path="/simulation/:id/standings" component={SimulationStandingsPage} />
             <Route path="/simulation/:id/offers" component={SimulationOffersPage} />
+            <Route path="/simulation/:id/report/:year?" component={SimulationReportPage} />
             <Route path="/simulation/:id" component={SimulationDeskPage} />
-            <Route path="/sprints/new" component={SprintMatchmaking} />
-            <Route path="/sprints/practice" component={SprintPractice} />
-            <Route path="/sprints/:id" component={SprintDashboard} />
+            {/* Ten Years From Now. Declared before /sprints/:id, which would
+                otherwise match "boards" and "game" as sprint ids. */}
+            <Route path="/sprints/boards" component={GameBoardsPage} />
+            <Route path="/sprints/game/:id" component={StartupGamePage} />
+            {/*
+                The questionnaire sprint is retired. Old links — a bookmark, a
+                notification from before, a shared URL — land on the game
+                rather than a blank 404, because the person following one was
+                trying to get to this part of the product and still can.
+              */}
+            <Route path="/sprints/new"><Redirect to="/sprints" replace /></Route>
+            <Route path="/sprints/practice"><Redirect to="/sprints" replace /></Route>
+            <Route path="/sprints/:id"><Redirect to="/sprints" replace /></Route>
             <Route path="/messages" component={Messages} />
             <Route path="/pricing" component={Pricing} />
             {/* Reviewer-only. The page itself renders NotFound for anyone

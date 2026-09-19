@@ -174,10 +174,23 @@ export function interlock(company: Company, d: TeamDecisions, niche: Niche): Int
    */
   const reachable = niche.segments.reduce((sum, s) => sum + s.size, 0);
   const impliedDemand = held + saturate(marketingSpend, 400_000) * reachable * 0.09;
+  /*
+   * Reported, and no longer used to discount the marketing itself.
+   *
+   * This used to scale every pound of marketing by capacity over an implied
+   * demand — and the implied demand is a guess, off by a factor of fifty: it
+   * put a new dating app's demand from £1.7m of marketing at 436,000 people
+   * when the market gave it about 8,000. Harmless while capacity was free and
+   * every team sat on hundreds of thousands of it. Once capacity cost money
+   * and teams sized it to a real forecast, the guess threw away ninety-eight
+   * per cent of their marketing for serving a demand that did not exist.
+   *
+   * Out-marketing your capacity now costs what it really costs, in the place
+   * it really happens: the people you cannot serve go to a rival, and your
+   * reputation pays for having turned them away. The year's report says so,
+   * from what actually happened rather than from this estimate.
+   */
   const deliverable = targetCapacity <= 0 ? 0 : Math.min(1, targetCapacity / Math.max(1, impliedDemand));
-  if (marketingSpend > 50_000 && deliverable < 0.85) {
-    notes.push("Marketing brought in more people than operations could serve. The ones turned away don't come back quietly.");
-  }
 
   /*
    * Quality nobody knows about. A great product with no awareness is a great
@@ -415,4 +428,44 @@ export function fixedCosts(company: Company, headcount: number, economy: Economy
   // and a real loss — which is the trade the CEO is being offered.
   const executives = company.seats.length * EXECUTIVE;
   return (salaries + executives) * footprint;
+}
+
+/**
+ * What a year of capacity nobody used costs.
+ *
+ * Capacity was free. The operations seat could set it to ten times demand at no
+ * cost whatever, so the forecast was a number nobody could get wrong in the
+ * expensive direction, and "how much can we serve" was never a bet. Real
+ * headroom is rent, staff and machines paid for whether or not anybody turns
+ * up: a kitchen with no diners in it still has chefs.
+ *
+ * Charged on the idle part only. The cost of serving somebody is already in the
+ * unit cost; this is the cost of being ready to serve somebody who never came.
+ * Priced against what the market pays for one sale, so it means the same thing
+ * in a market where a sale is £14 and one where it is £14,000.
+ */
+export const IDLE_RATE = 0.08;
+
+export function marketPriceOf(niche: Niche): number {
+  return niche.segments.reduce((sum, s) => sum + s.referencePrice * s.size, 0)
+    / Math.max(1, niche.segments.reduce((sum, s) => sum + s.size, 0));
+}
+
+export const idleCapacityCost = (idle: number, niche: Niche): number =>
+  Math.max(0, idle) * marketPriceOf(niche) * IDLE_RATE;
+
+/**
+ * Tax on trading profit, after losses carried from earlier years.
+ *
+ * Twenty per cent: close enough to the real thing to feel like it, low enough
+ * that a profitable year is still plainly worth having. Losses carry forward,
+ * so the three hard years a new company spends getting going shelter the
+ * first good one rather than being forgotten by it.
+ */
+export const TAX_RATE = 0.2;
+
+export function taxOn(profit: number, carried = 0): { tax: number; carried: number } {
+  if (profit <= 0) return { tax: 0, carried: carried + Math.max(0, -profit) };
+  const taxable = Math.max(0, profit - carried);
+  return { tax: taxable * TAX_RATE, carried: Math.max(0, carried - profit) };
 }

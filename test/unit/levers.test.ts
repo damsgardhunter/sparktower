@@ -173,22 +173,12 @@ describe("the preview", () => {
     expect(preview.warnings.join(" ")).toMatch(/interest/i);
   });
 
-  it("tells operations that marketing is about to outrun them", () => {
-    /*
-     * The coupling that is invisible from either seat alone, shown before the
-     * tick instead of explained after it.
-     */
-    const c = company();
-    const preview = draftPreview({
-      company: c, niche, economy,
-      decisions: {
-        companyId: "t",
-        cmo: { price: 22, brandSpend: 3_000_000, performanceSpend: 3_000_000, celebritySpend: 0, targetCities: [] },
-        coo: { capacityTarget: 1_000, supportSpend: 0, efficiencySpend: 0, headcount: 0 },
-      },
-    });
-    expect(preview.notes.join(" ")).toMatch(/more people than operations could serve/i);
-  });
+  /*
+   * "Tells operations that marketing is about to outrun them" lived here, and
+   * moved to test/unit/forecast.test.ts. The preview judged it against a guess
+   * at demand that was out by a factor of fifty; the desk now judges capacity
+   * against the forecast, which runs the real market.
+   */
 
   it("says nothing about seats that simply haven't filed yet", () => {
     /*

@@ -8,19 +8,20 @@
  * whole fourteen years.
  */
 import { describe, it, expect } from "vitest";
+import { forecastDemand } from "@shared/simulation/forecast";
 import {
   economyFor, startingCompany, buildWorld, openingDecisions, caretakerDecisions,
   decisionsForYear, absenceNote, tickDueAt, seasonOver, CARETAKER_RATE, SEASON_YEARS,
 } from "@shared/simulation/season";
 import { resolveYear } from "@shared/simulation/resolve";
 import { nicheById } from "@shared/simulation/niches";
-import { ROLE_TITLES, type Role } from "@shared/simulation/types";
+import { ROLE_TITLES, type Role, type World } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
 
 const niche = nicheById("dating_apps")!;
 
 /** Run a whole season, deciding each year with the given strategy. */
-function playSeason(decide: (year: number, company: any) => TeamDecisions | null, seasonId = "s-test") {
+function playSeason(decide: (year: number, company: any, world: World) => TeamDecisions | null, seasonId = "s-test") {
   let world = buildWorld({
     seasonId,
     niche,
@@ -31,7 +32,7 @@ function playSeason(decide: (year: number, company: any) => TeamDecisions | null
 
   for (let year = 1; year <= SEASON_YEARS; year++) {
     const company = world.companies.find((c) => c.id === "team")!;
-    const chosen = decide(year, company);
+    const chosen = decide(year, company, { ...world, year });
     const submitted: Partial<Record<Role, any>> = {};
     if (chosen) {
       for (const role of ["ceo", "cmo", "cfo", "cto", "coo"] as Role[]) {
@@ -58,9 +59,9 @@ function playSeason(decide: (year: number, company: any) => TeamDecisions | null
  * rebalanced — it quietly becomes a company throttling itself, and the test
  * then claims playing is worse than not playing.
  */
-function playedYear(company: { cash: number; capacity: number; price: number }): TeamDecisions {
+function playedYear(company: { cash: number; capacity: number; price: number }, world?: World): TeamDecisions {
   const spend = Math.round(Math.max(250_000, company.cash * 0.08));
-  return {
+  const d: TeamDecisions = {
     companyId: "team",
     cmo: { price: company.price, brandSpend: spend, performanceSpend: spend, celebritySpend: 0, targetCities: [] },
     cto: { featureSpend: spend, reliabilitySpend: spend, techDebtPaydown: 0 },
@@ -68,6 +69,16 @@ function playedYear(company: { cash: number; capacity: number; price: number }):
     cfo: { borrow: 0, repay: 0, cashBuffer: 0 },
     ceo: { focus: "growth" },
   };
+  /*
+   * A steady hand builds to the forecast. Growing capacity a fixed fifteen per
+   * cent a year was steady while headroom was free; now that too little sends
+   * customers to rivals and too much is paid for, it is simply wrong, and a
+   * test of whether playing beats not playing should not have the player
+   * making a mistake the desk warns them about.
+   */
+  if (!world) return d;
+  const f = forecastDemand({ world, companyId: "team", year: world.year, economy: world.economy, draft: d });
+  return f ? { ...d, coo: { ...d.coo!, capacityTarget: Math.max(1_000, Math.round(f.likely * 1.15)) } } : d;
 }
 
 describe("the weather", () => {
@@ -254,7 +265,7 @@ describe("a whole season", () => {
      */
     const idle = playSeason(() => null);
     // A steady hand, not a perfect one.
-    const played = playSeason((_, company) => playedYear(company));
+    const played = playSeason((_, company, world) => playedYear(company, world));
 
     const idleFinal = idle.history[idle.history.length - 1];
     const playedFinal = played.history[played.history.length - 1];
@@ -304,8 +315,8 @@ describe("the chief executive's chair", () => {
    * the game was the only one that could not change the outcome. These tests
    * exist to stop that being true again.
    */
-  const withFocus = (focus: string) => playSeason((_, company) => ({
-    ...playedYear(company),
+  const withFocus = (focus: string) => playSeason((_, company, world) => ({
+    ...playedYear(company, world),
     ceo: { focus } as any,
   }));
 
@@ -347,7 +358,10 @@ describe("the chief executive's chair", () => {
     const growth = withFocus("growth");
     const end = (r: ReturnType<typeof withFocus>) => r.history[r.history.length - 1];
 
-    expect(end(survival).costs).toBeLessThan(end(growth).costs);
+    // Spending, not tax: a lean year that turns a profit pays tax on it, and
+    // that is not the survival focus costing anything.
+    const spent = (r: any) => r.costs - (r.pnl?.tax ?? 0);
+    expect(spent(end(survival))).toBeLessThan(spent(end(growth)));
     expect(end(survival).marketShare).toBeLessThan(end(growth).marketShare);
   });
 

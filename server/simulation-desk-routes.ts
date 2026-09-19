@@ -30,7 +30,9 @@ import { ROLE_TITLES, ROLE_LEVERS, type Role, type World, type Company } from "@
 import type { TeamDecisions } from "@shared/simulation/decisions";
 import { LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision, draftPreview, speak } from "@shared/simulation/levers";
 import { economyFor } from "@shared/simulation/season";
-import { debtDrag } from "@shared/simulation/decisions";
+import { debtDrag, IDLE_RATE, marketPriceOf } from "@shared/simulation/decisions";
+import { weightsOf, expectationsFor, shortfalls, describeWeights } from "@shared/simulation/criteria";
+import { forecastDemand } from "@shared/simulation/forecast";
 import { postureBlurb } from "@shared/simulation/incumbents";
 import { distressOf, DISTRESS_COPY, recoveryOptions } from "@shared/simulation/recovery";
 import { startReadySeasons } from "./simulation-tick";
@@ -305,11 +307,38 @@ export function registerSimulationDeskRoutes(app: Express): void {
       /** Seats that could be filled again, for the chief executive's rehire lever. */
       dissolvedSeats: (["ceo", "cmo", "cfo", "cto", "coo"] as Role[]).filter((r) => !company.seats.includes(r)),
 
-      segments: niche.segments.map((s) => ({
-        id: s.id, name: s.name, description: s.description,
-        referencePrice: s.referencePrice, loyalty: s.loyalty,
-        yours: company.customers[s.id] ?? 0,
-      })),
+      /*
+       * Each segment with what it actually weighs and what it expects this
+       * year — the numbers the engine chooses by, not a description of them —
+       * and where this company falls short. That turns "who the company is
+       * for" from a flag into a bet you can see the odds of: positioning at
+       * the long-haulers means nothing until you can see they want quality of
+       * 55 and you have 41.
+       */
+      segments: niche.segments.map((s) => {
+        const expected = expectationsFor(s, year);
+        return {
+          id: s.id, name: s.name, description: s.description,
+          referencePrice: s.referencePrice, loyalty: s.loyalty,
+          yours: company.customers[s.id] ?? 0,
+          weights: weightsOf(s),
+          taste: describeWeights(s),
+          floors: expected.floors,
+          priceCeiling: expected.priceCeiling,
+          shortOf: shortfalls(company, s, year),
+        };
+      }),
+
+      /*
+       * How many people will want the company this year, at the table's
+       * current draft — the forecast the operations seat sizes capacity
+       * against. Worked out from what has been filed so far, so it moves as
+       * the others file: a marketing seat that doubles its spend moves the
+       * number the operations seat is building to.
+       */
+      forecast: forecastDemand({ world: { ...world, niche, year }, companyId: company.id, year, economy, draft: decisions }),
+      /** What one unit of empty capacity costs for a year, so the risk can be priced as someone types. */
+      idleCostPerUnit: Math.round(marketPriceOf(niche) * IDLE_RATE * 100) / 100,
       economy: { ...economy, outlookMeans: OUTLOOK_MEANS[economy.outlook] },
       /*
        * What the company is worth, and how fast this market moves.

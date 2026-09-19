@@ -172,8 +172,22 @@ export function startingCompany(input: {
      * wins — and winning is still the hard part. Capped as a share of the
      * market so it never reads as absurd.
      */
+    /*
+     * And now that capacity costs money when it sits idle, small.
+     *
+     * The old ceiling was sized when headroom was free, and it was many times
+     * what a newcomer wins in its first year — a dating app opened with room
+     * for 225,000 people and served two thousand of them. Free, that was
+     * harmless. Charged for, it put every new company a million pounds down
+     * before anyone had made a decision, and it made the operations seat's
+     * first job undoing a mistake it did not make.
+     *
+     * A percent and a half of the market is room to be surprised by a good
+     * year without paying for a fantasy. Building more is the operations
+     * seat's call, and the forecast on the desk is there to make it.
+     */
     capacity: Math.min(
-      Math.round(market * 0.12),
+      Math.round(market * 0.015),
       Math.round(9_000_000 / Math.max(1, opening.referencePrice)),
     ),
     unitCost: niche.baseUnitCost,

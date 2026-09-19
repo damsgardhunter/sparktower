@@ -269,6 +269,60 @@ export function registerSimulationProfileRoutes(app: Express): void {
   });
 
   /**
+   * The year-end report: everything that happened to your company in one year.
+   *
+   * ## The single biggest gap in the game, closed here
+   *
+   * A year used to come back as four numbers and a handful of notes. You could
+   * see that you lost two million and not which line lost it; that you ended
+   * with fewer customers and not who took them or why. Decisions that cannot
+   * be traced to outcomes cannot be learned from, and a fortnight of turning up
+   * is supposed to be fourteen chances to learn.
+   *
+   * So this sends the whole of it: the accounts line by line, why the bank
+   * balance moved, every segment's customers in and out by rival with the
+   * reason for the biggest loss, and what every rival visibly did.
+   *
+   * Your own company's only. A rival's report is its private accounts; what
+   * you may know about them is already in `rivals`, estimated from outside.
+   * Readable after the season finishes, because the end of a season is when
+   * people most want to read back through it.
+   */
+  /*
+   * `{/:year}`, not `/:year?`. Express 5's router rejects the question-mark
+   * form outright, and it rejects it when the route is registered — so the
+   * old spelling does not fail this request, it fails the server's boot.
+   */
+  app.get("/api/sim/ventures/:id/reports{/:year}", isAuthenticated, async (req: any, res) => {
+    const found = await standing(req.params.id, req.user.id);
+    if (!found) return res.status(404).json({ message: "No such company." });
+    const { venture, season, niche } = found;
+
+    const rows = await db
+      .select({ year: simReports.year, report: simReports.report })
+      .from(simReports)
+      .where(and(eq(simReports.seasonId, season.id), eq(simReports.companyId, venture.id)))
+      .orderBy(desc(simReports.year));
+
+    if (rows.length === 0) {
+      return res.json({ years: [], report: null, niche: { id: niche.id, name: niche.name, voice: niche.voice } });
+    }
+
+    const wanted = req.params.year ? Number(req.params.year) : rows[0].year;
+    const row = rows.find((r) => r.year === wanted);
+    if (!row) return res.status(404).json({ message: "No report for that year." });
+
+    res.json({
+      years: rows.map((r) => r.year).sort((a, b) => a - b),
+      year: row.year,
+      totalYears: season.totalYears,
+      companyName: venture.name,
+      niche: { id: niche.id, name: niche.name, voice: niche.voice },
+      report: row.report,
+    });
+  });
+
+  /**
    * One of the four people you are doing this with.
    *
    * What they have filed is deliberately readable by the whole table. That is

@@ -129,7 +129,8 @@ describe("five seats, not one", () => {
       companyId: "lopsided",
       // Everything into marketing, nothing behind it.
       cmo: { price: 18, brandSpend: total * 0.7, performanceSpend: total * 0.3, celebritySpend: 0, targetCities: [] },
-      coo: { capacityTarget: 40_000, supportSpend: 0, efficiencySpend: 0, headcount: 12 },
+      // And nowhere near enough room for what that marketing brings in.
+      coo: { capacityTarget: 1_500, supportSpend: 0, efficiencySpend: 0, headcount: 12 },
     };
 
     const { reports } = resolveYear(world, [fullYear("balanced", total), lopsided]);
@@ -137,7 +138,13 @@ describe("five seats, not one", () => {
     const lop = reports.find((r) => r.companyId === "lopsided")!;
 
     expect(balanced.marketShare).toBeGreaterThan(lop.marketShare);
-    expect(lop.notes.join(" ")).toMatch(/more people than operations could serve/i);
+    /*
+     * Told from what happened, not from an estimate: the people it could not
+     * serve, and where they went. The warning used to come from a guess at
+     * demand that was out by a factor of fifty; it now comes from the year.
+     */
+    expect(lop.turnedAway).toBeGreaterThan(0);
+    expect(lop.notes.join(" ")).toMatch(/could not be served/i);
   });
 
   it("tells a team when its product got better and nobody noticed", () => {

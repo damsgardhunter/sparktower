@@ -159,8 +159,8 @@ test("a year is filed, resolves overnight, and comes back as something to read",
   await expect(cmo.getByTestId("card-last-year")).toBeVisible({ timeout: 40_000 });
   await expect(cmo.getByTestId("text-last-year")).toHaveText("Year 1");
   await expect(cmo.getByTestId("text-last-rank")).toContainText("in the market");
-  await expect(cmo.getByText("Revenue")).toBeVisible();
-  await expect(cmo.getByText("Turned away"), "including the number nobody wants to see").toBeVisible();
+  await expect(cmo.getByTestId("card-last-year").getByText("Revenue", { exact: true })).toBeVisible();
+  await expect(cmo.getByTestId("card-last-year").getByText("Turned away", { exact: true }), "including the number nobody wants to see").toBeVisible();
 
   // A new year is a new decision, not yesterday's still sitting there filed.
   await expect(cmo.getByTestId("badge-filed"), "last year's filing does not carry over").toHaveCount(0);
@@ -182,6 +182,43 @@ test("a year is filed, resolves overnight, and comes back as something to read",
   await expect(cfo.getByTestId("card-last-year")).toBeVisible({ timeout: 40_000 });
   await expect(cfo.getByText(/No decisions came in from/i).first()).toBeVisible();
   await expect(cfo.getByTestId("card-last-year")).not.toContainText(/nobody filed/i);
+
+  /*
+   * The forecast, and what each segment weighs — the two things the next
+   * decision should be made against. On every seat's desk, because the
+   * argument between marketing and operations about how many people will
+   * turn up is one the whole table has.
+   */
+  await expect(cfo.getByTestId("card-forecast")).toBeVisible();
+  await expect(cfo.getByTestId("text-forecast-range")).toContainText(/between .* and .* listeners/i);
+  await expect(cfo.getByTestId("text-capacity-verdict")).toBeVisible();
+  await expect(cfo.locator('[data-testid^="criteria-"]').first()).toContainText(/price \d+%/);
+
+  /*
+   * And the whole year, one tap from the summary. This is the screen a team
+   * learns from: which line lost the money, and who took the customers.
+   */
+  await cfo.getByTestId("button-open-report").click();
+  await expect(cfo.getByTestId("text-report-title")).toContainText("Year 1", { timeout: 30_000 });
+  await expect(cfo.getByTestId("card-accounts")).toBeVisible();
+  await expect(cfo.getByTestId("row-pnl-marketing")).toBeVisible();
+  await expect(cfo.getByTestId("row-pnl-idle-capacity")).toBeVisible();
+  await expect(cfo.getByTestId("row-pnl-profit")).toBeVisible();
+  await expect(cfo.getByTestId("text-cash-summary"), "started with, ended with").toContainText(/Started the year with .* and ended it with/);
+  await expect(cfo.locator('[data-testid^="segment-"]')).toHaveCount(3);
+  await expect(cfo.getByTestId("card-rivals")).toContainText("The Daily Brief");
+
+  // For looking at, not for asserting: set E2E_SCREENSHOTS to a directory.
+  if (process.env.E2E_SCREENSHOTS) {
+    // The app scrolls inside its own container, so each card is captured on its own.
+    for (const card of ["card-accounts", "card-cash", "card-customers", "card-rivals"]) {
+      await cfo.getByTestId(card).screenshot({ path: `${process.env.E2E_SCREENSHOTS}/${card}.png` });
+    }
+    await cfo.getByTestId("button-back").click();
+    await expect(cfo.getByTestId("card-forecast")).toBeVisible({ timeout: 30_000 });
+    await cfo.getByTestId("card-forecast").screenshot({ path: `${process.env.E2E_SCREENSHOTS}/card-forecast.png` });
+    await cfo.locator('[data-testid^="criteria-"]').first().locator("..").screenshot({ path: `${process.env.E2E_SCREENSHOTS}/criteria.png` });
+  }
 
   for (const person of people) await person.context.close();
 });

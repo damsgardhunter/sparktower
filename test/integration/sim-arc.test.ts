@@ -234,6 +234,59 @@ describe("everyone gets something of their own", () => {
     expect(after.cash - before.cash - traded).toBeCloseTo(each * 5, -3);
   }, 180_000);
 
+  it("puts the reward in the year-end report as its own line, and the cash still lands", async () => {
+    /*
+     * The engine accounts for the trading year; the tick then pays objectives
+     * and settles the marketplace, and none of that is trading. The cash
+     * bridge has to name those steps as well or it stops matching the bank
+     * balance on exactly the years that matter — the ones where something
+     * other than selling happened.
+     */
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+
+    const rows = await db.select().from(simChallenges)
+      .where(and(eq(simChallenges.ventureId, ventureId), eq(simChallenges.year, 1)));
+    for (const row of rows) {
+      await db.update(simChallenges).set({
+        challenge: {
+          ...(row.challenge as any),
+          targets: [{ id: "easy", label: "Exist", goal: -99_000_000, compare: "at_least", metric: "cash" }],
+          reward: { kind: "cash", amount: 100_000, label: "Paid." },
+        },
+      }).where(eq(simChallenges.id, row.id));
+    }
+
+    const before = await companyIn(seasonId, ventureId);
+    await makeDue(seasonId);
+    await tickSeason(seasonId);
+    const after = await companyIn(seasonId, ventureId);
+
+    const res = await seat("cfo").agent.get(`/api/sim/ventures/${ventureId}/reports/1`);
+    expect(res.status).toBe(200);
+    const r = res.body.report;
+
+    // The accounts, the cash, the customers and the rivals are all there.
+    expect(r.pnl.revenue).toBeGreaterThanOrEqual(0);
+    expect(r.segments.length).toBeGreaterThan(0);
+    expect(r.rivals.length).toBeGreaterThan(0);
+
+    const bridge = r.cashBridge;
+    expect(bridge.opening).toBeCloseTo(before.cash, 0);
+    expect(bridge.closing).toBeCloseTo(after.cash, 0);
+    const summed = bridge.opening + bridge.lines.reduce((a: number, l: any) => a + l.amount, 0);
+    expect(summed, JSON.stringify(bridge.lines)).toBeCloseTo(bridge.closing, 0);
+
+    const rewards = bridge.lines.find((l: any) => l.label === "Objectives met");
+    expect(rewards?.amount, "the five rewards, as one named line").toBeCloseTo(500_000, -3);
+    expect(bridge.lines.some((l: any) => l.label === "Other"), "nothing unexplained").toBe(false);
+
+    // Latest year by default, and a stranger sees nothing.
+    expect((await seat("ceo").agent.get(`/api/sim/ventures/${ventureId}/reports`)).body.year).toBe(1);
+    const stranger = await player(app);
+    expect((await stranger.agent.get(`/api/sim/ventures/${ventureId}/reports/1`)).status).toBe(404);
+  }, 180_000);
+
   it("sets nothing for a seat that was dissolved", async () => {
     const app = await getTestApp();
     const { ventureId, seasonId } = await runningCompany(app);
@@ -323,7 +376,14 @@ describe("the marketplace", () => {
     const app = await getTestApp();
     const { ventureId, seasonId } = await runningCompany(app);
 
-    const listing = marketListings({ seasonId, year: 1, niche }).find((l) => l.asset.effect.capacity)!;
+    /*
+     * The whole catalogue, not the three a season deals. Which three come up
+     * is seeded on the season's id — a fresh uuid every run — and four of the
+     * nine templates add capacity, so about one run in eight dealt three that
+     * didn't and this test fell over on `undefined.asset`, nowhere near the
+     * claim it exists to check.
+     */
+    const listing = marketListings({ seasonId, year: 1, niche, count: 100 }).find((l) => l.asset.effect.capacity)!;
     await setCompany(seasonId, ventureId, { cash: 40_000_000, assets: [listing.asset] });
 
     const before = await companyIn(seasonId, ventureId);

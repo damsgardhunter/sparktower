@@ -158,9 +158,22 @@ export function incumbentYear(
   const priceCut = reacting ? Math.min(posture.priceFlex, pressure * posture.priceFlex * 2.5) : 0;
   const price = Math.max(company.unitCost * 1.08, company.price * (1 - priceCut));
 
-  // Capacity follows demand, with the sluggishness of scale.
+  /*
+   * Capacity follows demand, with the sluggishness of scale — and with a
+   * margin, because a company this size plans for the market to grow.
+   *
+   * The margin is deliberately thin. An incumbent that planned perfectly
+   * would never turn anybody away, and the customers it turns away are one of
+   * the doors a newcomer comes in through — they go, now, to whoever has room
+   * and appeals to them. Twelve per cent of headroom closed that door
+   * entirely and left every new team in single figures; the old five per cent,
+   * with the turned-away silently reappearing as next year's open demand, let
+   * one team inherit two thirds of a market from incumbents who never built a
+   * warehouse. Six per cent sits between the two: big companies that plan for
+   * growth, and are slower at it than the market.
+   */
   const held = Object.values(company.customers).reduce((sum, n) => sum + n, 0);
-  const capacity = Math.round(Math.max(held * 1.05, company.capacity * (reacting ? 1.04 : 1.01)));
+  const capacity = Math.round(Math.max(held * 1.06, company.capacity * (reacting ? 1.03 : 1.02)));
 
   const spend =
     serviceLift * 42_000 +

@@ -20,22 +20,44 @@
  */
 import { describe, it, expect } from "vitest";
 import { resolveYear } from "@shared/simulation/resolve";
+import { forecastDemand } from "@shared/simulation/forecast";
 import { buildWorld, economyFor, decisionsForYear, SEASON_YEARS } from "@shared/simulation/season";
 import { NICHES, nicheById } from "@shared/simulation/niches";
-import { ROLES, type Company, type Niche, type Role } from "@shared/simulation/types";
+import { ROLES, type Company, type Niche, type Role, type World } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
 
-type Play = (year: number, company: Company, niche: Niche) => TeamDecisions | null;
+type Play = (year: number, company: Company, niche: Niche, world: World) => TeamDecisions | null;
+
+/*
+ * Capacity sized against the forecast, the way a competent operations seat now
+ * has to size it.
+ *
+ * These strategies used to grow capacity by a fixed ten to forty per cent a
+ * year, compounding — thirty-odd times the opening figure by year fourteen.
+ * That was harmless while capacity was free, and it is ruinous now that idle
+ * headroom is paid for, which is the whole point of charging for it. A
+ * strategy that ignores the forecast is not a strategy any real team would
+ * run, so it is not a fair test of whether the market can be won.
+ *
+ * `headroom` is each strategy's appetite for risk: the grower builds for a
+ * good year, the premium house for an ordinary one.
+ */
+function sizeTo(world: World, year: number, d: TeamDecisions, headroom: number): TeamDecisions {
+  const f = forecastDemand({ world: { ...world, year }, companyId: d.companyId, year, economy: world.economy, draft: d });
+  if (!f || !d.coo) return d;
+  return { ...d, coo: { ...d.coo, capacityTarget: Math.max(1_000, Math.round(f.likely * headroom)) } };
+}
 
 /** Run one season of one strategy against the incumbents. */
 function season(niche: Niche, play: Play, seasonId = "bal") {
   let world = buildWorld({ seasonId, niche, teams: [{ id: "t", name: "T", seats: [...ROLES] as Role[] }] });
   let previous: TeamDecisions | undefined;
   const history = [];
+  let marketRevenue = 0;
 
   for (let year = 1; year <= SEASON_YEARS; year++) {
     const company = world.companies.find((c) => c.id === "t")!;
-    const chosen = play(year, company, niche);
+    const chosen = play(year, company, niche, world);
     const submitted: Partial<Record<Role, any>> = {};
     if (chosen) for (const role of ROLES) if ((chosen as any)[role]) submitted[role] = (chosen as any)[role];
 
@@ -44,11 +66,14 @@ function season(niche: Niche, play: Play, seasonId = "bal") {
     world = out.world;
     if (chosen) previous = chosen;
     history.push(out.reports.find((r) => r.companyId === "t")!);
+    marketRevenue = out.reports.reduce((sum, r) => sum + r.revenue, 0);
   }
 
   const final = history[history.length - 1];
   return {
     share: final.marketShare,
+    /** Share of the money in the market, rather than of the heads in it. */
+    revenueShare: marketRevenue > 0 ? final.revenue / marketRevenue : 0,
     /*
      * What the league table actually ranks by. Share is still checked — a
      * market that falls over is a market that falls over — but "which strategy
@@ -70,58 +95,58 @@ const cheapest = (niche: Niche) => [...niche.segments].sort((a, b) => a.referenc
 const dearest = (niche: Niche) => [...niche.segments].sort((a, b) => b.referencePrice - a.referencePrice)[0];
 
 /** Spend everywhere, sell everywhere, take share and worry later. */
-const grower: Play = (year, c, niche) => {
+const grower: Play = (year, c, niche, world) => sizeTo(world, year, (() => {
   const s = Math.round(Math.max(250_000, c.cash * 0.07));
   return {
-    companyId: "t",
+    companyId: c.id,
     cmo: { price: Math.round(dearest(niche).referencePrice * 0.55), brandSpend: s, performanceSpend: s, celebritySpend: 0, targetCities: cities(niche, Math.min(6, 1 + year)) },
     cto: { featureSpend: s, reliabilitySpend: s, techDebtPaydown: 0 },
     coo: { capacityTarget: Math.round(c.capacity * 1.35), supportSpend: s, efficiencySpend: 0, headcount: 6 },
     cfo: { borrow: 0, repay: 0, cashBuffer: 0 },
     ceo: { focus: "growth" },
   };
-};
+})(), 1.25);
 
 /** Be the best thing in the market and charge for it. One or two places, done properly. */
-const premium: Play = (year, c, niche) => {
+const premium: Play = (year, c, niche, world) => sizeTo(world, year, (() => {
   const s = Math.round(Math.max(250_000, c.cash * 0.07));
   const target = dearest(niche);
   return {
-    companyId: "t",
+    companyId: c.id,
     cmo: { price: Math.round(target.referencePrice * 1.05), brandSpend: Math.round(s * 0.6), performanceSpend: 0, celebritySpend: 0, targetCities: cities(niche, 2) },
     cto: { featureSpend: Math.round(s * 0.5), reliabilitySpend: Math.round(s * 0.5), techDebtPaydown: 0, researchSpend: s },
     coo: { capacityTarget: Math.round(c.capacity * 1.1), supportSpend: s, efficiencySpend: 0, headcount: 4 },
     cfo: { borrow: 0, repay: 0, cashBuffer: 0 },
     ceo: { focus: "quality", positioning: target.id },
   };
-};
+})(), 1.05);
 
 /** Undercut everyone, take the price-sensitive end, live on volume. */
-const cheap: Play = (year, c, niche) => {
+const cheap: Play = (year, c, niche, world) => sizeTo(world, year, (() => {
   const s = Math.round(Math.max(200_000, c.cash * 0.05));
   const target = cheapest(niche);
   return {
-    companyId: "t",
+    companyId: c.id,
     cmo: { price: Math.max(2, Math.round(target.referencePrice * 0.8)), brandSpend: Math.round(s * 0.5), performanceSpend: s, celebritySpend: 0, targetCities: cities(niche, Math.min(6, 2 + year)) },
     cto: { featureSpend: Math.round(s * 0.3), reliabilitySpend: Math.round(s * 0.3), techDebtPaydown: 0 },
     coo: { capacityTarget: Math.round(c.capacity * 1.4), supportSpend: Math.round(s * 0.3), efficiencySpend: s, headcount: 5 },
     cfo: { borrow: 0, repay: 0, cashBuffer: 0 },
     ceo: { focus: "margin", positioning: target.id },
   };
-};
+})(), 1.2);
 
 /** One place, served properly, and never mind the rest of the country. */
-const local: Play = (year, c, niche) => {
+const local: Play = (year, c, niche, world) => sizeTo(world, year, (() => {
   const s = Math.round(Math.max(200_000, c.cash * 0.06));
   return {
-    companyId: "t",
+    companyId: c.id,
     cmo: { price: Math.round(dearest(niche).referencePrice * 0.7), brandSpend: s, performanceSpend: Math.round(s * 0.5), celebritySpend: 0, targetCities: cities(niche, 1) },
     cto: { featureSpend: Math.round(s * 0.6), reliabilitySpend: s, techDebtPaydown: 0 },
     coo: { capacityTarget: Math.round(c.capacity * 1.2), supportSpend: s, efficiencySpend: Math.round(s * 0.4), headcount: 3 },
     cfo: { borrow: 0, repay: 0, cashBuffer: 0 },
     ceo: { focus: "quality" },
   };
-};
+})(), 1.1);
 
 const idle: Play = () => null;
 
@@ -138,9 +163,16 @@ describe("can you win, and can you lose", () => {
      * "Real" is deliberately modest. The incumbents start with ninety per cent
      * and the brief wanted them to be a wall — but a wall with no door in it is
      * a lecture about how hard business is, not a game.
+     *
+     * Measured in money, not in heads. These markets differ by a thousand
+     * times in what one customer pays, and within one market by fifteen: a
+     * construction firm that wins the public sector holds four per cent of the
+     * clients and most of the value — the best result in that market by a
+     * distance — and a count of heads called that "nothing works". The ceiling
+     * below is still on heads, so this does not loosen anything.
      */
     for (const niche of NICHES) {
-      const best = Math.max(...STRATEGIES.map((s) => season(niche, s.play).share));
+      const best = Math.max(...STRATEGIES.map((s) => season(niche, s.play).revenueShare));
       expect(best, `nothing works in ${niche.id}`).toBeGreaterThan(0.05);
     }
   });
@@ -244,7 +276,7 @@ describe("five teams in one market, which is the actual game", () => {
       for (const [i, strategy] of STRATEGIES.entries()) {
         const id = `t${i}`;
         const company = world.companies.find((c) => c.id === id)!;
-        const chosen = strategy.play(year, company, niche);
+        const chosen = strategy.play(year, company, niche, world);
         const submitted: Partial<Record<Role, any>> = {};
         if (chosen) for (const role of ROLES) if ((chosen as any)[role]) submitted[role] = (chosen as any)[role];
         const { decisions: theirs } = decisionsForYear({
@@ -353,7 +385,7 @@ describe("a season is a story, not a coin flip", () => {
      * playing after a strong start should fall back, or the game is over on
      * day three for everybody who did not start well.
      */
-    const stopsEarly = season(niche, (year, c, n) => (year <= 4 ? grower(year, c, n) : null));
+    const stopsEarly = season(niche, (year, c, n, w) => (year <= 4 ? grower(year, c, n, w) : null));
     const keepsGoing = season(niche, grower);
     expect(stopsEarly.share).toBeLessThan(keepsGoing.share);
   });
