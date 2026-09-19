@@ -692,7 +692,18 @@ function LoginForm() {
           />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="login-password">Password</Label>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="login-password">Password</Label>
+            {/*
+              * Next to the field it fails at — where someone looks the moment
+              * the password doesn't work. The redesign that moved this form to
+              * the right-hand panel dropped it, and with it the only way anyone
+              * could reach /forgot-password: nothing else on the site links there.
+              */}
+            <Link href="/forgot-password" className="text-xs text-muted-foreground underline hover:text-foreground" data-testid="link-forgot-password">
+              Forgot your password?
+            </Link>
+          </div>
           <div className="relative">
             <Input
               id="login-password"
