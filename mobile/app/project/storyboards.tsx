@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Image, Pressable, Text, View, useWindowDimensions } from "react-native";
 import { Stack, useLocalSearchParams } from "expo-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -24,24 +24,56 @@ const STYLES = [
   { value: "cartoon", label: "Cartoon", blurb: "Illustrated, vibrant, hand-drawn" },
 ] as const;
 
-/** RN can send headers with an image request, which the frame route requires. */
+/**
+ * RN can send headers with an image request, which the frame route requires.
+ *
+ * Read continuously rather than once. The token was captured in a `useEffect`
+ * with an empty dependency list — read at mount and never again — while access
+ * tokens last fifteen minutes and `api()` replaces them silently on a 401. So
+ * the JSON on this screen kept working (its refresh path is the thing that
+ * rotated the token) and the pictures kept presenting the token it had
+ * replaced. React Native renders a rejected image as empty space, with no
+ * error anywhere, which is why this looked like "the AI images don't work"
+ * rather than "the images are being sent a stale credential".
+ */
 function useAuthHeader() {
-  const [header, setHeader] = useState<Record<string, string> | undefined>();
-  useEffect(() => {
-    getAccessToken().then((t) => setHeader(t ? { Authorization: `Bearer ${t}` } : undefined));
-  }, []);
-  return header;
+  const { data: token } = useQuery({
+    queryKey: ["access-token"],
+    queryFn: () => getAccessToken(),
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
+  return token ? { Authorization: `Bearer ${token}` } : undefined;
 }
 
 function SceneImage({ path, headers, width }: { path: string; headers?: Record<string, string>; width: number }) {
+  const qc = useQueryClient();
+  /*
+   * One retry, after asking for a fresh token.
+   *
+   * `api()` refreshes on a 401 and saves the result, so a call that goes
+   * through it is enough to replace an expired token; re-reading then gives
+   * this image the new one. The nonce is what makes React Native fetch again
+   * rather than serve the failure it cached.
+   */
+  const [retry, setRetry] = useState(0);
+  const onError = () => {
+    if (retry > 0) return;
+    void api("/api/auth/mobile/me")
+      .catch(() => {})
+      .then(() => qc.invalidateQueries({ queryKey: ["access-token"] }))
+      .then(() => setRetry(1));
+  };
+
   if (!path || !headers) {
     return <View style={{ width, height: width * 0.6, borderRadius: radius.md, backgroundColor: colors.surfaceRaised }} />;
   }
   return (
     <Image
-      source={{ uri: `${API_URL}${path}`, headers }}
+      source={{ uri: `${API_URL}${path}${retry ? `${path.includes("?") ? "&" : "?"}v=${retry}` : ""}`, headers }}
       style={{ width, height: width * 0.6, borderRadius: radius.md, backgroundColor: colors.surfaceRaised }}
       resizeMode="cover"
+      onError={onError}
     />
   );
 }
