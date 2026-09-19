@@ -522,7 +522,7 @@ const s = StyleSheet.create({
   listItem: { flexDirection: "row", alignItems: "center", gap: spacing.md, paddingVertical: spacing.md, paddingHorizontal: spacing.lg },
   listIcon: { width: 28, alignItems: "center" },
   listTitle: { color: colors.text, fontSize: font.base, fontFamily: fontFamily.medium },
-  h1: { color: colors.text, fontSize: font.xl, fontFamily: fontFamily.bold, letterSpacing: -0.3 },
+  h1: { color: colors.text, fontSize: font.xl, fontFamily: fontFamily.extrabold, letterSpacing: -0.3 },
   h2: { color: colors.text, fontSize: font.lg, fontFamily: fontFamily.semibold },
   label: {
     color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.semibold,

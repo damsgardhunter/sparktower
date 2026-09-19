@@ -5,9 +5,9 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
-  SpaceGrotesk_400Regular, SpaceGrotesk_500Medium,
-  SpaceGrotesk_600SemiBold, SpaceGrotesk_700Bold, useFonts,
-} from "@expo-google-fonts/space-grotesk";
+  PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold,
+  PlusJakartaSans_700Bold, PlusJakartaSans_800ExtraBold, useFonts,
+} from "@expo-google-fonts/plus-jakarta-sans";
 import { AuthProvider, useAuth } from "../src/auth/AuthContext";
 import { colors, fontFamily, isDark } from "../src/theme";
 
@@ -94,10 +94,11 @@ export default function RootLayout() {
   // would flash the system font and reflow every label, so hold the splash
   // until it's ready — the auth check is usually still in flight anyway.
   const [fontsLoaded, fontError] = useFonts({
-    SpaceGrotesk_400Regular,
-    SpaceGrotesk_500Medium,
-    SpaceGrotesk_600SemiBold,
-    SpaceGrotesk_700Bold,
+    PlusJakartaSans_400Regular,
+    PlusJakartaSans_500Medium,
+    PlusJakartaSans_600SemiBold,
+    PlusJakartaSans_700Bold,
+    PlusJakartaSans_800ExtraBold,
   });
 
   return (

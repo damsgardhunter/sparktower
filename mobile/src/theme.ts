@@ -177,10 +177,13 @@ export const font = {
  * registered in app/_layout.tsx.
  */
 export const fontFamily = {
-  regular: "SpaceGrotesk_400Regular",
-  medium: "SpaceGrotesk_500Medium",
-  semibold: "SpaceGrotesk_600SemiBold",
-  bold: "SpaceGrotesk_700Bold",
+  // Plus Jakarta Sans, as on the web: 400 for body text, 800 for headlines.
+  regular: "PlusJakartaSans_400Regular",
+  medium: "PlusJakartaSans_500Medium",
+  semibold: "PlusJakartaSans_600SemiBold",
+  bold: "PlusJakartaSans_700Bold",
+  /** Headlines. The web sets its display text at 800; this is the same face. */
+  extrabold: "PlusJakartaSans_800ExtraBold",
 } as const;
 
 /** A soft card shadow, the same on iOS and Android. */

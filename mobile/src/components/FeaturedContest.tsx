@@ -17,9 +17,10 @@ const AMOUNT_COLORS = ["#6EE7B7", "#BBF7D0", "#D8B4FE"] as const;
  */
 export function GradientAmount({ size: max }: { size: number }) {
   const [width, setWidth] = useState(0);
-  // Space Grotesk bold runs about 0.62em a character across this string.
-  const size = width ? Math.min(max, Math.floor(width / (C.amount.length * 0.62))) : max;
-  const style: StyleProp<TextStyle> = { fontSize: size, lineHeight: size * 1.1, fontFamily: fontFamily.bold, letterSpacing: -0.5, textAlign: "center" };
+  // Plus Jakarta Sans ExtraBold runs wider than the Space Grotesk this was first
+  // fitted for (0.62em a character); 0.7 leaves room so the figure never clips.
+  const size = width ? Math.min(max, Math.floor(width / (C.amount.length * 0.7))) : max;
+  const style: StyleProp<TextStyle> = { fontSize: size, lineHeight: size * 1.1, fontFamily: fontFamily.extrabold, letterSpacing: -0.5, textAlign: "center" };
   return (
     <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)} style={{ alignSelf: "stretch", opacity: width ? 1 : 0 }}>
       <AmountText style={style} />
