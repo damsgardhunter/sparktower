@@ -47,6 +47,7 @@ import { TeammateProfile } from "@/components/sim/teammate-profile";
 import { lookOf } from "@/components/sim/market-look";
 import { capacityRisk, type Forecast } from "@shared/simulation/forecast";
 import { ProjectionPanel } from "@/components/sim/projection-panel";
+import { AdvanceYearCard } from "@/components/sim/advance-year";
 import {
   Loader2, Clock, TrendingUp, TrendingDown, Minus, AlertTriangle, Info,
   CheckCircle2, Circle, Banknote, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy, Newspaper,
@@ -61,6 +62,9 @@ interface Desk {
   year: number;
   totalYears: number;
   resolvesAt: string | null;
+  seasonId?: string;
+  /** Set only for developers and for companies running this season. */
+  canAdvance?: "developer" | "company" | null;
   yourRole: Role | null;
   yourTitle: string | null;
   /** Only before year one: how many rooms in this market are still in a lobby. */
@@ -73,6 +77,8 @@ interface Desk {
   company: {
     cash: number; debt: number; creditLimit: number; reputation: number;
     quality: number; brand: number; service: number; capacity: number;
+    /** Room the company's assets add on top of what it built. */
+    assetCapacity?: number;
     unitCost: number; price: number; customers: number; bankruptSince: number | null;
     founderShare: number; pipeline: number; positioning: string | null;
     pipelineLater?: number; brandPipeline?: number; staff?: number;
@@ -304,6 +310,17 @@ export default function SimulationDeskPage() {
       onBack={() => navigate("/simulation")}
       clock={desk.phase === "finished" ? "Season over" : secondsLeft !== null ? `${longCountdown(secondsLeft)} until this year resolves` : null}
     >
+      {/* Only for developers and for companies running their own season. */}
+      {desk.canAdvance && desk.phase !== "finished" && desk.seasonId && (
+        <AdvanceYearCard
+          seasonId={desk.seasonId}
+          ventureId={desk.ventureId}
+          year={desk.year}
+          totalYears={desk.totalYears}
+          as={desk.canAdvance}
+        />
+      )}
+
       {/* 1. What happened last year, before anyone is asked to decide this one. */}
       {desk.lastYear ? <LastYear report={desk.lastYear} voice={v} onOpen={() => navigate(`/simulation/${desk.ventureId}/report/${desk.lastYear!.year}`)} /> : (
         <Card><CardContent className="p-5">
@@ -349,7 +366,7 @@ export default function SimulationDeskPage() {
            * against next year's demand in the projection above, not here.
            * A cut is immediate, so the smaller of the two is what serves.
            */
-          capacity={Math.min(c.capacity, Number(desk.yourRole === "coo" && draft ? draft.capacityTarget : (desk.filed as any)?.coo?.capacityTarget ?? c.capacity))}
+          capacity={Math.min(c.capacity, Number(desk.yourRole === "coo" && draft ? draft.capacityTarget : (desk.filed as any)?.coo?.capacityTarget ?? c.capacity)) + (c.assetCapacity ?? 0)}
           idleCostPerUnit={desk.idleCostPerUnit}
           yours={desk.yourRole === "coo" ? "capacity" : desk.yourRole === "cmo" ? "price" : null}
         />
@@ -364,7 +381,9 @@ export default function SimulationDeskPage() {
             <Stat
               label={title(v.customers)}
               value={c.customers.toLocaleString()}
-              sub={`${v.capacityShort} ${c.capacity.toLocaleString()}`}
+              sub={c.assetCapacity
+                ? `${v.capacityShort} ${(c.capacity + c.assetCapacity).toLocaleString()} (${c.assetCapacity.toLocaleString()} from what you own)`
+                : `${v.capacityShort} ${c.capacity.toLocaleString()}`}
             />
             <Stat label={`Price ${v.per}`} value={money(c.price)} sub={`costs ${money(c.unitCost)} each`} tone={c.price < c.unitCost ? "bad" : "plain"} />
             <Stat label="Reputation" value={`${c.reputation}`} />
