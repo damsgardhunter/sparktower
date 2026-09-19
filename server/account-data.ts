@@ -205,6 +205,30 @@ export interface DeleteOutcome {
  *
  * One transaction: a half-deleted account is worse than a failed one.
  */
+/**
+ * Who inherits a project when its owner closes their account: an admin if
+ * there is one, otherwise the member whose account is oldest. One statement,
+ * shared, so the projects `deleteAccount` removes and the ones
+ * `projectsLeavingWith` names — the ones whose held pledges are refunded first
+ * — can never disagree.
+ */
+const HEIR_SQL = `SELECT m.user_id FROM project_members m
+   JOIN users u ON u.id = m.user_id
+  WHERE m.project_id = $1 AND m.user_id <> $2 AND u.deleted_at IS NULL
+  ORDER BY (m.role IN ('owner', 'admin')) DESC, u.created_at ASC NULLS LAST, m.user_id ASC
+  LIMIT 1`;
+
+/** The projects that will be deleted, not handed on, when this account closes. */
+export async function projectsLeavingWith(userId: string): Promise<{ id: string; title: string }[]> {
+  const owned = await pool.query<{ id: string; title: string }>("SELECT id, title FROM projects WHERE owner_id = $1", [userId]);
+  const leaving: { id: string; title: string }[] = [];
+  for (const project of owned.rows) {
+    const heir = await pool.query(HEIR_SQL, [project.id, userId]);
+    if (heir.rows.length === 0) leaving.push(project);
+  }
+  return leaving;
+}
+
 export async function deleteAccount(userId: string, opts: { keepPosts: boolean }): Promise<DeleteOutcome> {
   const client = await pool.connect();
   const outcome: DeleteOutcome = { transferred: [], deletedProjects: [], posts: opts.keepPosts ? "kept-anonymous" : "deleted", rowsDeleted: 0 };
@@ -219,14 +243,7 @@ export async function deleteAccount(userId: string, opts: { keepPosts: boolean }
        * one, otherwise the member whose SparkTower account is oldest. Stable,
        * explainable, and the same answer every time.
        */
-      const heir = await client.query<{ user_id: string }>(
-        `SELECT m.user_id FROM project_members m
-           JOIN users u ON u.id = m.user_id
-          WHERE m.project_id = $1 AND m.user_id <> $2 AND u.deleted_at IS NULL
-          ORDER BY (m.role IN ('owner', 'admin')) DESC, u.created_at ASC NULLS LAST, m.user_id ASC
-          LIMIT 1`,
-        [project.id, userId],
-      );
+      const heir = await client.query<{ user_id: string }>(HEIR_SQL, [project.id, userId]);
       if (heir.rows[0]) {
         await client.query("UPDATE projects SET owner_id = $1 WHERE id = $2", [heir.rows[0].user_id, project.id]);
         await client.query("UPDATE project_members SET role = 'owner' WHERE project_id = $1 AND user_id = $2", [project.id, heir.rows[0].user_id]);

@@ -13,6 +13,8 @@ import { describe, it, expect, afterAll, beforeEach, vi } from "vitest";
 import request from "supertest";
 
 const stripe = {
+  refunded: [] as string[],
+  failRefunds: false,
   cancelled: [] as string[],
   subs: [] as { id: string; status: string }[],
   failWith: null as null | Error,
@@ -33,6 +35,13 @@ vi.mock("../../server/stripeClient", () => ({
         },
         cancel: async (id: string) => { stripe.cancelled.push(id); return { id, status: "canceled" }; },
       },
+      refunds: {
+        create: async ({ payment_intent }: { payment_intent: string }) => {
+          if (stripe.failRefunds) throw new Error("connect ETIMEDOUT api.stripe.com");
+          stripe.refunded.push(payment_intent);
+          return { id: `re_${stripe.refunded.length}` };
+        },
+      },
     };
   },
   getStripeSync: async () => ({}),
@@ -40,11 +49,11 @@ vi.mock("../../server/stripeClient", () => ({
 
 const { getTestApp, closeTestApp } = await import("../helpers/app");
 const { db } = await import("../../server/db");
-const { users } = await import("@shared/schema");
+const { users, projects, projectBackings, projectMembers } = await import("@shared/schema");
 const { eq } = await import("drizzle-orm");
 
 afterAll(async () => { await closeTestApp(); });
-beforeEach(() => { stripe.cancelled = []; stripe.subs = []; stripe.failWith = null; stripe.calls = 0; });
+beforeEach(() => { stripe.cancelled = []; stripe.subs = []; stripe.failWith = null; stripe.calls = 0; stripe.refunded = []; stripe.failRefunds = false; });
 
 let n = 0;
 const password = "Testpass123!";
@@ -121,5 +130,61 @@ describe("deleting an account that never paid", () => {
     const res = await m.agent.post("/api/account/delete").send({ password });
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(stripe.calls, "no billing, no call").toBe(0);
+  });
+});
+
+describe("closing an account that holds other people's money", () => {
+  /*
+   * Closing an account deletes the projects nobody else is on, and pledges go
+   * with their project (ON DELETE CASCADE). A held pledge — the backer
+   * charged, the money in the platform's balance — was deleted with it, and
+   * nothing was left for the refund sweep to find.
+   */
+  async function soloProjectWithPledge(owner: { id: string }, backerId: string, withMember?: string) {
+    const [project] = await db.insert(projects).values({ title: "Closing shop", description: "A project with backers.", category: "saas", ownerId: owner.id } as any).returning();
+    if (withMember) await db.insert(projectMembers).values({ projectId: project.id, userId: withMember, role: "member" } as any);
+    const [pledge] = await db.insert(projectBackings).values({
+      projectId: project.id, backerId, amountCents: 5000, status: "held", stripePaymentIntentId: `pi_${project.id.slice(0, 8)}`,
+    } as any).returning();
+    return { project, pledge };
+  }
+
+  it("refunds the backers of a project that closes with the account, before deleting it", async () => {
+    const creator = await member();
+    const backer = await member();
+    const { pledge } = await soloProjectWithPledge(creator, backer.id);
+
+    const res = await creator.agent.post("/api/account/delete").send({ password });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.pledgesRefunded).toBe(1);
+    expect(stripe.refunded).toEqual([pledge.stripePaymentIntentId]);
+  });
+
+  it("deletes nothing when the backers can't be refunded", async () => {
+    const creator = await member();
+    const backer = await member();
+    const { pledge } = await soloProjectWithPledge(creator, backer.id);
+    stripe.failRefunds = true;
+
+    const res = await creator.agent.post("/api/account/delete").send({ password });
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe("pledge_refund_failed");
+    const [still] = await db.select().from(projectBackings).where(eq(projectBackings.id, pledge.id));
+    expect(still?.status, "the pledge is still on record, still held").toBe("held");
+    expect((await db.select().from(users).where(eq(users.id, creator.id)))[0].deletedAt).toBeNull();
+  });
+
+  it("leaves the pledges with a project another member inherits", async () => {
+    const creator = await member();
+    const backer = await member();
+    const teammate = await member();
+    const { pledge, project } = await soloProjectWithPledge(creator, backer.id, teammate.id);
+
+    const res = await creator.agent.post("/api/account/delete").send({ password });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(stripe.refunded, "the project goes on, so the backing does").toEqual([]);
+    const [still] = await db.select().from(projectBackings).where(eq(projectBackings.id, pledge.id));
+    expect(still.status).toBe("held");
+    expect((await db.select().from(projects).where(eq(projects.id, project.id)))[0].ownerId).toBe(teammate.id);
   });
 });

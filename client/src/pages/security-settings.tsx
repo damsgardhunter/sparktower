@@ -344,7 +344,7 @@ function YourData({ mfaEnabled }: { mfaEnabled: boolean }) {
               </p>
               {/* Said here because it is the question a paying member has, and until now the answer was "you keep being charged". */}
               <p className="text-sm text-muted-foreground" data-testid="text-delete-billing">
-                A paid plan is cancelled at the same moment, so you won't be charged again.
+                A paid plan is cancelled at the same moment, so you won't be charged again. Pledges held on projects that close with your account are refunded to their backers.
               </p>
             </div>
             {!open && (
