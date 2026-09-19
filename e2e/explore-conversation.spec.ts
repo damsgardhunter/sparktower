@@ -42,6 +42,7 @@ test("commenting on a followed builder's progress comes back round when they rep
   // Bea replies to him.
   const comments = await (await bea.get(`/api/feed/${post.id}/comments`)).json();
   const ariComment = comments.find((c: any) => c.content === "How accurate is the scan?");
+  expect(ariComment, `Bea can't see Ari's comment; she got: ${JSON.stringify(comments).slice(0, 600)}`).toBeTruthy();
   expect((await bea.post(`/api/feed/${post.id}/comments`, { data: { content: "About 90% so far.", parentCommentId: ariComment.id } })).ok()).toBeTruthy();
 
   // The bell brings Ari back to the post, where the reply is.
@@ -52,5 +53,12 @@ test("commenting on a followed builder's progress comes back round when they rep
   await expect(reply).toBeVisible();
   await reply.click();
   await expect(page).toHaveURL(new RegExp(`/posts/${post.id}$`));
-  await expect(page.getByText("About 90% so far.")).toBeVisible();
+  /*
+   * In the thread, specifically. The notification now quotes the reply, and
+   * the panel it sits in is still animating closed when the page arrives — so
+   * the same words are briefly on screen twice, and an unscoped match fails
+   * on the ambiguity rather than on anything being wrong. What this test is
+   * about is that the reply is on the post.
+   */
+  await expect(page.getByTestId(/^comment-/).getByText("About 90% so far.")).toBeVisible();
 });
