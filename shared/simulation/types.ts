@@ -255,6 +255,54 @@ export interface CompanyAsset {
 }
 
 /** The whole world at a moment in time. */
+/**
+ * A company with every number made a number again.
+ *
+ * The engine now refuses to spread a `NaN` that arrives in a decision, but a
+ * world saved while it still could is stored in the database and would carry
+ * it forever: every tick reads the broken figure, produces another, and writes
+ * it back. Nothing recovers on its own, and the team sees "£NaN" until
+ * somebody edits the row by hand.
+ *
+ * So a stored world is repaired on the way in. A company whose cash cannot be
+ * read is treated as having none, which is wrong but recoverable — and far
+ * better than a season that can never be resolved again.
+ */
+export function repairCompany(c: Company): Company {
+  const num = (value: unknown, fallback: number): number => {
+    const n = typeof value === "number" ? value : Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  const bounded = (value: unknown, fallback: number): number =>
+    Math.max(0, Math.min(100, num(value, fallback)));
+
+  const customers: Record<string, number> = {};
+  for (const [segment, held] of Object.entries(c.customers ?? {})) {
+    customers[segment] = Math.max(0, num(held, 0));
+  }
+
+  return {
+    ...c,
+    cash: num(c.cash, 0),
+    debt: Math.max(0, num(c.debt, 0)),
+    creditLimit: Math.max(0, num(c.creditLimit, 0)),
+    price: Math.max(0.01, num(c.price, 1)),
+    unitCost: Math.max(0, num(c.unitCost, 1)),
+    capacity: Math.max(0, Math.round(num(c.capacity, 0))),
+    reputation: bounded(c.reputation, 50),
+    quality: bounded(c.quality, 40),
+    brand: bounded(c.brand, 10),
+    service: bounded(c.service, 40),
+    customers,
+    assets: Array.isArray(c.assets) ? c.assets : [],
+    seats: Array.isArray(c.seats) ? c.seats : [],
+    cities: Array.isArray(c.cities) ? c.cities : undefined as any,
+    founderShare: Math.max(0.01, Math.min(1, num(c.founderShare, 1))),
+    techDebt: bounded(c.techDebt, 0),
+    pipeline: Math.max(0, num(c.pipeline, 0)),
+  };
+}
+
 export interface World {
   seasonId: string;
   niche: Niche;

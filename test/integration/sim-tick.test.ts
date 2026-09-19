@@ -292,6 +292,50 @@ describe("resolving a year", () => {
   }, 300_000);
 });
 
+describe("a season that was already broken", () => {
+  it("repairs a world holding numbers that are not numbers", async () => {
+    /*
+     * Before the engine refused to spread a NaN, one malformed decision could
+     * turn every company's cash into one — the incumbents included — and the
+     * world was written back that way. Nothing recovered on its own: each tick
+     * read the broken figure, produced another, and saved it again, so a team
+     * saw "£NaN" until somebody edited the row by hand.
+     *
+     * Any season saved during that window is still out there, which is why the
+     * repair happens on the way in rather than only at the boundary.
+     */
+    const app = await getTestApp();
+    const { ventureId, seasonId } = await readyRoom(app);
+    await startReadySeasons();
+
+    const [before] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    const broken = before.world as World;
+    broken.companies = broken.companies.map((c) => ({
+      ...c,
+      cash: Number.NaN,
+      reputation: Number.NaN,
+      customers: Object.fromEntries(Object.keys(c.customers).map((s) => [s, Number.NaN])),
+    }));
+    await db.update(simSeasons).set({ world: broken }).where(eq(simSeasons.id, seasonId));
+
+    await makeDue(seasonId);
+    expect(await tickSeason(seasonId), "a broken season should still resolve").toBe(1);
+
+    const [after] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    for (const company of (after.world as World).companies) {
+      expect(Number.isFinite(company.cash), `${company.name} cash is still ${company.cash}`).toBe(true);
+      expect(Number.isFinite(company.reputation), `${company.name} reputation`).toBe(true);
+      for (const held of Object.values(company.customers)) {
+        expect(Number.isFinite(held), `${company.name} customers`).toBe(true);
+      }
+    }
+
+    const [report] = await db.select().from(simReports)
+      .where(and(eq(simReports.ventureId, ventureId), eq(simReports.year, 1)));
+    expect(Number.isFinite((report.report as any).cash), "the year's report is readable").toBe(true);
+  }, 180_000);
+});
+
 describe("the pass", () => {
   it("settles, starts and resolves in one go", async () => {
     const app = await getTestApp();

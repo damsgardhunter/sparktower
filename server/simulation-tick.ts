@@ -28,12 +28,13 @@ import {
 } from "@shared/schema";
 import { nicheById } from "@shared/simulation/niches";
 import { resolveYear } from "@shared/simulation/resolve";
-import { ROLE_TITLES, type Role, type World } from "@shared/simulation/types";
+import { ROLE_TITLES, repairCompany, type Role, type World } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
 import {
   buildWorld, decisionsForYear, economyFor, absenceNote, tickDueAt, seasonOver,
 } from "@shared/simulation/season";
 import { advanceVenture } from "./simulation-routes";
+import { fileBotDecisions, fillWaitingLobbies } from "./simulation-bots";
 import { marketListings, resolveBids, biddableFunds, type Bid, type Listing } from "@shared/simulation/assets";
 import { applyRecovery, reviewCovenant, type RecoveryKind } from "@shared/simulation/recovery";
 import { challengeFor, checkChallenge, applyReward, discretionarySpend, type Challenge } from "@shared/simulation/challenges";
@@ -119,15 +120,32 @@ export async function settleLobbies(): Promise<number> {
  * watching, so this can never hang on an empty room.
  */
 export async function startReadySeasons(): Promise<string[]> {
-  const forming = await db
-    .select({ id: simSeasons.id, nicheId: simSeasons.nicheId })
+  /*
+   * `abandoned` is in here as well as `forming`, and that is not tidiness.
+   *
+   * A season is abandoned when every room in it fell apart, which is a fair
+   * thing to conclude and an unrecoverable one to be wrong about: the status
+   * is read nowhere except here, so a season marked abandoned while a company
+   * was still alive could never be started by anything, and the people in that
+   * company sit on "waiting for year one" for ever. That happened in this
+   * database — one room, one real chief executive, four bots, the company
+   * running, the season abandoned around it — and nothing in the product could
+   * have noticed, because noticing was this function's job and this function
+   * had stopped looking at the season.
+   *
+   * So abandonment is treated as a conclusion rather than a fact: if the rooms
+   * disagree with it, the rooms win. A season with a running company in it
+   * starts, whatever its status says. One with nothing running is left alone.
+   */
+  const candidates = await db
+    .select({ id: simSeasons.id, nicheId: simSeasons.nicheId, status: simSeasons.status })
     .from(simSeasons)
-    .where(eq(simSeasons.status, "forming"))
+    .where(inArray(simSeasons.status, ["forming", "abandoned"]))
     .limit(50);
 
   const started: string[] = [];
 
-  for (const season of forming) {
+  for (const season of candidates) {
     const ventures = await db
       .select({ id: simVentures.id, name: simVentures.name, phase: simVentures.phase })
       .from(simVentures)
@@ -140,14 +158,22 @@ export async function startReadySeasons(): Promise<string[]> {
     const playing = ventures.filter((v) => v.phase === "running");
     if (playing.length === 0) {
       // Every room fell apart. Nothing to run.
-      await db.update(simSeasons).set({ status: "abandoned" }).where(eq(simSeasons.id, season.id));
+      if (season.status !== "abandoned") {
+        await db.update(simSeasons).set({ status: "abandoned" }).where(eq(simSeasons.id, season.id));
+      }
       continue;
+    }
+
+    if (season.status === "abandoned") {
+      console.warn(`[sim] season ${season.id} was abandoned with ${playing.length} company(s) still running; starting it anyway`);
     }
 
     const niche = nicheById(season.nicheId);
     if (!niche) {
       console.error(`[sim] season ${season.id} names a market that no longer exists: ${season.nicheId}`);
-      await db.update(simSeasons).set({ status: "abandoned" }).where(eq(simSeasons.id, season.id));
+      if (season.status !== "abandoned") {
+        await db.update(simSeasons).set({ status: "abandoned" }).where(eq(simSeasons.id, season.id));
+      }
       continue;
     }
 
@@ -167,12 +193,13 @@ export async function startReadySeasons(): Promise<string[]> {
     });
 
     const startsAt = new Date(Date.now() + FIRST_YEAR_DELAY_MS);
-    // Conditional on still being `forming`, so two processes starting the same
-    // season at the same moment cannot both seed a world.
+    // Conditional on the status still being the one that was read, so two
+    // processes starting the same season at the same moment cannot both seed a
+    // world.
     const claimed = await db
       .update(simSeasons)
       .set({ status: "running", year: 1, world, startsAt, nextTickAt: tickDueAt(startsAt, 1) })
-      .where(and(eq(simSeasons.id, season.id), eq(simSeasons.status, "forming")))
+      .where(and(eq(simSeasons.id, season.id), eq(simSeasons.status, season.status)))
       .returning({ id: simSeasons.id });
 
     if (claimed.length > 0) {
@@ -210,7 +237,13 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
    * month's balance for a fortnight, and two seasons running side by side
    * would be playing different games.
    */
-  const world: World = { ...stored, niche, year };
+  /*
+   * Repaired on the way in. A world saved while the engine could still spread
+   * a NaN would otherwise carry it forever — every tick reading the broken
+   * figure, producing another, and writing it back, with nothing recovering on
+   * its own.
+   */
+  const world: World = { ...stored, niche, year, companies: (stored.companies ?? []).map(repairCompany) };
 
   let teams = world.companies.filter((c) => c.kind === "player");
   if (teams.length === 0) return null;
@@ -282,6 +315,20 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
     if (out.released.length > 0) releasedByTeam.set(company.id, out.released);
   }
   teams = world.companies.filter((c) => c.kind === "player");
+
+  /*
+   * Bots file last, just before the year is read.
+   *
+   * Last because a person filing in the final seconds must not be overwritten
+   * by a seat the product is playing on their team's behalf, and before the
+   * read because a bot that abstains is a seat doing nothing — which is the
+   * thing filling the room was meant to prevent.
+   */
+  await fileBotDecisions({
+    companies: teams.map((t) => ({ id: t.id, company: t })),
+    year,
+    niche,
+  }).catch((err) => console.error(`[sim] bot decisions for season ${seasonId} failed:`, err));
 
   // Everything submitted for this year, and what each team ran last year.
   const rows = await db
@@ -656,6 +703,9 @@ export async function runDueTicks(now = new Date()): Promise<number> {
 /** One pass of everything, under one lock. Exported so a test can run it directly. */
 export async function runSimulationPass(now = new Date()): Promise<{ settled: number; started: number; resolved: number } | null> {
   return withLock(LOCK_SIM_TICK, async () => {
+    // Before settling: a room that has waited its minute gets its bots, so the
+    // deadline it is about to hit finds five players rather than one.
+    await fillWaitingLobbies().catch((err) => console.error("[sim] filling lobbies failed:", err));
     const settled = await settleLobbies();
     const started = (await startReadySeasons()).length;
     const resolved = await runDueTicks(now);

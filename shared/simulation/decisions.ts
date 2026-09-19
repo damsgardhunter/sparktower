@@ -218,6 +218,74 @@ export function lift(spend: number, half: number, ceiling: number): number {
 
 /** What the company pays every year before it does anything at all. */
 /**
+ * Decisions with every number made a number.
+ *
+ * The engine used to trust what it was handed, and one bad field was enough to
+ * take down a whole market: a `NaN` price makes a company's appeal `NaN`,
+ * which makes every allocation weight `NaN`, which makes every company's
+ * customers and revenue and cash `NaN` — the incumbents included. One team
+ * filing nonsense corrupted the season for the other four, and because the
+ * world is stored between years, it stayed corrupted.
+ *
+ * The routes validate before anything reaches here, and that is the right
+ * place for a person's mistake to be caught and explained. This is the other
+ * thing: a validator is one refactor away from being bypassed, a new lever can
+ * be added without one, and a world saved during an earlier bug can still hold
+ * a `NaN` today. The engine is the last place that can refuse to spread it.
+ */
+const clean = (value: unknown, fallback = 0): number => {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : fallback;
+};
+
+export function sanitiseDecisions(d: TeamDecisions): TeamDecisions {
+  const out: TeamDecisions = { companyId: d.companyId };
+
+  if (d.cmo) out.cmo = {
+    ...d.cmo,
+    // A price of nothing is not a decision anybody can act on, so it falls
+    // back to a pound rather than to zero and a division by it.
+    price: Math.max(0.01, clean(d.cmo.price, 1)),
+    brandSpend: Math.max(0, clean(d.cmo.brandSpend)),
+    performanceSpend: Math.max(0, clean(d.cmo.performanceSpend)),
+    celebritySpend: Math.max(0, clean(d.cmo.celebritySpend)),
+    targetCities: Array.isArray(d.cmo.targetCities) ? d.cmo.targetCities.filter((c) => typeof c === "string") : [],
+  };
+
+  if (d.cto) out.cto = {
+    featureSpend: Math.max(0, clean(d.cto.featureSpend)),
+    reliabilitySpend: Math.max(0, clean(d.cto.reliabilitySpend)),
+    techDebtPaydown: Math.max(0, clean(d.cto.techDebtPaydown)),
+    researchSpend: Math.max(0, clean(d.cto.researchSpend)),
+  };
+
+  if (d.coo) out.coo = {
+    ...d.coo,
+    capacityTarget: Math.max(0, clean(d.coo.capacityTarget)),
+    supportSpend: Math.max(0, clean(d.coo.supportSpend)),
+    efficiencySpend: Math.max(0, clean(d.coo.efficiencySpend)),
+    headcount: Math.max(0, Math.round(clean(d.coo.headcount))),
+  };
+
+  if (d.cfo) out.cfo = {
+    ...d.cfo,
+    borrow: Math.max(0, clean(d.cfo.borrow)),
+    repay: Math.max(0, clean(d.cfo.repay)),
+    cashBuffer: Math.max(0, clean(d.cfo.cashBuffer)),
+    raiseAmount: Math.max(0, clean((d.cfo as any).raiseAmount)),
+  };
+
+  if (d.ceo) out.ceo = {
+    ...d.ceo,
+    focus: (["growth", "margin", "quality", "survival"] as const).includes(d.ceo.focus as any)
+      ? d.ceo.focus
+      : "growth",
+  };
+
+  return out;
+}
+
+/**
  * What the chief executive's focus actually does.
  *
  * It had to do something. `focus` was declared, shown in the lobby as the

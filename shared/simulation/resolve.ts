@@ -18,7 +18,7 @@
 import type { Company, Economy, World } from "./types";
 import { allocate, marketShares } from "./market";
 import { incumbentYear } from "./incumbents";
-import { fixedCosts, focusEffects, interlock, lift, debtDrag, nextTechDebt, FOCUS_NOTES, type Focus, type TeamDecisions } from "./decisions";
+import { fixedCosts, focusEffects, interlock, lift, debtDrag, nextTechDebt, sanitiseDecisions, FOCUS_NOTES, type Focus, type TeamDecisions } from "./decisions";
 import { assetEffects, ageAssets } from "./assets";
 import { reachOf } from "./market";
 import { eventFor, economyWithEvent, companyWithEvent, type MarketEvent } from "./events";
@@ -112,7 +112,12 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
    */
   const event = eventFor({ world, year: world.year, economy: economy ?? world.economy });
   const nextEconomy = economyWithEvent(economy ?? world.economy, event);
-  const byCompany = new Map(decisions.map((d) => [d.companyId, d]));
+  /*
+   * Every number made a number before anything reads it. One bad field used to
+   * be enough to turn an entire market's cash into NaN — see
+   * `sanitiseDecisions`.
+   */
+  const byCompany = new Map(decisions.map((d) => [d.companyId, sanitiseDecisions(d)]));
   const sharesBefore = marketShares(Object.fromEntries(world.companies.map((c) => [c.id, c.customers])));
 
   const notesFor: Record<string, string[]> = {};
