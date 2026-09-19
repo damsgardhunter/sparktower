@@ -133,6 +133,57 @@ export interface Niche {
   baseUnitCost: number;
   /** Multiplies how fast quality can be moved in this market — software moves faster than hardware. */
   innovationPace: number;
+  /** The words this market uses for the things every market has. */
+  voice: NicheVoice;
+}
+
+/**
+ * What this market calls things.
+ *
+ * The engine has one set of nouns — customers, capacity, quality, price — and
+ * it has to, because the maths is the same everywhere. What players read does
+ * not have to be, and it should not be: a restaurant does not have "units of
+ * capacity", it has covers, and a podcast does not have "customers", it has
+ * listeners who never pay you and advertisers who do.
+ *
+ * Running seven markets through one generic vocabulary makes them feel like
+ * seven reskins of a spreadsheet, which is exactly what they are underneath
+ * and exactly what nobody should be able to tell. A player who picks drone
+ * delivery should spend a fortnight thinking about weather windows and
+ * regulators, not about "units".
+ *
+ * Every field is a noun phrase that drops into a sentence without ceremony —
+ * lower case, no full stop — because the screens build sentences out of these.
+ */
+export interface NicheVoice {
+  /** One buyer. "subscriber", "diner", "player". */
+  customer: string;
+  /** Many of them. Used constantly; worth getting right. */
+  customers: string;
+  /** What one of them pays for, once. "a month of premium", "a cover", "a delivery". */
+  unit: string;
+  /** What the price is per, as a phrase. "a month", "a head", "a drop". */
+  per: string;
+  /** What being able to serve more people means here, in one line. */
+  capacity: string;
+  /** The same thing as a label on a number. "kitchen seats", "drones in the air". */
+  capacityShort: string;
+  /** What a place is. "city", "region", "territory". */
+  place: string;
+  /** Plural of the above. */
+  places: string;
+  /** What "quality" is on the ground here. */
+  quality: string;
+  /** What "brand" is. Usually the thing money can buy fastest and hold worst. */
+  brand: string;
+  /** What "service" is — what happens after somebody has already said yes. */
+  service: string;
+  /** What it looks like when demand arrives and cannot be served. */
+  turnedAway: string;
+  /** The market itself, named as somebody inside it would name it. */
+  market: string;
+  /** What the competition is called collectively, in this trade's own idiom. */
+  rivals: string;
 }
 
 /** An incumbent as the niche defines it, before a season starts. */
@@ -148,6 +199,41 @@ export interface IncumbentSeed {
   service: number;
   /** Multiplier on the segment's reference price. */
   priceIndex: number;
+  /** Who they are, as against what they score. */
+  persona: Persona;
+}
+
+/**
+ * A company with a personality, rather than four numbers and a name.
+ *
+ * The posture already decides what an incumbent *does* — a fortress spends on
+ * service, a brawler follows you down in price. What it did not decide was
+ * whether anybody cared. Four rows on a league table reading "Ember 39%,
+ * Pairwise 24%" give a player nothing to feel about taking a point off Ember,
+ * and taking a point off Ember is the entire fortnight.
+ *
+ * So each one gets a character, and the character has to be *the posture, made
+ * human* — not decoration laid over it. A fortress that reads as arrogant and
+ * slow explains, before any number moves, why it will out-spend you on service
+ * and never cut its price. A player who reads this should be able to predict
+ * the behaviour, and then watch it happen.
+ *
+ * The other rule: every one of them has to be beatable in a way you can name.
+ * `knock` is not a joke at their expense, it is the door.
+ */
+export interface Persona {
+  /** How they describe themselves. Their words, and usually a little too pleased with them. */
+  tagline: string;
+  /** Who runs it, and what that is like to be near. */
+  boss: string;
+  /** Two or three sentences: what they believe, and what that belief costs them. */
+  character: string;
+  /** What they are genuinely good at. Short enough to sit on a chip. */
+  known: string;
+  /** What everybody says about them behind their backs. This is the way in. */
+  knock: string;
+  /** How they talk about a newcomer taking share — used when they answer you. */
+  voice: string;
 }
 
 /**
