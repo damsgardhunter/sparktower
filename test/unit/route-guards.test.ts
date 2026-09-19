@@ -44,14 +44,12 @@ const FLOOR_ONLY_ALLOWED: Record<string, string> = {
   "DELETE /api/storyboards/:id": "owner-only delete",
   "DELETE /api/health-findings/feedback/:feedbackId": "author-only delete",
   "POST /api/messages/:userId/read": "marks read; no content",
-  "PATCH /api/sprints/:id/tasks/:taskId": "member-only edit",
-  "DELETE /api/sprints/queue": "leaves the queue",
   "PATCH /api/projects/:id/backing": "owner-only settings edit",
   "DELETE /api/projects/:id/path/loops/:taskId": "member-only delete",
   "DELETE /api/mcp-tokens/:id": "owner-only revoke of one's own token; refusing it is the harm",
 };
 
-const SENSITIVE = /^\/api\/(auth|feed|projects\/:id\/comments|project-comments|uploads|objects\/upload|messages|conversations|chat|projects\/:id\/nova|projects\/:id\/tasks\/nova-assist|projects\/:id\/path|reports|documents|projects\/:id\/documents|generate-image|sprints|mock-interviews|storyboards|projects\/:id\/(live-chat|waitlist|interviews|health-findings)|me\/badges|projects\/:id\/backing|mcp|mcp-tokens)/;
+const SENSITIVE = /^\/api\/(auth|feed|projects\/:id\/comments|project-comments|uploads|objects\/upload|messages|conversations|chat|projects\/:id\/nova|projects\/:id\/tasks\/nova-assist|projects\/:id\/path|reports|documents|projects\/:id\/documents|generate-image|games|mock-interviews|storyboards|projects\/:id\/(live-chat|waitlist|interviews|health-findings)|me\/badges|projects\/:id\/backing|mcp|mcp-tokens)/;
 
 describe("rate limits on the abuse-prone surface", () => {
   it("every write under a sensitive family has its own limit or metering, or a written reason for the floor alone", () => {
@@ -186,7 +184,7 @@ const AFTER_WEDGE_FAMILIES: Record<string, RegExp> = {
   backing: /\/(backing|backings|backing-tiers|backer-badges|merch|merch-orders|printful|payouts|donations|donate|donate-checkout)(\/|$)|\/badges\/backer|\/me\/badges|\/stripe\/connect-/,
   storyboards: /\/(storyboards|visuals|generate-video)(\/|$)/,
   matches: /\/(matches|recommend-people)(\/|$)/,
-  sprints: /\/sprints(\/|$)/,
+  sprints: /\/games(\/|$)/,
   connections: /\/connections(\/|$)/,
   messages: /\/(messages|conversations)(\/|$)/,
   leaderboard: /\/(leaderboard|reputation)(\/|$)/,
@@ -237,7 +235,9 @@ describe("kill switches", () => {
     expect(gated("/api/projects/:id/code-audit")).toBe("codeAudit");
     expect(gated("/api/projects/:id/documents/plan")).toBe("documents");
     expect(gated("/api/mock-interviews/:id/finish")).toBe("investor");
-    expect(gated("/api/sprints")).toBe("sprints");
+    // The surface kept its id when the questionnaire sprint was retired;
+    // what sits behind it now is the game.
+    expect(gated("/api/games/solo")).toBe("sprints");
     expect(gated("/api/contests/:id/join")).toBe("contests");
     expect(gated("/api/projects/:id/backing/checkout")).toBe("backing");
     // Sign-in is never behind a switch: nobody gets locked out by an incident elsewhere.

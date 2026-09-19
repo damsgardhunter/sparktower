@@ -49,3 +49,8 @@ e2e/.objects/
 packages/*/node_modules
 packages/*/dist
 packages/*/*.vsix
+
+# Local editor state. Holds this machine's Nova project id, which is not
+# shared configuration and has been one `git add -A` away from the repository
+# for months.
+.vscode/

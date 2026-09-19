@@ -9,7 +9,7 @@ import { backfillMissingProfiles } from "./user-provisioning";
 import { loadSurfaceFlags, startSurfaceFlagRefresh } from "./surfaces";
 import { startBackingJobs } from "./backing-jobs";
 import { startSimulationJobs } from "./simulation-tick";
-import { startSprintBotJobs } from "./sprint-bots";
+import { startStartupGameJobs } from "./startup-game";
 import { startAnalyticsJobs } from "./analytics";
 import { startPromotionJobs } from "./promotion-sync";
 import { startModerationJobs } from "./moderation";
@@ -147,7 +147,7 @@ let appReady = false;
   // running several server processes is safe.
   startBackingJobs();
   startSimulationJobs();
-  startSprintBotJobs();
+  startStartupGameJobs();
   startAnalyticsJobs();
   startPromotionJobs();
   startModerationJobs();

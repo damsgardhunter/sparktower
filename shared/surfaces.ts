@@ -161,7 +161,7 @@ export const SURFACE_API_PREFIXES: Record<string, string[]> = {
   discover: ["/api/discover"],
   feed: ["/api/feed", "/api/projects/:id/comments", "/api/project-comments", "/api/artifacts", "/api/public/artifacts", "/api/promotions"],
   matches: ["/api/matches", "/api/projects/:id/recommend-people"],
-  sprints: ["/api/sprints"],
+  sprints: ["/api/games"],
   connections: ["/api/connections"],
   messages: ["/api/messages"],
   leaderboard: ["/api/leaderboard", "/api/reputation"],

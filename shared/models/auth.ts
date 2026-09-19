@@ -46,6 +46,22 @@ export const users = pgTable("users", {
    */
   platformRole: varchar("platform_role").default("user").notNull(),
   /**
+   * A bot: an account the product plays, not a person who signed up.
+   *
+   * Bots fill seats in a simulation lobby nobody else joined and partner
+   * somebody who has waited alone in the sprint queue — an empty room is the
+   * fastest way to lose the person who did turn up. They carry ordinary names
+   * so a league table reads naturally, and every surface that shows one labels
+   * it, because a bot that passes for a person is the product telling somebody
+   * something untrue about who they are playing with.
+   *
+   * The flag is what keeps them out of the places a person is counted:
+   * matches, Discover, the leaderboards and any number quoted as usage. It is
+   * set when the row is created and never through the API — nothing signs in
+   * as a bot, and bot rows carry no password hash.
+   */
+  isBot: boolean("is_bot").default(false).notNull(),
+  /**
    * Set when an account is suspended. Checked on every authenticated request,
    * so a suspension takes effect on the suspended person's next action rather
    * than whenever their session happens to expire.

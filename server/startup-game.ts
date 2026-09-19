@@ -27,6 +27,7 @@ import {
   type Round, type Submission,
 } from "@shared/sprints/game";
 import { DECKS, MAX_CUSTOM_CARDS, cardById, customCard, isCustomCard } from "@shared/sprints/cards";
+import { botMove } from "@shared/sprints/partner";
 import { cleanAllocation, mergeAllocations, budgetIsReady } from "@shared/sprints/budget";
 import { cleanClaims, mergeClaims, claimsAreReady, type Claim } from "@shared/sprints/product";
 
@@ -107,9 +108,14 @@ export function cleanSubmission(round: Round, raw: any, userId: string): any | n
       if (isCustomCard(id)) {
         const label = String(raw?.label ?? "").trim();
         if (!label) return null;
-        const index = Number(id.split(":")[1]);
+        /*
+         * The id is rebuilt from the submitting player rather than trusted,
+         * so one player cannot file a card under the other's name and make a
+         * disagreement look like agreement.
+         */
+        const index = Number(id.split(":").pop());
         if (!Number.isInteger(index) || index < 0 || index >= MAX_CUSTOM_CARDS) return null;
-        const card = customCard({ label, detail: String(raw?.detail ?? ""), index });
+        const card = customCard({ label, detail: String(raw?.detail ?? ""), index, owner: userId });
         return { cardId: card.id, label: card.label, detail: card.detail };
       }
 
@@ -157,12 +163,71 @@ export async function submitRound(input: {
   const clean = cleanSubmission(round, payload, userId);
   if (!clean) return { ok: false, code: "unusable", message: "That isn't a valid answer for this round." };
 
-  await db.insert(startupGameSubmissions)
-    .values({ gameId, userId, round, payload: clean, submittedAt: new Date() } as any)
-    .onConflictDoUpdate({
-      target: [startupGameSubmissions.gameId, startupGameSubmissions.userId, startupGameSubmissions.round],
-      set: { payload: clean, submittedAt: new Date() },
-    });
+  /*
+   * The round is re-checked under a lock before the answer is stored.
+   *
+   * Between reading the game above and writing below, the round can close —
+   * the sweep runs every twenty seconds and the other player's poll settles
+   * too. Without the lock, an answer submitted on the buzzer was written
+   * against a round that had already been resolved: stored, never read,
+   * silently dropped, and the player told it had worked. Losing somebody's
+   * last-second decision is bad; telling them it landed is worse.
+   *
+   * `settleIfReady` takes the same lock, so the two serialise: either this
+   * answer is in before the round closes, or the round has closed and the
+   * player is told so.
+   */
+  const stored = await db.transaction(async (tx) => {
+    const [held] = await tx.select({ round: startupGames.round })
+      .from(startupGames).where(eq(startupGames.id, gameId)).for("update");
+    if (!held || held.round !== round) return false;
+
+    await tx.insert(startupGameSubmissions)
+      .values({ gameId, userId, round, payload: clean, submittedAt: new Date() } as any)
+      .onConflictDoUpdate({
+        target: [startupGameSubmissions.gameId, startupGameSubmissions.userId, startupGameSubmissions.round],
+        set: { payload: clean, submittedAt: new Date() },
+      });
+
+    /*
+     * A bot partner answers in the same breath, under the same lock.
+     *
+     * It used to answer nothing, which broke the game in its only mode: a pick
+     * round ends early only when both agree, so every round of a solo game
+     * ran its full clock and closed with "only one of you answered". See
+     * `@shared/sprints/partner` for what it chooses and why.
+     */
+    const partnerId = game.player1Id === userId ? game.player2Id : game.player1Id;
+    const [partner] = await tx.select({ isBot: users.isBot }).from(users).where(eq(users.id, partnerId));
+    if (!partner?.isBot) return "stored";
+
+    const move = botMove({ round, gameId, human: clean, deck: (DECKS as any)[round] });
+    if (!move) return "stored";
+    // After yours, so the two read back in the order they were made.
+    const at = new Date(Date.now() + 1);
+    await tx.insert(startupGameSubmissions)
+      .values({ gameId, userId: partnerId, round, payload: move, submittedAt: at } as any)
+      .onConflictDoUpdate({
+        target: [startupGameSubmissions.gameId, startupGameSubmissions.userId, startupGameSubmissions.round],
+        set: { payload: move, submittedAt: at },
+      });
+    return "against-bot";
+  });
+
+  if (!stored) {
+    return { ok: false, code: "round_over", message: "That round just ended — you're on the next one." };
+  }
+
+  /*
+   * Against a bot there is nobody left to persuade, so the round closes now
+   * rather than on its clock. Pinned to the round just answered: if the sweep
+   * advanced the game in the moment between, forcing unpinned would close the
+   * *next* round with nothing in it.
+   */
+  if (stored === "against-bot") {
+    const settled = await settleIfReady(gameId, true, round);
+    return { ok: true, settled };
+  }
 
   /*
    * Agreement should feel instant. A round where both have picked the same
@@ -183,10 +248,24 @@ async function submissionsFor(gameId: string, round: Round) {
 
 // ─── Settling ────────────────────────────────────────────────────────────────
 
+/**
+ * Rounds where the two of them pick one of something, as opposed to keeping
+ * both answers.
+ *
+ * The distinction decides whether a round can end early, so it is named once
+ * here rather than inferred. It was inferred, and the inference was wrong:
+ * `sameChoice` compared `cardId`, which a product or budget submission does
+ * not have, so `undefined === undefined` read as agreement and both of those
+ * rounds ended the instant the second player submitted.
+ */
+const PICK_ROUNDS = new Set<Round>(["idea", "customer", "model"]);
+
 /** Two submissions are "the same pick" when they name the same card or idea. */
 const sameChoice = (round: Round) => (a: any, b: any) => {
   if (round === "idea") return String(a?.name ?? "").toLowerCase() === String(b?.name ?? "").toLowerCase();
-  return a?.cardId === b?.cardId;
+  if (round === "customer" || round === "model") return a?.cardId === b?.cardId;
+  // A merge round has no notion of the same answer; see `canEndEarly`.
+  return false;
 };
 
 /**
@@ -196,21 +275,45 @@ const sameChoice = (round: Round) => (a: any, b: any) => {
  * here is conditional on the round still being the one we read, so the two
  * players' polls and the sweep racing each other produce one advance.
  */
-export async function settleIfReady(gameId: string, force = false): Promise<boolean> {
-  const [game] = await db.select().from(startupGames).where(eq(startupGames.id, gameId));
+export async function settleIfReady(gameId: string, force = false, onlyRound?: Round): Promise<boolean> {
+  /*
+   * Everything from here to the advance happens under a lock on the game row,
+   * which `submitRound` also takes. Reading the submissions outside one meant
+   * an answer could land after the read and before the update, and the round
+   * would close without it even though the player submitted in time.
+   */
+  return db.transaction(async (tx) => settleLocked(tx, gameId, force, onlyRound));
+}
+
+async function settleLocked(tx: any, gameId: string, force: boolean, onlyRound?: Round): Promise<boolean> {
+  const [game] = await tx.select().from(startupGames)
+    .where(eq(startupGames.id, gameId)).for("update");
   if (!game || game.round === "verdict" || game.round === "abandoned") return false;
+  // A forced settle aimed at one round must not land on the one after it.
+  if (onlyRound && game.round !== onlyRound) return false;
 
   const round = game.round as Round;
-  const rows = await submissionsFor(gameId, round);
+  const rows = await tx.select().from(startupGameSubmissions)
+    .where(and(eq(startupGameSubmissions.gameId, gameId), eq(startupGameSubmissions.round, round)));
   const expired = !!game.roundEndsAt && new Date(game.roundEndsAt).getTime() <= Date.now();
 
-  const submissions: Submission<any>[] = rows.map((r) => ({
+  const submissions: Submission<any>[] = rows.map((r: any) => ({
     userId: r.userId,
     choice: r.payload,
     at: new Date(r.submittedAt).getTime(),
   }));
 
-  const everyoneAgrees = roundCanSettleEarly({
+  /*
+   * Only a pick round can end early.
+   *
+   * A merge round keeps both answers, so there is always something left to
+   * change: the budget screen tells the pair in as many words that what gets
+   * spent is the average of their two budgets and that they should talk to
+   * each other, and ending the round the moment the second one submits gives
+   * neither of them a chance to move after seeing the other's number. That is
+   * the whole negotiation, and it happens after the first submission.
+   */
+  const everyoneAgrees = PICK_ROUNDS.has(round) && roundCanSettleEarly({
     submissions, playerCount: 2, same: sameChoice(round),
   });
 
@@ -226,7 +329,7 @@ export async function settleIfReady(gameId: string, force = false): Promise<bool
   const after = nextRound(round)!;
   const settledBy = { ...(game.settledBy as Record<string, string> ?? {}), [round]: outcome.reason };
 
-  const advanced = await db.update(startupGames)
+  const advanced = await tx.update(startupGames)
     .set({
       ...outcome.columns,
       settledBy,
@@ -253,7 +356,7 @@ function resolveRound(gameId: string, round: Round, submissions: Submission<any>
     const lists = submissions.map((s) => (s.choice?.claims ?? []) as Claim[]);
     const claims = mergeClaims(lists);
     return {
-      reason: submissions.length === 0 ? "nobody" : submissions.length === 1 ? "unopposed" : "agreed",
+      reason: submissions.length === 0 ? "nobody" : submissions.length === 1 ? "unopposed" : "merged",
       columns: { productClaims: claims },
     };
   }
@@ -261,7 +364,7 @@ function resolveRound(gameId: string, round: Round, submissions: Submission<any>
   if (round === "spend") {
     const allocations = submissions.map((s) => s.choice?.allocation ?? {});
     return {
-      reason: submissions.length === 0 ? "nobody" : submissions.length === 1 ? "unopposed" : "agreed",
+      reason: submissions.length === 0 ? "nobody" : submissions.length === 1 ? "unopposed" : "merged",
       // The average of the two, so neither player is a spectator in the round
       // the valuation leans on hardest.
       columns: { budget: allocations.length ? mergeAllocations(allocations) : null },
@@ -454,12 +557,40 @@ export { claimsAreReady, budgetIsReady };
  * full minute past its deadline before moving would spend a twentieth of
  * itself frozen. The pass does nothing at all when no round is due.
  */
+/**
+ * The Postgres error code for "that table isn't there", wherever the driver
+ * buried it. Drizzle wraps driver errors, so the code is one level down.
+ */
+const undefinedTable = (err: any) => (err?.code ?? err?.cause?.code) === "42P01";
+
 export function startStartupGameJobs(): void {
+  /*
+   * A missing table is reported once, not sixty times an hour.
+   *
+   * It means one thing — the migration that creates these tables has not been
+   * applied — and it will still mean that on the next pass twenty seconds
+   * later. Logging the full query, parameters and stack each time buries every
+   * other line in the log under the same repeated page, which is precisely
+   * when somebody is trying to read the log to find out what is wrong.
+   */
+  let toldAboutMissingTables = false;
+
   const pass = () => {
     sweepDueRounds()
       .then((n) => (n > 0 ? console.log(`[game] settled ${n} round(s) nobody was watching`) : undefined))
-      .catch((err) => console.error("[game] sweep failed:", err));
+      .catch((err) => {
+        if (undefinedTable(err)) {
+          if (!toldAboutMissingTables) {
+            toldAboutMissingTables = true;
+            console.error("[game] startup_games is missing — run `npm run db:migrate`. Games are off until then.");
+          }
+          return;
+        }
+        toldAboutMissingTables = false;
+        console.error("[game] sweep failed:", err);
+      });
   };
+
   setTimeout(pass, 15_000);
   setInterval(pass, 20_000).unref();
 }
