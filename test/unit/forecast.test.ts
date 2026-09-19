@@ -46,7 +46,15 @@ function played(nicheId: string, headroom = 1.15) {
   for (let year = 1; year <= 8; year++) {
     const d = plan({ ...world, year }, "t", year);
     const f = forecastDemand({ world: { ...world, year }, companyId: "t", year, economy: economyFor("fc", year), draft: d })!;
-    d.coo!.capacityTarget = Math.max(1_000, Math.round(f.likely * headroom));
+    /*
+     * Capacity ordered now opens next year (see `lag.ts`), so a competent
+     * operations seat sizes it to next year's demand, not this year's. Sizing
+     * to this year's left the company permanently a year short — turning
+     * people away, handing them to rivals, and making the forecast look wrong
+     * when it was the capacity that was.
+     */
+    const next = forecastDemand({ world: { ...world, year: year + 1 }, companyId: "t", year: year + 1, economy: economyFor("fc", year + 1), draft: d })!;
+    d.coo!.capacityTarget = Math.max(1_000, Math.round(next.likely * headroom));
     const company = world.companies.find((c) => c.id === "t")!;
     const { decisions } = decisionsForYear({ company, niche, submitted: d as any, previous });
     const result = resolveYear({ ...world, year }, [decisions], economyFor("fc", year));
@@ -176,10 +184,16 @@ describe("headroom is a mistake you can make both ways", () => {
      * with space the turned-away genuinely have nowhere to go — which is also
      * correct, and is why the test brings its own.
      */
-    const world = buildWorld({ seasonId: "sp", niche: dating, teams: [
+    const built = buildWorld({ seasonId: "sp", niche: dating, teams: [
       { id: "t", name: "T", seats: [...ROLES] as Role[] },
       { id: "r", name: "Roomy", seats: [...ROLES] as Role[] },
     ] });
+    /*
+     * Roomy's room is capacity it already has, not capacity it orders now:
+     * capacity ordered this year opens next year (see `lag.ts`), so a rival
+     * that only placed the order would have no room to take anybody in.
+     */
+    const world = { ...built, companies: built.companies.map((c) => (c.id === "r" ? { ...c, capacity: 2_000_000 } : c)) };
     const d = plan(world, "t", 1, 1_500_000);
     d.coo!.capacityTarget = 500;
     const roomy = plan(world, "r", 1, 1_500_000);

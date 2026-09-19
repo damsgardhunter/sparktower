@@ -332,12 +332,48 @@ export interface Company {
    */
   techDebt?: number;
   /**
-   * Research finished but not yet shipped, in quality points.
+   * Quality on its way, in points, that lands next year.
    *
-   * Lands in full next year. It is why a team can look flat for a year and
-   * then move further in one than anybody could have bought.
+   * What was shipped this year, plus research that has been in the pipeline
+   * for a year already. Quality is felt a year after it is built: a feature
+   * shipped in March is not what people are talking about until the next
+   * season. It is why a team can look flat for a year and then move further
+   * in one than anybody could have bought.
    */
   pipeline?: number;
+  /**
+   * Research still two years out, in quality points. Moves into `pipeline`
+   * next year and lands the year after. The slowest money in the game, and
+   * the most it buys per pound.
+   */
+  pipelineLater?: number;
+  /**
+   * Brand that this year's campaigns have bought and that has not landed
+   * yet. A brand campaign is felt half in the year it runs and half the year
+   * after — awareness builds, it does not switch on.
+   */
+  brandPipeline?: number;
+  /**
+   * Staff at the start of the year beyond the five seats.
+   *
+   * The difference between this and this year's headcount is new hires, who
+   * are paid from day one and are not much use until their second year.
+   */
+  staff?: number;
+  /**
+   * The company's credit score, 0–100, drifting each year towards what its
+   * profit, debt and cash justify. Sets its interest rate and how much the
+   * bank will lend. See `finance.ts`.
+   */
+  creditScore?: number;
+  /**
+   * The part of `debt` that is an emergency loan — money lent because cash ran
+   * out, at a punitive rate. Always a portion of `debt`, never extra to it, so
+   * everything that reads `debt` as the total still gets it right.
+   */
+  emergencyDebt?: number;
+  /** Who bought a stake, what they expect, and whether they have taken the chair. */
+  investors?: import("./finance").Investors;
   /**
    * What the founders still own, 0–1.
    *
@@ -407,6 +443,11 @@ export function repairCompany(c: Company): Company {
     founderShare: Math.max(0.01, Math.min(1, num(c.founderShare, 1))),
     techDebt: bounded(c.techDebt, 0),
     pipeline: Math.max(0, num(c.pipeline, 0)),
+    pipelineLater: Math.max(0, num(c.pipelineLater, 0)),
+    brandPipeline: Math.max(0, num(c.brandPipeline, 0)),
+    staff: Math.max(0, Math.round(num(c.staff, 0))),
+    creditScore: Math.max(0, Math.min(100, num(c.creditScore, 50))),
+    emergencyDebt: Math.max(0, num(c.emergencyDebt, 0)),
   };
 }
 

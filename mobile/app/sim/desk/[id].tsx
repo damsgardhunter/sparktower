@@ -14,6 +14,7 @@ import {
   NumberField, PipelineNote, ReportCard, RivalRow, ScoreBar, Stat, TechDebtNote,
 } from "../../../src/components/sim/DeskKit";
 import { MarketResultCard } from "../../../src/components/sim/MarketKit";
+import { ProjectionCard } from "../../../src/components/sim/ProjectionCard";
 import { marketNotesRead } from "../../../src/components/sim/market";
 import { ROOM_POLL_MS, useDesk } from "../../../src/components/sim/useSim";
 import {
@@ -633,6 +634,17 @@ export default function Desk() {
               <Icon name="chevron-forward" size={18} color={colors.textTertiary} />
             </View>
           </Card>
+
+          {/* The year as it stands — revenue, costs, profit, cash — redrawn as
+              teammates file and as this seat edits. Keyed on the table's
+              filings so it re-runs exactly when somebody files. */}
+          {!finished ? (
+            <ProjectionCard
+              ventureId={String(id)}
+              draft={dirty ? draft : null}
+              filedStamp={JSON.stringify((data as any).filed ?? {})}
+            />
+          ) : null}
 
           {/* 3 & 4. The table's money, then your levers. The total sits above the
               form on purpose: it is the context every number below it changes. */}

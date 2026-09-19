@@ -29,6 +29,7 @@
  * when it buys itself another year. Without it, bankruptcy would be an
  * inconvenience and nobody would fear it.
  */
+import { CATALOGUES } from "./catalogues";
 import type { Company, CompanyAsset, Niche } from "./types";
 import { hash, rng, sample } from "./random";
 
@@ -102,7 +103,17 @@ interface AssetTemplate {
   blurb: string;
 }
 
-const TEMPLATES: AssetTemplate[] = [
+/**
+ * The nine slots every market's marketplace is built from: what each thing
+ * costs, how long it lasts, and what it does.
+ *
+ * The names and blurbs here are only the fallback for a market with no
+ * catalogue of its own. Each market's actual wording comes from
+ * `CATALOGUES` in `catalogues.ts`, matched to these slots by position — a
+ * dating app gets a moderation centre where this says operations centre, and
+ * it does exactly the same thing.
+ */
+const SLOTS: AssetTemplate[] = [
   {
     kind: "distribution", name: "Retail shelf agreement", weight: 1.6, life: 4,
     effect: (n) => ({ capacity: Math.round(marketSize(n) * 0.04), brand: 4 }),
@@ -152,6 +163,26 @@ const TEMPLATES: AssetTemplate[] = [
 
 const marketSize = (niche: Niche): number => niche.segments.reduce((sum, s) => sum + s.size, 0);
 
+/**
+ * This market's things for sale: the slots' numbers under this market's words.
+ *
+ * Falls back to a slot's own wording when a market has no catalogue, or when
+ * a catalogue entry's kind disagrees with its slot — a licence re-skinned as a
+ * facility would carry a licence's effect under a building's name, which is
+ * worse than a generic label.
+ */
+export function templatesFor(niche: Niche): AssetTemplate[] {
+  const catalogue = CATALOGUES[niche.id];
+  if (!catalogue) return SLOTS;
+  return SLOTS.map((slot, i) => {
+    const entry = catalogue[i];
+    return entry && entry.kind === slot.kind ? { ...slot, name: entry.name, blurb: entry.blurb } : slot;
+  });
+}
+
+/** The slots themselves, for the test that holds catalogues in step with them. */
+export const ASSET_SLOTS: readonly AssetTemplate[] = SLOTS;
+
 /** An asset on offer, with what it would take to get it. */
 export interface Listing {
   id: string;
@@ -183,7 +214,7 @@ const YEAR_OF_COSTS = 1_100_000;
 export function marketListings(input: { seasonId: string; year: number; niche: Niche; count?: number }): Listing[] {
   const { seasonId, year, niche, count = 3 } = input;
   const seed = `${seasonId}:${year}:market`;
-  const chosen = sample(seed, TEMPLATES, count);
+  const chosen = sample(seed, templatesFor(niche), count);
 
   return chosen.map((template, i) => {
     const jitter = 0.85 + rng(`${seed}:${i}:price`)() * 0.35;

@@ -13,10 +13,8 @@
  *
  * Three rules they're built to:
  *
- *   - **They are always labelled.** A bot carries an ordinary name, because a
- *     league table reading "Bot 3" is worse than one reading "Ada Fournier" —
- *     but every surface that shows one says what it is. Passing for a person
- *     is the product lying about who somebody is playing against.
+ *   - **They are always labelled.** See `shared/bots.ts`, which owns the cast
+ *     and the rules that come with it.
  *   - **They never win by playing better.** Their decisions come from the same
  *     `defaultDraft` a person's form is pre-filled with, nudged slightly. A
  *     bot is a warm body, not an opponent tuned to be beaten.
@@ -26,112 +24,25 @@
  *
  * Pure: no database, no clock. `server/simulation-bots.ts` does the writing.
  */
-import { between, pick, rng } from "./random";
+import { between, pick } from "./random";
+import { BOT_POOL_SIZE, botsFor } from "../bots";
 import { LEVER_FIELDS, defaultDraft, validateDecision } from "./levers";
 import type { Company } from "./types";
 import type { Role } from "./types";
 
-/**
- * How long somebody waits alone before the product fills the room.
- *
- * A minute, not the fifteen the lobby's own clock allows. The clock exists to
- * give real people time to arrive; this exists so that when they don't, the
- * person who came isn't punished for being early. Short enough that nobody
- * sits looking at an empty table, long enough that two people arriving
- * together still play together.
+/*
+ * Who the bots are — the cast, the wait, the label — lives in `shared/bots.ts`
+ * and is shared with the sprint queue. Re-exported here so this module stays
+ * the one place the simulation needs to look.
  */
-export const BOT_FILL_AFTER_SECONDS = 60;
+export {
+  BOT_FILL_AFTER_SECONDS, BOT_LABEL, BOT_POOL_SIZE,
+  botDisplayName, botIdentity, botsNeeded, type BotIdentity,
+} from "../bots";
 
-/** What a bot is called in every surface that shows one. */
-export const BOT_LABEL = "Bot";
-
-/**
- * Names bots are drawn from.
- *
- * Ordinary and unremarkable on purpose: a lobby of "TestUser1".."TestUser5"
- * reads as a broken deployment, and a league table is a list of companies
- * people are meant to care about beating. The label beside the name is what
- * makes it honest; the name itself is only there to be readable.
- *
- * Deliberately not generated from a model — a fixed list is reproducible, has
- * no per-call cost, and can be read by a person checking that none of them
- * resembles a real user of this product.
- */
-const FIRST_NAMES = [
-  "Ada", "Bea", "Cai", "Dev", "Esme", "Finn", "Greta", "Hugo", "Iris", "Jonas",
-  "Kira", "Luca", "Maya", "Nils", "Otis", "Priya", "Quinn", "Rosa", "Sven", "Tara",
-  "Umi", "Vera", "Wren", "Xan", "Yusuf", "Zara",
-] as const;
-
-const LAST_NAMES = [
-  "Fournier", "Okafor", "Lindqvist", "Marchetti", "Halvorsen", "Nakamura",
-  "Delgado", "Abernathy", "Sørensen", "Варга", "Kowalski", "Mbeki",
-  "Ferreira", "Novak", "Rasmussen", "Aziz",
-].filter((n) => /^[\x20-\x7E]+$/.test(n)); // ASCII only: these go in email local-parts too.
-
-export interface BotIdentity {
-  /** Stable key: the same index always produces the same person. */
-  index: number;
-  firstName: string;
-  lastName: string;
-  /** On a domain that can never receive mail, so nothing is ever sent to one. */
-  email: string;
-}
-
-/**
- * The bot at `index`.
- *
- * Stable across restarts and deployments, because the account is looked up by
- * this address. A bot whose name changed between seasons would look like a
- * different player holding the same history.
- */
-export function botIdentity(index: number): BotIdentity {
-  const i = Math.abs(Math.floor(index));
-  const firstName = FIRST_NAMES[i % FIRST_NAMES.length];
-  const lastName = LAST_NAMES[(i * 7 + 3) % LAST_NAMES.length];
-  return {
-    index: i,
-    firstName,
-    lastName,
-    // `.invalid` is reserved by RFC 2606 and resolves nowhere: even a bug that
-    // tried to email a bot could not reach anybody.
-    email: `bot-${i}-${firstName}.${lastName}@bots.sparktower.invalid`.toLowerCase(),
-  };
-}
-
-/** The display name a surface shows, with the label that keeps it honest. */
-export const botDisplayName = (b: Pick<BotIdentity, "firstName" | "lastName">) => `${b.firstName} ${b.lastName}`;
-
-/**
- * How many bots to add to a room that has waited long enough.
- *
- * Up to the lobby's size, never past it, and never when the room is already
- * full. Returns 0 when nobody is waiting: a lobby with no people in it is not
- * a room to fill, it's a room to retire, and filling it would have bots
- * playing seasons against each other for nobody's benefit.
- */
-export function botsNeeded(input: { humans: number; lobbySize: number }): number {
-  const { humans, lobbySize } = input;
-  if (humans <= 0) return 0;
-  return Math.max(0, lobbySize - humans);
-}
-
-/**
- * Which bot identities to seat in a given venture.
- *
- * Seeded from the venture, so re-running the fill picks the same people rather
- * than a fresh cast each time it's retried.
- */
-export function botsForVenture(ventureId: string, count: number, poolSize = FIRST_NAMES.length): BotIdentity[] {
-  const next = rng(`bots:${ventureId}`);
-  const chosen: number[] = [];
-  // Distinct: two bots with one name in a five-person company reads as a bug.
-  while (chosen.length < Math.min(count, poolSize)) {
-    const i = Math.floor(next() * poolSize) % poolSize;
-    if (!chosen.includes(i)) chosen.push(i);
-  }
-  return chosen.map(botIdentity);
-}
+/** The cast for one venture. See `botsFor`. */
+export const botsForVenture = (ventureId: string, count: number, poolSize = BOT_POOL_SIZE) =>
+  botsFor(ventureId, count, poolSize);
 
 // ─── Decisions ───────────────────────────────────────────────────────────────
 

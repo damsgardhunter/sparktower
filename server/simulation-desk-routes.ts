@@ -33,6 +33,8 @@ import { economyFor } from "@shared/simulation/season";
 import { debtDrag, IDLE_RATE, marketPriceOf } from "@shared/simulation/decisions";
 import { weightsOf, expectationsFor, shortfalls, describeWeights } from "@shared/simulation/criteria";
 import { forecastDemand } from "@shared/simulation/forecast";
+import { projectYear } from "@shared/simulation/projection";
+import { RATING_START, interestOn, ratingGrade } from "@shared/simulation/finance";
 import { postureBlurb } from "@shared/simulation/incumbents";
 import { distressOf, DISTRESS_COPY, recoveryOptions } from "@shared/simulation/recovery";
 import { startReadySeasons } from "./simulation-tick";
@@ -269,8 +271,23 @@ export function registerSimulationDeskRoutes(app: Express): void {
         bankruptSince: company.bankruptSince ?? null,
         /** What the founders still own. Raising money is what spends this. */
         founderShare: company.founderShare ?? 1,
-        /** Research finished and not yet shipped — it lands next year, whatever happens. */
+        /** Quality arriving next year: last year's shipping, and research a year in. See `lag.ts`. */
         pipeline: Math.round((company.pipeline ?? 0) * 10) / 10,
+        /** Research still two years out. */
+        pipelineLater: Math.round((company.pipelineLater ?? 0) * 10) / 10,
+        /** Brand this year's campaigns have bought that lands next year. */
+        brandPipeline: Math.round((company.brandPipeline ?? 0) * 10) / 10,
+        /** Staff already here since last year — the ones who are any use yet. */
+        staff: company.staff ?? 0,
+        /** The rating, what it makes borrowing cost, and any emergency loan outstanding. */
+        credit: {
+          score: company.creditScore ?? RATING_START,
+          grade: ratingGrade(company.creditScore ?? RATING_START),
+          rate: interestOn(company, economyFor(season.id, year).interestRate).rate,
+          emergencyDebt: Math.round(company.emergencyDebt ?? 0),
+        },
+        /** The investors' terms, if a stake has been sold. */
+        investors: company.investors ?? null,
         /*
          * What the product owes itself, and what that is costing right now.
          *
@@ -405,6 +422,69 @@ export function registerSimulationDeskRoutes(app: Express): void {
   });
 
   /**
+   * What this year will do to the company, as filed and with your draft on top.
+   *
+   * The live half of the desk: called as a seat edits (debounced on the
+   * client), so the screen can show revenue, costs, profit and cash moving
+   * under the hand that is moving the slider. See `@shared/simulation/projection`
+   * for what is run and what is deliberately left out.
+   *
+   * A GET, because it changes nothing. As a POST it would count against the
+   * write floor every write shares, and a seat dragging a slider for ten
+   * minutes could lock themselves out of filing the decision they were
+   * working towards.
+   */
+  app.get("/api/sim/ventures/:id/projection", isAuthenticated, async (req: any, res) => {
+    const [venture] = await db.select().from(simVentures).where(eq(simVentures.id, req.params.id));
+    if (!venture) return res.status(404).json({ message: "No such company." });
+    const seat = await seatOf(venture.id, req.user.id);
+    // A stranger learns nothing, including that the company exists.
+    if (!seat) return res.status(404).json({ message: "No such company." });
+
+    const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, venture.seasonId));
+    if (!season || season.status !== "running" || !season.world) {
+      return res.status(409).json({ message: "This season isn't running.", code: "not_running" });
+    }
+
+    const niche = nicheById(season.nicheId)!;
+    const year = season.year;
+    const world = { ...(season.world as World), niche, year };
+
+    const { decisions: filed } = await draftFor(venture.id, year);
+    const previous = year > 1 ? (await draftFor(venture.id, year - 1)).decisions : undefined;
+
+    /*
+     * The viewer's unfiled draft for their own seat, and only their own. Put
+     * through the same cleaning a filing gets, so a projection cannot be asked
+     * about a lever the seat does not own. Not validated beyond that: showing
+     * what an overspend would do — an emergency loan, a worse rating — is
+     * exactly what the projection is for.
+     */
+    let draft: { role: Role; decision: any } | undefined;
+    if (seat.role && typeof req.query.draft === "string" && req.query.draft.length < 8_000) {
+      try {
+        const raw = JSON.parse(req.query.draft);
+        draft = { role: seat.role as Role, decision: cleanDecision(seat.role as Role, raw, niche.cities.map((c) => c.id)) };
+      } catch {
+        return res.status(400).json({ message: "That draft couldn't be read." });
+      }
+    }
+
+    const { companyId: _, ...filedByRole } = filed as any;
+    const pair = projectYear({
+      world,
+      companyId: venture.id,
+      economy: economyFor(season.id, year),
+      filed: filedByRole,
+      previous,
+      draft,
+    });
+    if (!pair) return res.status(404).json({ message: "No such company." });
+
+    res.json({ year, yourRole: seat.role, ...pair });
+  });
+
+  /**
    * File this year's decision for your seat.
    *
    * Replaces whatever was there: a decision is changeable right up to the tick
@@ -432,6 +512,18 @@ export function registerSimulationDeskRoutes(app: Express): void {
     if (!company) return res.status(404).json({ message: "No such company." });
 
     const role = seat.role as Role;
+    /*
+     * The investors' board has removed the chief executive and is running that
+     * chair itself (see `finance.ts`). Refused, not accepted and ignored: a
+     * filing that silently did nothing would leave somebody believing they
+     * still ran the company.
+     */
+    if (role === "ceo" && company.investors?.inCharge) {
+      return res.status(409).json({
+        code: "board_in_charge",
+        message: `The board has removed the chief executive after two missed targets and is running this chair itself. Meet this year's target of £${company.investors.target.toLocaleString()} and the chair comes back.`,
+      });
+    }
     const payload = req.body?.decision;
     const check = validateDecision(role, payload, company);
     if (!check.ok) return res.status(400).json({ message: "Some of that doesn't add up.", errors: check.errors });

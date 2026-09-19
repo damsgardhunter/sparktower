@@ -21,6 +21,11 @@ import { incumbentYear } from "./incumbents";
 import { fixedCosts, focusEffects, interlock, lift, debtDrag, nextTechDebt, sanitiseDecisions, idleCapacityCost, marketPriceOf, taxOn, FOCUS_NOTES, type Focus, type TeamDecisions } from "./decisions";
 import { shortfalls, expectationsFor, weightsOf } from "./criteria";
 import { assetEffects, ageAssets } from "./assets";
+import { brandLanding, capacityBuild, qualityLanding, staffing } from "./lag";
+import {
+  EMERGENCY_REPUTATION, RATING_START, applyRepayment, boardChiefExecutive, creditMultiplier,
+  interestOn, justifiedRating, nextRating, ratingGrade, reviewInvestors, termsFor,
+} from "./finance";
 import { reachOf, appealFor } from "./market";
 import { eventFor, economyWithEvent, companyWithEvent, type MarketEvent } from "./events";
 
@@ -90,6 +95,10 @@ export interface CompanyReport {
    */
   event?: { headline: string; body: string; advice: string; scope: "market" | "company"; mine: boolean };
   bankrupt: boolean;
+  /** Players only: the rating, the rate it buys, and any emergency loan outstanding. */
+  credit?: { score: number; grade: string; rate: number; emergencyDebt: number };
+  /** Players only: the investors' terms, if a stake has been sold. */
+  investors?: import("./finance").Investors;
 
   /**
    * The year's accounts, line by line. Players only — a rival's cost base is
@@ -303,7 +312,20 @@ function segmentBridges(input: {
   });
 }
 
-export function resolveYear(world: World, decisions: TeamDecisions[], economy?: Economy): YearResult {
+export function resolveYear(
+  world: World,
+  decisions: TeamDecisions[],
+  economy?: Economy,
+  options: {
+    /**
+     * Leave out the year's news. For projections only: the event is decided
+     * from the state of the market and is secret until the year runs, so a
+     * projection that included it would tell a team tonight what the market
+     * does to them tomorrow.
+     */
+    withoutEvent?: boolean;
+  } = {},
+): YearResult {
   const { niche } = world;
   /*
    * The year's news, decided before anything else and applied to the weather
@@ -312,7 +334,7 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
    * that has been quietly excellent gets the write-up. The dice choose which
    * of the things you had coming arrives, never whether you deserved one.
    */
-  const event = eventFor({ world, year: world.year, economy: economy ?? world.economy });
+  const event = options.withoutEvent ? null : eventFor({ world, year: world.year, economy: economy ?? world.economy });
   const nextEconomy = economyWithEvent(economy ?? world.economy, event);
   /*
    * Every number made a number before anything reads it. One bad field used to
@@ -320,6 +342,17 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
    * `sanitiseDecisions`.
    */
   const byCompany = new Map(decisions.map((d) => [d.companyId, sanitiseDecisions(d)]));
+  /*
+   * Where the investors have removed the chief executive, the board's
+   * decisions stand in that chair — replacing whatever was filed, before
+   * anything reads it, so the focus a removed chief executive filed cannot
+   * leak into this year's costs. See `finance.ts`.
+   */
+  for (const company of world.companies) {
+    if (company.kind !== "player" || !company.investors?.inCharge) continue;
+    const filed = byCompany.get(company.id) ?? { companyId: company.id };
+    byCompany.set(company.id, { ...filed, ceo: boardChiefExecutive(company) as any });
+  }
   const sharesBefore = marketShares(Object.fromEntries(world.companies.map((c) => [c.id, c.customers])));
 
   const notesFor: Record<string, string[]> = {};
@@ -357,22 +390,13 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
     const brandGain = lift((d.cmo?.brandSpend ?? 0) + (d.cmo?.celebritySpend ?? 0) * 1.4, 220_000, 16) * focus.marketing;
     const perfGain = lift(d.cmo?.performanceSpend ?? 0, 180_000, 9) * focus.marketing;
     /*
-     * This year's shipping, plus whatever last year's research finished.
-     * Research buys more per pound than features do and buys it a year late —
-     * the one lever here that asks a team to be behind on purpose.
-     */
-    const landed = company.pipeline ?? 0;
-    /*
      * Half the saturation point and a higher ceiling than shipping: research
      * buys roughly half again as much quality per pound. It needs to, because
-     * the year you spend it you gain nothing while everything still decays —
-     * so a payoff merely equal to shipping would make patience strictly worse
-     * and the lever a tax on thinking ahead.
+     * it lands two years out while everything decays in between — so a payoff
+     * merely equal to shipping would make patience strictly worse and the
+     * lever a tax on thinking ahead.
      */
-    const pipeline = lift(d.cto?.researchSpend ?? 0, 150_000, 24) * niche.innovationPace;
-    if (landed > 0) {
-      notesFor[company.id].push(`Last year's research shipped: ${landed.toFixed(1)} points of quality that no amount of spending this year could have bought.`);
-    }
+    const researched = lift(d.cto?.researchSpend ?? 0, 150_000, 24) * niche.innovationPace;
     /*
      * What the company already owes itself. Carried debt means a share of
      * every engineer's year goes on working around what is already there, so
@@ -395,15 +419,61 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
       );
     }
 
-    const qualityGain = (lift((d.cto?.featureSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 1.2, 200_000, 14) * niche.innovationPace * focus.quality) * drag.product + landed;
-    const serviceGain = lift((d.coo?.supportSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 0.5, 150_000, 15) * focus.quality;
+    /*
+     * Quality is felt a year after it is built. This year's shipping goes into
+     * the pipeline; what arrives now is last year's shipping and research that
+     * started two years ago. See `lag.ts`.
+     */
+    const shipped = (lift((d.cto?.featureSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 1.2, 200_000, 14) * niche.innovationPace * focus.quality) * drag.product;
+    const quality = qualityLanding(company, shipped, researched);
+    if (quality.landed > 0.5) {
+      notesFor[company.id].push(`Last year's work reached customers: ${quality.landed.toFixed(1)} points of quality that no amount of spending this year could have bought.`);
+    }
+    if (shipped > 0.5) {
+      notesFor[company.id].push(`What was shipped this year — ${shipped.toFixed(1)} points of quality — reaches customers next year.`);
+    }
+
+    /*
+     * Staff are paid from day one and useful from day three hundred and
+     * sixty-six. Once they are established they are the cheapest service in
+     * the game, which is the reward for hiring a year before you need them.
+     */
+    const staff = staffing(company, d.coo?.headcount ?? 0);
+    if (staff.newHires > 0) {
+      notesFor[company.id].push(
+        `${staff.newHires} new ${staff.newHires === 1 ? "hire" : "hires"} this year: on the payroll now, and not much use until next year.`,
+      );
+    }
+    const serviceGain = lift(
+      (d.coo?.supportSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 0.5 + staff.supportEquivalent,
+      150_000, 15,
+    ) * focus.quality;
     const costCut = lift(d.coo?.efficiencySpend ?? 0, 180_000, 0.18);
 
     // Everything decays. A company that stands still goes backwards, which is
     // what stops a good year in year two carrying a team to year fourteen.
     const decay = { brand: 4.5 * focus.decay, quality: 3 * focus.decay, service: 3.5 * focus.decay };
 
-    const capacity = Math.max(0, Math.round(d.coo?.capacityTarget ?? company.capacity));
+    /*
+     * Brand lands half this year and half next — awareness builds, it does
+     * not switch on. Performance marketing is the exception and stays
+     * immediate: paying for clicks buys this year's clicks, which is the whole
+     * trade between the two.
+     */
+    const brand = brandLanding(company, brandGain);
+
+    /*
+     * Capacity built this year opens next year. A cut is immediate — you can
+     * close a floor faster than you can fit one out — so this year the company
+     * serves with the smaller of what it had and what it asked for.
+     */
+    const build = capacityBuild(company, d.coo?.capacityTarget ?? company.capacity);
+    if (build.building > 0) {
+      notesFor[company.id].push(
+        `Room for ${build.building.toLocaleString()} more ${niche.voice.capacityShort} is being built. It opens next year; this year you serve with what you had.`,
+      );
+    }
+    const capacity = build.now;
     const price = Math.max(1, d.cmo?.price ?? company.price);
 
     /*
@@ -435,7 +505,12 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
       ...company,
       assets: aged.assets,
       cities,
-      pipeline,
+      pipeline: quality.pipeline,
+      pipelineLater: quality.pipelineLater,
+      brandPipeline: brand.next,
+      staff: staff.next,
+      /** Next year's capacity, applied once the year is settled. */
+      capacityNext: build.next,
       techDebt,
       positioning: d.ceo?.positioning ?? company.positioning,
       // Seats brought back cost a salary again, and the lever comes with them.
@@ -447,8 +522,8 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
       cash: company.cash - entryCost,
       price,
       capacity,
-      brand: clamp(company.brand + brandGain + perfGain - decay.brand),
-      quality: clamp(company.quality + qualityGain - decay.quality),
+      brand: clamp(company.brand + brand.now + perfGain - decay.brand),
+      quality: clamp(company.quality + quality.landed - decay.quality),
       service: clamp(company.service + serviceGain - decay.service),
       /*
        * Costs move by how much the index moved, not by the whole index.
@@ -613,7 +688,15 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
       ];
     }
 
-    const interest = company.debt * nextEconomy.interestRate;
+    /*
+     * At the company's own rate, set by its credit rating, and with any
+     * emergency loan at the premium. It used to be one market rate for
+     * everybody, so a company on fire borrowed as cheaply as one thriving.
+     */
+    const rates = company.kind === "player"
+      ? interestOn(company, nextEconomy.interestRate)
+      : { interest: company.debt * nextEconomy.interestRate, rate: nextEconomy.interestRate, emergencyRate: nextEconomy.interestRate };
+    const interest = rates.interest;
     const operatingProfit = revenue - (variable + discretionary + interest + idleCost);
     const taxed = company.kind === "player" ? taxOn(operatingProfit, company.taxLosses ?? 0) : { tax: 0, carried: 0 };
     const costs = variable + discretionary + interest + idleCost + taxed.tax;
@@ -636,9 +719,37 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
      */
     let bankruptSince = company.bankruptSince;
     let emergencyDrawn = 0;
+    // Repayment clears the expensive money first.
+    let emergencyDebt = company.kind === "player" ? applyRepayment(company.emergencyDebt ?? 0, repaid) : 0;
     if (cash < 0) {
-      const emergency = Math.min(company.creditLimit - debt, -cash);
-      if (emergency > 0) { cash += emergency; debt += emergency; emergencyDrawn = emergency; }
+      /*
+       * The emergency loan. It used to be a silent draw on the credit line at
+       * the ordinary rate, which made running out of money cost almost
+       * nothing. Now it is lent at a punitive premium, it costs reputation,
+       * and it drags the rating — but it still keeps the company in the
+       * season, because a season is never ended by one bad year.
+       *
+       * Lent beyond the ordinary line, by up to a year of salaries *in total*
+       * — not per year. A company rescued once is rescued expensively; one
+       * that has already used its rescue and runs out again is out of money
+       * and credit, and the recovery moves open. Capped per year instead, it
+       * could be rescued every year for ever and bankruptcy would never come.
+       */
+      const rescueLeft = company.kind === "player" ? Math.max(0, fixed - emergencyDebt) : 0;
+      const room = Math.max(0, company.creditLimit - debt) + rescueLeft;
+      const emergency = Math.min(room, -cash);
+      if (emergency > 0) {
+        cash += emergency;
+        debt += emergency;
+        emergencyDrawn = emergency;
+        if (company.kind === "player") emergencyDebt += emergency;
+      }
+      if (company.kind === "player" && emergency > 0) {
+        notesFor[company.id] = [
+          ...(notesFor[company.id] ?? []),
+          `Cash ran out and an emergency loan of ${Math.round(emergency).toLocaleString()} covered it — at ${Math.round(rates.emergencyRate * 1000) / 10}% a year, repaid before anything else. Customers heard about it, and so did the credit agencies.`,
+        ];
+      }
       if (cash < 0 && company.kind === "player") {
         bankruptSince ??= world.year;
         notesFor[company.id] = [
@@ -647,10 +758,35 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
         ];
       }
     }
+    emergencyDebt = Math.min(emergencyDebt, debt);
+
+    /*
+     * The credit rating moves with the year's numbers — gradually, the way a
+     * lender re-rates, not in one lurch. See `finance.ts`.
+     */
+    const creditScore = company.kind === "player"
+      ? nextRating(company.creditScore, justifiedRating({
+          revenue, profit, debt, cash, fixedCosts: fixed, rescued: emergencyDrawn > 0,
+        }))
+      : company.creditScore;
+    if (company.kind === "player" && creditScore !== undefined) {
+      const before = ratingGrade(company.creditScore ?? RATING_START);
+      const after = ratingGrade(creditScore);
+      if (before !== after) {
+        notesFor[company.id] = [
+          ...(notesFor[company.id] ?? []),
+          `The credit rating moved from ${before} to ${after}. That changes what everything the company owes costs next year, and how much it can borrow.`,
+        ];
+      }
+    }
 
     // What a bank will lend against reputation and what the company holds.
     const assetValue = company.assets.reduce((sum, a) => sum + a.bookValue, 0);
-    const creditLimit = Math.max(0, Math.round(revenue * 0.35 + assetValue * 0.5 + company.reputation * 4_000));
+    const creditLimit = Math.max(0, Math.round(
+      (revenue * 0.35 + assetValue * 0.5 + company.reputation * 4_000)
+      // A lender lends more to a company it rates, and far less to one it does not.
+      * (company.kind === "player" ? creditMultiplier(creditScore ?? RATING_START) : 1),
+    ));
 
     /*
      * 5. Reputation: a consequence, not a lever. It is bought by keeping
@@ -690,7 +826,8 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
       (company.service - 50) * 0.06 +
       (valueForMoney - 0.8) * 6 -
       letDown * 26 -
-      (profit < 0 && company.cash < 0 ? 2 : 0);
+      (profit < 0 && company.cash < 0 ? 2 : 0) -
+      (emergencyDrawn > 0 && company.kind === "player" ? EMERGENCY_REPUTATION : 0);
 
     /*
      * Back to the company's own numbers. Everything the assets lent it was for
@@ -726,6 +863,25 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
       notesFor[company.id] = [
         ...(notesFor[company.id] ?? []),
         `Raised ${Math.round(raised).toLocaleString()} against a company worth about ${Math.round(worth).toLocaleString()}. The founders now hold ${Math.round(founderShare * 100)}% of whatever this becomes.`,
+      ];
+    }
+
+    /*
+     * The investors. Reviewed first, against the target that fell due this
+     * year; then, if a stake was sold, the terms that came with it. Selling
+     * a stake used to cost ownership and nothing else. See `finance.ts`.
+     */
+    let investors = company.kind === "player" ? company.investors : undefined;
+    if (investors) {
+      const review = reviewInvestors(investors, revenue, world.year);
+      investors = review.investors;
+      if (review.note) notesFor[company.id] = [...(notesFor[company.id] ?? []), review.note];
+    }
+    if (company.kind === "player" && raised > 0) {
+      investors = termsFor({ existing: investors, raised, revenue, year: world.year });
+      notesFor[company.id] = [
+        ...(notesFor[company.id] ?? []),
+        `The new investors expect revenue of at least £${investors.target.toLocaleString()} next year. Miss their target twice running and the board can remove the chief executive.`,
       ];
     }
 
@@ -770,20 +926,23 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
       };
     }
 
+    // Capacity ordered this year opens now that the year is over.
+    const { capacityNext, ...rest } = company as Company & { capacityNext?: number };
     return {
-      ...company,
+      ...rest,
       ...(company.kind === "player" ? { taxLosses: taxed.carried } : {}),
       founderShare,
       brand: base.brand,
       quality: base.quality,
       service: base.service,
-      capacity: base.capacity,
+      capacity: (base as Company & { capacityNext?: number }).capacityNext ?? base.capacity,
       unitCost: base.unitCost,
       customers,
       cash,
       debt,
       creditLimit,
       bankruptSince,
+      ...(company.kind === "player" ? { creditScore, emergencyDebt, investors } : {}),
       reputation: clamp(base.reputation + repChange),
     };
   });
@@ -916,6 +1075,18 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
       founderShare: company.founderShare ?? 1,
       notes: notesFor[company.id] ?? [],
       bankrupt: !!company.bankruptSince,
+      ...(company.kind === "player"
+        ? {
+            credit: {
+              score: company.creditScore ?? RATING_START,
+              grade: ratingGrade(company.creditScore ?? RATING_START),
+              /** What its debt will cost next year, at the rating it now has. */
+              rate: interestOn(company, nextEconomy.interestRate).rate,
+              emergencyDebt: company.emergencyDebt ?? 0,
+            },
+            investors: company.investors,
+          }
+        : {}),
       ...(company.kind === "player" && accounts[company.id]
         ? {
             pnl: accounts[company.id].pnl,

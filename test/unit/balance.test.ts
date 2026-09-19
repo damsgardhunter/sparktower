@@ -43,7 +43,13 @@ type Play = (year: number, company: Company, niche: Niche, world: World) => Team
  * good year, the premium house for an ordinary one.
  */
 function sizeTo(world: World, year: number, d: TeamDecisions, headroom: number): TeamDecisions {
-  const f = forecastDemand({ world: { ...world, year }, companyId: d.companyId, year, economy: world.economy, draft: d });
+  /*
+   * For next year, because that is when it opens (see `lag.ts`). A strategy
+   * that sized to this year's demand was a year short every year of the
+   * season, which is not a strategy a competent operations seat plays — and
+   * it made the balance of the market look like the balance of that mistake.
+   */
+  const f = forecastDemand({ world: { ...world, year: year + 1 }, companyId: d.companyId, year: year + 1, economy: world.economy, draft: d });
   if (!f || !d.coo) return d;
   return { ...d, coo: { ...d.coo, capacityTarget: Math.max(1_000, Math.round(f.likely * headroom)) } };
 }

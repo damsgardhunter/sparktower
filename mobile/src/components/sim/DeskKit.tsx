@@ -694,7 +694,7 @@ export function PipelineNote({ pipeline, spend, innovationPace }: {
         <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
           <Icon name="hourglass-outline" size={14} color={colors.info} />
           <Text style={{ flex: 1, color: colors.text, fontSize: font.xs, fontFamily: fontFamily.semibold }}>
-            This buys, landing next year
+            This buys, landing in two years
           </Text>
           <Text
             testID="desk-research-landing"
@@ -707,13 +707,13 @@ export function PipelineNote({ pipeline, spend, innovationPace }: {
 
       <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
         {committing
-          ? "None of it arrives in the year you pay for it. It buys around half again as much quality per pound as shipping features now — the trade is the wait, not the money."
+          ? "None of it arrives for two years. Shipping features lands next year; research the year after — and buys around half again as much quality per pound for the wait."
           : "No research is in flight."}
       </Text>
 
       {waiting > 0 ? (
         <Text style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>
-          +{qualityRead(waiting)} quality is already bought and lands next year whatever you decide today.
+          +{qualityRead(waiting)} quality is already built and reaches customers next year, whatever you decide today.
         </Text>
       ) : null}
     </View>

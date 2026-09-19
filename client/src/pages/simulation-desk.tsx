@@ -46,6 +46,7 @@ import { CompanyProfile } from "@/components/sim/company-profile";
 import { TeammateProfile } from "@/components/sim/teammate-profile";
 import { lookOf } from "@/components/sim/market-look";
 import { capacityRisk, type Forecast } from "@shared/simulation/forecast";
+import { ProjectionPanel } from "@/components/sim/projection-panel";
 import {
   Loader2, Clock, TrendingUp, TrendingDown, Minus, AlertTriangle, Info,
   CheckCircle2, Circle, Banknote, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy, Newspaper,
@@ -74,6 +75,7 @@ interface Desk {
     quality: number; brand: number; service: number; capacity: number;
     unitCost: number; price: number; customers: number; bankruptSince: number | null;
     founderShare: number; pipeline: number; positioning: string | null;
+    pipelineLater?: number; brandPipeline?: number; staff?: number;
     techDebt: number; techDebtCost: { product: number; unitCost: number };
   };
   segments: {
@@ -324,12 +326,30 @@ export default function SimulationDeskPage() {
         * the thing marketing moves and operations builds to — and the argument
         * between them is the one this card exists to have before the tick.
         */}
+      {/*
+        * The year as it stands — revenue, costs, profit, cash — redrawn as
+        * teammates file and as this seat edits, with what the unfiled draft
+        * here is doing to each number. Keyed on the table's filings so it
+        * re-runs exactly when somebody files.
+        */}
+      <ProjectionPanel
+        ventureId={id!}
+        draft={draft}
+        filedStamp={JSON.stringify(desk.filed ?? {})}
+      />
+
       {desk.forecast && (
         <ForecastCard
           forecast={desk.forecast}
           voice={v}
           price={Number(desk.yourRole === "cmo" && draft ? draft.price : (desk.filed as any)?.cmo?.price ?? c.price)}
-          capacity={Number(desk.yourRole === "coo" && draft ? draft.capacityTarget : (desk.filed as any)?.coo?.capacityTarget ?? c.capacity)}
+          /*
+           * The room the company actually has this year. Capacity ordered now
+           * opens next year, so the lever's value is next year's room — set
+           * against next year's demand in the projection above, not here.
+           * A cut is immediate, so the smaller of the two is what serves.
+           */
+          capacity={Math.min(c.capacity, Number(desk.yourRole === "coo" && draft ? draft.capacityTarget : (desk.filed as any)?.coo?.capacityTarget ?? c.capacity))}
           idleCostPerUnit={desk.idleCostPerUnit}
           yours={desk.yourRole === "coo" ? "capacity" : desk.yourRole === "cmo" ? "price" : null}
         />
@@ -364,7 +384,10 @@ export default function SimulationDeskPage() {
               sub={c.founderShare < 1 ? "the rest was sold to investors" : "nobody else has a claim"}
               tone={c.founderShare < 0.6 ? "warn" : "plain"}
             />
-            {c.pipeline > 0 && <Stat label="Research due" value={`+${c.pipeline}`} sub="lands next year" />}
+            {/* What is already on its way — the lag made visible. See `lag.ts`. */}
+            {c.pipeline > 0 && <Stat label="Quality coming" value={`+${c.pipeline}`} sub="lands next year" />}
+            {(c.pipelineLater ?? 0) > 0 && <Stat label="Research due" value={`+${c.pipelineLater}`} sub="lands in two years" />}
+            {(c.brandPipeline ?? 0) > 0 && <Stat label="Brand coming" value={`+${c.brandPipeline}`} sub="the rest of this year's campaign" />}
             {c.techDebt > 0 && (
               <Stat
                 label="Technical debt"
@@ -449,7 +472,7 @@ export default function SimulationDeskPage() {
               {desk.yourRole === "cto" && Number(draft.researchSpend) > 0 && (
                 <p className="text-xs text-muted-foreground mt-4" data-testid="text-research">
                   Roughly +{(saturate(Number(draft.researchSpend), 150_000) * 24 * desk.innovationPace).toFixed(1)} quality,
-                  landing next year. None of it arrives in this one.
+                  landing in two years. Shipping lands next year; research the year after — and buys more for the wait.
                 </p>
               )}
 
@@ -1189,8 +1212,8 @@ function ForecastCard({ forecast, voice, price, capacity, idleCostPerUnit, yours
           <div className="absolute top-0 h-8 w-0.5 bg-foreground" style={{ left: x(capacity) }} />
         </div>
         <p className="text-xs text-muted-foreground">
-          The shaded band is the forecast. The dark line is what you are built for: {Math.round(capacity).toLocaleString()} {voice.capacityShort}
-          {yours === "capacity" ? ", and it is yours to move" : ""}.
+          The shaded band is the forecast. The dark line is the room you have this year: {Math.round(capacity).toLocaleString()} {voice.capacityShort}.
+          {yours === "capacity" ? " Room you order now opens next year — size it to next year's demand in the projection above." : ""}
         </p>
 
         <p className={`text-sm font-medium ${verdict.tone}`} data-testid="text-capacity-verdict">{verdict.text}</p>

@@ -135,7 +135,7 @@ describe("what a year of research buys", () => {
 
   it("predicts what the engine will actually add", () => {
     /*
-     * The phone shows "+12 quality, landing next year" before anything is
+     * The phone shows "+12 quality, landing in two years" before anything is
      * filed. If that number is not the number the tick produces, the screen is
      * lying about the only lever whose whole point is patience.
      */

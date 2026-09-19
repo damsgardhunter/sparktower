@@ -17,6 +17,7 @@ import { allocate, appealFor, marketShares } from "@shared/simulation/market";
 import { resolveYear } from "@shared/simulation/resolve";
 import type { Company, World } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
+import { interestOn, EMERGENCY_PREMIUM } from "@shared/simulation/finance";
 
 const niche = NICHES[0];
 
@@ -214,8 +215,14 @@ describe("the incumbents defend like incumbents", () => {
 });
 
 describe("running out of money", () => {
+  /*
+   * Running out of cash is now met with an emergency loan (see `finance.ts`),
+   * so the first crisis is survived — expensively. What this test is about is
+   * the one after that: a company that has already used its rescue and runs
+   * out again is out of money and credit. It is still not out of the season.
+   */
   it("does not end the season", () => {
-    const broke: Company = { ...newTeam("broke", "Broke"), cash: 10_000, creditLimit: 20_000 };
+    const broke: Company = { ...newTeam("broke", "Broke"), cash: 10_000, creditLimit: 20_000, debt: 5_000_000, emergencyDebt: 5_000_000 };
     const world = worldWith([broke]);
     const { world: after, reports } = resolveYear(world, [fullYear("broke", 3_000_000)]);
 
@@ -224,6 +231,35 @@ describe("running out of money", () => {
     // Still in the world, still holding customers, still able to act next year.
     expect(after.companies.find((c) => c.id === "broke")).toBeTruthy();
     expect(report.notes.join(" ")).toMatch(/not out of the season/i);
+  });
+});
+
+describe("the emergency loan", () => {
+  const short = (): Company => ({ ...newTeam("short", "Short"), cash: 10_000, creditLimit: 20_000 });
+
+  it("keeps a company solvent the first time its cash runs out", () => {
+    const { reports } = resolveYear(worldWith([short()]), [fullYear("short", 3_000_000)]);
+    const r = reports.find((x) => x.companyId === "short")!;
+    expect(r.bankrupt, "the first crisis is survived").toBe(false);
+    expect(r.cash).toBeGreaterThanOrEqual(0);
+    expect(r.credit!.emergencyDebt, "and it is on the books").toBeGreaterThan(0);
+    expect(r.notes.join(" ")).toMatch(/emergency loan/i);
+  });
+
+  it("costs reputation and credit rating", () => {
+    const rescued = resolveYear(worldWith([short()]), [fullYear("short", 3_000_000)]).reports.find((x) => x.companyId === "short")!;
+    const fine = resolveYear(worldWith([{ ...short(), cash: 50_000_000 }]), [fullYear("short", 3_000_000)]).reports.find((x) => x.companyId === "short")!;
+    expect(rescued.reputation).toBeLessThan(fine.reputation);
+    expect(rescued.credit!.score).toBeLessThan(fine.credit!.score);
+  });
+
+  it("charges a punitive rate the following year", () => {
+    const after = resolveYear(worldWith([short()]), [fullYear("short", 3_000_000)]).world;
+    const company = after.companies.find((c) => c.id === "short")!;
+    expect(company.emergencyDebt ?? 0).toBeGreaterThan(0);
+    // The emergency part pays the premium over the company's own rate.
+    const r = interestOn(company, 0.05);
+    expect(r.emergencyRate - r.rate).toBeCloseTo(EMERGENCY_PREMIUM, 5);
   });
 });
 

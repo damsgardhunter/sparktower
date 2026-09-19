@@ -39,6 +39,7 @@ import type { Company, Economy, World } from "./types";
 import { allocate } from "./market";
 import { incumbentYear } from "./incumbents";
 import { lift } from "./decisions";
+import { brandLanding, staffing } from "./lag";
 import type { TeamDecisions } from "./decisions";
 
 export interface Forecast {
@@ -57,11 +58,20 @@ export interface Forecast {
 
 /** What the drafted spending does to the company before the market sees it. A sketch of the engine, not the engine. */
 function projected(company: Company, d: TeamDecisions | undefined, innovationPace: number): Company {
-  const brandGain = lift((d?.cmo?.brandSpend ?? 0) + (d?.cmo?.celebritySpend ?? 0) * 1.4, 220_000, 16)
-    + lift(d?.cmo?.performanceSpend ?? 0, 180_000, 9);
-  const qualityGain = lift((d?.cto?.featureSpend ?? 0) + (d?.cto?.reliabilitySpend ?? 0) * 1.2, 200_000, 14) * innovationPace
-    + (company.pipeline ?? 0);
-  const serviceGain = lift((d?.coo?.supportSpend ?? 0) + (d?.cto?.reliabilitySpend ?? 0) * 0.5, 150_000, 15);
+  /*
+   * With the same lags the year itself applies (see `lag.ts`), or the forecast
+   * would count brand and quality this year that will not arrive until next —
+   * and be most wrong for exactly the team that planned ahead.
+   */
+  void innovationPace; // This year's shipping lands next year, so it does not move this year's demand.
+  const brand = brandLanding(company, lift((d?.cmo?.brandSpend ?? 0) + (d?.cmo?.celebritySpend ?? 0) * 1.4, 220_000, 16));
+  const brandGain = brand.now + lift(d?.cmo?.performanceSpend ?? 0, 180_000, 9);
+  const qualityGain = Math.max(0, company.pipeline ?? 0);
+  const staff = staffing(company, d?.coo?.headcount ?? 0);
+  const serviceGain = lift(
+    (d?.coo?.supportSpend ?? 0) + (d?.cto?.reliabilitySpend ?? 0) * 0.5 + staff.supportEquivalent,
+    150_000, 15,
+  );
   const clamp = (n: number) => Math.max(0, Math.min(100, n));
   return {
     ...company,

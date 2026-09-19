@@ -14,7 +14,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
-import { simSeasons, simVentures, simDecisions } from "@shared/schema";
+import { simSeasons, simVentures, simDecisions, simReports } from "@shared/schema";
 import { startReadySeasons, tickSeason } from "../../server/simulation-tick";
 
 afterAll(async () => { await closeTestApp(); });
@@ -246,17 +246,36 @@ describe("what the table has committed", () => {
     expect(cfo.body.preview.warnings.length).toBeGreaterThan(0);
   }, 120_000);
 
-  it("warns operations before marketing outruns them, not after", async () => {
+  /*
+   * When marketing outruns capacity, operations is told — by the year's report,
+   * from what actually happened.
+   *
+   * This used to assert a warning on the desk *before* the year ran, built
+   * from an estimate of demand. That estimate was off by a factor of about
+   * fifty (see `shared/simulation/decisions.ts`), so the pre-tick warning was
+   * removed on purpose rather than left to fire on nearly every team. What the
+   * operations seat is owed is the truth afterwards: how many people wanted
+   * the company and could not be served, and that some went to a rival.
+   */
+  it("tells operations, once the year runs, that marketing outran them", async () => {
     const app = await getTestApp();
-    const { ventureId, seat } = await runningCompany(app);
+    const { ventureId, seasonId, seat } = await runningCompany(app);
 
     await seat("cmo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
       .send({ decision: { price: 22, brandSpend: 3_000_000, performanceSpend: 3_000_000, celebritySpend: 0 } });
     await seat("coo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
       .send({ decision: { capacityTarget: 1_000, supportSpend: 0, efficiencySpend: 0, headcount: 0 } });
 
-    const desk = await seat("coo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
-    expect(desk.body.preview.notes.join(" ")).toMatch(/more people than operations could serve/i);
+    await db.update(simSeasons)
+      .set({ nextTickAt: new Date(Date.now() - 1000), startsAt: new Date(Date.now() - 60_000) })
+      .where(eq(simSeasons.id, seasonId));
+    expect(await tickSeason(seasonId)).toBe(1);
+
+    const [report] = await db.select().from(simReports).where(and(
+      eq(simReports.seasonId, seasonId), eq(simReports.ventureId, ventureId), eq(simReports.year, 1),
+    ));
+    const notes = ((report?.report as any)?.notes ?? []).join(" ");
+    expect(notes, notes).toMatch(/could not be served/i);
   }, 120_000);
 });
 
@@ -342,8 +361,8 @@ describe("the decisions that make it a business", () => {
     expect(after.body.cities.find((c: any) => c.id === shut.id).open).toBe(true);
     // The raise cost them ownership.
     expect(after.body.company.founderShare).toBeLessThan(1);
-    // The research is banked and lands next year.
-    expect(after.body.company.pipeline).toBeGreaterThan(0);
+    // The research is banked. It lands in two years, not next (see `lag.ts`).
+    expect(after.body.company.pipelineLater).toBeGreaterThan(0);
     // And the positioning stuck.
     expect(after.body.company.positioning).toBe(desk.body.segments[0].id);
   }, 240_000);
@@ -426,5 +445,83 @@ describe("a desk before year one", () => {
     const res = await p.agent.get(`/api/sim/ventures/${ventureId}/desk`);
     expect(res.status).toBe(200);
     expect(res.body.phase).toBe("over");
+  }, 120_000);
+});
+
+/*
+ * The live projection: the year run on a copy, as filed and with the viewer's
+ * unfiled draft on top. See `@shared/simulation/projection`.
+ */
+describe("the projection", () => {
+  it("shows the year as filed, and what a seat's unfiled draft does to it", async () => {
+    const app = await getTestApp();
+    const { ventureId, seat } = await runningCompany(app);
+
+    const plain = await seat("cmo").agent.get(`/api/sim/ventures/${ventureId}/projection`);
+    expect(plain.status, JSON.stringify(plain.body)).toBe(200);
+    expect(plain.body.filed.revenue).toBeGreaterThanOrEqual(0);
+    expect(plain.body.drafted, "no draft, no difference").toEqual(plain.body.filed);
+
+    const draft = { price: 40, brandSpend: 3_000_000, performanceSpend: 0, celebritySpend: 0, targetCities: [] };
+    const moved = await seat("cmo").agent
+      .get(`/api/sim/ventures/${ventureId}/projection?draft=${encodeURIComponent(JSON.stringify(draft))}`);
+    expect(moved.status).toBe(200);
+    expect(moved.body.drafted.cashEnd, "spending three million leaves less in the bank").toBeLessThan(moved.body.filed.cashEnd);
+  }, 120_000);
+
+  /*
+   * The draft is cleaned against the viewer's own seat, so a projection
+   * cannot be asked what a lever the seat does not own would do.
+   */
+  it("only lets a seat project its own levers", async () => {
+    const app = await getTestApp();
+    const { ventureId, seat } = await runningCompany(app);
+    const sneaky = { borrow: 50_000_000 };
+    const res = await seat("cmo").agent
+      .get(`/api/sim/ventures/${ventureId}/projection?draft=${encodeURIComponent(JSON.stringify(sneaky))}`);
+    expect(res.status).toBe(200);
+    // A CMO "borrowing" fifty million must not show up as fifty million in the bank.
+    expect(res.body.drafted.cashEnd).toBeLessThan(res.body.filed.cashEnd + 50_000_000);
+  }, 120_000);
+
+  it("tells a stranger nothing, including that the company exists", async () => {
+    const app = await getTestApp();
+    const { ventureId } = await runningCompany(app);
+    const outsider = await player(app);
+    expect((await outsider.agent.get(`/api/sim/ventures/${ventureId}/projection`)).status).toBe(404);
+  }, 120_000);
+
+  it("refuses a draft it cannot read", async () => {
+    const app = await getTestApp();
+    const { ventureId, seat } = await runningCompany(app);
+    expect((await seat("cmo").agent.get(`/api/sim/ventures/${ventureId}/projection?draft=%7Bnot-json`)).status).toBe(400);
+  }, 120_000);
+});
+
+/*
+ * The investors' board, once it has removed the chief executive. A filing
+ * from the removed seat must be refused out loud, not accepted and ignored.
+ */
+describe("when the board has taken the chair", () => {
+  it("refuses the removed chief executive's filing and says why", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+
+    const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    const world = season.world as any;
+    world.companies = world.companies.map((c: any) => c.id === ventureId
+      ? { ...c, investors: { since: 1, raised: 2_000_000, target: 9_000_000, targetYear: 5, strikes: 2, inCharge: true } }
+      : c);
+    await db.update(simSeasons).set({ world }).where(eq(simSeasons.id, seasonId));
+
+    const res = await seat("ceo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { focus: "margin", positioning: "", rehire: "" } });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("board_in_charge");
+
+    // Everyone else still files as normal.
+    const cmo = await seat("cmo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { price: 40, brandSpend: 0, performanceSpend: 0, celebritySpend: 0, targetCities: [] } });
+    expect(cmo.status, JSON.stringify(cmo.body)).toBe(200);
   }, 120_000);
 });

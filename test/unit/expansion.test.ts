@@ -157,41 +157,46 @@ describe("research", () => {
     expect(costs(paid) - costs(free)).toBeCloseTo(1_000_000, 0);
   });
 
-  it("does nothing the year you spend it", () => {
+  /*
+   * Quality is felt a year after it is built, and research a year after that
+   * (see `shared/simulation/lag.ts`). So neither kind of spending moves this
+   * year's product; what differs is when, and how much, it arrives.
+   */
+  it("does nothing the year you spend it — and neither does shipping", () => {
     const researching = resolveYear(world(team()), [spend({ cto: { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0, researchSpend: 800_000 } })]);
     const shipping = resolveYear(world(team()), [spend({ cto: { featureSpend: 800_000, reliabilitySpend: 0, techDebtPaydown: 0 } })]);
+    const idle = resolveYear(world(team()), [spend({ cto: { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0 } })]);
     const q = (r: any) => r.reports.find((x: any) => x.companyId === "t").quality;
-    expect(q(researching)).toBeLessThan(q(shipping));
+    expect(q(researching)).toBeCloseTo(q(idle), 5);
+    expect(q(shipping), "shipping reaches customers next year, not this one").toBeCloseTo(q(idle), 5);
   });
 
-  it("lands in full the year after, and is worth more for the wait", () => {
+  it("lands two years out, a year after shipping would have", () => {
     const first = resolveYear(world(team()), [spend({ cto: { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0, researchSpend: 800_000 } })]);
-    const carried = first.world.companies.find((c) => c.id === "t")!;
-    expect(carried.pipeline).toBeGreaterThan(0);
+    const one = first.world.companies.find((c) => c.id === "t")!;
+    expect(one.pipelineLater, "still two years out").toBeGreaterThan(0);
+    expect(one.pipeline ?? 0, "nothing arrives next year from research").toBe(0);
 
     const second = resolveYear({ ...first.world, year: 2 }, [spend({ cto: { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0 } })]);
-    expect(second.reports.find((r) => r.companyId === "t")!.notes.join(" ")).toMatch(/research shipped/i);
+    const two = second.world.companies.find((c) => c.id === "t")!;
+    expect(two.pipeline, "a year in, it is next year's").toBeCloseTo(one.pipelineLater!, 5);
+
+    const third = resolveYear({ ...second.world, year: 3 }, [spend({ cto: { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0 } })]);
+    expect(third.reports.find((r) => r.companyId === "t")!.notes.join(" ")).toMatch(/last year's work reached customers/i);
   });
 
   it("buys more quality per pound than shipping does", () => {
     /*
-     * The direct claim, not a two-year strategy comparison — how a season
-     * plays out is emergent and depends on what everyone else does, and a test
-     * that asserts an emergent outcome is testing the strategy it happened to
-     * pick. What the lever promises is simply this: the same money, delivered
-     * a year late, is worth more when it lands.
+     * The direct claim: the same money, delivered later, is worth more when it
+     * lands. Compared as what each has banked, since neither shows this year.
      */
     const money = 800_000;
     const shipped = resolveYear(world(team()), [spend({ cto: { featureSpend: money, reliabilitySpend: 0, techDebtPaydown: 0 } })]);
     const researched = resolveYear(world(team()), [spend({ cto: { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0, researchSpend: money } })]);
 
-    const shippedGain = shipped.reports.find((r) => r.companyId === "t")!.quality - team().quality;
-    const banked = researched.world.companies.find((c) => c.id === "t")!.pipeline ?? 0;
-
+    const shippedGain = shipped.world.companies.find((c) => c.id === "t")!.pipeline ?? 0;
+    const banked = researched.world.companies.find((c) => c.id === "t")!.pipelineLater ?? 0;
     expect(banked).toBeGreaterThan(shippedGain);
-    // And the wait is real: nothing of it shows up this year.
-    expect(researched.reports.find((r) => r.companyId === "t")!.quality)
-      .toBeLessThan(shipped.reports.find((r) => r.companyId === "t")!.quality);
   });
 });
 
@@ -299,8 +304,13 @@ describe("what the product owes itself", () => {
   it("actually slows a company down over a year", () => {
     const indebted = resolveYear(world(team({ techDebt: 85 })), [spend()]);
     const clean = resolveYear(world(team({ techDebt: 0 })), [spend()]);
-    const q = (r: any) => r.reports.find((x: any) => x.companyId === "t").quality;
-    expect(q(indebted)).toBeLessThan(q(clean));
+    /*
+     * Measured in what reaches customers next year. Shipping lands a year
+     * after it is built, so the drag shows in the pipeline rather than in this
+     * year's quality — the same money buys a smaller next year.
+     */
+    const next = (r: any) => r.world.companies.find((x: any) => x.id === "t").pipeline ?? 0;
+    expect(next(indebted)).toBeLessThan(next(clean));
   });
 
   it("buys nothing you can see in the year you clear it", () => {

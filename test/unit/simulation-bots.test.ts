@@ -14,7 +14,8 @@ import {
   BOT_FILL_AFTER_SECONDS, BOT_JITTER, botDecision, botDisplayName, botIdentity,
   botsForVenture, botsNeeded, decisionSeed, jitter,
 } from "@shared/simulation/bots";
-import { LEVER_FIELDS, defaultDraft, validateDecision } from "@shared/simulation/levers";
+import { LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision } from "@shared/simulation/levers";
+import { nextPhase } from "@shared/simulation/lobby";
 import { ROLES } from "@shared/simulation/types";
 import type { Company } from "@shared/simulation/types";
 
@@ -186,5 +187,88 @@ describe("what a bot files", () => {
     const d = botDecision({ ventureId: "v1", year: 2, role: "cmo", company: company(), previous });
     // Nudged from 99, not reset to the company's price.
     expect(Math.abs(Number(d.price) - 99) / 99).toBeLessThanOrEqual(BOT_JITTER + 0.001);
+  });
+});
+
+/*
+ * A bot never claims a seat — taking whatever nobody else wanted is the whole
+ * arrangement. That leaves the lobby's clocks pointed at choices that are
+ * never going to be made: three minutes of claiming and two of naming, five
+ * minutes of one real person watching an empty room tick down. These are the
+ * two places the room is allowed to stop waiting early.
+ */
+describe("a room that is waiting on bots", () => {
+  const seat = (userId: string, role: any, isBot = false) => ({ userId, role, assigned: false, isBot });
+  const claiming = (seats: any[], secondsLeft = 120) =>
+    nextPhase({ phase: "claiming" as const, seats, secondsLeft, named: false });
+
+  it("deals the rest out as soon as every person has chosen", () => {
+    const move = claiming([seat("a", "ceo"), seat("b", "cmo"), seat("bot-1", null, true), seat("bot-2", null, true)]);
+    expect(move?.phase).toBe("naming");
+    expect(move?.assign, "the unclaimed seats go to the bots now, not in three minutes").toBe(true);
+  });
+
+  it("still waits while a person hasn't chosen", () => {
+    expect(claiming([seat("a", "ceo"), seat("b", null), seat("bot-1", null, true)])).toBeNull();
+  });
+
+  it("waits out the clock in a room of only people", () => {
+    expect(claiming([seat("a", "ceo"), seat("b", null)])).toBeNull();
+  });
+
+  it("starts the season rather than waiting for a name a bot will never give", () => {
+    const move = nextPhase({
+      phase: "naming",
+      seats: [seat("bot-1", "ceo", true), seat("a", "cmo")],
+      secondsLeft: 100,
+      named: false,
+    });
+    expect(move?.phase, "a placeholder now beats two minutes of nothing").toBe("running");
+  });
+
+  it("gives a human chief executive their full two minutes to name it", () => {
+    const move = nextPhase({
+      phase: "naming",
+      seats: [seat("a", "ceo"), seat("bot-1", "cmo", true)],
+      secondsLeft: 100,
+      named: false,
+    });
+    expect(move, "naming is the one thing the room is actually waiting for").toBeNull();
+  });
+});
+
+/*
+ * The cleaning a submission goes through on its way into the database. It was
+ * inline in the decisions route; bots file through the same door, so there is
+ * one definition of what a seat may say rather than two that can drift.
+ */
+describe("what a seat is allowed to file", () => {
+  it("keeps only the fields the role owns", () => {
+    const clean = cleanDecision("cmo", { price: 30, borrow: 500_000, nonsense: 1 });
+    expect(clean.borrow, "a CMO must not be able to take out a loan").toBeUndefined();
+    expect(clean.nonsense).toBeUndefined();
+    expect(clean.price).toBe(30);
+  });
+
+  it("fills in what wasn't sent rather than leaving a hole", () => {
+    const clean = cleanDecision("cfo", {});
+    for (const field of LEVER_FIELDS.cfo) expect(clean).toHaveProperty(field.id);
+  });
+
+  it("turns a number that isn't one into zero, not NaN", () => {
+    expect(cleanDecision("cfo", { borrow: "banana" }).borrow).toBe(0);
+  });
+
+  it("keeps a city list a list, filtered to places that exist", () => {
+    const clean = cleanDecision("cmo", { targetCities: ["real", "nowhere"] }, ["real"]);
+    expect(clean.targetCities).toEqual(["real"]);
+  });
+
+  it("passes everything a bot files", () => {
+    for (const role of ROLES) {
+      const d = botDecision({ ventureId: "v1", year: 1, role, company: company() });
+      const clean = cleanDecision(role, d);
+      expect(clean, `${role} loses something on the way in`).toEqual(d);
+    }
   });
 });

@@ -611,3 +611,39 @@
   from { opacity: 0; }
   to   { opacity: 1; }
 }
+
+/*
+ * Chart tokens for the simulation's projection panel.
+ *
+ * Taken from a validated data-viz palette rather than picked by eye: the
+ * in/out pair (blue, orange) passes colour-blind separation in both modes
+ * (worst ΔE 24.7 light, 26.8 dark), and the meters use three steps of one
+ * blue ramp — built, arriving next year, and the track — so "more" always
+ * reads as "darker". Dark mode has its own steps, not an automatic flip.
+ */
+.viz-root {
+  --viz-in: #2a78d6;
+  --viz-out: #eb6834;
+  --viz-total: #898781;
+  --viz-now: #2a78d6;
+  --viz-coming: #86b6ef;
+  --viz-track: #cde2fb;
+  --viz-grid: #e1e0d9;
+  --viz-good: #006300;
+  --viz-bad: #d03b3b;
+  --viz-status-good: #0ca30c;
+  --viz-status-warning: #fab219;
+  --viz-status-serious: #ec835a;
+  --viz-status-critical: #d03b3b;
+}
+.dark .viz-root {
+  --viz-in: #3987e5;
+  --viz-out: #d95926;
+  --viz-total: #898781;
+  --viz-now: #3987e5;
+  --viz-coming: #1c5cab;
+  --viz-track: #0d366b;
+  --viz-grid: #2c2c2a;
+  --viz-good: #0ca30c;
+  --viz-bad: #e66767;
+}
