@@ -235,7 +235,13 @@ describe("running out of money", () => {
 });
 
 describe("the emergency loan", () => {
-  const short = (): Company => ({ ...newTeam("short", "Short"), cash: 10_000, creditLimit: 20_000 });
+  /*
+   * A company whose year costs more than it has, by less than one rescue can
+   * cover. (It used to start with ten thousand and survive only because a plan
+   * cut to nothing by the cash floor still bought a whole year's brand and
+   * quality — see step 0 in resolve.ts.)
+   */
+  const short = (): Company => ({ ...newTeam("short", "Short"), cash: 300_000, creditLimit: 20_000 });
 
   it("keeps a company solvent the first time its cash runs out", () => {
     const { reports } = resolveYear(worldWith([short()]), [fullYear("short", 3_000_000)]);

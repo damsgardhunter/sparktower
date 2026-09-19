@@ -32,6 +32,7 @@
  * to your teammates — which is the pressure that actually gets someone back
  * tomorrow. The engine's job is to leave them a company worth coming back to.
  */
+import { defaultDraft } from "./levers";
 import type { Company, Niche, Role, World } from "./types";
 import type { TeamDecisions } from "./decisions";
 import { seedIncumbents } from "./incumbents";
@@ -364,6 +365,11 @@ export interface YearDecisions {
   decisions: TeamDecisions;
   /** Roles that submitted nothing this year and were run by the caretaker rules. */
   absent: Role[];
+  /**
+   * The seat the chief executive overruled, and what it had filed — kept so
+   * the year can be run the other way afterwards to see who was right.
+   */
+  overruled?: { role: Role; filed: TeamDecisions[keyof TeamDecisions] };
 }
 
 /**
@@ -398,6 +404,23 @@ export function decisionsForYear(input: {
       (decisions as any)[key] = (fallback as any)[key];
     }
   }
+
+  /*
+   * The chief executive's overrule: one seat's filing reversed to what it ran
+   * last year. Only a seat that actually filed something different can be
+   * overruled — there is nothing to reverse in an empty chair — and never the
+   * chief executive's own. The seat's one-off moves do not come back with
+   * last year's plan: a loan taken last year is not taken again because the
+   * seat was overruled this year.
+   */
+  const target = (decisions.ceo as any)?.overrule as Role | "" | undefined;
+  if (target && target !== "ceo" && company.seats.includes(target) && submitted[target] && previous?.[LEVER_OF[target]]) {
+    const filed = (decisions as any)[LEVER_OF[target]];
+    (decisions as any)[LEVER_OF[target]] = defaultDraft(target, company, (previous as any)[LEVER_OF[target]]);
+    return { decisions, absent, overruled: { role: target, filed } };
+  }
+  // An overrule that could not happen is not recorded as one.
+  if (target && decisions.ceo) (decisions.ceo as any) = { ...decisions.ceo, overrule: "" };
 
   return { decisions, absent };
 }

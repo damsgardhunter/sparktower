@@ -107,11 +107,17 @@ describe("what the table has committed", () => {
     expect(withBuffer).toBe(withoutBuffer - 3_000_000);
   });
 
-  it("counts a drawdown as money the table can spend", () => {
-    const c = company();
+  it("counts a drawdown once: it moves money from the line to the bank, it doesn't add to it", () => {
+    /*
+     * This used to expect a million more to spend after borrowing a million —
+     * which is the double count itself: the million was already there as
+     * unused credit. Drawing it changes where the money sits, not how much.
+     */
+    const c = { ...company(), creditLimit: 3_000_000, debt: 0 };
     const plain = commitment(c, { companyId: "t" }, economy).available;
     const borrowed = commitment(c, { companyId: "t", cfo: { borrow: 1_000_000, repay: 0, cashBuffer: 0 } }, economy).available;
-    expect(borrowed).toBe(plain + 1_000_000);
+    expect(borrowed).toBe(plain);
+    expect(plain).toBe(c.cash + 3_000_000);
   });
 
   it("attributes the spend to the seat that chose it", () => {

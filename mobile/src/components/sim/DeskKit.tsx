@@ -236,16 +236,24 @@ export function CommitmentMeter({ commitment, live, titleOf }: {
  * designed around, so tapping it can only produce sensible numbers. The text
  * field stays for the person who knows exactly what they want.
  */
-export function NumberField({ field, value, error, onChange, disabled }: {
+export function NumberField({ field, value, error, onChange, disabled, allowEmpty }: {
   field: LeverField;
   value: any;
   error?: string;
   onChange: (next: any) => void;
   disabled?: boolean;
+  /**
+   * Leave an emptied box empty rather than settling it on nought. For a price
+   * tier, empty means "the list price" and nought means "free" — tapping in
+   * and out of a box must not quietly give a segment away.
+   */
+  allowEmpty?: boolean;
 }) {
   const shown = value === undefined || value === null ? "" : String(value);
   const numeric = Number(value);
-  const prefix = field.kind === "money" ? money(Number.isFinite(numeric) ? numeric : 0) : null;
+  const prefix = field.kind === "money" ? money(Number.isFinite(numeric) ? numeric : 0)
+    : field.kind === "percent" ? `${Number.isFinite(numeric) ? numeric : 0}%`
+      : null;
 
   return (
     <View style={{ gap: 6 }}>
@@ -270,7 +278,7 @@ export function NumberField({ field, value, error, onChange, disabled }: {
           testID={`desk-field-${field.id}`}
           value={shown}
           onChangeText={(text) => onChange(text.replace(/[^0-9.\-]/g, ""))}
-          onBlur={() => onChange(clampToField(field, Number(shown)))}
+          onBlur={() => onChange(allowEmpty && shown.trim() === "" ? "" : clampToField(field, Number(shown)))}
           editable={!disabled}
           keyboardType="number-pad"
           placeholder="0"
@@ -300,6 +308,183 @@ export function NumberField({ field, value, error, onChange, disabled }: {
       {error ? (
         <Text testID={`desk-error-${field.id}`} style={{ color: colors.danger, fontSize: font.xs, fontFamily: fontFamily.medium }}>
           {error}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * A number for each of several things: a price per segment, or a share of the
+ * budget per seat. Each row is a NumberField of its own, so it steps and
+ * clamps exactly as every other lever does.
+ *
+ * For tiers an empty row is a real answer — that segment pays the list price —
+ * so a row can be cleared back to it. For the budget split the rows are
+ * summed, because the one rule is that they cannot come to more than 100%.
+ */
+export function MapField({ field, value, error, onChange, disabled, listPrice }: {
+  field: LeverField;
+  value: any;
+  error?: string;
+  onChange: (next: Record<string, any>) => void;
+  disabled?: boolean;
+  /** For tiers: what a segment with no tier pays. */
+  listPrice?: number;
+}) {
+  const map: Record<string, any> = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const tiers = field.kind === "tiers";
+  const total = Object.values(map).reduce((sum: number, v) => sum + (Number.isFinite(Number(v)) ? Number(v) : 0), 0);
+  const set = (key: string, next: any) => {
+    const copy = { ...map };
+    if (next === "" || next === null || next === undefined) delete copy[key];
+    else copy[key] = next;
+    onChange(copy);
+  };
+
+  return (
+    <View style={{ gap: spacing.sm }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+        <Text style={{ flex: 1, color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>{field.label}</Text>
+        {!tiers ? (
+          <Text
+            testID={`desk-map-total-${field.id}`}
+            style={{ color: total > 100 ? colors.danger : colors.textSecondary, fontSize: font.sm, fontFamily: fontFamily.semibold, fontVariant: ["tabular-nums"] }}
+          >
+            {`${Math.round(total)}% of 100%`}
+          </Text>
+        ) : null}
+      </View>
+      <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>
+        {field.help}
+      </Text>
+
+      {(field.options ?? []).map((option) => {
+        const has = map[option.value] !== undefined && map[option.value] !== "";
+        return (
+          <View key={option.value} style={{ gap: 4, paddingLeft: spacing.sm, borderLeftWidth: 2, borderLeftColor: colors.border }}>
+            <NumberField
+              field={{
+                id: `${field.id}-${option.value}`,
+                label: option.label,
+                help: tiers
+                  ? `${option.help}${has ? "" : ` No tier: pays the list price${listPrice ? ` of ${exact(listPrice)}` : ""}.`}${has && Number(map[option.value]) === 0 ? " Free: advertising money, word of mouth, and every paying tier leaks towards it." : ""}`
+                  : option.help,
+                kind: tiers ? "price" : "percent",
+                min: 0,
+                max: field.max,
+                step: field.step,
+              }}
+              value={map[option.value]}
+              disabled={disabled}
+              allowEmpty={tiers}
+              onChange={(next) => set(option.value, next)}
+            />
+            {tiers && has ? (
+              <Pressable
+                onPress={() => set(option.value, "")}
+                disabled={disabled}
+                accessibilityRole="button"
+                accessibilityLabel={`Use the list price for ${option.label}`}
+                testID={`desk-map-clear-${field.id}-${option.value}`}
+                hitSlop={6}
+              >
+                <Text style={{ color: colors.primary, fontSize: font.xs, fontFamily: fontFamily.semibold }}>Use the list price instead</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        );
+      })}
+
+      {error ? (
+        <Text testID={`desk-error-${field.id}`} style={{ color: colors.danger, fontSize: font.xs, fontFamily: fontFamily.medium }}>
+          {error}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * One answer per seat — easy, fair or aggressive — for the chief executive's
+ * targets. Each row carries the seat's loyalty, because that is what an
+ * aggressive target is spending.
+ */
+export function LevelsField({ field, value, error, onChange, disabled }: {
+  field: LeverField;
+  value: any;
+  error?: string;
+  onChange: (next: Record<string, string>) => void;
+  disabled?: boolean;
+}) {
+  const map: Record<string, string> = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return (
+    <View style={{ gap: spacing.sm }}>
+      <Text style={{ color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>{field.label}</Text>
+      <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>{field.help}</Text>
+      {(field.options ?? []).map((o) => (
+        <View key={o.value} style={{ gap: 6, paddingLeft: spacing.sm, borderLeftWidth: 2, borderLeftColor: colors.border }}>
+          <Text style={{ color: colors.text, fontSize: font.sm, fontFamily: fontFamily.medium }}>{o.label}</Text>
+          <Text style={{ color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.regular }}>{o.help}</Text>
+          <View style={{ flexDirection: "row", gap: 6 }} accessibilityRole="radiogroup">
+            {(field.choices ?? []).map((c) => {
+              const chosen = (map[o.value] ?? field.defaultChoice) === c.value;
+              return (
+                <Pressable
+                  key={c.value}
+                  onPress={() => onChange({ ...map, [o.value]: c.value })}
+                  disabled={disabled}
+                  accessibilityRole="radio"
+                  accessibilityState={{ checked: chosen }}
+                  accessibilityLabel={`${o.label}: ${c.label}. ${c.help}`}
+                  testID={`desk-level-${field.id}-${o.value}-${c.value}`}
+                  style={({ pressed }) => [{
+                    flex: 1, alignItems: "center", paddingVertical: spacing.sm, borderRadius: radius.sm, borderWidth: 1,
+                    borderColor: chosen ? colors.primary : colors.border,
+                    backgroundColor: chosen ? tintSoft(colors.primary) : "transparent",
+                  }, pressed && { opacity: 0.6 }, disabled && { opacity: 0.4 }]}
+                >
+                  <Text style={{ color: chosen ? colors.primary : colors.textSecondary, fontSize: font.sm, fontFamily: chosen ? fontFamily.semibold : fontFamily.regular }}>{c.label}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+      ))}
+      {error ? (
+        <Text testID={`desk-error-${field.id}`} style={{ color: colors.danger, fontSize: font.xs, fontFamily: fontFamily.medium }}>{error}</Text>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * What arrived on this seat this year, and what arrives next.
+ *
+ * Responsibilities come a year at a time (UNLOCKS in
+ * shared/simulation/responsibilities.ts). A new control that simply appears is
+ * easy to scroll past; one announced a year ahead is one the table has already
+ * started arguing about.
+ */
+export function NewLeversNote({ fresh, coming }: { fresh: string[]; coming: string[] }) {
+  if (fresh.length === 0 && coming.length === 0) return null;
+  const list = (xs: string[]) => (xs.length === 1 ? xs[0] : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
+  return (
+    <View
+      testID="desk-new-levers"
+      style={{ gap: 4, padding: spacing.md, borderRadius: radius.sm, backgroundColor: tintSoft(colors.primary), borderWidth: 1, borderColor: tintSoft(colors.primary, 0.3) }}
+    >
+      {fresh.length > 0 ? (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+          <Icon name="sparkles" size={14} color={colors.primary} />
+          <Text style={{ flex: 1, color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>
+            {`New this year: ${list(fresh)}`}
+          </Text>
+        </View>
+      ) : null}
+      {coming.length > 0 ? (
+        <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>
+          {`Next year this seat also gets ${list(coming)}.`}
         </Text>
       ) : null}
     </View>
@@ -1136,7 +1321,13 @@ export function FiledRow({ seat, spend }: { seat: DeskTableSeat; spend?: number 
         </View>
         <Text style={{ color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.regular }}>
           {seat.title ?? seat.role?.toUpperCase() ?? "No seat"} · {seat.filed ? "filed" : "still deciding"}
+          {seat.person ? ` · loyalty ${seat.person.loyalty}` : ""}
         </Text>
+        {seat.person?.warning ? (
+          <Text testID={`desk-loyalty-warning-${seat.role}`} style={{ color: colors.warning, fontSize: font.xs, fontFamily: fontFamily.medium }}>
+            Thinking about leaving. At 15 they resign.
+          </Text>
+        ) : null}
       </View>
       {seat.filed && spend !== undefined ? (
         <Text style={{ color: spend > 0 ? colors.text : colors.textTertiary, fontSize: font.sm, fontFamily: fontFamily.semibold, fontVariant: ["tabular-nums"] }}>

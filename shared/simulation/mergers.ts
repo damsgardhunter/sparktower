@@ -38,7 +38,8 @@
  * over-reaches is the most vulnerable company in the market, and everybody can
  * see them.
  */
-import type { Company } from "./types";
+import type { Company, Segment } from "./types";
+import { takings } from "./responsibilities";
 
 export type OfferKind = "acquire";
 export type OfferStatus = "pending" | "accepted" | "declined" | "lapsed" | "withdrawn";
@@ -71,7 +72,15 @@ export interface Valuation {
  */
 export function valuation(company: Company): Valuation {
   const customers = Object.values(company.customers).reduce((sum, n) => sum + n, 0);
-  const revenue = customers * company.price;
+  /*
+   * What the customers actually pay, tier by tier. Only the segments the
+   * company holds or prices matter, and a free tier's advertising is left out
+   * of a buyer's arithmetic — it is the part nobody can count on.
+   */
+  const segmentIds = Array.from(new Set([...Object.keys(company.customers), ...Object.keys(company.tiers ?? {})]));
+  const revenue = company.tiers
+    ? takings(company, company.customers, segmentIds.map((id) => ({ id, referencePrice: 0 }) as Segment)).revenue
+    : customers * company.price;
   const assets = company.assets.reduce((sum, a) => sum + a.bookValue * 0.8, 0);
   const debt = company.debt;
 
@@ -84,7 +93,9 @@ export function valuation(company: Company): Valuation {
   const fair = Math.max(0, Math.round(revenue * 1.2 + assets - debt));
 
   const notes: string[] = [];
-  notes.push(`${customers.toLocaleString()} customers at ${Math.round(company.price)} is ${Math.round(revenue).toLocaleString()} a year.`);
+  notes.push(company.tiers
+    ? `${customers.toLocaleString()} customers across its price tiers is ${Math.round(revenue).toLocaleString()} a year.`
+    : `${customers.toLocaleString()} customers at ${Math.round(company.price)} is ${Math.round(revenue).toLocaleString()} a year.`);
   if (assets > 0) notes.push(`What it owns would fetch about ${Math.round(assets).toLocaleString()}.`);
   if (debt > 0) notes.push(`It owes ${Math.round(debt).toLocaleString()}, and that comes with it.`);
   if (company.bankruptSince !== undefined) {

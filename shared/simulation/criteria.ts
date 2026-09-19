@@ -39,6 +39,7 @@
  * heavily expects more of it, a segment that weighs it lightly expects nothing
  * in particular.
  */
+import { hasTier, priceFor } from "./responsibilities";
 import type { Company, Segment } from "./types";
 
 export type Axis = "price" | "quality" | "brand" | "service";
@@ -143,14 +144,16 @@ export interface Shortfall {
 }
 
 /** Where a company falls short of what this segment expects this year. */
-export function shortfalls(company: Pick<Company, "quality" | "brand" | "service" | "price">, segment: Segment, year: number): Shortfall[] {
+export function shortfalls(company: Pick<Company, "quality" | "brand" | "service" | "price" | "tiers">, segment: Segment, year: number): Shortfall[] {
   const { floors, priceCeiling } = expectationsFor(segment, year);
   const out: Shortfall[] = [];
   for (const f of floors) {
     const have = company[f.axis];
     if (have < f.atLeast) out.push({ axis: f.axis, by: Math.round((f.atLeast - have) * 10) / 10 });
   }
-  if (company.price > priceCeiling) out.push({ axis: "price", by: Math.round(company.price - priceCeiling) });
+  // The price this segment is asked for — its own tier, if it has one.
+  const asked = priceFor(company, segment.id);
+  if (asked > priceCeiling) out.push({ axis: "price", by: Math.round(asked - priceCeiling) });
   return out;
 }
 
@@ -162,15 +165,32 @@ export function shortfalls(company: Pick<Company, "quality" | "brand" | "service
  * out, but not driven to zero, because a segment where nobody meets the
  * standard still buys from somebody.
  */
-export function expectationPenalty(company: Pick<Company, "quality" | "brand" | "service" | "price">, segment: Segment, year: number): number {
+export function expectationPenalty(company: Pick<Company, "quality" | "brand" | "service" | "price" | "tiers">, segment: Segment, year: number): number {
   const weights = { quality: segment.qualityFocus, service: segment.serviceFocus };
   let factor = 1;
+  let priced = 1;
   for (const s of shortfalls(company, segment, year)) {
-    // Price over the ceiling is already priced in by the price curve itself.
-    if (s.axis === "price") continue;
+    if (s.axis === "price") {
+      /*
+       * A price tier aimed at this segment, set past its ceiling: the segment
+       * stops listening. For a segment that barely weighs price the curve
+       * bottoms out early, so a tier at five times the ceiling cost a loyal,
+       * price-blind segment's newcomers only two fifths of their interest, and
+       * a premium tier could be set anywhere. A little over costs a little;
+       * well over rules the company out.
+       *
+       * Tiers only. One list price has to sit somewhere across segments whose
+       * going rates differ fifteenfold in some markets, and the price curve
+       * already judges it; a tier is a price chosen for these people alone.
+       */
+      if (!hasTier(company, segment.id)) continue;
+      const ceiling = priceFor(company, segment.id) - s.by;
+      priced = Math.max(0.1, 1 - (s.by / Math.max(1, ceiling)) * 1.5);
+      continue;
+    }
     factor *= Math.max(0.45, 1 - s.by * 0.02 * weights[s.axis as "quality" | "service"]);
   }
-  return Math.max(0.3, factor);
+  return Math.max(0.3, factor) * priced;
 }
 
 const AXIS_WORD: Record<Axis, string> = { price: "price", quality: "quality", brand: "brand", service: "service" };

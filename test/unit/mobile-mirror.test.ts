@@ -21,6 +21,10 @@
  * modules are deliberately free of React Native imports, which is what makes
  * this possible at all — keep them that way.
  */
+import { buildCostPerUnit, leaseCostPerUnit } from "@shared/simulation/responsibilities";
+import { featureCost } from "@shared/simulation/product";
+import { programmeCost, researchCost, statementCost } from "@shared/simulation/world";
+import { SEVERANCE, payEffect } from "@shared/simulation/people";
 import { describe, it, expect } from "vitest";
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -95,6 +99,44 @@ describe("what the table has committed", () => {
       decisions: {
         cmo: { price: 20, brandSpend: 0, performanceSpend: 0, celebritySpend: 0, targetCities: ["leeds", "london", "bristol"] },
       },
+    },    {
+      name: "building room and leasing more",
+      cities: ["leeds"],
+      decisions: {
+        coo: { capacityTarget: 900_000, supportSpend: 100_000, efficiencySpend: 0, headcount: 4, leaseCapacity: 120_000 },
+      },
+    },
+    {
+      name: "cutting room, which is not spending",
+      cities: ["leeds"],
+      decisions: {
+        coo: { capacityTarget: 1_000, supportSpend: 0, efficiencySpend: 0, headcount: 4 },
+      },
+    },    {
+      name: "the people money: engineer pay, hiring, training, a bonus and a firing",
+      cities: ["leeds"],
+      decisions: {
+        cto: { featureSpend: 500_000, reliabilitySpend: 100_000, techDebtPaydown: 0, researchSpend: 0, engineerPay: 120 },
+        coo: { capacityTarget: 1_000, supportSpend: 0, efficiencySpend: 0, headcount: 4, recruitingSpend: 75_000, trainingSpend: 50_000 },
+        ceo: { focus: "growth", bonusPool: 200_000, replaceSeat: "coo", replaceBid: 300_000 },
+      },
+    },
+    {
+      name: "the world: a report, a win-back, a programme and a statement",
+      cities: ["leeds"],
+      decisions: {
+        cmo: { price: 22, brandSpend: 0, performanceSpend: 0, celebritySpend: 0, targetCities: [], winbackSpend: 120_000, research: "rivals" },
+        coo: { capacityTarget: 1_000, supportSpend: 0, efficiencySpend: 0, headcount: 4, programme: "quality" },
+        ceo: { focus: "growth", shockAnswer: "statement" },
+      },
+    },
+    {
+      name: "the bets: PR, referrals, security, data and a feature",
+      cities: ["leeds"],
+      decisions: {
+        cmo: { price: 22, brandSpend: 0, performanceSpend: 0, celebritySpend: 0, targetCities: [], prSpend: 50_000, referralSpend: 75_000 },
+        cto: { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0, researchSpend: 0, securitySpend: 100_000, dataSpend: 50_000, featureBet: "anything", featureMode: "copy", engineerPay: 90 },
+      },
     },
   ];
 
@@ -116,6 +158,12 @@ describe("what the table has committed", () => {
         // The screen works reach out from the map and passes it; so does this.
         reach: phone.reachOf(map),
         cities: map,
+        // As the desk sends them.
+        prices: {
+          build: buildCostPerUnit(niche), lease: leaseCostPerUnit(niche),
+          featureBuild: featureCost(niche, "build"), featureCopy: featureCost(niche, "copy"),
+          research: researchCost(niche), programme: programmeCost(niche), statement: statementCost(niche), expansion: 0,
+        },
       });
 
       expect(theirs.spend, "spend").toBeCloseTo(mine.spend, 4);
@@ -163,11 +211,39 @@ describe("what a seat may file", () => {
       { role: "ceo", draft: { focus: "growth", positioning: "", rehire: "" } },
       { role: "ceo", draft: { focus: "nonsense", positioning: "", rehire: "" } },
       { role: "coo", draft: { capacityTarget: 1000, supportSpend: 0, efficiencySpend: 0, headcount: 0 } },
+      // The responsibilities that arrive during the season.
+      { role: "coo", draft: { capacityTarget: 1000, supportSpend: 0, efficiencySpend: 0, headcount: 0, leaseCapacity: 50_000 } },
+      { role: "cmo", draft: { price: 22, brandSpend: 0, performanceSpend: 0, celebritySpend: 0, targetCities: [], forecast: 90_000, tiers: { swipers: 0, long_haulers: 150 } } },
+      { role: "cmo", draft: { price: 22, brandSpend: 0, performanceSpend: 0, celebritySpend: 0, targetCities: [], tiers: { swipers: -1 } } },
+      { role: "cmo", draft: { price: 22, brandSpend: 0, performanceSpend: 0, celebritySpend: 0, targetCities: [], tiers: "cheap" } },
+      { role: "ceo", draft: { focus: "growth", positioning: "", rehire: "", budget: { cmo: 40, cto: 30, coo: 30 } } },
+      { role: "ceo", draft: { focus: "growth", positioning: "", rehire: "", budget: { cmo: 70, cto: 40 } } },
+      { role: "cfo", draft: { borrow: 0, repay: 0, cashBuffer: 0, borrowTerm: "long", holdBack: 10, holdBackSeat: "cto", annualDiscount: 15 } },
+      { role: "cfo", draft: { borrow: 0, repay: 0, cashBuffer: 0, holdBack: 25 } },
+      { role: "cfo", draft: { borrow: 0, repay: 0, cashBuffer: 0, borrowTerm: "forever" } },
+      { role: "cfo", draft: { borrow: 0, repay: 0, cashBuffer: 0, holdBack: "" } },
+      // The people levers.
+      { role: "ceo", draft: { focus: "growth", positioning: "", rehire: "", targets: { cmo: "aggressive", cto: "easy" }, bonusPool: 200_000 } },
+      { role: "ceo", draft: { focus: "growth", positioning: "", rehire: "", targets: { cmo: "brutal" } } },
+      { role: "ceo", draft: { focus: "growth", positioning: "", rehire: "", overrule: "cmo", replaceSeat: "coo", replaceBid: 250_000 } },
+      { role: "cto", draft: { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0, researchSpend: 0, engineerPay: 120 } },
+      { role: "cto", draft: { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0, researchSpend: 0, engineerPay: 150 } },
+      { role: "coo", draft: { capacityTarget: 1000, supportSpend: 0, efficiencySpend: 0, headcount: 0, recruitingSpend: 50_000, trainingSpend: -1 } },
+      { role: "cfo", draft: { borrow: 0, repay: 0, cashBuffer: 0, costReview: 10 } },
+      // Borrowing past the line.
+      { role: "cfo", draft: { borrow: 900_000_000, repay: 0, cashBuffer: 0 } },
+      // The world's levers.
+      { role: "cmo", draft: { price: 22, brandSpend: 0, performanceSpend: 0, celebritySpend: 0, targetCities: [], promo: "free_month", winbackSpend: 50_000, research: "expectations" } },
+      { role: "cfo", draft: { borrow: 0, repay: 0, cashBuffer: 0, insurance: "all", dividendPct: 40 } },
+      { role: "cfo", draft: { borrow: 0, repay: 0, cashBuffer: 0, dividendPct: 200 } },
+      { role: "ceo", draft: { focus: "growth", positioning: "", rehire: "", deals: { "6-distribution": "accept" }, shockAnswer: "statement" } },
+      { role: "cto", draft: { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0, researchSpend: 0, dealVotes: { "6-distribution": "yes" } } },
+      { role: "cto", draft: { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0, researchSpend: 0, dealVotes: { "6-distribution": "maybe" } } },
     ];
 
     for (const { role, draft } of drafts) {
       const mine = validateDecision(role, draft, c);
-      const theirs = phone.validateDraft(LEVER_FIELDS[role] as any, draft, { debt: c.debt } as any, role);
+      const theirs = phone.validateDraft(LEVER_FIELDS[role] as any, draft, { debt: c.debt, creditLimit: c.creditLimit } as any, role);
       expect(theirs.ok, `${role}: ${JSON.stringify(draft)}`).toBe(mine.ok);
     }
   });
@@ -287,5 +363,12 @@ describe("what keeps this file able to run at all", () => {
         }
       }
     }
+  });
+});
+
+describe("the numbers the phone copies by hand", () => {
+  it("agree with the engine's", () => {
+    expect(phone.SEVERANCE).toBe(SEVERANCE);
+    for (const pct of [undefined, 80, 100, 115, 130, 150]) expect(phone.payCost(pct)).toBeCloseTo(payEffect(pct as any).cost, 10);
   });
 });

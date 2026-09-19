@@ -11,10 +11,11 @@ import { SimSectionTitle } from "../../../src/components/sim/SimKit";
 import {
   BufferCutWarning, BufferHoldNote, ChallengeCard, ChoiceField, CitiesField, CommitmentMeter,
   DeskBanner, DilutionNote, DistressCard, EconomyStrip, EventCard, FiledRow, LastChallengeCard,
-  NumberField, PipelineNote, ReportCard, RivalRow, ScoreBar, Stat, TechDebtNote,
+  LevelsField, MapField, NewLeversNote, NumberField, PipelineNote, ReportCard, RivalRow, ScoreBar, Stat, TechDebtNote,
 } from "../../../src/components/sim/DeskKit";
 import { MarketResultCard } from "../../../src/components/sim/MarketKit";
 import { ProjectionCard } from "../../../src/components/sim/ProjectionCard";
+import { AdvanceYearCard } from "../../../src/components/sim/AdvanceYearCard";
 import { marketNotesRead } from "../../../src/components/sim/market";
 import { ROOM_POLL_MS, useDesk } from "../../../src/components/sim/useSim";
 import {
@@ -222,11 +223,13 @@ export default function Desk() {
          * only one the meter never mentioned.
          */
         cities: data.cities,
+        // Building and leasing room are operations' money, priced by the server for this market.
+        prices: data.prices ?? null,
       });
     } catch {
       return null;
     }
-  }, [company, economy, data?.preview, data?.filed, data?.yourRole, data?.cities, draft]);
+  }, [company, economy, data?.preview, data?.filed, data?.yourRole, data?.cities, data?.prices, draft]);
 
   const localCheck = useMemo(
     () => (company ? validateDraft(fields, draft, company, data?.yourRole ?? null) : { ok: true, errors: {} }),
@@ -343,6 +346,9 @@ export default function Desk() {
    */
   const marketNews = data.lastYear?.market ?? [];
 
+  /** All the room the company serves from: what it built plus what its assets add. */
+  const room = company ? company.capacity + (company.assetCapacity ?? 0) : 0;
+
   const challenge = data.challenge ?? null;
   const progress = challenge ? challengeProgress(challenge, { company: company ?? null, committedSpend }) : [];
   const standing = challenge ? challengeStanding(progress).line : null;
@@ -403,6 +409,18 @@ export default function Desk() {
             submitted={!!data.submitted}
             finished={finished}
           />
+
+          {/* Only for developers and for companies running their own season. */}
+          {!finished && data.canAdvance && data.seasonId && (
+            <AdvanceYearCard
+              seasonId={data.seasonId}
+              ventureId={String(id)}
+              year={data.year ?? 1}
+              totalYears={data.totalYears ?? 14}
+              as={data.canAdvance}
+              onDone={show}
+            />
+          )}
 
           {finished && (
             <Callout
@@ -477,8 +495,11 @@ export default function Desk() {
                 <Stat label="Cash" value={money(company.cash)} tone={company.cash <= 0 ? colors.danger : colors.success} />
                 <Stat label="Debt" value={money(company.debt)} hint={`${money(Math.max(0, company.creditLimit - company.debt))} still borrowable`}
                   tone={company.debt >= company.creditLimit ? colors.danger : undefined} />
-                <Stat label="Customers" value={money(company.customers)} hint={`${money(company.capacity)} of capacity`}
-                  tone={company.customers > company.capacity ? colors.danger : undefined} />
+                <Stat label="Customers" value={money(company.customers)}
+                  hint={company.assetCapacity
+                    ? `${money(room)} of capacity, ${money(company.assetCapacity)} from what you own`
+                    : `${money(room)} of capacity`}
+                  tone={company.customers > room ? colors.danger : undefined} />
                 <Stat label="Price" value={exact(company.price)} hint={`${exact(company.unitCost)} to make`}
                   tone={company.price <= company.unitCost ? colors.danger : undefined} />
                 {/* What the five of them own. Beside the cash rather than in a
@@ -562,7 +583,7 @@ export default function Desk() {
                   hint="What happens after they buy." />
               </View>
 
-              {company.customers > company.capacity ? (
+              {company.customers > room ? (
                 <Callout
                   icon="warning"
                   tone="warn"
@@ -718,6 +739,21 @@ export default function Desk() {
                 />
               )}
 
+              {/* Responsibilities arrive a year at a time. Say what just
+                  arrived, and what is coming, so neither is a surprise. */}
+              <NewLeversNote
+                fresh={fields.filter((f) => f.unlocksIn === data.year).map((f) => f.label)}
+                coming={data.arrivingNextYear ?? []}
+              />
+              {/* What the technology seat is carrying: exposure, and what its bets came to. */}
+              {data.yourRole === "cto" && data.productRisk ? (
+                <Text testID="desk-product-risk" style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>
+                  {`Security ${data.productRisk.security} · data ${data.productRisk.data} · breach chance ${data.productRisk.breachChance}% · outage chance ${data.productRisk.outageChance}%`}
+                  {data.productRisk.features.some((f) => f.live) ? ` · live: ${data.productRisk.features.filter((f) => f.live).map((f) => f.name).join(", ")}` : ""}
+                  {data.productRisk.features.some((f) => !f.live && !f.flopped) ? ` · coming: ${data.productRisk.features.filter((f) => !f.live && !f.flopped).map((f) => f.name).join(", ")}` : ""}
+                </Text>
+              ) : null}
+
               <View style={{ gap: spacing.lg, paddingTop: spacing.xs }}>
                 {fields.map((field) => {
                   // The server's message wins while it stands: it is the one
@@ -737,6 +773,35 @@ export default function Desk() {
                    * higher fixed base for ever) both need saying where the
                    * decision is made.
                    */
+                  // An answer per seat: the chief executive's targets.
+                  if (field.kind === "levels") {
+                    return (
+                      <LevelsField
+                        key={field.id}
+                        field={field}
+                        value={draft[field.id]}
+                        error={message}
+                        disabled={disabled}
+                        onChange={change}
+                      />
+                    );
+                  }
+
+                  // A number per segment, or a share per seat.
+                  if (field.kind === "tiers" || field.kind === "allocation") {
+                    return (
+                      <MapField
+                        key={field.id}
+                        field={field}
+                        value={draft[field.id]}
+                        error={message}
+                        disabled={disabled}
+                        listPrice={field.kind === "tiers" ? draft.price : undefined}
+                        onChange={change}
+                      />
+                    );
+                  }
+
                   if (field.kind === "cities") {
                     return (
                       <CitiesField

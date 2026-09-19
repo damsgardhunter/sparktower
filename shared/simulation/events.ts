@@ -28,6 +28,7 @@
  */
 import type { Company, Economy, Niche, World } from "./types";
 import { rng, pick } from "./random";
+import { servingCapacity } from "./assets";
 
 export type EventScope = "market" | "company";
 
@@ -155,7 +156,10 @@ const COMPANY_EVENTS: CompanyEvent[] = [
   {
     when: (c) => {
       const held = Object.values(c.customers).reduce((sum, n) => sum + n, 0);
-      return held > c.capacity * 0.92 && held > 0;
+      // All the room it serves from, not just what it built — otherwise a
+      // company that bought its capacity is "at the limit" every year, and
+      // loses 5% of what it built each time it is told so.
+      return held > servingCapacity(c) * 0.92 && held > 0;
     },
     build: (c) => ({
       headline: `${c.name} is running at the limit`,

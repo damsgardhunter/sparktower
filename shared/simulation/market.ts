@@ -28,7 +28,10 @@
  * produces nothing. One seat pulling hard while the others idle moves very
  * little, which is the whole design.
  */
-import { expectationPenalty } from "./criteria";
+import { expectationPenalty, expectationsFor } from "./criteria";
+import { hasTier, priceFor } from "./responsibilities";
+import { featureAppeal } from "./product";
+import { DEAL_CHASERS_LEAVE, promoAppeal } from "./world";
 import type { Company, Economy, Niche, Segment } from "./types";
 
 /** What a company is offering a particular segment this year, after everything interacts. */
@@ -61,7 +64,8 @@ export function appealFor(company: Company, segment: Segment, year?: number): nu
   // Price, relative to what this segment thinks is normal. Cheaper is better,
   // but only until it isn't — a price far under the reference reads as cheap
   // rather than good, and quality-led segments distrust it.
-  const priceRatio = company.price / segment.referencePrice;
+  // Each segment judges the price it is offered: its own tier, where there is one.
+  const priceRatio = priceFor(company, segment.id) / segment.referencePrice;
   /*
    * Cheaper helps, and only so much. Uncapped, this rewarded undercutting
    * without limit: a company charging a quarter of what a premium segment
@@ -193,7 +197,8 @@ export function reachOf(company: Company, niche: Niche): number {
    */
   if (!Array.isArray(company.cities)) return 1;
   const open = new Set(company.cities);
-  const reach = niche.cities.filter((c) => open.has(c.id)).reduce((sum, c) => sum + c.weight, 0);
+  // A region opened this year is reached only as far as the brand reaches (see `firstYearReach`).
+  const reach = niche.cities.filter((c) => open.has(c.id)).reduce((sum, c) => sum + c.weight * (company.ramp?.[c.id] ?? 1), 0);
   return Math.max(0, Math.min(1, reach));
 }
 
@@ -231,7 +236,8 @@ export function allocate(
     fresh[segment.id] = {};
     const demand = segmentDemand(segment, year, economy);
     const appeal: Record<string, number> = {};
-    for (const c of companies) appeal[c.id] = appealFor(c, segment, year) * positioningFor(c, segment.id);
+    // Features built for this segment count too (see `product.ts`), and a promotion to the people who watch the price (see `world.ts`).
+    for (const c of companies) appeal[c.id] = appealFor(c, segment, year) * positioningFor(c, segment.id) * featureAppeal(c, segment.id, year) * promoAppeal(c.promo, segment);
     appealBySegment[segment.id] = appeal;
 
     const bestAppeal = Math.max(...companies.map((c) => appeal[c.id]), 0.0001);
@@ -265,8 +271,31 @@ export function allocate(
        */
       const tolerance = 0.06 + segment.loyalty * 0.34;
       const excess = Math.max(0, gap - tolerance);
-      const leaveRate = Math.min(0.35, excess * (1.8 - segment.loyalty));
-      leaving[c.id] = Math.round(current * leaveRate);
+      /*
+       * Annual plans hold some customers in place: they have paid for the year.
+       * `retention` is set on the way into the market from the finance seat's
+       * discount (see `annualPlans`), and scales down how many would leave.
+       */
+      const locked = Math.max(0, Math.min(0.9, c.retention ?? 0));
+      /*
+       * A tier priced past what the segment will pay at all, and loyalty stops
+       * protecting you. Without this a loyal, price-blind segment could be
+       * charged anything — a premium tier at five times its ceiling kept most
+       * of its customers, because loyalty only ever let a third of them go in
+       * a year. The further over, the more leave: a few per cent over costs a
+       * few per cent, double the ceiling costs most of them.
+       */
+      // Tiers only, for the reason given in `expectationPenalty`.
+      const ceiling = expectationsFor(segment, year).priceCeiling;
+      const over = hasTier(c, segment.id) ? Math.max(0, priceFor(c, segment.id) / Math.max(1, ceiling) - 1) : 0;
+      const gouged = Math.min(0.85, over * 0.6);
+      const leaveRate = Math.max(Math.min(0.35, excess * (1.8 - segment.loyalty)), gouged) * (1 - locked);
+      /*
+       * And last year's deal-chasers: customers a promotion won, who leave
+       * faster than the rest once the deal is over.
+       */
+      const chasers = Math.min(current, Math.max(0, c.dealChasers?.[segment.id] ?? 0)) * DEAL_CHASERS_LEAVE;
+      leaving[c.id] = Math.min(current, Math.round(current * leaveRate + chasers));
 
       held[c.id][segment.id] = current - leaving[c.id];
       poolForNewcomers += leaving[c.id];

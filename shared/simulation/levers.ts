@@ -26,8 +26,12 @@
  */
 import type { Company, Niche, NicheVoice, Role } from "./types";
 import type { TeamDecisions } from "./decisions";
-import { interlock, fixedCosts } from "./decisions";
+import { interlock, fixedCosts, sanitiseDecisions } from "./decisions";
 import { reachOf } from "./market";
+import { SPENDING_SEATS, capacityMoney, drawdown, fundYear, isUnlocked } from "./responsibilities";
+import { SEVERANCE, payEffect } from "./people";
+import { featureCost } from "./product";
+import { programmeCost, researchCost, statementCost } from "./world";
 
 /** How a lever is presented and bounded. */
 export interface LeverField {
@@ -36,11 +40,20 @@ export interface LeverField {
   label: string;
   /** One line on what moving it actually does. */
   help: string;
-  kind: "money" | "price" | "count" | "choice" | "cities" | "segment";
+  kind: "money" | "price" | "count" | "choice" | "cities" | "segment" | "percent" | "tiers" | "allocation" | "levels";
   min?: number;
   max?: number;
   step?: number;
   options?: { value: string; label: string; help: string }[];
+  /** For "levels": the answers each option can be given — easy, fair, aggressive. */
+  choices?: { value: string; label: string; help: string }[];
+  /** For "levels": the answer an option carries when nobody has chosen one. */
+  defaultChoice?: string;
+  /**
+   * The season year this lever first appears in, when it is not year one.
+   * Set by the desk from `UNLOCKS`, so a screen can mark what is new.
+   */
+  unlocksIn?: number;
 }
 
 /**
@@ -56,14 +69,38 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
   cmo: [
     { id: "price", label: "Price", kind: "price", min: 1, step: 1,
       help: "What one customer pays. Segments differ wildly in how much they care — some leave over a pound, others barely look." },
-    { id: "brandSpend", label: "Brand marketing", kind: "money", min: 0, step: 50_000,
-      help: "Being known. Slow, compounding, and the thing that makes every other pound work harder." },
+    { id: "brandSpend", label: "TV and billboards", kind: "money", min: 0, step: 50_000,
+      help: "Being known. Durable and expensive: half of it lands this year, half next, and it fades slowly. The thing that makes every other pound work harder." },
     { id: "performanceSpend", label: "Performance marketing", kind: "money", min: 0, step: 50_000,
       help: "Buying customers now. Faster than brand and it stops the moment you stop paying." },
     { id: "celebritySpend", label: "Sponsorship", kind: "money", min: 0, step: 100_000,
       help: "A shortcut to being known, at a premium. Worth more than the same money on brand, and it does not repeat itself." },
+    { id: "dealVotes", label: "Your vote on the table's offers", kind: "levels", choices: [
+      { value: "yes", label: "For", help: "Take it." },
+      { value: "no", label: "Against", help: "Turn it down." },
+    ], options: [], help: "Only counts on an offer the chief executive put to the table. A majority of the votes cast decides it." },
     { id: "targetCities", label: "Where you sell", kind: "cities",
       help: "Only people in a city you have opened can choose you, however good you are. Opening one costs money once and costs more to run for ever — spread faster than you can sell and you pay for reach you are not using." },
+    { id: "forecast", label: "The forecast", kind: "count", min: 0, step: 1_000,
+      help: "How many customers you will end the year with. Operations builds against it and finance plans cash on it. Within 10% saves about 2% of revenue in things bought at the right volume; out by more than 20% costs up to 8%, and the year's report says whose number it was." },
+    { id: "prSpend", label: "PR and influencers", kind: "money", min: 0, step: 25_000,
+      help: "A coin flip. A little better than half the time it lands and buys brand cheaply; otherwise it buys nothing, and one time in ten the story that runs is not the one you pitched." },
+    { id: "referralSpend", label: "Referral programme", kind: "money", min: 0, step: 25_000,
+      help: "Paying customers to bring customers. Worth nothing below quality 40 and as much as TV at quality 100 — it only works if the product is one people want to recommend." },
+    { id: "promo", label: "The offer", kind: "choice", options: [
+      { value: "none", label: "No offer", help: "Everybody pays the list price." },
+      { value: "free_month", label: "First month free", help: "New customers only, and they pay for eleven months of twelve. Wins the people who watch the price — and they leave faster once the deal is over." },
+      { value: "january", label: "A January sale", help: "Everybody pays a little less all year. A gentler version of the same trade." },
+    ], help: "A promotion. It wins the price-sensitive, it costs margin, and the finance seat will notice who it attracted." },
+    { id: "winbackSpend", label: "Win-back", kind: "money", min: 0, step: 25_000,
+      help: "Bringing back last year's leavers, at about a third of a year's takings each — far cheaper than finding new people. It only works if what drove them off was fixed; if nothing changed, you get a fifth of it." },
+    { id: "research", label: "Buy research", kind: "choice", options: [
+      { value: "none", label: "None", help: "Decide on what you can see." },
+      { value: "expectations", label: "Next year's expectations", help: "What each segment will demand of a company next year, before you have to meet it." },
+      { value: "rivals", label: "What the incumbents will charge", help: "Their likely prices next year, which is what your price will be judged against." },
+    ], help: "A report, paid for once and read by the whole table." },
+    { id: "tiers", label: "Price tiers", kind: "tiers", min: 0, step: 1,
+      help: "A price for each segment instead of one for everybody. Nought is a free tier: advertising money and word of mouth, and every paying tier leaks towards it. The wider the gap between a tier and the cheapest one, the more of that segment works out how to pay less." },
   ],
   cto: [
     { id: "featureSpend", label: "New features", kind: "money", min: 0, step: 50_000,
@@ -74,6 +111,22 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
       help: "Buying back the speed you sold. Nothing visible this year." },
     { id: "researchSpend", label: "Research", kind: "money", min: 0, step: 50_000,
       help: "Work that lands next year instead of this one, and buys more quality per pound for the wait. The only decision here that asks you to be behind on purpose." },
+    { id: "dealVotes", label: "Your vote on the table's offers", kind: "levels", choices: [
+      { value: "yes", label: "For", help: "Take it." },
+      { value: "no", label: "Against", help: "Turn it down." },
+    ], options: [], help: "Only counts on an offer the chief executive put to the table. A majority of the votes cast decides it." },
+    { id: "securitySpend", label: "Security", kind: "money", min: 0, step: 25_000,
+      help: "Lowers the chance of a breach and how bad one is. Builds up over years and wears off a fifth a year. Nobody thanks you for the breach that didn't happen." },
+    { id: "dataSpend", label: "Data and analytics", kind: "money", min: 0, step: 25_000,
+      help: "A gift to the other seats: a narrower forecast for everyone, more room for the marketing seat's number to be right, and marketing and efficiency that go a little further. Builds up over years." },
+    { id: "featureBet", label: "This year's feature bet", kind: "choice", options: [],
+      help: "One idea from this year's menu, each built for one segment. Built, it lands next year and makes them about 8% keener — and about one in four flops. Copied from a rival, it is live now, cheaper, and worth half." },
+    { id: "featureMode", label: "Build it or copy it", kind: "choice", options: [
+      { value: "build", label: "Build our own", help: "A year to land, the full effect, and it might be wrong." },
+      { value: "copy", label: "Copy a rival's", help: "Live now, 40% of the price, half the effect. Only for something a rival already has." },
+    ], help: "Whether the feature bet is built from scratch or copied." },
+    { id: "engineerPay", label: "Engineer pay", kind: "percent", min: 80, max: 130, step: 5,
+      help: "Pay against the market. Above it, the product moves faster — and every pound of product work costs that much more. Below it, the work is cheaper, your engineer stays less happy, and some years the market hires away a quarter of what is in flight." },
   ],
   coo: [
     { id: "capacityTarget", label: "Capacity", kind: "count", min: 0, step: 10_000,
@@ -84,6 +137,20 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
       help: "Cuts what each unit costs to make, permanently. Pays back over years rather than this one." },
     { id: "headcount", label: "Headcount", kind: "count", min: 0, max: 400, step: 1,
       help: "Staff beyond the five of you. Each one is a salary every year, in good years and bad." },
+    { id: "leaseCapacity", label: "Lease capacity", kind: "count", min: 0, step: 10_000,
+      help: "Room you can use this year, rented rather than built. Immediate where building takes a year, 40% dearer than building, and gone when the year ends. Cutting built capacity sells it back for 30% of what it cost." },
+    { id: "dealVotes", label: "Your vote on the table's offers", kind: "levels", choices: [
+      { value: "yes", label: "For", help: "Take it." },
+      { value: "no", label: "Against", help: "Turn it down." },
+    ], options: [], help: "Only counts on an offer the chief executive put to the table. A majority of the votes cast decides it." },
+    { id: "programme", label: "Improvement programme", kind: "choice", options: [],
+      help: "One a year, paying out a third of its effect in each of the next three years. Slow, cumulative and permanent — and the year you start one, it does nothing at all." },
+    { id: "expand", label: "Open the announced region", kind: "choice", options: [],
+      help: "The region announced for next year, opened at 70% of the usual cost. It opens next year, and in its first year you reach only as far as the brand does." },
+    { id: "recruitingSpend", label: "Recruiting", kind: "money", min: 0, step: 25_000,
+      help: "Who this year's hires are. Spend nothing and you get whoever turned up; spend well and they arrive good. They arrive next year either way." },
+    { id: "trainingSpend", label: "Training", kind: "money", min: 0, step: 25_000,
+      help: "Making the staff already here better at looking after people. Shows next year, and staff who are not trained slowly get worse." },
   ],
   cfo: [
     { id: "borrow", label: "Draw down", kind: "money", min: 0, step: 100_000,
@@ -94,6 +161,35 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
       help: "What you refuse to let the others spend, and it holds — spending above it is cut back, everyone's by the same fraction. The only authority this seat has over the other four, so it is worth telling them." },
     { id: "raiseAmount", label: "Raise from investors", kind: "money", min: 0, step: 500_000,
       help: "Money that never has to be repaid, bought with a permanent share of everything the company becomes. Raising while the company is worth little is the most expensive money in the game." },
+    { id: "borrowTerm", label: "Borrow on", kind: "choice", options: [
+      { value: "short", label: "The credit line", help: "Today's rate, which moves with the rating. Repay whenever you like." },
+      { value: "long", label: "A three-year loan", help: "A point and a half cheaper, fixed for three years, repaid in full when it ends. It cannot be repaid early, and profit must cover the interest one and a half times over or the lenders mark you down." },
+    ], help: "What this year's drawdown is borrowed on. Interest is paid from next year." },
+    { id: "holdBack", label: "Sign-off: hold back", kind: "percent", min: 0, max: 20, step: 1,
+      help: "Hold back up to 20% of what a seat committed, or everyone's. It is cut before the year runs, and the report says who did it." },
+    { id: "holdBackSeat", label: "Hold back from", kind: "choice", options: [
+      { value: "all", label: "Everyone", help: "Every spending seat, by the same share." },
+      { value: "cmo", label: "Marketing", help: "Only the marketing plan." },
+      { value: "cto", label: "Technology", help: "Only the product plan." },
+      { value: "coo", label: "Operations", help: "Only the operations plan, capacity included." },
+    ], help: "Whose plan the hold-back falls on." },
+    { id: "annualDiscount", label: "Annual plans", kind: "percent", min: 0, max: 30, step: 1,
+      help: "A discount for paying a year up front. Costs revenue on everyone who takes it; buys customers who cannot leave until the year is up, and cash before it is earned. Worth most where people leave most." },
+    { id: "dealVotes", label: "Your vote on the table's offers", kind: "levels", choices: [
+      { value: "yes", label: "For", help: "Take it." },
+      { value: "no", label: "Against", help: "Turn it down." },
+    ], options: [], help: "Only counts on an offer the chief executive put to the table. A majority of the votes cast decides it." },
+    { id: "insurance", label: "Insure against", kind: "choice", options: [
+      { value: "none", label: "Nothing", help: "Carry the risk. Most years, the cheapest answer." },
+      { value: "breach", label: "Breaches", help: "The insurer pays 80% of a breach's clean-up. Never the reputation." },
+      { value: "lawsuit", label: "Lawsuits", help: "The insurer pays 80% of a settlement." },
+      { value: "poaching", label: "Poaching", help: "Half of what the market takes when engineers are paid under the odds comes back." },
+      { value: "all", label: "Everything", help: "All three, for about twice the price of any one." },
+    ], help: "A premium against the year going wrong, charged on revenue. Wasted money most years, and the only thing that mattered in one." },
+    { id: "dividendPct", label: "Pay out", kind: "percent", min: 0, max: 100, step: 5,
+      help: "The share of this year's profit paid to the owners. The founders' share is banked for good — safe from whatever happens next — and investors who have been paid do not hold a missed target against you. It is money that leaves the company." },
+    { id: "costReview", label: "Cost review", kind: "percent", min: 0, max: 20, step: 1,
+      help: "Cut overhead by a percentage. The salaries bill falls this year; next year service slips and every seat's loyalty drops, by about half a point for each point cut." },
   ],
   ceo: [
     { id: "focus", label: "Where the year goes", kind: "choice", options: [
@@ -106,6 +202,33 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
       help: "Declaring a segment makes you meaningfully more appealing to those people and slightly less to everyone else. It is the decision the other four then have to live inside." },
     { id: "rehire", label: "Bring a seat back", kind: "choice", options: [], 
       help: "A seat dissolved in a bad year can be filled again, at the salary that was saved by losing it — and the lever comes back with it." },
+    { id: "deals", label: "This year's offers", kind: "levels", defaultChoice: "decline", choices: [
+      { value: "accept", label: "Take it", help: "Your call, on your own." },
+      { value: "decline", label: "Turn it down", help: "Nothing happens." },
+      { value: "vote", label: "Put it to the table", help: "The other four vote. A majority of those who vote decides it; a tie or silence turns it down." },
+    ], options: [], help: "What arrives from outside: a partner, a campaign, sometimes a buyer. Accept, decline, or let the table decide." },
+    { id: "shockAnswer", label: "Answer the shock", kind: "choice", options: [],
+      help: "What the company says about what happened. A statement wins back about half the reputation it cost; silence wins back nothing and reads as evasive; blaming a seat wins back the most and costs them dearly." },
+    { id: "budget", label: "Split the budget", kind: "allocation", min: 0, max: 100, step: 5,
+      help: "The share of what the company can spend, once salaries are paid, that each seat may commit. A seat that asks for more is cut to its share; a share left unused stays in the bank rather than going to somebody else. Leave it empty and nobody is capped." },
+    { id: "pace", label: "Pace", kind: "choice", options: [
+      { value: "ship", label: "Ship it", help: "Part of this year's product work lands now, results swing further, bets flop more, and the technology seat inherits half as much debt again." },
+      { value: "balanced", label: "Balanced", help: "Neither." },
+      { value: "right", label: "Get it right", help: "Nothing early, steadier results, bets flop half as often, less debt — and marketing waits for the product." },
+    ], help: "How fast the company moves. Faster everything, higher variance, and the technology seat inherits the debt." },
+    { id: "targets", label: "Set each seat's target", kind: "levels", defaultChoice: "fair", choices: [
+      { value: "easy", label: "Easy", help: "A tenth easier. They coast a little, and missing it barely stings." },
+      { value: "fair", label: "Fair", help: "The objective as written." },
+      { value: "aggressive", label: "Aggressive", help: "A tenth harder, and they work harder for it — but a miss costs a lot of loyalty." },
+    ], help: "How hard each seat's objective is pushed next year. Aggressive targets get more effort out of people and more of them leave." },
+    { id: "bonusPool", label: "Bonus pot", kind: "money", min: 0, step: 50_000,
+      help: "Shared equally by the seats that meet this year's objective, and paid only if they do. Loyalty for the money: about ten points for a year's executive salary." },
+    { id: "overrule", label: "Overrule a seat", kind: "choice", options: [],
+      help: "Once a year, reverse one seat's decision: last year's plan runs in that chair instead. It costs them twenty points of loyalty, and the year's report works out who was right." },
+    { id: "replaceSeat", label: "Replace a seat", kind: "choice", options: [],
+      help: "Fire someone and hire a replacement from the market, where rivals are bidding too. Costs half a year's salary in severance on top of the bid. A person who is fired moves to another table in this market." },
+    { id: "replaceBid", label: "Bid for the replacement", kind: "money", min: 0, step: 50_000,
+      help: "What you offer the best executive on the market this year. The highest bid gets the best person; the incumbents sometimes take them first; the last bidder gets whoever is left, or a stopgap." },
   ],
 };
 
@@ -114,9 +237,26 @@ export function defaultDraft(role: Role, company: Company, previous?: any): Reco
   if (previous) {
     // What they did last year, minus the moves that should never repeat by default.
     const carried = { ...previous };
-    if (role === "cfo") { carried.borrow = 0; carried.repay = 0; delete carried.raise; }
+    /*
+     * The one-shot levers, reset by their real field ids. (This used to delete
+     * `raise`, which has never been a field — so last year's `raiseAmount`
+     * survived, and a bot, which starts from this draft, sold another slice of
+     * the company every year.) Zero rather than delete, so the control shows.
+     */
+    if (role === "cfo") { carried.borrow = 0; carried.repay = 0; carried.raiseAmount = 0; }
     if (role === "cmo") carried.celebritySpend = 0;
-    if (role === "ceo") { delete carried.offer; delete carried.dissolveSeats; }
+    if (role === "ceo") {
+      delete carried.offer; delete carried.dissolveSeats;
+      // An overrule, a firing and a bonus are each one year's decision, never a habit.
+      carried.overrule = ""; carried.replaceSeat = ""; carried.replaceBid = 0; carried.bonusPool = 0;
+      // A seat brought back last year is already back.
+      carried.rehire = "";
+    }
+    if (role === "cfo") carried.costReview = 0;
+    // A feature bet is placed once; next year has its own menu.
+    if (role === "cto") { carried.featureBet = ""; carried.featureMode = "build"; }
+    // Rented room goes back at the end of the year; renting it again is a new decision.
+    if (role === "coo") carried.leaseCapacity = 0;
     return carried;
   }
 
@@ -173,6 +313,26 @@ export function validateDecision(role: Role, payload: any, company: Company): Va
       continue;
     }
 
+    if (field.kind === "levels") {
+      if (value === undefined || value === null || value === "") continue;
+      if (typeof value !== "object" || Array.isArray(value)) { errors[field.id] = "Pick one for each."; continue; }
+      const allowed = (field.choices ?? []).map((c) => c.value);
+      if (Object.values(value as Record<string, unknown>).some((v) => v !== "" && !allowed.includes(String(v)))) errors[field.id] = "Pick one for each.";
+      continue;
+    }
+
+    if (field.kind === "tiers" || field.kind === "allocation") {
+      if (value === undefined || value === null || value === "") continue;
+      if (typeof value !== "object" || Array.isArray(value)) { errors[field.id] = "Needs a number for each."; continue; }
+      const entries = Object.entries(value as Record<string, unknown>).filter(([, v]) => v !== "" && v !== null && v !== undefined);
+      if (entries.some(([, v]) => !Number.isFinite(Number(v)) || Number(v) < 0)) { errors[field.id] = "Each needs a number of nought or more."; continue; }
+      if (field.kind === "allocation") {
+        const total = entries.reduce((sum, [, v]) => sum + Number(v), 0);
+        if (total > 100) errors[field.id] = `That adds up to ${Math.round(total)}%. The shares can't come to more than 100%.`;
+      }
+      continue;
+    }
+
     if (field.kind === "segment") {
       // Optional: a company is allowed to be for everybody.
       if (value !== undefined && value !== null && value !== "" && typeof value !== "string") {
@@ -204,6 +364,21 @@ export function validateDecision(role: Role, payload: any, company: Company): Va
     errors.repay = `You only owe ${Math.round(company.debt).toLocaleString()}.`;
   }
 
+  /*
+   * The other: you cannot draw down credit the bank has not extended. Not
+   * refusing risk — borrowing to the last pound of the line is allowed — but
+   * money that does not exist. The engine clamps too, for a line that shrinks
+   * between filing and the tick.
+   */
+  if (role === "cfo") {
+    const room = Math.max(0, company.creditLimit - company.debt);
+    if (Number(payload.borrow) > room) {
+      errors.borrow = room > 0
+        ? `The bank will lend at most ${Math.round(room).toLocaleString()} more.`
+        : "The credit line is fully drawn. Repay some of it, or raise from investors.";
+    }
+  }
+
   return { ok: Object.keys(errors).length === 0, errors };
 }
 
@@ -224,10 +399,20 @@ export function cleanDecision(
   role: Role,
   payload: any,
   cityIds: readonly string[] = [],
+  context: {
+    /**
+     * The season year. A lever that has not arrived yet (see `UNLOCKS`) is
+     * dropped, so it cannot be filed early by a client that shows it anyway.
+     */
+    year?: number;
+    /** The market's segments: price tiers can only be set for ones that exist. */
+    segmentIds?: readonly string[];
+  } = {},
 ): Record<string, any> {
   const source = payload ?? {};
   const clean: Record<string, any> = {};
   for (const field of LEVER_FIELDS[role]) {
+    if (context.year !== undefined && !isUnlocked(role, field.id, context.year)) continue;
     const raw = source[field.id];
     switch (field.kind) {
       case "choice":
@@ -249,6 +434,42 @@ export function cleanDecision(
           ? raw.map(String).filter((id) => cityIds.includes(id)).slice(0, 20)
           : [];
         break;
+      case "levels": {
+        const out: Record<string, string> = {};
+        const answers = (field.choices ?? []).map((c) => c.value);
+        /*
+         * Targets are keyed by seat, and nothing else is a seat. Everything
+         * else of this shape — an answer or a vote on each of the year's
+         * offers — is keyed by whatever the season called them, so the key is
+         * only bounded in length.
+         */
+        const seatsOnly = field.id === "targets";
+        if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+          for (const [k, v] of Object.entries(raw)) {
+            const key = seatsOnly ? (["cmo", "cfo", "cto", "coo"].includes(k) ? k : null) : k.slice(0, 64);
+            if (key && answers.includes(String(v))) out[key] = String(v);
+          }
+        }
+        if (Object.keys(out).length) clean[field.id] = out;
+        break;
+      }
+      case "tiers":
+      case "allocation": {
+        // A map of numbers keyed by segment or by seat, and nothing else.
+        const out: Record<string, number> = {};
+        const allowed = field.kind === "allocation" ? (SPENDING_SEATS as readonly string[]) : context.segmentIds;
+        if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+          for (const [k, v] of Object.entries(raw)) {
+            if (v === "" || v === null || v === undefined) continue;
+            if (allowed && !allowed.includes(k)) continue;
+            const n = Number(v);
+            if (Number.isFinite(n) && n >= 0) out[String(k).slice(0, 64)] = field.max !== undefined ? Math.min(field.max, n) : n;
+          }
+        }
+        // Empty means none: no split, no tiers. Left out rather than filed as {}.
+        if (Object.keys(out).length) clean[field.id] = out;
+        break;
+      }
       default: {
         const n = Number(raw);
         clean[field.id] = Number.isFinite(n) ? n : 0;
@@ -256,6 +477,78 @@ export function cleanDecision(
     }
   }
   return clean;
+}
+
+/**
+ * What building and leasing room costs this year, which is operations'
+ * spending like anything else. Needs the market to price it; without one it
+ * is left out, as the city fee is.
+ */
+/**
+ * What one of each thing costs in this market, as the desk sends it: a unit
+ * of capacity built or leased, and a feature built or copied. For a screen
+ * that has the market's shape but not the sizes to price them from.
+ */
+export interface UnitPrices {
+  build: number;
+  lease: number;
+  featureBuild?: number;
+  featureCopy?: number;
+  /** A research report, an improvement programme, a statement, and opening the announced region. */
+  research?: number;
+  programme?: number;
+  statement?: number;
+  expansion?: number;
+}
+
+/**
+ * A move that is one price or nothing — a report, a programme, a statement,
+ * opening the announced region. Priced by the desk where it can be, and from
+ * the market where the screen has its sizes.
+ */
+function oneOff(
+  taken: boolean | undefined,
+  niche: Niche | undefined,
+  prices: UnitPrices | null | undefined,
+  key: "research" | "programme" | "statement" | "expansion",
+  fallback: (n: Niche) => number,
+): number {
+  if (!taken) return 0;
+  if (prices?.[key] !== undefined) return prices[key] ?? 0;
+  if (!niche) return 0;
+  const cost = fallback(niche);
+  return Number.isFinite(cost) ? cost : 0;
+}
+
+/** What this year's feature bet costs, if one is placed. */
+export function betSpend(decisions: TeamDecisions, niche?: Niche, prices?: UnitPrices | null): number {
+  const bet = decisions.cto?.featureBet;
+  if (!bet) return 0;
+  const copy = decisions.cto?.featureMode === "copy";
+  if (prices?.featureBuild !== undefined) return (copy ? prices.featureCopy : prices.featureBuild) ?? 0;
+  if (!niche) return 0;
+  const cost = featureCost(niche, copy ? "copy" : "build");
+  return Number.isFinite(cost) ? cost : 0;
+}
+
+export function capacitySpend(
+  company: Company,
+  decisions: TeamDecisions,
+  niche?: Niche,
+  /** Per-unit prices as the desk sends them, for a screen that has the market's shape but not its sizes. */
+  prices?: UnitPrices | null,
+): number {
+  if (!decisions.coo) return 0;
+  const target = decisions.coo.capacityTarget ?? company.capacity;
+  const lease = decisions.coo.leaseCapacity ?? 0;
+  if (prices) {
+    return Math.max(0, target - company.capacity) * prices.build + Math.max(0, lease) * prices.lease;
+  }
+  if (!niche) return 0;
+  const room = capacityMoney({ current: company.capacity, target, lease, niche });
+  const total = room.build + room.lease;
+  // A market passed without its segment sizes cannot be priced; leave it out rather than turn the meter into NaN.
+  return Number.isFinite(total) ? total : 0;
 }
 
 export interface Commitment {
@@ -281,13 +574,29 @@ export interface Commitment {
  * the sum. Shown live, it turns "I'll take two million for marketing" from a
  * private decision into a thing the other four can see happening.
  */
-export function commitment(company: Company, decisions: TeamDecisions, economy: { costIndex: number }, niche?: Niche): Commitment {
+export function commitment(
+  company: Company,
+  decisions: TeamDecisions,
+  economy: { costIndex: number },
+  niche?: Niche,
+  prices?: UnitPrices | null,
+): Commitment {
   const bySeat: { role: Role; spend: number }[] = [
-    { role: "cmo", spend: (decisions.cmo?.brandSpend ?? 0) + (decisions.cmo?.performanceSpend ?? 0) + (decisions.cmo?.celebritySpend ?? 0) },
-    { role: "cto", spend: (decisions.cto?.featureSpend ?? 0) + (decisions.cto?.reliabilitySpend ?? 0) + (decisions.cto?.techDebtPaydown ?? 0) + (decisions.cto?.researchSpend ?? 0) },
-    { role: "coo", spend: (decisions.coo?.supportSpend ?? 0) + (decisions.coo?.efficiencySpend ?? 0) },
+    { role: "cmo", spend: (decisions.cmo?.brandSpend ?? 0) + (decisions.cmo?.performanceSpend ?? 0) + (decisions.cmo?.celebritySpend ?? 0) + (decisions.cmo?.prSpend ?? 0) + (decisions.cmo?.referralSpend ?? 0) + (decisions.cmo?.winbackSpend ?? 0) + oneOff(decisions.cmo?.research && decisions.cmo.research !== "none", niche, prices, "research", researchCost) },
+    // At the engineering pay the technology seat set.
+    { role: "cto", spend: ((decisions.cto?.featureSpend ?? 0) + (decisions.cto?.reliabilitySpend ?? 0) + (decisions.cto?.techDebtPaydown ?? 0) + (decisions.cto?.researchSpend ?? 0) + (decisions.cto?.securitySpend ?? 0) + (decisions.cto?.dataSpend ?? 0) + betSpend(decisions, niche, prices)) * payEffect(decisions.cto?.engineerPay).cost },
+    { role: "coo", spend: (decisions.coo?.supportSpend ?? 0) + (decisions.coo?.efficiencySpend ?? 0) + (decisions.coo?.recruitingSpend ?? 0) + (decisions.coo?.trainingSpend ?? 0)
+      + oneOff(!!decisions.coo?.programme && !(company.programmes ?? []).some((p) => p.id === decisions.coo!.programme), niche, prices, "programme", programmeCost)
+      + oneOff(!!decisions.coo?.expand, niche, prices, "expansion", () => 0)
+      + capacitySpend(company, decisions, niche, prices) },
     { role: "cfo", spend: Math.max(0, decisions.cfo?.repay ?? 0) },
-    { role: "ceo", spend: 0 },
+    /*
+     * The chief executive's own money: the bonus pot, if every objective is
+     * met, and what firing somebody costs — the bid and the severance. Most
+     * years nothing; the year it is not, it is the table's money too.
+     */
+    { role: "ceo", spend: Math.max(0, decisions.ceo?.bonusPool ?? 0) + (decisions.ceo?.replaceSeat ? Math.max(0, decisions.ceo?.replaceBid ?? 0) + SEVERANCE : 0)
+      + oneOff(decisions.ceo?.shockAnswer === "statement", niche, prices, "statement", statementCost) },
   ];
 
   /*
@@ -324,8 +633,10 @@ export function commitment(company: Company, decisions: TeamDecisions, economy: 
     niche ? reachOf(company, niche) : 1,
   );
   const borrowable = Math.max(0, company.creditLimit - company.debt);
+  // Drawn money counted once, and never more than the bank will lend (see `drawdown`).
+  const drawn = drawdown(company, decisions.cfo?.borrow);
   const available = Math.max(0,
-    company.cash + (decisions.cfo?.borrow ?? 0) + borrowable - (decisions.cfo?.cashBuffer ?? 0));
+    company.cash + drawn + Math.max(0, borrowable - drawn) - (decisions.cfo?.cashBuffer ?? 0));
 
   return {
     spend,
@@ -404,6 +715,17 @@ export function draftPreview(input: {
    */
   const notes = lock.notes.filter((n) => !/^No \w+ decision was made/.test(n));
 
+  /*
+   * The chief executive's split and the finance seat's hold-back, said before
+   * the year rather than discovered in its report. The floor is left to the
+   * warning above, which already says the same thing in money.
+   */
+  const funded = fundYear(company, sanitiseDecisions(decisions), niche, { costIndex: economy.costIndex } as any);
+  for (const n of funded.notes) {
+    if (/^(Finance held|There was only)/.test(n)) continue;
+    warnings.push(n.replace(/^The chief executive's split gave/, "The chief executive's split gives").replace(/and its plan was cut to fit\./, "and its plan will be cut to fit.").replace(/^The chief financial officer held back/, "The chief financial officer is holding back"));
+  }
+
   return { commitment: money, notes, warnings };
 }
 
@@ -446,7 +768,7 @@ export function speak(field: LeverField, voice: NicheVoice): LeverField {
       return {
         ...field,
         label: cap.charAt(0).toUpperCase() + cap.slice(1),
-        help: `${voice.capacity.charAt(0).toUpperCase()}${voice.capacity.slice(1)}. Win more than this and you get ${voice.turnedAway} — which costs reputation, not just revenue.`,
+        help: `${voice.capacity.charAt(0).toUpperCase()}${voice.capacity.slice(1)} you build yourself; room your assets add comes on top. Win more than the two together and you get ${voice.turnedAway} — which costs reputation, not just revenue.`,
       };
     case "supportSpend":
       return { ...field, help: `${voice.service.charAt(0).toUpperCase()}${voice.service.slice(1)}. The segments that pay most are the ones that care about this most.` };

@@ -75,6 +75,12 @@ interface Desk {
   yourRoomReady?: boolean;
   yourLevers: string[];
   fields: LeverField[];
+  /** The levers this seat gets next year, by name. */
+  arrivingNextYear?: string[];
+  /** The product's risks and its bets. */
+  productRisk?: ProductRisk;
+  /** What one unit of capacity costs to build, and to lease for a year, in this market. */
+  prices?: { build: number; lease: number };
   draft: Record<string, any> | null;
   submitted: boolean;
   company: {
@@ -106,7 +112,11 @@ interface Desk {
   valuation: number;
   /** How fast this market's products move, which scales what research buys. */
   innovationPace: number;
-  table: { userId: string; name: string; role: Role | null; title: string | null; filed: boolean; isYou: boolean }[];
+  table: {
+    userId: string; name: string; role: Role | null; title: string | null; filed: boolean; isYou: boolean;
+    /** The chair's standing with the room. Not tracked for the chief executive. */
+    person?: { loyalty: number; skill: number; stretch: "easy" | "fair" | "aggressive"; warning: boolean } | null;
+  }[];
   filed: Record<string, any>;
   preview: {
     commitment: { spend: number; fixed: number; available: number; ratio: number; bySeat: { role: Role; spend: number }[]; openingCost: number };
@@ -254,7 +264,8 @@ export default function SimulationDeskPage() {
        * to say something.
        */
       const market: any = { cities: desk.cities, segments: desk.segments };
-      return commitment(desk.company as any, decisions, desk.economy, market);
+      // Capacity priced as the server priced it: the desk's segments carry no sizes to price it from.
+      return commitment(desk.company as any, decisions, desk.economy, market, desk.prices ?? null);
     } catch {
       /*
        * Fall back to the server's own figure rather than taking the screen
@@ -538,6 +549,11 @@ export default function SimulationDeskPage() {
                   <div>
                     <h2 className="font-semibold">{desk.yourTitle}</h2>
                     <p className="text-xs text-muted-foreground mt-0.5">{desk.yourLevers.join(" · ")}</p>
+                    <NewLeversLine
+                      fresh={desk.fields.filter((f) => f.unlocksIn === desk.year).map((f) => f.label)}
+                      coming={desk.arrivingNextYear ?? []}
+                    />
+                    {desk.yourRole === "cto" && desk.productRisk && <ProductRiskLine risk={desk.productRisk} />}
                   </div>
                   {desk.submitted && (
                     <Badge variant="secondary" className="shrink-0" data-testid="badge-filed">
@@ -555,6 +571,8 @@ export default function SimulationDeskPage() {
                       error={errors[field.id]}
                       onChange={(v) => setDraft((d) => ({ ...d!, [field.id]: v }))}
                       cities={desk.cities}
+                      isNew={field.unlocksIn === desk.year}
+                      listPrice={field.kind === "tiers" ? Number(draft.price) : undefined}
                     />
                   ))}
                 </div>
@@ -670,6 +688,15 @@ export default function SimulationDeskPage() {
                     : <Circle className="h-4 w-4 text-muted-foreground shrink-0" />}
                   <span className="font-medium truncate">{seat.isYou ? "You" : seat.name}</span>
                   <span className="text-muted-foreground text-xs truncate">{seat.title ?? "no seat"}</span>
+                  {seat.person && (
+                    <span
+                      className={`text-[11px] tabular-nums shrink-0 ${seat.person.warning ? "text-amber-600" : "text-muted-foreground"}`}
+                      title={seat.person.warning ? "Thinking about leaving. At 15 they resign." : "Loyalty: how far their decisions go."}
+                      data-testid={`text-loyalty-${seat.role}`}
+                    >
+                      {seat.person.warning ? "⚠ " : ""}loyalty {seat.person.loyalty}
+                    </span>
+                  )}
                   {!seat.filed && <span className="text-xs text-muted-foreground ml-auto shrink-0">still deciding</span>}
                 </button>
               ))}
@@ -1297,10 +1324,131 @@ function YearDetails({ report, up, down }: { report: NonNullable<Desk["lastYear"
  * is miserable and error-prone in a way that matters here — a stray zero is
  * a decision nobody meant to make.
  */
-function Field({ field, value, error, onChange, cities }: {
+function Field({ field, value, error, onChange, cities, isNew, listPrice }: {
   field: LeverField; value: any; error?: string; onChange: (v: any) => void;
   cities?: Desk["cities"];
+  /** Arrived this year (see UNLOCKS in shared/simulation/responsibilities.ts). */
+  isNew?: boolean;
+  /** For price tiers: what a segment with no tier pays. */
+  listPrice?: number;
 }) {
+  const badge = isNew ? <Badge variant="secondary" className="ml-2 text-[10px] align-middle" data-testid={`badge-new-${field.id}`}>New this year</Badge> : null;
+
+  /*
+   * A number for each of several things: a price per segment, or a share of
+   * the budget per seat. For tiers an empty row is a real answer — that
+   * segment pays the list price — and nought is a free tier, so the two are
+   * never confused. For the split, the rows are summed where they are typed,
+   * because the one rule is that they cannot come to more than 100%.
+   */
+  /*
+   * One answer per seat — easy, fair or aggressive — for the chief
+   * executive's targets. Each seat's row says how loyal it is, because that
+   * is what an aggressive target is spending.
+   */
+  if (field.kind === "levels") {
+    const map: Record<string, string> = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    return (
+      <div>
+        <Label className="text-sm font-medium">{field.label}{badge}</Label>
+        <p className="text-xs text-muted-foreground mt-0.5 mb-2">{field.help}</p>
+        <div className="space-y-2">
+          {(field.options ?? []).map((o) => (
+            <div key={o.value} className="rounded-lg border p-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">{o.label}</p>
+                  <p className="text-[11px] text-muted-foreground">{o.help}</p>
+                </div>
+                <div className="flex gap-1" role="radiogroup" aria-label={`${field.label}: ${o.label}`}>
+                  {(field.choices ?? []).map((c) => {
+                    const chosen = (map[o.value] ?? field.defaultChoice) === c.value;
+                    return (
+                      <button
+                        key={c.value}
+                        type="button"
+                        role="radio"
+                        aria-checked={chosen}
+                        title={c.help}
+                        onClick={() => onChange({ ...map, [o.value]: c.value })}
+                        className={`rounded-md border px-2.5 py-1 text-xs transition ${chosen ? "border-primary bg-primary/10 font-medium" : "border-border text-muted-foreground hover:border-muted-foreground/40"}`}
+                        data-testid={`level-${field.id}-${o.value}-${c.value}`}
+                      >
+                        {c.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+        {error && <p className="text-xs text-destructive mt-1.5">{error}</p>}
+      </div>
+    );
+  }
+
+  if (field.kind === "tiers" || field.kind === "allocation") {
+    const map: Record<string, any> = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    const tiers = field.kind === "tiers";
+    const total = Object.values(map).reduce((sum: number, v) => sum + (Number.isFinite(Number(v)) ? Number(v) : 0), 0);
+    const set = (key: string, raw: string) => {
+      const next = { ...map };
+      if (raw === "") delete next[key];
+      else next[key] = Math.max(0, Math.min(field.max ?? Infinity, Number(raw)));
+      onChange(next);
+    };
+    return (
+      <div>
+        <div className="flex items-baseline justify-between gap-3">
+          <Label className="text-sm font-medium">{field.label}{badge}</Label>
+          {!tiers && (
+            <span className={`text-xs tabular-nums ${total > 100 ? "text-destructive" : "text-muted-foreground"}`} data-testid={`text-${field.id}-total`}>
+              {Math.round(total)}% of 100%
+            </span>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground mt-0.5 mb-2">{field.help}</p>
+        <div className="space-y-2">
+          {(field.options ?? []).map((o) => {
+            const has = map[o.value] !== undefined && map[o.value] !== "";
+            return (
+              <div key={o.value} className="flex items-center gap-3 rounded-lg border p-2.5">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">{o.label}</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    {tiers
+                      ? has
+                        ? Number(map[o.value]) === 0 ? "Free: advertising money and word of mouth, and every paying tier leaks towards it." : o.help
+                        : `No tier: pays the list price${Number.isFinite(listPrice) ? ` of ${money(listPrice!)}` : ""}.`
+                      : o.help}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Input
+                    type="number"
+                    inputMode="numeric"
+                    value={has ? map[o.value] : ""}
+                    placeholder={tiers ? "list" : "0"}
+                    min={0}
+                    max={field.max}
+                    step={field.step ?? 1}
+                    onChange={(e) => set(o.value, e.target.value)}
+                    className="w-24 tabular-nums"
+                    aria-label={`${field.label}: ${o.label}`}
+                    data-testid={`input-${field.id}-${o.value}`}
+                  />
+                  <span className="w-3 text-xs text-muted-foreground">{tiers ? "" : "%"}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {error && <p className="text-xs text-destructive mt-1.5">{error}</p>}
+      </div>
+    );
+  }
+
   if (field.kind === "cities") {
     const open = new Set<string>(Array.isArray(value) ? value : []);
     return (
@@ -1344,7 +1492,7 @@ function Field({ field, value, error, onChange, cities }: {
   if (field.kind === "segment" || field.kind === "choice") {
     return (
       <div>
-        <Label className="text-sm font-medium">{field.label}</Label>
+        <Label className="text-sm font-medium">{field.label}{badge}</Label>
         <p className="text-xs text-muted-foreground mt-0.5 mb-2">{field.help}</p>
         {(field.options?.length ?? 0) === 0 && (
           <p className="text-xs text-muted-foreground">Nothing to choose here — every seat is filled.</p>
@@ -1375,8 +1523,10 @@ function Field({ field, value, error, onChange, cities }: {
   return (
     <div>
       <div className="flex items-baseline justify-between gap-3">
-        <Label className="text-sm font-medium" htmlFor={`field-${field.id}`}>{field.label}</Label>
-        {field.kind !== "count" && <span className="text-xs text-muted-foreground tabular-nums">{compact(n)}</span>}
+        <Label className="text-sm font-medium" htmlFor={`field-${field.id}`}>{field.label}{badge}</Label>
+        {field.kind === "percent"
+          ? <span className="text-xs text-muted-foreground tabular-nums">{n}%</span>
+          : field.kind !== "count" && <span className="text-xs text-muted-foreground tabular-nums">{compact(n)}</span>}
       </div>
       <p className="text-xs text-muted-foreground mt-0.5 mb-2">{field.help}</p>
       <div className="flex gap-2">
@@ -1594,3 +1744,43 @@ function ForecastCard({ forecast, voice, price, capacity, idleCostPerUnit, yours
   );
 }
 
+/**
+ * What arrived on this seat this year, and what arrives next. A new control
+ * that simply appears is easy to scroll past; one announced a year ahead is
+ * one the table has already started arguing about.
+ */
+function NewLeversLine({ fresh, coming }: { fresh: string[]; coming: string[] }) {
+  if (fresh.length === 0 && coming.length === 0) return null;
+  const list = (xs: string[]) => (xs.length === 1 ? xs[0] : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
+  return (
+    <p className="text-xs mt-1.5" data-testid="text-new-levers">
+      {fresh.length > 0 && <span className="font-medium text-primary">New this year: {list(fresh)}. </span>}
+      {coming.length > 0 && <span className="text-muted-foreground">Next year this seat also gets {list(coming)}.</span>}
+    </p>
+  );
+}
+
+interface ProductRisk {
+  security: number;
+  data: number;
+  breachChance: number;
+  outageChance: number;
+  features: { id: string; name: string; live: boolean; flopped: boolean; lands: number }[];
+}
+
+/**
+ * What the technology seat is carrying: how exposed the company is, and what
+ * its bets have come to. A breach that didn't happen gets nobody any credit,
+ * so the odds are said out loud where the seat that lowers them can see them.
+ */
+function ProductRiskLine({ risk }: { risk: ProductRisk }) {
+  const live = risk.features.filter((f) => f.live).map((f) => f.name);
+  const coming = risk.features.filter((f) => !f.live && !f.flopped).map((f) => f.name);
+  return (
+    <p className="text-xs text-muted-foreground mt-1.5" data-testid="text-product-risk">
+      Security {risk.security} · data {risk.data} · breach chance {risk.breachChance}% · outage chance {risk.outageChance}%
+      {live.length > 0 && <> · live: {live.join(", ")}</>}
+      {coming.length > 0 && <> · coming: {coming.join(", ")}</>}
+    </p>
+  );
+}

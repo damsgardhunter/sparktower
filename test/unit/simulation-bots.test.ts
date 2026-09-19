@@ -13,6 +13,7 @@ import { describe, it, expect } from "vitest";
 import {
   BOT_FILL_AFTER_SECONDS, BOT_JITTER, botDecision, botDisplayName, botIdentity,
   botsForVenture, botsNeeded, decisionSeed, jitter,
+  botCapacity,
 } from "@shared/simulation/bots";
 import { LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision } from "@shared/simulation/levers";
 import { nextPhase } from "@shared/simulation/lobby";
@@ -252,7 +253,16 @@ describe("what a seat is allowed to file", () => {
 
   it("fills in what wasn't sent rather than leaving a hole", () => {
     const clean = cleanDecision("cfo", {});
-    for (const field of LEVER_FIELDS.cfo) expect(clean).toHaveProperty(field.id);
+    /*
+     * Except the levers whose answer is a map — price tiers, a budget split,
+     * a vote on each offer. There, empty means "none filed", and writing an
+     * empty object would file a decision nobody made.
+     */
+    const maps = new Set(["tiers", "allocation", "levels"]);
+    for (const field of LEVER_FIELDS.cfo) {
+      if (maps.has(field.kind)) expect(clean).not.toHaveProperty(field.id);
+      else expect(clean).toHaveProperty(field.id);
+    }
   });
 
   it("turns a number that isn't one into zero, not NaN", () => {
@@ -265,10 +275,42 @@ describe("what a seat is allowed to file", () => {
   });
 
   it("passes everything a bot files", () => {
-    for (const role of ROLES) {
-      const d = botDecision({ ventureId: "v1", year: 1, role, company: company() });
-      const clean = cleanDecision(role, d);
-      expect(clean, `${role} loses something on the way in`).toEqual(d);
+    // Every year, since levers arrive over the season and a bot must file only what it has.
+    for (const year of [1, 2, 3, 4, 5]) for (const role of ROLES) {
+      const d = botDecision({ ventureId: "v1", year, role, company: company() });
+      const clean = cleanDecision(role, d, [], { year });
+      expect(clean, `${role} in year ${year} loses something on the way in`).toEqual(d);
+    }
+  });
+});
+
+describe("an operations bot's capacity", () => {
+  const full = { capacity: 231_000, customers: { swipers: 300_000, recently_single: 250_000, long_haulers: 100_000 } } as any;
+  const cluster = { id: "c", kind: "facility", name: "Cluster", bookValue: 1, effect: { capacity: 484_000 } } as any;
+
+  /*
+   * The bug: capacity was jittered either way at random, and a bot cut a
+   * company serving 650,000 from 231,000 built to 210,000.
+   */
+  it("never cuts a company that is running full", () => {
+    for (let i = 0; i < 200; i++) {
+      const c = company({ ...full, assets: [{ ...cluster, expiresIn: 3 }] });
+      expect(botCapacity({ seed: `s${i}`, company: c, step: 10_000, min: 0 })).toBeGreaterThanOrEqual(230_000);
+    }
+  });
+
+  it("builds to replace room its assets stop adding after this year", () => {
+    const lapsing = company({ ...full, assets: [{ ...cluster, expiresIn: 1 }] });
+    const lasting = company({ ...full, assets: [{ ...cluster, expiresIn: 4 }] });
+    expect(botCapacity({ seed: "x", company: lapsing, step: 10_000 })).toBeGreaterThan(botCapacity({ seed: "x", company: lasting, step: 10_000 }));
+  });
+
+  it("trims only a mostly idle company, and gently", () => {
+    const idle = company({ capacity: 500_000, customers: { swipers: 100_000 } as any, assets: [] });
+    for (let i = 0; i < 50; i++) {
+      const v = botCapacity({ seed: `i${i}`, company: idle, step: 10_000 });
+      expect(v).toBeLessThanOrEqual(500_000);
+      expect(v).toBeGreaterThanOrEqual(450_000);
     }
   });
 });

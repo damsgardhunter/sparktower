@@ -23,6 +23,9 @@ import { simDecisions, simSeats, simVentures, users } from "@shared/schema";
 import { LOBBY_SIZE } from "@shared/simulation/lobby";
 import { BOT_FILL_AFTER_SECONDS, botDecision, botsForVenture, botsNeeded } from "@shared/simulation/bots";
 import { cleanDecision } from "@shared/simulation/levers";
+import { dealsFor } from "@shared/simulation/world";
+import { valuation } from "@shared/simulation/mergers";
+import { isUnlocked } from "@shared/simulation/responsibilities";
 import { ensureBotUser } from "./bot-accounts";
 import type { Company, Niche, Role } from "@shared/simulation/types";
 
@@ -172,8 +175,12 @@ export async function fileBotDecisions(input: {
   companies: { id: string; company: Company }[];
   year: number;
   niche: Niche;
+  /** The season, so a bot can answer the offers this season put in front of its company. */
+  seasonId?: string;
+  /** Everyone in the market, for the same reason. */
+  world?: { companies: Company[] };
 }): Promise<number> {
-  const { companies, year, niche } = input;
+  const { companies, year, niche, seasonId, world } = input;
   if (companies.length === 0) return 0;
   const ventureIds = companies.map((c) => c.id);
 
@@ -212,6 +219,25 @@ export async function fileBotDecisions(input: {
       previous: (last as Record<string, any>) ?? undefined,
     });
 
+    /*
+     * The year's offers, which a bot can only know about here: the season and
+     * the market are what decide them. A bot chief executive puts every offer
+     * to the table rather than deciding alone — the humans in the room should
+     * get that call — and a bot in any other chair votes for a partnership and
+     * against being bought.
+     */
+    if (seasonId && isUnlocked(role, role === "ceo" ? "deals" : "dealVotes", year)) {
+      const offers = dealsFor({
+        seasonId, year, company, niche,
+        incumbents: (world?.companies ?? []).filter((c) => c.kind === "incumbent"),
+        worth: valuation(company).fair,
+      });
+      if (offers.length > 0) {
+        if (role === "ceo") decision.deals = Object.fromEntries(offers.map((o) => [o.id, "vote"]));
+        else decision.dealVotes = Object.fromEntries(offers.map((o) => [o.id, o.kind === "buyout" ? "no" : "yes"]));
+      }
+    }
+
     const put = await db.insert(simDecisions)
       .values({
         ventureId: seat.ventureId,
@@ -220,7 +246,7 @@ export async function fileBotDecisions(input: {
         year,
         // The same cleaning a person's submission goes through, so there is one
         // definition of what a seat may file and no second path that can drift.
-        payload: cleanDecision(role, decision, cityIds),
+        payload: cleanDecision(role, decision, cityIds, { year, segmentIds: niche.segments.map((s) => s.id) }),
       })
       /*
        * Never replaces. A person can hold a bot's seat after a takeover, and

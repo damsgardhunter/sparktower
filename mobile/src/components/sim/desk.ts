@@ -41,12 +41,36 @@ export interface LeverField {
   id: string;
   label: string;
   help: string;
-  kind: "money" | "price" | "count" | "choice" | "cities" | "segment";
+  kind: "money" | "price" | "count" | "choice" | "cities" | "segment" | "percent" | "tiers" | "allocation" | "levels";
   min?: number;
   max?: number;
   step?: number;
   options?: { value: string; label: string; help: string }[];
+  /** The season year this lever first appeared in, when not year one — so the screen can mark it new. */
+  unlocksIn?: number;
+  /** For "levels": the answers each option can be given. */
+  choices?: { value: string; label: string; help: string }[];
+  /** For "levels": the answer an option carries when nobody has chosen one. */
+  defaultChoice?: string;
 }
+
+/** Mirrors UnitPrices in shared/simulation/levers.ts: what one of each thing costs in this market. */
+export interface UnitPrices {
+  build: number;
+  lease: number;
+  featureBuild?: number;
+  featureCopy?: number;
+  research?: number;
+  programme?: number;
+  statement?: number;
+  expansion?: number;
+}
+
+/** Half an executive's salary: what firing somebody costs on top of the bid. Mirrors SEVERANCE in shared/simulation/people.ts. */
+export const SEVERANCE = 70_000;
+
+/** Engineering pay as a multiplier on product spending. Mirrors payEffect() in shared/simulation/people.ts. */
+export const payCost = (pct: unknown): number => Math.max(80, Math.min(130, Number(pct) || 100)) / 100;
 
 /** Mirrors Commitment in shared/simulation/levers.ts. */
 export interface Commitment {
@@ -82,6 +106,8 @@ export interface DeskCompany {
   brand: number;
   service: number;
   capacity: number;
+  /** Room the company's assets add on top of what it built. Served from all the same. */
+  assetCapacity?: number;
   unitCost: number;
   price: number;
   customers: number;
@@ -176,6 +202,8 @@ export interface DeskTableSeat {
   /** A seat the product is playing. Labelled here as it is in the lobby. */
   isBot?: boolean;
   isYou: boolean;
+  /** The chair's standing with the room. Not tracked for the chief executive. */
+  person?: { loyalty: number; skill: number; stretch: "easy" | "fair" | "aggressive"; warning: boolean } | null;
 }
 
 export interface DeskRival {
@@ -301,6 +329,9 @@ export interface DeskView {
   totalYears?: number;
   /** ISO timestamp this year resolves at, or null once the season has finished. */
   resolvesAt?: string | null;
+  seasonId?: string;
+  /** Set only for developers and for companies running this season. */
+  canAdvance?: "developer" | "company" | "dev_flag" | null;
   yourRole: DeskRole | null;
   yourTitle?: string | null;
   yourLevers?: string[];
@@ -309,6 +340,15 @@ export interface DeskView {
   submitted?: boolean;
   company?: DeskCompany;
   /** Everywhere this market exists, with the ones the company already sells in flagged. */
+  /** What one unit of capacity costs to build, and to lease for a year, in this market. */
+  prices?: UnitPrices;
+  /** The levers this seat gets next year, by name. */
+  arrivingNextYear?: string[];
+  /** The product's risks and its bets. */
+  productRisk?: {
+    security: number; data: number; breachChance: number; outageChance: number;
+    features: { id: string; name: string; live: boolean; flopped: boolean; lands: number }[];
+  };
   cities?: DeskCity[];
   /**
    * What the company is worth today, floored at 500,000 — the number a raise
@@ -405,7 +445,7 @@ function num(value: any): number {
  * over-reads its own danger and under-spends the whole season.
  */
 export function commitment(input: {
-  company: Pick<DeskCompany, "cash" | "debt" | "creditLimit" | "seats">;
+  company: Pick<DeskCompany, "cash" | "debt" | "creditLimit" | "seats"> & { capacity?: number };
   decisions: FiledDecisions;
   costIndex: number;
   /**
@@ -420,21 +460,49 @@ export function commitment(input: {
    * missing from the total the meter exists to show.
    */
   cities?: DeskCity[];
+  /**
+   * What one unit of capacity costs to build, and to lease for a year, as the
+   * server priced them for this market (`prices` on the desk). Without
+   * them, building and leasing are left out, as the city fee is without a map.
+   */
+  prices?: UnitPrices | null;
 }): Commitment {
-  const { company, decisions, costIndex, reach, cities } = input;
+  const { company, decisions, costIndex, reach, cities, prices } = input;
   const cmo = decisions.cmo ?? {};
   const cto = decisions.cto ?? {};
   const coo = decisions.coo ?? {};
   const cfo = decisions.cfo ?? {};
+  const ceo = decisions.ceo ?? {};
 
   const bySeat: { role: DeskRole; spend: number }[] = [
-    { role: "cmo", spend: num(cmo.brandSpend) + num(cmo.performanceSpend) + num(cmo.celebritySpend) },
-    // Research is committed money like any other, even though it buys nothing
-    // until next year. Mirrors commitment() in shared/simulation/levers.ts.
-    { role: "cto", spend: num(cto.featureSpend) + num(cto.reliabilitySpend) + num(cto.techDebtPaydown) + num(cto.researchSpend) },
-    { role: "coo", spend: num(coo.supportSpend) + num(coo.efficiencySpend) },
+    // Including the moves that are one price or nothing: a report, a campaign to win people back.
+    { role: "cmo", spend: num(cmo.brandSpend) + num(cmo.performanceSpend) + num(cmo.celebritySpend) + num(cmo.prSpend) + num(cmo.referralSpend)
+      + num(cmo.winbackSpend) + (cmo.research && cmo.research !== "none" ? num(prices?.research) : 0) },
+    /*
+     * Research is committed money like any other, even though it buys nothing
+     * until next year; so are security, data and a feature bet. All of it at
+     * the engineering pay the seat set. Mirrors commitment() in
+     * shared/simulation/levers.ts.
+     */
+    { role: "cto", spend: (num(cto.featureSpend) + num(cto.reliabilitySpend) + num(cto.techDebtPaydown) + num(cto.researchSpend)
+      + num(cto.securitySpend) + num(cto.dataSpend)
+      + (cto.featureBet && prices?.featureBuild !== undefined ? num(cto.featureMode === "copy" ? prices.featureCopy : prices.featureBuild) : 0))
+      * payCost(cto.engineerPay) },
+    /*
+     * Building and leasing room are operations' money too, and so are hiring
+     * and training. Mirrors capacitySpend() in shared/simulation/levers.ts:
+     * new room is paid for in the year it is ordered, leased room for the year
+     * it is used.
+     */
+    { role: "coo", spend: num(coo.supportSpend) + num(coo.efficiencySpend) + num(coo.recruitingSpend) + num(coo.trainingSpend)
+      + (coo.programme ? num(prices?.programme) : 0) + (coo.expand ? num(prices?.expansion) : 0) + (prices && decisions.coo
+      ? Math.max(0, num(coo.capacityTarget ?? (company as any).capacity) - num((company as any).capacity)) * prices.build
+        + Math.max(0, num(coo.leaseCapacity)) * prices.lease
+      : 0) },
     { role: "cfo", spend: Math.max(0, num(cfo.repay)) },
-    { role: "ceo", spend: 0 },
+    // The bonus pot, and firing somebody: the bid plus half a year's salary in severance.
+    { role: "ceo", spend: num(ceo.bonusPool) + (ceo.replaceSeat ? num(ceo.replaceBid) + SEVERANCE : 0)
+      + (ceo.shockAnswer === "statement" ? num(prices?.statement) : 0) },
   ];
 
   /*
@@ -455,7 +523,9 @@ export function commitment(input: {
   const spend = bySeat.reduce((sum, s) => sum + s.spend, 0);
   const fixed = fixedCosts(num(coo.headcount), costIndex, company.seats?.length ?? 0, reach ?? 1);
   const borrowable = Math.max(0, company.creditLimit - company.debt);
-  const available = Math.max(0, company.cash + num(cfo.borrow) + borrowable - num(cfo.cashBuffer));
+  // Drawn money counted once, and never more than the bank will lend. Mirrors drawdown() in shared/simulation/responsibilities.ts.
+  const drawn = Math.min(Math.max(0, num(cfo.borrow)), borrowable);
+  const available = Math.max(0, company.cash + drawn + Math.max(0, borrowable - drawn) - num(cfo.cashBuffer));
 
   return {
     spend, fixed, available,
@@ -908,7 +978,7 @@ export function shareOwnedRead(share: number | null | undefined): string {
 export function validateDraft(
   fields: LeverField[],
   draft: Record<string, any>,
-  company: Pick<DeskCompany, "debt">,
+  company: Pick<DeskCompany, "debt"> & Partial<Pick<DeskCompany, "creditLimit">>,
   role: DeskRole | null,
 ): { ok: boolean; errors: Record<string, string> } {
   const errors: Record<string, string> = {};
@@ -954,7 +1024,35 @@ export function validateDraft(
       continue;
     }
 
-    if (value === undefined || value === null || value === "") { errors[field.id] = "Needs a number."; continue; }
+    // An answer per seat. Mirrors validateDecision().
+    if (field.kind === "levels") {
+      if (value === undefined || value === null || value === "") continue;
+      if (typeof value !== "object" || Array.isArray(value)) { errors[field.id] = "Pick one for each."; continue; }
+      const allowed = (field.choices ?? []).map((c) => c.value);
+      if (Object.values(value as Record<string, unknown>).some((v) => v !== "" && !allowed.includes(String(v)))) errors[field.id] = "Pick one for each.";
+      continue;
+    }
+
+    // A map of numbers: a price per segment, or a share per seat. Mirrors validateDecision().
+    if (field.kind === "tiers" || field.kind === "allocation") {
+      if (value === undefined || value === null || value === "") continue;
+      if (typeof value !== "object" || Array.isArray(value)) { errors[field.id] = "Needs a number for each."; continue; }
+      const entries = Object.entries(value as Record<string, unknown>).filter(([, v]) => v !== "" && v !== null && v !== undefined);
+      if (entries.some(([, v]) => !Number.isFinite(Number(v)) || Number(v) < 0)) { errors[field.id] = "Each needs a number of nought or more."; continue; }
+      if (field.kind === "allocation") {
+        const total = entries.reduce((sum, [, v]) => sum + Number(v), 0);
+        if (total > 100) errors[field.id] = `That adds up to ${Math.round(total)}%. The shares can't come to more than 100%.`;
+      }
+      continue;
+    }
+
+    /*
+     * Never sent is fine; sent empty is not. Mirrors validateDecision(): a
+     * lever the phone has not drawn yet — one that arrives later in the
+     * season — must not be refused for being missing.
+     */
+    if (value === undefined) continue;
+    if (value === null || value === "") { errors[field.id] = "Needs a number."; continue; }
     const n = Number(value);
     if (!Number.isFinite(n)) { errors[field.id] = "Needs a number."; continue; }
     if (field.min !== undefined && n < field.min) errors[field.id] = `Can't go below ${field.min}.`;
@@ -964,6 +1062,16 @@ export function validateDraft(
   // The one hard stop the server keeps: you cannot repay money you do not owe.
   if (role === "cfo" && Number(draft?.repay) > company.debt) {
     errors.repay = `You only owe ${Math.round(company.debt).toLocaleString()}.`;
+  }
+
+  // And the other: you cannot draw down credit the bank has not extended. Mirrors validateDecision().
+  if (role === "cfo" && company.creditLimit !== undefined) {
+    const room = Math.max(0, company.creditLimit - company.debt);
+    if (Number(draft?.borrow) > room) {
+      errors.borrow = room > 0
+        ? `The bank will lend at most ${Math.round(room).toLocaleString()} more.`
+        : "The credit line is fully drawn. Repay some of it, or raise from investors.";
+    }
   }
 
   return { ok: Object.keys(errors).length === 0, errors };

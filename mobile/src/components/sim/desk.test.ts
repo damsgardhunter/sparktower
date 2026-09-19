@@ -61,7 +61,8 @@ describe("what the table has committed", () => {
     const borrowed = run({ cfo: { borrow: 400_000, repay: 0, cashBuffer: 0 } });
     expect(repaid.spend).toBe(400_000);
     expect(borrowed.spend).toBe(0);
-    expect(borrowed.available - repaid.available).toBe(400_000);
+    // And borrowing doesn't add to what's available: the money was already there as unused credit.
+    expect(borrowed.available).toBe(repaid.available);
   });
 
   it("never lets a negative repayment subtract from the table's spend", () => {
@@ -75,14 +76,15 @@ describe("what the table has committed", () => {
   });
 
   it("counts unused credit as available, and the buffer as unavailable", () => {
-    // 4m cash + 0.5m drawn + (3m limit − 1m owed) − 1m held back.
-    expect(run().available).toBe(5_500_000);
+    // 4m cash + 0.5m drawn + (3m limit − 1m owed − the 0.5m just drawn) − 1m held back.
+    // The drawdown counts once: before this, the 0.5m was counted as cash and again as credit.
+    expect(run().available).toBe(5_000_000);
   });
 
   it("gives the ratio the whole bill, fixed costs included", () => {
     const c = run();
-    expect(c.ratio).toBeCloseTo((2_350_000 + 2_485_000) / 5_500_000, 10);
-    expect(shortfall(c)).toBe(-665_000);
+    expect(c.ratio).toBeCloseTo((2_350_000 + 2_485_000) / 5_000_000, 10);
+    expect(shortfall(c)).toBe(-165_000);
   });
 
   it("treats a company with nothing available as infinitely over-committed", () => {

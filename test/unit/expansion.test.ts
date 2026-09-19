@@ -32,7 +32,8 @@ const spend = (over: any = {}) => ({
   companyId: "t",
   cmo: { price: 22, brandSpend: 600_000, performanceSpend: 600_000, celebritySpend: 0, targetCities: [], ...over.cmo },
   cto: { featureSpend: 400_000, reliabilitySpend: 400_000, techDebtPaydown: 0, ...over.cto },
-  coo: { capacityTarget: 2_000_000, supportSpend: 300_000, efficiencySpend: 0, headcount: 5, ...over.coo },
+  // Capacity held where it is: building room now costs money, and these tests are about other things.
+  coo: { capacityTarget: team().capacity, supportSpend: 300_000, efficiencySpend: 0, headcount: 5, ...over.coo },
   cfo: { borrow: 0, repay: 0, cashBuffer: 0, ...over.cfo },
   ceo: { focus: "growth", ...over.ceo },
 });

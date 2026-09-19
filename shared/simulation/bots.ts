@@ -28,6 +28,8 @@ import { between, pick } from "./random";
 import { BOT_POOL_SIZE, botsFor } from "../bots";
 import { LEVER_FIELDS, defaultDraft, validateDecision } from "./levers";
 import type { Company } from "./types";
+import { assetEffects } from "./assets";
+import { isUnlocked } from "./responsibilities";
 import type { Role } from "./types";
 
 /*
@@ -161,7 +163,13 @@ export function botDecision(input: {
    * inventing a loan is a bot making a decision, which is more than one should
    * do.
    */
-  const openable = role === "cfo" ? [] : fields.filter((f) => f.kind === "money" && Number(draft[f.id]) === 0);
+  // A money lever that has only just arrived starts at nought, like any other.
+  for (const f of fields) {
+    if (f.kind === "money" && draft[f.id] === undefined && isUnlocked(role, f.id, year)) draft[f.id] = 0;
+  }
+  const openable = role === "cfo" ? [] : fields.filter((f) => f.kind === "money" && Number(draft[f.id]) === 0 && isUnlocked(role, f.id, year)
+    // The chief executive's money is never spent by a bot on a human's behalf.
+    && role !== "ceo");
   const budgetSeed = decisionSeed({ ventureId, year, role, field: "_budget" });
   const budget = openable.length
     ? Math.max(0, between(budgetSeed, 0.06, 0.18) * (Number(company.cash) || 0))
@@ -172,8 +180,88 @@ export function botDecision(input: {
     const value = draft[field.id];
     const seed = decisionSeed({ ventureId, year, role, field: field.id });
 
+    // A lever the seat does not have yet is not filed at all (see UNLOCKS).
+    if (!isUnlocked(role, field.id, year)) { delete draft[field.id]; continue; }
+
+    /*
+     * The newer levers each get a considered value rather than a random one.
+     * A bot is a teammate a person has to live with: it forecasts honestly,
+     * rents room only when the company is already full, borrows on the
+     * ordinary line, and never imposes a budget split, a hold-back or price
+     * tiers on the humans at its table.
+     */
+    if (field.id === "forecast") {
+      const held = Object.values(company.customers ?? {}).reduce((sum, n) => sum + (Number(n) || 0), 0);
+      draft[field.id] = held > 0 ? snap(held * between(`${seed}:growth`, 0.95, 1.2), field.step, 0) : 0;
+      continue;
+    }
+    if (field.id === "leaseCapacity") {
+      const held = Object.values(company.customers ?? {}).reduce((sum, n) => sum + (Number(n) || 0), 0);
+      const room = (Number(company.capacity) || 0) + assetEffects(company.assets ?? []).capacity;
+      draft[field.id] = room > 0 && held >= room * 0.98 ? snap(held * 0.1, field.step, 0) : 0;
+      continue;
+    }
+    if (field.id === "budget" || field.id === "tiers") {
+      delete draft[field.id];
+      continue;
+    }
+    if (field.id === "holdBack" || field.id === "costReview" || field.id === "bonusPool" || field.id === "replaceBid") {
+      draft[field.id] = 0;
+      continue;
+    }
+    /*
+     * A bot chief executive manages people gently: fair targets for everyone,
+     * and it never overrules or fires a human. Those are decisions a person
+     * should only ever have made to them by another person.
+     */
+    if (field.id === "targets") {
+      draft[field.id] = Object.fromEntries((company.seats ?? ["cmo", "cfo", "cto", "coo"]).filter((r) => r !== "ceo").map((r) => [r, "fair"]));
+      continue;
+    }
+    if (field.id === "overrule" || field.id === "replaceSeat") {
+      draft[field.id] = "";
+      continue;
+    }
+    if (field.id === "engineerPay") {
+      draft[field.id] = 100;
+      continue;
+    }
+    /*
+     * A bot keeps a balanced pace and places no feature bets: the menu is the
+     * season's, and a bet is the kind of call a table should see a person make.
+     */
+    if (field.id === "pace") { draft[field.id] = "balanced"; continue; }
+    /*
+     * The world's offers are filled in by the server, which knows the season
+     * and so knows what was offered (see `fileBotDecisions`). A bot chief
+     * executive puts every offer to the table rather than deciding alone: the
+     * humans at the table should get the call.
+     */
+    if (field.id === "deals" || field.id === "dealVotes") { delete draft[field.id]; continue; }
+    if (field.id === "shockAnswer") { draft[field.id] = "statement"; continue; }
+    if (field.id === "promo") { draft[field.id] = "none"; continue; }
+    if (field.id === "research") { draft[field.id] = "none"; continue; }
+    if (field.id === "insurance") { draft[field.id] = "breach"; continue; }
+    if (field.id === "programme" || field.id === "expand") { draft[field.id] = ""; continue; }
+    if (field.id === "featureBet") { draft[field.id] = ""; continue; }
+    if (field.id === "featureMode") { draft[field.id] = "build"; continue; }
+    if (field.id === "borrowTerm" || field.id === "holdBackSeat") {
+      draft[field.id] = field.id === "borrowTerm" ? "short" : "all";
+      continue;
+    }
+    if (field.id === "annualDiscount") {
+      // A modest discount, some years: never a quarter of the revenue on a whim.
+      draft[field.id] = between(`${seed}:plans`, 0, 1) < 0.5 ? 0 : 10;
+      continue;
+    }
+
     if (field.kind === "choice" && field.options?.length) {
       draft[field.id] = jitterChoice(seed, field.options.map((o) => o.value), value);
+      continue;
+    }
+
+    if (field.id === "capacityTarget") {
+      draft[field.id] = botCapacity({ seed, company, step: field.step, min: field.min, max: field.max });
       continue;
     }
 
@@ -205,4 +293,40 @@ export function botDecision(input: {
 
   const checked = validateDecision(role, draft, company);
   return checked.ok ? draft : base;
+}
+
+/**
+ * What an operations bot builds: enough room for the customers it has.
+ *
+ * Capacity used to be jittered like any other number — up or down by as much
+ * as 12% at random. That is a coin toss on the one lever where the direction
+ * matters most: a cut takes effect at once, growth a year later, so a bot
+ * that rolled a cut while half a million people were being turned away made
+ * the company smaller in the year it most needed to be bigger.
+ *
+ * So it looks at how full the company is, counting room its assets add, and
+ * builds toward next year: a little more than it serves now, less whatever
+ * assets will still be adding then (the ones in their last year won't be).
+ * It only ever cuts when the company is mostly empty, and never by much.
+ */
+export function botCapacity(input: { seed: string; company: Company; step?: number; min?: number; max?: number }): number {
+  const { seed, company, step, min, max } = input;
+  const built = Math.max(0, Number(company.capacity) || 0);
+  const held = Object.values(company.customers ?? {}).reduce((sum, n) => sum + (Number(n) || 0), 0);
+  const assets = company.assets ?? [];
+  const room = built + assetEffects(assets).capacity;
+  const load = room > 0 ? held / room : 1;
+
+  if (load < 0.5) {
+    // Mostly idle: trim, gently.
+    return snap(built * (1 - between(`${seed}:trim`, 0, 0.1)), step, min, max, built);
+  }
+  if (load < 0.85) {
+    // Comfortable: hold, or edge up. Never a cut on a busy operation.
+    return snap(built * (1 + between(`${seed}:edge`, 0, 0.08)), step, min, max, built);
+  }
+  const assetsNextYear = assetEffects(assets.filter((a) => a.expiresIn === undefined || a.expiresIn > 1)).capacity;
+  const wanted = held * (1 + between(`${seed}:ahead`, 0.1, 0.25)) - assetsNextYear;
+  // Room for growth, but not a factory five times the size in a year.
+  return snap(Math.min(Math.max(built, wanted), built * 1.6 + 10_000), step, min, max, built);
 }

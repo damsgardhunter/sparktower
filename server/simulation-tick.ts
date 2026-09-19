@@ -39,6 +39,9 @@ import { marketListings, resolveBids, biddableFunds, type Bid, type Listing } fr
 import { applyRecovery, reviewCovenant, type RecoveryKind } from "@shared/simulation/recovery";
 import { challengeFor, checkChallenge, applyReward, discretionarySpend, type Challenge } from "@shared/simulation/challenges";
 import { applyAcquisition } from "@shared/simulation/mergers";
+import { closeYear, stretchChallenge, whoWasRight } from "@shared/simulation/people";
+import { takings } from "@shared/simulation/responsibilities";
+import { applySeatMoves } from "./simulation-people";
 import type { Company, CompanyAsset } from "@shared/simulation/types";
 
 /** What the market did to one company in one year. */
@@ -407,6 +410,8 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
     companies: teams.map((t) => ({ id: t.id, company: t })),
     year,
     niche,
+    seasonId,
+    world,
   }).catch((err) => console.error(`[sim] bot decisions for season ${seasonId} failed:`, err));
 
   // Everything submitted for this year, and what each team ran last year.
@@ -420,6 +425,8 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
 
   const decisions: TeamDecisions[] = [];
   const absences = new Map<string, { absent: Role[]; seats: number }>();
+  /** Overrules, with what the overruled seat had filed, so the year can be run the other way. */
+  const overrules = new Map<string, { role: Role; filed: any }>();
 
   for (const team of teams) {
     const submitted: Partial<Record<Role, any>> = {};
@@ -442,7 +449,7 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
       ? { companyId: team.id, ...previousParts } as TeamDecisions
       : undefined;
 
-    const { decisions: theirs, absent } = decisionsForYear({
+    const { decisions: theirs, absent, overruled } = decisionsForYear({
       company: team,
       niche,
       submitted,
@@ -450,6 +457,7 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
     });
     decisions.push(theirs);
     if (absent.length > 0) absences.set(team.id, { absent, seats: team.seats.length });
+    if (overruled) overrules.set(team.id, overruled);
   }
 
   const economy = economyFor(seasonId, year);
@@ -487,6 +495,33 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
   }
 
   const cashAfterRewards = cashNow(nextWorld.companies);
+
+  /*
+   * The people side of the year: who was right about an overrule (the year
+   * run again the other way, without its news, so only the one decision
+   * differs), loyalty from each seat's objective, the bonus pot, the
+   * executive market, and resignations. See `closeYear` in people.ts.
+   */
+  const verdicts = new Map<string, { role: Role; right: "ceo" | "seat" }>();
+  for (const [ventureId, o] of overrules) {
+    try {
+      const asRun = resolveYear(world, decisions, economy, { withoutEvent: true });
+      const otherWay = resolveYear(world, decisions.map((d) => d.companyId === ventureId ? { ...d, [o.role]: o.filed } : d), economy, { withoutEvent: true });
+      const worth = (r: typeof asRun) => r.reports.find((x) => x.companyId === ventureId)?.founderValue ?? 0;
+      verdicts.set(ventureId, { role: o.role, right: whoWasRight(worth(asRun), worth(otherWay)) });
+    } catch (err) {
+      console.error(`[sim] judging the overrule for ${ventureId} failed:`, err);
+    }
+  }
+  const outcomes = new Map<string, { role: Role; outcome: "met" | "partial" | "missed" }[]>();
+  for (const [ventureId, results] of challengeResults) outcomes.set(ventureId, results.map((r) => ({ role: r.role, outcome: r.outcome })));
+  const closed = closeYear({ seasonId, year, companies: nextWorld.companies, decisions: decisions as any, outcomes, verdicts });
+  nextWorld.companies = closed.companies;
+  for (const [ventureId, lines] of closed.notes) {
+    const report = reports.find((r) => r.companyId === ventureId);
+    if (report) report.notes.push(...lines);
+  }
+  const cashAfterPeople = cashNow(nextWorld.companies);
 
   // Covenants, against what the team actually spent rather than what it planned.
   for (const company of nextWorld.companies) {
@@ -561,7 +596,9 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
       const after: { label: string; amount: number }[] = [];
       const rewards = (cashAfterRewards.get(company.id) ?? 0) - bridge.closing;
       if (Math.abs(rewards) >= 1) after.push({ label: "Objectives met", amount: rewards });
-      const market = company.cash - (cashAfterRewards.get(company.id) ?? company.cash);
+      const people = (cashAfterPeople.get(company.id) ?? 0) - (cashAfterRewards.get(company.id) ?? 0);
+      if (Math.abs(people) >= 1) after.push({ label: "Bonuses and hiring", amount: people });
+      const market = company.cash - (cashAfterPeople.get(company.id) ?? company.cash);
       if (Math.abs(market) >= 1) after.push({ label: "The marketplace", amount: market });
 
       bridge.opening = cashAtStart.get(company.id) ?? bridge.opening;
@@ -580,7 +617,9 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
     report.brand = company.brand;
     report.service = company.service;
     report.founderShare = company.founderShare ?? 1;
-    report.value = Math.max(0, Math.round(units * company.price * 1.2 + assets - company.debt));
+    // What its customers actually pay, tier by tier — the same valuation the engine uses.
+    report.value = Math.max(0, Math.round(takings(company, company.customers, niche.segments).revenue * 1.2 + assets - company.debt));
+    void units;
     report.founderValue = Math.round(report.value * report.founderShare);
     report.bankrupt = !!company.bankruptSince;
   }
@@ -588,6 +627,7 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
   const finished = seasonOver(year + 1, season.totalYears);
   const nextTickAt = season.startsAt && !finished ? tickDueAt(season.startsAt, year + 1) : null;
 
+  let saved = false;
   await db.transaction(async (tx) => {
     /*
      * Reports first, then the year. If this dies in between, the next pass
@@ -618,6 +658,7 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
     // Another process resolved this year while we were working. Its writes are
     // identical to ours, so there is nothing to correct — just nothing to do.
     if (advanced.length === 0) return;
+    saved = true;
 
     /*
      * Each venture keeps a copy of its own company for the screens, written in
@@ -631,6 +672,12 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
         .where(eq(simVentures.id, company.id));
     }
   });
+
+  /*
+   * Seats change hands only once the year that caused it is saved, and only by
+   * the process that saved it — so a retried year never moves anybody twice.
+   */
+  if (saved && closed.moves.length > 0) await applySeatMoves({ seasonId, year, moves: closed.moves });
 
   // Next year's objectives, set against where each company now stands.
   if (!finished) await setChallenges({ world: nextWorld, year: year + 1 });
@@ -663,7 +710,7 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
  */
 async function fileBotDecisionsFor(world: World, year: number, niche: any, seasonId: string): Promise<void> {
   const teams = world.companies.filter((c) => c.kind === "player");
-  await fileBotDecisions({ companies: teams.map((t) => ({ id: t.id, company: t })), year, niche })
+  await fileBotDecisions({ companies: teams.map((t) => ({ id: t.id, company: t })), year, niche, seasonId, world })
     .catch((err) => console.error(`[sim] bot decisions for season ${seasonId} year ${year} failed:`, err));
 }
 
@@ -688,7 +735,11 @@ async function setChallenges(input: { world: World; year: number }): Promise<voi
       userId: seat.userId,
       role: seat.role,
       year,
-      challenge: challengeFor({ company, world, role: seat.role as Role, year, ventureId: seat.ventureId }),
+      // Pushed as hard as the chief executive set it (see `stretchChallenge`).
+      challenge: stretchChallenge(
+        challengeFor({ company, world, role: seat.role as Role, year, ventureId: seat.ventureId }),
+        company.people?.[seat.role as Role]?.stretch,
+      ),
     });
   }
 
