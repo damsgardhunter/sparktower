@@ -9,7 +9,15 @@ import { expect } from "vitest";
 import { devOutbox } from "../../server/email";
 
 export async function verifyEmail(app: any, email: string, ip = "198.51.109.10"): Promise<void> {
-  const mail = devOutbox().find((m) => m.to === email && m.tag === "verify-email");
+  /*
+   * Compared without case. The server stores and mails the address lowercased
+   * (shared/email-address.ts), so a test that registers "inv-Founder@…" gets
+   * its link sent to "inv-founder@…" — and an exact comparison found nothing,
+   * failing every test whose address had a capital in it with "no
+   * verification email", nowhere near what it was checking.
+   */
+  const wanted = email.trim().toLowerCase();
+  const mail = devOutbox().find((m) => m.to?.toLowerCase() === wanted && m.tag === "verify-email");
   const token = /verify-email\?token=([^\s&]+)/.exec(mail?.text ?? "")?.[1];
   expect(token, `no verification email for ${email}`).toBeTruthy();
   const res = await request(app).post("/api/auth/verify-email").set("x-forwarded-for", ip).send({ token });
