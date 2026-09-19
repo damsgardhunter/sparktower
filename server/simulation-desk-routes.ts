@@ -24,7 +24,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db";
 import { simSeasons, simSeats, simVentures, simDecisions, simReports, simChallenges, simRecoveryMoves, users, userProfiles } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
-import { enforceRateLimit } from "./moderation";
+import { enforceRateLimit, rateLimit } from "./moderation";
 import { nicheById } from "@shared/simulation/niches";
 import { ROLE_TITLES, ROLE_LEVERS, type Role, type World, type Company } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
@@ -34,6 +34,8 @@ import { debtDrag, IDLE_RATE, marketPriceOf } from "@shared/simulation/decisions
 import { weightsOf, expectationsFor, shortfalls, describeWeights } from "@shared/simulation/criteria";
 import { forecastDemand } from "@shared/simulation/forecast";
 import { projectYear } from "@shared/simulation/projection";
+import { advanceAuthority, advanceSeasonNow, warnIfDevAdvance } from "./season-control";
+import { mfaGate, mfaRequiredFor, mfaSatisfied } from "./mfa";
 import { RATING_START, interestOn, ratingGrade } from "@shared/simulation/finance";
 import { postureBlurb } from "@shared/simulation/incumbents";
 import { distressOf, DISTRESS_COPY, recoveryOptions } from "@shared/simulation/recovery";
@@ -83,6 +85,30 @@ async function draftFor(ventureId: string, year: number): Promise<{ decisions: T
 }
 
 export function registerSimulationDeskRoutes(app: Express): void {
+  warnIfDevAdvance();
+
+  /**
+   * End the year being played now — for developers, and for anyone seated in
+   * the season when a local development server opts in. Everyone else gets a
+   * 404: a clock a person cannot control is none of their business. See
+   * `server/season-control.ts`.
+   */
+  app.post("/api/sim/seasons/:id/advance", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
+    try {
+      const result = await advanceSeasonNow(String(req.params.id), req.user.id, {
+        secondFactor: !mfaRequiredFor(req.user) || mfaSatisfied(req),
+      });
+      // The admin gate's own refusal, so the client is told to enrol or to re-enter a code.
+      if (!result.ok && result.code === "second_factor") return void mfaGate(req, res);
+      if (!result.ok) return res.status(result.status).json({ message: result.message, code: result.code });
+      const { ok: _, ...body } = result;
+      res.json(body);
+    } catch (error) {
+      console.error("[sim] advance year failed:", error);
+      res.status(500).json({ message: "Couldn't resolve the year." });
+    }
+  });
+
   /**
    * Everything one seat needs to decide this year.
    *
@@ -218,6 +244,14 @@ export function registerSimulationDeskRoutes(app: Express): void {
       totalYears: season.totalYears,
       /** Null when the season has finished; otherwise when this year resolves. */
       resolvesAt: season.nextTickAt,
+      /**
+       * Whether this person may end the year now, and as what — a developer,
+       * or (local development, SIM_DEV_ADVANCE) anyone seated in the season.
+       * Null for everyone else, who never see the button. See
+       * `server/season-control.ts`.
+       */
+      seasonId: season.id,
+      canAdvance: season.status === "running" ? await advanceAuthority(req.user.id, season) : null,
 
       yourRole: seat.role,
       yourTitle: seat.role ? ROLE_TITLES[seat.role as Role] : null,
