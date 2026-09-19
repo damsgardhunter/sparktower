@@ -53,7 +53,7 @@ interface CountSource {
  * un-reacting deletes the row; a presign writes nothing; an AI call writes to
  * a dozen places.
  */
-const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai", "login", "loginAccount", "passwordReset", "write", "track", "post", "connect", "review", "payout", "webhookReject", "session", "workspace", "follow", "apply", "sprint", "checkout", "external", "invite", "inviteLookup"]);
+const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai", "login", "loginAccount", "passwordReset", "write", "track", "post", "connect", "review", "payout", "webhookReject", "mfaCode", "session", "workspace", "follow", "apply", "sprint", "checkout", "external", "invite", "inviteLookup"]);
 
 const hitSource = (action: RateLimitAction): CountSource => ({
   table: rateLimitHits, author: rateLimitHits.userId, created: rateLimitHits.createdAt,
@@ -114,6 +114,8 @@ const COUNTED: Record<RateLimitAction, CountSource[]> = {
   review: [hitSource("review")],
   payout: [hitSource("payout")],
   webhookReject: [hitSource("webhookReject")],
+  // Wrong second-factor codes, counted per account (server/mfa.ts).
+  mfaCode: [hitSource("mfaCode")],
   session: [hitSource("session")],
   workspace: [hitSource("workspace")],
   follow: [hitSource("follow")],
@@ -144,8 +146,33 @@ export function accountKey(email: unknown): string | null {
   return value && value.length <= 320 ? `account:${value}` : null;
 }
 
+/**
+ * Said once, loudly, if the address every limit is keyed on turns out to be our
+ * own proxy.
+ *
+ * `trust proxy` is set to one hop. If a deployment ever sits behind two — a CDN
+ * in front of the host, say — `req.ip` becomes the inner proxy's address, which
+ * is the *same* for every visitor. Every per-address limit then shares one
+ * bucket: one person's failed sign-ins lock out everybody, and a real attacker
+ * is throttled no more than anyone else. It is silent, and it looks exactly
+ * like the limits working.
+ */
+let warnedAboutProxy = false;
+function warnIfProxyAddress(address: string): void {
+  if (warnedAboutProxy || process.env.NODE_ENV !== "production") return;
+  if (!/^(10\.|127\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|::1$|fc|fd)/.test(address)) return;
+  warnedAboutProxy = true;
+  console.warn(
+    `[moderation] Every rate limit is being keyed on ${address}, which is a private address — ` +
+    `this server is seeing its proxy rather than the visitor, so all visitors share one limit. ` +
+    `Check the number of proxies in front of it against \`trust proxy\` (server/replit_integrations/auth/replitAuth.ts).`,
+  );
+}
+
 export function ipKey(req: any): string {
-  return `ip:${req.ip || req.socket?.remoteAddress || "unknown"}`;
+  const address = req.ip || req.socket?.remoteAddress || "unknown";
+  warnIfProxyAddress(String(address));
+  return `ip:${address}`;
 }
 
 /*
@@ -220,7 +247,9 @@ async function isExempt(key: string): Promise<boolean> {
       return false; // Can't tell who this is, so the limit applies.
     }
   }
-  return who.role === "admin" || (!!who.email && exemptEmails().has(who.email));
+  // Lowercased on both sides: the allowlist already is, and a row written before
+  // addresses were normalised would otherwise miss its own exemption.
+  return who.role === "admin" || (!!who.email && exemptEmails().has(who.email.trim().toLowerCase()));
 }
 
 export interface RateCheck {

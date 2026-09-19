@@ -31,6 +31,13 @@ import AdminPromotions from "@/pages/admin-promotions";
 import MfaVerifyPage from "@/pages/mfa-verify";
 import SecuritySettings from "@/pages/security-settings";
 import ForgotPasswordPage from "@/pages/forgot-password";
+import { PrivacyPolicy, TermsOfService, SecurityPolicy } from "@/pages/legal";
+import SimulationPage from "@/pages/simulation";
+import SimulationDeskPage from "@/pages/simulation-desk";
+import SimulationMarketPage from "@/pages/simulation-market";
+import SimulationStandingsPage from "@/pages/simulation-standings";
+import SimulationOffersPage from "@/pages/simulation-offers";
+import SimulationReportPage from "@/pages/simulation-report";
 import ResetPasswordPage from "@/pages/reset-password";
 import { MfaNotice } from "@/components/mfa";
 import { NOVA_GRADIENT, NOVA_GRADIENT_CSS } from "@shared/backing";
@@ -42,14 +49,14 @@ import PostDetail from "@/pages/post-detail";
 import AdminSurfaces from "@/pages/admin-surfaces";
 import AdminReports from "@/pages/admin-reports";
 import AdminSafety from "@/pages/admin-safety";
+import AdminSecurity from "@/pages/admin-security";
 import AdminAnalytics from "@/pages/admin-analytics";
 import { installAnalytics, trackPageView } from "@/lib/analytics";
 import Messages from "@/pages/messages";
 import ProjectManager from "@/pages/project-manager";
 import Sprints from "@/pages/sprints";
-import SprintMatchmaking from "@/pages/sprint-matchmaking";
-import SprintDashboard from "@/pages/sprint-dashboard";
-import SprintPractice from "@/pages/sprint-practice";
+import StartupGamePage from "@/pages/startup-game";
+import GameBoardsPage from "@/pages/game-boards";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "@tanstack/react-query";
 import type { UserProfile } from "@shared/schema";
@@ -128,6 +135,16 @@ function Router() {
           */}
         <Route path="/forgot-password" component={ForgotPasswordPage} />
         <Route path="/reset-password" component={ResetPasswordPage} />
+        {/*
+          * Signed out on purpose. Both app stores refuse a first submission
+          * without a privacy policy a reviewer can open with no account
+          * (Apple 5.1.1(i), Google's Data safety form), and anyone deciding
+          * whether to sign up should be able to read the terms before they do.
+          */}
+        <Route path="/privacy" component={PrivacyPolicy} />
+        <Route path="/terms" component={TermsOfService} />
+        {/* Named by /.well-known/security.txt, so it must answer for a stranger. */}
+        <Route path="/security" component={SecurityPolicy} />
         <Route>
           <Redirect to="/" />
         </Route>
@@ -154,7 +171,7 @@ function Router() {
    * "tell us about yourself" form instead of the reset — with no way to reach
    * it at all, since every other address redirects here too.
    */
-  const RECOVERY_PATHS = ["/onboarding", "/verify-email", "/forgot-password", "/reset-password"];
+  const RECOVERY_PATHS = ["/onboarding", "/verify-email", "/forgot-password", "/reset-password", "/privacy", "/terms", "/security"];
   if (!profile?.isOnboarded && !RECOVERY_PATHS.includes(window.location.pathname)) {
     return <Redirect to="/onboarding" />;
   }
@@ -232,6 +249,9 @@ function Router() {
             {/* Signed in and still resetting — an old email, or a shared computer. */}
             <Route path="/forgot-password" component={ForgotPasswordPage} />
             <Route path="/reset-password" component={ResetPasswordPage} />
+            <Route path="/privacy" component={PrivacyPolicy} />
+            <Route path="/terms" component={TermsOfService} />
+            <Route path="/security" component={SecurityPolicy} />
             {/* Every project's next step in one place — the address the retention loop returns to. */}
             <Route path="/path" component={PathHome} />
             {/*
@@ -264,9 +284,27 @@ function Router() {
             <Route path="/contests" component={Contests} />
             <Route path="/contests/:slug" component={ContestDetail} />
             <Route path="/sprints" component={Sprints} />
-            <Route path="/sprints/new" component={SprintMatchmaking} />
-            <Route path="/sprints/practice" component={SprintPractice} />
-            <Route path="/sprints/:id" component={SprintDashboard} />
+            {/* The market simulation lives under sprints, which is now "Sprints & simulations". */}
+            <Route path="/simulation" component={SimulationPage} />
+            {/* One company's desk: the year this seat is deciding. */}
+            <Route path="/simulation/:id/market" component={SimulationMarketPage} />
+            <Route path="/simulation/:id/standings" component={SimulationStandingsPage} />
+            <Route path="/simulation/:id/offers" component={SimulationOffersPage} />
+            <Route path="/simulation/:id/report/:year?" component={SimulationReportPage} />
+            <Route path="/simulation/:id" component={SimulationDeskPage} />
+            {/* Ten Years From Now. Declared before /sprints/:id, which would
+                otherwise match "boards" and "game" as sprint ids. */}
+            <Route path="/sprints/boards" component={GameBoardsPage} />
+            <Route path="/sprints/game/:id" component={StartupGamePage} />
+            {/*
+                The questionnaire sprint is retired. Old links — a bookmark, a
+                notification from before, a shared URL — land on the game
+                rather than a blank 404, because the person following one was
+                trying to get to this part of the product and still can.
+              */}
+            <Route path="/sprints/new"><Redirect to="/sprints" replace /></Route>
+            <Route path="/sprints/practice"><Redirect to="/sprints" replace /></Route>
+            <Route path="/sprints/:id"><Redirect to="/sprints" replace /></Route>
             <Route path="/messages" component={Messages} />
             <Route path="/pricing" component={Pricing} />
             {/* Reviewer-only. The page itself renders NotFound for anyone
@@ -276,6 +314,7 @@ function Router() {
             <Route path="/admin/surfaces" component={AdminSurfaces} />
             <Route path="/admin/reports" component={AdminReports} />
             <Route path="/admin/safety" component={AdminSafety} />
+            <Route path="/admin/security" component={AdminSecurity} />
             <Route path="/admin/analytics" component={AdminAnalytics} />
             <Route path="/admin/promotions" component={AdminPromotions} />
             <Route component={NotFound} />

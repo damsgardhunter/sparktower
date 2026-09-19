@@ -129,4 +129,39 @@ describe("publishing a path artifact", () => {
     expect((await request(app).get(`/api/public/artifacts/${a.id}`)).status).toBe(404);
     expect((await owner.agent.post(`/api/artifacts/${a.id}/publish`).send({ title: "A product statement, again" })).body.code).toBe("project_private");
   });
+
+  it("lists a project's pages for its team, with how each is doing, and for nobody else", async () => {
+    const app = await getTestApp();
+    const owner = await person(app, "Lister");
+    const outsider = await person(app, "Outsider");
+    const project = (await owner.agent.post("/api/projects").send({
+      title: `Pages ${Date.now()}`, description: "A project that publishes a page and then wants to see it.",
+      category: "saas", goal: "ship_mvp", subcategory: "saas",
+    })).body;
+
+    // A finished step becomes a stored artifact, published or not.
+    const tasks = (await owner.agent.get(`/api/projects/${project.id}/kanban`)).body;
+    const step = tasks.find((t: any) => (t.tags ?? []).includes("backbone:SHIP.M1.1"));
+    await owner.agent.patch(`/api/kanban/${step.id}`).send({ status: "done", description: "Plan a week of dinners from the fridge." }).expect(200);
+    const made = await owner.agent.post(`/api/projects/${project.id}/path/tasks/${step.id}/artifact`).send({});
+    expect(made.status, JSON.stringify(made.body)).toBe(200);
+
+    // Before publishing it's in the team's list as private — the page doesn't exist yet.
+    const drafts = await owner.agent.get(`/api/projects/${project.id}/artifacts`);
+    expect(drafts.status).toBe(200);
+    expect(drafts.body.find((a: any) => a.id === made.body.id)).toMatchObject({ visibility: "private", views: 0, signups: 0 });
+
+    await owner.agent.post(`/api/artifacts/${made.body.id}/publish`).send({ title: "A week of dinners", tags: ["food"] }).expect(200);
+    const live = (await owner.agent.get(`/api/projects/${project.id}/artifacts`)).body.find((a: any) => a.id === made.body.id);
+    expect(live).toMatchObject({ visibility: "public", title: "A week of dinners" });
+
+    // The list is the team's: it says what of theirs is public, and nobody else can ask.
+    expect((await outsider.agent.get(`/api/projects/${project.id}/artifacts`)).status).toBe(403);
+
+    // And taking it down from the list leaves it listed, no longer public.
+    await owner.agent.post(`/api/artifacts/${made.body.id}/unpublish`).send({}).expect(200);
+    const after = (await owner.agent.get(`/api/projects/${project.id}/artifacts`)).body.find((a: any) => a.id === made.body.id);
+    expect(after.visibility).toBe("private");
+    expect((await request(app).get(`/api/public/artifacts/${made.body.id}`)).status).toBe(404);
+  });
 });

@@ -313,39 +313,9 @@
   animation: hero-fade-in 1.2s ease-out 3.2s forwards;
 }
 
-/**
- * The landing header, held back for the opening of the hero video.
- *
- * The video is 8 seconds and its first beat is the tower charging; a gradient
- * bar dropping in over that reads as chrome loading late. So nothing is there
- * at all for the first two and a half seconds, and then it comes up over two —
- * slow enough to register as the page arriving rather than as a popup.
- *
- * `visibility` rides along with the opacity so the header can't be tabbed to
- * or clicked while it's invisible. Stepped at the end, so it becomes
- * interactive only once it's actually on screen.
- */
 .hero-header-reveal {
   opacity: 0;
-  visibility: hidden;
-  animation: hero-header-arrive 2s ease-out 2.5s forwards;
-}
-
-@keyframes hero-header-arrive {
-  0%   { opacity: 0; visibility: visible; transform: translateY(-8px); }
-  100% { opacity: 1; visibility: visible; transform: translateY(0); }
-}
-
-/*
- * Asked for less motion: the header is simply there, with no entrance and no
- * hidden window to tab through.
- */
-@media (prefers-reduced-motion: reduce) {
-  .hero-header-reveal {
-    opacity: 1;
-    visibility: visible;
-    animation: none;
-  }
+  animation: hero-fade-in-slow 1.5s ease-out 3.8s forwards;
 }
 
 /**
@@ -454,41 +424,12 @@
   /* The depth used by every card on the page, so they're all lit the same way. */
   --home-lift: 0 1px 2px hsl(0 0% 0% / 0.04), 0 4px 16px -6px hsl(0 0% 0% / 0.08);
   --home-lift-hover: 0 1px 2px hsl(0 0% 0% / 0.05), 0 10px 28px -10px hsl(0 0% 0% / 0.16);
-
-  /*
-   * Nova's glow.
-   *
-   * The same green → purple as NOVA_GRADIENT (shared/backing.ts), cast as two
-   * offset coloured shadows rather than a blurred copy of the gradient behind
-   * the card. Two reasons: a gradient pseudo-element needs a negative z-index
-   * to sit behind its own card, which breaks the moment anything on the page
-   * makes a stacking context; and offsetting the colours puts the green up and
-   * left and the purple down and right, which is the gradient's own 135°
-   * direction. So the card looks lit by Nova from the same angle the badge and
-   * the header are.
-   *
-   * Kept under the neutral depth in the box-shadow list so it reads as a tint
-   * on the shadow, not as a second border.
-   */
-  --nova-glow:
-    -7px -7px 20px -13px hsl(142 69% 58% / 0.55),
-     7px  7px 22px -13px hsl(272 91% 65% / 0.55);
-  --nova-glow-hover:
-    -10px -10px 26px -12px hsl(142 69% 58% / 0.8),
-     10px  10px 28px -12px hsl(272 91% 65% / 0.8);
 }
 
 .dark .home-modern {
   /* On black, shadow does nothing — the lift has to come from the border. */
   --home-lift: 0 0 0 1px hsl(0 0% 100% / 0.04);
   --home-lift-hover: 0 0 0 1px hsl(0 0% 100% / 0.09);
-  /* Black swallows a soft shadow, so the glow is carried further out and brighter. */
-  --nova-glow:
-    -8px -8px 24px -12px hsl(142 69% 58% / 0.42),
-     8px  8px 26px -12px hsl(272 91% 65% / 0.46);
-  --nova-glow-hover:
-    -12px -12px 32px -10px hsl(142 69% 58% / 0.7),
-     12px  12px 34px -10px hsl(272 91% 65% / 0.75);
 }
 
 /* Generous, consistent corners on every box the page composes. */
@@ -496,45 +437,16 @@
   border-radius: 14px;
 }
 
-/*
- * Every box on the page wears the glow: the rail modules (.home-card) and the
- * feed's own cards — posts, the composer, promotions, empty states — which all
- * render through the shared Card as .shadcn-card. Listing both here rather
- * than tagging each component keeps a new card on the page consistent by
- * default. The feed's cards set `shadow-none`; this out-specifies it.
- */
-.home-modern .home-card,
-.home-modern .shadcn-card {
-  box-shadow: var(--home-lift), var(--nova-glow);
+.home-modern .home-card {
+  box-shadow: var(--home-lift);
   border-color: hsl(var(--border) / 0.9);
-  transition: box-shadow 260ms cubic-bezier(0.22, 1, 0.36, 1), transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: box-shadow 220ms cubic-bezier(0.22, 1, 0.36, 1), transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.home-modern .home-card:hover,
-.home-modern .shadcn-card:hover {
-  box-shadow: var(--home-lift-hover), var(--nova-glow-hover);
-}
-
-/* Only cards that are themselves a link or hold a list of them lift as well. */
+/* Only cards that are themselves a link or hold a list of them. */
 .home-modern .home-card-interactive:hover {
+  box-shadow: var(--home-lift-hover);
   transform: translateY(-1px);
-}
-
-/*
- * A feed post answers the pointer by growing slightly, and only by that.
- *
- * The brighter glow every other box gets on hover is deliberately taken back
- * here: a post is the widest thing on the page and there is a column of them,
- * so a halo that intensifies under the pointer reads as the whole feed
- * flickering as you scroll past. Scale says "this one, and it's clickable"
- * without adding light. The glow itself stays at its resting strength.
- *
- * 1.01 is about six pixels across a feed column — enough to notice, small
- * enough that the post doesn't visibly collide with its neighbours.
- */
-.home-modern [data-testid^="feed-post-"]:hover {
-  box-shadow: var(--home-lift), var(--nova-glow);
-  transform: scale(1.01);
 }
 
 /*
@@ -625,8 +537,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .home-modern .home-rise { animation: none; }
-  .home-modern .home-card-interactive:hover,
-  .home-modern [data-testid^="feed-post-"]:hover { transform: none; }
+  .home-modern .home-card-interactive:hover { transform: none; }
 }
 
 /*
@@ -699,4 +610,40 @@
 @keyframes slogan-fade {
   from { opacity: 0; }
   to   { opacity: 1; }
+}
+
+/*
+ * Chart tokens for the simulation's projection panel.
+ *
+ * Taken from a validated data-viz palette rather than picked by eye: the
+ * in/out pair (blue, orange) passes colour-blind separation in both modes
+ * (worst ΔE 24.7 light, 26.8 dark), and the meters use three steps of one
+ * blue ramp — built, arriving next year, and the track — so "more" always
+ * reads as "darker". Dark mode has its own steps, not an automatic flip.
+ */
+.viz-root {
+  --viz-in: #2a78d6;
+  --viz-out: #eb6834;
+  --viz-total: #898781;
+  --viz-now: #2a78d6;
+  --viz-coming: #86b6ef;
+  --viz-track: #cde2fb;
+  --viz-grid: #e1e0d9;
+  --viz-good: #006300;
+  --viz-bad: #d03b3b;
+  --viz-status-good: #0ca30c;
+  --viz-status-warning: #fab219;
+  --viz-status-serious: #ec835a;
+  --viz-status-critical: #d03b3b;
+}
+.dark .viz-root {
+  --viz-in: #3987e5;
+  --viz-out: #d95926;
+  --viz-total: #898781;
+  --viz-now: #3987e5;
+  --viz-coming: #1c5cab;
+  --viz-track: #0d366b;
+  --viz-grid: #2c2c2a;
+  --viz-good: #0ca30c;
+  --viz-bad: #e66767;
 }

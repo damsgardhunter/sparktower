@@ -6,7 +6,7 @@
  * leads straight to it. That's the named risk — following that changes
  * nothing you can see — checked end to end.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./test";
 import { verifyEmail } from "./verify-email";
 
 const password = "Testpass123!";

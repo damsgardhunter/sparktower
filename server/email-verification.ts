@@ -21,6 +21,7 @@ import { emailVerificationTokens, users } from "@shared/schema";
 import { sendEmail } from "./email";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { enforceRateLimit, ipKey } from "./moderation";
+import { publicBaseUrl } from "./public-url";
 
 export const VERIFICATION_TTL_HOURS = 48;
 /** The code a blocked write answers with, so a client can offer "resend" rather than a dead end. */
@@ -29,14 +30,7 @@ export const EMAIL_UNVERIFIED = "email_unverified" as const;
 const hash = (token: string) => crypto.createHash("sha256").update(token).digest("hex");
 const normalise = (email: string) => email.trim().toLowerCase();
 
-/** Where the confirm link points: the public address if we know it, else this request's own host. */
-function baseUrl(req?: { headers: Record<string, any>; protocol?: string }): string {
-  const configured = process.env.PUBLIC_URL || process.env.REPLIT_DOMAINS?.split(",")[0];
-  if (configured) return /^https?:\/\//.test(configured) ? configured.replace(/\/$/, "") : `https://${configured}`;
-  const host = String(req?.headers?.["x-forwarded-host"] ?? req?.headers?.host ?? "localhost:5001").split(",")[0];
-  const protocol = String(req?.headers?.["x-forwarded-proto"] ?? req?.protocol ?? (host.startsWith("localhost") ? "http" : "https")).split(",")[0];
-  return `${protocol}://${host}`;
-}
+
 
 /**
  * Issues a link and sends it. Never throws and never fails the request that
@@ -56,7 +50,7 @@ export async function sendVerificationEmail(
       email: normalise(user.email),
       expiresAt: new Date(Date.now() + VERIFICATION_TTL_HOURS * 3600_000),
     });
-    const link = `${baseUrl(req)}/verify-email?token=${encodeURIComponent(token)}`;
+    const link = `${publicBaseUrl(req)}/verify-email?token=${encodeURIComponent(token)}`;
     const name = user.firstName?.trim() || "there";
     await sendEmail({
       to: user.email,
@@ -121,7 +115,13 @@ export const REACHES_OTHERS: RegExp[] = [
   // Straight to a person: an invite, a message, a connection request, a report.
   /^\/api\/projects\/[^/]+\/invites$/,
   /^\/api\/messages\/[^/]+$/,
-  /^\/api\/sprints\/[^/]+\/messages$/,
+  /*
+   * The game's chat. It replaced `/api/sprints/:id/messages` when the
+   * questionnaire sprint was retired, and the entry was not moved across with
+   * it — so for a while the one route in the game that puts your words in
+   * front of a stranger was the one route not behind this gate.
+   */
+  /^\/api\/games\/[^/]+\/messages$/,
   /^\/api\/connections\/request$/,
   /^\/api\/reports$/,
   // Applying is a message to the owner, with a name attached.

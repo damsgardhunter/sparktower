@@ -88,7 +88,7 @@ export function ProfileRailCard() {
   if (isLoading) {
     return (
       <RailCard padded={false}>
-        <Skeleton className="h-14 w-full rounded-none" />
+        <Skeleton className="h-20 w-full rounded-none" />
         <div className="p-3 pt-0 -mt-6 space-y-2">
           <Skeleton className="h-14 w-14 rounded-full" />
           <Skeleton className="h-4 w-32" />
@@ -104,11 +104,11 @@ export function ProfileRailCard() {
   const seed = profile?.userId || name;
 
   return (
-    <RailCard padded={false} className="group">
+    <RailCard padded={false} className="group home-card">
       {/* Cover band. Click to replace, the way LinkedIn does. */}
       <div className="relative">
         <div
-          className="h-14 w-full bg-cover bg-center"
+          className="h-20 w-full bg-cover bg-center"
           style={
             profile?.coverUrl
               ? { backgroundImage: `url(${profile.coverUrl})` }

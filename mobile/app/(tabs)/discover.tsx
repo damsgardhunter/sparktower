@@ -10,11 +10,11 @@ import { ConnectActions, FollowButton, useConnectionStates } from "../../src/com
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
 import { DISCOVER_NEW_KEY, EXPLORE, markSeen as rememberSeen, openDiscover, recordDiscoverVisit, trackExplore } from "../../src/explore";
 import {
-  DISCOVER_UPDATES_KEY, CONNECTION_REQUESTS_KEY, personAvatar, personName, updateLabel,
+  DISCOVER_UPDATES_KEY, CONNECTION_REQUESTS_KEY, personAvatar, personName,
   DIRECTORY_KEY, useConnectionRequests, useConnections, useDirectory, useExploreUpdates, useInvitationActions,
 } from "../../src/networkData";
 import {
-  InvitationRow, LookingForCardView, NetworkBlock, NewsBanner, PersonGridCard, ProjectRowItem, ShowMore, networkStyles,
+  InvitationRow, LookingForCardView, NetworkBlock, PersonGridCard, ProjectRowItem, ShowMore, networkStyles,
 } from "../../src/components/NetworkCards";
 
 type Mode = "grow" | "looking";
@@ -48,7 +48,6 @@ export default function Discover() {
   const [projectsAll, setProjectsAll] = useState(false);
   const [moreAll, setMoreAll] = useState(false);
   const [hidden, setHidden] = useState<Set<string>>(() => new Set());
-  const [newsDismissed, setNewsDismissed] = useState(false);
 
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: fetchMe });
   const meId: string | undefined = me?.user?.id;
@@ -59,7 +58,7 @@ export default function Discover() {
   const requests = useConnectionRequests();
   const connectionsList = useConnections();
   const looking = useQuery({ queryKey: ["looking-for"], queryFn: () => api<any[]>("/api/looking-for") });
-  const { updates, byKey } = useExploreUpdates();
+  const { byKey } = useExploreUpdates();
   // Everyone else on SparkTower — the web's Discover People list — for when Nova's matches run short.
   const directory = useDirectory();
 
@@ -100,11 +99,27 @@ export default function Discover() {
     void writePref(seenKey, newest);
   }, [lastSeen, seenKey, newest]);
 
-  const markSeen = () => {
+  /*
+   * Leaving the screen is what marks it seen.
+   *
+   * There used to be a banner at the top of this list — "Welcome back, new
+   * since you last looked", with a button to mark it seen — and the only way
+   * the New marks ever cleared was somebody pressing that button. So the
+   * banner had to exist, on every visit, to undo the state the last visit
+   * created. It was a notice about the app's own bookkeeping, sitting above
+   * the thing people came to read.
+   *
+   * Looking at the page is the acknowledgement. The marks stay up for the
+   * whole visit, so what is new is still visible while you are reading it, and
+   * they are gone when you come back.
+   */
+  const markSeen = useCallback(() => {
     const mark = newest ?? new Date().toISOString();
     setLastSeen(mark);
     if (seenKey) void writePref(seenKey, mark);
-  };
+  }, [newest, seenKey]);
+
+  useFocusEffect(useCallback(() => () => markSeen(), [markSeen]));
 
   const feed = useMemo(() => buildDiscoverFeed({
     matches: matches.data ?? [],
@@ -207,14 +222,6 @@ export default function Discover() {
   const shownBuilders = gridAll ? builders : builders.slice(0, GRID_START);
   const shownProjects = projectsAll ? projectItems : projectItems.slice(0, PROJECTS_START);
   const shownMore = moreAll ? moreBuilders.slice(0, 24) : moreBuilders.slice(0, MORE_START);
-  const showNews = !newsDismissed && (updates.length > 0 || feed.newCount > 0);
-
-  const newsTitle = updates.length ? "Welcome back — new since you last looked" : `${feed.newCount} new since you last looked`;
-  const newsDetail = updates.length
-    ? updates.map((u) => `${u.name}: ${updateLabel(u)}`).join(" · ")
-    : "New matches and projects are at the top of each list, marked New.";
-  const firstUpdate = updates[0];
-
   const lookingSection = (limit?: number) => {
     const rows = (looking.data ?? []).filter((p: any) => p.userId !== meId);
     const shown = limit ? rows.slice(0, limit) : rows;
@@ -246,7 +253,7 @@ export default function Discover() {
 
   return (
     <>
-      <Screen canvas onRefresh={refresh} refreshing={refreshing} contentStyle={{ padding: 0, gap: spacing.sm }}>
+      <Screen hideTabBar canvas onRefresh={refresh} refreshing={refreshing} contentStyle={{ padding: 0, gap: spacing.sm }}>
         <View style={{ backgroundColor: colors.surface }}>
           <TabStrip
             options={[{ value: "grow" as Mode, label: "Grow" }, { value: "looking" as Mode, label: "Who's looking" }]}
@@ -271,18 +278,6 @@ export default function Discover() {
           </NetworkBlock>
         ) : (
           <>
-            {showNews && (
-              <NewsBanner
-                title={newsTitle}
-                detail={newsDetail}
-                primary={firstUpdate
-                  ? { label: `See ${firstUpdate.name}`, onPress: () => (firstUpdate.kind === "builder" ? openBuilder(firstUpdate.id, 0) : openProject(firstUpdate.id, 0)) }
-                  : feed.newCount > 0 ? { label: "Mark seen", onPress: markSeen } : undefined}
-                secondary={firstUpdate && feed.newCount > 0 ? { label: `Mark ${feed.newCount} seen`, onPress: markSeen } : undefined}
-                onDismiss={() => setNewsDismissed(true)}
-              />
-            )}
-
             {invitations.length > 0 && (
               <NetworkBlock
                 title={`Invitations (${invitations.length})`}

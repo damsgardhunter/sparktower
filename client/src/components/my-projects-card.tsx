@@ -62,14 +62,28 @@ export function MyProjectsCard() {
   const sorted = [...list].sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity));
 
   return (
-    <RailCard>
+    <RailCard className="home-card">
       <RailHeader title="Your projects" href="/profile#projects" />
-      <div className="space-y-2.5 pt-1">
+      <div className="space-y-1 pt-1">
         {sorted.slice(0, 5).map((p) => {
           const item = nextByProject.get(p.id);
           const nextLabel = item?.next ? (item.next.step ?? item.next.title) : null;
           return (
-            <div key={p.id} className="flex items-start gap-2" data-testid={`rail-project-${p.id}`}>
+            /*
+             * The whole row opens the project, not just its name.
+             *
+             * Done with a stretched link rather than by wrapping the row in an
+             * anchor: Manage is a link too, and a link inside a link is invalid
+             * markup that browsers and screen readers resolve differently. So
+             * the title's own anchor grows a `before:` overlay across the row,
+             * and Manage sits above it — two real links, one hit area each,
+             * and the row still reads as one project to assistive tech.
+             */
+            <div
+              key={p.id}
+              className="home-row group/proj relative flex items-start gap-2 px-2 py-2"
+              data-testid={`rail-project-${p.id}`}
+            >
               {p.logoUrl ? (
                 <img
                   src={p.logoUrl} alt=""
@@ -83,7 +97,8 @@ export function MyProjectsCard() {
               <div className="min-w-0 flex-1">
                 <Link
                   href={`/projects/${p.id}`}
-                  className="text-sm font-medium leading-tight hover:underline block truncate"
+                  className="text-sm font-medium leading-tight block truncate group-hover/proj:underline before:absolute before:inset-0 before:rounded-[10px] before:content-['']"
+                  data-testid={`rail-project-open-${p.id}`}
                 >
                   {p.title}
                 </Link>
@@ -97,7 +112,7 @@ export function MyProjectsCard() {
               </div>
               <Button
                 asChild size="sm" variant="ghost"
-                className="h-7 w-7 p-0 shrink-0"
+                className="relative z-10 h-7 w-7 p-0 shrink-0"
                 title="Manage project"
                 data-testid={`rail-manage-${p.id}`}
               >

@@ -120,4 +120,36 @@ describe("logout", () => {
     expect((await other.post("/api/logout")).status).toBe(200);
     expect(await signedInNow(other)).toBe(false);
   });
+
+  it("isn't triggered by things that fetch a link without a person clicking it", async () => {
+    /*
+     * A GET that changes something gets fetched by software: a browser
+     * prefetching a link, a mail client checking URLs are safe, an <img> whose
+     * src somebody set to it. Each of those would sign a person out of their
+     * own account with nobody having asked.
+     */
+    const app = await getTestApp();
+    const agent = await signedIn(app);
+
+    for (const headers of [
+      { "Sec-Purpose": "prefetch;anonymous", "Sec-Fetch-Dest": "document" },
+      { Purpose: "prefetch" },
+      { "X-moz": "prefetch" },
+      { "Sec-Fetch-Dest": "image" },
+      { "Sec-Fetch-Dest": "empty", "Sec-Fetch-Mode": "cors" },
+    ]) {
+      const res = await agent.get("/api/logout").set(headers as Record<string, string>);
+      expect(res.status, JSON.stringify(headers)).toBe(302);
+      expect(await signedInNow(agent), `signed out by ${JSON.stringify(headers)}`).toBe(true);
+    }
+
+    // A person following the link, on the other hand, signs out.
+    expect((await agent.get("/api/logout").set({ "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "same-origin" })).status).toBe(302);
+    expect(await signedInNow(agent)).toBe(false);
+
+    // And a client that sends none of those headers still signs out, as before.
+    const older = await signedIn(app);
+    expect((await older.get("/api/logout")).status).toBe(302);
+    expect(await signedInNow(older)).toBe(false);
+  });
 });

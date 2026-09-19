@@ -7,7 +7,7 @@
  * is a real refused request — the route is intercepted to answer 500 — rather
  * than a simulator, which is the part of the original packet that was dropped.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./test";
 import { verifyEmail } from "./verify-email";
 
 /*

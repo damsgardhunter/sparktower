@@ -8,6 +8,17 @@ import { QUICK_POST_TYPES } from "../feedModel";
 import { Box } from "./Box";
 
 /**
+ * Short enough for one row. The full names live on the post itself, where
+ * there is a line to spell them out on; here three of them have to share the
+ * width of a phone with their icons.
+ */
+const QUICK_LABELS: Record<string, string> = {
+  project_update: "Update",
+  looking_for_help: "Need help",
+  looking_for_cofounder: "Co-founder",
+};
+
+/**
  * The web's closed composer (feed-composer.tsx): what kind of update first,
  * centred, then your avatar and "Share what you're building…". Picking a kind
  * opens the full-screen composer ready for it.
@@ -27,7 +38,7 @@ export function ComposerCard() {
             testID={`button-quick-${t.type}`}
           >
             <Ionicons name={t.icon} size={14} color={colors.text} />
-            <Text style={s.quickText} numberOfLines={1}>{t.label}</Text>
+            <Text style={s.quickText} numberOfLines={1}>{QUICK_LABELS[t.type] ?? t.label}</Text>
           </Pressable>
         ))}
       </View>
@@ -49,12 +60,19 @@ export function ComposerCard() {
 }
 
 const s = StyleSheet.create({
+  /*
+   * One row, no wrapping. "Project Update", "Looking for Help" and "Looking for
+   * Cofounder" are 42 characters between them, so `flexWrap` put them on two or
+   * three lines and the card grew a block of stacked buttons where a single
+   * strip was meant to be. Equal flex cells share the width instead, and the
+   * labels are shortened to fit one — the icon carries the rest of the meaning.
+   */
   quick: {
-    flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 2,
+    flexDirection: "row", justifyContent: "center", gap: 2,
     paddingBottom: 10, borderBottomWidth: 1, borderColor: "#D6D6D6",
   },
-  quickBtn: { flexDirection: "row", alignItems: "center", gap: 5, height: 28, paddingHorizontal: 8, borderRadius: 6 },
-  quickText: { color: colors.text, fontSize: 12, fontFamily: fontFamily.medium },
+  quickBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4, height: 28, paddingHorizontal: 4, borderRadius: 6 },
+  quickText: { color: colors.text, fontSize: 11.5, fontFamily: fontFamily.medium, flexShrink: 1 },
   openRow: { flexDirection: "row", alignItems: "center", gap: spacing.md, paddingTop: 10 },
   pill: {
     flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: 999,

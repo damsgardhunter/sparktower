@@ -15,20 +15,47 @@ const ACCESS_KEY = "sparktower.accessToken";
 const REFRESH_KEY = "sparktower.refreshToken";
 
 /**
+ * The host a shipped build talks to. Also `expo.extra.apiUrl` in app.json and
+ * `EXPO_PUBLIC_API_URL` in every eas.json build profile — three places that
+ * must agree, and the constant below is the one that wins if they ever don't.
+ */
+export const PRODUCTION_API_URL = "https://sparktower.app";
+
+const isLoopback = (url: string) => url.includes("localhost") || url.includes("127.0.0.1");
+
+/**
  * Base URL resolution.
  *
  * `localhost` means the device itself, not your Mac — so a phone or the
  * Android emulator can't reach a dev server that way. Android's emulator
  * maps the host to 10.0.2.2; a physical device needs your LAN IP, which
  * Expo exposes as the dev-server host.
+ *
+ * The loopback rewrite applies to `EXPO_PUBLIC_API_URL` as well as to
+ * app.json's value: an env var set to `http://localhost:5001` is the same
+ * unreachable address, and silently skipping the rewrite for it was a trap.
+ *
+ * A release bundle never keeps a loopback host. If one gets this far — a
+ * mis-set build profile, a stale `.env` picked up by the bundler — the app
+ * falls back to production and says so, because an app pointed at localhost
+ * is an app that does nothing at all and gives no reason why.
  */
 export function resolveApiUrl(): string {
-  const fromEnv = process.env.EXPO_PUBLIC_API_URL;
-  if (fromEnv) return fromEnv.replace(/\/$/, "");
+  const configured =
+    process.env.EXPO_PUBLIC_API_URL ||
+    (Constants.expoConfig?.extra?.apiUrl as string) ||
+    PRODUCTION_API_URL;
 
-  const configured = (Constants.expoConfig?.extra?.apiUrl as string) || "http://localhost:5001";
-  if (!configured.includes("localhost") && !configured.includes("127.0.0.1")) {
+  if (!isLoopback(configured)) {
     return configured.replace(/\/$/, "");
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    console.error(
+      `[api] Release build resolved the API host to ${configured}, which is this device. ` +
+      `Falling back to ${PRODUCTION_API_URL}. Fix EXPO_PUBLIC_API_URL in eas.json before shipping again.`,
+    );
+    return PRODUCTION_API_URL;
   }
 
   const port = new URL(configured).port || "5001";

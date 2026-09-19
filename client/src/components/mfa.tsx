@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { ShieldCheck } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 
-export interface MfaStatus { required: boolean; enabled: boolean; verified: boolean; recoveryCodesLeft: number }
+export interface MfaStatus { required: boolean; enabled: boolean; verified: boolean }
 
 /** POST as JSON with the session cookie; the parsed body, or throws with the server's message. */
 export async function postJson<T = any>(url: string, body: unknown = {}): Promise<T> {
@@ -18,13 +18,16 @@ export async function postJson<T = any>(url: string, body: unknown = {}): Promis
 }
 
 /**
- * The second step of signing in to an account with 2FA on: a code from the
- * authenticator app, or a recovery code. The password step already happened;
+ * The second step of signing in to an account with 2FA on: the six digits from
+ * the authenticator app, and nothing else. The password step already happened;
  * the server holds that for five minutes (server/mfa.ts).
+ *
+ * There was a "use a recovery code" toggle here. It is gone with the codes
+ * themselves: an account that loses its phone is reset by an operator
+ * (script/reset-mfa.ts), which is slower on purpose.
  */
 export function MfaCodeForm({ onVerified, onRestart }: { onVerified: () => void; onRestart?: () => void }) {
   const [code, setCode] = useState("");
-  const [recovery, setRecovery] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -46,18 +49,18 @@ export function MfaCodeForm({ onVerified, onRestart }: { onVerified: () => void;
     <form onSubmit={submit} className="space-y-3" data-testid="form-mfa-code">
       <div className="flex items-center gap-2 text-sm font-medium"><ShieldCheck className="h-4 w-4 text-primary" /> Two-factor authentication</div>
       <p className="text-sm text-muted-foreground">
-        {recovery ? "Enter one of the recovery codes you saved when you set up 2FA. Each works once." : "Enter the 6-digit code from your authenticator app."}
+        Enter the 6-digit code from your authenticator app. It changes every 30 seconds.
       </p>
       {error && <div className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md p-3" data-testid="text-mfa-error">{error}</div>}
       <div className="space-y-1.5">
-        <Label htmlFor="mfa-code">{recovery ? "Recovery code" : "Code"}</Label>
+        <Label htmlFor="mfa-code">Code</Label>
         <Input
           id="mfa-code"
           value={code}
           onChange={(e) => setCode(e.target.value)}
-          inputMode={recovery ? "text" : "numeric"}
+          inputMode="numeric"
           autoComplete="one-time-code"
-          placeholder={recovery ? "xxxxx-xxxxx" : "123456"}
+          placeholder="123456"
           autoFocus
           required
           data-testid="input-mfa-code"
@@ -67,11 +70,9 @@ export function MfaCodeForm({ onVerified, onRestart }: { onVerified: () => void;
         {loading ? "Checking…" : "Verify"}
       </Button>
       <div className="flex justify-between text-xs">
-        <button type="button" className="text-muted-foreground hover:underline" onClick={() => { setRecovery(!recovery); setCode(""); setError(""); }} data-testid="button-mfa-toggle-recovery">
-          {recovery ? "Use the authenticator app" : "Use a recovery code"}
-        </button>
+        <span className="text-muted-foreground">Lost your phone? Ask an admin to reset 2FA on your account.</span>
         {onRestart && (
-          <button type="button" className="text-muted-foreground hover:underline" onClick={onRestart} data-testid="button-mfa-restart">Start over</button>
+          <button type="button" className="text-muted-foreground hover:underline shrink-0" onClick={onRestart} data-testid="button-mfa-restart">Start over</button>
         )}
       </div>
     </form>

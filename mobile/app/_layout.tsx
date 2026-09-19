@@ -9,7 +9,7 @@ import {
   SpaceGrotesk_600SemiBold, SpaceGrotesk_700Bold, useFonts,
 } from "@expo-google-fonts/space-grotesk";
 import { AuthProvider, useAuth } from "../src/auth/AuthContext";
-import { colors, fontFamily } from "../src/theme";
+import { colors, fontFamily, isDark } from "../src/theme";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -43,8 +43,9 @@ function AuthGate() {
     if (loading) return;
     const inAuthGroup = segments[0] === "(auth)";
     const inOnboarding = (segments[0] as string) === "welcome";
-    // Shared links the web shows signed out: a published artifact.
-    const onPublicPage = ["a"].includes(segments[0] as string);
+    // Shared links the web shows signed out: a published artifact, and an invite —
+    // the person an invite is for usually has no account yet, which is the point of it.
+    const onPublicPage = ["a", "invite"].includes(segments[0] as string);
 
     if (!user) {
       if (!inAuthGroup && !onPublicPage) router.replace("/(auth)/sign-in");
@@ -103,7 +104,10 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
-          <StatusBar style="dark" />
+          {/* Dark letters on a light phone, light letters on a dark one. The
+              header's own StatusBar overrides this to light where it sits on a
+              cover photo, in both schemes. */}
+          <StatusBar style={isDark ? "light" : "dark"} />
           {/* On a font error, fall through to the system font rather than
               stranding the user on a spinner. */}
           {fontsLoaded || fontError ? <AuthGate /> : <Loading />}

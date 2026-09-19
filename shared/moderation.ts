@@ -159,6 +159,21 @@ export const RATE_LIMITS = {
     message: "Too many rejected deliveries from this address.",
   },
   /** Unauthenticated session endpoints that aren't sign-in (mobile sign-out), per address. */
+  /**
+   * A second-factor code, wrong.
+   *
+   * Only wrong ones count. The first version counted every attempt — enrolling,
+   * signing in, and the successful ones too — against eight in fifteen minutes,
+   * shared between setting 2FA up and using it. Someone turning it on for the
+   * first time could spend the whole budget on the setup screen and then be
+   * told "too many sign-in attempts" on their first real code, with a quarter
+   * of an hour to think about it. Guessing six digits is what this is for, and
+   * a guess that works is not a guess.
+   */
+  mfaCode: {
+    max: 10, windowMinutes: 15,
+    message: "Too many incorrect codes. Wait 15 minutes, then try the current code from your app.",
+  },
   session: {
     max: 60, windowMinutes: 10,
     message: "Too many requests from this address. Try again shortly.",

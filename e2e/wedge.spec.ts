@@ -12,7 +12,7 @@
  * fails for reasons nobody cares about. Every step that *is* the wedge is a
  * real click in a real browser.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./test";
 import { verifyEmail } from "./verify-email";
 
 const password = "Testpass123!";
@@ -22,7 +22,7 @@ const newEmail = () => `e2e-${Date.now()}-${Math.random().toString(36).slice(2, 
 async function signUp(page: Page, first = "Casey") {
   const email = newEmail();
   await page.goto("/");
-  // The form is a modal; the nav button opens it already on the signup tab.
+  // The form is on the page from first paint; the nav button selects the signup tab and scrolls to it.
   await page.getByTestId("button-signup-nav").click();
   await expect(page.getByTestId("tab-signup")).toBeVisible();
   await page.getByTestId("input-signup-firstname").fill(first);

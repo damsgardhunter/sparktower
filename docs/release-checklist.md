@@ -5,26 +5,26 @@ line to the log at the end. It is short on purpose — a long checklist gets
 skimmed — and every item on it is something that has already gone wrong once
 in this repository or would be expensive the first time it did.
 
+How the deploy itself works — the host, the service, the environment, the
+health endpoints, rollback — is [ops/deploy.md](ops/deploy.md), and that file
+is the source of truth. This one is the list you walk *around* a deploy.
+
 Set these two once per session and the commands below paste as-is:
 
 ```sh
-export APP=https://<your-production-domain>     # no trailing slash
-export PROD_DB="postgresql://…"                   # from Replit → Secrets → DATABASE_URL
+export APP=https://sparktower.onrender.com      # today; sparktower.app once DNS moves. No trailing slash
+export PROD_DB="postgresql://…"                 # Render → the database → External Database URL (add ?sslmode=require)
 ```
 
 ## 1. Before you deploy
 
 - [ ] **User testing passed** — every *Blocker* in
   [pre-deploy-user-testing.md](pre-deploy-user-testing.md) is ticked.
-- [ ] **CI is green on `main`** — all seven jobs (`docs/ci-gate.md`).
+- [ ] **CI is green on `main`** — `server-web`, `e2e`, and `mobile`.
       ```sh
       gh run list --branch main --workflow ci --limit 1
       ```
-      Since 17 September 2026 nothing reaches `main` without them, the owner
-      included, so this should never be a surprise. Check anyway: the gate
-      guarantees the checks *ran and passed on the commit that merged*, not
-      that `main` is green now — a merge queue of two green PRs can still
-      combine into a red `main` while `strict` is off.
+      Branch protection requires it, but check anyway; an admin push bypasses it.
 
 - [ ] **Migrations applied.** Run them against production *before* the new
       build starts serving:
@@ -57,23 +57,27 @@ export PROD_DB="postgresql://…"                   # from Replit → Secrets �
       reads is listed there. A deploy that needs a variable nobody wrote down
       fails at 2am.
 
-## 1b. The gate is closed — check it still is
+## 1b. Close the gate
 
-Closed on 17 September 2026: the seven checks bind everyone, the owner
-included. A direct push to `main` is refused and so is `gh pr merge --admin`
-(`docs/ci-gate.md` shows what each refusal looks like). This step is no longer
-"do it" — it's "confirm nobody quietly reopened it":
+- [ ] **Make the CI gate bind for everyone, owner included.** Until now an
+      owner's push lands on `main` without the seven checks running first
+      (`docs/ci-gate.md`). Once other people depend on the site, that stops:
 
-- [ ] **The gate still binds.**
       ```sh
+      gh api -X PUT repos/{owner}/{repo}/branches/main/protection/enforce_admins
       node scripts/check-branch-protection.mjs --launch   # must exit 0
       ```
-      A non-zero exit means a required check was dropped, force pushes were
-      allowed, or administrators were exempted again. Find out who and why
-      before deploying; if it was a deliberate exception, it belongs in the
-      release log with its reason.
 
-## 2. Production secrets (Replit → Secrets)
+      From then on every change is a branch and a pull request that merges when
+      the checks are green. To undo it in an emergency:
+      `gh api -X DELETE repos/{owner}/{repo}/branches/main/protection/enforce_admins`
+      — and say so in the release log, because it reopens the door this closed.
+
+## 2. Production secrets (Render → the service → Environment)
+
+Run `npm run check:env` first — it says what is set, what is missing and what
+looks wrong, which beats finding out from a boot that refuses. Then confirm the
+judgement calls it can't make:
 
 - [ ] `SESSION_SECRET` is a real random value, at least 32 characters, used
       nowhere else. There is no default: the server **refuses to boot** when
@@ -103,24 +107,44 @@ included. A direct push to `main` is refused and so is `gh pr merge --admin`
       invite at a Gmail address and confirm `SPF: PASS`, `DKIM: PASS`,
       `DMARC: PASS` in "show original".
 
-      **As of 2026-09-16 this fails at the first step:** `sparktower.app` does
-      not resolve (NXDOMAIN) — the domain isn't registered, so there is no zone
-      to publish into, and `security@sparktower.app` in `SECURITY.md` and
-      `/.well-known/security.txt` reaches nobody. Register the domain, or
-      change what the repository publishes, before launch.
+      **As of 2026-09-17 this still fails.** `sparktower.app` is registered at
+      GoDaddy but still serves GoDaddy's parked page — DNS has not been pointed
+      at Render — and the zone has no SPF, no DKIM and no MX, with GoDaddy's
+      default `p=quarantine` DMARC. So nothing can be authenticated yet, and
+      `security@sparktower.app` in `SECURITY.md` and `/.well-known/security.txt`
+      reaches nobody. [ops/custom-domain.md](ops/custom-domain.md) is the
+      order to do it in.
 
 ## 3. Deploy
 
-Replit → Deployments → Deploy. Wait for the health probe to go green, then run
-section 4 in order. Each check is a curl you can paste; the expected result is
-in the comment.
+Merging to `main` deploys, because auto-deploy is on. To do it by hand: Render
+dashboard → the service → **Manual Deploy** → *Deploy latest commit*. The
+pre-deploy command runs the migrations before the new version takes traffic, so
+a failed migration fails the deploy and the old version keeps serving.
+
+Wait for the deploy to go live, then:
+
+```sh
+curl -s $APP/_ready        # {"ready":true,"database":"ok","migrations":"ok","ms":…} — not just /_health
+```
+
+`/_health` deliberately doesn't touch the database, so a 200 there proves only
+that the process is listening. `/_ready` is the one that proves the deploy can
+do anything. Details in [ops/deploy.md](ops/deploy.md).
+
+Then run section 4 in order. Each check is a curl you can paste; the expected
+result is in the comment.
 
 ## 4. Sanity, the moment after
 
-- [ ] **Boot**
+- [ ] **Boot, and then boot properly.**
       ```sh
-      curl -s -o /dev/null -w '%{http_code}\n' $APP/_health          # 200
+      curl -s -o /dev/null -w '%{http_code}\n' $APP/_health          # 200 — the process is listening
+      curl -s $APP/_ready                                            # {"ready":true,"database":"ok","migrations":"ok","ms":…}
       ```
+      The second one is the one that matters: `/_health` answers 200 even when
+      the database is unreachable, on purpose
+      ([ops/deploy.md](ops/deploy.md)).
 
 - [ ] **Auth.** The API is up, protects itself, and issues sessions.
       ```sh
@@ -186,7 +210,7 @@ in the comment.
 
 - [ ] **A restore has been rehearsed in the last three months** — there is a
       dated row in [ops/backups.md](ops/backups.md) saying who restored a
-      snapshot into a scratch database, how long it took, and whether the app
+      backup into a scratch database, how long it took, and whether the app
       could read it. If the newest row is older than that, or there is no row,
       do the rehearsal in that file *before* a deploy that changes the schema
       destructively. It takes twenty minutes and it is the only thing that turns
@@ -194,13 +218,15 @@ in the comment.
 
 ## 5. Rollback
 
-- **Code:** Replit → Deployments → previous deployment → Redeploy. Takes about
-  a minute. Sessions live in Postgres, so nobody is signed out.
+- **Code:** Render dashboard → the service → **Events** → the last good deploy
+  → **Rollback**. Sessions live in Postgres, so nobody is signed out.
 - **Schema:** migrations only go forward. An additive one leaves the old code
   working, so rolling back the code without touching the schema is safe. A
-  destructive one has no automatic undo — restore from the Replit database
-  snapshot taken before the deploy (Database → Backups), or write a new
-  migration that puts back what you need.
+  destructive one has no automatic undo — restore from a Render Postgres backup
+  taken before the deploy ([ops/backups.md](ops/backups.md); note that a Render
+  restore creates a *new* database instance, so the rollback isn't finished
+  until `DATABASE_URL` points at it), or write a new migration that puts back
+  what you need.
 - **Can't deploy a fix in the next ten minutes?** Turn the surface off at
   **$APP/admin/surfaces**. It reaches every instance within ten seconds and
   returns 404 for the whole route prefix, which reads as "this feature doesn't
@@ -216,20 +242,6 @@ fixed by …" is worth more than three green ticks. Three consecutive entries
 where the checklist was followed and nothing surprised you is the signal that
 this document is doing its job.
 
-Don't type the row — generate it, so the timestamp, the commit and the CI link
-are read rather than remembered:
-
-```sh
-node scripts/release-log.mjs --notes "clean"        # after section 4
-node scripts/release-log.mjs --notes "…" --dry-run  # see the row first
-```
-
-It looks up the CI run **for the commit being deployed** (not the latest run on
-`main`, which may be something else by then) and refuses to write a clean row
-unless that run is green. Deploying a commit CI hasn't passed is occasionally
-the right call; `--force` allows it and records it as exactly that, so the log
-can't quietly claim a discipline that wasn't kept.
-
-| date (UTC) | commit | deployed by | ci run | checklist followed? | notes |
-|---|---|---|---|---|---|
-| — | — | — | — | — | *No production deploys recorded yet. The next one goes here.* |
+| date | commit | deployed by | checklist followed? | notes |
+|---|---|---|---|---|
+| — | — | — | — | *No production deploys recorded yet. The next one goes here.* |

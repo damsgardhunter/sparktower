@@ -7,14 +7,14 @@
  *
  *  - Enrolled: a correct password doesn't sign you in. The web keeps a pending
  *    sign-in in the session for five minutes; mobile gets a signed challenge.
- *    A code from the authenticator app (or a one-time recovery code) finishes it.
+ *    A code from the authenticator app finishes it.
  *  - Required but not enrolled: sign-in works, but every privileged route
  *    answers 403 `mfa_enrollment_required` until 2FA is set up.
  *  - A session (web) or token pair (mobile) that passed a second factor is
  *    marked; privileged routes check the mark (`mfaGate`, called by
  *    requireReviewer, requireOwner and the admin guard).
  *
- * Secrets are sealed at rest (secret-box); recovery codes are hashed; a code
+ * Secrets are sealed at rest (secret-box); a code
  * works once (the accepted time step is recorded); attempts are limited per
  * account and per address.
  */
@@ -26,12 +26,12 @@ import { users } from "@shared/schema";
 import { seal, open } from "./secret-box";
 import { deriveKey, mobileTokenKey } from "./secrets";
 import { newTotpSecret, otpauthUrl, verifyTotp } from "./totp";
+import QRCode from "qrcode";
 import { atLeast, isOwner } from "./platform-roles";
-import { enforceRateLimit, rateLimit } from "./moderation";
+import { enforceRejectionLimit, countRejection, ipKey, rateLimit } from "./moderation";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 
 export const MFA_CHALLENGE_TTL_MS = 5 * 60_000;
-export const RECOVERY_CODE_COUNT = 10;
 
 type UserRow = typeof users.$inferSelect;
 
@@ -70,18 +70,13 @@ export function mfaGate(req: any, res: Response): boolean {
   return false;
 }
 
-const hashRecovery = (code: string) => crypto.createHash("sha256").update(code.toLowerCase().replace(/[^a-z0-9]/g, "")).digest("hex");
-const newRecoveryCodes = () => Array.from({ length: RECOVERY_CODE_COUNT }, () => {
-  const raw = crypto.randomBytes(5).toString("hex"); // 40 bits each
-  return `${raw.slice(0, 5)}-${raw.slice(5)}`;
-});
 
 /**
  * A second factor for an enrolled account: an authenticator code (once per
  * time step — recorded atomically, so a replayed or raced code fails) or a
- * recovery code (removed as it's used). Returns what matched, or null.
+ * app. Returns "totp" when it matched, or null.
  */
-export async function checkSecondFactor(userId: string, code: string): Promise<"totp" | "recovery" | null> {
+export async function checkSecondFactor(userId: string, code: string): Promise<"totp" | null> {
   const [user] = await db.select().from(users).where(eq(users.id, userId));
   if (!mfaEnabledFor(user)) return null;
   const secret = open(user!.mfaSecret!);
@@ -93,12 +88,20 @@ export async function checkSecondFactor(userId: string, code: string): Promise<"
       .returning({ id: users.id });
     return claimed.length ? "totp" : null;
   }
-  const hashed = hashRecovery(code);
-  if (!/^[0-9a-f]{5}-?[0-9a-f]{5}$/i.test(code.trim()) || !(user!.mfaRecoveryCodes ?? []).includes(hashed)) return null;
-  const used = await db.update(users).set({ mfaRecoveryCodes: sql`array_remove(${users.mfaRecoveryCodes}, ${hashed})` })
-    .where(and(eq(users.id, userId), sql`${hashed} = any(${users.mfaRecoveryCodes})`))
-    .returning({ id: users.id });
-  return used.length ? "recovery" : null;
+  /*
+   * And that is the whole list. There used to be a second branch here for a
+   * one-time recovery code, and it is gone on purpose: ten printable strings
+   * that each sign in once are a second password, kept wherever people keep
+   * things — a screenshot, a notes app, a text to themselves — and they bypass
+   * the factor they are supposed to be protecting.
+   *
+   * What replaces them is not nothing. An account that loses its phone is
+   * reset by an operator with database access (script/reset-mfa.ts), after
+   * confirming who the person is some other way. That is slower, and it is
+   * meant to be: a lockout that needs a human is recoverable, and a recovery
+   * code someone screenshotted is not revocable.
+   */
+  return null;
 }
 
 // --- Mobile: a signed, short-lived challenge instead of a server session ---------
@@ -126,27 +129,90 @@ export function readMfaChallenge(token: unknown, now = Date.now()): string | nul
 }
 
 /** Attempts at a code, per account: eight tries in fifteen minutes, then wait. (Per address is the route's own rateLimit.) */
+/**
+ * Whether this account may try another second-factor code.
+ *
+ * Checks without counting: a wrong code is counted by `countWrongMfaCode`
+ * below, once the code has actually been judged. It used to count every call —
+ * every enrolment, every sign-in, and the successful ones too — against eight
+ * attempts in fifteen minutes, shared between turning 2FA on and using it. So
+ * somebody enrolling could spend the budget on the setup screen and be told
+ * "too many sign-in attempts" on their first real code. What this is defending
+ * against is somebody guessing six digits, and a guess that works is not a
+ * guess.
+ */
 export async function limitMfaAttempts(_req: Request, res: Response, userId: string): Promise<boolean> {
-  return enforceRateLimit(res, `mfa:${userId}`, "login");
+  return enforceRejectionLimit(res, `mfa:${userId}`, "mfaCode");
+}
+
+/** A code that wasn't right. This is the only thing that brings the limit closer. */
+export async function countWrongMfaCode(userId: string): Promise<void> {
+  await countRejection(`mfa:${userId}`, "mfaCode");
 }
 
 const safeUser = (u: UserRow) => {
-  const { passwordHash: _p, mfaSecret: _s, mfaPendingSecret: _ps, mfaRecoveryCodes: _r, mfaLastStep: _l, ...rest } = u;
+  const { passwordHash: _p, mfaSecret: _s, mfaPendingSecret: _ps, mfaLastStep: _l, ...rest } = u;
   return rest;
 };
+
+/**
+ * The enrolment QR, drawn twice over if it has to be.
+ *
+ * PNG first, because it is what every camera and every browser handles without
+ * argument. But PNG encoding goes through zlib and a pixel buffer, and that is
+ * the part that fails on a host with an unusual build of the runtime — which is
+ * exactly how somebody ended up staring at "Couldn't draw the QR code this
+ * time" while the same code drew it happily in development and in the tests.
+ *
+ * So when PNG fails, SVG: a different renderer, no compression, no pixel
+ * buffer, nothing but a string of rectangles. It is handed back base64-encoded
+ * in a data URL like the PNG, so the page still renders it as an *image* and
+ * never as markup — an SVG injected as HTML is a script tag waiting to happen.
+ *
+ * Both failing is survivable: the key below the picture does the same job, and
+ * refusing to set up 2FA because a decoration wouldn't draw would be worse.
+ * Which renderer answered comes back with it, because "it works for me" is not
+ * a diagnosis and the next person to hit this deserves the answer.
+ */
+export async function drawQr(url: string): Promise<{ dataUrl: string | null; drawnAs: "png" | "svg" | null }> {
+  try {
+    const png = await QRCode.toDataURL(url, { errorCorrectionLevel: "M", margin: 1, width: 240, color: { dark: "#000000ff", light: "#ffffffff" } });
+    return { dataUrl: png, drawnAs: "png" };
+  } catch (err) {
+    console.error("[mfa] couldn't draw the enrolment QR as a PNG, trying SVG:", (err as Error)?.message ?? err);
+  }
+  try {
+    const svg = await QRCode.toString(url, { type: "svg", errorCorrectionLevel: "M", margin: 1, width: 240, color: { dark: "#000000ff", light: "#ffffffff" } });
+    return { dataUrl: `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`, drawnAs: "svg" };
+  } catch (err) {
+    // The key below still works; a missing picture is not a reason to fail setup.
+    console.error("[mfa] couldn't draw the enrolment QR as an SVG either:", (err as Error)?.message ?? err);
+    return { dataUrl: null, drawnAs: null };
+  }
+}
 
 export function registerMfaRoutes(app: Express) {
   /** Where this account stands: whether its role needs 2FA, whether it's on, whether this session passed it. */
   app.get("/api/auth/mfa/status", isAuthenticated, (req: any, res) => {
-    res.json({ required: mfaRequiredFor(req.user), enabled: mfaEnabledFor(req.user), verified: mfaSatisfied(req), recoveryCodesLeft: req.user.mfaRecoveryCodes?.length ?? 0 });
+    res.json({ required: mfaRequiredFor(req.user), enabled: mfaEnabledFor(req.user), verified: mfaSatisfied(req) });
   });
 
   /**
    * Finishing a web sign-in that stopped at the second factor. The pending
    * sign-in lives in the session the password check started, for five minutes.
    */
-  app.post("/api/auth/mfa/verify", rateLimit("login"), async (req: any, res, next) => {
+  app.post("/api/auth/mfa/verify", async (req: any, res, next) => {
     // public-write: a pending sign-in in this session, started by a correct password, plus a one-time code; limited per address and per account
+    /*
+     * The per-address limit used to be `rateLimit("login")` — the same eight
+     * attempts per quarter hour that password sign-ins draw from, counted on
+     * every call including the ones that worked. So signing in a few times
+     * while setting 2FA up spent the budget, and the first correct code came
+     * back "Too many sign-in attempts. Try again in 15 minutes." Both limits
+     * here now count wrong codes and nothing else, and they have their own
+     * budget rather than sharing the password one.
+     */
+    if (!(await enforceRejectionLimit(res, ipKey(req), "mfaCode"))) return;
     const pending = req.session?.mfaPending as { userId: string; at: number } | undefined;
     if (!pending || Date.now() - pending.at > MFA_CHALLENGE_TTL_MS) {
       if (req.session) delete req.session.mfaPending;
@@ -154,7 +220,11 @@ export function registerMfaRoutes(app: Express) {
     }
     if (!(await limitMfaAttempts(req, res, pending.userId))) return;
     const method = await checkSecondFactor(pending.userId, String(req.body?.code ?? ""));
-    if (!method) return res.status(401).json({ message: "That code isn't right. Check your authenticator app and try again.", code: "mfa_invalid_code" });
+    if (!method) {
+      await countRejection(ipKey(req), "mfaCode");
+      await countWrongMfaCode(pending.userId);
+      return res.status(401).json({ message: "That code isn't right. Check your authenticator app and try again.", code: "mfa_invalid_code" });
+    }
     const [user] = await db.select().from(users).where(eq(users.id, pending.userId));
     if (!user) return res.status(401).json({ message: "That account no longer exists.", code: "mfa_challenge_expired" });
     delete req.session.mfaPending;
@@ -171,10 +241,28 @@ export function registerMfaRoutes(app: Express) {
     if (mfaEnabledFor(req.user)) return res.status(409).json({ message: "Two-factor authentication is already on.", code: "mfa_already_enabled" });
     const secret = newTotpSecret();
     await db.update(users).set({ mfaPendingSecret: seal(secret) }).where(eq(users.id, req.user.id));
-    res.json({ secret, otpauthUrl: otpauthUrl(secret, req.user.email ?? req.user.id) });
+    const url = otpauthUrl(secret, req.user.email ?? req.user.id);
+
+    /*
+     * The same otpauth:// URL as a picture, because the alternative is asking
+     * someone to hand-type thirty-two characters into a phone. Every
+     * authenticator worth having — Google Authenticator, Duo Mobile, 1Password,
+     * Authy, Microsoft Authenticator, Bitwarden — reads this one QR; TOTP is a
+     * standard (RFC 6238) and none of them needs anything app-specific.
+     *
+     * Drawn here rather than in the browser: the page already has the secret,
+     * so nothing is more exposed, and it keeps a QR library out of the bundle
+     * of a page most people open once. A data URL rather than raw SVG markup
+     * so the client renders it as an image and never as HTML.
+     *
+     * Black on white regardless of theme — a QR inverted for dark mode is one
+     * many phone cameras will not read.
+     */
+    const { dataUrl: qrDataUrl, drawnAs } = await drawQr(url);
+    res.json({ secret, otpauthUrl: url, qrDataUrl, drawnAs });
   });
 
-  /** Confirms setup with a code from the app: 2FA is on, this session counts as verified, and the recovery codes are shown once. */
+  /** Confirms setup with a code from the app: 2FA is on and this session counts as verified. */
   app.post("/api/auth/mfa/enable", isAuthenticated, rateLimit("session"), async (req: any, res) => {
     if (!(await limitMfaAttempts(req, res, req.user.id))) return;
     const [user] = await db.select().from(users).where(eq(users.id, req.user.id));
@@ -182,22 +270,15 @@ export function registerMfaRoutes(app: Express) {
     const secret = user?.mfaPendingSecret ? open(user.mfaPendingSecret) : null;
     if (!secret) return res.status(400).json({ message: "Start setup first.", code: "mfa_not_started" });
     const step = verifyTotp(secret, String(req.body?.code ?? ""));
-    if (step == null) return res.status(401).json({ message: "That code isn't right. Check the time on your phone and try the next one.", code: "mfa_invalid_code" });
-    const codes = newRecoveryCodes();
+    if (step == null) {
+      await countWrongMfaCode(req.user.id);
+      return res.status(401).json({ message: "That code isn't right. Check the time on your phone and try the next one.", code: "mfa_invalid_code" });
+    }
     await db.update(users).set({
       mfaSecret: seal(secret), mfaPendingSecret: null, mfaEnabledAt: new Date(), mfaLastStep: step,
-      mfaRecoveryCodes: codes.map(hashRecovery),
     }).where(eq(users.id, req.user.id));
     if (req.session) req.session.mfaVerifiedAt = Date.now();
-    res.json({ enabled: true, recoveryCodes: codes, reauthenticate: !req.session });
+    res.json({ enabled: true, reauthenticate: !req.session });
   });
 
-  /** New recovery codes (the old ones stop working). Needs a verified session. */
-  app.post("/api/auth/mfa/recovery-codes", isAuthenticated, rateLimit("session"), async (req: any, res) => {
-    if (!mfaEnabledFor(req.user)) return res.status(400).json({ message: "Two-factor authentication isn't on.", code: "mfa_not_enabled" });
-    if (!mfaSatisfied(req)) return res.status(403).json({ message: "Sign in again with your authenticator code first.", code: "mfa_required" });
-    const codes = newRecoveryCodes();
-    await db.update(users).set({ mfaRecoveryCodes: codes.map(hashRecovery) }).where(eq(users.id, req.user.id));
-    res.json({ recoveryCodes: codes });
-  });
 }

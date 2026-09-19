@@ -1,7 +1,9 @@
 import { productNameNote } from "@shared/project-draft";
-import { tierForPrice, PriceTierMissingError } from "./webhookHandlers";
+import { tierForPrice, PriceTierMissingError, WebhookHandlers } from "./webhookHandlers";
+import { liveSubscriptions, settleTier } from "./subscription-state";
 import { paidSubscription } from "@shared/subscriptions";
 import { registerStripeHealthRoutes } from "./stripe-health";
+import { registerDeploymentRoutes } from "./deployment-info";
 import { ROADMAP_DEPTHS, DEFAULT_ROADMAP_DEPTH, MAX_ROADMAP_PHASES, roadmapDepth, depthForRevision, type RoadmapDepth } from "@shared/roadmap";
 import type { Express } from "express";
 import { createServer, type Server } from "http";
@@ -12,7 +14,8 @@ import { setupAuth, isAuthenticated } from "./replit_integrations/auth/replitAut
 import { registerAuthRoutes } from "./replit_integrations/auth/routes";
 import { attachBearerUser, registerMobileAuthRoutes } from "./mobile-auth";
 import { registerObjectStorageRoutes, ObjectStorageService, ObjectNotFoundError } from "./replit_integrations/object_storage";
-import { registerSprintRoutes } from "./sprint-routes";
+import { registerStartupGameRoutes } from "./startup-game-routes";
+import { registerGameIdeaRoutes } from "./game-ideas";
 import { registerInvestorRoutes } from "./investor-routes";
 import { registerNovaBriefingRoutes } from "./nova-briefing";
 import { registerFeedbackLoopRoutes } from "./feedback-loop-routes";
@@ -56,6 +59,12 @@ import { insertUserProfileSchema, insertProjectSchema, insertProjectBase, insert
 import { pickFields, WRITABLE } from "./body-fields";
 import { registerEmailVerificationRoutes, requireVerifiedEmail } from "./email-verification";
 import { registerPasswordResetRoutes } from "./password-reset";
+import { recordView, countViews } from "./views";
+import { registerAdminSecurityRoutes } from "./admin-security-routes";
+import { registerSimulationRoutes } from "./simulation-routes";
+import { registerSimulationDeskRoutes } from "./simulation-desk-routes";
+import { registerSimulationMarketRoutes } from "./simulation-market-routes";
+import { registerSimulationProfileRoutes } from "./simulation-profile-routes";
 import { z } from "zod";
 import OpenAI from "openai";
 import { eq, ne, and, sql, inArray, desc, isNull } from "drizzle-orm";
@@ -100,12 +109,8 @@ async function isProjectMember(userId: string, projectId: string): Promise<boole
   return members.some(m => m.userId === userId);
 }
 
-const _rawOpenAiBase = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
-const _openAiBaseURL = _rawOpenAiBase ? (_rawOpenAiBase.endsWith("/v1") ? _rawOpenAiBase : `${_rawOpenAiBase.replace(/\/$/,"")}/v1`) : undefined;
-const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: _openAiBaseURL,
-});
+// Built on first use, never at import: server/openai-client.ts.
+import { openai } from "./openai-client";
 
 /**
  * URL for a storyboard frame. Always the authenticated streaming route — the
@@ -375,7 +380,8 @@ export async function registerRoutes(
   registerAuthRoutes(app);
   registerMobileAuthRoutes(app);
   registerObjectStorageRoutes(app);
-  registerSprintRoutes(app);
+  registerStartupGameRoutes(app);
+  registerGameIdeaRoutes(app);
   registerInvestorRoutes(app);
   registerNovaBriefingRoutes(app);
   registerFeedRoutes(app);
@@ -387,6 +393,7 @@ export async function registerRoutes(
   // The starter communities exist before anyone can open the page. Non-fatal: the list is just shorter without them.
   await seedCommunities().catch((err) => console.error("[communities] seed failed (non-fatal):", err));
   registerArtifactRoutes(app);
+  registerAdminSecurityRoutes(app);
   registerPromotionRoutes(app);
   registerInviteRoutes(app);
   // Your data: export it, or close the account (server/account-data.ts).
@@ -402,6 +409,8 @@ export async function registerRoutes(
   registerMcpRoutes(app);
   registerDiscoverRoutes(app);
   registerStripeHealthRoutes(app);
+  // Which build is running, at what address, and whether it came up (server/deployment-info.ts).
+  registerDeploymentRoutes(app);
   /*
    * Kill switches, mounted as path prefixes rather than per-route.
    *
@@ -418,6 +427,13 @@ export async function registerRoutes(
   // mounted here rather than behind the verification gate: someone locked out
   // can be neither signed in nor verified.
   registerPasswordResetRoutes(app);
+  // The market simulation: joining a market and claiming a seat (server/simulation-routes.ts).
+  registerSimulationRoutes(app);
+  // The desk a seat files its year from (server/simulation-desk-routes.ts).
+  registerSimulationDeskRoutes(app);
+  // Buying, selling, and the moves a company makes in trouble.
+  registerSimulationMarketRoutes(app);
+  registerSimulationProfileRoutes(app);
   registerSafetyRoutes(app);
   registerInvestmentRoutes(app);
   registerBackingRoutes(app);
@@ -755,7 +771,29 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       }
     }
 
-    await storage.incrementProjectViews(req.params.id);
+    /*
+     * A view, when it is one. This route is what the owner's own dashboard
+     * reads and the client refetches, and it used to increment on every call —
+     * so `projects.views` counted the owner refreshing their own page. In this
+     * database that produced 450 views on a project two people had ever
+     * opened, one of them the owner (server/views.ts).
+     */
+    const members = await storage.getProjectMembers(req.params.id).catch(() => []);
+    const outcome = await recordView({
+      kind: "project",
+      targetId: req.params.id,
+      ownerId: project.ownerId,
+      insiders: members.map((m: any) => m.userId),
+      viewer: {
+        userId: req.user?.id ?? null,
+        visitorId: req.visitorId ?? null,
+        sessionId: req.sessionId ?? null,
+        userAgent: req.headers["user-agent"] ?? null,
+        path: req.originalUrl,
+        referrer: req.headers.referer ?? null,
+      },
+    });
+    if (outcome === "counted") await storage.incrementProjectViews(req.params.id);
     res.json(project);
   });
 
@@ -3933,10 +3971,40 @@ RULES:
     for (const p of allProjects.filter((x) => x.ownerId === req.params.id)) {
       if (!p.isPrivate || (viewerId && (viewerId === p.ownerId || (await isProjectMember(viewerId, p.id))))) userProjects.push(p);
     }
+    /*
+     * Profile views were not recorded anywhere — the number simply did not
+     * exist, while the code carried a comment about LinkedIn's "profile
+     * viewers". Same rules as a project: not yourself, once per person per day,
+     * not a crawler.
+     */
+    await recordView({
+      kind: "profile",
+      targetId: req.params.id,
+      ownerId: req.params.id,
+      viewer: {
+        userId: viewerId ?? null,
+        visitorId: req.visitorId ?? null,
+        sessionId: req.sessionId ?? null,
+        userAgent: req.headers["user-agent"] ?? null,
+        path: req.originalUrl,
+        referrer: req.headers.referer ?? null,
+      },
+    });
+
     res.json({
       id: user.id, firstName: user.firstName, lastName: user.lastName,
       profileImageUrl: user.profileImageUrl, createdAt: user.createdAt,
       profile, projects: userProjects,
+      /*
+       * Who has looked at a profile is the owner's business, the way a
+       * professional network shows you your own profile views and nobody
+       * else's. It went out to every visitor when it was added — an aggregate,
+       * no identities in it, but this response is an allowlist of what a
+       * stranger may see (test/integration/public-profile.test.ts) and nothing
+       * on the site showed it to one. Still counted for everyone; only shown
+       * to the person it is about.
+       */
+      ...(req.user?.id === req.params.id ? { views: await countViews("profile", req.params.id) } : {}),
     });
   });
 
@@ -6277,6 +6345,48 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         });
         await storage.updateUserStripeInfo(userId, { stripeCustomerId: customer.id });
         customerId = customer.id;
+      }
+
+      /*
+       * Never a second subscription.
+       *
+       * This used to start a new subscription checkout for anybody who asked,
+       * including people already paying — so a Builder member who ran out of
+       * credits and pressed "upgrade" was billed for Builder and Pro, every
+       * month, indefinitely. Somebody already subscribed changes the plan on
+       * the subscription they have; Stripe prorates the difference onto the
+       * next invoice, and the webhook moves their tier when it lands.
+       */
+      const live = await liveSubscriptions(stripe, customerId);
+      if (live.length > 0) {
+        const current = live[0];
+        const item = current.items?.data?.[0];
+        if (!item) return res.status(409).json({ message: "Your subscription is in a state we can't change from here. Use Manage billing.", code: "manage_in_portal" });
+        if (item.price?.id === priceId) {
+          return res.status(409).json({ message: "You're already on this plan.", code: "already_subscribed" });
+        }
+        const switched = await stripe.subscriptions.update(current.id, {
+          items: [{ id: item.id, price: priceId }],
+          proration_behavior: "create_prorations",
+          metadata: { userId },
+        });
+        // Settle now rather than waiting on the webhook, so the page they return to is already right.
+        const settled = await settleTier({
+          userId, customer: customerId, stripe,
+          tierFor: (sub) => WebhookHandlers.tierForSubscription(sub),
+          fresh: switched as any,
+        });
+        return res.json({ switched: true, tier: settled.tier });
+      }
+
+      /*
+       * And no two checkouts racing to become two subscriptions. A checkout
+       * left open in another tab — or started twice by a double click —
+       * would otherwise complete alongside this one. Only the newest can.
+       */
+      const open = await stripe.checkout.sessions.list({ customer: customerId, status: "open", limit: 20 });
+      for (const stale of open.data) {
+        if (stale.mode === "subscription") await stripe.checkout.sessions.expire(stale.id).catch(() => {});
       }
 
       const session = await stripe.checkout.sessions.create({

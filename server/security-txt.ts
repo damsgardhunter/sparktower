@@ -7,7 +7,16 @@
  * `Expires` is required by the RFC and deliberately fixed: a stale file is a
  * sign nobody is reading the inbox. test/integration/security-txt.test.ts fails
  * a month before it lapses, which is the reminder to check the contacts and
- * move the date on. SECURITY.md carries the full policy.
+ * move the date on.
+ *
+ * Every address here has to be reachable by a stranger, which is the whole
+ * point of the file. It used to name a GitHub advisory form and SECURITY.md in
+ * the repository; both stopped resolving for outsiders the moment the
+ * repository went private, leaving a disclosure path that 404s — worse than
+ * not publishing one, because a researcher who hits it concludes nobody is
+ * listening. The policy is served by the app instead (/security), where its
+ * reachability doesn't depend on a repository setting. SECURITY.md stays as
+ * the copy for people working in the repository.
  */
 import type { Express } from "express";
 
@@ -17,11 +26,10 @@ export const SECURITY_TXT_EXPIRES = "2027-09-01T00:00:00.000Z";
 export function securityTxt(): string {
   return [
     `Contact: mailto:${SECURITY_CONTACT_EMAIL}`,
-    "Contact: https://github.com/damsgardhunter/sparktower/security/advisories/new",
     `Expires: ${SECURITY_TXT_EXPIRES}`,
     "Preferred-Languages: en",
     "Canonical: https://sparktower.app/.well-known/security.txt",
-    "Policy: https://github.com/damsgardhunter/sparktower/blob/main/SECURITY.md",
+    "Policy: https://sparktower.app/security",
     "",
   ].join("\n");
 }

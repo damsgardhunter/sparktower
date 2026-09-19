@@ -70,7 +70,8 @@ describe("investment applications", () => {
     expect((await stranger.agent.get(`${url}/applications`)).status).toBe(403);
     const inbox = (await founder.agent.get(`${url}/applications`)).body;
     expect(inbox).toHaveLength(1);
-    expect(inbox[0]).toMatchObject({ status: "new", amount: "25k_100k", investor: { id: investor.id, name: "Investor", email: investor.email, phone: "+1 (918) 555-0142" } });
+    // Lowercased: addresses are stored normalized, so that is what the founder is shown.
+    expect(inbox[0]).toMatchObject({ status: "new", amount: "25k_100k", investor: { id: investor.id, name: "Investor", email: investor.email.toLowerCase(), phone: "+1 (918) 555-0142" } });
     // The founder reads the number; the database doesn't hold it in the clear (server/pii.ts).
     const stored = await pool.query("SELECT phone FROM investment_applications WHERE investor_id = $1", [investor.id]);
     expect(stored.rows[0].phone).toMatch(/^v1\./);

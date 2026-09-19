@@ -7,6 +7,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import NotFound from "@/pages/not-found";
 import { Loader2, ToggleLeft, Users, AlertTriangle } from "lucide-react";
+import { DeploymentCard } from "@/components/admin/deployment-card";
 import {
   SURFACE_CLASS_LABEL, SURFACE_SEQUENCE_LABEL, WEDGE_PROOF, type SurfaceClass, type SurfaceDef, type SurfaceSequence,
 } from "@shared/surfaces";
@@ -74,6 +75,9 @@ export default function AdminSurfaces() {
           <p className="text-xs text-muted-foreground">{onCount} of {rows.length} on.</p>
         )}
       </header>
+
+      {/* Before anything about what's switched on: did this build come up at all. */}
+      <DeploymentCard />
 
       {/* The sequencing decision, where the switches are: what the work is for, and what waits. */}
       <Card className="border-primary/40" data-testid="surface-sequencing">

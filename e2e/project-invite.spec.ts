@@ -4,7 +4,7 @@
  * is in the database, and a signed-out browser opens the link onto the accept
  * screen, signs up, and joins the project. API-level: test/integration/invites.test.ts.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./test";
 import { verifyEmail } from "./verify-email";
 import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";

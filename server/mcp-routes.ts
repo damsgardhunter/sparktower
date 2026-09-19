@@ -688,7 +688,8 @@ export function registerMcpRoutes(app: Express) {
    * uncommitted work. An audit of the last push judges a repository the
    * builder may have moved a long way past.
    */
-  app.post("/api/mcp/projects/:projectId/audit", async (req: any, res) => {
+  // Limited like its session-authenticated twin: credits bound the cost, not the rate.
+  app.post("/api/mcp/projects/:projectId/audit", rateLimit("external"), async (req: any, res) => {
     // metering: checked here; charged in runCodeAudit only after the audit is parsed and saved
     try {
       const ctx = await member(req, res); if (!ctx) return;

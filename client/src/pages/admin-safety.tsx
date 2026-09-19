@@ -144,6 +144,7 @@ export default function AdminSafety() {
   const [note, setNote] = useState("");
 
   const isReviewer = !!user && ["reviewer", "admin"].includes((user as any).platformRole);
+  const isAdmin = !!user && (user as any).platformRole === "admin";
 
   const { data, isLoading, isError } = useQuery<Review>({
     queryKey: ["/api/admin/safety/review"],
@@ -197,6 +198,15 @@ export default function AdminSafety() {
           <Link href="/admin/surfaces" className="text-primary hover:underline">Surfaces</Link>
           <span className="text-muted-foreground">·</span>
           <Link href="/admin/analytics" className="text-primary hover:underline">Analytics</Link>
+          <span className="text-muted-foreground">·</span>
+          <Link href="/admin/backing" className="text-primary hover:underline">Backing review</Link>
+          {/* Admins only: the promotions endpoints refuse a reviewer, so the link would lead nowhere useful. */}
+          {isAdmin && (
+            <>
+              <span className="text-muted-foreground">·</span>
+              <Link href="/admin/promotions" className="text-primary hover:underline">Featured tools</Link>
+            </>
+          )}
         </div>
       </header>
 

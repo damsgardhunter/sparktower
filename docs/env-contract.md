@@ -10,34 +10,52 @@ There are three environments. There is no staging.
 |---|---|
 | **local** | `.env` in the repo root (gitignored), loaded by `tsx --env-file`. Copy `.env.example` to start. |
 | **CI** | the workflow file only. Nothing is read from a `.env`; the test config pins every value it needs to a fixed fake (see `vitest.config.ts` and `playwright.config.ts`). |
-| **production** | Replit → Secrets. Nothing else. The server refuses to boot if the ones marked *required* are missing. |
+| **production** | Render dashboard → the service → **Environment**. Nothing else. The server refuses to boot if the ones marked *required* are missing. [`render.yaml`](../render.yaml) lists every one; [ops/deploy.md](ops/deploy.md) is how the deploy works. |
 
 ## Required to boot
 
 | variable | local | CI | production |
 |---|---|---|---|
-| `DATABASE_URL` | your own Postgres | per-run service container (`ci-<run id>`) | Replit Secrets |
+| `DATABASE_URL` | your own Postgres | per-run service container (`ci-<run id>`) | Render → Environment |
 | `SESSION_SECRET` | any value | pinned fake | **must be random**; the dev fallback is refused in production |
-| `AI_INTEGRATIONS_OPENAI_API_KEY` | real key | pinned fake — tests never call the API | Replit Secrets |
+| `AI_INTEGRATIONS_OPENAI_API_KEY` | real key | pinned fake — tests never call the API | Render → Environment |
 
 ## Who runs the site
 
 | variable | local | CI | production |
 |---|---|---|---|
-| `PLATFORM_OWNER_EMAIL` | your address | `owner@test.local` | Replit Secrets |
-| `PLATFORM_REVIEWER_EMAILS` | your address | `reviewer@test.local` | Replit Secrets |
+| `PLATFORM_OWNER_EMAIL` | your address | `owner@test.local` | Render → Environment |
+| `PLATFORM_REVIEWER_EMAILS` | your address | `reviewer@test.local` | Render → Environment |
 
 Roles are re-derived from these at every boot. Removing an address removes
 the role on the next restart.
+
+## The site's own address
+
+| variable | local | CI | production |
+|---|---|---|---|
+| `PUBLIC_URL` | unset in `.env.example`; links then fall back to the request's `Host` header | unset | **set** — today `https://sparktower.onrender.com` |
+
+This one is not a label. Every email verification link, every invite link,
+every shared artifact URL, every `<loc>` in the sitemap, the Stripe webhook the
+app registers for itself, the Google OAuth callback and the CSRF trusted
+origins are all built from it. Links that have already gone out point wherever
+it pointed when they were sent, and nothing rewrites them later.
+
+So when DNS moves to `sparktower.app`, **changing `PUBLIC_URL` is a required
+step of that move**, not a tidy-up afterwards: a site answering on the new
+domain while this still says `onrender.com` sends people to the other host,
+where their session cookie isn't. The full explanation, and what breaks in
+which way, is in [ops/deploy.md](ops/deploy.md).
 
 ## Integrations (optional; the feature is off without them)
 
 | variable | local | CI | production |
 |---|---|---|---|
-| `GOOGLE_CLIENT_ID` / `_SECRET` | optional | unset | Replit Secrets |
-| `GOOGLE_IOS_CLIENT_ID` / `GOOGLE_ANDROID_CLIENT_ID` | optional | unset | Replit Secrets |
-| `STRIPE_SECRET_KEY` / `STRIPE_PUBLISHABLE_KEY` | test-mode keys | unset — the webhook tests stub the client | Replit Stripe connector, or Secrets |
-| `PRINTFUL_API_KEY` / `PRINTFUL_STORE_ID` | optional | unset | Replit Secrets |
+| `GOOGLE_CLIENT_ID` / `_SECRET` | optional | unset | Render → Environment |
+| `GOOGLE_IOS_CLIENT_ID` / `GOOGLE_ANDROID_CLIENT_ID` | optional | unset | Render → Environment |
+| `STRIPE_SECRET_KEY` / `STRIPE_PUBLISHABLE_KEY` | test-mode keys | unset — the webhook tests stub the client | Render → Environment |
+| `PRINTFUL_API_KEY` / `PRINTFUL_STORE_ID` | optional | unset | Render → Environment |
 | `RESEND_API_KEY` / `EMAIL_FROM` | optional — unset, emails are written to the server log and `GET /api/dev/outbox` instead | unset (tests always log) | **required in practice** — see below. `EMAIL_FROM` on a domain verified in Resend, e.g. `SparkTower <hello@yourdomain>` |
 
 ### Email is not optional in production any more
@@ -49,7 +67,7 @@ new account post, comment, message, invite or publish
 lands in a product they cannot use, and nothing on the screen explains why. The
 server says so at boot, loudly, but it does not refuse to start: an existing
 site whose key expires should keep serving the people already on it.
-| `GITHUB_TOKEN` | personal token, for code audits | unset | Replit Secrets |
+| `GITHUB_TOKEN` | personal token, for code audits | unset | Render → Environment |
 | `PRIVATE_OBJECT_DIR` / `PUBLIC_OBJECT_SEARCH_PATHS` | unset → local disk | unset → local disk | bucket path |
 
 ## Switches with a safe default
@@ -60,9 +78,16 @@ site whose key expires should keep serving the people already on it.
 
 ## Set by the platform, never by hand
 
-`REPLIT_DOMAINS`, `REPLIT_DEPLOYMENT`, `REPL_IDENTITY`,
-`REPLIT_CONNECTORS_HOSTNAME`. Present in production, absent everywhere else.
-Code that branches on them must treat "absent" as the local case.
+Render sets `PORT` (the server reads it; never set it yourself) and
+`RENDER_GIT_COMMIT` (the error reporter reads it, so a report names the deploy
+it came from). Neither belongs in `.env.example` as something to fill in.
+
+The `REPLIT_*` variables — `REPLIT_DOMAINS`, `REPLIT_DEPLOYMENT`,
+`REPL_IDENTITY`, `REPLIT_CONNECTORS_HOSTNAME` — are a leftover of where this
+repository was written. **They are set nowhere any more**, production included:
+production is Render. Code that still branches on them takes the "absent" path
+everywhere, which is the local path, and that is the behaviour to preserve if
+you touch it.
 
 ## Mobile
 
@@ -80,5 +105,10 @@ the app binary and are OAuth client ids, not secrets. See
 - **No secret in the workflow file.** CI-only values are derived per run
   (`${{ github.run_id }}`); anything else goes in repository secrets and is
   referenced as `${{ secrets.NAME }}`.
-- **Production values are set in Replit and nowhere else.** Not in a
-  committed file, not in a build step, not in a comment.
+- **Production values are set in the Render dashboard and nowhere else.** Not
+  in a committed file, not in a build step, not in a comment. `render.yaml`
+  names each secret with `sync: false`, which means Render prompts for it and
+  stores it — the repository never holds the value.
+- **Before a deploy, run `npm run check:env`.** It says what is set, what is
+  missing and what looks wrong, which is cheaper than finding out from a boot
+  that refuses.

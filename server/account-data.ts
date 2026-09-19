@@ -68,6 +68,31 @@ export const MINE: Owned[] = [
   { table: "user_reputation_scores", column: "user_id" },
   { table: "sprint_responses", column: "user_id" },
   { table: "sprint_deliverables", column: "user_id" },
+  /*
+   * The market simulation: a seat in a season and everything played from it.
+   * Classified like the other games above — it is this person's own play, so
+   * it leaves with them rather than being kept as somebody else's record.
+   */
+  { table: "sim_seats", column: "user_id" },
+  { table: "sim_decisions", column: "user_id" },
+  /*
+   * Ten Years From Now. Both players are named on the game row, so leaving
+   * takes your side of every game you played with it.
+   *
+   * `startup_game_verdicts` is deliberately absent: it has no user column and
+   * cascades from the game, so it goes when the game does. The messages are
+   * here rather than under `choice` because a game's chat is two people in a
+   * closed room for half an hour, not something published that others replied
+   * to — nobody outside it ever sees a line of it.
+   */
+  { table: "startup_games", column: "player1_id" },
+  { table: "startup_games", column: "player2_id" },
+  { table: "startup_game_submissions", column: "user_id" },
+  // What a player was still typing when a round's clock ran out — theirs alone.
+  { table: "startup_game_drafts", column: "user_id" },
+  { table: "startup_game_messages", column: "user_id" },
+  { table: "sim_challenges", column: "user_id" },
+  { table: "sim_recovery_moves", column: "user_id" },
   { table: "sprint_decisions", column: "user_id" },
   { table: "sprint_messages", column: "user_id" },
   { table: "sprint_behavioral_metrics", column: "user_id" },
@@ -96,10 +121,19 @@ export const KEPT: Owned[] = [
  * the password hash in the first draft of this file.
  */
 const NEVER_EXPORTED = new Set([
+  // mfa_recovery_codes is dropped (migrations/0024) and kept on this list anyway: it costs
+  // nothing, and it still holds for a database restored from a dump taken before that.
   "password_hash", "mfa_secret", "mfa_pending_secret", "mfa_recovery_codes", "mfa_last_step",
   "token_hash", "stripe_customer_id", "stripe_subscription_id",
   "passwordHash", "mfaSecret", "mfaPendingSecret", "mfaRecoveryCodes", "mfaLastStep",
   "tokenHash", "stripeCustomerId", "stripeSubscriptionId",
+  /*
+   * The project's read-only database connection, sealed at rest and never
+   * returned to a client (shared/schema.ts). The export is a file a person
+   * downloads and forwards, and a member of a project — not only its owner —
+   * can ask for one, so this is the one path where "sealed" had a way out.
+   */
+  "data_source", "dataSource",
 ]);
 
 const ident = (v: string) => {
@@ -137,7 +171,8 @@ export async function exportAccount(userId: string): Promise<Record<string, unkn
        OR EXISTS (SELECT 1 FROM project_members m WHERE m.project_id = p.id AND m.user_id = $1)`,
     [userId],
   );
-  out.projects = projects.rows;
+  // Scrubbed like every other table here: this row carries the sealed data source.
+  out.projects = scrub(projects.rows);
 
   for (const { table, column } of [...MINE, ...CHOICE, ...KEPT]) {
     const { rows } = await pool.query(statement("SELECT *", table, column), [userId]);
@@ -170,6 +205,30 @@ export interface DeleteOutcome {
  *
  * One transaction: a half-deleted account is worse than a failed one.
  */
+/**
+ * Who inherits a project when its owner closes their account: an admin if
+ * there is one, otherwise the member whose account is oldest. One statement,
+ * shared, so the projects `deleteAccount` removes and the ones
+ * `projectsLeavingWith` names — the ones whose held pledges are refunded first
+ * — can never disagree.
+ */
+const HEIR_SQL = `SELECT m.user_id FROM project_members m
+   JOIN users u ON u.id = m.user_id
+  WHERE m.project_id = $1 AND m.user_id <> $2 AND u.deleted_at IS NULL
+  ORDER BY (m.role IN ('owner', 'admin')) DESC, u.created_at ASC NULLS LAST, m.user_id ASC
+  LIMIT 1`;
+
+/** The projects that will be deleted, not handed on, when this account closes. */
+export async function projectsLeavingWith(userId: string): Promise<{ id: string; title: string }[]> {
+  const owned = await pool.query<{ id: string; title: string }>("SELECT id, title FROM projects WHERE owner_id = $1", [userId]);
+  const leaving: { id: string; title: string }[] = [];
+  for (const project of owned.rows) {
+    const heir = await pool.query(HEIR_SQL, [project.id, userId]);
+    if (heir.rows.length === 0) leaving.push(project);
+  }
+  return leaving;
+}
+
 export async function deleteAccount(userId: string, opts: { keepPosts: boolean }): Promise<DeleteOutcome> {
   const client = await pool.connect();
   const outcome: DeleteOutcome = { transferred: [], deletedProjects: [], posts: opts.keepPosts ? "kept-anonymous" : "deleted", rowsDeleted: 0 };
@@ -184,14 +243,7 @@ export async function deleteAccount(userId: string, opts: { keepPosts: boolean }
        * one, otherwise the member whose SparkTower account is oldest. Stable,
        * explainable, and the same answer every time.
        */
-      const heir = await client.query<{ user_id: string }>(
-        `SELECT m.user_id FROM project_members m
-           JOIN users u ON u.id = m.user_id
-          WHERE m.project_id = $1 AND m.user_id <> $2 AND u.deleted_at IS NULL
-          ORDER BY (m.role IN ('owner', 'admin')) DESC, u.created_at ASC NULLS LAST, m.user_id ASC
-          LIMIT 1`,
-        [project.id, userId],
-      );
+      const heir = await client.query<{ user_id: string }>(HEIR_SQL, [project.id, userId]);
       if (heir.rows[0]) {
         await client.query("UPDATE projects SET owner_id = $1 WHERE id = $2", [heir.rows[0].user_id, project.id]);
         await client.query("UPDATE project_members SET role = 'owner' WHERE project_id = $1 AND user_id = $2", [project.id, heir.rows[0].user_id]);
@@ -221,7 +273,7 @@ export async function deleteAccount(userId: string, opts: { keepPosts: boolean }
       `UPDATE users SET
          email = $2, first_name = 'Deleted', last_name = 'account', profile_image_url = NULL,
          password_hash = NULL, google_id = NULL, stripe_customer_id = NULL, stripe_subscription_id = NULL,
-         mfa_secret = NULL, mfa_pending_secret = NULL, mfa_enabled_at = NULL, mfa_last_step = NULL, mfa_recovery_codes = NULL,
+         mfa_secret = NULL, mfa_pending_secret = NULL, mfa_enabled_at = NULL, mfa_last_step = NULL,
          access_tokens_revoked_at = now(), deleted_at = now()
        WHERE id = $1`,
       [userId, `deleted+${userId}@deleted.invalid`],

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { RefreshControl, ScrollView, View } from "react-native";
+import { View } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
@@ -19,6 +19,8 @@ import {
 } from "../../src/components/ProjectPageTabs";
 import { useNewFeedbackCount } from "../../src/components/project/FeedbackInbox";
 import { ScrollingTabs } from "../../src/components/project/ScrollingTabs";
+import { SectionPager, type PagerPage, type SectionPagerHandle } from "../../src/components/project/SectionPager";
+import { pageIndex, tabAt } from "../../src/components/project/pager";
 
 /**
  * A project's public page — the native counterpart of
@@ -26,6 +28,14 @@ import { ScrollingTabs } from "../../src/components/project/ScrollingTabs";
  * header, the social tabs, then (on Overview) what the web keeps under the
  * tabs and in its right rail — storyboards, tech stack, links, applications,
  * Invest, Back this project, stats, team members and application questions.
+ *
+ * The sections are a pager, not a swap in place: swiping sideways moves between
+ * them in PROJECT_TABS order and each keeps its own vertical scroll, so leaving
+ * Team halfway down and coming back lands where you left it. That costs the
+ * header its ride — it sits above the pager now instead of scrolling away with
+ * the content, because a header inside the pages would slide off sideways with
+ * the section, and a header above a pager inside one outer vertical ScrollView
+ * would put two vertical scrollers in the same column fighting over each drag.
  */
 export default function ProjectDetail() {
   const { id, tab: initialTab } = useLocalSearchParams<{ id: string; tab?: ProjectTab }>();
@@ -39,7 +49,7 @@ export default function ProjectDetail() {
   const [applyOpen, setApplyOpen] = useState(false);
   const [questionsOpen, setQuestionsOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const scrollRef = useRef<ScrollView>(null);
+  const pagerRef = useRef<SectionPagerHandle>(null);
   const contentY = useRef(0);
   const backingY = useRef<number | null>(null);
 
@@ -176,68 +186,77 @@ export default function ProjectDetail() {
     return { value: t.value, label: `${t.label}${n > 0 ? ` ${n}` : ""}`, badge: t.value === "updates" && newFeedback > 0 ? `${newFeedback} new feedback` : null };
   };
 
+  const page = pageIndex(PROJECT_TABS, tab);
+  const overviewPage = pageIndex(PROJECT_TABS, "overview");
+
+  /*
+   * "Back this project" in the header jumps to the card inside Overview. From
+   * another section that means sliding there first; the scroll waits for the
+   * slide to finish, or it would run against a page that isn't on screen yet.
+   */
   const jumpToBacking = () => {
-    const go = () => { if (backingY.current != null) scrollRef.current?.scrollTo({ y: contentY.current + backingY.current - 56, animated: true }); };
+    const go = () => { if (backingY.current != null) pagerRef.current?.scrollPageTo(overviewPage, contentY.current + backingY.current - 56, true); };
     if (tab !== "overview") { setTab("overview"); setTimeout(go, 400); } else go();
   };
+
+  const pages: PagerPage[] = [
+    { key: "overview", render: () => (
+      <View style={{ gap: spacing.sm }} onLayout={(e) => { contentY.current = e.nativeEvent.layout.y; }}>
+        <OverviewTab project={project} members={members} isOwner={isOwner} isMember={isMember}
+          onApply={apply} onManage={manage} onTab={setTab} notify={notify} />
+        {isOwner && <StoryboardsBlock projectId={id!} onOpen={() => router.push(`/project/storyboards?id=${id}` as any)} />}
+        <TechStackBlock project={project} />
+        <LinksBlock project={project} />
+        {isOwner && (
+          <PendingApplications projectId={id!} applications={applications || []} questions={questions}
+            onEditQuestions={() => setQuestionsOpen(true)} notify={notify} />
+        )}
+        <InvestCard projectId={id!} notify={notify} />
+        <View onLayout={(e) => { backingY.current = e.nativeEvent.layout.y; }}>
+          <BackingCard projectId={id!} projectTitle={project.title} isOwner={isOwner} notify={notify} />
+        </View>
+        <StatsBlock project={project} members={members} followerCount={follow?.count ?? 0} />
+        <TeamMembersBlock project={project} members={members} />
+        {isOwner && <QuestionsBlock questions={questions} onEdit={() => setQuestionsOpen(true)} />}
+        <RailVisuals project={project} />
+      </View>
+    ) },
+    { key: "updates", render: () => <UpdatesTab projectId={id!} isMember={isMember} notify={notify} /> },
+    { key: "roadmap", render: () => <RoadmapTab projectId={id!} isOwner={isOwner} onManage={manage} counts={counts} /> },
+    { key: "milestones", render: () => <MilestonesTab projectId={id!} counts={counts} /> },
+    { key: "team", render: () => <TeamTab members={members} /> },
+    { key: "roles", render: () => <RolesTab project={project} members={members} isOwner={isOwner} isMember={isMember} onApply={apply} /> },
+    { key: "media", render: () => <MediaTab projectId={id!} mediaUrls={project.mediaUrls || []} isOwner={isOwner} notify={notify} /> },
+    { key: "discussion", render: () => <DiscussionTab projectId={id!} /> },
+    { key: "followers", render: () => <FollowersTab projectId={id!} /> },
+  ];
 
   return (
     <>
       <Stack.Screen options={{ title: project.title }} />
       <View style={{ flex: 1, backgroundColor: colors.canvas }}>
-        <ScrollView
-          ref={scrollRef}
-          stickyHeaderIndices={[1]}
-          contentContainerStyle={{ paddingBottom: spacing.xxl * 3 }}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
-          keyboardShouldPersistTaps="handled"
-        >
-          <ProjectHeader
-            project={project}
-            owner={owner}
-            followerCount={follow?.count ?? 0}
-            following={!!follow?.following}
-            onFollow={() => toggleFollow.mutate(!follow?.following)}
-            role={role}
-            applied={applied}
-            onApply={apply}
-            onManage={manage}
-            onOwner={() => owner && router.push(`/user/${owner.userId}` as any)}
-            onBack={campaign ? jumpToBacking : undefined}
-          />
-          <ScrollingTabs options={PROJECT_TABS.map(tabLabel)} value={tab} onChange={setTab} />
-          <View style={{ paddingTop: spacing.sm, gap: spacing.sm }} onLayout={(e) => { contentY.current = e.nativeEvent.layout.y; }}>
-            {tab === "overview" && (
-              <>
-                <OverviewTab project={project} members={members} isOwner={isOwner} isMember={isMember}
-                  onApply={apply} onManage={manage} onTab={setTab} notify={notify} />
-                {isOwner && <StoryboardsBlock projectId={id!} onOpen={() => router.push(`/project/storyboards?id=${id}` as any)} />}
-                <TechStackBlock project={project} />
-                <LinksBlock project={project} />
-                {isOwner && (
-                  <PendingApplications projectId={id!} applications={applications || []} questions={questions}
-                    onEditQuestions={() => setQuestionsOpen(true)} notify={notify} />
-                )}
-                <InvestCard projectId={id!} notify={notify} />
-                <View onLayout={(e) => { backingY.current = e.nativeEvent.layout.y; }}>
-                  <BackingCard projectId={id!} projectTitle={project.title} isOwner={isOwner} notify={notify} />
-                </View>
-                <StatsBlock project={project} members={members} followerCount={follow?.count ?? 0} />
-                <TeamMembersBlock project={project} members={members} />
-                {isOwner && <QuestionsBlock questions={questions} onEdit={() => setQuestionsOpen(true)} />}
-                <RailVisuals project={project} />
-              </>
-            )}
-            {tab === "updates" && <UpdatesTab projectId={id!} isMember={isMember} notify={notify} />}
-            {tab === "roadmap" && <RoadmapTab projectId={id!} isOwner={isOwner} onManage={manage} counts={counts} />}
-            {tab === "milestones" && <MilestonesTab projectId={id!} counts={counts} />}
-            {tab === "team" && <TeamTab members={members} />}
-            {tab === "roles" && <RolesTab project={project} members={members} isOwner={isOwner} isMember={isMember} onApply={apply} />}
-            {tab === "media" && <MediaTab projectId={id!} mediaUrls={project.mediaUrls || []} isOwner={isOwner} notify={notify} />}
-            {tab === "discussion" && <DiscussionTab projectId={id!} />}
-            {tab === "followers" && <FollowersTab projectId={id!} />}
-          </View>
-        </ScrollView>
+        <ProjectHeader
+          project={project}
+          owner={owner}
+          followerCount={follow?.count ?? 0}
+          following={!!follow?.following}
+          onFollow={() => toggleFollow.mutate(!follow?.following)}
+          role={role}
+          applied={applied}
+          onApply={apply}
+          onManage={manage}
+          onOwner={() => owner && router.push(`/user/${owner.userId}` as any)}
+          onBack={campaign ? jumpToBacking : undefined}
+        />
+        <ScrollingTabs options={PROJECT_TABS.map(tabLabel)} value={tab} onChange={setTab} />
+        <SectionPager
+          ref={pagerRef}
+          pages={pages}
+          index={page}
+          onIndexChange={(i) => setTab(tabAt(PROJECT_TABS, i))}
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+        />
         <NoticeBanner notice={notice} onDismiss={clear} />
       </View>
 

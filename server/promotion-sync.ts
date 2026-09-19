@@ -12,9 +12,9 @@
  * private or internal addresses (checked again after every redirect), a
  * timeout, and a size cap — these URLs come from other people's HTML.
  */
-import { lookup } from "dns/promises";
 import { eq } from "drizzle-orm";
 import { db } from "./db";
+import { safeFetch, type Fetched } from "./safe-fetch";
 import { promotionSettings, promotionSources } from "@shared/schema";
 import { PROMOTION_CATALOG } from "@shared/promotions";
 import {
@@ -22,41 +22,17 @@ import {
   isPrivateAddress, parseYouTubeFeed, rankChannelVideos,
 } from "@shared/promotion-sources";
 
-const USER_AGENT = "Mozilla/5.0 (compatible; SparkTowerBot/1.0; +https://sparktower.app)";
-const TIMEOUT_MS = 12_000;
 
-export interface Fetched { ok: boolean; status: number; url: string; contentType: string; body: Buffer }
+export type { Fetched };
 export type Fetcher = (url: string, opts?: { maxBytes?: number }) => Promise<Fetched>;
 
-/** A fetch that can't be pointed at our own network, can't hang, and can't be made to download something huge. */
-export const guardedFetch: Fetcher = async (start, { maxBytes = 3 * 1024 * 1024 } = {}) => {
-  let url = start;
-  for (let hop = 0; hop <= 4; hop++) {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "https:") throw new Error(`not https: ${url}`);
-    const addresses = await lookup(parsed.hostname, { all: true });
-    if (!addresses.length || addresses.some((a) => isPrivateAddress(a.address))) throw new Error(`refused address for ${parsed.hostname}`);
-    const res = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(TIMEOUT_MS), headers: { "user-agent": USER_AGENT, "accept-language": "en" } });
-    if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
-      url = new URL(res.headers.get("location")!, url).toString();
-      continue;
-    }
-    const declared = Number(res.headers.get("content-length") ?? 0);
-    if (declared > maxBytes) throw new Error(`too large: ${url}`);
-    const reader = res.body?.getReader();
-    const chunks: Buffer[] = [];
-    let size = 0;
-    while (reader) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.length;
-      if (size > maxBytes) { await reader.cancel(); throw new Error(`too large: ${url}`); }
-      chunks.push(Buffer.from(value));
-    }
-    return { ok: res.ok, status: res.status, url, contentType: (res.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase(), body: Buffer.concat(chunks) };
-  }
-  throw new Error(`too many redirects: ${start}`);
-};
+/**
+ * The guarded fetch, now shared with the audit probe and merch rendering
+ * (server/safe-fetch.ts) — those two had their own weaker versions and then
+ * followed redirects without re-checking them. Kept exported under this name
+ * because the promotion sources take it as their fetcher.
+ */
+export const guardedFetch: Fetcher = (url, opts) => safeFetch(url, opts);
 
 /** Reads a logo's type from its bytes, not the server's say-so. */
 function sniffImage(body: Buffer): string | null {
@@ -77,7 +53,7 @@ export async function syncPromotion(promotionId: string, fetcher: Fetcher = guar
   if (!company) return { promotionId, logo: false, videoId: null, error: "not in the catalog" };
   const [settings] = await db.select({ channel: promotionSettings.youtubeChannelUrl }).from(promotionSettings).where(eq(promotionSettings.promotionId, promotionId));
   // A page on someone else's platform: its logo and channel aren't the company's. Only an admin's channel is used.
-  if (company.readSite === false && !settings?.channel) {
+  if (company.readSite === false && !settings?.channel && !company.channel) {
     const cleared = { logoData: null, logoContentType: null, logoSourceUrl: null, youtubeChannelId: null, videoId: null, videoTitle: null, videoPublishedAt: null, fetchedAt: new Date(), error: "not read from its site (a shared platform page) — set its logo and YouTube channel here" };
     await db.insert(promotionSources).values({ promotionId, ...cleared }).onConflictDoUpdate({ target: promotionSources.promotionId, set: cleared });
     return { promotionId, logo: false, videoId: null, error: cleared.error };
@@ -102,9 +78,23 @@ export async function syncPromotion(promotionId: string, fetcher: Fetcher = guar
   }
   if (!logo && homepage) problems.push("no usable logo");
 
-  // The video: the admin's channel if one is set, else the one the site links,
-  // else a likely handle — used only if that channel's page links the company's domain.
-  const linked = settings?.channel ? [settings.channel] : findYouTubeChannelLinks(homepage);
+  /*
+   * The video, in order of how much the channel is trusted:
+   *
+   *   1. the channel an admin set — they looked it up on purpose;
+   *   2. the channel the catalog carries, checked by hand against the real
+   *      channel's name when it was added;
+   *   3. the channel the company's own homepage links;
+   *   4. a handle guessed from the company's name.
+   *
+   * Only the guess has to prove itself (`channelVouchesFor`). That check is
+   * what keeps a look-alike channel out — the kind that shares a company's
+   * name and belongs to someone else entirely.
+   */
+  const curated = company.channel ? `https://www.youtube.com/${company.channel}` : null;
+  const linked = settings?.channel ? [settings.channel]
+    : curated ? [curated, ...findYouTubeChannelLinks(homepage)]
+    : findYouTubeChannelLinks(homepage);
   const channels = linked.length ? linked.slice(0, 3).map((url) => ({ url, guessed: false }))
     : company.readSite === false ? [] : guessYouTubeHandles(company).slice(0, 4).map((url) => ({ url, guessed: true }));
   let channelId: string | null = null;

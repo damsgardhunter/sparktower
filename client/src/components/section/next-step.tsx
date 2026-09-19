@@ -14,6 +14,7 @@ import { WorkView, refreshPath, useFail } from "@/components/path-work";
 import { addableLoopTypes } from "@/components/loop-tree";
 import { ShareStepDialog, PublishArtifactDialog, WeeklyUpdateDialog } from "@/components/continue-path-card";
 import { InviteCollaboratorDialog } from "@/components/invite-collaborator-dialog";
+import { PublishedPages } from "@/components/section/published-pages";
 import { LowCreditsNotice } from "@/components/upgrade-to-keep-generating";
 import { sectionDef } from "@/lib/sections";
 import { LOOP_TYPE_INFO, type LoopType } from "@shared/phase-trees";
@@ -75,17 +76,24 @@ export function NextStep({ projectId, data, onNavigate }: { projectId: string; d
 
   const followUps = (
     <>
+      {/* What of this project is already public, and how it's doing — see published-pages.tsx. */}
+      <PublishedPages projectId={projectId} />
       {data.lastDone && (
         <div className="flex items-center gap-x-3 gap-y-1 text-xs flex-wrap" data-testid="path-last-done">
           <span className="flex items-center gap-1.5 min-w-0"><CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" /><span className="text-muted-foreground">Finished</span><span className="font-medium truncate max-w-[16rem]">{data.lastDone.title}</span></span>
-          {data.lastDone.sharedPostId ? (
-            <Link href={`/posts/${data.lastDone.sharedPostId}`} className="text-primary hover:underline" data-testid="link-shared-step">See feedback</Link>
-          ) : (
-            <span className="flex items-center gap-3">
+          <span className="flex items-center gap-3">
+            {data.lastDone.sharedPostId ? (
+              <Link href={`/posts/${data.lastDone.sharedPostId}`} className="text-primary hover:underline" data-testid="link-shared-step">See feedback</Link>
+            ) : (
               <button className="text-primary hover:underline flex items-center gap-1" onClick={() => setSharingStep(true)} data-testid="button-share-finished-step"><Share2 className="h-3 w-3" />Share</button>
-              <button className="text-primary hover:underline flex items-center gap-1" onClick={() => setPublishingStep(true)} data-testid="button-publish-finished-step"><Globe className="h-3 w-3" />Publish</button>
-            </span>
-          )}
+            )}
+            {/*
+              * Publish stays here once the step has been shared: the dialog is
+              * also where the public page's link lives, and where taking it
+              * down again lives. Hiding it would make publishing one-way.
+              */}
+            <button className="text-primary hover:underline flex items-center gap-1" onClick={() => setPublishingStep(true)} data-testid="button-publish-finished-step"><Globe className="h-3 w-3" />Publish</button>
+          </span>
         </div>
       )}
       {/*

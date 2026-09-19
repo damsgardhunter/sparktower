@@ -45,8 +45,16 @@ export function UpgradeToKeepGenerating() {
   const checkout = useMutation({
     mutationFn: async (priceId: string) => (await apiRequest("POST", "/api/checkout", {
       priceId, returnTo: `${window.location.pathname}${window.location.search}`,
-    })).json() as Promise<{ url: string }>,
-    onSuccess: ({ url }) => { if (url) window.location.href = url; },
+    })).json() as Promise<{ url?: string; switched?: boolean }>,
+    onSuccess: ({ url, switched }) => {
+      // A paying member upgrades the subscription they have — never a second one (see /api/checkout).
+      if (switched) {
+        void queryClient.invalidateQueries();
+        toast({ title: "Plan upgraded", description: "The difference is prorated on your next invoice. Your credits are ready." });
+        return;
+      }
+      if (url) window.location.href = url;
+    },
     onError: (e) => toast({ title: "Couldn't start checkout", description: errorText(e), variant: "destructive" }),
   });
 

@@ -1,11 +1,10 @@
 import { useState } from "react";
-import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { CardDescription } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Zap, MessageSquare, Target, Eye, EyeOff, Loader2, Users, Rocket, Globe, Brain, UserPlus, Search, Handshake, Lightbulb, Wrench, User, ArrowRight } from "lucide-react";
+import { Zap, Eye, EyeOff, Loader2, Globe, Handshake, ArrowRight, Trophy, Heart, Scale } from "lucide-react";
 const logoImage = "/favicon.png";
 import { SiGoogle } from "react-icons/si";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -15,9 +14,11 @@ import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { PENDING_PATH_KEY, type PendingPath } from "@shared/path-artifacts";
 import { PENDING_INVITE_KEY } from "@shared/invites";
-import heroVideo from "@assets/Landing_Video.mp4";
 import { MfaCodeForm } from "@/components/mfa";
 import { PASSWORD_MIN } from "@shared/passwords";
+import { PROJECT_GOALS } from "@shared/goals";
+import { LiveProjects } from "@/components/live-projects";
+import { Link } from "wouter";
 
 /** The artifact a visitor chose "start" or "explore" on before signing up, so the signup is credited to it. */
 function pendingArtifactId(): string | undefined {
@@ -33,14 +34,36 @@ function afterAuthPath(): string {
   return "/";
 }
 
+/**
+ * The sentence each path gets on the landing page, on top of the one-liner in
+ * shared/goals.ts. The shared one says what the path *is*, everywhere in the
+ * product; this says what you actually do on it, which is what a stranger
+ * deciding whether to sign up is asking.
+ */
+const PATH_DETAIL: Record<string, string> = {
+  ship_mvp: "Scope down to something you can finish, build it, and put it in front of real people before you are ready.",
+  systemize_business: "Write down what you already do, find the parts only you can do, and hand the rest to a process or a person.",
+  raise_funding: "Get the numbers, the story and the deck into one shape, and practise the questions before you are asked them.",
+};
+
 export default function LandingPage() {
-  // Arriving from a public page's "start your own path" opens straight onto sign up.
+  /*
+   * `?signup=1` (a public page's "start your own path") is the default now, so
+   * it needs no branch — the tab it used to select is the one that opens.
+   * `?login=1` (an invite link's "I have an account") still does.
+   */
   const search = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
-  const arrivedToSignUp = search?.get("signup") === "1";
-  // An invite link's "I have an account" opens straight onto log in.
   const arrivedToLogIn = search?.get("login") === "1";
-  const [activeTab, setActiveTab] = useState(arrivedToSignUp ? "signup" : "login");
-  const [showAuthModal, setShowAuthModal] = useState(arrivedToSignUp || arrivedToLogIn);
+  /*
+   * Sign up unless the visitor asked for log in. The form is on the page from
+   * the first paint now, so there is no "show the form" state any more — the
+   * header's buttons pick a tab and bring the panel into view.
+   */
+  const [activeTab, setActiveTab] = useState(arrivedToLogIn ? "login" : "signup");
+  const focusAuth = (tab: "login" | "signup") => {
+    setActiveTab(tab);
+    document.querySelector("[data-testid=panel-auth]")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
 
   return (
     <div className="flex flex-col min-h-screen bg-white text-foreground">
@@ -62,7 +85,13 @@ export default function LandingPage() {
         * `hero-header-reveal` holds the whole thing hidden while the opening
         * video plays, then brings it up slowly (index.css).
         */}
-      <header className="hero-header-reveal fixed top-0 w-full z-50" data-testid="landing-header">
+      {/*
+        * Visible immediately. This used to carry `hero-header-reveal`, which
+        * held it invisible for 3.8 seconds while the opening video played —
+        * and with the video gone that was 3.8 seconds of a page with no way
+        * to sign in on it.
+        */}
+      <header className="fixed top-0 w-full z-50" data-testid="landing-header">
         <div
           className="relative flex items-center justify-between h-14 sm:h-16 md:h-20 px-2 sm:px-6 text-white shadow-[0_4px_20px_-6px_rgba(0,0,0,0.35)]"
           style={{ backgroundImage: NOVA_GRADIENT_CSS }}
@@ -98,7 +127,7 @@ export default function LandingPage() {
               variant="outline"
               className="h-8 px-1.5 text-xs border-0 sm:h-9 sm:px-4 sm:text-sm sm:border bg-white/10 text-white border-white/40 hover:bg-white/20 hover:text-white backdrop-blur-sm"
               data-testid="button-login"
-              onClick={() => { setActiveTab("login"); setShowAuthModal(true); }}
+              onClick={() => focusAuth("login")}
             >
               Log In
             </Button>
@@ -106,7 +135,7 @@ export default function LandingPage() {
               size="sm"
               className="h-8 px-2.5 text-xs sm:h-9 sm:px-4 sm:text-sm bg-white text-black hover:bg-white/90 font-semibold"
               data-testid="button-signup-nav"
-              onClick={() => { setActiveTab("signup"); setShowAuthModal(true); }}
+              onClick={() => focusAuth("signup")}
             >
               Sign Up
             </Button>
@@ -114,183 +143,147 @@ export default function LandingPage() {
         </div>
       </header>
 
-      <section className="relative min-h-screen flex items-start justify-center px-4 pt-28 sm:pt-48 md:pt-56 pb-16 md:pb-24 bg-white overflow-visible">
-        <div className="absolute left-0 right-0 z-0 overflow-hidden" style={{ top: '0px', bottom: 0 }}>
-          <video
-            src={heroVideo}
-            autoPlay
-            muted
-            playsInline
-            className="w-full h-full object-cover object-top"
-            data-testid="video-hero"
-          />
-        </div>
+      {/*
+        * The whole point of the page, above the fold: a person can make an
+        * account without scrolling or clicking anything first.
+        *
+        * It replaced a full-screen hero video with a Tesla quote under it. That
+        * page looked handsome and asked for nothing — the only way to sign up
+        * was to notice a button, which opened a form somewhere further down.
+        * Every social product converges on the same shape for a reason: what
+        * you get on the left, the box that gets you in on the right, nothing in
+        * between. The video also cost every first-time visitor a 2.5MB download
+        * before the page settled.
+        */}
+      <section
+        className="relative flex items-start justify-center px-4 pt-24 sm:pt-32 md:pt-36 pb-16 md:pb-24 bg-white overflow-hidden"
+        data-testid="section-hero"
+      >
+        {/* The gradient, far back and soft, so the white card in front of it has something to sit on. */}
+        <div aria-hidden className="pointer-events-none absolute -top-40 left-1/2 -translate-x-1/2 w-[80rem] h-[50rem] opacity-[0.16] blur-3xl" style={{ backgroundImage: NOVA_GRADIENT_CSS }} />
 
-        <div className="relative z-10 w-full max-w-5xl flex flex-col items-center gap-12" style={{ animation: 'hero-fade-in 0.8s ease-out both' }}>
-          <div className="text-center space-y-6">
-            <h1 className="text-3xl md:text-5xl font-bold text-black tracking-tight italic leading-tight" style={{ opacity: 0, animation: 'hero-fade-in 0.8s ease-out forwards' }} data-testid="text-hero-headline">
-              "The present is theirs; the future, for which I really worked, <span className="text-primary">is mine.</span>"
-            </h1>
-            <div className="flex justify-center" style={{ opacity: 0, animation: 'hero-fade-in 0.8s ease-out 0.1s forwards' }}>
-              <span className="inline-block px-4 py-1.5 bg-black text-white text-sm font-semibold tracking-wide">
-                — Nikola Tesla
-              </span>
-            </div>
-            <p className="text-lg text-gray-600 max-w-2xl mx-auto font-light leading-relaxed" style={{ opacity: 0, animation: 'hero-fade-in 0.8s ease-out 0.2s forwards' }}>
-              SparkTower is built for the builders who think ahead. Like Tesla, we believe the future belongs to those who create it — connect with visionary entrepreneurs, collaborate with AI, and launch the projects that shape tomorrow.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center" style={{ opacity: 0, animation: 'hero-fade-in 0.8s ease-out 0.3s forwards' }}>
-              <Button
-                size="lg"
-                data-testid="button-get-started"
-                onClick={() => { setActiveTab("signup"); setShowAuthModal(true); }}
-              >
-                Get Started
-              </Button>
-              <Button size="lg" variant="outline" className="bg-white/80 backdrop-blur-md" asChild>
-                <a href="#features" data-testid="link-learn-more">Learn More</a>
-              </Button>
-            </div>
-          </div>
+        <div className="relative z-10 w-full max-w-6xl" style={{ animation: "hero-fade-in 0.6s ease-out both" }}>
+          {/* The gradient border: a 2px gradient sheet with the card laid on top of it. */}
+          <div className="rounded-[1.75rem] p-[2px] shadow-[0_24px_60px_-20px_rgba(0,0,0,0.35)]" style={{ backgroundImage: NOVA_GRADIENT_CSS }}>
+            <div className="rounded-[1.65rem] bg-white overflow-hidden grid md:grid-cols-[1.15fr_1fr]">
 
-          {showAuthModal && (
-            <div className="w-full max-w-md" style={{ opacity: 0, animation: 'hero-fade-in 0.8s ease-out forwards' }}>
-              <AuthCard activeTab={activeTab} onTabChange={setActiveTab} />
-            </div>
-          )}
-        </div>
-      </section>
+              <ChallengePanel />
 
-      <section id="features" className="py-24 px-4 bg-card/30 border-y border-border">
-        <div className="max-w-6xl mx-auto">
-          <div className="text-center mb-16 space-y-4">
-            <h2 className="text-3xl md:text-5xl font-bold tracking-tight">Why SparkTower?</h2>
-            <p className="text-xl text-secondary max-w-2xl mx-auto">
-              We provide the tools and network to turn your vision into reality.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            <div className="p-8 rounded-2xl bg-card border border-card-border space-y-4 hover-elevate">
-              <div className="h-12 w-12 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
-                <Target className="h-6 w-6" />
+              {/* The box that gets you in. Sign up first: a landing page is for people who don't have an account yet. */}
+              <div className="p-6 sm:p-10 flex flex-col justify-center border-t md:border-t-0 md:border-l border-gray-100" data-testid="panel-auth">
+                <AuthCard activeTab={activeTab} onTabChange={setActiveTab} />
+                <p className="mt-6 text-center text-xs text-gray-400 leading-relaxed">
+                  Free to start. No card, no credits spent until you ask Nova for something.
+                </p>
               </div>
-              <h3 className="text-xl font-bold">AI Matching</h3>
-              <p className="text-secondary leading-relaxed">
-                Our smart algorithm matches you with users based on skills, interests, and experience level.
-              </p>
-            </div>
-            <div className="p-8 rounded-2xl bg-card border border-card-border space-y-4 hover-elevate">
-              <div className="h-12 w-12 rounded-xl bg-accent/10 flex items-center justify-center text-accent-foreground">
-                <MessageSquare className="h-6 w-6" />
-              </div>
-              <h3 className="text-xl font-bold">AI Project Chat</h3>
-              <p className="text-secondary leading-relaxed">
-                Guided project creation with an AI assistant that helps you plan roadmaps, teams, and roles.
-              </p>
-            </div>
-            <div className="p-8 rounded-2xl bg-card border border-card-border space-y-4 hover-elevate">
-              <div className="h-12 w-12 rounded-xl bg-chart-4/10 flex items-center justify-center text-chart-4">
-                <Zap className="h-6 w-6" />
-              </div>
-              <h3 className="text-xl font-bold">Showcase & Scale</h3>
-              <p className="text-secondary leading-relaxed">
-                Display your code, receive donations, and climb the leaderboard as your project gains traction.
-              </p>
             </div>
           </div>
         </div>
       </section>
 
-      <section className="py-16 px-4 bg-background border-b border-border" data-testid="section-stats">
-        <div className="max-w-6xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
-          {[
-            { value: "10,000+", label: "Builders & Creators", icon: Users },
-            { value: "2,500+", label: "Projects Launched", icon: Rocket },
-            { value: "50,000+", label: "AI Matches Made", icon: Brain },
-            { value: "120+", label: "Countries Represented", icon: Globe },
-          ].map((stat) => (
-            <div key={stat.label} className="space-y-2" data-testid={`stat-${stat.label.toLowerCase().replace(/\s+/g, '-')}`}>
-              <stat.icon className="h-6 w-6 text-primary mx-auto mb-2" />
-              <div className="text-3xl md:text-4xl font-bold text-foreground tracking-tight">{stat.value}</div>
-              <div className="text-sm text-muted-foreground font-medium">{stat.label}</div>
-            </div>
-          ))}
-        </div>
-      </section>
+      <TaglineBanner />
 
-      <section className="py-24 px-4 bg-card/30 border-b border-border" data-testid="section-personas">
-        <div className="max-w-6xl mx-auto">
-          <div className="text-center mb-16 space-y-4">
-            <h2 className="text-3xl md:text-5xl font-bold tracking-tight">Built for Builders Like You</h2>
-            <p className="text-xl text-secondary max-w-2xl mx-auto">
-              Whether you're going solo or looking for your dream team, SparkTower meets you where you are.
-            </p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            <div className="p-8 rounded-2xl bg-card border border-card-border space-y-4 hover-elevate" data-testid="card-persona-founder">
-              <div className="h-12 w-12 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
-                <Lightbulb className="h-6 w-6" />
-              </div>
-              <h3 className="text-xl font-bold">Solo Founders</h3>
-              <p className="text-secondary leading-relaxed italic">"I have the vision, but I need the right people to make it real."</p>
-              <p className="text-secondary leading-relaxed">
-                Stop pitching into the void. SparkTower's AI matches you with co-founders who share your drive and complement your skills — so you can move from idea to launch, faster.
-              </p>
-            </div>
-            <div className="p-8 rounded-2xl bg-card border border-card-border space-y-4 hover-elevate" data-testid="card-persona-freelancer">
-              <div className="h-12 w-12 rounded-xl bg-accent/10 flex items-center justify-center text-accent-foreground">
-                <Wrench className="h-6 w-6" />
-              </div>
-              <h3 className="text-xl font-bold">Freelancers & Specialists</h3>
-              <p className="text-secondary leading-relaxed italic">"I'm tired of one-off gigs. I want to build something that matters."</p>
-              <p className="text-secondary leading-relaxed">
-                Your skills deserve more than a marketplace listing. Join projects you believe in, earn reputation through real collaboration, and build a portfolio that proves your impact.
-              </p>
-            </div>
-            <div className="p-8 rounded-2xl bg-card border border-card-border space-y-4 hover-elevate" data-testid="card-persona-sideproject">
-              <div className="h-12 w-12 rounded-xl bg-chart-4/10 flex items-center justify-center text-chart-4">
-                <Zap className="h-6 w-6" />
-              </div>
-              <h3 className="text-xl font-bold">Side-Project Builders</h3>
-              <p className="text-secondary leading-relaxed italic">"I build on nights and weekends, but I feel like I'm doing it alone."</p>
-              <p className="text-secondary leading-relaxed">
-                You're not alone anymore. Connect with others who share your hustle. Practice sprints with our AI, compete in hackathons, and turn your side project into your main thing.
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
+      <LiveProjects />
 
-      <section className="py-24 px-4 bg-background border-b border-border" data-testid="section-how-it-works">
+      <section id="how-it-works" className="scroll-mt-40 py-24 px-4 bg-white border-t border-gray-100" data-testid="section-how-it-works">
         <div className="max-w-5xl mx-auto">
-          <div className="text-center mb-16 space-y-4">
-            <h2 className="text-3xl md:text-5xl font-bold tracking-tight">How It Works</h2>
-            <p className="text-xl text-secondary max-w-2xl mx-auto">
-              Four steps from sign-up to launch. No gatekeeping, no waiting — just building.
+
+          <div className="max-w-3xl mx-auto text-center">
+            <span className="inline-flex items-center gap-2 rounded-full border border-gray-200 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.18em] text-gray-500" data-testid="badge-contest-status">
+              <Trophy className="h-3.5 w-3.5" style={{ color: NOVA_GRADIENT[2] }} />
+              The contest hasn't started yet
+            </span>
+            <h2 className="mt-5 text-3xl md:text-4xl font-bold tracking-tight text-black">
+              The $50B challenge, and where it actually stands
+            </h2>
+            <p className="mt-4 text-[15px] sm:text-base text-gray-600 leading-relaxed">
+              The offer is real and it is not open yet. Handing over a majority of a company is a
+              promotion with a prize, and that means written rules, eligibility, judging and a
+              promotion agreement drafted by lawyers who do this for a living. We are finding
+              those lawyers and writing those rules now.
             </p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+
+          <div className="mt-10 grid gap-4 md:grid-cols-3">
             {[
-              { step: "01", title: "Sign Up", desc: "Create your free account in under a minute. No credit card required.", icon: UserPlus },
-              { step: "02", title: "Build Your Profile", desc: "Tell us your skills, interests, and what you're looking to build. Our AI learns what makes you unique.", icon: User },
-              { step: "03", title: "Get Matched", desc: "Our AI finds builders who complement your strengths. Try a 24-hour sprint to test the fit before committing.", icon: Search },
-              { step: "04", title: "Launch Together", desc: "Collaborate with built-in project tools, AI assistance, and a community cheering you on.", icon: Handshake },
-            ].map((item, i) => (
-              <div key={item.step} className="relative text-center space-y-4 p-6" data-testid={`step-${item.step}`}>
-                {i < 3 && (
-                  <div className="hidden md:block absolute top-12 -right-3 z-10">
-                    <ArrowRight className="h-5 w-5 text-primary/40" />
-                  </div>
-                )}
-                <div className="h-14 w-14 rounded-full bg-primary/10 flex items-center justify-center text-primary mx-auto">
-                  <item.icon className="h-6 w-6" />
-                </div>
-                <div className="text-xs font-bold text-primary tracking-widest uppercase">Step {item.step}</div>
-                <h3 className="text-lg font-bold">{item.title}</h3>
-                <p className="text-secondary text-sm leading-relaxed">{item.desc}</p>
+              {
+                icon: Scale,
+                title: "Rules, so nobody can cheat",
+                body: "What counts as a company built here, what counts as $50 billion, who verifies it, and what stops someone bolting SparkTower onto a business they already had. Ambiguity is how a prize like this gets fought over instead of won.",
+              },
+              {
+                icon: Globe,
+                title: "Open wherever you are",
+                body: "Anyone, anywhere. That is the hardest part to write, not the easiest: prize promotions are governed country by country, and \"open to everyone\" has to survive the places with the strictest rules rather than ignore them.",
+              },
+              {
+                icon: Handshake,
+                title: "A promotion agreement, in writing",
+                body: "An offer this size is worth nothing as a sentence on a landing page. It needs a document that binds the company, survives a change of ownership, and says exactly what a winner receives.",
+              },
+            ].map((item) => (
+              <div key={item.title} className="rounded-2xl border border-gray-200 p-5" data-testid={`card-contest-${item.title.split(" ")[0].toLowerCase()}`}>
+                <item.icon className="h-5 w-5" style={{ color: NOVA_GRADIENT[1] }} />
+                <h3 className="mt-3 font-bold text-black">{item.title}</h3>
+                <p className="mt-1.5 text-sm text-gray-600 leading-relaxed">{item.body}</p>
               </div>
             ))}
+          </div>
+
+          <p className="mt-6 text-center text-sm text-gray-500 max-w-2xl mx-auto">
+            This takes a while, and we would rather say so than open something we would have to
+            change halfway through. Nothing you build before the rules land is wasted: the contest
+            will be judged on companies, and a company takes longer to build than a rulebook takes
+            to write.
+          </p>
+
+          {/* --- Meanwhile: the part you can do today ------------------------------- */}
+
+          <div className="mt-20 max-w-3xl mx-auto text-center">
+            <h2 className="text-3xl md:text-4xl font-bold tracking-tight text-black">
+              So start building now
+            </h2>
+            <p className="mt-4 text-[15px] sm:text-base text-gray-600 leading-relaxed">
+              Make an account, tell Nova what you're thinking about, and it turns the idea into a
+              project with a path under it. Every project picks one of three — and a project works
+              all three side by side as it grows, so the one you pick first is a starting point
+              rather than a category you're stuck in.
+            </p>
+          </div>
+
+          <div className="mt-10 grid gap-5 md:grid-cols-3">
+            {PROJECT_GOALS.map((goal, i) => (
+              <div key={goal.id} className="relative rounded-2xl p-[2px]" style={{ backgroundImage: NOVA_GRADIENT_CSS }} data-testid={`card-path-${goal.id}`}>
+                <div className="h-full rounded-[0.95rem] bg-white p-5">
+                  <div className="flex items-center gap-2">
+                    <span className="grid h-7 w-7 place-items-center rounded-lg text-[11px] font-bold text-white" style={{ backgroundImage: NOVA_GRADIENT_CSS }}>
+                      {i + 1}
+                    </span>
+                    <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-gray-400">{goal.short}</span>
+                  </div>
+                  <h3 className="mt-3 text-lg font-bold text-black">{goal.label}</h3>
+                  <p className="mt-1.5 text-sm text-gray-600 leading-relaxed">{goal.description}</p>
+                  <p className="mt-3 text-sm text-gray-500 leading-relaxed">{PATH_DETAIL[goal.id]}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-12 rounded-2xl bg-gray-50 border border-gray-200 p-6 sm:p-8">
+            <h3 className="font-bold text-black">What the first hour looks like</h3>
+            <ol className="mt-4 grid gap-4 sm:grid-cols-2 text-sm text-gray-600">
+              {[
+                ["Describe the idea in a sentence", "Nova asks what you're building and who it's for, then writes the project for you — you're editing rather than starting at a blank page."],
+                ["Pick a path", "Ship, Systemize or Raise. It decides what Nova puts in front of you first, and it can change."],
+                ["Do the next step", "One card at a time, never a backlog. Each finished step saves what you wrote as part of the project."],
+                ["Publish one and get feedback", "A finished step becomes a page you can share with anyone, no account needed to read it. That is how people find you here."],
+              ].map(([title, body], n) => (
+                <li key={title} className="flex gap-3">
+                  <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full text-[11px] font-bold text-white" style={{ backgroundImage: NOVA_GRADIENT_CSS }}>{n + 1}</span>
+                  <span><span className="font-semibold text-black">{title}.</span> {body}</span>
+                </li>
+              ))}
+            </ol>
           </div>
         </div>
       </section>
@@ -324,7 +317,7 @@ export default function LandingPage() {
             <Button
               size="lg"
               data-testid="button-join-sparktower"
-              onClick={() => { setActiveTab("signup"); setShowAuthModal(true); }}
+              onClick={() => focusAuth("signup")}
             >
               Join SparkTower
               <ArrowRight className="ml-2 h-5 w-5" />
@@ -366,7 +359,15 @@ export default function LandingPage() {
             </div>
           </div>
           <div className="border-t border-border pt-8 flex flex-col md:flex-row justify-between items-center gap-4">
-            <p className="text-muted-foreground/60 text-sm">&copy; {new Date().getFullYear()} SparkTower. Built for the future of collaboration.</p>
+            <p className="text-muted-foreground/60 text-sm">
+              &copy; {new Date().getFullYear()} SparkTower. Built for the future of collaboration.
+              {/* Where people look for them, and where a store reviewer looks first. */}
+              <span className="ml-2">
+                <Link href="/privacy" className="underline hover:text-foreground" data-testid="link-footer-privacy">Privacy</Link>
+                <span className="mx-1.5">·</span>
+                <Link href="/terms" className="underline hover:text-foreground" data-testid="link-footer-terms">Terms</Link>
+              </span>
+            </p>
             <p className="text-muted-foreground/40 text-xs italic">"The present is theirs; the future is mine." — Nikola Tesla</p>
           </div>
         </div>
@@ -375,26 +376,234 @@ export default function LandingPage() {
   );
 }
 
+/**
+ * The line between the sign-up panel and the live tracker.
+ *
+ * Black letters with the gradient showing only at their edges, and the same
+ * gradient blurred behind them for the glow. Three stacked copies of the same
+ * text do it: a blurred one for the light, a gradient one whose gradient is
+ * clipped to the glyphs *and their stroke* (`background-clip: text` with a
+ * transparent `-webkit-text-stroke`, which is what makes the outline gradient
+ * rather than one flat colour), and the black one on top covering the middle.
+ *
+ * The copies are `aria-hidden` and the readable one is last, so a screen
+ * reader hears the sentence once.
+ */
+/*
+ * Change this one string to change the line.
+ *
+ * "Fastest growing" is a comparative claim rather than the kind of superlative
+ * nobody reads literally, and growth measured as a rate from a small base is a
+ * real way to mean it — 0 to 100 accounts in a day is a bigger percentage than
+ * anyone established can post. Worth knowing, in case a competitor or an
+ * advertising regulator ever asks: keep a note of the basis you would answer
+ * with (accounts week over week, say), because the answer to that question is
+ * either a number you already have or an afternoon you did not plan on. The
+ * specific counts that used to sit further down this page were a different
+ * thing entirely, and they are gone.
+ */
+const TAGLINE = "The fastest growing startup community.";
+
+function TaglineBanner() {
+  /* The gradient, clipped to the glyphs plus a fat transparent stroke. */
+  const gradientText = {
+    backgroundImage: NOVA_GRADIENT_CSS,
+    WebkitBackgroundClip: "text" as const,
+    backgroundClip: "text" as const,
+    color: "transparent",
+  };
+
+  /*
+   * The letters are not flat black. They run through near-black tints of the
+   * same three gradient stops — green-black, black, purple-black — so the fill
+   * has somewhere to go between the bright edges instead of sitting there as a
+   * slab. Dark enough to still read as black type at a glance.
+   */
+  const letterFill = {
+    backgroundImage: "linear-gradient(135deg, #07271b 0%, #0b0b0c 48%, #241043 100%)",
+    WebkitBackgroundClip: "text" as const,
+    backgroundClip: "text" as const,
+    color: "transparent",
+  };
+
+  return (
+    <section className="relative bg-white px-4 pt-6 pb-14 sm:pb-20" data-testid="section-tagline">
+      <h2 className="relative mx-auto max-w-4xl text-center font-black tracking-tight leading-[1.05] text-[2rem] sm:text-5xl md:text-[3.5rem]">
+        {/* The glow: the same words, fattened and blurred, sitting underneath. */}
+        <span aria-hidden className="absolute inset-0 select-none" style={{ ...gradientText, WebkitTextStroke: "6px transparent", filter: "blur(18px)", opacity: 0.45 }}>
+          {TAGLINE}
+        </span>
+        {/* The outline: gradient everywhere, about to be covered in the middle. */}
+        <span aria-hidden className="absolute inset-0 select-none" style={{ ...gradientText, WebkitTextStroke: "4px transparent" }}>
+          {TAGLINE}
+        </span>
+        {/* The letters themselves. */}
+        <span className="relative" style={letterFill} data-testid="text-tagline">{TAGLINE}</span>
+      </h2>
+    </section>
+  );
+}
+
+/**
+ * The left half: what you get, and the offer that makes people stop scrolling.
+ *
+ * Built out of the product's own shapes rather than a stock photograph — a
+ * project card, a believer badge, a path step, Nova's tower — because a
+ * landing page that shows the thing is worth more than one that describes it,
+ * and because these stay true when the product changes. They overlap and tilt
+ * so the panel reads as depth rather than a list.
+ *
+ * The challenge is the headline and deliberately not a link: there is no
+ * contest row behind it yet (`contests` is empty), and sending somebody to an
+ * empty page is worse than telling them it's coming.
+ */
+function ChallengePanel() {
+  return (
+    <div className="relative p-6 sm:p-10 overflow-hidden bg-gradient-to-br from-gray-50 to-white" data-testid="panel-challenge">
+      {/* A wash of the gradient behind the cards, so they have something to lift off. */}
+      <div aria-hidden className="pointer-events-none absolute -right-24 -top-24 w-[28rem] h-[28rem] rounded-full opacity-20 blur-3xl" style={{ backgroundImage: NOVA_GRADIENT_CSS }} />
+
+      <div className="relative z-10">
+        <span
+          className="inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-bold uppercase tracking-[0.18em] text-white shadow-lg"
+          style={{ backgroundImage: NOVA_GRADIENT_CSS }}
+          data-testid="badge-challenge"
+        >
+          <Trophy className="h-3.5 w-3.5" />
+          The Contest
+        </span>
+
+        <h1 className="mt-5 text-3xl sm:text-4xl md:text-[2.75rem] font-bold tracking-tight leading-[1.08] text-black" data-testid="text-hero-headline">
+          Build a $50B company.
+          <br />
+          <span
+            className="bg-clip-text text-transparent"
+            style={{ backgroundImage: NOVA_GRADIENT_CSS }}
+          >
+            Take most of mine.
+          </span>
+        </h1>
+
+        <p className="mt-4 text-[15px] sm:text-base text-gray-600 leading-relaxed max-w-md">
+          The first builder who takes a project from SparkTower to a $50 billion company
+          takes home a majority stake in SparkTower itself. One contest, one winner,
+          no entry fee — start a project and you are in it.
+        </p>
+
+        <a href="#how-it-works" className="mt-5 inline-flex items-center gap-1.5 text-sm font-semibold text-gray-900 hover:gap-2.5 transition-all" data-testid="link-challenge-details">
+          How it works <ArrowRight className="h-4 w-4" />
+        </a>
+      </div>
+
+      {/*
+        * The product in miniature, as one overlapping stack rather than four
+        * things spread to the corners. The first version placed each card
+        * against a different edge and left a hole through the middle of the
+        * panel; depth comes from pieces covering each other, which is what the
+        * collages these pages all use are actually doing.
+        *
+        * Hidden below `sm`, where the form is the only thing that matters.
+        */}
+      <div className="relative z-10 mt-8 h-64 hidden sm:block" aria-hidden>
+        {/* Back of the stack: a project mid-build. */}
+        <div className="absolute left-0 top-8 w-64 rounded-2xl bg-white p-4 shadow-[0_18px_40px_-16px_rgba(0,0,0,0.3)] ring-1 ring-gray-100 -rotate-[4deg]">
+          <div className="flex items-center gap-2.5">
+            <div className="h-9 w-9 rounded-lg shrink-0" style={{ backgroundImage: NOVA_GRADIENT_CSS }} />
+            <div className="min-w-0">
+              <div className="text-[13px] font-semibold text-black leading-tight truncate">Harbor Coffee Co</div>
+              <div className="text-[11px] text-gray-500">Ship an MVP · step 4 of 9</div>
+            </div>
+          </div>
+          <div className="mt-3 h-1.5 w-full rounded-full bg-gray-100">
+            <div className="h-1.5 rounded-full w-5/12" style={{ backgroundImage: NOVA_GRADIENT_CSS }} />
+          </div>
+          <div className="mt-3 flex items-center gap-1.5">
+            <div className="h-5 w-5 rounded-full bg-gray-200" />
+            <div className="h-5 w-5 rounded-full bg-gray-300 -ml-2.5" />
+            <div className="h-5 w-5 rounded-full -ml-2.5" style={{ backgroundColor: NOVA_GRADIENT[0] }} />
+            <span className="ml-1 text-[11px] text-gray-400">3 believers</span>
+          </div>
+        </div>
+
+        {/* Over its shoulder: the next step, which is what the product is for. */}
+        <div className="absolute left-[14.5rem] top-0 w-60 rounded-2xl bg-black p-4 text-white shadow-[0_22px_45px_-14px_rgba(0,0,0,0.55)] rotate-[3deg]">
+          <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.16em] text-white/60">
+            <Zap className="h-3 w-3" /> Next step
+          </div>
+          <div className="mt-2 text-[13px] leading-snug">
+            Write the one-line version of what you're building.
+          </div>
+          <div className="mt-3 inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold text-black" style={{ backgroundImage: NOVA_GRADIENT_CSS }}>
+            Do it with Nova <ArrowRight className="h-3 w-3" />
+          </div>
+        </div>
+
+        {/* Front of the stack, overlapping both: the moment worth showing. */}
+        <div className="absolute left-20 bottom-2 flex items-center gap-2 rounded-full bg-white px-3.5 py-2 shadow-[0_16px_32px_-10px_rgba(0,0,0,0.45)] ring-1 ring-gray-100 -rotate-2">
+          <Heart className="h-4 w-4 fill-current" style={{ color: NOVA_GRADIENT[2] }} />
+          <span className="text-[12px] font-semibold text-black">Believer #1</span>
+        </div>
+
+        {/* The tower, leaning in from the edge the way the reaction chips do. */}
+        <div className="absolute right-0 bottom-6 rounded-2xl p-3.5 shadow-[0_18px_38px_-12px_rgba(0,0,0,0.5)] rotate-[6deg]" style={{ backgroundColor: NOVA_GRADIENT[1] }}>
+          <AnimatedTowerLogo height={64} className="drop-shadow" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The form, with no card around it any more: on the landing page it *is* the
+ * right half of the panel, and a card inside a card is a border inside a
+ * border. It still renders standalone elsewhere, so the spacing lives here
+ * rather than on the panel.
+ *
+ * Sign up leads. The tab order matters more than it looks — the first tab is
+ * what a hurried visitor lands on, and a landing page is read by people who
+ * don't have an account.
+ */
 function AuthCard({ activeTab, onTabChange }: { activeTab: string; onTabChange: (tab: string) => void }) {
   return (
-    <Card className="bg-card/95 backdrop-blur-md border-card-border shadow-2xl">
-      <Tabs value={activeTab} onValueChange={onTabChange}>
-        <CardHeader className="pb-4">
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="login" data-testid="tab-login">Log In</TabsTrigger>
-            <TabsTrigger value="signup" data-testid="tab-signup">Sign Up</TabsTrigger>
-          </TabsList>
-        </CardHeader>
-        <CardContent>
-          <TabsContent value="login" className="mt-0">
-            <LoginForm />
-          </TabsContent>
-          <TabsContent value="signup" className="mt-0">
-            <SignupForm onSuccess={() => onTabChange("login")} />
-          </TabsContent>
-        </CardContent>
-      </Tabs>
-    </Card>
+    <Tabs value={activeTab} onValueChange={onTabChange}>
+      <div className="mb-6">
+        <h2 className="text-2xl font-bold tracking-tight text-black" data-testid="text-auth-heading">
+          {activeTab === "signup" ? "Start building." : "Welcome back."}
+        </h2>
+        <p className="mt-1 text-sm text-gray-500">
+          {activeTab === "signup" ? "Your first project takes about a minute." : "Pick up where you left off."}
+        </p>
+      </div>
+
+      {/* The gradient rides under the selected tab, so the two halves of the panel share a palette. */}
+      <TabsList className="grid w-full grid-cols-2 bg-gray-100 p-1 h-11">
+        <TabsTrigger
+          value="signup"
+          data-testid="tab-signup"
+          className="h-9 data-[state=active]:text-white data-[state=active]:shadow-md"
+          style={activeTab === "signup" ? { backgroundImage: NOVA_GRADIENT_CSS } : undefined}
+        >
+          Sign Up
+        </TabsTrigger>
+        <TabsTrigger
+          value="login"
+          data-testid="tab-login"
+          className="h-9 data-[state=active]:text-white data-[state=active]:shadow-md"
+          style={activeTab === "login" ? { backgroundImage: NOVA_GRADIENT_CSS } : undefined}
+        >
+          Log In
+        </TabsTrigger>
+      </TabsList>
+
+      <div className="mt-6">
+        <TabsContent value="login" className="mt-0">
+          <LoginForm />
+        </TabsContent>
+        <TabsContent value="signup" className="mt-0">
+          <SignupForm onSuccess={() => onTabChange("login")} />
+        </TabsContent>
+      </div>
+    </Tabs>
   );
 }
 
@@ -485,7 +694,12 @@ function LoginForm() {
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
             <Label htmlFor="login-password">Password</Label>
-            {/* Next to the field it fails at — where someone looks the moment the password doesn't work. */}
+            {/*
+              * Next to the field it fails at — where someone looks the moment
+              * the password doesn't work. The redesign that moved this form to
+              * the right-hand panel dropped it, and with it the only way anyone
+              * could reach /forgot-password: nothing else on the site links there.
+              */}
             <Link href="/forgot-password" className="text-xs text-muted-foreground underline hover:text-foreground" data-testid="link-forgot-password">
               Forgot your password?
             </Link>
@@ -510,7 +724,7 @@ function LoginForm() {
             </button>
           </div>
         </div>
-        <Button type="submit" className="w-full" disabled={loading} data-testid="button-submit-login">
+        <Button type="submit" className="w-full text-white font-semibold border-0 hover:opacity-90 transition-opacity" style={{ backgroundImage: NOVA_GRADIENT_CSS }} disabled={loading} data-testid="button-submit-login">
           {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
           Log In
         </Button>
@@ -653,7 +867,8 @@ function SignupForm({ onSuccess }: { onSuccess: () => void }) {
             data-testid="input-signup-confirm"
           />
         </div>
-        <Button type="submit" className="w-full" disabled={loading} data-testid="button-submit-signup">
+        {/* The gradient, on the one button the page exists for. */}
+        <Button type="submit" className="w-full text-white font-semibold border-0 hover:opacity-90 transition-opacity" style={{ backgroundImage: NOVA_GRADIENT_CSS }} disabled={loading} data-testid="button-submit-signup">
           {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
           Create Account
         </Button>

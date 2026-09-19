@@ -5,7 +5,7 @@
  * Stripe itself isn't reachable here; the paid tier is set the way the webhook
  * sets it. API-level: test/integration/revenue-loop.test.ts.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./test";
 import { verifyEmail } from "./verify-email";
 import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";

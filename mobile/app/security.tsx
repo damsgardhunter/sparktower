@@ -3,6 +3,7 @@ import { Clipboard, Linking, ScrollView, Text, View } from "react-native";
 import { Stack } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../src/api/client";
+import { useAuth } from "../src/auth/AuthContext";
 import { colors, font, fontFamily, radius, spacing } from "../src/theme";
 import { Btn, ErrorNote, Field, Loading, errText } from "../src/components/ui";
 import { Group, MenuRow } from "../src/components/MoreKit";
@@ -136,8 +137,98 @@ export default function Security() {
         <Text style={{ color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.regular, paddingHorizontal: spacing.lg }}>
           Lost your phone and your recovery codes? Contact support — we can turn it off once we know it's you.
         </Text>
+
+        <Password />
       </ScrollView>
       <NoticeBanner notice={notice} onDismiss={clear} />
     </>
+  );
+}
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * Changing the password, the same form as the web page
+ * (client/src/pages/security-settings.tsx) and the same route.
+ *
+ * The route ends every other session, which is the reason to change a password
+ * in the first place, so it's said before the button rather than after. An
+ * account that signs in with Google has no password of its own; the provider
+ * is on the account row, and the route says so too if the row turns out to
+ * have a password after all — someone who set one before linking Google.
+ */
+function Password() {
+  const { user, signOut } = useAuth();
+  const [anyway, setAnyway] = useState(false);
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [again, setAgain] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [noPassword, setNoPassword] = useState(false);
+  const [done, setDone] = useState<{ sessionsEnded: number; devicesSignedOut: number } | null>(null);
+
+  const change = useMutation({
+    mutationFn: () => api<{ sessionsEnded: number; devicesSignedOut: number }>("/api/auth/change-password", {
+      method: "POST",
+      body: { currentPassword: current, newPassword: next },
+    }),
+    onSuccess: (r) => { setDone(r); setError(null); setCurrent(""); setNext(""); setAgain(""); },
+    onError: (e: any) => {
+      if (e?.body?.code === "no_password") setNoPassword(true);
+      else setError(errText(e, "Couldn't change your password. Nothing was changed."));
+    },
+  });
+
+  const submit = () => {
+    if (next !== again) return setError("The two new passwords don't match.");
+    setError(null);
+    change.mutate();
+  };
+
+  const google = user?.authProvider === "google";
+  const explainGoogle = "You sign in to SparkTower with Google, so this account has no password of its own. Your password is your Google account's, and you change it with Google.";
+
+  if (noPassword || (google && !anyway)) {
+    return (
+      <Group title="Password" footer={explainGoogle}>
+        {!noPassword && (
+          <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.md }}>
+            <Btn label="I had a password before I linked Google" variant="outline" onPress={() => setAnyway(true)} testID="password-anyway" />
+          </View>
+        )}
+      </Group>
+    );
+  }
+
+  if (done) {
+    return (
+      <Group title="Password" footer="Anyone who knew the old password will have to start again.">
+        <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.md, gap: spacing.sm }}>
+          <Text style={{ color: colors.text, fontSize: font.base, fontFamily: fontFamily.regular, lineHeight: 21 }} testID="password-changed">
+            Your password is changed, and every session on the account was signed out: {plural(done.sessionsEnded, "browser session", "browser sessions")} ended
+            and {plural(done.devicesSignedOut, "phone", "phones")} signed out, this one included. Sign in again with the new password.
+          </Text>
+          <Btn label="Sign in again" onPress={() => { void signOut(); }} testID="password-signin-again" />
+        </View>
+      </Group>
+    );
+  }
+
+  return (
+    <Group title="Password" footer={"At least 8 characters \u2014 a few words beat a short scramble. Changing it signs out every session on your account, this phone included, so you'll sign in again here."}>
+      <View style={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.md, gap: spacing.sm }}>
+        {error && <ErrorNote message={error} />}
+        <Field label="Current password" value={current} onChangeText={setCurrent} secureTextEntry autoCapitalize="none" placeholder="Your password" />
+        <Field label="New password" value={next} onChangeText={setNext} secureTextEntry autoCapitalize="none" placeholder="At least 8 characters" />
+        <Field label="New password again" value={again} onChangeText={setAgain} secureTextEntry autoCapitalize="none" placeholder="The same again" />
+        <Btn
+          label="Change password"
+          loading={change.isPending}
+          disabled={!current || !next || !again}
+          onPress={submit}
+          testID="password-change"
+        />
+      </View>
+    </Group>
   );
 }

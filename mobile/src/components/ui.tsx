@@ -16,6 +16,10 @@ import { LinearGradient } from "expo-linear-gradient";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { API_URL } from "../api/client";
 import { colors, font, fontFamily, novaGradient, radius, shadow, spacing } from "../theme";
+import { useHideTabBarOnScroll } from "./tab-bar-visibility";
+import { useHeaderSpace } from "./AppHeader";
+// The floating bar's footprint, so a list's last row isn't stuck underneath it.
+export const TAB_BAR_SPACE = 112;
 
 export type IconName = React.ComponentProps<typeof Ionicons>["name"];
 
@@ -27,7 +31,7 @@ export const assetUri = (uri?: string | null): string | null =>
 
 /** Scrolling screen body with consistent padding and pull-to-refresh. */
 export function Screen({
-  children, onRefresh, refreshing, contentStyle, scroll = true, canvas,
+  children, onRefresh, refreshing, contentStyle, scroll = true, canvas, hideTabBar,
 }: {
   children: React.ReactNode;
   onRefresh?: () => void;
@@ -36,7 +40,21 @@ export function Screen({
   scroll?: boolean;
   /** The gray feed background, for screens made of stacked cards. */
   canvas?: boolean;
+  /**
+   * Let the bottom bar slide away as this screen scrolls, and leave room for
+   * it at the end of the content. For screens people read down; not for forms,
+   * where a bar disappearing mid-answer just loses someone their place.
+   */
+  hideTabBar?: boolean;
 }) {
+  const hiding = useHideTabBarOnScroll();
+  /*
+   * Both ends of the floating chrome. `hideTabBar` says "this screen sits
+   * under the bar and the header", so it pays for both: room at the top for a
+   * header that owns no layout, and room at the bottom for a bar that doesn't
+   * either.
+   */
+  const headerSpace = useHeaderSpace();
   const base = [s.screenBase, canvas && { backgroundColor: colors.canvas }];
   if (!scroll) {
     return <View style={[...base, contentStyle]}>{children}</View>;
@@ -44,8 +62,9 @@ export function Screen({
   return (
     <ScrollView
       style={base}
-      contentContainerStyle={[s.screenContent, contentStyle]}
+      contentContainerStyle={[s.screenContent, hideTabBar && { paddingTop: headerSpace, paddingBottom: TAB_BAR_SPACE }, contentStyle]}
       keyboardShouldPersistTaps="handled"
+      {...(hideTabBar ? hiding : null)}
       refreshControl={
         onRefresh
           ? <RefreshControl refreshing={!!refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
@@ -319,7 +338,7 @@ export function Chip({
 
 export function Field({
   label, value, onChangeText, placeholder, multiline, secureTextEntry,
-  keyboardType, autoCapitalize, maxLength, numeric,
+  keyboardType, autoCapitalize, maxLength, numeric, testID,
 }: {
   label?: string;
   value: string;
@@ -330,6 +349,8 @@ export function Field({
   keyboardType?: "default" | "email-address" | "numeric";
   autoCapitalize?: "none" | "sentences" | "words";
   maxLength?: number;
+  /** So a test can find the input by name, as it can the buttons beside it. */
+  testID?: string;
   numeric?: boolean;
 }) {
   return (
@@ -346,6 +367,7 @@ export function Field({
         keyboardType={numeric ? "number-pad" : keyboardType}
         autoCapitalize={autoCapitalize}
         maxLength={maxLength}
+        testID={testID}
       />
     </View>
   );

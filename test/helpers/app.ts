@@ -10,11 +10,54 @@
  * without racing each other for a fixed one.
  */
 import { createServer, type Server } from "http";
+import { pinServer } from "./loopback";
 import type { Express } from "express";
 import { createApp } from "../../server/app";
 import { loadSurfaceFlags, stopSurfaceFlagRefresh } from "../../server/surfaces";
 
 let cached: { app: Express; server: Server } | null = null;
+/** The build in progress, so two callers cannot start two of them. */
+let building: Promise<Express> | null = null;
+
+/**
+ * How many route layers a fully-built app has, near enough.
+ *
+ * Not a count to keep up to date — a floor, well below the real number, whose
+ * only job is to tell a half-built app from a whole one.
+ */
+const FEWEST_PLAUSIBLE_LAYERS = 50;
+
+/**
+ * Whether a path is actually routable on this app.
+ *
+ * Walks the router stack, including routers mounted under a prefix, and asks
+ * each layer's matcher about the path. Express 4 and 5 disagree about where
+ * the stack lives and what a layer looks like, so this is deliberately
+ * forgiving: anything it cannot interpret is treated as "present", because a
+ * check that cannot see is not entitled to an opinion.
+ */
+function registered(stack: any[], path: string): boolean {
+  for (const layer of stack) {
+    try {
+      if (layer?.regexp?.fast_slash) {
+        if (Array.isArray(layer?.handle?.stack) && registered(layer.handle.stack, path)) return true;
+        continue;
+      }
+      if (typeof layer?.match === "function" && layer.match(path)) return true;
+      if (layer?.regexp instanceof RegExp && layer.regexp.test(path)) {
+        if (layer?.route) return true;
+        if (Array.isArray(layer?.handle?.stack)) {
+          const rest = path.replace(new RegExp(`^${layer.path ?? ""}`), "") || "/";
+          if (registered(layer.handle.stack, rest)) return true;
+        }
+      }
+    } catch {
+      // A layer this cannot interrogate is not evidence of absence.
+      return true;
+    }
+  }
+  return false;
+}
 
 /**
  * Builds the app once per worker and reuses it.
@@ -23,22 +66,98 @@ let cached: { app: Express; server: Server } | null = null;
  * that per test would dominate the runtime and prove nothing that doing it once
  * doesn't. State that must not leak between tests lives in the database, and
  * that is truncated before each one.
+ *
+ * ## Why this checks its own work
+ *
+ * A long run of several integration files occasionally produced a 404 with an
+ * empty body from a route that certainly exists — `POST /api/auth/register`,
+ * which is not behind a kill switch and cannot be turned off. A 404 with no
+ * body is Express saying nothing matched, so for that request the route was
+ * not on the app. It never reproduced with one file, only in long runs, and it
+ * moved from test to test.
+ *
+ * The build turned out to be fine — which is what these checks eventually
+ * proved. The requests were not reaching this app at all: supertest listened
+ * on the IPv6 wildcard and connected to 127.0.0.1, and a port another process
+ * held on 127.0.0.1 took the connection. The fix and the whole story are in
+ * test/setup/each-test.ts. The checks below stay, because an app that really
+ * does come back half-built should still fail where it is built rather than
+ * in whichever test happens to run next.
  */
 export async function getTestApp(): Promise<Express> {
   if (cached) return cached.app;
+  // Two callers arriving together must not each build one.
+  if (building) return building;
 
-  const server = createServer();
-  const app = await createApp({ httpServer: server, logRequests: process.env.TEST_LOG_REQUESTS === "1" });
+  building = (async () => {
+    const server = createServer();
+    const app = await createApp({ httpServer: server, logRequests: process.env.TEST_LOG_REQUESTS === "1" });
 
-  /*
-   * Kill switches decide whether whole route prefixes answer at all, so the
-   * flags have to be loaded or every gated endpoint 404s and the failure looks
-   * like a routing bug.
-   */
-  await loadSurfaceFlags();
+    /*
+     * Kill switches decide whether whole route prefixes answer at all, so the
+     * flags have to be loaded or every gated endpoint 404s and the failure
+     * looks like a routing bug.
+     */
+    await loadSurfaceFlags();
 
-  cached = { app, server };
-  return app;
+    /*
+     * Express 5 renamed the internal router from `_router` to `router`, and a
+     * probe that only knew the old name reported zero layers for a perfectly
+     * healthy app. Both names are read, and an app that exposes neither is
+     * left alone rather than failed — a check that cannot see anything must
+     * not claim what it sees is wrong.
+     */
+    const stack = (app as any)?.router?.stack ?? (app as any)?._router?.stack;
+    const layers = Array.isArray(stack) ? stack.length : null;
+    if (layers !== null && layers < FEWEST_PLAUSIBLE_LAYERS) {
+      throw new Error(
+        `The test app finished building with only ${layers} route layers, which means registration did not complete. ` +
+        `Every request against it would 404 with an empty body. Failing here rather than caching it.`,
+      );
+    }
+
+    /*
+     * And check a route that must exist, not just that there are many.
+     *
+     * The layer count never fired, and the thing it was meant to catch kept
+     * happening: `POST /api/auth/register` answering with Express's own
+     * "Cannot POST" page, which is what Express says when nothing matched.
+     * A count cannot tell a hundred middleware layers from a hundred
+     * middleware layers plus the routes, so this asks for the route itself.
+     *
+     * Registration is awaited inside `createApp`, so an app that reaches here
+     * without it is a genuine puzzle — and one worth failing loudly at the
+     * moment it is built rather than in whichever test happens to run next.
+     */
+    if (Array.isArray(stack) && !registered(stack, "/api/auth/register")) {
+      throw new Error(
+        `The test app was built without POST /api/auth/register, though it has ${layers} layers. ` +
+        `Requests to it would answer with Express's own 404 page. Refusing to cache this app.`,
+      );
+    }
+
+    /*
+     * Listening on loopback, once, before anything is sent to it — and handed
+     * to supertest in place of the fresh server it would otherwise make per
+     * request. See test/setup/each-test.ts: those fresh servers bound `::` and
+     * could lose their port to another process holding it on 127.0.0.1.
+     */
+    server.on("request", app);
+    await new Promise<void>((ok, fail) => {
+      server.once("error", fail);
+      server.listen(0, "127.0.0.1", () => ok());
+    });
+    pinServer(app, server);
+
+    cached = { app, server };
+    return app;
+  })();
+
+  try {
+    return await building;
+  } finally {
+    building = null;
+  }
 }
 
 /**
@@ -48,6 +167,7 @@ export async function getTestApp(): Promise<Express> {
  * one.
  */
 export async function closeTestApp(): Promise<void> {
+  building = null;
   if (!cached) return;
   const { server } = cached;
   cached = null;

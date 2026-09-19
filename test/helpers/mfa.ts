@@ -7,12 +7,12 @@
 import { expect } from "vitest";
 import { timeStep, totpAt } from "../../server/totp";
 
-export async function passMfa(agent: any): Promise<{ secret: string; recoveryCodes: string[] }> {
+export async function passMfa(agent: any): Promise<{ secret: string }> {
   const setup = await agent.post("/api/auth/mfa/setup").send({});
   expect(setup.status, JSON.stringify(setup.body)).toBe(200);
   const enable = await agent.post("/api/auth/mfa/enable").send({ code: totpAt(setup.body.secret, timeStep()) });
   expect(enable.status, JSON.stringify(enable.body)).toBe(200);
-  return { secret: setup.body.secret, recoveryCodes: enable.body.recoveryCodes };
+  return { secret: setup.body.secret };
 }
 
 /** A code for a secret at a step offset from now (the next step, for a second sign-in in the same 30 seconds). */

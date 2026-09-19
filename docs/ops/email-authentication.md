@@ -52,6 +52,65 @@ and `p=reject` once that is quiet.
 
 Skipping straight to `p=reject` is how people silently lose their own invoices.
 
+## Publishing them, on the setup this domain actually has
+
+DNS is at **GoDaddy** (`ns23`/`ns24.domaincontrol.com`), so the records go in
+GoDaddy → My Products → Domains → `sparktower.app` → DNS → Manage Zones. The
+sender is **Resend** (`RESEND_API_KEY`, `EMAIL_FROM` in `server/email.ts`).
+
+Do these in order. Publishing the sender before the records is what puts
+verification links in spam.
+
+**1. Add the domain in Resend first.** Resend → Domains → Add Domain →
+`sparktower.app` (or a sending subdomain such as `mail.sparktower.app`, which is
+the tidier arrangement and keeps a marketing tool's SPF out of the site's).
+Resend prints the exact DKIM and SPF rows for *your* account. Copy them; don't
+retype the ones below, which are shapes rather than values — a DKIM key is
+account-specific and cannot be guessed.
+
+**2. Publish what Resend printed.** In GoDaddy's zone editor:
+
+| Type | Name | Value |
+|---|---|---|
+| TXT | `@` (or `send` for a subdomain) | `v=spf1 include:_spf.resend.com ~all` |
+| CNAME/TXT | `resend._domainkey` | exactly as Resend printed it |
+
+GoDaddy appends the domain itself, so enter `resend._domainkey`, not
+`resend._domainkey.sparktower.app` — typing the full name yields
+`resend._domainkey.sparktower.app.sparktower.app`, which is the single most
+common way this goes wrong.
+
+**3. Replace GoDaddy's DMARC record.** There is already one at `_dmarc`, which
+GoDaddy published when the domain was registered. It enforces `p=quarantine` and
+sends the reports to `dmarc_rua@onsecureserver.net` — GoDaddy, not you. Edit it,
+don't add a second:
+
+```
+_dmarc   TXT   "v=DMARC1; p=none; rua=mailto:dmarc@sparktower.app; pct=100; adkim=s; aspf=s"
+```
+
+`p=none` on purpose, and it is a *relaxation* of what is published today. It
+enforces nothing while you read a fortnight of reports and find every legitimate
+sender; then `p=quarantine`, then `p=reject`. Going back to quarantine before
+SPF and DKIM are verified re-arms the exact failure this section exists to undo.
+
+For `rua=` to work, `dmarc@sparktower.app` has to receive mail — and the domain
+currently has **no MX records at all**, so it receives nothing. Either add MX
+for a mailbox, or point `rua` at an address you do read.
+
+**4. Point the domain at the deployment.** `sparktower.app` currently serves a
+GoDaddy Website Builder page, and `/_health` answers 404. Until it serves this
+app, every link in every email — `PUBLIC_URL`-based, one builder for all three
+(`server/public-url.ts`) — resolves to that placeholder. See
+[custom-domain.md](custom-domain.md).
+
+**5. Only then set the sender.** `EMAIL_FROM` must be on the domain you just
+authenticated: `SparkTower <hello@sparktower.app>`. A From on any other domain
+fails DMARC however perfect the records, because alignment compares the visible
+From domain with the one SPF or DKIM signed for. The server checks this
+relationship at boot and says so (`warnIfSenderMisaligned`, `server/public-url.ts`);
+`test/unit/email-links.test.ts` holds it to its word.
+
 ## Checking, and the record of who did
 
 Run the checker. It asks the real DNS — through Cloudflare's and Google's public
@@ -68,14 +127,89 @@ It exits non-zero until all three are published, so it can become a pre-deploy
 gate. It is deliberately not in CI: CI has no business going red because
 somebody else's DNS is slow.
 
-Then send one real invite to a Gmail address, open the message, and view the
-original: `SPF: PASS`, `DKIM: PASS`, `DMARC: PASS`. That end-to-end check is the
-one worth trusting — it proves the mail was actually signed, which a DNS lookup
-never can. A third-party validator (mail-tester.com, MXToolbox, Google's Admin
-Toolbox) gives the same answer from outside; paste its verdict and the date into
-the evidence below when you use one.
+### The delivery test, which no script here can do for you
+
+DNS says the records exist. Only a real message proves they signed anything and
+that a receiver believed it, so this part needs two mailboxes and a person.
+
+Send **20 messages: 10 verification, 10 invite**, half to Gmail and half to
+Outlook/Hotmail. Both flows, because they are built and sent separately and only
+share the link builder — an invite carries a project name and a different
+template, and a template is a thing that can get a message filtered on its own.
+
+For each, record: **inbox or spam**, and from *Show original* (Gmail) or *View
+message source* (Outlook):
+
+```
+spf=pass       header.from=sparktower.app
+dkim=pass      header.d=sparktower.app
+dmarc=pass     header.from=sparktower.app
+```
+
+`header.from` is the part that matters and the part people skip. `dkim=pass` on
+a signature from the provider's own domain is a pass that does nothing for you:
+DMARC wants the signing domain to be *yours*. A verdict line without
+`header.d=sparktower.app` means the domain was never really authenticated.
+
+Then click the link in one of each and check it opens `PUBLIC_URL` and that the
+form on the far end submits — a confirm, an accept, a new password. A link that
+loads a page which then refuses the button is a CSRF trusted-origin mismatch,
+not a mail problem (`emailLinkHostIsTrusted`, `server/public-url.ts`).
+
+Anything in spam: don't re-run it and hope. Read the aggregate reports at `rua=`
+first; they name the source that failed.
+
+A third-party validator (mail-tester.com, MXToolbox, Google's Admin Toolbox)
+gives the same answer from outside in one send. It is a good smoke test and not
+a substitute for the batch — it tells you nothing about placement, and placement
+is what the task is about.
+
+| flow | to | inbox/spam | spf | dkim (header.d) | dmarc | link opens PUBLIC_URL |
+|---|---|---|---|---|---|---|
+| | | | | | | |
 
 ## Verification evidence
+
+Newest first. Each entry is what the DNS actually said on the day, not what
+anyone meant to publish.
+
+### 2026-09-17 — the domain exists now, and its DMARC is quarantining our own mail
+
+The situation changed overnight: yesterday `sparktower.app` did not resolve at
+all. It is now registered through GoDaddy (`ns23`/`ns24.domaincontrol.com`) and
+serves a GoDaddy Website Builder placeholder — `<title>SparkTower</title>`,
+`generator: Go Daddy Website Builder`, and marketing copy about "network
+management tools". **The app is not on it**: `https://sparktower.app/_health`
+answers 404, where the real deployment answers 200.
+
+```
+MISSING  SPF    no v=spf1 record at the domain root
+MISSING  DKIM   no key at any of the selectors tried
+BROKEN   DMARC  p=quarantine, reports on — enforcing with nothing to align
+      ^ rua points at dmarc_rua@onsecureserver.net — not an address on sparktower.app.
+```
+
+Three things follow, and the middle one is the dangerous one.
+
+**The DMARC record is not ours.** `onsecureserver.net` is GoDaddy's. Registering
+the domain published `v=DMARC1; p=quarantine; adkim=r; aspf=r;
+rua=mailto:dmarc_rua@onsecureserver.net` on our behalf. So the audit's "DMARC
+missing" is out of date, and the criterion "receiving aggregate reports" is not
+met either — the reports exist and go to GoDaddy.
+
+**Enforcing with nothing to align is worse than publishing no DMARC at all.**
+A message aligns through SPF or DKIM. Neither is published, so every message
+fails, and `p=quarantine` tells every receiver to put it in spam. The moment
+`RESEND_API_KEY` and `EMAIL_FROM` are set, verification links and invites start
+being sent *and quarantined* — Resend reports them as delivered, the recipient
+never sees them, and the only symptom is that nobody completes signup. This is
+the failure mode the task describes, and it is armed and waiting rather than
+hypothetical.
+
+**Nothing is being lost today**, because nothing is being sent: `RESEND_API_KEY`
+and `EMAIL_FROM` are unset, so `emailConfigured()` is false and mail goes to the
+server log and `GET /api/dev/outbox` (`server/email.ts`). The order below
+matters — publish the records *before* configuring the sender, not after.
 
 ### 2026-09-16 — nothing is published, because the domain does not exist
 
@@ -117,4 +251,6 @@ repository as an intention rather than a fact.
 
 | date | domain | SPF | DKIM | DMARC policy | checked by |
 |---|---|---|---|---|---|
+| 2026-09-18 | sparktower.app | published | resend | p=quarantine | scripts/check-email-auth.mjs — SPF via send.* CNAME, DKIM resend TXT, DMARC rua on-domain |
+| 2026-09-17 | sparktower.app | MISSING | MISSING | p=quarantine (BROKEN — nothing aligns) | scripts/check-email-auth.mjs — GoDaddy's default record, rua to onsecureserver.net |
 | 2026-09-16 | sparktower.app | MISSING | MISSING | MISSING | scripts/check-email-auth.mjs — domain does not resolve (NXDOMAIN) |

@@ -47,6 +47,21 @@ export interface CatalogPromotion {
    * reads nothing from it. An admin sets the logo and channel instead.
    */
   readSite?: false;
+  /**
+   * The company's own YouTube channel, as a handle ("@OpenAI").
+   *
+   * A starting point for the sync, not a substitute for it: the video shown is
+   * still whatever that channel published recently, so nothing here goes stale
+   * the way a pinned video id would. It exists because guessing the handle
+   * from the company's name fails for most of them — a site that links no
+   * channel got no video at all, which is why half the catalog showed a bare
+   * logo and a tagline.
+   *
+   * Every handle here was resolved to a real channel whose name matches the
+   * company. An admin's channel still wins over it, and a handle that stops
+   * resolving costs the video, not the promotion.
+   */
+  channel?: string;
 }
 
 const P = (id: string, name: string, category: PromotionCategory, url: string, tagline: string, perk?: string): CatalogPromotion =>
@@ -54,42 +69,41 @@ const P = (id: string, name: string, category: PromotionCategory, url: string, t
 
 export const PROMOTION_CATALOG: CatalogPromotion[] = [
   // AI coding / app builders
-  P("replit", "Replit", "ai_coding", "https://replit.com", "Build and deploy apps from your browser, with an AI agent that writes the code.", "$10 in credits"),
-  P("cursor", "Cursor", "ai_coding", "https://cursor.com", "The AI code editor: chat with, edit and refactor your whole codebase."),
-  P("windsurf", "Windsurf", "ai_coding", "https://windsurf.com", "An AI-native code editor with an agent that works through multi-step changes."),
+  { ...P("replit", "Replit", "ai_coding", "https://replit.com", "Build and deploy apps from your browser, with an AI agent that writes the code.", "$10 in credits"), channel: "@replit" },
+  { ...P("cursor", "Cursor", "ai_coding", "https://cursor.com", "The AI code editor: chat with, edit and refactor your whole codebase."), channel: "@cursor_ai" },
   P("lovable", "Lovable", "ai_coding", "https://lovable.dev", "Describe an app in plain English and get a working full-stack app."),
-  P("bolt", "Bolt.new", "ai_coding", "https://bolt.new", "Prompt, run, edit and deploy full-stack web apps right in the browser."),
-  P("v0", "v0 by Vercel", "ai_coding", "https://v0.dev", "Vercel's AI builder for React interfaces and full apps from a prompt."),
-  P("github-copilot", "GitHub Copilot", "ai_coding", "https://github.com/features/copilot", "An AI pair programmer in your editor and across GitHub."),
-  P("claude-code", "Claude Code", "ai_coding", "https://www.anthropic.com/claude-code", "Anthropic's agentic coding tool that works in your terminal and IDE."),
-  P("openai-codex", "OpenAI Codex", "ai_coding", "https://openai.com/codex", "OpenAI's coding agent for writing, reviewing and shipping code."),
+  { ...P("bolt", "Bolt.new", "ai_coding", "https://bolt.new", "Prompt, run, edit and deploy full-stack web apps right in the browser."), channel: "@boltdotnew" },
+  { ...P("v0", "v0 by Vercel", "ai_coding", "https://v0.app", "Vercel's AI builder for React interfaces and full apps from a prompt."), channel: "@VercelHQ" },
+  { ...P("github-copilot", "GitHub Copilot", "ai_coding", "https://github.com/features/copilot", "An AI pair programmer in your editor and across GitHub."), channel: "@GitHub" },
+  { ...P("claude-code", "Claude Code", "ai_coding", "https://claude.com/product/claude-code", "Anthropic's agentic coding tool that works in your terminal and IDE."), channel: "@anthropic-ai" },
+  { ...P("openai-codex", "OpenAI Codex", "ai_coding", "https://openai.com/codex", "OpenAI's coding agent for writing, reviewing and shipping code."), channel: "@OpenAI" },
   { ...P("gemini-cli", "Gemini CLI", "ai_coding", "https://github.com/google-gemini/gemini-cli", "Google's open-source AI agent for the command line."), readSite: false },
-  P("devin", "Devin", "ai_coding", "https://devin.ai", "Cognition's autonomous AI software engineer."),
+  { ...P("devin", "Devin", "ai_coding", "https://devin.ai", "Cognition's autonomous AI software engineer."), channel: "@cognition-labs" },
   P("base44", "Base44", "ai_coding", "https://base44.com", "Build full apps with AI from a conversation, no code required."),
   P("softgen", "Softgen", "ai_coding", "https://softgen.ai", "An AI web app builder that turns a description into a full-stack app."),
 
   // Models / APIs
-  P("openai", "OpenAI", "models", "https://platform.openai.com", "GPT models and APIs for text, images, audio and agents."),
-  P("anthropic", "Anthropic", "models", "https://www.anthropic.com/api", "The Claude API: models for reasoning, coding and long documents."),
+  { ...P("openai", "OpenAI", "models", "https://platform.openai.com", "GPT models and APIs for text, images, audio and agents."), channel: "@OpenAI" },
+  { ...P("anthropic", "Anthropic", "models", "https://claude.com/platform/api", "The Claude API: models for reasoning, coding and long documents."), channel: "@anthropic-ai" },
   P("google-ai-studio", "Google AI Studio", "models", "https://aistudio.google.com", "Try Gemini models and get an API key in minutes."),
   P("mistral", "Mistral AI", "models", "https://mistral.ai", "Open-weight and commercial models, available by API."),
-  P("groq", "Groq", "models", "https://groq.com", "Very fast inference for open models."),
+  { ...P("groq", "Groq", "models", "https://groq.com", "Very fast inference for open models."), channel: "@GroqInc" },
   P("together-ai", "Together AI", "models", "https://www.together.ai", "Run, fine-tune and deploy open-source models."),
-  P("fireworks", "Fireworks AI", "models", "https://fireworks.ai", "Fast, low-cost inference for open models."),
-  P("openrouter", "OpenRouter", "models", "https://openrouter.ai", "One API for hundreds of models across providers."),
+  { ...P("fireworks", "Fireworks AI", "models", "https://fireworks.ai", "Fast, low-cost inference for open models."), channel: "@fireworksai" },
+  { ...P("openrouter", "OpenRouter", "models", "https://openrouter.ai", "One API for hundreds of models across providers."), channel: "@OpenRouterAI" },
   P("fal", "fal.ai", "models", "https://fal.ai", "Fast APIs for generative image, video and audio models."),
-  P("replicate", "Replicate", "models", "https://replicate.com", "Run open-source models with an API call."),
-  P("elevenlabs", "ElevenLabs", "models", "https://elevenlabs.io", "Realistic AI voices, text-to-speech and dubbing."),
-  P("hugging-face", "Hugging Face", "models", "https://huggingface.co", "Models, datasets and Spaces from the open ML community."),
+  { ...P("replicate", "Replicate", "models", "https://replicate.com", "Run open-source models with an API call."), channel: "@replicatehq" },
+  { ...P("elevenlabs", "ElevenLabs", "models", "https://elevenlabs.io", "Realistic AI voices, text-to-speech and dubbing."), channel: "@ElevenLabs" },
+  { ...P("hugging-face", "Hugging Face", "models", "https://huggingface.co", "Models, datasets and Spaces from the open ML community."), channel: "@HuggingFace" },
 
   // Hosting / infra
-  P("vercel", "Vercel", "hosting", "https://vercel.com", "Deploy frontends and full-stack apps, with a preview for every push."),
-  P("netlify", "Netlify", "hosting", "https://www.netlify.com", "Build, deploy and host web projects straight from Git."),
-  P("railway", "Railway", "hosting", "https://railway.com", "Deploy apps, databases and workers with almost no config."),
-  P("render", "Render", "hosting", "https://render.com", "Host web services, databases, workers and cron jobs."),
-  P("fly", "Fly.io", "hosting", "https://fly.io", "Run your app on servers close to your users, worldwide."),
-  P("cloudflare", "Cloudflare", "hosting", "https://www.cloudflare.com", "CDN, security, and Workers to run code at the edge."),
-  P("digitalocean", "DigitalOcean", "hosting", "https://www.digitalocean.com", "Simple cloud servers, managed databases and app hosting."),
+  { ...P("vercel", "Vercel", "hosting", "https://vercel.com", "Deploy frontends and full-stack apps, with a preview for every push."), channel: "@VercelHQ" },
+  { ...P("netlify", "Netlify", "hosting", "https://www.netlify.com", "Build, deploy and host web projects straight from Git."), channel: "@NetlifyApp" },
+  { ...P("railway", "Railway", "hosting", "https://railway.com", "Deploy apps, databases and workers with almost no config."), channel: "@RailwayApp" },
+  { ...P("render", "Render", "hosting", "https://render.com", "Host web services, databases, workers and cron jobs."), channel: "@renderhq" },
+  { ...P("fly", "Fly.io", "hosting", "https://fly.io", "Run your app on servers close to your users, worldwide."), channel: "@flydotio" },
+  { ...P("cloudflare", "Cloudflare", "hosting", "https://www.cloudflare.com", "CDN, security, and Workers to run code at the edge."), channel: "@cloudflare" },
+  { ...P("digitalocean", "DigitalOcean", "hosting", "https://www.digitalocean.com", "Simple cloud servers, managed databases and app hosting."), channel: "@DigitalOcean" },
   P("hetzner", "Hetzner", "hosting", "https://www.hetzner.com", "Low-cost cloud and dedicated servers."),
   P("aws-activate", "AWS Activate", "hosting", "https://aws.amazon.com/startups", "Amazon Web Services' program for startups."),
   P("google-cloud-startups", "Google Cloud for Startups", "hosting", "https://cloud.google.com/startup", "Google Cloud's program for startups."),
@@ -97,82 +111,81 @@ export const PROMOTION_CATALOG: CatalogPromotion[] = [
 
   // Backend / database
   P("supabase", "Supabase", "backend", "https://supabase.com", "Postgres with auth, storage, realtime and edge functions."),
-  P("firebase", "Firebase", "backend", "https://firebase.google.com", "Google's app platform: auth, databases, hosting and more."),
+  { ...P("firebase", "Firebase", "backend", "https://firebase.google.com", "Google's app platform: auth, databases, hosting and more."), channel: "@Firebase" },
   P("convex", "Convex", "backend", "https://www.convex.dev", "A reactive backend: database, functions and sync, in TypeScript."),
-  P("planetscale", "PlanetScale", "backend", "https://planetscale.com", "Managed databases built to scale."),
-  P("neon", "Neon", "backend", "https://neon.tech", "Serverless Postgres with branching."),
+  { ...P("planetscale", "PlanetScale", "backend", "https://planetscale.com", "Managed databases built to scale."), channel: "@PlanetScale" },
+  { ...P("neon", "Neon", "backend", "https://neon.com", "Serverless Postgres with branching."), channel: "@neondatabase" },
   P("turso", "Turso", "backend", "https://turso.tech", "SQLite for production, close to your users."),
-  P("mongodb-atlas", "MongoDB Atlas", "backend", "https://www.mongodb.com/atlas", "MongoDB's managed cloud database."),
+  { ...P("mongodb-atlas", "MongoDB Atlas", "backend", "https://www.mongodb.com/atlas", "MongoDB's managed cloud database."), channel: "@MongoDB" },
   P("upstash", "Upstash", "backend", "https://upstash.com", "Serverless Redis, queues and vector storage."),
   P("xata", "Xata", "backend", "https://xata.io", "A Postgres platform for developers."),
 
   // Auth / payments / email
-  P("clerk", "Clerk", "auth_payments", "https://clerk.com", "Drop-in authentication and user management."),
-  P("auth0", "Auth0", "auth_payments", "https://auth0.com", "Authentication and authorization, by Okta."),
-  P("workos", "WorkOS", "auth_payments", "https://workos.com", "Enterprise-ready auth: SSO, directory sync and more."),
-  P("stripe", "Stripe", "auth_payments", "https://stripe.com", "Online payments, subscriptions and billing."),
+  { ...P("clerk", "Clerk", "auth_payments", "https://clerk.com", "Drop-in authentication and user management."), channel: "@ClerkDev" },
+  { ...P("auth0", "Auth0", "auth_payments", "https://auth0.com", "Authentication and authorization, by Okta."), channel: "@Auth0" },
+  { ...P("workos", "WorkOS", "auth_payments", "https://workos.com", "Enterprise-ready auth: SSO, directory sync and more."), channel: "@WorkOS" },
+  { ...P("stripe", "Stripe", "auth_payments", "https://stripe.com", "Online payments, subscriptions and billing."), channel: "@StripeDev" },
   P("lemon-squeezy", "Lemon Squeezy", "auth_payments", "https://www.lemonsqueezy.com", "Sell software and digital products, with sales tax handled."),
-  P("paddle", "Paddle", "auth_payments", "https://www.paddle.com", "A merchant of record for SaaS billing and tax."),
-  P("polar", "Polar", "auth_payments", "https://polar.sh", "Payments and subscriptions built for developers."),
+  { ...P("paddle", "Paddle", "auth_payments", "https://www.paddle.com", "A merchant of record for SaaS billing and tax."), channel: "@PaddleHQ" },
+  { ...P("polar", "Polar", "auth_payments", "https://polar.sh", "Payments and subscriptions built for developers."), channel: "@polar_sh" },
   P("resend", "Resend", "auth_payments", "https://resend.com", "An email API for developers."),
   P("postmark", "Postmark", "auth_payments", "https://postmarkapp.com", "Fast, reliable transactional email."),
   P("loops", "Loops", "auth_payments", "https://loops.so", "Email for SaaS: product, marketing and transactional."),
 
   // Design / product
-  P("figma", "Figma", "design", "https://www.figma.com", "Design, prototype and collaborate in the browser."),
-  P("framer", "Framer", "design", "https://www.framer.com", "Design and publish websites visually."),
-  P("webflow", "Webflow", "design", "https://webflow.com", "Build professional websites visually, with a CMS."),
-  P("canva", "Canva", "design", "https://www.canva.com", "Design graphics, presentations and videos."),
+  { ...P("figma", "Figma", "design", "https://www.figma.com", "Design, prototype and collaborate in the browser."), channel: "@Figma" },
+  { ...P("framer", "Framer", "design", "https://www.framer.com", "Design and publish websites visually."), channel: "@Framer" },
+  { ...P("webflow", "Webflow", "design", "https://webflow.com", "Build professional websites visually, with a CMS."), channel: "@webflow" },
+  { ...P("canva", "Canva", "design", "https://www.canva.com", "Design graphics, presentations and videos."), channel: "@canva" },
   P("mobbin", "Mobbin", "design", "https://mobbin.com", "A library of real app screens and flows for design reference."),
   P("lottiefiles", "LottieFiles", "design", "https://lottiefiles.com", "Lightweight Lottie animations for web and apps."),
-  P("spline", "Spline", "design", "https://spline.design", "Design interactive 3D for the web."),
-  P("rive", "Rive", "design", "https://rive.app", "Interactive animations that run in apps, games and sites."),
+  { ...P("spline", "Spline", "design", "https://spline.design", "Design interactive 3D for the web."), channel: "@splinetool" },
+  { ...P("rive", "Rive", "design", "https://rive.app", "Interactive animations that run in apps, games and sites."), channel: "@rive_app" },
 
   // Analytics / feedback / growth
-  P("posthog", "PostHog", "analytics", "https://posthog.com", "Product analytics, session replay, feature flags and experiments."),
+  { ...P("posthog", "PostHog", "analytics", "https://posthog.com", "Product analytics, session replay, feature flags and experiments."), channel: "@posthog" },
   P("plausible", "Plausible", "analytics", "https://plausible.io", "Simple, privacy-friendly web analytics."),
-  P("mixpanel", "Mixpanel", "analytics", "https://mixpanel.com", "Product analytics for funnels, retention and growth."),
+  { ...P("mixpanel", "Mixpanel", "analytics", "https://mixpanel.com", "Product analytics for funnels, retention and growth."), channel: "@mixpanel" },
   P("amplitude", "Amplitude", "analytics", "https://amplitude.com", "Digital analytics for product teams."),
-  P("hotjar", "Hotjar", "analytics", "https://www.hotjar.com", "Heatmaps, recordings and surveys."),
   P("sentry", "Sentry", "analytics", "https://sentry.io", "Error tracking and performance monitoring."),
   P("logrocket", "LogRocket", "analytics", "https://logrocket.com", "Session replay and analytics for frontends."),
   P("featurebase", "Featurebase", "analytics", "https://www.featurebase.app", "Feedback boards, roadmaps and changelogs."),
-  P("canny", "Canny", "analytics", "https://canny.io", "Collect, organize and prioritize customer feedback."),
+  { ...P("canny", "Canny", "analytics", "https://canny.io", "Collect, organize and prioritize customer feedback."), channel: "@cannyio" },
 
   // Workflow / collaboration
-  P("linear", "Linear", "workflow", "https://linear.app", "Issue tracking and planning for software teams."),
-  P("notion", "Notion", "workflow", "https://www.notion.com", "Docs, wikis and projects in one workspace."),
-  P("slack", "Slack", "workflow", "https://slack.com", "Team messaging, organized in channels."),
-  P("discord", "Discord", "workflow", "https://discord.com", "Voice, video and text for communities."),
+  { ...P("linear", "Linear", "workflow", "https://linear.app", "Issue tracking and planning for software teams."), channel: "@linear" },
+  { ...P("notion", "Notion", "workflow", "https://www.notion.com", "Docs, wikis and projects in one workspace."), channel: "@notion" },
+  { ...P("slack", "Slack", "workflow", "https://slack.com", "Team messaging, organized in channels."), channel: "@SlackHQ" },
+  { ...P("discord", "Discord", "workflow", "https://discord.com", "Voice, video and text for communities."), channel: "@discord" },
   P("loom", "Loom", "workflow", "https://www.loom.com", "Record quick video messages of your screen."),
   P("cal-com", "Cal.com", "workflow", "https://cal.com", "Open-source scheduling."),
-  P("zapier", "Zapier", "workflow", "https://zapier.com", "Connect your apps and automate workflows."),
-  P("n8n", "n8n", "workflow", "https://n8n.io", "Workflow automation you can self-host."),
-  P("make", "Make", "workflow", "https://www.make.com", "Visual automation across your apps."),
+  { ...P("zapier", "Zapier", "workflow", "https://zapier.com", "Connect your apps and automate workflows."), channel: "@zapier" },
+  { ...P("n8n", "n8n", "workflow", "https://n8n.io", "Workflow automation you can self-host."), channel: "@n8n-io" },
+  { ...P("make", "Make", "workflow", "https://www.make.com", "Visual automation across your apps."), channel: "@MakeHQ" },
 
   // No-code / automation
   P("bubble", "Bubble", "no_code", "https://bubble.io", "Build web apps visually, without code."),
-  P("glide", "Glide", "no_code", "https://www.glideapps.com", "Turn your data into apps without code."),
-  P("softr", "Softr", "no_code", "https://www.softr.io", "Build portals and internal tools on top of your data."),
-  P("airtable", "Airtable", "no_code", "https://www.airtable.com", "A spreadsheet-database for apps and workflows."),
-  P("retool", "Retool", "no_code", "https://retool.com", "Build internal tools on your databases and APIs."),
-  P("flutterflow", "FlutterFlow", "no_code", "https://www.flutterflow.io", "Build Flutter apps visually."),
+  { ...P("glide", "Glide", "no_code", "https://www.glideapps.com", "Turn your data into apps without code."), channel: "@glideapps" },
+  { ...P("softr", "Softr", "no_code", "https://www.softr.io", "Build portals and internal tools on top of your data."), channel: "@Softr" },
+  { ...P("airtable", "Airtable", "no_code", "https://www.airtable.com", "A spreadsheet-database for apps and workflows."), channel: "@AirtableApp" },
+  { ...P("retool", "Retool", "no_code", "https://retool.com", "Build internal tools on your databases and APIs."), channel: "@retool" },
+  { ...P("flutterflow", "FlutterFlow", "no_code", "https://www.flutterflow.io", "Build Flutter apps visually."), channel: "@FlutterFlow" },
 
   // Launch / distribution
   P("product-hunt", "Product Hunt", "launch", "https://www.producthunt.com", "Launch your product and find early users."),
   P("show-hn", "Show HN", "launch", "https://news.ycombinator.com/show", "Share what you built with the Hacker News community."),
-  P("indie-hackers", "Indie Hackers", "launch", "https://www.indiehackers.com", "A community of founders building profitable businesses."),
+  { ...P("indie-hackers", "Indie Hackers", "launch", "https://www.indiehackers.com", "A community of founders building profitable businesses."), channel: "@IndieHackers" },
   P("betalist", "BetaList", "launch", "https://betalist.com", "Get your early-stage startup in front of early adopters."),
   P("peerlist", "Peerlist", "launch", "https://peerlist.io", "A professional network for builders, with weekly launches."),
   P("x", "X", "launch", "https://x.com", "Build in public and reach people where the conversation is."),
   P("linkedin", "LinkedIn", "launch", "https://www.linkedin.com", "Share your progress with a professional network."),
 
   // Domains / misc
-  P("namecheap", "Namecheap", "misc", "https://www.namecheap.com", "Domains, hosting and SSL certificates."),
+  { ...P("namecheap", "Namecheap", "misc", "https://www.namecheap.com", "Domains, hosting and SSL certificates."), channel: "@Namecheap" },
   P("porkbun", "Porkbun", "misc", "https://porkbun.com", "A domain registrar with low prices."),
-  P("cloudflare-registrar", "Cloudflare Registrar", "misc", "https://www.cloudflare.com/products/registrar/", "Register domains at cost, with no markup."),
+  { ...P("cloudflare-registrar", "Cloudflare Registrar", "misc", "https://www.cloudflare.com/domains/", "Register domains at cost, with no markup."), channel: "@cloudflare" },
   P("1password", "1Password", "misc", "https://1password.com", "A password manager for people and teams."),
-  P("tailscale", "Tailscale", "misc", "https://tailscale.com", "Private networks between your devices and servers."),
+  { ...P("tailscale", "Tailscale", "misc", "https://tailscale.com", "Private networks between your devices and servers."), channel: "@Tailscale" },
 ];
 
 /** The categories that matter most to each goal: weighted up when choosing what to show. */

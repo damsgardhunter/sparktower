@@ -4,13 +4,14 @@
  * recommendations.
  */
 import { useState } from "react";
-import { Text, View } from "react-native";
+import { Text, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../api/client";
-import { colors, font, fontFamily, spacing } from "../../theme";
+import { colors, font, fontFamily, radius, spacing } from "../../theme";
 import { Avatar, Body, Btn, Card, Chip, Cost, Divider, Empty, Icon, Label, Loading, Meta, Row, timeAgo } from "../ui";
-import { Bubble, Line, Tag, Well, useNotify } from "./bits";
+import { Bubble, EditorSheet, Line, Tag, Well, shareText, useNotify, type Notify } from "./bits";
+
 import { mkey } from "./shared";
 
 interface Member {
@@ -27,6 +28,94 @@ interface Application {
 const nameOf = (x: { user?: any; profile?: any }) =>
   x.profile?.displayName || [x.user?.firstName, x.user?.lastName].filter(Boolean).join(" ") || x.user?.email || "Member";
 
+/** The roles an invite can carry — the same list the server validates against (shared/invites.ts). */
+const INVITE_ROLES = ["Collaborator", "Cofounder", "Engineer", "Designer", "Marketer", "Advisor"];
+
+/**
+ * Inviting someone from the phone.
+ *
+ * The web has had this since invites existed; the app could only be invited,
+ * never invite — which quietly ended the referral loop for anyone who works
+ * from their phone. Anyone on the team can send one (server/invite-routes.ts).
+ *
+ * The link is the thing that matters: an address is optional, and with email
+ * unconfigured on a development server nothing is sent at all, so the link is
+ * always shown and always shareable rather than assumed delivered.
+ */
+function InviteSheet({ projectId, projectTitle, visible, onClose, onNotice }: {
+  projectId: string; projectTitle: string; visible: boolean; onClose: () => void; onNotice: Notify;
+}) {
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState(INVITE_ROLES[0]);
+  const [created, setCreated] = useState<{ url: string; email: string | null; emailStatus: string | null } | null>(null);
+  const qc = useQueryClient();
+
+  const create = useMutation({
+    mutationFn: () => api<{ invite: { email: string | null; emailStatus: string | null }; url: string }>(`/api/projects/${projectId}/invites`, {
+      method: "POST",
+      body: { email: email.trim() || undefined, role },
+    }),
+    onSuccess: (r) => {
+      setCreated({ url: r.url, email: r.invite.email, emailStatus: r.invite.emailStatus });
+      qc.invalidateQueries({ queryKey: mkey(projectId, "invites") });
+    },
+    onError: (e: any) => onNotice(e?.body?.message ?? "Couldn't create that invite.", "error"),
+  });
+
+  const close = () => { setEmail(""); setRole(INVITE_ROLES[0]); setCreated(null); onClose(); };
+
+  return (
+    <EditorSheet
+      visible={visible}
+      onClose={close}
+      title={created ? "Invite ready" : `Invite someone to ${projectTitle}`}
+      subtitle={created
+        ? "Anyone with this link can join once, and it expires in a week."
+        : "You'll get a link to share. Add their email and we'll send it too — only that account can accept."}
+      action={created ? undefined : { label: "Create", onPress: () => create.mutate(), disabled: create.isPending, loading: create.isPending }}
+    >
+      {created ? (
+        <View style={{ gap: spacing.md }}>
+          <Well tone="primary"><Body>{created.url}</Body></Well>
+          <Btn label="Share the link" icon="share-outline" onPress={() => shareText(`Join ${projectTitle} on SparkTower: ${created.url}`)} testID="button-share-invite" />
+          {created.email && (
+            <Meta>
+              {created.emailStatus === "sent"
+                ? `Emailed to ${created.email}.`
+                : `Nothing was sent to ${created.email} — email isn't set up on this server, so send them the link yourself.`}
+            </Meta>
+          )}
+          <Btn variant="ghost" label="Done" onPress={close} />
+        </View>
+      ) : (
+        <View style={{ gap: spacing.md }}>
+          <View style={{ gap: 6 }}>
+            <Label>Their email (optional)</Label>
+            <TextInput
+              value={email}
+              onChangeText={setEmail}
+              placeholder="them@example.com"
+              placeholderTextColor={colors.textTertiary}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              style={{ borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: spacing.md, fontFamily: fontFamily.regular, fontSize: font.sm, color: colors.text, backgroundColor: colors.surface }}
+              testID="input-invite-email"
+            />
+          </View>
+          <View style={{ gap: 6 }}>
+            <Label>Joining as</Label>
+            <Row wrap gap={6}>
+              {INVITE_ROLES.map((r) => (
+                <Chip key={r} label={r} active={r === role} onPress={() => setRole(r)} />
+              ))}
+            </Row>
+          </View>
+        </View>
+      )}
+    </EditorSheet>
+  );
+}
+
 export function Team({ projectId, project, members, isOwner }: { projectId: string; project: any; members: Member[]; isOwner: boolean }) {
   const router = useRouter();
   const qc = useQueryClient();
@@ -34,8 +123,16 @@ export function Team({ projectId, project, members, isOwner }: { projectId: stri
   const solo = !!project?.soloMode;
   const [editing, setEditing] = useState<{ userId: string; timezone: string; availability: string; hoursPerWeek: string; skills: string } | null>(null);
   const [showDecided, setShowDecided] = useState(false);
+  const [inviting, setInviting] = useState(false);
 
   const { data: tasks } = useQuery({ queryKey: mkey(projectId, "kanban"), queryFn: () => api<any[]>(`/api/projects/${projectId}/kanban`) });
+  const { data: inviteList } = useQuery({
+    queryKey: mkey(projectId, "invites"),
+    queryFn: () => api<{ invites: { id: string; email: string | null; role: string; status: string; invitedByName: string | null }[] }>(`/api/projects/${projectId}/invites`),
+    enabled: !solo,
+  });
+  const invites = inviteList?.invites ?? [];
+
   const { data: apps, isLoading: appsLoading } = useQuery({
     queryKey: mkey(projectId, "applications"),
     queryFn: () => api<Application[]>(`/api/projects/${projectId}/applications`),
@@ -87,6 +184,8 @@ export function Team({ projectId, project, members, isOwner }: { projectId: stri
             </Row>
             <Meta>{members.length} member{members.length === 1 ? "" : "s"}{isOwner && !solo && pending.length ? ` · ${pending.length} waiting to join` : ""}</Meta>
           </View>
+          {/* Anyone on the team can bring the next person in, not only the owner (server/invite-routes.ts). */}
+          {!solo && <Btn small icon="person-add-outline" label="Invite" onPress={() => setInviting(true)} testID="button-invite-collaborator" />}
         </Row>
         {solo && (
           <Well tone="primary">
@@ -94,6 +193,22 @@ export function Team({ projectId, project, members, isOwner }: { projectId: stri
           </Well>
         )}
       </Card>
+
+      {/* Invites anyone on the team sent, and what became of them — the web's list, on the phone. */}
+      {!solo && invites.length > 0 && (
+        <Card style={{ gap: spacing.sm }}>
+          <Row center gap={6}><Icon name="mail-outline" size={17} color={colors.primary} /><Text style={{ fontFamily: fontFamily.bold, fontSize: font.base, color: colors.text }}>Invites</Text></Row>
+          {invites.map((i) => (
+            <Row key={i.id} between gap={spacing.sm} style={{ borderTopWidth: 1, borderColor: colors.borderSubtle, paddingTop: spacing.sm }}>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontFamily: fontFamily.semibold, fontSize: font.sm, color: colors.text }}>{i.email ?? "Link invite"}</Text>
+                <Meta>{i.role}{i.invitedByName ? ` · from ${i.invitedByName}` : ""}</Meta>
+              </View>
+              <Tag label={i.status} />
+            </Row>
+          ))}
+        </Card>
+      )}
 
       {isOwner && !solo && (
         <Card style={{ gap: spacing.md }}>
@@ -219,6 +334,13 @@ export function Team({ projectId, project, members, isOwner }: { projectId: stri
           ))}
         </Card>
       )}
+      <InviteSheet
+        projectId={projectId}
+        projectTitle={project?.title ?? "this project"}
+        visible={inviting}
+        onClose={() => setInviting(false)}
+        onNotice={notify}
+      />
     </View>
   );
 }

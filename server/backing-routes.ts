@@ -32,6 +32,7 @@ import {
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { requireSurface } from "./surfaces";
 import { getUncachableStripeClient } from "./stripeClient";
+import { runRefundSweep } from "./backing-jobs";
 import { requireReviewer } from "./platform-roles";
 import { isPrintfulConfigured, listCatalog } from "./printful";
 import { renderMerchFace, type MerchFace } from "./merch-render";
@@ -189,6 +190,38 @@ export async function backingSignals(projectId: string) {
     heldCents: totals?.heldCents ?? 0,
     releasedCents: totals?.releasedCents ?? 0,
   };
+}
+
+/**
+ * Whether a campaign may take money: switched on, not rejected by review, and
+ * run by a creator who can still be paid. One rule for the page that shows the
+ * "back this" button and the checkout behind it, so they can't disagree.
+ */
+async function acceptingBacking(campaign: { enabled: boolean | null; reviewStatus: string | null } | undefined, ownerId: string): Promise<boolean> {
+  if (!campaign?.enabled || campaign.reviewStatus === "rejected") return false;
+  const [creator] = await db.select({ suspendedAt: users.suspendedAt, deletedAt: users.deletedAt }).from(users).where(eq(users.id, ownerId));
+  return !!creator && !creator.suspendedAt && !creator.deletedAt;
+}
+
+/**
+ * Every transfer already sent for a project's pledges, keyed by the pledge it
+ * paid. Read from Stripe, not from our rows, because the case it exists for is
+ * the one where our row didn't get written. Reversed transfers don't count:
+ * that money came back.
+ */
+async function transfersByBacking(stripe: Awaited<ReturnType<typeof getUncachableStripeClient>>, projectId: string): Promise<Map<string, string>> {
+  const found = new Map<string, string>();
+  let startingAfter: string | undefined;
+  for (;;) {
+    const page = await stripe.transfers.list({ transfer_group: `backing_${projectId}`, limit: 100, ...(startingAfter ? { starting_after: startingAfter } : {}) });
+    for (const t of page.data) {
+      const backingId = t.metadata?.backingId;
+      if (backingId && !t.reversed) found.set(backingId, t.id);
+    }
+    if (!page.has_more || page.data.length === 0) break;
+    startingAfter = page.data[page.data.length - 1].id;
+  }
+  return found;
 }
 
 export function registerBackingRoutes(app: Express) {
@@ -588,8 +621,10 @@ export function registerBackingRoutes(app: Express) {
         .where(eq(projectBackingCampaigns.projectId, projectId));
       if (!campaign?.enabled) return res.status(404).json({ message: "Not accepting backing" });
 
-      const [project] = await db.select({ logoUrl: projects.logoUrl }).from(projects)
+      const [project] = await db.select({ logoUrl: projects.logoUrl, ownerId: projects.ownerId }).from(projects)
         .where(eq(projects.id, projectId));
+      // The same rule as checkout: no "back this" button on a campaign that can't take the money.
+      if (!project || !(await acceptingBacking(campaign, project.ownerId))) return res.status(404).json({ message: "Not accepting backing" });
 
       const tiers = await db.select().from(projectBackerTiers)
         .where(and(
@@ -700,7 +735,14 @@ export function registerBackingRoutes(app: Express) {
 
       const [campaign] = await db.select().from(projectBackingCampaigns)
         .where(eq(projectBackingCampaigns.projectId, projectId));
-      if (!campaign?.enabled) return res.status(404).json({ message: "Not accepting backing" });
+      /*
+       * Rejected means a reviewer decided this project shouldn't be funded,
+       * and rejecting never switched the campaign off — so it went on taking
+       * people's money, which then sat for the full refund window. Likewise a
+       * creator who has been suspended or has closed their account can't be
+       * paid out to, so nobody should be charged on their behalf.
+       */
+      if (!(await acceptingBacking(campaign, project.ownerId))) return res.status(404).json({ message: "Not accepting backing" });
 
       const amountCents = clampInt(req.body.amountCents, MIN_PLEDGE_CENTS, MAX_PLEDGE_CENTS, 0);
       if (amountCents < MIN_PLEDGE_CENTS) {
@@ -871,6 +913,22 @@ export function registerBackingRoutes(app: Express) {
       }).where(eq(projectBackingCampaigns.id, campaign.id)).returning();
 
       /*
+       * A rejected project's backers get their money back now, not in ninety
+       * days. Their pledges are made due immediately and the sweep runs — the
+       * one path that refunds, under the row lock, carrying out each backer's
+       * own choice for unclaimed money. A reviewer who approves again before
+       * the sweep reaches a pledge keeps it: the sweep re-reads the approval.
+       */
+      let refundsQueued = 0;
+      if (decision === "rejected") {
+        const due = await db.update(projectBackings).set({ refundDueAt: new Date() })
+          .where(and(eq(projectBackings.projectId, projectId), eq(projectBackings.status, "held")))
+          .returning({ id: projectBackings.id });
+        refundsQueued = due.length;
+        if (refundsQueued > 0) void runRefundSweep().catch((err) => console.error("[backing] sweep after rejection failed:", err));
+      }
+
+      /*
        * Merch is gated on this campaign's review status rather than on a flag
        * copied onto each order, so approving frees the backlog without
        * touching a row: the fulfillment worker only submits orders whose
@@ -884,7 +942,7 @@ export function registerBackingRoutes(app: Express) {
           eq(projectMerchOrders.status, "queued"),
         ));
 
-      res.json({ campaign: updated, merchWaiting: waiting?.n ?? 0 });
+      res.json({ campaign: updated, merchWaiting: waiting?.n ?? 0, refundsQueued });
     } catch (error) {
       console.error("Backing decision error:", error);
       res.status(500).json({ message: "Failed to record that decision" });
@@ -923,26 +981,53 @@ export function registerBackingRoutes(app: Express) {
       const failed: { id: string; error: string }[] = [];
       let totalCents = 0;
 
+      // What has already gone out for this project, by pledge — asked once, up front.
+      const paidOut = await transfersByBacking(stripe, projectId);
+
       // One transfer per backing rather than one lump sum: a single failure
       // then costs one pledge instead of the whole batch, and each transfer
       // carries the id of the pledge that funded it for reconciliation.
       for (const backing of pending) {
         try {
           const amount = creatorPayoutCents(backing.amountCents);
-          const transfer = await stripe.transfers.create({
-            amount,
-            currency: "usd",
-            destination: owner.stripeConnectAccountId,
-            transfer_group: `backing_${projectId}`,
-            metadata: { backingId: backing.id, projectId },
-          }, { idempotencyKey: `release_${backing.id}` });
+          /*
+           * Locked, re-checked, and asked of Stripe before any money moves.
+           *
+           * The row lock is what stops this and the refund sweep from both
+           * acting on one pledge — the sweep takes the same lock, so whichever
+           * gets it second finds the pledge no longer "held" and leaves it.
+           * Without it, a pledge could be refunded to the backer and paid to
+           * the creator: the platform paying for it twice.
+           *
+           * The Stripe lookup is what makes a retry safe. The idempotency key
+           * only holds for 24 hours; after that, a transfer that succeeded but
+           * wasn't recorded (the write below failing) would simply be sent
+           * again. A transfer already carrying this pledge's id is recorded
+           * instead of repeated, however long after.
+           */
+          const outcome = await db.transaction(async (tx) => {
+            const [row] = await tx.select({ id: projectBackings.id }).from(projectBackings)
+              .where(and(eq(projectBackings.id, backing.id), eq(projectBackings.status, "held")))
+              .for("update");
+            if (!row) return "gone" as const;
 
-          await db.update(projectBackings).set({
-            status: "released",
-            stripeTransferId: transfer.id,
-            releasedAt: new Date(),
-            resolvedAt: new Date(),
-          }).where(eq(projectBackings.id, backing.id));
+            const transferId = paidOut.get(backing.id) ?? (await stripe.transfers.create({
+              amount,
+              currency: "usd",
+              destination: owner.stripeConnectAccountId!,
+              transfer_group: `backing_${projectId}`,
+              metadata: { backingId: backing.id, projectId },
+            }, { idempotencyKey: `release_${backing.id}` })).id;
+
+            await tx.update(projectBackings).set({
+              status: "released",
+              stripeTransferId: transferId,
+              releasedAt: new Date(),
+              resolvedAt: new Date(),
+            }).where(eq(projectBackings.id, backing.id));
+            return "released" as const;
+          });
+          if (outcome === "gone") continue;
 
           released.push(backing.id);
           totalCents += amount;

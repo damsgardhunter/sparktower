@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View, type ViewToken } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -12,14 +12,22 @@ import { PostCard } from "../../src/components/PostCard";
 import { VerifyEmailNotice } from "../../src/components/VerifyEmailNotice";
 import { POST_TYPES, type FeedPage, type FeedPost, type PostType } from "../../src/components/feedModel";
 import { Box, GlossyButton, primaryTint } from "../../src/components/feed/Box";
-import { DiscoverNewsLink, FeedbackUsedCard, MyProjectsCard, ProfileCard } from "../../src/components/feed/HomeRail";
+import { FeedbackUsedCard } from "../../src/components/feed/HomeRail";
 import { ContinuePathCard, NEXT_STEPS_KEY } from "../../src/components/feed/ContinuePathCard";
 import { ComposerCard } from "../../src/components/feed/ComposerCard";
 import { RAIL_SLOTS, RailModule, type RailModuleKind } from "../../src/components/feed/RailModules";
+import { PromotionCard } from "../../src/components/feed/PromotionCard";
+import { useFeedPromotions, type PromotionSlot } from "../../src/components/feed/useFeedPromotions";
+import { useHideTabBarOnScroll } from "../../src/components/tab-bar-visibility";
+import { useHeaderSpace } from "../../src/components/AppHeader";
+import { TAB_BAR_SPACE } from "./_layout";
 
 type Scope = "everyone" | "following";
 
-type Item = { key: string; post: FeedPost } | { key: string; module: RailModuleKind };
+type Item =
+  | { key: string; post: FeedPost }
+  | { key: string; module: RailModuleKind }
+  | { key: string; promo: PromotionSlot };
 
 /**
  * Home — the website's home page (client/src/pages/home.tsx) on one column.
@@ -40,7 +48,6 @@ export default function Feed() {
   const [scope, setScope] = useState<Scope>(wanted === "following" ? "following" : "everyone");
   useEffect(() => { if (wanted === "following") setScope("following"); }, [wanted]);
   const [filter, setFilter] = useState<PostType | "all">("all");
-  const [filtering, setFiltering] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   const feed = useInfiniteQuery({
@@ -61,19 +68,49 @@ export default function Feed() {
   }, [feed.data]);
   const followingCount = feed.data?.pages[0]?.followingCount;
 
+  // Featured tools, where the website puts them: usually one above the first
+  // post, then one every few posts, on this feed whichever scope or filter is
+  // on — the same as the web's home feed (client/src/components/founder-feed.tsx).
+  const { promotionBefore, onSeen: promoSeen, onHide: promoHide } = useFeedPromotions(posts.length);
+
   // Posts, with the rail's discovery modules between them on the Everyone feed.
   const items = useMemo<Item[]>(() => {
     const out: Item[] = [];
     const withModules = scope === "everyone" && filter === "all";
+    const promoAt = (index: number) => {
+      const promo = promotionBefore(index);
+      if (promo) out.push({ key: `promo-${promo.promotion.id}-${promo.slot}`, promo });
+    };
     posts.forEach((post, i) => {
+      promoAt(i);
       out.push({ key: post.id, post });
       if (withModules) {
         const slot = RAIL_SLOTS.find((r) => r.after === i);
         if (slot) out.push({ key: `module-${slot.kind}`, module: slot.kind });
       }
     });
+    promoAt(posts.length);
     return out;
-  }, [posts, scope, filter]);
+  }, [posts, scope, filter, promotionBefore]);
+
+  // An impression once half the card has been on screen, as the web counts it.
+  // The bar slides away while you read the feed, and comes back on the way up.
+  const hideTabBar = useHideTabBarOnScroll();
+  // The header floats now, so the list leaves its room rather than sitting under it.
+  const headerSpace = useHeaderSpace();
+  const [filtering, setFiltering] = useState(false);
+
+  // Held in a ref because FlatList refuses a callback that changes identity.
+  const promoSeenRef = useRef(promoSeen);
+  promoSeenRef.current = promoSeen;
+  const viewability = useRef({
+    viewabilityConfig: { itemVisiblePercentThreshold: 50 },
+    onViewableItemsChanged: ({ viewableItems }: { viewableItems: ViewToken[] }) => {
+      for (const { item } of viewableItems) {
+        if (item && typeof item === "object" && "promo" in item) promoSeenRef.current((item as { promo: PromotionSlot }).promo);
+      }
+    },
+  }).current;
   const leftoverModules = scope === "everyone" && filter === "all" && posts.length > 0 && !feed.hasNextPage
     ? RAIL_SLOTS.filter((r) => r.after >= posts.length).map((r) => r.kind)
     : [];
@@ -111,13 +148,20 @@ export default function Feed() {
 
   const header = (
     <View style={s.stack}>
-      <ProfileCard />
+      {/*
+        * No ProfileCard here any more: the app header IS the profile now —
+        * cover, avatar, name and the same three numbers, from the same
+        * endpoint. Two of them on one screen was the same card twice.
+        */}
       <VerifyEmailNotice onNotice={show} />
       <GlossyButton label="Create Project" icon="add" onPress={() => router.push("/project/new" as any)} testID="button-create-project-home" />
-      <DiscoverNewsLink />
+      {/* The "new since you last looked" line is gone from here as well as from
+          Discover. It was the same nag in two places, and what it counted was
+          the app's own bookkeeping rather than anything a person asked for. */}
       <ContinuePathCard onNotice={show} />
       <FeedbackUsedCard />
-      <MyProjectsCard />
+      {/* "Your projects" directly under "Continue your path" was the same list
+          twice over — the path card already names the project you're in. */}
       <ComposerCard />
 
       {/* One line: whose posts on the left, and a small Filter at the end. */}
@@ -146,6 +190,12 @@ export default function Feed() {
           })}
         </View>
         <View style={s.filler} />
+        {/*
+          * One filter control, as the web has: a Filter button that opens the
+          * list, and the active one shown beside it so its state is never
+          * invisible. The row of chips this replaces put six choices on screen
+          * at all times to save a tap that nobody minded making.
+          */}
         {filterLabel && (
           <Pressable onPress={() => setFilter("all")} style={s.clear} hitSlop={6} testID="filter-clear">
             <Text style={s.clearText} numberOfLines={1}>{filterLabel}</Text>
@@ -207,7 +257,12 @@ export default function Feed() {
       <FlatList
         data={items}
         keyExtractor={(it) => it.key}
-        renderItem={({ item }) => ("post" in item ? <PostCard post={item.post} onNotice={show} /> : <RailModule kind={item.module} />)}
+        renderItem={({ item }) =>
+          "post" in item ? <PostCard post={item.post} onNotice={show} />
+          : "promo" in item ? <PromotionCard promotion={item.promo.promotion} slot={item.promo.slot} onHide={promoHide} />
+          : <RailModule kind={item.module} />}
+        viewabilityConfig={viewability.viewabilityConfig}
+        onViewableItemsChanged={viewability.onViewableItemsChanged}
         ItemSeparatorComponent={() => <View style={{ height: spacing.sm }} />}
         ListHeaderComponent={header}
         ListEmptyComponent={empty}
@@ -227,9 +282,11 @@ export default function Feed() {
         }
         onEndReached={() => { if (feed.hasNextPage && !feed.isFetchingNextPage) feed.fetchNextPage(); }}
         onEndReachedThreshold={0.6}
-        contentContainerStyle={{ paddingTop: spacing.sm, paddingBottom: 110 }}
+        {...hideTabBar}
+        contentContainerStyle={{ paddingTop: headerSpace + spacing.sm, paddingBottom: TAB_BAR_SPACE }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
       />
+
 
       <Sheet visible={filtering} onClose={() => setFiltering(false)} title="Show posts">
         <View style={{ marginHorizontal: -spacing.lg }}>
@@ -239,13 +296,13 @@ export default function Feed() {
             onPress={() => { setFilter("all"); setFiltering(false); }}
             right={filter === "all" ? <Ionicons name="checkmark" size={20} color={colors.primary} /> : <View />}
           />
-          {POST_TYPES.map((t) => (
+          {POST_TYPES.map((pt) => (
             <ListItem
-              key={t.type}
-              icon={t.icon}
-              title={t.label}
-              onPress={() => { setFilter(t.type); setFiltering(false); }}
-              right={filter === t.type ? <Ionicons name="checkmark" size={20} color={colors.primary} /> : <View />}
+              key={pt.type}
+              icon={pt.icon}
+              title={pt.label}
+              onPress={() => { setFilter(pt.type); setFiltering(false); }}
+              right={filter === pt.type ? <Ionicons name="checkmark" size={20} color={colors.primary} /> : <View />}
             />
           ))}
         </View>
@@ -277,6 +334,7 @@ const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.canvas },
   stack: { gap: spacing.sm, marginBottom: spacing.sm },
   filterBar: { flexDirection: "row", alignItems: "center", gap: 4, marginHorizontal: spacing.sm, paddingVertical: 2 },
+  // Equal flex so the cells divide the width evenly however long the words are.
   scopes: { flexDirection: "row", gap: 2 },
   scope: { flexDirection: "row", alignItems: "center", gap: 5, height: 30, paddingHorizontal: 10, borderRadius: 6 },
   scopeOn: { backgroundColor: "#000000" },

@@ -1,24 +1,105 @@
 {
+  // eas.json is parsed as JSON5 by EAS CLI, so these comments are legal.
   "cli": {
     "version": ">= 23.0.0",
+    // "remote" means EAS owns the version numbers: ios.buildNumber and
+    // android.versionCode in app.json are ignored for EAS builds. Bump the
+    // user-facing `version` in app.json by hand; the build number increments
+    // itself (see build.production.autoIncrement).
     "appVersionSource": "remote"
   },
   "build": {
     "development": {
       "developmentClient": true,
       "distribution": "internal",
-      "channel": "development"
+      "channel": "development",
+      "env": {
+        // Localhost is rewritten per-platform at runtime (10.0.2.2 on the
+        // Android emulator, the LAN host on a physical device) — see
+        // src/api/client.ts resolveApiUrl().
+        "EXPO_PUBLIC_API_URL": "http://localhost:5001"
+      }
     },
     "preview": {
       "distribution": "internal",
-      "channel": "preview"
+      "channel": "preview",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://sparktower.app"
+      }
     },
     "production": {
       "channel": "production",
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        // Set explicitly so a store build can never inherit a development
+        // host. app.json's extra.apiUrl is the same value as a second line of
+        // defence, and client.ts refuses a localhost host in a production
+        // bundle outright.
+        "EXPO_PUBLIC_API_URL": "https://sparktower.app"
+      }
     }
   },
+
+  // ---------------------------------------------------------------------
+  // SUBMIT — every value below is a placeholder. `eas submit` will fail
+  // loudly on each one until it is replaced. Nothing here is a secret, and
+  // nothing secret may be added: the Play service-account JSON and the App
+  // Store Connect API key are files, referenced by path, and both paths are
+  // gitignored.
+  // ---------------------------------------------------------------------
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        // The Apple ID (an email address) that is signed in to App Store
+        // Connect and holds the app. Apple Developer account → the email you
+        // log in with. Not the bundle identifier.
+        "appleId": "REPLACE_WITH_APPLE_ID_EMAIL",
+
+        // The app's numeric Apple ID, issued when the app record is first
+        // created. App Store Connect → My Apps → the app → App Information →
+        // General Information → "Apple ID" (a 10-digit number). It does not
+        // exist until you have created the app record, so create it before
+        // the first submit.
+        "ascAppId": "REPLACE_WITH_APP_STORE_CONNECT_APP_ID",
+
+        // The 10-character team identifier.
+        // developer.apple.com → Account → Membership details → Team ID.
+        "appleTeamId": "REPLACE_WITH_APPLE_TEAM_ID",
+
+        // Optional but strongly preferred over interactive Apple login: an
+        // App Store Connect API key (App Store Connect → Users and Access →
+        // Integrations → App Store Connect API → generate a key with the
+        // "App Manager" role). Download the .p8 once — Apple will not show it
+        // again — keep it out of the repo, and uncomment these three:
+        // "ascApiKeyPath": "./secrets/asc-api-key.p8",
+        // "ascApiKeyIssuerId": "REPLACE_WITH_ISSUER_ID",
+        // "ascApiKeyId": "REPLACE_WITH_KEY_ID",
+
+        "bundleIdentifier": "com.sparktower.app"
+      },
+      "android": {
+        // A Google Cloud service account JSON key with the Play Developer API
+        // enabled, then invited into Play Console → Users and permissions with
+        // "Release to testing tracks" and "Release apps to production".
+        // Google Play Console → Setup → API access → link a Google Cloud
+        // project → create a service account → create a JSON key → download.
+        // Store it at mobile/secrets/ (gitignored). Never commit it.
+        "serviceAccountKeyPath": "./secrets/play-service-account.json",
+
+        // "internal" is deliberate for the first upload: a new personal Play
+        // account cannot reach production at all until the closed-testing gate
+        // (12 testers, 14 continuous days) is cleared — see
+        // docs/ops/mobile-release.md. Move this to "internal" → "alpha"
+        // (closed) → "production" as the account earns each track.
+        "track": "internal",
+
+        "applicationId": "com.sparktower.app",
+
+        // false = the upload is sent for Google's review as soon as it lands.
+        // Set true only when batching several changes and promoting them
+        // together from the Play Console by hand.
+        "changesNotSentForReview": false
+      }
+    }
   }
 }

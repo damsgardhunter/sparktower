@@ -14,11 +14,14 @@ export const SPRINT_PHASES = ["setup", "ideation", "alignment", "building", "val
 export const PHASE_LABELS: Record<string, string> = {
   setup: "Setup", ideation: "Ideation", alignment: "Alignment", building: "Building",
   validation: "Validation", review: "Review", completed: "Completed",
+  // An ending, not a phase — see the status enum in shared/schema.ts.
+  abandoned: "Ended early",
 };
 
 export const PHASE_ICONS: Record<string, IconName> = {
   setup: "sparkles", ideation: "bulb", alignment: "locate", building: "list",
   validation: "document-text", review: "people", completed: "checkmark-circle",
+  abandoned: "exit-outline",
 };
 
 export const PHASE_COLORS: Record<string, string> = {

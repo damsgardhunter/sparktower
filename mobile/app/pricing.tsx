@@ -50,9 +50,15 @@ export default function Pricing() {
   };
 
   const checkout = useMutation({
-    mutationFn: ({ priceId }: { priceId: string; tier: string }) => api<{ url?: string }>("/api/checkout", { method: "POST", body: { priceId } }),
+    mutationFn: ({ priceId }: { priceId: string; tier: string }) => api<{ url?: string; switched?: boolean }>("/api/checkout", { method: "POST", body: { priceId } }),
     onSuccess: async (r) => {
       setPendingTier(null);
+      // Already subscribed: the plan changed on the existing subscription, never a second one.
+      if (r.switched) {
+        await qc.invalidateQueries();
+        show({ tone: "success", text: "Plan changed. The difference is prorated on your next invoice." });
+        return;
+      }
       if (!r.url) { show({ tone: "error", text: "Couldn't start checkout: no checkout link came back." }); return; }
       await WebBrowser.openBrowserAsync(r.url);
       await afterBrowser(ent.tier);

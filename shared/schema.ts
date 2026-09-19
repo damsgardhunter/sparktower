@@ -1,4 +1,4 @@
-import { pgTable, text, varchar, timestamp, integer, boolean, index, jsonb, unique, foreignKey, bigserial, bigint, real } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, integer, boolean, index, jsonb, unique, foreignKey, bigserial, bigint, real, primaryKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
@@ -1190,6 +1190,10 @@ export const NOTIFICATION_KINDS = [
   "artifact_signup",
   // Someone accepted an invite to your project.
   "invite_accepted",
+  // Your sprint partner left. The sprint is over for both of you, and you're free to look again.
+  "sprint_left",
+  // A teammate in a simulated season is waiting on your seat to file this year.
+  "sim_nudge",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
@@ -2207,7 +2211,12 @@ export const cofounderSprints = pgTable("cofounder_sprints", {
   user1Id: varchar("user1_id").notNull().references(() => users.id),
   user2Id: varchar("user2_id").notNull().references(() => users.id),
   duration: text("duration", { enum: ["24h", "72h"] }).notNull(),
-  status: text("status", { enum: ["setup", "ideation", "alignment", "building", "validation", "review", "completed"] }).default("setup").notNull(),
+  /**
+   * `abandoned` is an ending, not a stage: it means somebody left, and the
+   * sprint stops there. It is deliberately not a stage in the sequence — a
+   * sprint never advances *into* it, and nothing advances out of it.
+   */
+  status: text("status", { enum: ["setup", "ideation", "alignment", "building", "validation", "review", "completed", "abandoned"] }).default("setup").notNull(),
   productStyle: text("product_style", { enum: ["past", "modern", "futuristic"] }),
   productName: text("product_name"),
   productDescription: text("product_description"),
@@ -2223,6 +2232,17 @@ export const cofounderSprints = pgTable("cofounder_sprints", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
   startedAt: timestamp("started_at"),
   completedAt: timestamp("completed_at"),
+  /**
+   * Who left, when, and — if they said — why.
+   *
+   * Kept rather than deleting the sprint: the other person spent hours in it,
+   * and a sprint that vanishes reads as a bug rather than as someone leaving.
+   * `abandonedById` is also what lets the remaining partner be told which of
+   * them it was, without inferring it from a status alone.
+   */
+  abandonedAt: timestamp("abandoned_at"),
+  abandonedById: varchar("abandoned_by_id").references(() => users.id),
+  abandonReason: text("abandon_reason"),
 });
 
 export const sprintResponses = pgTable("sprint_responses", {
@@ -2350,6 +2370,179 @@ export const sprintMatchmakingQueue = pgTable("sprint_matchmaking_queue", {
     name: "sprint_matchmaking_queue_matched_sprint_fk",
   }),
 }));
+
+/* ── Ten Years From Now: the startup game ────────────────────────────────── */
+
+/**
+ * One game of Ten Years From Now.
+ *
+ * Two strangers get half an hour to invent a startup, and then a model says
+ * what it thinks the thing is worth in a decade. It replaces the questionnaire
+ * sprint, which asked people to type paragraphs into boxes alone — a
+ * reasonable set of questions and a poor thing to do with another person.
+ *
+ * Kept separate from `cofounder_sprints` rather than bolted onto it. That
+ * table's columns are the questionnaire's shape (`agreed_problem`,
+ * `validation_questions`) and its status enum is the questionnaire's phases;
+ * reusing it would mean every column on both being nullable and neither game
+ * being readable from the schema. A row here is a whole game.
+ *
+ * The decisions live on the game rather than in the submissions table because
+ * they are what the game *is*: a settled customer is a fact about this
+ * company, and reconstructing it by replaying votes every time somebody opens
+ * the screen would be a second source of truth waiting to disagree.
+ */
+export const startupGames = pgTable("startup_games", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  player1Id: varchar("player1_id").notNull().references(() => users.id),
+  player2Id: varchar("player2_id").notNull().references(() => users.id),
+  /**
+   * Which round is open. `verdict` is the result screen; `abandoned` is an
+   * ending rather than a stage, and nothing advances out of it.
+   */
+  round: text("round", { enum: ["idea", "customer", "model", "product", "spend", "verdict", "abandoned"] })
+    .default("idea").notNull(),
+  /** When the open round stops waiting and settles itself. */
+  roundEndsAt: timestamp("round_ends_at"),
+  /** past | modern | futuristic — the flavour both players' ideas are drawn in. */
+  era: text("era", { enum: ["past", "modern", "futuristic"] }),
+
+  /* What they settled on, round by round. Null until that round closes. */
+  /** The chosen idea, whole: name, pitch, the twist. */
+  idea: jsonb("idea"),
+  /** Card id, plus the label, so a custom card survives the deck changing. */
+  customerCardId: varchar("customer_card_id"),
+  customerLabel: text("customer_label"),
+  modelCardId: varchar("model_card_id"),
+  modelLabel: text("model_label"),
+  /** Up to ten ways it beats what exists, each flagged core or not. */
+  productClaims: jsonb("product_claims"),
+  /** The committed allocation of the million: option id → dollars. */
+  budget: jsonb("budget"),
+  /**
+   * How each round ended — agreed, coin, unopposed or nobody — keyed by round.
+   *
+   * Stored because the screen has to be able to say "the coin went your
+   * partner's way". A player whose pick vanished with no explanation writes in
+   * to complain; one who is told they lost a toss does not.
+   */
+  settledBy: jsonb("settled_by"),
+
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  completedAt: timestamp("completed_at"),
+  abandonedAt: timestamp("abandoned_at"),
+  abandonedById: varchar("abandoned_by_id").references(() => users.id),
+}, (table) => ({
+  byPlayer1: index("startup_games_player1_idx").on(table.player1Id, table.round),
+  byPlayer2: index("startup_games_player2_idx").on(table.player2Id, table.round),
+  /** The sweep that settles rounds nobody is watching reads exactly this. */
+  byDeadline: index("startup_games_deadline_idx").on(table.round, table.roundEndsAt),
+}));
+
+/**
+ * What one player put forward in one round, before it settled.
+ *
+ * Kept after the round closes rather than deleted. The results screen is much
+ * better for being able to say what each of you wanted — "you both said night
+ * nurses" and "you wanted the marketplace" are the sentences that make this
+ * feel like something you did together rather than a form that produced a
+ * number.
+ */
+export const startupGameSubmissions = pgTable("startup_game_submissions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  gameId: varchar("game_id").notNull().references(() => startupGames.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  round: text("round").notNull(),
+  /** Whatever that round collects: an idea, a card id, claims, an allocation. */
+  payload: jsonb("payload").notNull(),
+  submittedAt: timestamp("submitted_at").defaultNow().notNull(),
+}, (table) => ({
+  /** One standing submission per player per round; changing your mind replaces it. */
+  once: unique("startup_game_submissions_once").on(table.gameId, table.userId, table.round),
+}));
+
+/**
+ * What a player has typed and not yet put forward.
+ *
+ * Kept apart from submissions on purpose. A submission is a decision — against
+ * a bot partner it closes a pick round the moment it lands — so saving a
+ * half-written idea as one would commit it before the person had finished.
+ * A draft is only ever read when the round's clock runs out and that player
+ * never submitted: then it stands in for them.
+ *
+ * Without it, the clock running out threw away everything on the screen that
+ * had not been sent. A player halfway through writing their company's name,
+ * tagline and pitch found the game had moved on to a company with no name and
+ * no description, because the only copy of their work was in their browser.
+ */
+export const startupGameDrafts = pgTable("startup_game_drafts", {
+  gameId: varchar("game_id").notNull().references(() => startupGames.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  round: text("round").notNull(),
+  payload: jsonb("payload").notNull(),
+  savedAt: timestamp("saved_at").notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.gameId, table.userId, table.round] }),
+}));
+
+/** The argument. A round is settled by picking; this is where it gets decided. */
+export const startupGameMessages = pgTable("startup_game_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  gameId: varchar("game_id").notNull().references(() => startupGames.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** Which round it was said in, so the transcript reads as the game did. */
+  round: text("round").notNull(),
+  body: text("body").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  byGame: index("startup_game_messages_game_idx").on(table.gameId, table.createdAt),
+}));
+
+/**
+ * What the model made of it.
+ *
+ * One row per game, written once. The five scores are 0–1000 and are what the
+ * leaderboards rank; `risk` is the one where lower is better, which the
+ * dimension list in @shared/sprints/scoring owns so that nothing sorts it by
+ * guessing.
+ *
+ * The valuations are stored in whole dollars as `bigint` — a ten-year
+ * valuation of a few hundred billion overflows a 32-bit integer, and finding
+ * that out in production is a poor way to find it out.
+ */
+export const startupGameVerdicts = pgTable("startup_game_verdicts", {
+  gameId: varchar("game_id").primaryKey().references(() => startupGames.id, { onDelete: "cascade" }),
+  growth: integer("growth").notNull(),
+  capital: integer("capital").notNull(),
+  product: integer("product").notNull(),
+  acquisition: integer("acquisition").notNull(),
+  /** Higher means riskier. The board is "lowest risk" and sorts ascending. */
+  risk: integer("risk").notNull(),
+  /** Mean of the five with risk inverted, so every board points the same way. */
+  overall: integer("overall").notNull(),
+  tenYear: bigint("ten_year", { mode: "number" }).notNull(),
+  peak: bigint("peak", { mode: "number" }).notNull(),
+  peakYear: integer("peak_year").notNull(),
+  summary: text("summary").notNull(),
+  notes: jsonb("notes"),
+  advice: jsonb("advice"),
+  /**
+   * False when the model could not be reached and the verdict is the honest
+   * fallback rather than a judgement. The screen says so; the leaderboard
+   * leaves these out, because a placeholder that ranks is a lie.
+   */
+  fromModel: boolean("from_model").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /** Every leaderboard is this index, read five ways. */
+  byOverall: index("startup_game_verdicts_overall_idx").on(table.overall),
+}));
+
+export const insertStartupGameSchema = createInsertSchema(startupGames).omit({ id: true, startedAt: true });
+export type StartupGame = typeof startupGames.$inferSelect;
+export type StartupGameSubmission = typeof startupGameSubmissions.$inferSelect;
+export type StartupGameMessage = typeof startupGameMessages.$inferSelect;
+export type StartupGameVerdict = typeof startupGameVerdicts.$inferSelect;
 
 // Sprint insert schemas
 export const insertCofounderSprintSchema = createInsertSchema(cofounderSprints).omit({ id: true, createdAt: true });
@@ -2488,3 +2681,264 @@ export type InsertSprintBehavioralMetrics = z.infer<typeof insertSprintBehaviora
 export type SprintCompatibilityReport = typeof sprintCompatibilityReports.$inferSelect;
 export type InsertSprintCompatibilityReport = z.infer<typeof insertSprintCompatibilityReportSchema>;
 export type SprintMatchmakingQueueEntry = typeof sprintMatchmakingQueue.$inferSelect;
+
+/* ── Market simulation: seasons, ventures and the lobby ──────────────────── */
+
+/**
+ * A run of the market simulation: one niche, fourteen days, one day per
+ * simulated year.
+ *
+ * A season is the unit everything else hangs off, and it is per-niche because
+ * the whole point of the game is competing against the other teams in your
+ * market. Two ventures in different niches never meet.
+ */
+export const simSeasons = pgTable("sim_seasons", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  /** Which market — an id from @shared/simulation/niches. */
+  nicheId: varchar("niche_id").notNull(),
+  name: text("name").notNull(),
+  status: text("status", { enum: ["forming", "running", "finished", "abandoned"] }).default("forming").notNull(),
+  /** 1-based. The year the next tick will resolve. */
+  year: integer("year").default(1).notNull(),
+  totalYears: integer("total_years").default(14).notNull(),
+  /** When the next year resolves. One day apart in a real season, minutes in a test one. */
+  nextTickAt: timestamp("next_tick_at"),
+  /**
+   * The engine's World after the last resolved year: incumbents, economy,
+   * every company, whole.
+   *
+   * The season owns this rather than the ventures, because a year is resolved
+   * for everyone at once — the players' customers are the ones the incumbents
+   * did not keep. Split across five rows it would be five half-truths that can
+   * disagree; here there is one state, written once per tick.
+   */
+  world: jsonb("world"),
+  startsAt: timestamp("starts_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  byStatus: index("sim_seasons_status_idx").on(table.status, table.nicheId),
+}));
+
+/**
+ * One company, run by up to five people.
+ *
+ * `state` is the world's view of this company between ticks — the shape in
+ * @shared/simulation/types. It is stored whole rather than as columns because
+ * the engine owns its meaning: a column per score would be two definitions of
+ * the same thing, and the one in the database would quietly go stale.
+ */
+export const simVentures = pgTable("sim_ventures", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  seasonId: varchar("season_id").notNull().references(() => simSeasons.id, { onDelete: "cascade" }),
+  /** Null until the CEO names it — naming is the CEO's, and the lobby waits for it. */
+  name: text("name"),
+  /** What they've decided to sell. The CEO's call, with the table shouting. */
+  product: text("product"),
+  /**
+   * Where this venture is in the lobby.
+   *
+   * filling → claiming → naming → running. Each step has a deadline, because a
+   * lobby with no clock is a lobby where one absent person holds four others
+   * hostage.
+   */
+  phase: text("phase", { enum: ["filling", "claiming", "naming", "running", "retired"] }).default("filling").notNull(),
+  /** When the current phase stops waiting and resolves itself. */
+  phaseEndsAt: timestamp("phase_ends_at"),
+  /** The engine's Company for this venture, after the last resolved year. */
+  state: jsonb("state"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  bySeason: index("sim_ventures_season_idx").on(table.seasonId, table.phase),
+}));
+
+/**
+ * A seat at a table.
+ *
+ * The unique indexes are the feature, not bookkeeping. Five people claim five
+ * seats at the same moment on five phones, and the database is the only place
+ * that can settle it: one row per (venture, role) means a second CEO is a
+ * constraint violation rather than a race nobody notices until the season is
+ * running. One row per (venture, user) means nobody quietly holds two seats.
+ *
+ * `role` is null between joining and claiming — a person in the room who
+ * hasn't taken a seat yet is a real state, and the one the whole lobby screen
+ * is about.
+ */
+export const simSeats = pgTable("sim_seats", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ventureId: varchar("venture_id").notNull().references(() => simVentures.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** ceo | cmo | cfo | cto | coo, or null while they're still arguing about it. */
+  role: varchar("role"),
+  /** Set when the lobby's clock ran out and the seat was assigned rather than chosen. */
+  assigned: boolean("assigned").default(false).notNull(),
+  joinedAt: timestamp("joined_at").defaultNow().notNull(),
+  claimedAt: timestamp("claimed_at"),
+}, (table) => ({
+  /** One person, one seat. */
+  onePerPerson: unique("sim_seats_venture_user").on(table.ventureId, table.userId),
+  /**
+   * One person per role — the constraint the whole lobby rests on.
+   *
+   * Postgres treats NULLs as distinct, which is exactly what is wanted here:
+   * any number of people can be sitting in the room without a seat, and the
+   * moment two of them reach for "ceo" the second one is a unique violation
+   * rather than a second chief executive nobody notices until the season runs.
+   */
+  oneRolePerVenture: unique("sim_seats_venture_role").on(table.ventureId, table.role),
+  bySeat: index("sim_seats_venture_idx").on(table.ventureId),
+}));
+
+/** What each seat decided in a given year — the input to the engine's tick. */
+export const simDecisions = pgTable("sim_decisions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ventureId: varchar("venture_id").notNull().references(() => simVentures.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  role: varchar("role").notNull(),
+  year: integer("year").notNull(),
+  /** The role's decision object from @shared/simulation/decisions. */
+  payload: jsonb("payload").notNull(),
+  submittedAt: timestamp("submitted_at").defaultNow().notNull(),
+}, (table) => ({
+  /** One submission per seat per year; a later one replaces it rather than stacking. */
+  once: unique("sim_decisions_once").on(table.ventureId, table.role, table.year),
+}));
+
+/**
+ * One person's objective for one year.
+ *
+ * Stored rather than recomputed on read, even though `challengeFor` is
+ * deterministic: the challenge is written against the company's position at
+ * the moment it was set, and that position changes the instant the year
+ * resolves. Recomputed later it would quietly become a different challenge,
+ * and a player would be marked against a target they were never shown.
+ */
+export const simChallenges = pgTable("sim_challenges", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ventureId: varchar("venture_id").notNull().references(() => simVentures.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  role: varchar("role").notNull(),
+  year: integer("year").notNull(),
+  /** The Challenge from @shared/simulation/challenges, as it was set. */
+  challenge: jsonb("challenge").notNull(),
+  /** The ChallengeResult, once the year has run. Null while it is still being played. */
+  result: jsonb("result"),
+  outcome: text("outcome", { enum: ["met", "partial", "missed"] }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /** One challenge per seat per year. */
+  once: unique("sim_challenges_once").on(table.ventureId, table.role, table.year),
+  byPerson: index("sim_challenges_user_idx").on(table.userId, table.year),
+}));
+
+/**
+ * Something a team has put up for sale.
+ *
+ * The open market's listings are generated deterministically from the season
+ * and year and are not stored — they are the same for everyone and can always
+ * be recomputed. These are the ones that only exist because a team decided to
+ * sell, so there is nothing to derive them from.
+ */
+export const simListings = pgTable("sim_listings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  seasonId: varchar("season_id").notNull().references(() => simSeasons.id, { onDelete: "cascade" }),
+  /** The venture selling it. */
+  sellerId: varchar("seller_id").notNull().references(() => simVentures.id, { onDelete: "cascade" }),
+  year: integer("year").notNull(),
+  /** The CompanyAsset being sold, whole. */
+  asset: jsonb("asset").notNull(),
+  reserve: integer("reserve").notNull(),
+  status: text("status", { enum: ["open", "sold", "unsold", "withdrawn"] }).default("open").notNull(),
+  buyerId: varchar("buyer_id").references(() => simVentures.id, { onDelete: "set null" }),
+  soldFor: integer("sold_for"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  bySeason: index("sim_listings_season_idx").on(table.seasonId, table.year, table.status),
+}));
+
+/**
+ * A sealed bid.
+ *
+ * Sealed is the whole point: nobody sees anyone else's number until the tick
+ * resolves them, which is what makes the marketplace a judgement about what a
+ * thing is worth to you rather than a race to press a button first.
+ */
+export const simBids = pgTable("sim_bids", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ventureId: varchar("venture_id").notNull().references(() => simVentures.id, { onDelete: "cascade" }),
+  /** Either a generated market listing id or a row in sim_listings. */
+  listingId: varchar("listing_id").notNull(),
+  year: integer("year").notNull(),
+  amount: integer("amount").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /** One bid per venture per listing — a team bids once, and may revise it. */
+  once: unique("sim_bids_once").on(table.ventureId, table.listingId, table.year),
+}));
+
+/**
+ * One team's offer to buy another.
+ *
+ * An offer lives for one year. If the other team has not answered by the time
+ * the year resolves it lapses, which is deliberate: an offer that sat open
+ * indefinitely would let a buyer tie up a rival's decision-making for a
+ * fortnight at no cost, and the answer to "do you want to sell" changes every
+ * time the market does.
+ */
+export const simOffers = pgTable("sim_offers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  seasonId: varchar("season_id").notNull().references(() => simSeasons.id, { onDelete: "cascade" }),
+  year: integer("year").notNull(),
+  fromVentureId: varchar("from_venture_id").notNull().references(() => simVentures.id, { onDelete: "cascade" }),
+  toVentureId: varchar("to_venture_id").notNull().references(() => simVentures.id, { onDelete: "cascade" }),
+  amount: integer("amount").notNull(),
+  /** A note from the buyer, because this is a negotiation between people. */
+  message: text("message"),
+  status: text("status", { enum: ["pending", "accepted", "declined", "lapsed", "withdrawn"] })
+    .default("pending").notNull(),
+  respondedById: varchar("responded_by_id").references(() => users.id, { onDelete: "set null" }),
+  respondedAt: timestamp("responded_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /** One live offer from a buyer to a target in a year. */
+  once: unique("sim_offers_once").on(table.fromVentureId, table.toVentureId, table.year),
+  byTarget: index("sim_offers_target_idx").on(table.toVentureId, table.status),
+}));
+
+/** A recovery move a team has committed to, applied at the start of the next tick. */
+export const simRecoveryMoves = pgTable("sim_recovery_moves", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  ventureId: varchar("venture_id").notNull().references(() => simVentures.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  year: integer("year").notNull(),
+  kind: text("kind", { enum: ["restructure", "fire_sale", "dissolve_seat", "rescue_raise"] }).notNull(),
+  /** Which seat, for dissolve_seat. */
+  seat: varchar("seat"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /** One move per year. These are not decisions you take several of at once. */
+  once: unique("sim_recovery_once").on(table.ventureId, table.year),
+}));
+
+/** What the engine said happened, kept so a season can be read back year by year. */
+export const simReports = pgTable("sim_reports", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  seasonId: varchar("season_id").notNull().references(() => simSeasons.id, { onDelete: "cascade" }),
+  /** Null for the AI-run incumbents, which have no venture behind them. */
+  ventureId: varchar("venture_id").references(() => simVentures.id, { onDelete: "cascade" }),
+  companyId: varchar("company_id").notNull(),
+  year: integer("year").notNull(),
+  report: jsonb("report").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  bySeasonYear: index("sim_reports_season_year_idx").on(table.seasonId, table.year),
+  /**
+   * One report per company per year, enforced rather than assumed.
+   *
+   * The tick is built to be safely re-runnable — a process that dies between
+   * writing reports and advancing the year must be able to pick the year up
+   * again — and this is what makes re-running it harmless instead of a season
+   * with two conflicting accounts of year six.
+   */
+  once: unique("sim_reports_once").on(table.seasonId, table.companyId, table.year),
+}));

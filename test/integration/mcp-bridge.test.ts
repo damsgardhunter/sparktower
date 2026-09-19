@@ -19,7 +19,7 @@ import crypto from "node:crypto";
 import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { db } from "../../server/db";
-import { mcpTokens } from "@shared/schema";
+import { mcpTokens, users } from "@shared/schema";
 import { saveWork } from "../../server/phase-trees";
 
 afterAll(async () => { await closeTestApp(); });
@@ -45,6 +45,63 @@ async function tokenFor(agent: any, body: Record<string, unknown> = { label: "Te
   expect(res.status).toBe(201);
   return res.body;
 }
+
+
+describe("the account behind a token", () => {
+  /*
+   * A token was checked for existing and nothing else. The two things every
+   * other way into an account already asks — has it been signed out
+   * everywhere, and is it suspended — the bridge did not, so a leaked editor
+   * token outlived its owner's password reset, and a suspended account could
+   * go on writing through it.
+   */
+  async function signedIn(app: any) {
+    const agent = request.agent(app);
+    const email = `mcp-acct-${Date.now()}-${Math.random().toString(36).slice(2, 7)}@example.test`;
+    const reg = await agent.post("/api/auth/register").send({ email, password });
+    return { agent, email, id: reg.body.id as string };
+  }
+
+  it("ends with a sign-out everywhere, like every other session — and a token made afterwards works", async () => {
+    const app = await getTestApp();
+    const me = await signedIn(app);
+    const p = (await project(me.agent)).body;
+    const before = await tokenFor(me.agent);
+    const status = (token: string) => request(app).get(`/api/mcp/projects/${p.id}/status`).set("authorization", `Bearer ${token}`);
+    expect((await status(before.token)).status).toBe(200);
+
+    // The same button a person presses in Settings after losing a laptop.
+    expect((await me.agent.post("/api/auth/logout-all")).status).toBe(200);
+
+    const refused = await status(before.token);
+    expect(refused.status, "a token from before the sign-out").toBe(401);
+    expect(refused.body.message).toMatch(/signed out everywhere/i);
+
+    // Back in, a new token is fine, and the list no longer shows the dead one as connected.
+    expect((await me.agent.post("/api/auth/login").send({ email: me.email, password })).status).toBe(200);
+    const after = await tokenFor(me.agent);
+    expect((await status(after.token)).status).toBe(200);
+    const listed = (await me.agent.get("/api/mcp-tokens")).body.tokens.map((t: any) => t.id);
+    expect(listed).toContain(after.id);
+    expect(listed).not.toContain(before.id);
+  });
+
+  it("lets a suspended account read, and refuses its writes", async () => {
+    const app = await getTestApp();
+    const me = await signedIn(app);
+    const p = (await project(me.agent)).body;
+    const { token } = await tokenFor(me.agent);
+    await db.update(users).set({ suspendedAt: new Date(), suspendedReason: "spam" }).where(eq(users.id, me.id));
+
+    const read = await request(app).get(`/api/mcp/projects/${p.id}/status`).set("authorization", `Bearer ${token}`);
+    expect(read.status, "reads stay open, as they do everywhere for a suspended account").toBe(200);
+
+    const write = await request(app).post(`/api/mcp/projects/${p.id}/work`).set("authorization", `Bearer ${token}`)
+      .send({ taskId: "anything", summary: "still writing" });
+    expect(write.status).toBe(403);
+    expect(write.body.code).toBe("account_suspended");
+  });
+});
 
 // --- the credential --------------------------------------------------------
 

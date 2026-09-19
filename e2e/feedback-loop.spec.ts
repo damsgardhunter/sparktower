@@ -5,7 +5,7 @@
  * loop starts again. The API-level version is test/integration/feedback-loop.test.ts;
  * this is the proof a person can see it.
  */
-import { test, expect, type Browser } from "@playwright/test";
+import { test, expect, type Browser } from "./test";
 import { verifyEmail } from "./verify-email";
 
 const password = "Testpass123!";

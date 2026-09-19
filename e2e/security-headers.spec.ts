@@ -5,7 +5,7 @@
  * project manager, the invite screen. The browser tests all run with the
  * policy enforced (CSP_ENFORCE=1); this one fails on any violation it sees.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./test";
 import { verifyEmail } from "./verify-email";
 import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";

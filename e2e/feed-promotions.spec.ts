@@ -4,7 +4,7 @@
  * an admin's video plays muted on its own, under our sound, pause and title controls, and a
  * referral link shows its perk. API-level: test/integration/promotions.test.ts.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./test";
 import { verifyEmail } from "./verify-email";
 import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";

@@ -12,13 +12,52 @@ describe("the catalog", () => {
   it("has every company once, a real category, and an https site", () => {
     const ids = PROMOTION_CATALOG.map((p) => p.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids.length).toBe(99);
+    /*
+     * Two entries removed on 2026-09-17 after checking every URL in the
+     * catalog: windsurf.com redirects to devin.ai/desktop (the editor was
+     * renamed Devin Desktop, and `devin` was already listed — one company
+     * twice), and hotjar.com redirects into Contentsquare, where you cannot
+     * sign up for Hotjar at all. A catalogue entry for a product nobody can
+     * buy is worse than a gap.
+     */
+    expect(ids.length).toBe(97);
     for (const p of PROMOTION_CATALOG) {
       expect(PROMOTION_CATEGORIES.some((c) => c.id === p.category), p.id).toBe(true);
       expect(new URL(p.url).protocol).toBe("https:");
       expect(p.tagline.length).toBeLessThanOrEqual(120);
     }
     expect(PROMOTION_CATALOG.find((p) => p.id === "replit")?.perk).toBe("$10 in credits");
+  });
+
+  /*
+   * Curated channels exist so a company whose site links no channel still gets
+   * a video. They're a starting point for the sync, not a pinned video — the
+   * clip shown is always whatever that channel published recently.
+   */
+  describe("curated YouTube channels", () => {
+    const withChannel = PROMOTION_CATALOG.filter((p) => p.channel);
+
+    it("covers a good part of the catalog, including the tools this site runs on", () => {
+      expect(withChannel.length).toBeGreaterThanOrEqual(50);
+      // The ones SparkTower itself is built with: OpenAI writes Nova's answers,
+      // Stripe takes the money, Replit hosts it.
+      for (const id of ["openai", "stripe", "replit", "render", "neon"]) {
+        expect(PROMOTION_CATALOG.find((p) => p.id === id)?.channel, id).toBeTruthy();
+      }
+    });
+
+    it("gives each one as a bare handle the sync can build a URL from", () => {
+      for (const p of withChannel) {
+        expect(p.channel, p.id).toMatch(/^@[A-Za-z0-9_.-]{2,100}$/);
+      }
+    });
+
+    it("builds a channel URL the settings validator would accept", () => {
+      for (const p of withChannel) {
+        const url = `https://www.youtube.com/${p.channel}`;
+        expect(validatePromotionSettings({ youtubeChannelUrl: url }).ok, p.id).toBe(true);
+      }
+    });
   });
 });
 

@@ -19,8 +19,8 @@ Roles are checked at request time, so someone promoted while signed in hits the 
 
 ## Storage and checks
 
-- The TOTP secret is sealed with AES-256-GCM (`server/secret-box.ts`); recovery codes (10, shown once) are stored as SHA-256. None of the `mfa*` columns are ever sent in a response (`NEVER_SENT`, `server/app.ts`).
-- A code is accepted for the current 30-second step ± one. The step used is recorded atomically, so a code (or an earlier one) can't be used twice. A recovery code is removed as it's used.
+- The TOTP secret is sealed with AES-256-GCM (`server/secret-box.ts`). None of the `mfa*` columns are ever sent in a response (`NEVER_SENT`, `server/app.ts`).
+- A code is accepted for the current 30-second step ± one. The step used is recorded atomically, so a code (or an earlier one) can't be used twice. Having used the newest code, there is no valid code until the clock moves on — about thirty seconds.
 - Attempts are limited per address (the `login` limit) and per account (`mfa:<userId>`).
 - A session or token counts as verified only while the account is still enrolled (`mfaSatisfied`). A support reset turns 2FA off, and any session or 15-minute token from before it stops counting rather than staying privileged.
 
@@ -35,7 +35,23 @@ Roles are checked at request time, so someone promoted while signed in hits the 
 
 `test/integration/auth-trust.test.ts` holds each of these: forged and re-headed tokens, expired and typeless claims, a code replayed into another session, a stale pending sign-in, sign-out touching one device, and a device label that buys nothing.
 
-## Lost phone and recovery codes
+## Lost phone
+
+**There are no recovery codes.** The six digits from the authenticator app are
+the only second factor, and the column that held hashed one-time codes was
+dropped (`migrations/0024_drop_mfa_recovery_codes.sql`).
+
+That is a deliberate trade. Ten printable strings that each sign in once are a
+second password, kept wherever people keep things — a screenshot, a notes app,
+a text to themselves — and they bypass the factor they exist to protect. What
+replaces them is an operator with database access, which is slower on purpose:
+a lockout that needs a human is recoverable, and a recovery code somebody
+screenshotted a year ago is not revocable.
+
+The cost is real and worth stating: **an account whose phone is gone cannot get
+itself back in.** Somebody with the database has to do it. Keep at least two
+accounts with the owner or admin role, enrolled on different phones, so losing
+one device is never losing the platform.
 
 There's no endpoint to turn 2FA off — a stolen password must not be enough to remove the second factor. After confirming who they are some other way:
 
@@ -48,5 +64,5 @@ DATABASE_URL=… npm run mfa:reset -- person@example.com --apply   # turns 2FA o
 
 - `test/unit/totp.test.ts` — RFC 6238 vectors, the window, replay, challenge tokens
 - `test/integration/auth.test.ts` — who needs a second factor: builder, reviewer, admin, owner
-- `test/integration/mfa.test.ts` — setup, wrong / reused / recovery codes, the owner console, mobile challenge and refresh
+- `test/integration/mfa.test.ts` — setup, wrong and reused codes, no second way in, the owner console, mobile challenge and refresh
 - `e2e/mfa-sign-in.spec.ts` — the notice, the setup page and the code step in a browser

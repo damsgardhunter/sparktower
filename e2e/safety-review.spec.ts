@@ -8,7 +8,7 @@
  * The moderation-loop spec proves the act itself; this proves what comes
  * after it, which is the part that closes the loop.
  */
-import { test, expect, type Browser } from "@playwright/test";
+import { test, expect, type Browser } from "./test";
 import { verifyEmail } from "./verify-email";
 import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";

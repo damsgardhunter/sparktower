@@ -11,28 +11,31 @@ import { fileURLToPath } from "node:url";
 const stub = (name: string) => fileURLToPath(new URL(`./test/stubs/${name}.ts`, import.meta.url));
 
 export default defineConfig({
+  /*
+   * An empty PostCSS config, given inline.
+   *
+   * `test.css: false` says "don't process stylesheets", and it isn't enough:
+   * Vite still *looks* for a PostCSS config before deciding there is nothing to
+   * do, walks up out of this package, finds the web app's at the repository
+   * root and tries to load Tailwind — which mobile doesn't install. Green on a
+   * laptop where the root's node_modules is right there, red in CI where the
+   * mobile job installs only its own dependencies. Handing Vite a config stops
+   * the search.
+   */
+  css: { postcss: { plugins: [] } },
   test: {
     environment: "node",
-    // Nothing here imports a stylesheet, so none needs processing.
+    /*
+     * No CSS pipeline. These are Node tests with no stylesheet in sight, but
+     * Vitest looks upward for a PostCSS config and finds the web app's at the
+     * repository root — then fails to load Tailwind, which this package
+     * doesn't install. Green here, red in CI, where mobile installs only its
+     * own dependencies.
+     */
     css: false,
     include: ["src/**/*.test.ts", "test/**/*.test.ts"],
     restoreMocks: true,
   },
-  /*
-   * An empty PostCSS config, given inline.
-   *
-   * Vite resolves PostCSS by searching upward from its root, so from `mobile/`
-   * it finds the web app's config at the repository root and tries to load
-   * Tailwind — which this package doesn't install. That was green locally,
-   * where the root's `node_modules` is right there, and red in CI, where the
-   * mobile job installs only its own dependencies.
-   *
-   * `test.css: false` does NOT prevent this, which is the trap: it turns off
-   * processing stylesheets for the tests, while the config search happens
-   * earlier, when Vite resolves its own config. Passing `postcss` explicitly
-   * is what stops the search — there is nothing to look for.
-   */
-  css: { postcss: { plugins: [] } },
   resolve: {
     alias: {
       "react-native": stub("react-native"),

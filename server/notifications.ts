@@ -194,7 +194,7 @@ export function registerNotificationRoutes(app: Express) {
           if (!post || post.hiddenAt || (post.project?.isPrivate && !post.viewerIsTeam)) continue;
         }
         const actorName = r.displayName || [r.firstName, r.lastName].filter(Boolean).join(" ") || r.email || "Someone";
-        const shaped = { kind: r.n.kind, actorId: r.n.actorId, postId: r.n.postId, projectId: r.n.projectId, actorName, projectTitle: r.projectTitle ?? null, ...paths.get(r.n.id) };
+        const shaped = { kind: r.n.kind, actorId: r.n.actorId, postId: r.n.postId, projectId: r.n.projectId, targetId: r.n.targetId, actorName, projectTitle: r.projectTitle ?? null, ...paths.get(r.n.id) };
         items.push({
           id: r.n.id, kind: r.n.kind, createdAt: r.n.createdAt, read: !!r.n.readAt,
           actor: { id: r.n.actorId, name: actorName, avatarUrl: r.avatarUrl || r.profileImageUrl || null },

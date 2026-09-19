@@ -16,6 +16,10 @@ import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import { OAuth2Client } from "google-auth-library";
 import { db } from "./db";
+import { authStorage } from "./replit_integrations/auth/storage";
+import { checkEmailShape, normalizeEmail } from "@shared/email-address";
+import { domainCanReceiveMail } from "./email-deliverable";
+import { domainOf } from "./public-url";
 import { users, mobileRefreshTokens } from "@shared/schema";
 import { eq, and, isNull, gt } from "drizzle-orm";
 import { storage } from "./storage";
@@ -23,9 +27,9 @@ import { isDeleted } from "./account-data";
 import { ACCESS_TOKEN_KEY_LABEL, mobileTokenKey } from "./secrets";
 import { ensureUserProfile } from "./user-provisioning";
 import { stampSignupAttribution } from "./attribution";
-import { enforceRateLimit, ipKey, rateLimit, enforceReservedLimit, refundAttempt, accountKey } from "./moderation";
+import { enforceRateLimit, enforceRejectionLimit, countRejection, ipKey, rateLimit, enforceReservedLimit, refundAttempt, accountKey } from "./moderation";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
-import { checkSecondFactor, limitMfaAttempts, mfaEnabledFor, mfaRequiredFor, readMfaChallenge, signMfaChallenge } from "./mfa";
+import { checkSecondFactor, countWrongMfaCode, limitMfaAttempts, mfaEnabledFor, mfaRequiredFor, readMfaChallenge, signMfaChallenge } from "./mfa";
 import { checkPassword } from "@shared/passwords";
 import { isBreached, BREACHED_MESSAGE } from "./password-breach";
 
@@ -269,6 +273,16 @@ export function registerMobileAuthRoutes(app: Express) {
       if (!email || !password) {
         return res.status(400).json({ message: "Email and password are required" });
       }
+      // The same bar as the web signup: shaped like an address, and a domain
+      // that can actually take delivery (shared/email-address.ts).
+      const badShape = checkEmailShape(email);
+      if (badShape) return res.status(400).json({ message: badShape.message, code: "invalid_input", field: badShape.field });
+      if (await domainCanReceiveMail(domainOf(normalizeEmail(email)) ?? "") === "no-mail-exchanger") {
+        return res.status(400).json({
+          message: "That domain can't receive email, so the confirmation would never arrive. Check the part after the @.",
+          code: "invalid_input", field: "email",
+        });
+      }
       const weak = checkPassword(password, { email });
       if (weak) return res.status(400).json({ message: weak.message, code: "invalid_input", field: weak.field });
       // Same bar as the web signup: an account is an account (server/password-breach.ts).
@@ -349,10 +363,17 @@ export function registerMobileAuthRoutes(app: Express) {
       if (!user) {
         const [byEmail] = await db.select().from(users).where(eq(users.email, email));
         if (byEmail) {
-          [user] = await db.update(users)
-            .set({ googleId: payload.sub, profileImageUrl: byEmail.profileImageUrl || payload.picture || null })
-            .where(eq(users.id, byEmail.id))
-            .returning();
+          /*
+           * Through the same door the web uses, so the pre-registration
+           * takeover is closed on both: an account that never proved it owns
+           * this address loses its password to the Google identity that just
+           * did (server/replit_integrations/auth/storage.ts).
+           */
+          user = await authStorage.linkGoogleAccount(byEmail.id, payload.sub);
+          if (!byEmail.profileImageUrl && payload.picture) {
+            [user] = await db.update(users).set({ profileImageUrl: payload.picture })
+              .where(eq(users.id, byEmail.id)).returning();
+          }
         } else {
           [user] = await db.insert(users).values({
             email,
@@ -421,14 +442,20 @@ export function registerMobileAuthRoutes(app: Express) {
   });
 
   /** Finishing a mobile sign-in that stopped at the second factor: the challenge from login, and a code. */
-  app.post("/api/auth/mobile/mfa/verify", rateLimit("login"), async (req, res) => {
+  /* Per address and per account, both counting wrong codes only — see server/mfa.ts. */
+  app.post("/api/auth/mobile/mfa/verify", async (req, res) => {
     // public-write: a signed five-minute challenge that only a correct password produced, plus a one-time code; limited per address and per account
     try {
+      if (!(await enforceRejectionLimit(res, ipKey(req), "mfaCode"))) return;
       const userId = readMfaChallenge(req.body?.challengeToken);
       if (!userId) return res.status(401).json({ message: "That sign-in has expired. Enter your password again.", code: "mfa_challenge_expired" });
       if (!(await limitMfaAttempts(req, res, userId))) return;
       const method = await checkSecondFactor(userId, String(req.body?.code ?? ""));
-      if (!method) return res.status(401).json({ message: "That code isn't right. Check your authenticator app and try again.", code: "mfa_invalid_code" });
+      if (!method) {
+        await countRejection(ipKey(req), "mfaCode");
+        await countWrongMfaCode(userId);
+        return res.status(401).json({ message: "That code isn't right. Check your authenticator app and try again.", code: "mfa_invalid_code" });
+      }
       res.json({ ...(await buildSession(userId, typeof req.body?.device === "string" ? req.body.device : undefined, { mfa: true })), mfaMethod: method });
     } catch (error) {
       console.error("Mobile MFA verify error:", error);

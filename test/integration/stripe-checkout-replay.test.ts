@@ -13,23 +13,28 @@
  * only happens when the plan moves *up* from what the account already has.
  */
 import { describe, it, expect, afterAll, vi } from "vitest";
+import { FAKE_STRIPE_TEST_KEY, fakeWebhookSecret } from "../helpers/fake-secrets";
 import request from "supertest";
 import Stripe from "stripe";
 import { eq } from "drizzle-orm";
 import { db } from "../../server/db";
 import { users, stripeEvents } from "@shared/schema";
 
-const WEBHOOK_SECRET = "whsec_test_secret_for_replay_checks";
-const signer = new Stripe("sk_test_dummy_key_not_used_for_network", { apiVersion: "2025-08-27.basil" });
+const WEBHOOK_SECRET = fakeWebhookSecret("replay-checks");
+const signer = new Stripe(FAKE_STRIPE_TEST_KEY, { apiVersion: "2025-08-27.basil" });
 
 /** A Stripe that answers about one subscription and one price, without a network. */
 let subscriptionStatus = "active";
 vi.mock("../../server/stripeClient", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../server/stripeClient")>();
   const StripeCtor = (await import("stripe")).default;
-  const real = new StripeCtor("sk_test_dummy_key_not_used_for_network", { apiVersion: "2025-08-27.basil" });
+  const real = new StripeCtor(FAKE_STRIPE_TEST_KEY, { apiVersion: "2025-08-27.basil" });
   const fake: any = {
-    subscriptions: { retrieve: async (id: string) => ({ id, status: subscriptionStatus, items: { data: [{ price: { id: "price_builder" } }] } }) },
+    subscriptions: {
+      retrieve: async (id: string) => ({ id, status: subscriptionStatus, items: { data: [{ price: { id: "price_builder" } }] } }),
+      // No other subscriptions on the customer: the plan is settled from the one the event carries.
+      list: async () => ({ data: [] }),
+    },
     prices: { retrieve: async (id: string) => ({ id, metadata: { tier: "builder" }, product: { metadata: {} } }) },
     webhooks: real.webhooks,
   };

@@ -3,12 +3,11 @@ import OpenAI, { toFile } from "openai";
 import { Buffer } from "node:buffer";
 import { IMAGE_MODEL } from "../../aiModels";
 
-const _rawOpenAiBase = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
-const _openAiBaseURL = _rawOpenAiBase ? (_rawOpenAiBase.endsWith("/v1") ? _rawOpenAiBase : `${_rawOpenAiBase.replace(/\/$/,"")}/v1`) : undefined;
-export const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: _openAiBaseURL,
-});
+// Built on first use, never at import: server/openai-client.ts. Imported as
+// well as re-exported — a bare `export { … } from` binds nothing locally, and
+// the functions below use it.
+import { openai } from "../../openai-client";
+export { openai };
 
 /**
  * Generate an image and return as Buffer.

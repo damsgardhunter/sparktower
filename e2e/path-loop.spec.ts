@@ -4,7 +4,7 @@
  * someone comments → the bell brings you to the post → the post takes you back
  * to your next step. API-level: test/integration/path-return.test.ts.
  */
-import { test, expect, type Browser } from "@playwright/test";
+import { test, expect, type Browser } from "./test";
 import { verifyEmail } from "./verify-email";
 
 const password = "Testpass123!";

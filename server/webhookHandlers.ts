@@ -6,6 +6,7 @@ import { normalizeTier } from '@shared/plans';
 import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import { applyTier, onInvoicePaid, onSubscriptionPaymentFailed, onSubscriptionChargeRefunded } from "./billing-credits";
 import { recordBacking } from './backing-routes';
+import { settleTier } from './subscription-state';
 
 /** Thrown only when the signature check fails: the caller answers 400, and Stripe does not retry. */
 export class WebhookVerificationError extends Error {
@@ -163,21 +164,25 @@ export class WebhookHandlers {
     }
     const stamp = { subscriptionEventAt: eventAt ?? new Date() };
 
-    if (type === 'customer.subscription.deleted') {
-      await db.update(users).set({ subscriptionTier: 'free', stripeSubscriptionId: null, ...stamp }).where(eq(users.id, user.id));
-      console.log(`Subscription canceled for user ${user.id}, reverted to free tier`);
-      return;
-    }
-    if (type === 'customer.subscription.created' || type === 'customer.subscription.updated') {
-      const status = subscription.status;
-      if (!isPaidSubscriptionStatus(status)) {
-        await db.update(users).set({ subscriptionTier: 'free', stripeSubscriptionId: subscription.id, ...stamp }).where(eq(users.id, user.id));
-        return;
-      }
-      const tier = await WebhookHandlers.tierForSubscription(subscription);
-      await applyTier(user.id, tier, subscription.id);
+    /*
+     * The plan comes from everything the customer is paying for, not from the
+     * one subscription this event is about (server/subscription-state.ts).
+     * Deciding from the event alone meant a second subscription's renewal set
+     * the plan back to its own tier each month, and cancelling either of two
+     * dropped the account to Free while the other kept charging.
+     */
+    if (type === 'customer.subscription.deleted' || type === 'customer.subscription.created' || type === 'customer.subscription.updated') {
+      const stripe = await getUncachableStripeClient();
+      const settled = await settleTier({
+        userId: user.id,
+        customer: subscription.customer,
+        stripe,
+        tierFor: (sub) => WebhookHandlers.tierForSubscription(sub),
+        // A deleted subscription is finished, whatever status the event shows.
+        fresh: type === 'customer.subscription.deleted' ? { ...subscription, status: 'canceled' } : subscription,
+      });
       await db.update(users).set(stamp).where(eq(users.id, user.id));
-      console.log(`Subscription updated for user ${user.id}: tier=${tier}`);
+      console.log(`Subscription ${type.split('.').pop()} for user ${user.id}: tier=${settled.tier}${settled.paying > 1 ? ` (${settled.paying} paid subscriptions — reported)` : ''}`);
     }
   }
 
@@ -223,9 +228,14 @@ export class WebhookHandlers {
       if (!user) return;
       const stripe = await getUncachableStripeClient();
       const subscription = await stripe.subscriptions.retrieve(typeof session.subscription === "string" ? session.subscription : session.subscription.id);
-      const tier = isPaidSubscriptionStatus(subscription.status) ? await WebhookHandlers.tierForSubscription(subscription) : 'free';
-      await applyTier(user.id, tier, subscription.id);
-      console.log(`Checkout subscription for user ${user.id}: tier=${tier}`);
+      const settled = await settleTier({
+        userId: user.id,
+        customer: session.customer,
+        stripe,
+        tierFor: (sub) => WebhookHandlers.tierForSubscription(sub),
+        fresh: subscription as any,
+      });
+      console.log(`Checkout subscription for user ${user.id}: tier=${settled.tier}`);
     }
   }
 

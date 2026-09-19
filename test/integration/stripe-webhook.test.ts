@@ -8,8 +8,8 @@
  * their plan, or pays and doesn't get one.
  *
  * The event used throughout is `customer.subscription.deleted`, chosen because
- * it is the only branch that changes a user's tier without calling the Stripe
- * API — so "was it processed?" is answerable by reading a row rather than by
+ * it changes a user's tier with the least of the Stripe API behind it — one
+ * list call, stubbed below — so "was it processed?" is answerable by reading a row rather than by
  * trusting a mock, and the whole suite runs with no network.
  *
  * What is stubbed and what is not: the sync layer is replaced, because its
@@ -20,14 +20,15 @@
  * the tier-updating handler.
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { FAKE_STRIPE_TEST_KEY, fakeWebhookSecret } from "../helpers/fake-secrets";
 import request from "supertest";
 import Stripe from "stripe";
 import { eq, sql } from "drizzle-orm";
 import { db } from "../../server/db";
 import { users, projects, donations, stripeEvents, projectBackings } from "@shared/schema";
 
-const WEBHOOK_SECRET = "whsec_test_secret_for_signature_verification";
-const stripe = new Stripe("sk_test_dummy_key_not_used_for_network", {
+const WEBHOOK_SECRET = fakeWebhookSecret("signature-verification");
+const stripe = new Stripe(FAKE_STRIPE_TEST_KEY, {
   apiVersion: "2025-08-27.basil",
 });
 
@@ -37,9 +38,12 @@ let delivered: { payload: unknown; signature: string }[] = [];
 vi.mock("../../server/stripeClient", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../server/stripeClient")>();
   const StripeCtor = (await import("stripe")).default;
-  const client = new StripeCtor("sk_test_dummy_key_not_used_for_network", {
+  const client = new StripeCtor(FAKE_STRIPE_TEST_KEY, {
     apiVersion: "2025-08-27.basil",
   });
+  // A cancellation now asks whether the customer still pays for anything else
+  // (server/subscription-state.ts). Here, nothing: this file is about the signature.
+  (client.subscriptions as any).list = async () => ({ data: [] });
 
   return {
     ...actual,
@@ -140,7 +144,7 @@ describe("stripe webhook signature verification", () => {
     // Right shape, wrong secret — what a forgery looks like.
     const forged = stripe.webhooks.generateTestHeaderString({
       payload: body,
-      secret: "whsec_an_attacker_does_not_have_the_real_one",
+      secret: fakeWebhookSecret("an attacker does not have the real one"),
     });
 
     const res = await request(app)

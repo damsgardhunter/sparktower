@@ -8,6 +8,8 @@ import { syncPlatformRoles } from "./platform-roles";
 import { backfillMissingProfiles } from "./user-provisioning";
 import { loadSurfaceFlags, startSurfaceFlagRefresh } from "./surfaces";
 import { startBackingJobs } from "./backing-jobs";
+import { startSimulationJobs } from "./simulation-tick";
+import { startStartupGameJobs } from "./startup-game";
 import { startAnalyticsJobs } from "./analytics";
 import { startPromotionJobs } from "./promotion-sync";
 import { startModerationJobs } from "./moderation";
@@ -16,7 +18,11 @@ import { checkMerchFonts } from "./merch-render";
 import { serveStatic } from "./static";
 import { createApp, log } from "./app";
 import { warnIfSharedTokenSecret } from "./mobile-auth";
+import { warnIfEmailUnconfigured } from "./email";
+import { warnIfSenderMisaligned, emailLinkHostIsTrusted } from "./public-url";
 import { assertSecretsAtBoot } from "./secrets";
+import { warnIfMigrationsPending } from "./migration-state";
+import { assertEnvironmentAtBoot } from "./preflight";
 import { watchProcessErrors } from "./error-reporting";
 import { storageCredentialMode } from "./replit_integrations/object_storage/objectStorage";
 
@@ -26,7 +32,21 @@ declare module "http" {
   }
 }
 
-// Before anything listens or connects: no secrets (or weak ones in production), no server.
+/*
+ * Before anything listens or connects: is this deployment actually configured?
+ *
+ * The whole report first (server/preflight.ts), so an operator reading a
+ * failed deploy sees everything that is wrong at once rather than fixing one
+ * variable, deploying, and meeting the next one. In production a missing
+ * database, session secret or public URL ends the process here; a missing
+ * Stripe key or mail provider is printed and the server carries on, because
+ * refusing to serve the site to protect an unconfigured feature is the larger
+ * outage.
+ */
+assertEnvironmentAtBoot();
+
+// Then the secrets themselves, which also derive the keys and so must throw
+// rather than report: no secrets, or weak ones in production, no server.
 assertSecretsAtBoot();
 
 // A promise nobody caught and a throw outside every handler used to be a silent
@@ -81,6 +101,19 @@ let appReady = false;
   // timer so a toggle reaches every instance rather than only the one that
   // served it — this deploys to autoscale.
   warnIfSharedTokenSecret();
+  await warnIfMigrationsPending();
+  // Email isn't an integration any more: without it, nobody who signs up can use the site (server/email.ts).
+  warnIfEmailUnconfigured();
+  /*
+   * Two things about outbound mail that only show up as "nobody signed up":
+   * a From domain that isn't the one SPF and DKIM were published for, and
+   * email links pointing at a host the CSRF guard doesn't trust.
+   */
+  warnIfSenderMisaligned();
+  {
+    const link = emailLinkHostIsTrusted();
+    if (!link.ok && link.reason) console.error(`[email] ${link.reason}`);
+  }
   /*
    * Which credentials uploads will use, said once at boot. Storage failures
    * surface much later and far away — an avatar that won't save — and the
@@ -113,6 +146,8 @@ let appReady = false;
   // Merch fulfillment and the refund window. Both take an advisory lock, so
   // running several server processes is safe.
   startBackingJobs();
+  startSimulationJobs();
+  startStartupGameJobs();
   startAnalyticsJobs();
   startPromotionJobs();
   startModerationJobs();
@@ -149,6 +184,18 @@ let appReady = false;
   if (process.platform !== "darwin") {
     listenOptions.reusePort = true;
   }
+  /*
+   * Timeouts, so a stalled connection can't hold a slot indefinitely.
+   *
+   * Node's defaults are generous — and `headersTimeout` must stay above
+   * `keepAliveTimeout`, or a connection the server is about to reuse gets
+   * closed underneath a request that has already started, which surfaces as
+   * random 502s behind a proxy rather than as a timeout.
+   */
+  httpServer.requestTimeout = 60_000;
+  httpServer.headersTimeout = 35_000;
+  httpServer.keepAliveTimeout = 30_000;
+
   httpServer.listen(listenOptions, () => {
     appReady = true;
     log(`serving on port ${port}`);
@@ -170,4 +217,51 @@ let appReady = false;
       }
     }
   });
+
+  /*
+   * Shutting down without dropping what's in flight.
+   *
+   * A deploy sends SIGTERM and then waits a short while before SIGKILL. With no
+   * handler, the process dies at once: requests being served are cut mid-flight
+   * and the person sees a failed request, which reads as the site being flaky
+   * rather than as a deploy. `/_ready` is made to answer false first, so a load
+   * balancer stops sending new work while the old work finishes.
+   *
+   * The timer is unref'd and the whole thing runs once — a second SIGTERM
+   * during a drain must not start a second drain.
+   */
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    appReady = false;
+    log(`${signal} received — refusing new connections, finishing what's in flight`);
+
+    /*
+     * The deadline is the point of this: `close` waits for every idle
+     * keep-alive connection to go away on its own, which can outlast the
+     * platform's patience. Past it we stop waiting and let the exit be abrupt,
+     * because an abrupt exit at 10s is better than a SIGKILL at 30 with no log
+     * line saying why.
+     */
+    const deadline = setTimeout(() => {
+      log("shutdown took too long — exiting anyway");
+      process.exit(1);
+    }, 10_000);
+    deadline.unref();
+
+    httpServer.close((err) => {
+      if (err) console.error("[shutdown] server close failed:", err);
+      // The pool last: a request still finishing may need one more query.
+      pool.end()
+        .catch((e) => console.error("[shutdown] closing the database pool failed:", e))
+        .finally(() => {
+          clearTimeout(deadline);
+          log("shutdown complete");
+          process.exit(err ? 1 : 0);
+        });
+    });
+  };
+
+  for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => shutdown(signal));
 })();

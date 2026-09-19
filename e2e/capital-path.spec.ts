@@ -9,7 +9,7 @@
  * the public page, and the founder marks it. Stops short of Nova's plans —
  * there's no model here.
  */
-import { test, expect, type Browser } from "@playwright/test";
+import { test, expect, type Browser } from "./test";
 import { verifyEmail } from "./verify-email";
 import pg from "pg";
 import { loadEnvFile } from "../test/setup/env";

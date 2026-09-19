@@ -24,12 +24,13 @@ import { feedDisplayName } from "./feed-routes";
 import {
   INVITES_PER_PROJECT_PER_DAY, MAX_PENDING_INVITES, invitePath, inviteStatus, isInviteToken, maskEmail, validateInviteInput,
 } from "@shared/invites";
+import { publicBaseUrl } from "./public-url";
 
 export const hashInviteToken = (token: string) => crypto.createHash("sha256").update(token).digest("hex");
 /** 32 bytes from the OS's CSPRNG, as URL-safe text. */
 export const newInviteToken = () => crypto.randomBytes(32).toString("base64url");
 
-const siteBase = (req: Request) => (process.env.SERVER_BASE_URL || process.env.PUBLIC_URL || `${req.protocol}://${req.get("host")}`).replace(/\/$/, "");
+const siteBase = (req: Request) => publicBaseUrl(req);
 
 type Owned =
   | { project: { id: string; title: string; ownerId: string; soloMode: boolean | null }; isOwner: boolean; error?: undefined }

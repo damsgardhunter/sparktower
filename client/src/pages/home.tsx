@@ -108,12 +108,12 @@ export default function Home() {
             className="space-y-3 lg:sticky lg:top-5 lg:max-h-[calc(100dvh-7rem)] lg:overflow-y-auto lg:pr-1 home-rail-scroll"
             data-testid="home-rail"
           >
-            {/* Your projects and where each is on its path lead the rail; the network cards follow, each behind its flag. */}
+            {/* Who you are leads the rail, then what you're building; the network cards follow, each behind its flag. */}
             <div className="home-rise" style={{ "--home-i": 0 } as React.CSSProperties}>
-              <MyProjectsCard />
+              <ProfileRailCard />
             </div>
             <div className="home-rise" style={{ "--home-i": 1 } as React.CSSProperties}>
-              <ProfileRailCard />
+              <MyProjectsCard />
             </div>
 
             <RailCard className="home-card home-card-interactive home-rise" style={{ "--home-i": 2 } as React.CSSProperties}>
@@ -129,7 +129,7 @@ export default function Home() {
                       key={project.id}
                       href={`/projects/${project.id}`}
                       className="home-row flex items-center gap-2.5 px-2 py-2"
-                      data-testid={`rail-project-${project.id}`}
+                      data-testid={`rail-new-project-${project.id}`}
                     >
                       <UserAvatar
                         src={project.profile?.avatarUrl}

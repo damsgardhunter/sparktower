@@ -66,9 +66,9 @@ describe("the owner's analytics console", () => {
          * it emits its own 'aborted' and 'error' (ECONNRESET) — separately from
          * the request, whose error is handled below. With nothing listening on
          * this side, that landed outside any test as an unhandled exception:
-         * vitest reported 843 of 843 tests passing and still exited non-zero,
-         * which made `server-web` red for a reason that had nothing to do with
-         * a test. Closing a stream you opened on purpose is not a failure.
+         * vitest reported every test passing and still exited non-zero, which
+         * made `server-web` red for a reason that had nothing to do with a
+         * test. Closing a stream you opened on purpose is not a failure.
          */
         res.on("aborted", () => { /* expected: we hung up */ });
         res.on("error", (err: any) => {

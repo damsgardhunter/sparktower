@@ -5,7 +5,12 @@ If you've found a vulnerability in SparkTower — the web app at sparktower.app,
 ## How to report
 
 - **Email:** security@sparktower.app
-- **GitHub:** [Report a vulnerability](https://github.com/damsgardhunter/sparktower/security/advisories/new) (private to the maintainers)
+
+This repository is private, so neither this file nor a GitHub advisory form is
+reachable by someone outside it — which is most people who find a bug. The
+public copy of this policy is served by the app at
+[sparktower.app/security](https://sparktower.app/security), and that is the
+address `/.well-known/security.txt` points at. Keep the two in step.
 
 Please don't open a public issue, pull request or discussion for a security problem.
 

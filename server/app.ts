@@ -26,6 +26,7 @@ import { securityHeaders } from "./security-headers";
 import { stripSealedFields } from "@shared/strip-sealed";
 import { reportError, redact } from "./error-reporting";
 import { pool } from "./db";
+import { migrationState } from "./migration-state";
 
 /**
  * Where an error happened, as a shape rather than as a URL.
@@ -202,20 +203,43 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
     const started = Date.now();
     try {
       await pool.query("SELECT 1");
-      return { status: 200, body: { ready: true, database: "ok", ms: Date.now() - started } };
+      /*
+       * Reachable is not the same as usable. A build whose schema is ahead of
+       * its database answers SELECT 1 perfectly and then 500s on every route
+       * that reads an account — with an error naming one column rather than
+       * the migrations nobody ran (server/migration-state.ts).
+       */
+      const migrations = await migrationState();
+      if (migrations.ok === false) {
+        /*
+         * The numbers go to the log, not to the caller.
+         *
+         * This route is public and unauthenticated by design — a deploy check
+         * that needs a credential is a deploy check nobody runs — so what it
+         * says is read by anyone who asks. "Three migrations short" tells a
+         * stranger the deployment is mid-broken and roughly where, which is
+         * the moment to try things. The operator loses nothing: they are
+         * reading the log or the owner-only deployment page anyway, and both
+         * carry the count and the command.
+         */
+        console.warn(
+          `[ready] ${migrations.pending} migration(s) not applied to this database ` +
+          `(${migrations.applied} of ${migrations.expected}). Run: npm run db:migrate`,
+        );
+        return { status: 503, body: { ready: false, database: "ok", migrations: "behind", ms: Date.now() - started } };
+      }
+      return { status: 200, body: { ready: true, database: "ok", migrations: "ok", ms: Date.now() - started } };
     } catch (err) {
       const message = String((err as Error)?.message ?? err);
-      return {
-        status: 503,
-        body: {
-          ready: false,
-          database: "unreachable",
-          // The address it tried is the answer nine times out of ten: a localhost
-          // here means the deployment carries a development connection string.
-          detail: redact(message).slice(0, 200),
-          ms: Date.now() - started,
-        },
-      };
+      /*
+       * The address it tried is the answer nine times out of ten — a localhost
+       * here means the deployment carries a development connection string —
+       * and it is also an internal hostname and port, which is not a public
+       * fact. `redact` removes credential-shaped strings, not topology. So it
+       * is logged in full and answered coarsely.
+       */
+      console.error(`[ready] database unreachable: ${redact(message).slice(0, 400)}`);
+      return { status: 503, body: { ready: false, database: "unreachable", ms: Date.now() - started } };
     }
   };
 
@@ -240,7 +264,15 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
    */
   app.post(
     "/api/stripe/webhook",
-    express.raw({ type: "application/json" }),
+    /*
+     * Deliberately larger than the 100kb the rest of the API allows. A Stripe
+     * event carries the whole object it is about, and an invoice with many
+     * lines is bigger than a request a person makes — refusing one loses a
+     * payment event, and Stripe's retries would refuse it again. The exposure
+     * is bounded differently here: the body is verified against a signature,
+     * and repeated failures are rate-limited per address.
+     */
+    express.raw({ type: "application/json", limit: "1mb" }),
     async (req, res) => {
       // public-write: Stripe's signature over the raw body (WebhookHandlers.processWebhook, test/integration/stripe-webhook.test.ts); failed deliveries limited per address
       /*
@@ -280,14 +312,29 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
     },
   );
 
+  /*
+   * Body size limits, written down rather than inherited.
+   *
+   * Express defaults to 100kb, which is the right number here — the largest
+   * thing this API accepts is a post, and uploads never come through it (they
+   * go to object storage through a signed URL). But an inherited default is a
+   * limit nobody chose: it moves if Express changes it, and the next person to
+   * add `limit:` to one route has no stated baseline to compare against.
+   *
+   * The ceiling matters because it is reached before any handler runs. Without
+   * one, a single request can make the process buffer megabytes of JSON and
+   * then parse it, which is an easy way to exhaust memory on a small instance
+   * without authenticating first.
+   */
   app.use(
     express.json({
+      limit: "100kb",
       verify: (req, _res, buf) => {
         req.rawBody = buf;
       },
     }),
   );
-  app.use(express.urlencoded({ extended: false }));
+  app.use(express.urlencoded({ extended: false, limit: "100kb" }));
 
   // Every cookie-carrying write must come from this site's own pages (server/csrf.ts).
   app.use(sameOriginWrites());

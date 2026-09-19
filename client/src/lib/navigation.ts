@@ -41,7 +41,7 @@ export const PRIMARY_NAV: NavItem[] = [
 export const SECONDARY_NAV: NavItem[] = [
   /* Matches and the leaderboard are sections of Discover now, not addresses of their own; their
      old URLs still resolve, they just redirect. Their flags still hide them — inside Discover. */
-  { title: "Sprints", url: "/sprints", icon: "Handshake", surface: "sprints" },
+  { title: "Sprints & simulations", url: "/sprints", icon: "Handshake", surface: "sprints" },
   { title: "Messages", url: "/messages", icon: "MessageSquare", surface: "messages" },
   { title: "Contests and Communities", url: "/contests", icon: "Medal", surface: "contests" },
   { title: "Pricing", url: "/pricing", icon: "CreditCard" },

@@ -226,7 +226,11 @@ export function CodebaseTool({ projectId, repoUrl, isOwner }: { projectId: strin
                 </Row>
               ))}
               {runtime.surfaces && small(`Kill switches: ${runtime.surfaces.loaded ? "loaded" : "not loaded"}, ${runtime.surfaces.enabled} on${runtime.surfaces.off?.length ? `, off: ${runtime.surfaces.off.join(", ")}` : ""}`, colors.textTertiary)}
-              {runtime.env && small(`Env: ${runtime.env.setHere.length}/${runtime.env.referenced} referenced variables set on the ${runtime.env.instance} instance${runtime.env.missingHere?.length ? ` · not set: ${runtime.env.missingHere.slice(0, 8).join(", ")}${runtime.env.missingHere.length > 8 ? " …" : ""}` : ""}`, colors.textTertiary)}
+              {runtime.env && small(
+                runtime.env.setThere
+                  ? `Env: ${runtime.env.setThere.length}/${runtime.env.referenced} referenced variables set where it runs${runtime.env.missingThere?.length ? ` · not set: ${runtime.env.missingThere.slice(0, 8).join(", ")}${runtime.env.missingThere.length > 8 ? " …" : ""}` : ""}`
+                  : `Env: ${runtime.env.referenced} variables referenced · not checked from here`,
+                colors.textTertiary)}
             </View>
           )}
 

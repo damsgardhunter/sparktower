@@ -13,7 +13,7 @@ import { webUrl } from "./shared";
 
 // --- Notices ----------------------------------------------------------------
 
-type Notify = (text: string, tone?: Notice["tone"], action?: Notice["action"]) => void;
+export type Notify = (text: string, tone?: Notice["tone"], action?: Notice["action"]) => void;
 const NoticeContext = createContext<{ notify: Notify; fail: (e: unknown, fallback?: string) => void }>({
   notify: () => {}, fail: () => {},
 });

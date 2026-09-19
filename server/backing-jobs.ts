@@ -250,25 +250,47 @@ export async function runRefundSweep(): Promise<{ refunded: number; converted: n
         }
 
         if (!backing.stripePaymentIntentId) throw new Error("No payment intent to refund");
-        const refund = await stripe.refunds.create({
-          payment_intent: backing.stripePaymentIntentId,
-          metadata: { backingId: backing.id, reason: "refund_window_elapsed" },
-        }, { idempotencyKey: `sweep_refund_${backing.id}` });
 
-        // The public "raised" figure has to give the money back too — but only
-        // on the move to "refunded". Stripe's charge.refunded webhook may have
-        // recorded this refund first, and gave the money back when it did.
-        await db.transaction(async (tx) => {
+        /*
+         * Locked and re-checked before the money moves.
+         *
+         * Payout release takes the same row lock, so the two can't both act on
+         * one pledge: whichever arrives second finds it no longer "held". And
+         * the approval is read again under the lock — the list above was read
+         * before any of this pass's refunds, and a reviewer who approved the
+         * project in the meantime has just made this pledge the creator's.
+         * Refunding it anyway, with a release to follow, pays for it twice.
+         */
+        const outcome = await db.transaction(async (tx) => {
+          const [row] = await tx.select({ id: projectBackings.id }).from(projectBackings)
+            .where(and(eq(projectBackings.id, backing.id), eq(projectBackings.status, "held")))
+            .for("update");
+          if (!row) return "gone" as const;
+          const [campaign] = await tx.select({ reviewStatus: projectBackingCampaigns.reviewStatus })
+            .from(projectBackingCampaigns).where(eq(projectBackingCampaigns.projectId, backing.projectId));
+          if (campaign?.reviewStatus === "approved") return "approved" as const;
+
+          const refund = await stripe.refunds.create({
+            payment_intent: backing.stripePaymentIntentId!,
+            metadata: { backingId: backing.id, reason: "refund_window_elapsed" },
+          }, { idempotencyKey: `sweep_refund_${backing.id}` });
+
+          // The public "raised" figure has to give the money back too — but only
+          // on the move to "refunded". Stripe's charge.refunded webhook may have
+          // recorded this refund first, and gave the money back when it did.
           const [moved] = await tx.update(projectBackings).set({
             status: "refunded",
             stripeRefundId: refund.id,
             resolvedAt: new Date(),
           }).where(and(eq(projectBackings.id, backing.id), ne(projectBackings.status, "refunded"))).returning({ id: projectBackings.id });
-          if (!moved) return;
-          await tx.update(projects)
-            .set({ totalDonations: sql`greatest(0, ${projects.totalDonations} - ${backing.amountCents})` })
-            .where(eq(projects.id, backing.projectId));
+          if (moved) {
+            await tx.update(projects)
+              .set({ totalDonations: sql`greatest(0, ${projects.totalDonations} - ${backing.amountCents})` })
+              .where(eq(projects.id, backing.projectId));
+          }
+          return "refunded" as const;
         });
+        if (outcome !== "refunded") continue;
 
         // Nothing physical can have shipped — merch waits on approval and
         // these are unapproved by definition — so cancelling is safe.

@@ -1,0 +1,1247 @@
+/**
+ * The desk: one seat's year, and what the other four are doing to it.
+ *
+ * This is the screen people open every day for a fortnight, so the order of it
+ * matters more than anything else on it. Top to bottom:
+ *
+ *   1. **What happened yesterday.** Nobody decides this year's marketing
+ *      before finding out how last year's went. Putting the form first would
+ *      be asking for a decision from someone who does not yet know where they
+ *      are.
+ *   2. **Where the company stands** — the numbers that decision is against.
+ *   3. **Your levers**, with what the table has committed pinned beside them.
+ *   4. **Everyone else** — who has filed, and what the market looks like.
+ *
+ * ## Why the money total follows the form as you type
+ *
+ * The failure this whole screen is built around is five people privately
+ * making reasonable decisions that are collectively ruinous. That only gets
+ * caught if the total moves while a hand is still on the slider — a number
+ * that updates after you submit is a post-mortem. So the commitment is
+ * recomputed locally on every keystroke from the same shared function the
+ * server uses, and the server's copy replaces it on the next poll.
+ *
+ * ## Nothing here is optimistic
+ *
+ * Five people are filing into the same year. The screen shows what the server
+ * last confirmed, and a submit that fails puts the message under the field
+ * that caused it rather than in a toast that scrolls away.
+ */
+import { useEffect, useMemo, useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { useParams, useLocation } from "wouter";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { NOVA_GRADIENT_CSS } from "@shared/backing";
+import { longCountdown } from "@shared/simulation/lobby-copy";
+import { commitment, type LeverField } from "@shared/simulation/levers";
+import { saturate } from "@shared/simulation/market";
+import type { Role } from "@shared/simulation/types";
+import { CompanyProfile } from "@/components/sim/company-profile";
+import { TeammateProfile } from "@/components/sim/teammate-profile";
+import { lookOf } from "@/components/sim/market-look";
+import { capacityRisk, type Forecast } from "@shared/simulation/forecast";
+import { ProjectionPanel } from "@/components/sim/projection-panel";
+import {
+  Loader2, Clock, TrendingUp, TrendingDown, Minus, AlertTriangle, Info,
+  CheckCircle2, Circle, Banknote, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy, Newspaper,
+} from "lucide-react";
+
+interface Desk {
+  phase: "not_started" | "over" | "running" | "finished";
+  ventureId: string;
+  name: string | null;
+  product: string | null;
+  niche: { id: string; name: string; premise: string; voice: Record<string, string> };
+  year: number;
+  totalYears: number;
+  resolvesAt: string | null;
+  yourRole: Role | null;
+  yourTitle: string | null;
+  /** Only before year one: how many rooms in this market are still in a lobby. */
+  roomsStillChoosing?: number;
+  yourRoomReady?: boolean;
+  yourLevers: string[];
+  fields: LeverField[];
+  draft: Record<string, any> | null;
+  submitted: boolean;
+  company: {
+    cash: number; debt: number; creditLimit: number; reputation: number;
+    quality: number; brand: number; service: number; capacity: number;
+    unitCost: number; price: number; customers: number; bankruptSince: number | null;
+    founderShare: number; pipeline: number; positioning: string | null;
+    pipelineLater?: number; brandPipeline?: number; staff?: number;
+    techDebt: number; techDebtCost: { product: number; unitCost: number };
+  };
+  segments: {
+    id: string; name: string; description: string; referencePrice: number; loyalty: number; yours: number;
+    weights: { price: number; quality: number; brand: number; service: number };
+    taste: string;
+    floors: { axis: "quality" | "service"; atLeast: number }[];
+    priceCeiling: number;
+    shortOf: { axis: string; by: number }[];
+  }[];
+  forecast: Forecast | null;
+  idleCostPerUnit: number;
+  cities: { id: string; name: string; weight: number; entryCost: number; note: string; open: boolean }[];
+  dissolvedSeats: string[];
+  economy: { demand: number; interestRate: number; costIndex: number; outlook: string; outlookMeans: string };
+  /** What the company is worth today — what a raise is priced against. */
+  valuation: number;
+  /** How fast this market's products move, which scales what research buys. */
+  innovationPace: number;
+  table: { userId: string; name: string; role: Role | null; title: string | null; filed: boolean; isYou: boolean }[];
+  filed: Record<string, any>;
+  preview: {
+    commitment: { spend: number; fixed: number; available: number; ratio: number; bySeat: { role: Role; spend: number }[]; openingCost: number };
+    notes: string[];
+    warnings: string[];
+  };
+  lastYear: {
+    year: number; customers: number; marketShare: number; shareChange: number; turnedAway: number;
+    revenue: number; costs: number; profit: number; cash: number; debt: number;
+    reputation: number; reputationChange: number; rank: number; notes: string[]; bankrupt: boolean;
+    market?: { kind: "won" | "lost" | "sold" | "unsold"; text: string }[];
+    event?: { headline: string; body: string; advice: string; scope: "market" | "company"; mine: boolean };
+    founderValue?: number; founderShare?: number;
+  } | null;
+  rivals: { id: string; name: string; kind: string; price: number; customers: number; posture: string | null; posturedAs: string | null }[];
+  challenge: Challenge | null;
+  lastChallenge: ChallengeResult | null;
+  distress: {
+    level: "healthy" | "strained" | "distressed" | "insolvent";
+    title: string;
+    body: string;
+    options: { kind: string; title: string; body: string; cost: string; raises: number }[];
+    covenant: { since: number; spendCap: number; met: number; rateRelief: number } | null;
+    filed: { kind: string; seat: string | null } | null;
+  };
+}
+
+interface Target { id: string; label: string; goal: number; compare: "at_least" | "at_most"; metric: string }
+interface Challenge {
+  id: string; role: Role; year: number; title: string; brief: string;
+  targets: Target[];
+  reward: { kind: string; amount: number; label: string };
+  partialReward: { kind: string; amount: number; label: string };
+}
+interface ChallengeResult {
+  outcome: "met" | "partial" | "missed";
+  targets: (Target & { actual: number; met: boolean })[];
+  note: string;
+}
+
+/** A market's noun as a column heading: "subscribers" → "Subscribers". */
+const title = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
+
+const money = (n: number) => `£${Math.round(n).toLocaleString()}`;
+const compact = (n: number) =>
+  n >= 1_000_000 ? `£${(n / 1_000_000).toFixed(1)}m` : n >= 1_000 ? `£${Math.round(n / 1_000)}k` : `£${Math.round(n)}`;
+
+export default function SimulationDeskPage() {
+  const { id } = useParams<{ id: string }>();
+  const [, navigate] = useLocation();
+  const { toast } = useToast();
+
+  const { data: desk, isLoading } = useQuery<Desk>({
+    queryKey: [`/api/sim/ventures/${id}/desk`],
+    // Slower than the lobby: a year lasts a day, and the thing worth noticing
+    // is a teammate filing rather than a seat being taken out from under you.
+    refetchInterval: 8000,
+  });
+
+  const [draft, setDraft] = useState<Record<string, any> | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  /*
+   * The server's draft seeds the form once, and then stops touching it. A poll
+   * that overwrote the field someone was mid-way through typing into would be
+   * the screen arguing with its own user.
+   */
+  useEffect(() => {
+    if (desk?.draft && draft === null) setDraft(desk.draft);
+  }, [desk?.draft, draft]);
+
+  const submit = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/sim/ventures/${id}/decisions`, { decision: draft }),
+    onSuccess: () => {
+      setErrors({});
+      toast({ title: "Filed", description: "You can still change it until the year resolves." });
+      queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${id}/desk`] });
+    },
+    onError: (err: any) => {
+      const body = err?.body ?? err?.response ?? {};
+      if (body?.errors) setErrors(body.errors);
+      else toast({ title: "Couldn't file that", description: body?.message ?? "Try again.", variant: "destructive" });
+    },
+  });
+
+  /* A local countdown so the deadline moves between polls. */
+  const [now, setNow] = useState(Date.now());
+  /*
+   * Which overlay is open, held here rather than in the cards that open them.
+   * A rival can be tapped from the list at the bottom and a teammate from the
+   * table above it, and both have to be able to close the other.
+   */
+  const [openCompany, setOpenCompany] = useState<string | null>(null);
+  const [openSeat, setOpenSeat] = useState<string | null>(null);
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  /*
+   * The table's commitment, recomputed as this seat types.
+   *
+   * Same function the server runs, so the number cannot drift from the one
+   * that will actually be charged — and immediate, which is the only way it
+   * changes anybody's mind.
+   */
+  const live = useMemo(() => {
+    /*
+     * Optional all the way down, because a desk before its season starts has
+     * no preview at all.
+     *
+     * `not_started` sends a handful of fields and nothing else, so reading
+     * `desk.preview.commitment` threw — and this runs before the early return
+     * that handles that phase, so the whole screen went white for every team
+     * between naming their company and the job starting the season. That is
+     * the first thing anybody does after the lobby.
+     */
+    if (!desk || desk.phase !== "running" || !desk.yourRole || !draft) return desk?.preview?.commitment ?? null;
+    try {
+      const decisions: any = { ...desk.filed, companyId: desk.ventureId, [desk.yourRole]: draft };
+      /*
+       * The market's shape matters to this sum twice over: the fixed bill
+       * scales with how much of the country the company sells in, and opening
+       * somewhere new is the largest single cash movement a marketing seat can
+       * make. Without it the meter ignored both — it sat unmoved while a city
+       * worth a million was selected, which is precisely the moment it exists
+       * to say something.
+       */
+      const market: any = { cities: desk.cities, segments: desk.segments };
+      return commitment(desk.company as any, decisions, desk.economy, market);
+    } catch {
+      /*
+       * Fall back to the server's own figure rather than taking the screen
+       * down with us.
+       *
+       * This is not hypothetical: the arithmetic needs `company.seats`, the
+       * payload did not carry it, and the whole desk rendered as a white
+       * screen — a total loss of the page over a number that was *already in
+       * the response* next to it. A live total is a nicety; the last year's
+       * results, the form and the deadline are not, and none of them should
+       * depend on it.
+       */
+      return desk.preview.commitment;
+    }
+  }, [desk, draft]);
+
+  if (isLoading || !desk) {
+    return <div className="flex min-h-[60vh] items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>;
+  }
+
+  if (desk.phase === "over") {
+    return (
+      <Shell title={desk.name ?? "Your company"} subtitle="This one didn't start">
+        <Card><CardContent className="p-6 space-y-3" data-testid="card-season-over">
+          <p className="text-sm">
+            Not enough people made it into this market in time, so the season closed instead of starting. Nothing you
+            did — rooms need three players to be a company, and this one didn't get there.
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Joining again puts you in a fresh room, and one that has been waiting a minute fills itself so you are
+            never the only one at the table.
+          </p>
+          <Button size="sm" onClick={() => navigate("/simulation")} data-testid="button-pick-market">Pick a market</Button>
+        </CardContent></Card>
+      </Shell>
+    );
+  }
+
+  if (desk.phase === "not_started") {
+    const waiting = desk.roomsStillChoosing ?? 0;
+    return (
+      <Shell title={desk.name ?? "Your company"} subtitle="Waiting for year one">
+        <Card><CardContent className="p-6 space-y-2" data-testid="card-not-started">
+          <p className="text-sm">
+            {waiting === 0
+              ? "Every room in this market has its seats. Year one starts within the minute — this page will move on by itself."
+              : `The company exists. Year one begins once the ${waiting === 1 ? "one room" : `${waiting} rooms`} still choosing seats ${waiting === 1 ? "has" : "have"} finished — usually a minute or two, and never more than twenty.`}
+          </p>
+          <p className="text-sm text-muted-foreground">
+            {desk.yourTitle ? `You have the ${desk.yourTitle.toLowerCase()}'s chair. ` : ""}
+            You don't need anyone else to turn up: a room that has been waiting a minute is filled out with players the
+            product runs, so a season never depends on five strangers arriving at once. Nothing is lost by closing
+            this; the season will be here when it starts.
+          </p>
+        </CardContent></Card>
+      </Shell>
+    );
+  }
+
+  const c = desk.company;
+  /*
+   * This market's words. Held in a short name because it is spliced into
+   * labels all over the screen and `desk.niche.voice.capacityShort` inside a
+   * template literal is unreadable.
+   */
+  const v = desk.niche.voice;
+  const secondsLeft = desk.resolvesAt ? Math.max(0, Math.round((new Date(desk.resolvesAt).getTime() - now) / 1000)) : null;
+  const overCommitted = live ? live.spend + live.fixed > live.available : false;
+  const onCredit = live ? live.spend + live.fixed > c.cash : false;
+
+  return (
+    <Shell
+      title={desk.name ?? "Your company"}
+      subtitle={`${desk.niche.name} · Year ${desk.year} of ${desk.totalYears}`}
+      nicheId={desk.niche.id}
+      onBack={() => navigate("/simulation")}
+      clock={desk.phase === "finished" ? "Season over" : secondsLeft !== null ? `${longCountdown(secondsLeft)} until this year resolves` : null}
+    >
+      {/* 1. What happened last year, before anyone is asked to decide this one. */}
+      {desk.lastYear ? <LastYear report={desk.lastYear} voice={v} onOpen={() => navigate(`/simulation/${desk.ventureId}/report/${desk.lastYear!.year}`)} /> : (
+        <Card><CardContent className="p-5">
+          <p className="text-sm font-medium">Year one</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            {desk.niche.premise} Nobody has heard of you yet — that is the first problem to solve.
+          </p>
+        </CardContent></Card>
+      )}
+
+      {/* What happened to the market, which is the thing people talk about. */}
+      {desk.lastYear?.event && <EventCard event={desk.lastYear.event} />}
+
+      {/* Your own thing to win, and how last year's went. */}
+      {desk.challenge && <ChallengeCard challenge={desk.challenge} last={desk.lastChallenge} />}
+
+      {/*
+        * How many people will want you this year, next to the number that has
+        * to be right about it. Shown to every seat, because the forecast is
+        * the thing marketing moves and operations builds to — and the argument
+        * between them is the one this card exists to have before the tick.
+        */}
+      {/*
+        * The year as it stands — revenue, costs, profit, cash — redrawn as
+        * teammates file and as this seat edits, with what the unfiled draft
+        * here is doing to each number. Keyed on the table's filings so it
+        * re-runs exactly when somebody files.
+        */}
+      <ProjectionPanel
+        ventureId={id!}
+        draft={draft}
+        filedStamp={JSON.stringify(desk.filed ?? {})}
+      />
+
+      {desk.forecast && (
+        <ForecastCard
+          forecast={desk.forecast}
+          voice={v}
+          price={Number(desk.yourRole === "cmo" && draft ? draft.price : (desk.filed as any)?.cmo?.price ?? c.price)}
+          /*
+           * The room the company actually has this year. Capacity ordered now
+           * opens next year, so the lever's value is next year's room — set
+           * against next year's demand in the projection above, not here.
+           * A cut is immediate, so the smaller of the two is what serves.
+           */
+          capacity={Math.min(c.capacity, Number(desk.yourRole === "coo" && draft ? draft.capacityTarget : (desk.filed as any)?.coo?.capacityTarget ?? c.capacity))}
+          idleCostPerUnit={desk.idleCostPerUnit}
+          yours={desk.yourRole === "coo" ? "capacity" : desk.yourRole === "cmo" ? "price" : null}
+        />
+      )}
+
+      {/* 2. Where the company stands. */}
+      <Card>
+        <CardContent className="p-5">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <Stat label="Cash" value={compact(c.cash)} tone={c.cash < 0 ? "bad" : "plain"} />
+            <Stat label="Debt" value={compact(c.debt)} sub={`limit ${compact(c.creditLimit)}`} tone={c.debt > c.creditLimit * 0.8 ? "warn" : "plain"} />
+            <Stat
+              label={title(v.customers)}
+              value={c.customers.toLocaleString()}
+              sub={`${v.capacityShort} ${c.capacity.toLocaleString()}`}
+            />
+            <Stat label={`Price ${v.per}`} value={money(c.price)} sub={`costs ${money(c.unitCost)} each`} tone={c.price < c.unitCost ? "bad" : "plain"} />
+            <Stat label="Reputation" value={`${c.reputation}`} />
+            {/*
+              * Quality, brand and service are the engine's three words for
+              * three things every market has and no market calls that. A
+              * restaurant's "quality" is whether it is the same in all forty
+              * kitchens; an MMO's is whether the endgame is worth the grind.
+              * The number is the same; the label is the market's own.
+              */}
+            <Stat label="Quality" value={`${c.quality}`} sub={v.quality} />
+            <Stat label="Brand" value={`${c.brand}`} sub={v.brand} />
+            <Stat label="Service" value={`${c.service}`} sub={v.service} />
+            <Stat
+              label="You own"
+              value={`${Math.round(c.founderShare * 100)}%`}
+              sub={c.founderShare < 1 ? "the rest was sold to investors" : "nobody else has a claim"}
+              tone={c.founderShare < 0.6 ? "warn" : "plain"}
+            />
+            {/* What is already on its way — the lag made visible. See `lag.ts`. */}
+            {c.pipeline > 0 && <Stat label="Quality coming" value={`+${c.pipeline}`} sub="lands next year" />}
+            {(c.pipelineLater ?? 0) > 0 && <Stat label="Research due" value={`+${c.pipelineLater}`} sub="lands in two years" />}
+            {(c.brandPipeline ?? 0) > 0 && <Stat label="Brand coming" value={`+${c.brandPipeline}`} sub="the rest of this year's campaign" />}
+            {c.techDebt > 0 && (
+              <Stat
+                label="Technical debt"
+                value={`${c.techDebt}`}
+                sub={c.techDebtCost.product > 0
+                  ? `product work buys ${c.techDebtCost.product}% less`
+                  : "nothing to worry about yet"}
+                tone={c.techDebt > 55 ? "warn" : "plain"}
+              />
+            )}
+          </div>
+          {c.bankruptSince !== null && (
+            <p className="mt-4 rounded-lg bg-destructive/10 text-destructive text-sm p-3">
+              Insolvent since year {c.bankruptSince}. The season does not end here — sell assets, cut seats, restructure, or take an offer.
+            </p>
+          )}
+          <p className="mt-4 text-xs text-muted-foreground border-t border-border pt-3">
+            <span className="font-medium text-foreground">Next year: {desk.economy.outlook}.</span> {desk.economy.outlookMeans}
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* When things are going badly, this is the most important thing on the page. */}
+      {desk.distress.level !== "healthy" && (
+        <DistressCard
+          distress={desk.distress}
+          isCeo={desk.yourRole === "ceo"}
+          seats={desk.table.map((s) => s.role).filter(Boolean) as Role[]}
+          ventureId={desk.ventureId}
+        />
+      )}
+
+      {/* 3. The decision. */}
+      {desk.phase === "finished" ? (
+        <Card><CardContent className="p-6 text-sm text-muted-foreground">
+          The season is over. Nothing left to decide — the last year's result is above.
+        </CardContent></Card>
+      ) : desk.yourRole && draft ? (
+        <div className="grid gap-4 lg:grid-cols-[1fr_320px] items-start">
+          <Card>
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="font-semibold">{desk.yourTitle}</h2>
+                  <p className="text-xs text-muted-foreground mt-0.5">{desk.yourLevers.join(" · ")}</p>
+                </div>
+                {desk.submitted && (
+                  <Badge variant="secondary" className="shrink-0" data-testid="badge-filed">
+                    <CheckCircle2 className="h-3 w-3 mr-1" /> Filed
+                  </Badge>
+                )}
+              </div>
+
+              <div className="mt-5 space-y-5">
+                {desk.fields.map((field) => (
+                  <Field
+                    key={field.id}
+                    field={field}
+                    value={draft[field.id]}
+                    error={errors[field.id]}
+                    onChange={(v) => setDraft((d) => ({ ...d!, [field.id]: v }))}
+                    cities={desk.cities}
+                  />
+                ))}
+              </div>
+
+              {desk.yourRole === "cfo" && Number(draft.raiseAmount) > 0 && (
+                <p className="text-xs text-amber-600 mt-4" data-testid="text-dilution">
+                  Raising {compact(Number(draft.raiseAmount))} against a company worth about {compact(desk.valuation)} leaves the
+                  founders with roughly {Math.round((desk.company.founderShare * desk.valuation / (desk.valuation + Number(draft.raiseAmount))) * 100)}%
+                  of whatever this becomes. It never has to be repaid, and it never comes back.
+                </p>
+              )}
+              {desk.yourRole === "cto" && desk.company.techDebt > 40 && (
+                <p className="text-xs text-amber-600 mt-4" data-testid="text-tech-debt">
+                  The product owes itself {desk.company.techDebt}. Everything spent here buys{" "}
+                  {desk.company.techDebtCost.product}% less than it would, and every unit costs{" "}
+                  {desk.company.techDebtCost.unitCost}% more. Paying it down shows up in no number this year and in
+                  every number after it.
+                </p>
+              )}
+              {desk.yourRole === "cto" && Number(draft.researchSpend) > 0 && (
+                <p className="text-xs text-muted-foreground mt-4" data-testid="text-research">
+                  Roughly +{(saturate(Number(draft.researchSpend), 150_000) * 24 * desk.innovationPace).toFixed(1)} quality,
+                  landing in two years. Shipping lands next year; research the year after — and buys more for the wait.
+                </p>
+              )}
+
+              <Button
+                className="w-full mt-6"
+                onClick={() => submit.mutate()}
+                disabled={submit.isPending}
+                data-testid="button-file-decision"
+              >
+                {submit.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                {desk.submitted ? "Update this year's decision" : "File this year's decision"}
+              </Button>
+              <p className="text-[11px] text-muted-foreground text-center mt-2">
+                Changeable until the year resolves. Nothing is locked in before then.
+              </p>
+            </CardContent>
+          </Card>
+
+          {/* The number no single seat could work out alone. */}
+          <div className="space-y-4 lg:sticky lg:top-4">
+            <Card className={overCommitted ? "border-destructive" : onCredit ? "border-amber-500/60" : ""}>
+              <CardContent className="p-5">
+                <div className="flex items-center gap-2">
+                  <Banknote className="h-4 w-4 text-muted-foreground" />
+                  <h3 className="text-sm font-semibold">What the table has committed</h3>
+                </div>
+
+                {live && (
+                  <>
+                    <p className="text-2xl font-bold tabular-nums mt-3" data-testid="text-commitment">
+                      {compact(live.spend + live.fixed)}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      against {compact(live.available)} available · {compact(live.fixed)} of it is salaries nobody chose
+                    </p>
+
+                    <div className="mt-3 h-2 rounded-full bg-muted overflow-hidden">
+                      <div
+                        className={`h-full ${overCommitted ? "bg-destructive" : onCredit ? "bg-amber-500" : "bg-primary"}`}
+                        style={{ width: `${Math.min(100, ((live.spend + live.fixed) / Math.max(1, live.available)) * 100)}%` }}
+                      />
+                    </div>
+
+                    <div className="mt-4 space-y-1.5">
+                      {live.openingCost > 0 && (
+                        <div className="flex justify-between text-xs text-amber-600" data-testid="text-opening-cost">
+                          <span>opening new places</span>
+                          <span className="tabular-nums">{compact(live.openingCost)}</span>
+                        </div>
+                      )}
+                      {live.bySeat.filter((s) => s.spend > 0).map((s) => (
+                        <div key={s.role} className="flex justify-between text-xs">
+                          <span className="text-muted-foreground uppercase">{s.role}</span>
+                          <span className="tabular-nums">{compact(s.spend)}</span>
+                        </div>
+                      ))}
+                      {live.bySeat.every((s) => s.spend === 0) && (
+                        <p className="text-xs text-muted-foreground">Nobody has committed anything yet.</p>
+                      )}
+                    </div>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+
+            {desk.preview.warnings.map((w, i) => (
+              <div key={i} className="rounded-lg bg-destructive/10 p-3 flex gap-2" data-testid="text-warning">
+                <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+                <p className="text-xs text-destructive">{w}</p>
+              </div>
+            ))}
+            {desk.preview.notes.map((note, i) => (
+              <div key={i} className="rounded-lg bg-muted p-3 flex gap-2">
+                <Info className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+                <p className="text-xs text-muted-foreground">{note}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {/* The three rooms off this one: buying things, buying companies, and where you stand. */}
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Card>
+          <CardContent className="p-4">
+            <h3 className="text-sm font-semibold flex items-center gap-2"><Store className="h-4 w-4 text-muted-foreground" /> The market</h3>
+            <p className="text-xs text-muted-foreground mt-1 mb-3">Three things a year, and everyone bids blind.</p>
+            <Button variant="outline" size="sm" onClick={() => navigate(`/simulation/${desk.ventureId}/market`)} data-testid="button-open-market">Open</Button>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <h3 className="text-sm font-semibold flex items-center gap-2"><Handshake className="h-4 w-4 text-muted-foreground" /> The boardroom</h3>
+            <p className="text-xs text-muted-foreground mt-1 mb-3">Buy a rival, or take the money for yours.</p>
+            <Button variant="outline" size="sm" onClick={() => navigate(`/simulation/${desk.ventureId}/offers`)} data-testid="button-open-offers">Open</Button>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <h3 className="text-sm font-semibold flex items-center gap-2"><Trophy className="h-4 w-4 text-muted-foreground" /> Standings</h3>
+            <p className="text-xs text-muted-foreground mt-1 mb-3">Where you actually stand, incumbents included.</p>
+            <Button variant="outline" size="sm" onClick={() => navigate(`/simulation/${desk.ventureId}/standings`)} data-testid="button-open-standings">Open</Button>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* 4. Everyone else. */}
+      <Card>
+        <CardContent className="p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <Users className="h-4 w-4 text-muted-foreground" />
+            <h3 className="text-sm font-semibold">The table</h3>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {desk.table.map((seat) => (
+              /*
+               * A whole row, not a name with a link in it. The thing being
+               * asked for is "tell me about this person", and on a phone a
+               * four-character first name is not a target.
+               */
+              <button
+                key={seat.userId}
+                type="button"
+                onClick={() => setOpenSeat(seat.userId)}
+                className="flex items-center gap-2.5 text-sm text-left rounded-md -mx-1.5 px-1.5 py-1 hover-elevate active-elevate-2"
+                data-testid={`button-seat-${seat.userId}`}
+              >
+                {seat.filed
+                  ? <CheckCircle2 className="h-4 w-4 text-primary shrink-0" />
+                  : <Circle className="h-4 w-4 text-muted-foreground shrink-0" />}
+                <span className="font-medium truncate">{seat.isYou ? "You" : seat.name}</span>
+                <span className="text-muted-foreground text-xs truncate">{seat.title ?? "no seat"}</span>
+                {!seat.filed && <span className="text-xs text-muted-foreground ml-auto shrink-0">still deciding</span>}
+              </button>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="p-5">
+          <h3 className="text-sm font-semibold">Who you're up against</h3>
+          <p className="text-xs text-muted-foreground mb-3">Open any of them to read who they are and where they can be taken.</p>
+          <div className="space-y-3">
+            {desk.rivals.map((r) => (
+              <button
+                key={r.id}
+                type="button"
+                onClick={() => setOpenCompany(r.id)}
+                className="w-full flex items-start justify-between gap-4 text-left rounded-md -mx-2 px-2 py-1.5 hover-elevate active-elevate-2"
+                data-testid={`button-company-${r.id}`}
+              >
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate">
+                    {r.name}
+                    {r.kind === "player" && <Badge variant="outline" className="ml-2 text-[10px]">a team</Badge>}
+                  </p>
+                  {r.posturedAs && <p className="text-xs text-muted-foreground">{r.posturedAs}</p>}
+                </div>
+                <div className="text-right shrink-0">
+                  <p className="text-sm tabular-nums">{r.customers.toLocaleString()}</p>
+                  <p className="text-xs text-muted-foreground">at {money(r.price)}</p>
+                </div>
+              </button>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="p-5">
+          <h3 className="text-sm font-semibold">The market</h3>
+          <p className="text-xs text-muted-foreground mb-3">What each segment weighs when it chooses, and what it expects of you this year.</p>
+          <div className="space-y-3">
+            {desk.segments.map((s) => (
+              <div key={s.id}>
+                <div className="flex justify-between gap-3">
+                  <p className="text-sm font-medium">{s.name}</p>
+                  <p className="text-sm tabular-nums shrink-0">{s.yours.toLocaleString()} yours</p>
+                </div>
+                <p className="text-xs text-muted-foreground">{s.description}</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  Pays around {money(s.referencePrice)} · {s.loyalty > 0.7 ? "very hard to move once settled" : s.loyalty > 0.4 ? "will switch for a reason" : "switches easily"}
+                </p>
+                <Criteria segment={s} company={c} />
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      <CompanyProfile ventureId={desk.ventureId} companyId={openCompany} onClose={() => setOpenCompany(null)} />
+      <TeammateProfile ventureId={desk.ventureId} userId={openSeat} onClose={() => setOpenSeat(null)} />
+    </Shell>
+  );
+}
+
+/**
+ * The seat's own objective, and how the last one went.
+ *
+ * Placed above the company's numbers rather than below the form, because this
+ * is the one thing on the page that belongs to the person reading it. In a
+ * five-person team the company's result is four other people too; this is what
+ * tells them whether *they* played well.
+ */
+function ChallengeCard({ challenge, last }: { challenge: Challenge; last: ChallengeResult | null }) {
+  return (
+    <Card className="border-primary/40">
+      <CardContent className="p-5">
+        <div className="flex items-center gap-2">
+          <Target className="h-4 w-4 text-primary" />
+          <p className="text-[11px] uppercase tracking-widest text-muted-foreground">Yours this year</p>
+        </div>
+        <h2 className="font-semibold text-lg mt-1.5" data-testid="text-challenge-title">{challenge.title}</h2>
+        <p className="text-sm text-muted-foreground mt-1">{challenge.brief}</p>
+
+        <div className="mt-4 space-y-2">
+          {challenge.targets.map((t) => (
+            <div key={t.id} className="flex items-start gap-2.5 text-sm">
+              <Circle className="h-4 w-4 shrink-0 mt-0.5 text-muted-foreground" />
+              <span>{t.label}</span>
+            </div>
+          ))}
+        </div>
+
+        <p className="text-xs text-muted-foreground mt-4 border-t border-border pt-3">
+          <span className="font-medium text-foreground">If you do it: </span>{challenge.reward.label}
+          {" "}Everyone on the team gets it — that is why they want you to win yours.
+        </p>
+
+        {last && (
+          <div className="mt-3 rounded-lg bg-muted p-3">
+            <p className="text-xs font-medium flex items-center gap-1.5">
+              {last.outcome === "met" ? <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
+                : last.outcome === "partial" ? <Minus className="h-3.5 w-3.5 text-amber-600" />
+                : <AlertTriangle className="h-3.5 w-3.5 text-muted-foreground" />}
+              Last year
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">{last.note}</p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Where the company stands when it is not standing well, and what can be done.
+ *
+ * Every option states its cost before it is chosen, because all of them are
+ * trades and a rescue that looked free would make the careful teams' caution
+ * pointless. Shown to the whole table rather than only to the chief executive:
+ * the person deciding how much to spend this year needs to know there is less
+ * than a year of costs in reach, even though only one of them can act on it.
+ */
+function DistressCard({ distress, isCeo, seats, ventureId }: {
+  distress: Desk["distress"]; isCeo: boolean; seats: Role[]; ventureId: string;
+}) {
+  const { toast } = useToast();
+  const [seat, setSeat] = useState<Role | "">("");
+
+  const file = useMutation({
+    mutationFn: (body: { kind: string; seat?: string }) =>
+      apiRequest("POST", `/api/sim/ventures/${ventureId}/recovery`, body),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/desk`] }),
+    onError: (err: any) => toast({
+      title: "Couldn't commit to that",
+      description: err?.body?.message ?? "Try again.",
+      variant: "destructive",
+    }),
+  });
+  const clear = useMutation({
+    mutationFn: () => apiRequest("DELETE", `/api/sim/ventures/${ventureId}/recovery`, undefined),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/desk`] }),
+  });
+
+  const severe = distress.level === "insolvent" || distress.level === "distressed";
+
+  return (
+    <Card className={severe ? "border-destructive" : "border-amber-500/60"}>
+      <CardContent className="p-5">
+        <div className="flex items-center gap-2">
+          <LifeBuoy className={`h-4 w-4 ${severe ? "text-destructive" : "text-amber-600"}`} />
+          <h2 className="font-semibold" data-testid="text-distress">{distress.title}</h2>
+        </div>
+        <p className="text-sm text-muted-foreground mt-1.5">{distress.body}</p>
+
+        {distress.covenant && (
+          <div className="mt-3 rounded-lg bg-muted p-3">
+            <p className="text-xs font-medium">The creditor's terms</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Spending capped at {compact(distress.covenant.spendCap)}. {distress.covenant.met} of 2 clear years —
+              {distress.covenant.met >= 1 ? " one more and it lifts." : " two and it lifts."}
+            </p>
+          </div>
+        )}
+
+        {distress.filed ? (
+          <div className="mt-4 rounded-lg border border-border p-3">
+            <p className="text-sm font-medium">Committed: {distress.filed.kind.replace(/_/g, " ")}{distress.filed.seat ? ` (${distress.filed.seat})` : ""}</p>
+            <p className="text-xs text-muted-foreground mt-1">It takes effect when the year resolves, before the year runs.</p>
+            {isCeo && (
+              <Button variant="outline" size="sm" className="mt-2" onClick={() => clear.mutate()} data-testid="button-clear-recovery">
+                Change your mind
+              </Button>
+            )}
+          </div>
+        ) : (
+          <div className="mt-4 space-y-3">
+            {distress.options.map((option) => (
+              <div key={option.kind} className="rounded-lg border border-border p-3">
+                <div className="flex items-baseline justify-between gap-3">
+                  <p className="text-sm font-medium">{option.title}</p>
+                  <p className="text-xs text-muted-foreground tabular-nums shrink-0">frees ~{compact(option.raises)}</p>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">{option.body}</p>
+                <p className="text-xs text-destructive mt-1.5">{option.cost}</p>
+
+                {isCeo && option.kind === "dissolve_seat" && (
+                  <select
+                    className="mt-2 w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+                    value={seat}
+                    onChange={(e) => setSeat(e.target.value as Role)}
+                    data-testid="select-dissolve-seat"
+                  >
+                    <option value="">Which seat…</option>
+                    {seats.filter((s) => s !== "ceo").map((s) => (
+                      <option key={s} value={s}>{s.toUpperCase()}</option>
+                    ))}
+                  </select>
+                )}
+
+                {isCeo ? (
+                  <Button
+                    size="sm"
+                    variant={option.kind === "rescue_raise" ? "destructive" : "outline"}
+                    className="mt-2"
+                    disabled={file.isPending || (option.kind === "dissolve_seat" && !seat)}
+                    onClick={() => file.mutate({ kind: option.kind, seat: option.kind === "dissolve_seat" ? seat : undefined })}
+                    data-testid={`button-recovery-${option.kind}`}
+                  >
+                    Commit to this
+                  </Button>
+                ) : null}
+              </div>
+            ))}
+            {!isCeo && (
+              <p className="text-xs text-muted-foreground">
+                These change what the company is, so they are the chief executive's call. Worth a conversation.
+              </p>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * The year's news.
+ *
+ * Above the company's own numbers, because it is the thing a team messages
+ * each other about and the reason a plan made on day three has to survive day
+ * seven. The advice is shown as prominently as the headline: an event a team
+ * can do nothing about is a punishment, and every one of these has an answer.
+ */
+function EventCard({ event }: { event: NonNullable<Desk["lastYear"]>["event"] }) {
+  if (!event) return null;
+  return (
+    <Card className={event.mine && event.scope === "company" ? "border-primary/50" : ""}>
+      <CardContent className="p-5">
+        <div className="flex items-center gap-2">
+          <Newspaper className="h-4 w-4 text-muted-foreground" />
+          <p className="text-[11px] uppercase tracking-widest text-muted-foreground">
+            {event.scope === "market" ? "The market, last year" : "About you, last year"}
+          </p>
+        </div>
+        <h2 className="font-semibold text-lg mt-1.5" data-testid="text-event">{event.headline}</h2>
+        <p className="text-sm text-muted-foreground mt-1">{event.body}</p>
+        <p className="text-sm mt-3 border-t border-border pt-3">{event.advice}</p>
+        <p className="text-[11px] text-muted-foreground mt-2">
+          Things like this are drawn from where a company already stood. The year chose which one arrived, not whether one was owed.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function Shell({ title, subtitle, clock, onBack, nicheId, children }: {
+  title: string; subtitle: string; clock?: string | null; onBack?: () => void; nicheId?: string; children: React.ReactNode;
+}) {
+  const look = nicheId ? lookOf(nicheId) : null;
+  return (
+    <div className="mx-auto max-w-4xl px-4 py-8 space-y-4">
+      <div className="rounded-2xl p-[2px]" style={{ backgroundImage: NOVA_GRADIENT_CSS }}>
+        <div className="rounded-[calc(1rem-1px)] bg-background p-6">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              {onBack && (
+                <button onClick={onBack} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 mb-2" data-testid="button-back">
+                  <ArrowLeft className="h-3 w-3" /> All companies
+                </button>
+              )}
+              <h1 className="text-2xl font-bold tracking-tight truncate" data-testid="text-company-name">{title}</h1>
+              {/*
+                * The market's mark next to its name. Fourteen days of opening
+                * the same screen is a long time to be unsure at a glance which
+                * of seven worlds you are in — and somebody may well be in two.
+                */}
+              <p className="text-sm text-muted-foreground mt-1 flex items-center gap-1.5">
+                {look && <look.Icon className={`h-3.5 w-3.5 shrink-0 ${look.ink}`} />}
+                <span className="truncate">{subtitle}</span>
+              </p>
+            </div>
+            {clock && (
+              <p className="text-xs text-muted-foreground flex items-center gap-1 shrink-0" data-testid="text-resolves">
+                <Clock className="h-3 w-3" /> {clock}
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Stat({ label, value, sub, tone = "plain" }: { label: string; value: string; sub?: string; tone?: "plain" | "warn" | "bad" }) {
+  return (
+    <div>
+      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className={`text-lg font-semibold tabular-nums ${tone === "bad" ? "text-destructive" : tone === "warn" ? "text-amber-600" : ""}`}>{value}</p>
+      {sub && <p className="text-[11px] text-muted-foreground">{sub}</p>}
+    </div>
+  );
+}
+
+/** Last year, said plainly, with the engine's own explanation of why. */
+function LastYear({ report, voice, onOpen }: { report: NonNullable<Desk["lastYear"]>; voice: Record<string, string>; onOpen: () => void }) {
+  const up = report.shareChange > 0.001;
+  const down = report.shareChange < -0.001;
+  return (
+    <Card data-testid="card-last-year">
+      <CardContent className="p-5">
+        <div className="flex items-baseline justify-between gap-3">
+          <h2 className="font-semibold" data-testid="text-last-year">Year {report.year}</h2>
+          <Badge variant={report.rank <= 3 ? "default" : "secondary"} data-testid="text-last-rank">#{report.rank} in the market</Badge>
+        </div>
+        {/*
+          * The way into the whole year. This card is the summary; the report
+          * is where a team finds out which line lost the money and who took
+          * the customers, which is what the next decision should be made on.
+          */}
+        <Button variant="outline" size="sm" className="mt-3 w-full sm:w-auto" onClick={onOpen} data-testid="button-open-report">
+          Read the full year — the accounts, the cash, and who took whom
+        </Button>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4">
+          <Stat
+            label="Share"
+            value={`${(report.marketShare * 100).toFixed(1)}%`}
+            sub={up ? `up ${(report.shareChange * 100).toFixed(1)}` : down ? `down ${Math.abs(report.shareChange * 100).toFixed(1)}` : "flat"}
+          />
+          <Stat label="Revenue" value={compact(report.revenue)} />
+          <Stat label="Profit" value={compact(report.profit)} tone={report.profit < 0 ? "bad" : "plain"} />
+          {/*
+            * The number nobody wants to see, named as the thing it actually
+            * was: orders refused for want of an airframe, people who looked at
+            * the queue and left, players who sat in a login queue and refunded.
+            */}
+          <Stat
+            label="Turned away"
+            value={report.turnedAway.toLocaleString()}
+            sub={report.turnedAway > 0 ? voice.turnedAway : undefined}
+            tone={report.turnedAway > 0 ? "warn" : "plain"}
+          />
+        </div>
+
+        {report.market && report.market.length > 0 && (
+          <div className="mt-4 border-t border-border pt-3 space-y-1.5">
+            <p className="text-xs font-medium flex items-center gap-1.5"><Store className="h-3.5 w-3.5" /> At the market</p>
+            {report.market.map((m, i) => (
+              <p
+                key={i}
+                className={`text-sm ${m.kind === "won" || m.kind === "sold" ? "text-foreground" : "text-muted-foreground"}`}
+                data-testid={`text-market-${m.kind}`}
+              >
+                {m.text}
+              </p>
+            ))}
+          </div>
+        )}
+
+        <div className="mt-4 space-y-2 border-t border-border pt-3">
+          {report.notes.length === 0 && <p className="text-sm text-muted-foreground">A quiet year.</p>}
+          {report.notes.map((note, i) => (
+            <p key={i} className="text-sm text-muted-foreground flex gap-2">
+              {up ? <TrendingUp className="h-4 w-4 shrink-0 mt-0.5 text-primary" />
+                : down ? <TrendingDown className="h-4 w-4 shrink-0 mt-0.5 text-destructive" />
+                : <Minus className="h-4 w-4 shrink-0 mt-0.5" />}
+              {note}
+            </p>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * One lever.
+ *
+ * Money fields get step buttons as well as a box. Typing "2000000" on a phone
+ * is miserable and error-prone in a way that matters here — a stray zero is
+ * a decision nobody meant to make.
+ */
+function Field({ field, value, error, onChange, cities }: {
+  field: LeverField; value: any; error?: string; onChange: (v: any) => void;
+  cities?: Desk["cities"];
+}) {
+  if (field.kind === "cities") {
+    const open = new Set<string>(Array.isArray(value) ? value : []);
+    return (
+      <div>
+        <Label className="text-sm font-medium">{field.label}</Label>
+        <p className="text-xs text-muted-foreground mt-0.5 mb-2">{field.help}</p>
+        <div className="space-y-1.5">
+          {(cities ?? []).map((city) => {
+            const selected = open.has(city.id);
+            return (
+              <button
+                key={city.id}
+                type="button"
+                onClick={() => {
+                  const next = new Set(open);
+                  // Somewhere you already sell cannot be closed — the customers
+                  // are there and leaving them is not a lever this game offers.
+                  if (city.open) return;
+                  selected ? next.delete(city.id) : next.add(city.id);
+                  onChange(Array.from(next));
+                }}
+                className={`w-full text-left rounded-lg border p-2.5 transition ${selected ? "border-primary bg-primary/5" : "border-border hover:border-muted-foreground/40"} ${city.open ? "opacity-90" : ""}`}
+                data-testid={`city-${city.id}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium">{city.name}</span>
+                  <span className="text-xs text-muted-foreground shrink-0">
+                    {city.open ? "already open" : `${compact(city.entryCost)} to open`} · {Math.round(city.weight * 100)}% of the market
+                  </span>
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-0.5">{city.note}</p>
+              </button>
+            );
+          })}
+        </div>
+        {error && <p className="text-xs text-destructive mt-1.5">{error}</p>}
+      </div>
+    );
+  }
+
+  if (field.kind === "segment" || field.kind === "choice") {
+    return (
+      <div>
+        <Label className="text-sm font-medium">{field.label}</Label>
+        <p className="text-xs text-muted-foreground mt-0.5 mb-2">{field.help}</p>
+        {(field.options?.length ?? 0) === 0 && (
+          <p className="text-xs text-muted-foreground">Nothing to choose here — every seat is filled.</p>
+        )}
+        <div className="grid grid-cols-2 gap-2">
+          {field.options?.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => onChange(o.value)}
+              className={`text-left rounded-lg border p-3 transition ${value === o.value ? "border-primary bg-primary/5" : "border-border hover:border-muted-foreground/40"}`}
+              data-testid={`option-${field.id}-${o.value}`}
+            >
+              <p className="text-sm font-medium">{o.label}</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">{o.help}</p>
+            </button>
+          ))}
+        </div>
+        {error && <p className="text-xs text-destructive mt-1.5">{error}</p>}
+      </div>
+    );
+  }
+
+  const step = field.step ?? 1;
+  const n = Number(value ?? 0);
+  const nudge = (by: number) => onChange(Math.max(field.min ?? 0, Math.min(field.max ?? Infinity, n + by)));
+
+  return (
+    <div>
+      <div className="flex items-baseline justify-between gap-3">
+        <Label className="text-sm font-medium" htmlFor={`field-${field.id}`}>{field.label}</Label>
+        {field.kind !== "count" && <span className="text-xs text-muted-foreground tabular-nums">{compact(n)}</span>}
+      </div>
+      <p className="text-xs text-muted-foreground mt-0.5 mb-2">{field.help}</p>
+      <div className="flex gap-2">
+        <Button type="button" variant="outline" size="sm" onClick={() => nudge(-step)} data-testid={`button-${field.id}-down`}>−</Button>
+        <Input
+          id={`field-${field.id}`}
+          type="number"
+          inputMode="numeric"
+          value={value ?? 0}
+          min={field.min}
+          max={field.max}
+          step={step}
+          onChange={(e) => onChange(e.target.value === "" ? 0 : Number(e.target.value))}
+          className="tabular-nums"
+          data-testid={`input-${field.id}`}
+        />
+        <Button type="button" variant="outline" size="sm" onClick={() => nudge(step)} data-testid={`button-${field.id}-up`}>+</Button>
+      </div>
+      {error && <p className="text-xs text-destructive mt-1.5">{error}</p>}
+    </div>
+  );
+}
+
+
+/**
+ * What a segment weighs, and whether you clear what it expects.
+ *
+ * The weights are the engine's own — the exponents it chooses by — shown as one
+ * bar so the shape is readable at a glance: a segment that is mostly price is
+ * mostly one colour. Beneath them, this year's floors with a tick or a cross,
+ * because "long-haulers expect quality of 55" means nothing until it sits next
+ * to "you have 41".
+ */
+function Criteria({ segment: s, company: c }: {
+  segment: Desk["segments"][number];
+  company: Desk["company"];
+}) {
+  const parts: { key: keyof typeof s.weights; label: string; tone: string }[] = [
+    { key: "price", label: "price", tone: "bg-sky-500" },
+    { key: "quality", label: "quality", tone: "bg-violet-500" },
+    { key: "brand", label: "brand", tone: "bg-amber-500" },
+    { key: "service", label: "service", tone: "bg-emerald-500" },
+  ];
+  return (
+    <div className="mt-2 space-y-1.5" data-testid={`criteria-${s.id}`}>
+      <div className="flex h-2 rounded-full overflow-hidden" aria-hidden>
+        {parts.map((p) => <div key={p.key} className={p.tone} style={{ width: `${s.weights[p.key]}%` }} />)}
+      </div>
+      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+        {parts.map((p) => (
+          <span key={p.key} className="flex items-center gap-1">
+            <span className={`inline-block h-2 w-2 rounded-full ${p.tone}`} /> {p.label} {s.weights[p.key]}%
+          </span>
+        ))}
+      </div>
+      <p className="text-xs">{s.taste}</p>
+      <div className="flex flex-wrap gap-1.5">
+        {s.floors.map((f) => {
+          const have = c[f.axis];
+          const ok = have >= f.atLeast;
+          return (
+            <Badge key={f.axis} variant={ok ? "secondary" : "destructive"} className="text-[10px] font-normal" data-testid={`floor-${s.id}-${f.axis}`}>
+              expects {f.axis} {f.atLeast}+ · you {have} {ok ? "✓" : "✗"}
+            </Badge>
+          );
+        })}
+        <Badge variant={c.price <= s.priceCeiling ? "outline" : "destructive"} className="text-[10px] font-normal">
+          stops listening above {money(s.priceCeiling)} · you {money(c.price)}
+        </Badge>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The forecast, and the bet capacity makes against it.
+ *
+ * Demand is read off the forecast's price curve at whatever price is on the
+ * table — the marketing seat's draft as they type, everyone else's view of
+ * what marketing filed — so moving the price moves the range while a hand is
+ * still on the lever. The capacity verdict is then priced both ways, in money:
+ * what the empty shelves cost if the year comes in low, and what walks to a
+ * rival if it comes in high. That is the whole decision, and until now it had
+ * no cost on one side.
+ */
+function ForecastCard({ forecast, voice, price, capacity, idleCostPerUnit, yours }: {
+  forecast: Forecast; voice: Record<string, string>; price: number; capacity: number; idleCostPerUnit: number;
+  yours: "capacity" | "price" | null;
+}) {
+  const curve = [...forecast.curve].sort((a, b) => a.price - b.price);
+  const at = (p: number): number => {
+    if (!Number.isFinite(p) || curve.length === 0) return forecast.likely;
+    if (p <= curve[0].price) return curve[0].likely;
+    if (p >= curve[curve.length - 1].price) return curve[curve.length - 1].likely;
+    for (let i = 1; i < curve.length; i++) {
+      if (p <= curve[i].price) {
+        const a = curve[i - 1], b = curve[i];
+        const t = (p - a.price) / Math.max(1, b.price - a.price);
+        return Math.round(a.likely + (b.likely - a.likely) * t);
+      }
+    }
+    return forecast.likely;
+  };
+  const likely = at(price);
+  const live: Forecast = {
+    ...forecast,
+    likely,
+    low: Math.round(likely * (1 - forecast.band)),
+    high: Math.round(likely * (1 + forecast.band)),
+  };
+  const risk = capacityRisk({ capacity, forecast: live, price, idleCostPerUnit });
+  const verdict = {
+    short: { text: "Short. Even an ordinary year turns people away — straight to a rival.", tone: "text-destructive" },
+    tight: { text: "Tight. A good year will outrun it.", tone: "text-amber-600" },
+    balanced: { text: "Built for the range.", tone: "text-primary" },
+    generous: { text: "Generous. Room for a great year, paid for in an ordinary one.", tone: "text-amber-600" },
+    idle: { text: "Far more than the forecast. Most of it will sit empty and cost money.", tone: "text-destructive" },
+  }[risk.verdict];
+
+  // One scale for the range bar and the capacity marker.
+  const top = Math.max(live.high, capacity) * 1.1 || 1;
+  const x = (n: number) => `${Math.min(100, (n / top) * 100)}%`;
+
+  return (
+    <Card data-testid="card-forecast">
+      <CardContent className="p-5 space-y-3">
+        <div className="flex items-baseline justify-between gap-3">
+          <h3 className="text-sm font-semibold">The forecast</h3>
+          <p className="text-xs text-muted-foreground">at {money(price)} {voice.per}</p>
+        </div>
+        <p className="text-sm" data-testid="text-forecast-range">
+          Somewhere between <span className="font-semibold tabular-nums">{live.low.toLocaleString()}</span> and{" "}
+          <span className="font-semibold tabular-nums">{live.high.toLocaleString()}</span> {voice.customers} this year, most likely about{" "}
+          <span className="font-semibold tabular-nums">{live.likely.toLocaleString()}</span>.
+        </p>
+
+        <div className="relative h-8" aria-hidden>
+          <div className="absolute top-3 h-2 w-full rounded-full bg-muted" />
+          <div className="absolute top-3 h-2 rounded-full bg-primary/40" style={{ left: x(live.low), width: `calc(${x(live.high)} - ${x(live.low)})` }} />
+          <div className="absolute top-2 h-4 w-0.5 bg-primary" style={{ left: x(live.likely) }} />
+          <div className="absolute top-0 h-8 w-0.5 bg-foreground" style={{ left: x(capacity) }} />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          The shaded band is the forecast. The dark line is the room you have this year: {Math.round(capacity).toLocaleString()} {voice.capacityShort}.
+          {yours === "capacity" ? " Room you order now opens next year — size it to next year's demand in the projection above." : ""}
+        </p>
+
+        <p className={`text-sm font-medium ${verdict.tone}`} data-testid="text-capacity-verdict">{verdict.text}</p>
+        <div className="grid sm:grid-cols-2 gap-2 text-xs">
+          <div className="rounded-md bg-muted/50 p-2.5">
+            <p className="text-muted-foreground">If the year comes in low</p>
+            <p className="tabular-nums">{risk.idleAtLow.toLocaleString()} {voice.capacityShort} idle, costing {money(risk.idleCostAtLow)}</p>
+          </div>
+          <div className="rounded-md bg-muted/50 p-2.5">
+            <p className="text-muted-foreground">If the year comes in high</p>
+            <p className="tabular-nums">{risk.shortAtHigh.toLocaleString()} turned away — {money(risk.revenueLostAtHigh)} of sales handed to {voice.rivals}</p>
+          </div>
+        </div>
+
+        {/* The price curve, so "what if we charged a bit more" is answered before anyone asks. */}
+        <div className="flex gap-1.5 overflow-x-auto pt-1">
+          {curve.map((pt) => (
+            <div key={pt.price} className={`rounded-md border px-2 py-1 text-[11px] shrink-0 ${Math.abs(pt.price - price) < 1 ? "border-primary" : "border-border"}`}>
+              <p className="text-muted-foreground">{money(pt.price)}</p>
+              <p className="tabular-nums">{pt.likely.toLocaleString()}</p>
+            </div>
+          ))}
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          Worked out from the market as it stands, with the incumbents' likely response and the table's drafts so far. It
+          cannot see what the other teams decide tonight — which is why it is a range.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}

@@ -6,11 +6,13 @@ import { api } from "../../src/api/client";
 import { useAuth } from "../../src/auth/AuthContext";
 import { EXPLORE, trackExplore, type ExploreSource } from "../../src/explore";
 import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
-import { Btn, Empty, Icon, Loading, NovaGradient } from "../../src/components/ui";
+import { Btn, Empty, Icon, Loading, NovaGradient, TAB_BAR_SPACE } from "../../src/components/ui";
 import { FollowButton } from "../../src/components/ConnectActions";
 import { NoticeBanner, Sheet, useNotice } from "../../src/components/Sheet";
 import { ProjectCard } from "../../src/components/ProjectCard";
 import { updateLabel, useExploreUpdates, type ExploreUpdate } from "../../src/networkData";
+// The header floats over the scene, so this screen leaves its room in the scroll content.
+import { useHeaderSpace } from "../../src/components/AppHeader";
 
 type View_ = "mine" | "all";
 
@@ -32,6 +34,7 @@ const SOURCE = "projects" as ExploreSource;
  * you looked at has posted since.
  */
 export default function Projects() {
+  const headerSpace = useHeaderSpace();
   const router = useRouter();
   const params = useLocalSearchParams<{ view?: string; category?: string }>();
   const { user } = useAuth();
@@ -143,7 +146,7 @@ export default function Projects() {
         keyExtractor={(p) => p.id}
         ListHeaderComponent={header}
         ItemSeparatorComponent={() => <View style={{ height: spacing.sm }} />}
-        contentContainerStyle={{ paddingBottom: spacing.xxl * 3 }}
+        contentContainerStyle={{ paddingTop: headerSpace, paddingBottom: TAB_BAR_SPACE }}
         keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.primary} />}
         ListEmptyComponent={loading ? <View style={{ paddingTop: spacing.xxl }}><Loading /></View> : (

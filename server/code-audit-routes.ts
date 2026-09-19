@@ -685,7 +685,15 @@ export function registerCodeAuditRoutes(app: Express) {
    * through the normal object-storage flow. A token for a private repository is
    * used for this request and never stored.
    */
-  app.post("/api/projects/:id/code-audit", isAuthenticated, async (req: any, res) => {
+  /*
+   * Rate-limited as well as metered.
+   *
+   * Credits were the only ceiling here, and a cost limit is not a request
+   * limit: an account with credit could start audits as fast as it could open
+   * connections, each one a repository fetch, an unzip and a model call. The
+   * limit is the same one the other outward-reaching calls use.
+   */
+  app.post("/api/projects/:id/code-audit", isAuthenticated, rateLimit("external"), async (req: any, res) => {
     // metering: checked here; charged in runCodeAudit only after the audit is parsed and saved (test/unit/ai-metering.test.ts holds the helper to the same order)
     let run: AuditRunHandle | undefined;
     try {
@@ -716,10 +724,46 @@ export function registerCodeAuditRoutes(app: Express) {
         if (!objectPath.startsWith("/objects/")) {
           return res.status(400).json({ message: "That doesn't look like an uploaded file." });
         }
-        const { ObjectStorageService } = await import("./replit_integrations/object_storage");
+        const { ObjectStorageService, getObjectAclPolicy, setObjectAclPolicy } = await import("./replit_integrations/object_storage");
+        const { ObjectPermission } = await import("./replit_integrations/object_storage/objectAcl");
+        const objStorage = new ObjectStorageService();
+
+        /*
+         * Whose upload is this?
+         *
+         * The path arrives in the request body and was read straight back —
+         * traversal is blocked downstream, but ownership was never asked, so
+         * anyone holding another person's `/objects/uploads/<uuid>` could have
+         * the server unzip it and hand back the file listing, the per-file
+         * verdicts and the names of files that look like they hold secrets.
+         *
+         * Two things happen here. The policy is enforced if there is one, and
+         * if there is none the object is claimed as this caller's and made
+         * private. That second part matters more than it looks: a zip of
+         * somebody's entire codebase was being uploaded through the generic
+         * presigned-URL route, which sets no policy at all, and an object with
+         * no policy is served by `GET /objects/...` to anyone who asks — no
+         * account, no session, nothing but the URL. Unguessable is not the
+         * same as private, and source code is the last thing that should rely
+         * on the difference.
+         */
         let file: { buffer: Buffer; size: number };
         try {
-          file = await new ObjectStorageService().readObjectBuffer(objectPath, MAX_ARCHIVE_BYTES);
+          const objectFile = await objStorage.getObjectEntityFile(objectPath);
+          const policy = await getObjectAclPolicy(objectFile).catch(() => null);
+          if (policy) {
+            const allowed = await objStorage.canAccessObjectEntity({
+              userId, objectFile, requestedPermission: ObjectPermission.READ,
+            });
+            // 404, like the serving route: an object path must not be confirmable.
+            if (!allowed) return res.status(404).json({ message: "We couldn't read that upload. Try uploading it again." });
+          } else {
+            // The already-resolved file, not the path: `trySetObjectEntityAclPolicy`
+            // parses its argument as a URL and an `/objects/...` path is not one.
+            await setObjectAclPolicy(objectFile, { owner: userId, visibility: "private" })
+              .catch((err: any) => console.error("[audit] couldn't make the upload private:", err?.message || err));
+          }
+          file = await objStorage.readObjectBuffer(objectPath, MAX_ARCHIVE_BYTES);
         } catch (err: any) {
           console.error("Audit upload read failed:", err?.message || err);
           return res.status(400).json({ message: "We couldn't read that upload. Try uploading it again." });
