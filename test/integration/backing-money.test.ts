@@ -167,3 +167,46 @@ describe("the refund sweep", () => {
     expect(S.refunds).toEqual([]);
   });
 });
+
+describe("a campaign a reviewer rejected", () => {
+  /*
+   * Rejecting only changed the review status; the campaign stayed switched
+   * on. So a project reviewers had turned down went on charging new backers,
+   * and everyone who had already pledged waited the full ninety-day window.
+   */
+  it("stops taking money, and stops offering to", async () => {
+    const { projectId } = await campaign("rejected", 0);
+    await db.update(projectBackingCampaigns).set({ enabled: true }).where(eq(projectBackingCampaigns.projectId, projectId));
+    const backer = await account();
+
+    const checkout = await backer.agent.post(`/api/projects/${projectId}/backing/checkout`).send({ amountCents: 2500 });
+    expect(checkout.status).toBe(404);
+    expect((await backer.agent.get(`/api/projects/${projectId}/backing/public`)).status, "no 'back this' button either").toBe(404);
+  });
+
+  it("refunds the backers now, not in ninety days", async () => {
+    const reviewer = await account("reviewer");
+    await passMfa(reviewer.agent);
+    // Pledged while the project was pending; the refund window is months away.
+    const { projectId, pledges } = await campaign("pending", 2, new Date(Date.now() + 90 * 86_400_000));
+
+    const res = await reviewer.agent.post(`/api/admin/backing/${projectId}/decision`).send({ decision: "rejected", notes: "Not a real product." });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.refundsQueued).toBe(2);
+
+    await expect.poll(() => S.refunds.length, { timeout: 10_000 }).toBe(2);
+    for (const p of pledges) expect((await status(p.id)).status).toBe("refunded");
+  });
+});
+
+describe("a creator who can't be paid", () => {
+  it("takes no pledges while suspended", async () => {
+    const { projectId } = await campaign("approved", 0);
+    await db.update(projectBackingCampaigns).set({ enabled: true }).where(eq(projectBackingCampaigns.projectId, projectId));
+    const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
+    await db.update(users).set({ suspendedAt: new Date(), suspendedReason: "fraud" }).where(eq(users.id, project.ownerId));
+
+    const backer = await account();
+    expect((await backer.agent.post(`/api/projects/${projectId}/backing/checkout`).send({ amountCents: 2500 })).status).toBe(404);
+  });
+});

@@ -32,6 +32,7 @@ import {
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { requireSurface } from "./surfaces";
 import { getUncachableStripeClient } from "./stripeClient";
+import { runRefundSweep } from "./backing-jobs";
 import { requireReviewer } from "./platform-roles";
 import { isPrintfulConfigured, listCatalog } from "./printful";
 import { renderMerchFace, type MerchFace } from "./merch-render";
@@ -189,6 +190,17 @@ export async function backingSignals(projectId: string) {
     heldCents: totals?.heldCents ?? 0,
     releasedCents: totals?.releasedCents ?? 0,
   };
+}
+
+/**
+ * Whether a campaign may take money: switched on, not rejected by review, and
+ * run by a creator who can still be paid. One rule for the page that shows the
+ * "back this" button and the checkout behind it, so they can't disagree.
+ */
+async function acceptingBacking(campaign: { enabled: boolean | null; reviewStatus: string | null } | undefined, ownerId: string): Promise<boolean> {
+  if (!campaign?.enabled || campaign.reviewStatus === "rejected") return false;
+  const [creator] = await db.select({ suspendedAt: users.suspendedAt, deletedAt: users.deletedAt }).from(users).where(eq(users.id, ownerId));
+  return !!creator && !creator.suspendedAt && !creator.deletedAt;
 }
 
 /**
@@ -609,8 +621,10 @@ export function registerBackingRoutes(app: Express) {
         .where(eq(projectBackingCampaigns.projectId, projectId));
       if (!campaign?.enabled) return res.status(404).json({ message: "Not accepting backing" });
 
-      const [project] = await db.select({ logoUrl: projects.logoUrl }).from(projects)
+      const [project] = await db.select({ logoUrl: projects.logoUrl, ownerId: projects.ownerId }).from(projects)
         .where(eq(projects.id, projectId));
+      // The same rule as checkout: no "back this" button on a campaign that can't take the money.
+      if (!project || !(await acceptingBacking(campaign, project.ownerId))) return res.status(404).json({ message: "Not accepting backing" });
 
       const tiers = await db.select().from(projectBackerTiers)
         .where(and(
@@ -721,7 +735,14 @@ export function registerBackingRoutes(app: Express) {
 
       const [campaign] = await db.select().from(projectBackingCampaigns)
         .where(eq(projectBackingCampaigns.projectId, projectId));
-      if (!campaign?.enabled) return res.status(404).json({ message: "Not accepting backing" });
+      /*
+       * Rejected means a reviewer decided this project shouldn't be funded,
+       * and rejecting never switched the campaign off — so it went on taking
+       * people's money, which then sat for the full refund window. Likewise a
+       * creator who has been suspended or has closed their account can't be
+       * paid out to, so nobody should be charged on their behalf.
+       */
+      if (!(await acceptingBacking(campaign, project.ownerId))) return res.status(404).json({ message: "Not accepting backing" });
 
       const amountCents = clampInt(req.body.amountCents, MIN_PLEDGE_CENTS, MAX_PLEDGE_CENTS, 0);
       if (amountCents < MIN_PLEDGE_CENTS) {
@@ -892,6 +913,22 @@ export function registerBackingRoutes(app: Express) {
       }).where(eq(projectBackingCampaigns.id, campaign.id)).returning();
 
       /*
+       * A rejected project's backers get their money back now, not in ninety
+       * days. Their pledges are made due immediately and the sweep runs — the
+       * one path that refunds, under the row lock, carrying out each backer's
+       * own choice for unclaimed money. A reviewer who approves again before
+       * the sweep reaches a pledge keeps it: the sweep re-reads the approval.
+       */
+      let refundsQueued = 0;
+      if (decision === "rejected") {
+        const due = await db.update(projectBackings).set({ refundDueAt: new Date() })
+          .where(and(eq(projectBackings.projectId, projectId), eq(projectBackings.status, "held")))
+          .returning({ id: projectBackings.id });
+        refundsQueued = due.length;
+        if (refundsQueued > 0) void runRefundSweep().catch((err) => console.error("[backing] sweep after rejection failed:", err));
+      }
+
+      /*
        * Merch is gated on this campaign's review status rather than on a flag
        * copied onto each order, so approving frees the backlog without
        * touching a row: the fulfillment worker only submits orders whose
@@ -905,7 +942,7 @@ export function registerBackingRoutes(app: Express) {
           eq(projectMerchOrders.status, "queued"),
         ));
 
-      res.json({ campaign: updated, merchWaiting: waiting?.n ?? 0 });
+      res.json({ campaign: updated, merchWaiting: waiting?.n ?? 0, refundsQueued });
     } catch (error) {
       console.error("Backing decision error:", error);
       res.status(500).json({ message: "Failed to record that decision" });
