@@ -164,6 +164,13 @@ test("a year is filed, resolves overnight, and comes back as something to read",
   await expect(cmo.getByTestId("text-last-rank")).toContainText("in the market");
   await expect(cmo.getByTestId("card-last-year").getByText("Revenue", { exact: true })).toBeVisible();
   await expect(cmo.getByTestId("card-last-year").getByText("Turned away", { exact: true }), "including the number nobody wants to see").toBeVisible();
+  // The market and the notes sit folded under the headline numbers, one click away.
+  const details = cmo.getByTestId("button-year-details");
+  if (await details.count()) {
+    await expect(details).toHaveAttribute("aria-expanded", "false");
+    await details.click();
+    await expect(details).toHaveAttribute("aria-expanded", "true");
+  }
 
   // A new year is a new decision, not yesterday's still sitting there filed.
   await expect(cmo.getByTestId("badge-filed"), "last year's filing does not carry over").toHaveCount(0);
