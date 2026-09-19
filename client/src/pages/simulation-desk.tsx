@@ -51,7 +51,7 @@ import { ProjectionRail, ProjectionBar } from "@/components/sim/projection-dock"
 import { AdvanceYearCard } from "@/components/sim/advance-year";
 import {
   Loader2, Clock, TrendingUp, TrendingDown, Minus, AlertTriangle, Info,
-  CheckCircle2, Circle, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy, Newspaper,
+  CheckCircle2, Circle, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy, Newspaper, ChevronDown, Gauge,
 } from "lucide-react";
 
 interface Desk {
@@ -394,59 +394,90 @@ export default function SimulationDeskPage() {
         />
       )}
 
-      {/* 2. Where the company stands. */}
-      <Card>
-        <CardContent className="p-5">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <Stat label="Cash" value={compact(c.cash)} tone={c.cash < 0 ? "bad" : "plain"} />
-            <Stat label="Debt" value={compact(c.debt)} sub={`limit ${compact(c.creditLimit)}`} tone={c.debt > c.creditLimit * 0.8 ? "warn" : "plain"} />
-            <Stat
-              label={title(v.customers)}
-              value={c.customers.toLocaleString()}
-              sub={c.assetCapacity
-                ? `${v.capacityShort} ${(c.capacity + c.assetCapacity).toLocaleString()} (${c.assetCapacity.toLocaleString()} from what you own)`
-                : `${v.capacityShort} ${c.capacity.toLocaleString()}`}
-            />
-            <Stat label={`Price ${v.per}`} value={money(c.price)} sub={`costs ${money(c.unitCost)} each`} tone={c.price < c.unitCost ? "bad" : "plain"} />
-            <Stat label="Reputation" value={`${c.reputation}`} />
-            {/*
-              * Quality, brand and service are the engine's three words for
-              * three things every market has and no market calls that. A
-              * restaurant's "quality" is whether it is the same in all forty
-              * kitchens; an MMO's is whether the endgame is worth the grind.
-              * The number is the same; the label is the market's own.
-              */}
-            <Stat label="Quality" value={`${c.quality}`} sub={v.quality} />
-            <Stat label="Brand" value={`${c.brand}`} sub={v.brand} />
-            <Stat label="Service" value={`${c.service}`} sub={v.service} />
-            <Stat
+      {/*
+        * 2. Where the company stands, as KPIs rather than a grid of equal
+        * labels. Grouped by the question each answers — the money, the
+        * customers, how good the product is, what is already on its way — so
+        * a seat reads four things instead of fourteen, and the scores out of
+        * a hundred get a bar, because "89" means more drawn against 100.
+        */}
+      <Card className="rounded-2xl nova-ring-soft" data-testid="card-company-kpis">
+        <CardContent className="space-y-4 p-5">
+          <div className="grid grid-cols-3 gap-2 sm:gap-3">
+            <Kpi label="Cash" value={compact(c.cash)} tone={c.cash < 0 ? "bad" : "plain"} />
+            <Kpi label="Debt" value={compact(c.debt)} sub={`limit ${compact(c.creditLimit)}`} tone={c.debt > c.creditLimit * 0.8 ? "warn" : "plain"} />
+            <Kpi
               label="You own"
               value={`${Math.round(c.founderShare * 100)}%`}
               sub={c.founderShare < 1 ? "the rest was sold to investors" : "nobody else has a claim"}
               tone={c.founderShare < 0.6 ? "warn" : "plain"}
             />
-            {/* What is already on its way — the lag made visible. See `lag.ts`. */}
-            {c.pipeline > 0 && <Stat label="Quality coming" value={`+${c.pipeline}`} sub="lands next year" />}
-            {(c.pipelineLater ?? 0) > 0 && <Stat label="Research due" value={`+${c.pipelineLater}`} sub="lands in two years" />}
-            {(c.brandPipeline ?? 0) > 0 && <Stat label="Brand coming" value={`+${c.brandPipeline}`} sub="the rest of this year's campaign" />}
-            {c.techDebt > 0 && (
-              <Stat
-                label="Technical debt"
-                value={`${c.techDebt}`}
-                sub={c.techDebtCost.product > 0
-                  ? `product work buys ${c.techDebtCost.product}% less`
-                  : "nothing to worry about yet"}
-                tone={c.techDebt > 55 ? "warn" : "plain"}
-              />
-            )}
           </div>
+
+          <div className="grid grid-cols-2 gap-2 sm:gap-3">
+            {/* Customers against room, room including what the company owns (server's assetCapacity). */}
+            <div className="rounded-xl border border-border bg-background/70 p-3">
+              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{title(v.customers)}</p>
+              <p className="text-xl sm:text-2xl font-extrabold tracking-tight tabular-nums">{c.customers.toLocaleString()}</p>
+              <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
+                <div className="h-full rounded-full nova-chip" style={{ width: `${Math.min(100, (c.customers / Math.max(1, c.capacity + (c.assetCapacity ?? 0))) * 100)}%` }} />
+              </div>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {c.assetCapacity
+                  ? `${v.capacityShort} ${(c.capacity + c.assetCapacity).toLocaleString()} (${c.assetCapacity.toLocaleString()} from what you own)`
+                  : `${v.capacityShort} ${c.capacity.toLocaleString()}`}
+              </p>
+            </div>
+            <Kpi
+              label={`Price ${v.per}`}
+              value={money(c.price)}
+              sub={`costs ${money(c.unitCost)} each · ${money(Math.max(0, c.price - c.unitCost))} margin`}
+              tone={c.price < c.unitCost ? "bad" : "plain"}
+            />
+          </div>
+
+          {/*
+            * Quality, brand and service are the engine's three words for three
+            * things every market has and no market calls that. The number is
+            * the same; the label under it is the market's own.
+            */}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Score label="Reputation" value={c.reputation} />
+            <Score label="Quality" value={c.quality} sub={v.quality} />
+            <Score label="Brand" value={c.brand} sub={v.brand} />
+            <Score label="Service" value={c.service} sub={v.service} />
+          </div>
+
+          {/* What is already on its way — the lag made visible (lag.ts) — as a table rather than more tiles. */}
+          {(c.pipeline > 0 || (c.pipelineLater ?? 0) > 0 || (c.brandPipeline ?? 0) > 0 || c.techDebt > 0) && (
+            <div className="overflow-hidden rounded-xl border border-border bg-background/70" data-testid="table-on-its-way">
+              <p className="bg-muted/50 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">On its way</p>
+              <table className="w-full text-sm">
+                <tbody className="divide-y divide-border">
+                  {c.pipeline > 0 && <WayRow label="Quality" value={`+${c.pipeline}`} when="lands next year" />}
+                  {(c.pipelineLater ?? 0) > 0 && <WayRow label="Research" value={`+${c.pipelineLater}`} when="lands in two years" />}
+                  {(c.brandPipeline ?? 0) > 0 && <WayRow label="Brand" value={`+${c.brandPipeline}`} when="the rest of this year's campaign" />}
+                  {c.techDebt > 0 && (
+                    <WayRow
+                      label="Technical debt"
+                      value={`${c.techDebt}`}
+                      when={c.techDebtCost.product > 0 ? `product work buys ${c.techDebtCost.product}% less` : "nothing to worry about yet"}
+                      warn={c.techDebt > 55}
+                    />
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+
           {c.bankruptSince !== null && (
-            <p className="mt-4 rounded-lg bg-destructive/10 text-destructive text-sm p-3">
+            <p className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
               Insolvent since year {c.bankruptSince}. The season does not end here — sell assets, cut seats, restructure, or take an offer.
             </p>
           )}
-          <p className="mt-4 text-xs text-muted-foreground border-t border-border pt-3">
-            <span className="font-medium text-foreground">Next year: {desk.economy.outlook}.</span> {desk.economy.outlookMeans}
+          <p className="flex flex-wrap items-center gap-2 border-t border-border pt-3 text-xs text-muted-foreground">
+            <span className="rounded-full nova-chip px-2 py-0.5 text-[11px] font-bold">Next year: {desk.economy.outlook}</span>
+            {desk.economy.outlookMeans}
           </p>
         </CardContent>
       </Card>
@@ -948,6 +979,44 @@ function Stat({ label, value, sub, tone = "plain" }: { label: string; value: str
   );
 }
 
+/** A headline number, in the KPI cards. */
+function Kpi({ label, value, sub, tone = "plain" }: { label: string; value: string; sub?: string; tone?: "plain" | "warn" | "bad" }) {
+  return (
+    <div className="rounded-xl border border-border bg-background/70 p-3">
+      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className={`text-xl sm:text-2xl font-extrabold tracking-tight tabular-nums ${tone === "bad" ? "text-destructive" : tone === "warn" ? "text-amber-600" : ""}`}>{value}</p>
+      {sub && <p className="mt-0.5 text-[11px] text-muted-foreground">{sub}</p>}
+    </div>
+  );
+}
+
+/** A score out of 100, drawn against the 100. */
+function Score({ label, value, sub }: { label: string; value: number; sub?: string }) {
+  return (
+    <div className="rounded-xl border border-border bg-background/70 p-3">
+      <div className="flex items-baseline justify-between gap-2">
+        <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
+        <p className="text-lg font-extrabold tabular-nums">{value}</p>
+      </div>
+      <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
+        <div className="h-full rounded-full nova-chip" style={{ width: `${Math.min(100, Math.max(0, value))}%` }} />
+      </div>
+      {sub && <p className="mt-1 text-[11px] leading-snug text-muted-foreground">{sub}</p>}
+    </div>
+  );
+}
+
+/** One row of "on its way". */
+function WayRow({ label, value, when, warn }: { label: string; value: string; when: string; warn?: boolean }) {
+  return (
+    <tr>
+      <td className="px-3 py-2 font-medium">{label}</td>
+      <td className={`px-3 py-2 text-right font-bold tabular-nums ${warn ? "text-amber-600" : ""}`}>{value}</td>
+      <td className="px-3 py-2 text-right text-xs text-muted-foreground">{when}</td>
+    </tr>
+  );
+}
+
 /** Last year, said plainly, with the engine's own explanation of why. */
 function LastYear({ report, voice, onOpen }: { report: NonNullable<Desk["lastYear"]>; voice: Record<string, string>; onOpen: () => void }) {
   const up = report.shareChange > 0.001;
@@ -989,34 +1058,83 @@ function LastYear({ report, voice, onOpen }: { report: NonNullable<Desk["lastYea
           />
         </div>
 
-        {report.market && report.market.length > 0 && (
-          <div className="mt-4 border-t border-border pt-3 space-y-1.5">
-            <p className="text-xs font-medium flex items-center gap-1.5"><Store className="h-3.5 w-3.5" /> At the market</p>
-            {report.market.map((m, i) => (
-              <p
-                key={i}
-                className={`text-sm ${m.kind === "won" || m.kind === "sold" ? "text-foreground" : "text-muted-foreground"}`}
-                data-testid={`text-market-${m.kind}`}
-              >
-                {m.text}
-              </p>
-            ))}
-          </div>
-        )}
-
-        <div className="mt-4 space-y-2 border-t border-border pt-3">
-          {report.notes.length === 0 && <p className="text-sm text-muted-foreground">A quiet year.</p>}
-          {report.notes.map((note, i) => (
-            <p key={i} className="text-sm text-muted-foreground flex gap-2">
-              {up ? <TrendingUp className="h-4 w-4 shrink-0 mt-0.5 text-primary" />
-                : down ? <TrendingDown className="h-4 w-4 shrink-0 mt-0.5 text-destructive" />
-                : <Minus className="h-4 w-4 shrink-0 mt-0.5" />}
-              {note}
-            </p>
-          ))}
-        </div>
+        <YearDetails report={report} up={up} down={down} />
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * What happened, line by line: the market's wins and losses, the engine's own
+ * explanation of the year, what expired, how each seat's objective went.
+ *
+ * Folded away until asked for. It is a dozen sentences, all true and all
+ * worth reading once — but it sat between the year's numbers and the decision
+ * about next year, so everyone scrolled past it every day to get to the form.
+ * The count says how much is in there without anyone having to open it.
+ */
+function YearDetails({ report, up, down }: { report: NonNullable<Desk["lastYear"]>; up: boolean; down: boolean }) {
+  const [open, setOpen] = useState(false);
+  const market = report.market ?? [];
+  /*
+   * Who didn't file (absenceNote, season.ts) stays out of the fold. It is about
+   * the table rather than the market, and the seat it most needs to reach is
+   * the one that would never think to open "what happened".
+   */
+  const absent = report.notes.filter((n) => /^(No decisions came in from|Nobody filed decisions)/.test(n));
+  const notes = report.notes.filter((n) => !absent.includes(n));
+  const count = market.length + notes.length;
+  const absentLines = absent.map((note, i) => (
+    <p key={i} className="mt-4 flex gap-2 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400" data-testid="text-absent-seats">
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {note}
+    </p>
+  ));
+  if (count === 0) return <>{absentLines}<p className="mt-4 border-t border-border pt-3 text-sm text-muted-foreground">A quiet year.</p></>;
+  return (
+    <>
+    {absentLines}
+    <div className={`mt-4 rounded-xl ${open ? "nova-ring-soft" : "border border-border"}`} data-testid="year-details">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left"
+        aria-expanded={open}
+        data-testid="button-year-details"
+      >
+        <span className="text-sm font-semibold">What happened in Year {report.year}</span>
+        <span className="flex items-center gap-2">
+          <span className="rounded-full nova-chip px-2 py-0.5 text-[11px] font-bold tabular-nums">{count}</span>
+          <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />
+        </span>
+      </button>
+      {open && (
+        <div className="space-y-3 border-t border-border px-3 pb-3 pt-3">
+          {market.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground"><Store className="h-3.5 w-3.5" /> At the market</p>
+              {market.map((m, i) => (
+                <p key={i} className={`text-sm ${m.kind === "won" || m.kind === "sold" ? "text-foreground" : "text-muted-foreground"}`} data-testid={`text-market-${m.kind}`}>
+                  {m.text}
+                </p>
+              ))}
+            </div>
+          )}
+          {notes.length > 0 && (
+            <div className="space-y-2">
+              {notes.map((note, i) => (
+                <p key={i} className="flex gap-2 text-sm text-muted-foreground">
+                  {up ? <TrendingUp className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                    : down ? <TrendingDown className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                    : <Minus className="mt-0.5 h-4 w-4 shrink-0" />}
+                  {note}
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+    </>
   );
 }
 
@@ -1218,68 +1336,109 @@ function ForecastCard({ forecast, voice, price, capacity, idleCostPerUnit, yours
     high: Math.round(likely * (1 + forecast.band)),
   };
   const risk = capacityRisk({ capacity, forecast: live, price, idleCostPerUnit });
+  /*
+   * The verdict in two words and a line, with an icon: colour is never the
+   * only thing saying whether this is fine.
+   */
   const verdict = {
-    short: { text: "Short. Even an ordinary year turns people away — straight to a rival.", tone: "text-destructive" },
-    tight: { text: "Tight. A good year will outrun it.", tone: "text-amber-600" },
-    balanced: { text: "Built for the range.", tone: "text-primary" },
-    generous: { text: "Generous. Room for a great year, paid for in an ordinary one.", tone: "text-amber-600" },
-    idle: { text: "Far more than the forecast. Most of it will sit empty and cost money.", tone: "text-destructive" },
+    short: { label: "Short", text: "Even an ordinary year turns people away.", tone: "bad" },
+    tight: { label: "Tight", text: "A good year will outrun it.", tone: "warn" },
+    balanced: { label: "Built for the range", text: "Room for most of what the year could bring.", tone: "good" },
+    generous: { label: "Generous", text: "Room for a great year, paid for in an ordinary one.", tone: "warn" },
+    idle: { label: "Far too much", text: "Most of it will sit empty and cost money.", tone: "bad" },
   }[risk.verdict];
+  const toneClass = { good: "text-primary", warn: "text-amber-600", bad: "text-destructive" }[verdict.tone];
+  const VerdictIcon = verdict.tone === "good" ? CheckCircle2 : AlertTriangle;
 
-  // One scale for the range bar and the capacity marker.
-  const top = Math.max(live.high, capacity) * 1.1 || 1;
+  /*
+   * One scale for the range bar and the capacity marker. When the room is far
+   * past anything the year could bring, a shared scale squashes the range into
+   * a sliver at the left; zoom to the range instead and pin the room marker to
+   * the edge, labelled as off the scale.
+   */
+  const roomOffScale = capacity > live.high * 2.5;
+  const top = (roomOffScale ? live.high * 1.25 : Math.max(live.high, capacity) * 1.1) || 1;
   const x = (n: number) => `${Math.min(100, (n / top) * 100)}%`;
 
+  /*
+   * Said with numbers rather than sentences. It used to be four paragraphs
+   * around three figures; the figures are the forecast, so they lead, and the
+   * explanations became a legend, two tiles and one line of small print.
+   */
   return (
-    <Card data-testid="card-forecast">
-      <CardContent className="p-5 space-y-3">
-        <div className="flex items-baseline justify-between gap-3">
-          <h3 className="text-sm font-semibold">The forecast</h3>
-          <p className="text-xs text-muted-foreground">at {money(price)} {voice.per}</p>
+    <Card className="rounded-2xl nova-ring-soft" data-testid="card-forecast">
+      <CardContent className="space-y-4 p-5">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="flex items-center gap-2 text-sm font-bold">
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg nova-chip"><Gauge className="h-3.5 w-3.5" /></span>
+            The forecast
+          </h3>
+          <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-semibold tabular-nums">at {money(price)} {voice.per}</span>
         </div>
-        <p className="text-sm" data-testid="text-forecast-range">
-          Somewhere between <span className="font-semibold tabular-nums">{live.low.toLocaleString()}</span> and{" "}
-          <span className="font-semibold tabular-nums">{live.high.toLocaleString()}</span> {voice.customers} this year, most likely about{" "}
-          <span className="font-semibold tabular-nums">{live.likely.toLocaleString()}</span>.
-        </p>
 
-        <div className="relative h-8" aria-hidden>
-          <div className="absolute top-3 h-2 w-full rounded-full bg-muted" />
-          <div className="absolute top-3 h-2 rounded-full bg-primary/40" style={{ left: x(live.low), width: `calc(${x(live.high)} - ${x(live.low)})` }} />
-          <div className="absolute top-2 h-4 w-0.5 bg-primary" style={{ left: x(live.likely) }} />
-          <div className="absolute top-0 h-8 w-0.5 bg-foreground" style={{ left: x(capacity) }} />
+        <div>
+          <p className="text-3xl font-extrabold tracking-tight tabular-nums" data-testid="text-forecast-likely">{live.likely.toLocaleString()}</p>
+          <p className="text-sm text-muted-foreground" data-testid="text-forecast-range">
+            {voice.customers} most likely · between {live.low.toLocaleString()} and {live.high.toLocaleString()} {voice.customers}
+          </p>
         </div>
-        <p className="text-xs text-muted-foreground">
-          The shaded band is the forecast. The dark line is the room you have this year: {Math.round(capacity).toLocaleString()} {voice.capacityShort}.
-          {yours === "capacity" ? " Room you order now opens next year — size it to next year's demand in the projection above." : ""}
-        </p>
 
-        <p className={`text-sm font-medium ${verdict.tone}`} data-testid="text-capacity-verdict">{verdict.text}</p>
-        <div className="grid sm:grid-cols-2 gap-2 text-xs">
-          <div className="rounded-md bg-muted/50 p-2.5">
-            <p className="text-muted-foreground">If the year comes in low</p>
-            <p className="tabular-nums">{risk.idleAtLow.toLocaleString()} {voice.capacityShort} idle, costing {money(risk.idleCostAtLow)}</p>
+        <div>
+          <div className="relative h-9" aria-hidden>
+            <div className="absolute top-3.5 h-2.5 w-full rounded-full bg-muted" />
+            <div className="absolute top-3.5 h-2.5 rounded-full nova-chip opacity-70" style={{ left: x(live.low), width: `calc(${x(live.high)} - ${x(live.low)})` }} />
+            <div className="absolute top-2.5 h-[18px] w-[3px] rounded-full bg-foreground/80" style={{ left: x(live.likely) }} />
+            <div className={`absolute top-0 h-9 w-0.5 ${roomOffScale ? "bg-foreground/40" : "bg-foreground"}`} style={roomOffScale ? { right: 0 } : { left: x(capacity) }} />
           </div>
-          <div className="rounded-md bg-muted/50 p-2.5">
-            <p className="text-muted-foreground">If the year comes in high</p>
-            <p className="tabular-nums">{risk.shortAtHigh.toLocaleString()} turned away — {money(risk.revenueLostAtHigh)} of sales handed to {voice.rivals}</p>
+          {/* The legend, where the paragraph explaining the bar used to be. */}
+          <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+            <span className="flex items-center gap-1.5"><span className="h-2 w-4 rounded-full nova-chip opacity-70" /> likely range</span>
+            <span className="flex items-center gap-1.5"><span className="h-3 w-[3px] rounded-full bg-foreground/80" /> most likely</span>
+            <span className="flex items-center gap-1.5"><span className="h-3 w-0.5 bg-foreground" /> your room: {Math.round(capacity).toLocaleString()}{roomOffScale && " (off the scale)"}</span>
+          </div>
+          {yours === "capacity" && (
+            <p className="mt-1 text-[11px] text-muted-foreground">Room you order now opens next year — size it to next year's demand.</p>
+          )}
+        </div>
+
+        <p className={`flex flex-wrap items-center gap-1.5 text-sm ${toneClass}`} data-testid="text-capacity-verdict">
+          <VerdictIcon className="h-4 w-4 shrink-0" />
+          <span className="font-bold">{verdict.label}.</span>
+          <span className="text-muted-foreground">{verdict.text}</span>
+        </p>
+
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div className="rounded-xl border border-border bg-background/70 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">If the year comes in low</p>
+            <p className="mt-0.5 text-lg font-extrabold tabular-nums">{risk.idleAtLow.toLocaleString()} <span className="text-xs font-medium text-muted-foreground">idle</span></p>
+            <p className="text-xs text-muted-foreground">costing {money(risk.idleCostAtLow)}</p>
+          </div>
+          <div className="rounded-xl border border-border bg-background/70 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">If the year comes in high</p>
+            <p className="mt-0.5 text-lg font-extrabold tabular-nums">{risk.shortAtHigh.toLocaleString()} <span className="text-xs font-medium text-muted-foreground">turned away</span></p>
+            <p className="text-xs text-muted-foreground">{money(risk.revenueLostAtHigh)} of sales to {voice.rivals}</p>
           </div>
         </div>
 
         {/* The price curve, so "what if we charged a bit more" is answered before anyone asks. */}
-        <div className="flex gap-1.5 overflow-x-auto pt-1">
-          {curve.map((pt) => (
-            <div key={pt.price} className={`rounded-md border px-2 py-1 text-[11px] shrink-0 ${Math.abs(pt.price - price) < 1 ? "border-primary" : "border-border"}`}>
-              <p className="text-muted-foreground">{money(pt.price)}</p>
-              <p className="tabular-nums">{pt.likely.toLocaleString()}</p>
-            </div>
-          ))}
+        <div>
+          <p className="mb-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">At other prices</p>
+          <div className="flex gap-1.5 overflow-x-auto">
+            {curve.map((pt) => {
+              const here = Math.abs(pt.price - price) < 1;
+              return (
+                <div key={pt.price} className={`shrink-0 rounded-lg px-2.5 py-1.5 text-center text-[11px] ${here ? "nova-chip" : "border border-border"}`}>
+                  <p className={here ? "font-semibold" : "text-muted-foreground"}>{money(pt.price)}</p>
+                  <p className="font-bold tabular-nums">{pt.likely.toLocaleString()}</p>
+                </div>
+              );
+            })}
+          </div>
         </div>
-        <p className="text-[11px] text-muted-foreground">
-          Worked out from the market as it stands, with the incumbents' likely response and the table's drafts so far. It
-          cannot see what the other teams decide tonight — which is why it is a range.
-        </p>
+
+        <p className="text-[11px] text-muted-foreground">A range, because it can't see what the other teams decide tonight.</p>
       </CardContent>
     </Card>
   );
 }
+
