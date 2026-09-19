@@ -66,7 +66,7 @@ export default function LandingPage() {
   };
 
   return (
-    <div className="flex flex-col min-h-screen bg-white text-foreground">
+    <div className="landing-type flex flex-col min-h-screen bg-white text-foreground">
       {/*
         * The same header a signed-in person gets (App.tsx) — Nova's gradient
         * with the logo hanging under it in a semicircle — scaled up, because

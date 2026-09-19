@@ -44,7 +44,8 @@
   --chart-3: 42 93% 56%;
   --chart-4: 147 79% 42%;
   --chart-5: 341 75% 51%;
-  --font-sans: 'Space Grotesk', sans-serif;
+  /* Plus Jakarta Sans everywhere: cleaner and friendlier than Space Grotesk, with none of its oddball letterforms. */
+  --font-sans: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
   --font-serif: 'Geist', sans-serif;
   --font-mono: 'Geist Mono', monospace;
   --radius: 0rem;
@@ -646,4 +647,17 @@
   --viz-grid: #2c2c2a;
   --viz-good: #0ca30c;
   --viz-bad: #e66767;
+}
+
+/*
+ * The landing page's headlines: Plus Jakarta Sans at 800.
+ *
+ * The whole app is Jakarta now (--font-sans), 400 for body text. Display text
+ * on the landing page — the hero, section headings, the sign-up panel's
+ * heading, the pull-quote — goes to 800, the family's heaviest weight: the
+ * `font-bold` / `font-black` classes those headings carry would otherwise
+ * leave them at 700, or ask for a 900 Jakarta doesn't have.
+ */
+.landing-type :is(h1, h2, blockquote) {
+  font-weight: 800;
 }
