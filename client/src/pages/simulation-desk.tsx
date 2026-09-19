@@ -802,11 +802,11 @@ function LastYear({ report }: { report: NonNullable<Desk["lastYear"]> }) {
   const up = report.shareChange > 0.001;
   const down = report.shareChange < -0.001;
   return (
-    <Card>
+    <Card data-testid="card-last-year">
       <CardContent className="p-5">
         <div className="flex items-baseline justify-between gap-3">
-          <h2 className="font-semibold">Year {report.year}</h2>
-          <Badge variant={report.rank <= 3 ? "default" : "secondary"}>#{report.rank} in the market</Badge>
+          <h2 className="font-semibold" data-testid="text-last-year">Year {report.year}</h2>
+          <Badge variant={report.rank <= 3 ? "default" : "secondary"} data-testid="text-last-rank">#{report.rank} in the market</Badge>
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4">

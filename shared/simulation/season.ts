@@ -396,11 +396,20 @@ export function decisionsForYear(input: {
  * need is an explanation for a disappointing year rather than a told-off
  * feeling on someone else's behalf.
  */
-export function absenceNote(absent: Role[], titles: Record<Role, string>): string | null {
+export function absenceNote(absent: Role[], titles: Record<Role, string>, seats: number): string | null {
   if (absent.length === 0) return null;
   const names = absent.map((r) => titles[r] ?? r);
   const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-  if (absent.length >= 4) {
+  /*
+   * "Nobody" has to mean nobody, which is why the seat count is passed in.
+   *
+   * This used to trigger at four absences and the table was five, so the one
+   * person who did turn up — who had picked a price, argued about it, and
+   * filed — opened the results to be told that nobody had filed anything. Of
+   * every reader this note can have, that is the one it most needs to keep,
+   * and it was the one it called a liar.
+   */
+  if (absent.length >= Math.max(1, seats)) {
     return `Nobody filed decisions this year. The company ran on last year's plan at a caretaker's pace — it is still standing, and one good year puts it back in the race.`;
   }
   return `No decisions came in from ${list}. Those parts of the year ran on last year's plan at about ${Math.round(CARETAKER_RATE * 100)}% — held together, but not steered.`;

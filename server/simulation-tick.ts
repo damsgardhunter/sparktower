@@ -362,7 +362,7 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
     ));
 
   const decisions: TeamDecisions[] = [];
-  const absences = new Map<string, Role[]>();
+  const absences = new Map<string, { absent: Role[]; seats: number }>();
 
   for (const team of teams) {
     const submitted: Partial<Record<Role, any>> = {};
@@ -392,7 +392,7 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
       previous: previous && Object.keys(previousParts).length > 0 ? previous : undefined,
     });
     decisions.push(theirs);
-    if (absent.length > 0) absences.set(team.id, absent);
+    if (absent.length > 0) absences.set(team.id, { absent, seats: team.seats.length });
   }
 
   const economy = economyFor(seasonId, year);
@@ -400,8 +400,8 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
 
   // Name the empty chairs, so a thin year has an explanation attached to it.
   for (const report of reports) {
-    const absent = absences.get(report.companyId);
-    const note = absent ? absenceNote(absent, ROLE_TITLES) : null;
+    const gap = absences.get(report.companyId);
+    const note = gap ? absenceNote(gap.absent, ROLE_TITLES, gap.seats) : null;
     if (note) report.notes = [note, ...report.notes];
     // And what a recovery move did, which happened before any of this.
     const rescue = recoveryNotes.get(report.companyId);

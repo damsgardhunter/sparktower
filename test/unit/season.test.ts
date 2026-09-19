@@ -198,10 +198,35 @@ describe("the chair nobody sat in", () => {
 
   it("explains itself to the teammate who did show up", () => {
     // The person reading this is usually not the person who missed it.
-    const note = absenceNote(["cfo"] as Role[], ROLE_TITLES)!;
+    const note = absenceNote(["cfo"] as Role[], ROLE_TITLES, 5)!;
     expect(note).toContain(ROLE_TITLES.cfo);
     expect(note).toMatch(/last year's plan/i);
-    expect(absenceNote([], ROLE_TITLES)).toBeNull();
+    expect(absenceNote([], ROLE_TITLES, 5)).toBeNull();
+  });
+
+  it("only says nobody filed when nobody filed", () => {
+    /*
+     * Four of five is the ordinary bad week, and it used to be described as
+     * "Nobody filed decisions this year" — read by the one person who had
+     * filed, about the year they had spent an evening on. The note names who
+     * was missing instead, which is both true and the thing a chief executive
+     * can act on.
+     */
+    const four = ["cmo", "cfo", "cto", "coo"] as Role[];
+    const partial = absenceNote(four, ROLE_TITLES, 5)!;
+    expect(partial, "somebody was there").not.toMatch(/nobody/i);
+    for (const role of four) expect(partial).toContain(ROLE_TITLES[role]);
+
+    // And when the table really is empty, it says so.
+    const all = ["ceo", ...four] as Role[];
+    expect(absenceNote(all, ROLE_TITLES, 5)).toMatch(/nobody filed/i);
+
+    /*
+     * A table that has lost seats counts by the seats it has, not by five. A
+     * three-person company where all three missed is just as empty.
+     */
+    expect(absenceNote(["ceo", "cmo", "cfo"] as Role[], ROLE_TITLES, 3)).toMatch(/nobody filed/i);
+    expect(absenceNote(["cmo", "cfo"] as Role[], ROLE_TITLES, 3)).not.toMatch(/nobody/i);
   });
 });
 
