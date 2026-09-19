@@ -26,8 +26,17 @@ import { Resolver } from "node:dns/promises";
 
 export type Deliverability = "ok" | "no-mail-exchanger" | "unknown";
 
-/** Reserved by RFC 2606 and RFC 6761: never resolvable, and never anybody's real address. */
-const RESERVED_TLDS = new Set(["test", "example", "invalid", "localhost"]);
+/**
+ * Reserved by RFC 2606, RFC 6761 and RFC 6762: never resolvable on the public
+ * internet, and never anybody's real address.
+ *
+ * `local` belongs here for the same reason as the rest — RFC 6762 reserves it
+ * for multicast DNS, so it has no public MX by definition — and its absence
+ * was not theoretical: the test configuration names the platform owner
+ * `owner@test.local`, so every suite that signs the owner in was refused at
+ * registration and 21 tests failed on a 400.
+ */
+const RESERVED_TLDS = new Set(["test", "example", "invalid", "localhost", "local"]);
 /** Reserved the same way, one level down — the addresses documentation is written with. */
 const RESERVED_DOMAINS = new Set(["example.com", "example.net", "example.org"]);
 

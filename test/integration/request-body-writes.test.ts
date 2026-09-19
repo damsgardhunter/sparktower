@@ -13,7 +13,7 @@ import request from "supertest";
 import { and, eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { db } from "../../server/db";
-import { cofounderSprints, projectMembers, projectPricingTiers, projects, sprintKanbanTasks } from "@shared/schema";
+import { projectMembers, projectPricingTiers, projects } from "@shared/schema";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -115,24 +115,4 @@ describe("workspace writes", () => {
     expect(p.total).toBe(0);
   });
 
-  it("keeps sprint tasks in their sprint and assigned within it", async () => {
-    const a = await person("SprintA");
-    const b = await person("SprintB");
-    const outsider = await person("SprintC");
-    const [mine] = await db.insert(cofounderSprints).values({ user1Id: a.id, user2Id: b.id, duration: "24h" }).returning();
-    const [other] = await db.insert(cofounderSprints).values({ user1Id: outsider.id, user2Id: b.id, duration: "24h" }).returning();
-    const [otherTask] = await db.insert(sprintKanbanTasks).values({ sprintId: other.id, title: "Someone else's task" }).returning();
-
-    const created = await a.agent.post(`/api/sprints/${mine.id}/tasks`).send({ title: "Ship it", sprintId: other.id });
-    expect(created.status).toBe(200);
-    expect(created.body.sprintId).toBe(mine.id);
-    expect((await a.agent.post(`/api/sprints/${mine.id}/tasks`).send({ title: "Hand off", assigneeId: outsider.id })).status).toBe(400);
-
-    expect((await a.agent.patch(`/api/sprints/${mine.id}/tasks/${otherTask.id}`).send({ title: "Hijacked" })).status).toBe(404);
-    const [still] = await db.select().from(sprintKanbanTasks).where(eq(sprintKanbanTasks.id, otherTask.id));
-    expect(still).toMatchObject({ title: "Someone else's task", sprintId: other.id });
-
-    const moved = await a.agent.patch(`/api/sprints/${mine.id}/tasks/${created.body.id}`).send({ status: "done", sprintId: other.id });
-    expect(moved.body).toMatchObject({ status: "done", sprintId: mine.id });
-  });
 });

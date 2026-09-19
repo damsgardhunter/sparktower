@@ -68,6 +68,31 @@ export const MINE: Owned[] = [
   { table: "user_reputation_scores", column: "user_id" },
   { table: "sprint_responses", column: "user_id" },
   { table: "sprint_deliverables", column: "user_id" },
+  /*
+   * The market simulation: a seat in a season and everything played from it.
+   * Classified like the other games above — it is this person's own play, so
+   * it leaves with them rather than being kept as somebody else's record.
+   */
+  { table: "sim_seats", column: "user_id" },
+  { table: "sim_decisions", column: "user_id" },
+  /*
+   * Ten Years From Now. Both players are named on the game row, so leaving
+   * takes your side of every game you played with it.
+   *
+   * `startup_game_verdicts` is deliberately absent: it has no user column and
+   * cascades from the game, so it goes when the game does. The messages are
+   * here rather than under `choice` because a game's chat is two people in a
+   * closed room for half an hour, not something published that others replied
+   * to — nobody outside it ever sees a line of it.
+   */
+  { table: "startup_games", column: "player1_id" },
+  { table: "startup_games", column: "player2_id" },
+  { table: "startup_game_submissions", column: "user_id" },
+  // What a player was still typing when a round's clock ran out — theirs alone.
+  { table: "startup_game_drafts", column: "user_id" },
+  { table: "startup_game_messages", column: "user_id" },
+  { table: "sim_challenges", column: "user_id" },
+  { table: "sim_recovery_moves", column: "user_id" },
   { table: "sprint_decisions", column: "user_id" },
   { table: "sprint_messages", column: "user_id" },
   { table: "sprint_behavioral_metrics", column: "user_id" },

@@ -167,7 +167,7 @@ import {
   type UserTaskStats,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, or, ilike, sql, and, gte, lte, asc, ne, inArray, isNull } from "drizzle-orm";
+import { eq, desc, or, ilike, sql, and, gte, lte, asc, ne, inArray, isNull, notInArray } from "drizzle-orm";
 import { ago } from "./sql-interval";
 import { getEntitlements, normalizeTier, FAIR_USE_MONTHLY_CAP } from "@shared/plans";
 
@@ -525,6 +525,15 @@ export interface IStorage {
   getSprint(id: string): Promise<CofounderSprint | undefined>;
   updateSprint(id: string, data: Partial<CofounderSprint>): Promise<CofounderSprint>;
   getSprintsByUser(userId: string): Promise<(CofounderSprint & { user1: User; user2: User })[]>;
+  /**
+   * Ends a sprint because somebody left. Returns the sprint and who the other
+   * person was, or a reason it couldn't be left — the caller needs both to
+   * answer the request and to tell the partner.
+   */
+  leaveSprint(sprintId: string, userId: string, reason?: string | null): Promise<
+    | { ok: true; sprint: CofounderSprint; partnerId: string | null }
+    | { ok: false; code: "not_found" | "not_a_member" | "already_over" }
+  >;
   addSprintResponse(data: { sprintId: string; userId: string; questionKey: string; answer: string; isNova?: boolean }): Promise<SprintResponse>;
   getSprintResponses(sprintId: string, userId?: string): Promise<SprintResponse[]>;
   addSprintDeliverable(data: { sprintId: string; type: string; content: any; userId?: string }): Promise<SprintDeliverable>;
@@ -1046,6 +1055,16 @@ export class DatabaseStorage implements IStorage {
       .leftJoin(userProfiles, eq(userProfiles.userId, users.id))
       .where(and(
         isNull(users.suspendedAt),
+        /*
+         * Bots are not people to find.
+         *
+         * They carry ordinary names so a simulation lobby reads like a room,
+         * which is exactly why they must not turn up here: a name search, a
+         * Discover card or a co-founder match offering "Ada Fournier" is the
+         * product introducing somebody to an account nobody is behind. This is
+         * the chokepoint — matching draws its whole candidate pool from here.
+         */
+        eq(users.isBot, false),
         q ? or(
           ilike(users.firstName, pattern),
           ilike(users.lastName, pattern),
@@ -2697,6 +2716,54 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
+  /**
+   * Leaving a sprint.
+   *
+   * Two people committed hours to this, so leaving ends it rather than
+   * removing the person: the row stays, the status becomes `abandoned`, and
+   * who left is recorded. The partner opens it and sees what happened instead
+   * of finding a sprint that silently stopped moving — or, worse, one that
+   * vanished.
+   *
+   * Conditional on the current status inside the UPDATE rather than checked
+   * and then written: both partners pressing Leave at the same moment would
+   * otherwise both pass the check, and the second write would overwrite the
+   * first one's record of who left.
+   */
+  async leaveSprint(sprintId: string, userId: string, reason?: string | null): Promise<
+    | { ok: true; sprint: CofounderSprint; partnerId: string | null }
+    | { ok: false; code: "not_found" | "not_a_member" | "already_over" }
+  > {
+    const [sprint] = await db.select().from(cofounderSprints).where(eq(cofounderSprints.id, sprintId));
+    if (!sprint) return { ok: false, code: "not_found" };
+    if (sprint.user1Id !== userId && sprint.user2Id !== userId) return { ok: false, code: "not_a_member" };
+    if (sprint.status === "completed" || sprint.status === "abandoned") return { ok: false, code: "already_over" };
+
+    const [updated] = await db.update(cofounderSprints)
+      .set({
+        status: "abandoned",
+        abandonedAt: new Date(),
+        abandonedById: userId,
+        abandonReason: reason?.trim()?.slice(0, 500) || null,
+      })
+      .where(and(
+        eq(cofounderSprints.id, sprintId),
+        // Whoever gets here first is the one recorded as having left.
+        notInArray(cofounderSprints.status, ["completed", "abandoned"]),
+      ))
+      .returning();
+    if (!updated) return { ok: false, code: "already_over" };
+
+    /*
+     * A practice sprint has Nova as the partner and stores the same person in
+     * both columns, so there is nobody to tell.
+     */
+    const partnerId = updated.isPractice
+      ? null
+      : (updated.user1Id === userId ? updated.user2Id : updated.user1Id);
+    return { ok: true, sprint: updated, partnerId: partnerId === userId ? null : partnerId };
+  }
+
   async addSprintResponse(data: { sprintId: string; userId: string; questionKey: string; answer: string; isNova?: boolean }): Promise<SprintResponse> {
     // In a practice sprint both the human and Nova share userId, so isNova is
     // part of the identity of a response — without it Nova's answer would
@@ -2846,6 +2913,21 @@ export class DatabaseStorage implements IStorage {
       status: "waiting" as const,
       matchedSprintId: null,
       lastSeenAt: new Date(),
+      /*
+       * Written here rather than left to the column's `DEFAULT now()`.
+       *
+       * `created_at` is a `timestamp` without a zone, and Postgres casts
+       * `now()` into one using the *session's* zone — so on a server running
+       * in, say, US Central it lands five hours behind every value Drizzle
+       * writes, which are UTC. Nothing noticed while the column was only
+       * displayed and compared against its own kind; the moment anything
+       * measures how long somebody has been queueing, every brand-new entry
+       * looks hours old.
+       *
+       * Re-joining resets it, which is what it should mean: you are starting
+       * to wait again, and `tryMatchInQueue` orders by this for fairness.
+       */
+      createdAt: new Date(),
     };
     // userId is unique, so re-joining updates the existing row (and clears any
     // stale "matched" state from a previous run).

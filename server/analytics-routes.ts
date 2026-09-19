@@ -379,7 +379,9 @@ export function registerAnalyticsRoutes(app: Express) {
         campaign: users.signupCampaign,
         n: sql<number>`count(*)::int`,
       }).from(users)
-        .where(gte(users.createdAt, since))
+        // Accounts the product created for itself are not signups. Counted,
+        // they would show up as a growing cohort from no source at all.
+        .where(and(gte(users.createdAt, since), eq(users.isBot, false)))
         .groupBy(users.signupSource, users.signupMedium, users.signupCampaign)
         .orderBy(desc(sql`count(*)`))
         .limit(20);

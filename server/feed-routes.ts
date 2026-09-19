@@ -528,6 +528,9 @@ export function registerFeedRoutes(app: Express) {
         .leftJoin(userProfiles, eq(userProfiles.userId, users.id))
         .where(and(
           ne(users.id, req.user.id),
+          // Bots carry ordinary names so a simulation lobby reads like a room.
+          // That is precisely why they must not come back from a people search.
+          eq(users.isBot, false),
           or(
             ilike(users.firstName, pattern),
             ilike(users.lastName, pattern),

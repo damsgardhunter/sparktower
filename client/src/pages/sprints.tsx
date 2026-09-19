@@ -1,48 +1,30 @@
-import { useEffect, useRef } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+/**
+ * Sprints & simulations.
+ *
+ * Two things live here now: a half-hour game two people play to invent a
+ * startup, and a fortnight-long market simulation five people run a company
+ * in.
+ *
+ * ## What used to be here
+ *
+ * The co-founder sprint — a 24-to-72-hour questionnaire two strangers filled
+ * in, mostly alone. It is retired. It asked a reasonable set of questions and
+ * was a poor thing to do with another person: everyone typed paragraphs into
+ * their own boxes, nobody read the other's, and the collaboration was two
+ * documents side by side. Ten Years From Now replaces it with the same
+ * intent — find out what somebody is like to build with — done as a series of
+ * decisions you have to agree on.
+ *
+ * The old data is still in the database and nothing has been dropped; there is
+ * simply no longer a way to start one, and the old URLs redirect here.
+ */
+import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { UserAvatar } from "@/components/user-avatar";
-import { useAuth } from "@/hooks/use-auth";
-import { useToast } from "@/hooks/use-toast";
-import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { CofounderSprint, User } from "@shared/schema";
-import {
-  Loader2, Plus, Users, Timer, Sparkles,
-  CheckCircle2, Clock, ArrowRight, XCircle, Cpu, GraduationCap, Bot, Building2,
-} from "lucide-react";
+import { Building2 } from "lucide-react";
+import { GameEntry } from "@/components/game/entry";
 
-type SprintWithUsers = CofounderSprint & { user1?: User; user2?: User };
-
-/** "2m 05s" / "1h 04m" — compact enough for the waiting-room stat row. */
-function formatWait(totalSeconds: number): string {
-  if (totalSeconds < 60) return `${totalSeconds}s`;
-  const minutes = Math.floor(totalSeconds / 60);
-  if (minutes < 60) return `${minutes}m ${String(totalSeconds % 60).padStart(2, "0")}s`;
-  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
-}
-
-const STATUS_STYLES: Record<string, { label: string; variant: "default" | "secondary" | "outline" | "destructive" }> = {
-  setup: { label: "Setup", variant: "outline" },
-  ideation: { label: "Ideation", variant: "secondary" },
-  alignment: { label: "Alignment", variant: "secondary" },
-  building: { label: "Building", variant: "default" },
-  validation: { label: "Validation", variant: "default" },
-  review: { label: "Review", variant: "secondary" },
-  completed: { label: "Completed", variant: "outline" },
-};
-
-/**
- * A door into the market simulation, and a way back to a company you are
- * already running.
- *
- * The second half matters more than the first. A season is fourteen real days
- * and a team only stays together if getting back to today's decisions takes
- * one tap — a returning player who has to remember where their company lives
- * is a player who stops returning.
- */
 function SimulationEntry() {
   const [, navigate] = useLocation();
   const { data } = useQuery<{ ventures: { id: string; name: string | null; phase: string; role: string | null; niche: { name: string } }[] }>({
@@ -108,287 +90,20 @@ function SimulationEntry() {
 }
 
 export default function Sprints() {
-  const { user } = useAuth();
-  const [, setLocation] = useLocation();
-  const { toast } = useToast();
-
-  const { data: sprints, isLoading } = useQuery<SprintWithUsers[]>({
-    queryKey: ["/api/sprints"],
-  });
-
-  // Polling doubles as the heartbeat that keeps our queue row alive; the
-  // server sweeps rows that stop checking in.
-  const { data: queueStatus } = useQuery<{
-    inQueue: boolean;
-    matched?: boolean;
-    sprint?: SprintWithUsers;
-    entry?: { duration: string; productStyle: string; createdAt: string };
-    position?: number | null;
-    waiting?: number;
-    waitingSeconds?: number;
-  }>({
-    queryKey: ["/api/sprints/queue/status"],
-    refetchInterval: 5000,
-  });
-
-  const leaveQueueMutation = useMutation({
-    mutationFn: async () => {
-      await apiRequest("DELETE", "/api/sprints/queue");
-    },
-    onSuccess: () => {
-      toast({ title: "Left queue", description: "You've been removed from the matchmaking queue." });
-      queryClient.invalidateQueries({ queryKey: ["/api/sprints/queue/status"] });
-    },
-  });
-
-  const matchHandled = useRef(false);
-  useEffect(() => {
-    if (queueStatus?.matched && queueStatus.sprint && !matchHandled.current) {
-      matchHandled.current = true;
-      queryClient.invalidateQueries({ queryKey: ["/api/sprints"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/sprints/queue/status"] });
-      toast({ title: "Match found!", description: "You've been paired with a partner." });
-      setLocation(`/sprints/${queueStatus.sprint.id}`);
-    }
-  }, [queueStatus?.matched, queueStatus?.sprint]);
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-full" data-testid="loading-sprints">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    );
-  }
-
-  const activeSprints = sprints?.filter(s => s.status !== "completed") || [];
-  const completedSprints = sprints?.filter(s => s.status === "completed") || [];
-
   return (
-    <div className="p-6 h-full overflow-y-auto">
-      <div className="max-w-5xl mx-auto">
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight" data-testid="text-sprints-title">Sprints &amp; simulations</h1>
-            <p className="text-muted-foreground mt-1">Trial collaborations to find a co-founder, and a market to run a company in</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={() => setLocation("/sprints/practice")} data-testid="button-practice-sprint">
-              <GraduationCap className="h-4 w-4 mr-2" />
-              Practice
-            </Button>
-            <Button onClick={() => setLocation("/sprints/new")} data-testid="button-new-sprint">
-              <Plus className="h-4 w-4 mr-2" />
-              New Sprint
-            </Button>
-          </div>
+    <div className="h-full overflow-y-auto p-6">
+      <div className="mx-auto max-w-5xl">
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold tracking-tight" data-testid="text-sprints-title">
+            Sprints &amp; simulations
+          </h1>
+          <p className="mt-1 text-muted-foreground">
+            Build something with a stranger in half an hour, or run a company for a fortnight.
+          </p>
         </div>
 
-        {/*
-          * The way into the simulation.
-          *
-          * It had none. The sidebar has said "Sprints & simulations" since the
-          * feature was built and this page said "Co-Founder Sprints" and
-          * mentioned no simulation at all — so the only way to reach a
-          * fortnight-long game that five people play together was to know the
-          * address and type it. Everything downstream of this was finished and
-          * unreachable.
-          */}
+        <GameEntry />
         <SimulationEntry />
-
-        {queueStatus?.inQueue && queueStatus.entry && (
-          <section className="mb-8">
-            <Card className="border-primary/30 bg-primary/5" data-testid="card-queue-waiting-room">
-              <CardContent className="p-5 space-y-4">
-                <div className="flex items-start justify-between gap-4 flex-wrap">
-                  <div className="flex items-center gap-4 min-w-0">
-                    <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                      <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                    </div>
-                    <div className="min-w-0">
-                      <h3 className="font-semibold" data-testid="text-queue-status">Looking for a partner…</h3>
-                      <p className="text-sm text-muted-foreground">
-                        You'll be paired with the next builder who picks a {queueStatus.entry.duration} sprint.
-                        Keep this tab open — we check every few seconds.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <Badge variant="outline">{queueStatus.entry.duration}</Badge>
-                    {queueStatus.entry.productStyle && (
-                      <Badge variant="outline" className="capitalize">{queueStatus.entry.productStyle}</Badge>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => leaveQueueMutation.mutate()}
-                      disabled={leaveQueueMutation.isPending}
-                      data-testid="button-leave-queue"
-                    >
-                      <XCircle className="h-4 w-4 mr-1" />
-                      Leave queue
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-3 gap-3 pt-1 border-t border-primary/20">
-                  <div className="pt-3">
-                    <p className="text-xs text-muted-foreground">Your place in line</p>
-                    <p className="text-lg font-semibold" data-testid="text-queue-position">
-                      {queueStatus.position ? `#${queueStatus.position}` : "—"}
-                    </p>
-                  </div>
-                  <div className="pt-3">
-                    <p className="text-xs text-muted-foreground">Builders waiting</p>
-                    <p className="text-lg font-semibold" data-testid="text-queue-waiting">
-                      {queueStatus.waiting ?? 0}
-                    </p>
-                  </div>
-                  <div className="pt-3">
-                    <p className="text-xs text-muted-foreground">Waiting for</p>
-                    <p className="text-lg font-semibold" data-testid="text-queue-elapsed">
-                      {formatWait(queueStatus.waitingSeconds ?? 0)}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Nobody else in line: offer the practice sprint rather than
-                    leaving them staring at a spinner. */}
-                {(queueStatus.waiting ?? 0) <= 1 && (queueStatus.waitingSeconds ?? 0) > 30 && (
-                  <div className="flex items-center justify-between gap-3 rounded-md bg-background/60 border border-border/60 p-3">
-                    <p className="text-sm text-muted-foreground">
-                      Quiet in here right now. You can practise with Nova instead — your place in line is kept.
-                    </p>
-                    <Button size="sm" variant="outline" className="gap-1.5 shrink-0" onClick={() => setLocation("/sprints/practice")} data-testid="button-queue-practice-instead">
-                      <Bot className="h-3.5 w-3.5" /> Practice with Nova
-                    </Button>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </section>
-        )}
-
-        {activeSprints.length > 0 && (
-          <section className="mb-8">
-            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-              <Clock className="h-4 w-4 text-primary" />
-              Active Sprints ({activeSprints.length})
-            </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {activeSprints.map(sprint => {
-                const partner = sprint.user1Id === user?.id ? sprint.user2 : sprint.user1;
-                const style = STATUS_STYLES[sprint.status] || STATUS_STYLES.setup;
-                return (
-                  <Card
-                    key={sprint.id}
-                    className="cursor-pointer hover:border-primary/50 transition-colors"
-                    onClick={() => setLocation(`/sprints/${sprint.id}`)}
-                    data-testid={`sprint-card-${sprint.id}`}
-                  >
-                    <CardContent className="p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex-1 min-w-0">
-                          <h3 className="font-semibold truncate" data-testid={`text-sprint-name-${sprint.id}`}>
-                            {sprint.productName || "Untitled Sprint"}
-                          </h3>
-                          {sprint.productDescription && (
-                            <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{sprint.productDescription}</p>
-                          )}
-                        </div>
-                        <Badge variant={style.variant} data-testid={`badge-sprint-status-${sprint.id}`}>{style.label}</Badge>
-                      </div>
-                      <div className="flex items-center gap-4 mt-3">
-                        {sprint.isPractice ? (
-                          <div className="flex items-center gap-2">
-                            <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center">
-                              <Cpu className="h-3.5 w-3.5 text-primary" />
-                            </div>
-                            <span className="text-sm text-muted-foreground">Nova (AI)</span>
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-2">
-                            <UserAvatar src={partner?.profileImageUrl} name={partner?.firstName || "Partner"} className="h-6 w-6" />
-                            <span className="text-sm text-muted-foreground">{partner?.firstName || "Partner"}</span>
-                          </div>
-                        )}
-                        <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                          <Timer className="h-3.5 w-3.5" />
-                          {sprint.duration}
-                        </div>
-                        {sprint.isPractice && (
-                          <Badge variant="secondary" className="text-xs">Practice</Badge>
-                        )}
-                        {sprint.productStyle && (
-                          <Badge variant="outline" className="text-xs">{sprint.productStyle}</Badge>
-                        )}
-                      </div>
-                      <div className="flex items-center justify-end mt-3">
-                        <span className="text-xs text-primary flex items-center gap-1">
-                          Continue <ArrowRight className="h-3 w-3" />
-                        </span>
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </div>
-          </section>
-        )}
-
-        {completedSprints.length > 0 && (
-          <section className="mb-8">
-            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
-              Completed ({completedSprints.length})
-            </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {completedSprints.map(sprint => {
-                const partner = sprint.user1Id === user?.id ? sprint.user2 : sprint.user1;
-                return (
-                  <Card
-                    key={sprint.id}
-                    className="cursor-pointer hover:border-primary/50 transition-colors opacity-80"
-                    onClick={() => setLocation(`/sprints/${sprint.id}`)}
-                    data-testid={`sprint-card-completed-${sprint.id}`}
-                  >
-                    <CardContent className="p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <h3 className="font-semibold truncate flex-1">{sprint.productName || "Untitled Sprint"}</h3>
-                        <Badge variant="outline">Completed</Badge>
-                      </div>
-                      <div className="flex items-center gap-4 mt-3">
-                        <div className="flex items-center gap-2">
-                          <UserAvatar src={partner?.profileImageUrl} name={partner?.firstName || "Partner"} className="h-6 w-6" />
-                          <span className="text-sm text-muted-foreground">{partner?.firstName || "Partner"}</span>
-                        </div>
-                        <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                          <Timer className="h-3.5 w-3.5" />
-                          {sprint.duration}
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </div>
-          </section>
-        )}
-
-        {(!sprints || sprints.length === 0) && !queueStatus?.inQueue && (
-          <div className="flex flex-col items-center justify-center py-20 text-center border-2 border-dashed rounded-lg bg-card/50">
-            <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center mb-4">
-              <Users className="h-6 w-6 text-primary" />
-            </div>
-            <h3 className="text-lg font-semibold">No sprints yet</h3>
-            <p className="text-muted-foreground max-w-sm mt-2 mb-6">
-              Start a trial collaboration with a potential co-founder. You can find partners from your matches or get randomly paired.
-            </p>
-            <Button onClick={() => setLocation("/sprints/new")} data-testid="button-new-sprint-empty">
-              <Sparkles className="h-4 w-4 mr-2" />
-              Start Your First Sprint
-            </Button>
-          </div>
-        )}
       </div>
     </div>
   );

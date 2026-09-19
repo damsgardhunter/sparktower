@@ -17,6 +17,7 @@ import { readFileSync, existsSync } from "fs";
 import { execSync } from "child_process";
 import { buildRouteCoverage } from "../../server/route-coverage";
 import { REACHES_OTHERS } from "../../server/email-verification";
+import { serverSourceFiles } from "../helpers/server-files";
 
 /** Paths that look social but stay inside the account's own work, and why. */
 const DOESNT_REACH_ANYONE: Record<string, string> = {
@@ -48,8 +49,9 @@ const DOESNT_REACH_ANYONE: Record<string, string> = {
   "POST /api/connections/:id/accept": "answering a request that was sent to them",
   "POST /api/connections/:id/reject": "answering a request that was sent to them",
   "POST /api/messages/:userId/read": "marks a conversation read, for them",
-  "POST /api/sprints/:id/decisions": "a decision inside a sprint the two of them already share",
   "POST /api/contests/:id/join": "entering a contest",
+  "POST /api/games/:id/submit": "a decision inside a game the two of them already share",
+  "POST /api/games/:id/leave": "walking out of a game they are already in",
   "POST /api/contests/:id/submit": "a contest entry, judged by the organiser",
   "POST /api/documents/:docId/unpublish": "takes a page down — the safe direction",
   "POST /api/projects/:id/tasks/nova-assist/apply": "applies Nova's help to their own board",
@@ -57,16 +59,15 @@ const DOESNT_REACH_ANYONE: Record<string, string> = {
   "POST /api/projects/:id/health-findings/feedback": "rates a finding Nova gave them, seen by nobody else",
   "DELETE /api/health-findings/feedback/:feedbackId": "removing their own rating",
   "POST /api/projects/:id/health-check/apply": "applies a health check to their own board",
-  "POST /api/sprints/:id/generate-report": "a report for the sprint the two of them already share",
 };
 
 /** Route families that tend to put something in front of someone else. */
-const SOCIAL = /feed|comment|message|invite|report|connection|publish|apply|application|react|follow|contest|communit|discussion|sprint\/.*decision/i;
+const SOCIAL = /feed|comment|message|invite|report|connection|publish|apply|application|react|follow|contest|communit|discussion|games\/.*(submit|leave)/i;
 
 describe("writes that reach other people", () => {
   it("are gated on a confirmed email, or named here with why they aren't", () => {
-    const paths = execSync("git ls-files server", { encoding: "utf8" }).split("\n").filter((p) => /\.ts$/.test(p) && existsSync(p));
-    const rows = buildRouteCoverage(paths.map((path) => ({ path, content: readFileSync(path, "utf8"), size: 1 })) as any).rows
+    // What is on disk, not what git tracks — see test/helpers/server-files.ts.
+    const rows = buildRouteCoverage(serverSourceFiles().map((f) => ({ ...f, size: 1 })) as any).rows
       .filter((r) => r.write && r.auth && r.mounted !== false && SOCIAL.test(r.path));
     expect(rows.length).toBeGreaterThan(20);
 
@@ -86,7 +87,7 @@ describe("writes that reach other people", () => {
       "/api/projects/p1/apply", "/api/projects/p1/investment/applications",
       "/api/artifacts/a1/publish", "/api/documents/d1/publish",
       "/api/feed/p1/react", "/api/feed/comments/c1/react", "/api/project-comments/c1/react",
-      "/api/sprints/s1/messages",
+      "/api/games/g1/messages",
     ]) expect(gated(path), path).toBe(true);
 
     // And leave alone what stays inside their own work.

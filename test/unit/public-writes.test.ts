@@ -15,6 +15,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, existsSync } from "fs";
 import { execSync } from "child_process";
 import { buildRouteCoverage } from "../../server/route-coverage";
+import { serverSourceFiles } from "../helpers/server-files";
 
 /** What the internet may POST to, and what each one trusts instead of a session. */
 const PUBLIC_WRITES: Record<string, string> = {
@@ -37,8 +38,8 @@ const PUBLIC_WRITES: Record<string, string> = {
 };
 
 const coverage = () => {
-  const paths = execSync("git ls-files server", { encoding: "utf8" }).split("\n").filter((p) => /\.ts$/.test(p) && existsSync(p));
-  return buildRouteCoverage(paths.map((path) => ({ path, content: readFileSync(path, "utf8"), size: 1 })) as any);
+  // What is on disk, not what git tracks — see test/helpers/server-files.ts.
+  return buildRouteCoverage(serverSourceFiles().map((f) => ({ ...f, size: 1 })) as any);
 };
 
 describe("writes anyone can reach", () => {

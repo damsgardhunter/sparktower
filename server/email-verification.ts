@@ -115,7 +115,13 @@ export const REACHES_OTHERS: RegExp[] = [
   // Straight to a person: an invite, a message, a connection request, a report.
   /^\/api\/projects\/[^/]+\/invites$/,
   /^\/api\/messages\/[^/]+$/,
-  /^\/api\/sprints\/[^/]+\/messages$/,
+  /*
+   * The game's chat. It replaced `/api/sprints/:id/messages` when the
+   * questionnaire sprint was retired, and the entry was not moved across with
+   * it — so for a while the one route in the game that puts your words in
+   * front of a stranger was the one route not behind this gate.
+   */
+  /^\/api\/games\/[^/]+\/messages$/,
   /^\/api\/connections\/request$/,
   /^\/api\/reports$/,
   // Applying is a message to the owner, with a name attached.

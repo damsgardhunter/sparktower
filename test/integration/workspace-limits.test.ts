@@ -36,7 +36,7 @@ const LIMITED: Record<string, [string, string][]> = {
   ],
   follow: [["post", "/api/projects/:id/follow"]],
   apply: [["post", "/api/projects/:id/apply"], ["post", "/api/contests/:id/join"], ["post", "/api/contests/:id/submit"]],
-  sprint: [["post", "/api/sprints"], ["post", "/api/sprints/queue"], ["post", "/api/sprints/:id/convert"]],
+  sprint: [["post", "/api/games/solo"]],
   checkout: [
     ["post", "/api/checkout"], ["post", "/api/billing-portal"], 
     ["post", "/api/projects/:id/donate-checkout"], ["post", "/api/stripe/connect-account"], ["post", "/api/stripe/sync-subscription"],
@@ -84,7 +84,7 @@ describe("limits on workspace, social, sprint, payment and outside-service write
       ["workspace", () => agent.post(`/api/projects/${project}/decisions`).send({ title: "One more", decision: "Past the limit." })],
       ["follow", () => agent.post(`/api/projects/${project}/follow`)],
       ["apply", () => agent.post(`/api/projects/${project}/apply`).send({ role: "Engineer", message: "Hi" })],
-      ["sprint", () => agent.post("/api/sprints/queue").send({ duration: "24h", productStyle: "saas" })],
+      ["sprint", () => agent.post("/api/games/solo").send({})],
       ["checkout", () => agent.post("/api/checkout").send({ tier: "starter" })],
       ["external", () => agent.post(`/api/projects/${project}/code-audit/check-repo`).send({ repoUrl: "https://github.com/octocat/hello-world" })],
     ];

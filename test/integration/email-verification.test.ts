@@ -67,7 +67,7 @@ describe("a new account", () => {
       ["publishing a document", () => person.agent.post("/api/documents/00000000-0000-0000-0000-000000000000/publish").send({})],
       ["applying to a project", () => person.agent.post(`/api/projects/${projectId}/apply`).send({ message: "I'd like to help with this." })],
       ["reacting to a post", () => person.agent.post("/api/feed/00000000-0000-0000-0000-000000000000/react").send({ reaction: "like" })],
-      ["a sprint message", () => person.agent.post("/api/sprints/00000000-0000-0000-0000-000000000000/messages").send({ content: "Hello partner." })],
+      ["a game message", () => person.agent.post("/api/games/00000000-0000-0000-0000-000000000000/messages").send({ body: "Hello partner." })],
     ] as const;
     for (const [what, call] of blocked) {
       const res = await call();

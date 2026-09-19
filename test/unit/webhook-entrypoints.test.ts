@@ -11,15 +11,15 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, existsSync } from "fs";
 import { execSync } from "child_process";
+import { serverSourceFiles } from "../helpers/server-files";
 
 /** Route paths that receive calls from outside and must verify what sent them. */
 const WEBHOOK_ROUTES: Record<string, RegExp> = {
   "/api/stripe/webhook": /WebhookHandlers\.processWebhook/,
 };
 
-const serverFiles = () => execSync("git ls-files server", { encoding: "utf8" })
-  .split("\n").filter((p) => /\.ts$/.test(p) && existsSync(p))
-  .map((path) => ({ path, content: readFileSync(path, "utf8") }));
+// What is on disk, not what git tracks — see test/helpers/server-files.ts.
+const serverFiles = () => serverSourceFiles();
 
 describe("webhook entrypoints", () => {
   it("are only the ones named here, each verifying the sender before it reads the body", () => {

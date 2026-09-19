@@ -21,6 +21,7 @@ import { buildRouteCoverage } from "../../server/route-coverage";
 import { RATE_LIMITS } from "@shared/moderation";
 import { readFileSync } from "fs";
 import { execSync } from "child_process";
+import { serverSourceFiles } from "../helpers/server-files";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -70,8 +71,8 @@ describe("the AI burst limit", () => {
   });
 
   it("holds the free AI routes to the burst limit, since credits aren't holding them", async () => {
-    const paths = execSync("git ls-files server", { encoding: "utf8" }).split("\n").filter((p) => /\.ts$/.test(p));
-    const coverage = buildRouteCoverage(paths.map((path) => ({ path, content: readFileSync(path, "utf8"), size: 1 })) as any);
+    // What is on disk, not what git tracks — see test/helpers/server-files.ts.
+    const coverage = buildRouteCoverage(serverSourceFiles().map((f) => ({ ...f, size: 1 })) as any);
     const free = coverage.rows.filter((r) => r.cost && !r.credits && r.mounted !== false);
     // Every AI route that isn't credit-metered carries its own limiter: nothing costly is left on the write floor alone.
     for (const route of free) {
