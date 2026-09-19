@@ -116,6 +116,8 @@ test("a rival opens into somebody you can plan against, and a teammate into what
    * A rival. The one thing the old screen could never do: say who they are and
    * where they can be taken.
    */
+  // Who you're up against sits under Past, with the market.
+  await ceo.getByTestId("tab-past").click();
   const rival = ceo.locator('[data-testid^="button-company-inc_"]').first();
   await expect(rival, "the incumbents are tappable").toBeVisible();
   await rival.click();
@@ -140,6 +142,8 @@ test("a rival opens into somebody you can plan against, and a teammate into what
    * A teammate who has not filed. This is the flow that had no button at all:
    * you could see somebody was still deciding and do nothing about it.
    */
+  // The table — who has filed — is on Decisions.
+  await ceo.getByTestId("tab-decisions").click();
   // Not the first row — that one is you, and you cannot nudge yourself.
   const anySeat = ceo.locator('[data-testid^="button-seat-"]').nth(1);
   await expect(anySeat).toBeVisible();

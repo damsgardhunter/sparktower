@@ -29,7 +29,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useParams, useLocation } from "wouter";
+import { useParams, useLocation, useSearch } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -51,7 +51,7 @@ import { ProjectionRail, ProjectionBar } from "@/components/sim/projection-dock"
 import { AdvanceYearCard } from "@/components/sim/advance-year";
 import {
   Loader2, Clock, TrendingUp, TrendingDown, Minus, AlertTriangle, Info,
-  CheckCircle2, Circle, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy, Newspaper, ChevronDown, Gauge,
+  CheckCircle2, Circle, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy, Newspaper, ChevronDown, Gauge, History, SlidersHorizontal, Telescope,
 } from "lucide-react";
 
 interface Desk {
@@ -154,6 +154,12 @@ export default function SimulationDeskPage() {
   const { id } = useParams<{ id: string }>();
   const [, navigate] = useLocation();
   const { toast } = useToast();
+
+  /* Which tab: in the address (?tab=past|future), Decisions when it isn't. */
+  const search = useSearch();
+  const asked = new URLSearchParams(search).get("tab");
+  const tabParam: DeskTab | null = asked === "past" || asked === "future" || asked === "decisions" ? asked : null;
+  const setTab = (t: DeskTab) => navigate(`/simulation/${id}${t === "decisions" ? "" : `?tab=${t}`}`, { replace: true });
 
   const { data: desk, isLoading } = useQuery<Desk>({
     queryKey: [`/api/sim/ventures/${id}/desk`],
@@ -299,6 +305,8 @@ export default function SimulationDeskPage() {
    * template literal is unreadable.
    */
   const v = desk.niche.voice;
+  // Once the season is over there is nothing to decide, so it opens on how it went.
+  const tab: DeskTab = tabParam ?? (desk.phase === "finished" ? "past" : "decisions");
   const secondsLeft = desk.resolvesAt ? Math.max(0, Math.round((new Date(desk.resolvesAt).getTime() - now) / 1000)) : null;
 
   return (
@@ -310,6 +318,7 @@ export default function SimulationDeskPage() {
       clock={desk.phase === "finished" ? "Season over" : secondsLeft !== null ? `${longCountdown(secondsLeft)} until this year resolves` : null}
       year={desk.year}
       totalYears={desk.totalYears}
+      tabs={<DeskTabs tab={tab} onChange={setTab} ventureId={desk.ventureId} lastYear={desk.lastYear?.year ?? null} />}
       rail={desk.phase !== "finished" ? (
         <ProjectionRail
           ventureId={id!}
@@ -332,372 +341,393 @@ export default function SimulationDeskPage() {
         />
       ) : undefined}
     >
-      {/* Only for developers and for companies running their own season. */}
-      {desk.canAdvance && desk.phase !== "finished" && desk.seasonId && (
-        <AdvanceYearCard
-          seasonId={desk.seasonId}
-          ventureId={desk.ventureId}
-          year={desk.year}
-          totalYears={desk.totalYears}
-          as={desk.canAdvance}
-        />
-      )}
-
-      {/* 1. What happened last year, before anyone is asked to decide this one. */}
-      {desk.lastYear ? <LastYear report={desk.lastYear} voice={v} onOpen={() => navigate(`/simulation/${desk.ventureId}/report/${desk.lastYear!.year}`)} /> : (
-        <Card><CardContent className="p-5">
-          <p className="text-sm font-medium">Year one</p>
-          <p className="text-sm text-muted-foreground mt-1">
-            {desk.niche.premise} Nobody has heard of you yet — that is the first problem to solve.
-          </p>
-        </CardContent></Card>
-      )}
-
-      {/* What happened to the market, which is the thing people talk about. */}
-      {desk.lastYear?.event && <EventCard event={desk.lastYear.event} />}
-
-      {/* Your own thing to win, and how last year's went. */}
-      {desk.challenge && <ChallengeCard challenge={desk.challenge} last={desk.lastChallenge} />}
-
       {/*
-        * How many people will want you this year, next to the number that has
-        * to be right about it. Shown to every seat, because the forecast is
-        * the thing marketing moves and operations builds to — and the argument
-        * between them is the one this card exists to have before the tick.
+        * Three tabs, in the order a seat thinks: what just happened, what to
+        * do about it, and where that leads. The pinned header switches them,
+        * and the tab is in the address so a reload keeps it.
         */}
-      {/*
-        * The year as it stands — revenue, costs, profit, cash — redrawn as
-        * teammates file and as this seat edits, with what the unfiled draft
-        * here is doing to each number. Keyed on the table's filings so it
-        * re-runs exactly when somebody files.
-        */}
-      <ProjectionPanel
-        ventureId={id!}
-        draft={draft}
-        filedStamp={JSON.stringify(desk.filed ?? {})}
-      />
-
-      {desk.forecast && (
-        <ForecastCard
-          forecast={desk.forecast}
-          voice={v}
-          price={Number(desk.yourRole === "cmo" && draft ? draft.price : (desk.filed as any)?.cmo?.price ?? c.price)}
-          /*
-           * The room the company actually has this year. Capacity ordered now
-           * opens next year, so the lever's value is next year's room — set
-           * against next year's demand in the projection above, not here.
-           * A cut is immediate, so the smaller of the two is what serves.
-           */
-          capacity={Math.min(c.capacity, Number(desk.yourRole === "coo" && draft ? draft.capacityTarget : (desk.filed as any)?.coo?.capacityTarget ?? c.capacity)) + (c.assetCapacity ?? 0)}
-          idleCostPerUnit={desk.idleCostPerUnit}
-          yours={desk.yourRole === "coo" ? "capacity" : desk.yourRole === "cmo" ? "price" : null}
-        />
-      )}
-
-      {/*
-        * 2. Where the company stands, as KPIs rather than a grid of equal
-        * labels. Grouped by the question each answers — the money, the
-        * customers, how good the product is, what is already on its way — so
-        * a seat reads four things instead of fourteen, and the scores out of
-        * a hundred get a bar, because "89" means more drawn against 100.
-        */}
-      <Card className="rounded-2xl nova-ring-soft" data-testid="card-company-kpis">
-        <CardContent className="space-y-4 p-5">
-          <div className="grid grid-cols-3 gap-2 sm:gap-3">
-            <Kpi label="Cash" value={compact(c.cash)} tone={c.cash < 0 ? "bad" : "plain"} />
-            <Kpi label="Debt" value={compact(c.debt)} sub={`limit ${compact(c.creditLimit)}`} tone={c.debt > c.creditLimit * 0.8 ? "warn" : "plain"} />
-            <Kpi
-              label="You own"
-              value={`${Math.round(c.founderShare * 100)}%`}
-              sub={c.founderShare < 1 ? "the rest was sold to investors" : "nobody else has a claim"}
-              tone={c.founderShare < 0.6 ? "warn" : "plain"}
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-2 sm:gap-3">
-            {/* Customers against room, room including what the company owns (server's assetCapacity). */}
-            <div className="rounded-xl border border-border bg-background/70 p-3">
-              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{title(v.customers)}</p>
-              <p className="text-xl sm:text-2xl font-extrabold tracking-tight tabular-nums">{c.customers.toLocaleString()}</p>
-              <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
-                <div className="h-full rounded-full nova-chip" style={{ width: `${Math.min(100, (c.customers / Math.max(1, c.capacity + (c.assetCapacity ?? 0))) * 100)}%` }} />
-              </div>
-              <p className="mt-1 text-[11px] text-muted-foreground">
-                {c.assetCapacity
-                  ? `${v.capacityShort} ${(c.capacity + c.assetCapacity).toLocaleString()} (${c.assetCapacity.toLocaleString()} from what you own)`
-                  : `${v.capacityShort} ${c.capacity.toLocaleString()}`}
-              </p>
-            </div>
-            <Kpi
-              label={`Price ${v.per}`}
-              value={money(c.price)}
-              sub={`costs ${money(c.unitCost)} each · ${money(Math.max(0, c.price - c.unitCost))} margin`}
-              tone={c.price < c.unitCost ? "bad" : "plain"}
-            />
-          </div>
-
-          {/*
-            * Quality, brand and service are the engine's three words for three
-            * things every market has and no market calls that. The number is
-            * the same; the label under it is the market's own.
-            */}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Score label="Reputation" value={c.reputation} />
-            <Score label="Quality" value={c.quality} sub={v.quality} />
-            <Score label="Brand" value={c.brand} sub={v.brand} />
-            <Score label="Service" value={c.service} sub={v.service} />
-          </div>
-
-          {/* What is already on its way — the lag made visible (lag.ts) — as a table rather than more tiles. */}
-          {(c.pipeline > 0 || (c.pipelineLater ?? 0) > 0 || (c.brandPipeline ?? 0) > 0 || c.techDebt > 0) && (
-            <div className="overflow-hidden rounded-xl border border-border bg-background/70" data-testid="table-on-its-way">
-              <p className="bg-muted/50 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">On its way</p>
-              <table className="w-full text-sm">
-                <tbody className="divide-y divide-border">
-                  {c.pipeline > 0 && <WayRow label="Quality" value={`+${c.pipeline}`} when="lands next year" />}
-                  {(c.pipelineLater ?? 0) > 0 && <WayRow label="Research" value={`+${c.pipelineLater}`} when="lands in two years" />}
-                  {(c.brandPipeline ?? 0) > 0 && <WayRow label="Brand" value={`+${c.brandPipeline}`} when="the rest of this year's campaign" />}
-                  {c.techDebt > 0 && (
-                    <WayRow
-                      label="Technical debt"
-                      value={`${c.techDebt}`}
-                      when={c.techDebtCost.product > 0 ? `product work buys ${c.techDebtCost.product}% less` : "nothing to worry about yet"}
-                      warn={c.techDebt > 55}
-                    />
-                  )}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {c.bankruptSince !== null && (
-            <p className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
-              Insolvent since year {c.bankruptSince}. The season does not end here — sell assets, cut seats, restructure, or take an offer.
+      {tab === "past" && (
+        <>
+        {/* 1. What happened last year, before anyone is asked to decide this one. */}
+        {desk.lastYear ? <LastYear report={desk.lastYear} voice={v} onOpen={() => navigate(`/simulation/${desk.ventureId}/report/${desk.lastYear!.year}`)} /> : (
+          <Card><CardContent className="p-5">
+            <p className="text-sm font-medium">Year one</p>
+            <p className="text-sm text-muted-foreground mt-1">
+              {desk.niche.premise} Nobody has heard of you yet — that is the first problem to solve.
             </p>
-          )}
-          <p className="flex flex-wrap items-center gap-2 border-t border-border pt-3 text-xs text-muted-foreground">
-            <span className="rounded-full nova-chip px-2 py-0.5 text-[11px] font-bold">Next year: {desk.economy.outlook}</span>
-            {desk.economy.outlookMeans}
-          </p>
-        </CardContent>
-      </Card>
+          </CardContent></Card>
+        )}
 
-      {/* When things are going badly, this is the most important thing on the page. */}
-      {desk.distress.level !== "healthy" && (
-        <DistressCard
-          distress={desk.distress}
-          isCeo={desk.yourRole === "ceo"}
-          seats={desk.table.map((s) => s.role).filter(Boolean) as Role[]}
-          ventureId={desk.ventureId}
-        />
+        {/* What happened to the market, which is the thing people talk about. */}
+        {desk.lastYear?.event && <EventCard event={desk.lastYear.event} />}
+        {/*
+          * 2. Where the company stands, as KPIs rather than a grid of equal
+          * labels. Grouped by the question each answers — the money, the
+          * customers, how good the product is, what is already on its way — so
+          * a seat reads four things instead of fourteen, and the scores out of
+          * a hundred get a bar, because "89" means more drawn against 100.
+          */}
+        <Card className="rounded-2xl nova-ring-soft" data-testid="card-company-kpis">
+          <CardContent className="space-y-4 p-5">
+            <div className="grid grid-cols-3 gap-2 sm:gap-3">
+              <Kpi label="Cash" value={compact(c.cash)} tone={c.cash < 0 ? "bad" : "plain"} />
+              <Kpi label="Debt" value={compact(c.debt)} sub={`limit ${compact(c.creditLimit)}`} tone={c.debt > c.creditLimit * 0.8 ? "warn" : "plain"} />
+              <Kpi
+                label="You own"
+                value={`${Math.round(c.founderShare * 100)}%`}
+                sub={c.founderShare < 1 ? "the rest was sold to investors" : "nobody else has a claim"}
+                tone={c.founderShare < 0.6 ? "warn" : "plain"}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 sm:gap-3">
+              {/* Customers against room, room including what the company owns (server's assetCapacity). */}
+              <div className="rounded-xl border border-border bg-background/70 p-3">
+                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{title(v.customers)}</p>
+                <p className="text-xl sm:text-2xl font-extrabold tracking-tight tabular-nums">{c.customers.toLocaleString()}</p>
+                <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
+                  <div className="h-full rounded-full nova-chip" style={{ width: `${Math.min(100, (c.customers / Math.max(1, c.capacity + (c.assetCapacity ?? 0))) * 100)}%` }} />
+                </div>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  {c.assetCapacity
+                    ? `${v.capacityShort} ${(c.capacity + c.assetCapacity).toLocaleString()} (${c.assetCapacity.toLocaleString()} from what you own)`
+                    : `${v.capacityShort} ${c.capacity.toLocaleString()}`}
+                </p>
+              </div>
+              <Kpi
+                label={`Price ${v.per}`}
+                value={money(c.price)}
+                sub={`costs ${money(c.unitCost)} each · ${money(Math.max(0, c.price - c.unitCost))} margin`}
+                tone={c.price < c.unitCost ? "bad" : "plain"}
+              />
+            </div>
+
+            {/*
+              * Quality, brand and service are the engine's three words for three
+              * things every market has and no market calls that. The number is
+              * the same; the label under it is the market's own.
+              */}
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <Score label="Reputation" value={c.reputation} />
+              <Score label="Quality" value={c.quality} sub={v.quality} />
+              <Score label="Brand" value={c.brand} sub={v.brand} />
+              <Score label="Service" value={c.service} sub={v.service} />
+            </div>
+
+            {c.bankruptSince !== null && (
+              <p className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
+                Insolvent since year {c.bankruptSince}. The season does not end here — sell assets, cut seats, restructure, or take an offer.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-5">
+            <h3 className="text-sm font-semibold">Who you're up against</h3>
+            <p className="text-xs text-muted-foreground mb-3">Open any of them to read who they are and where they can be taken.</p>
+            <div className="space-y-3">
+              {desk.rivals.map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => setOpenCompany(r.id)}
+                  className="w-full flex items-start justify-between gap-4 text-left rounded-md -mx-2 px-2 py-1.5 hover-elevate active-elevate-2"
+                  data-testid={`button-company-${r.id}`}
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">
+                      {r.name}
+                      {r.kind === "player" && <Badge variant="outline" className="ml-2 text-[10px]">a team</Badge>}
+                    </p>
+                    {r.posturedAs && <p className="text-xs text-muted-foreground">{r.posturedAs}</p>}
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-sm tabular-nums">{r.customers.toLocaleString()}</p>
+                    <p className="text-xs text-muted-foreground">at {money(r.price)}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-5">
+            <h3 className="text-sm font-semibold">The market</h3>
+            <p className="text-xs text-muted-foreground mb-3">What each segment weighs when it chooses, and what it expects of you this year.</p>
+            <div className="space-y-3">
+              {desk.segments.map((s) => (
+                <div key={s.id}>
+                  <div className="flex justify-between gap-3">
+                    <p className="text-sm font-medium">{s.name}</p>
+                    <p className="text-sm tabular-nums shrink-0">{s.yours.toLocaleString()} yours</p>
+                  </div>
+                  <p className="text-xs text-muted-foreground">{s.description}</p>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    Pays around {money(s.referencePrice)} · {s.loyalty > 0.7 ? "very hard to move once settled" : s.loyalty > 0.4 ? "will switch for a reason" : "switches easily"}
+                  </p>
+                  <Criteria segment={s} company={c} />
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+        </>
       )}
 
-      {/* 3. The decision. */}
-      {desk.phase === "finished" ? (
-        <Card><CardContent className="p-6 text-sm text-muted-foreground">
-          The season is over. Nothing left to decide — the last year's result is above.
-        </CardContent></Card>
-      ) : desk.yourRole && draft ? (
-        <div className="space-y-3">
-          {/* Yours: the one card on the desk that is this seat's to change, so it carries the ring. */}
-          <Card className="rounded-2xl nova-ring" data-testid="card-your-decision">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h2 className="font-semibold">{desk.yourTitle}</h2>
-                  <p className="text-xs text-muted-foreground mt-0.5">{desk.yourLevers.join(" · ")}</p>
-                </div>
-                {desk.submitted && (
-                  <Badge variant="secondary" className="shrink-0" data-testid="badge-filed">
-                    <CheckCircle2 className="h-3 w-3 mr-1" /> Filed
-                  </Badge>
-                )}
-              </div>
-
-              <div className="mt-5 space-y-5">
-                {desk.fields.map((field) => (
-                  <Field
-                    key={field.id}
-                    field={field}
-                    value={draft[field.id]}
-                    error={errors[field.id]}
-                    onChange={(v) => setDraft((d) => ({ ...d!, [field.id]: v }))}
-                    cities={desk.cities}
-                  />
-                ))}
-              </div>
-
-              {desk.yourRole === "cfo" && Number(draft.raiseAmount) > 0 && (
-                <p className="text-xs text-amber-600 mt-4" data-testid="text-dilution">
-                  Raising {compact(Number(draft.raiseAmount))} against a company worth about {compact(desk.valuation)} leaves the
-                  founders with roughly {Math.round((desk.company.founderShare * desk.valuation / (desk.valuation + Number(draft.raiseAmount))) * 100)}%
-                  of whatever this becomes. It never has to be repaid, and it never comes back.
-                </p>
-              )}
-              {desk.yourRole === "cto" && desk.company.techDebt > 40 && (
-                <p className="text-xs text-amber-600 mt-4" data-testid="text-tech-debt">
-                  The product owes itself {desk.company.techDebt}. Everything spent here buys{" "}
-                  {desk.company.techDebtCost.product}% less than it would, and every unit costs{" "}
-                  {desk.company.techDebtCost.unitCost}% more. Paying it down shows up in no number this year and in
-                  every number after it.
-                </p>
-              )}
-              {desk.yourRole === "cto" && Number(draft.researchSpend) > 0 && (
-                <p className="text-xs text-muted-foreground mt-4" data-testid="text-research">
-                  Roughly +{(saturate(Number(draft.researchSpend), 150_000) * 24 * desk.innovationPace).toFixed(1)} quality,
-                  landing in two years. Shipping lands next year; research the year after — and buys more for the wait.
-                </p>
-              )}
-
-              <Button
-                className="w-full mt-6"
-                onClick={() => submit.mutate()}
-                disabled={submit.isPending}
-                data-testid="button-file-decision"
-              >
-                {submit.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                {desk.submitted ? "Update this year's decision" : "File this year's decision"}
-              </Button>
-              <p className="text-[11px] text-muted-foreground text-center mt-2">
-                Changeable until the year resolves. Nothing is locked in before then.
-              </p>
-            </CardContent>
-          </Card>
-
-          {/* Notes on the draft stay with the form; the money and the warnings are pinned in the dock. */}
-          {desk.preview.notes.map((note, i) => (
-            <div key={i} className="rounded-lg bg-muted p-3 flex gap-2">
-              <Info className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-              <p className="text-xs text-muted-foreground">{note}</p>
-            </div>
-          ))}
-        </div>
-      ) : null}
-
-      {/* The three rooms off this one: buying things, buying companies, and where you stand. */}
-      <div className="grid gap-3 sm:grid-cols-3">
-        {/* A whole card to press, like the manager's rail: the chip says what it is, the ring that it goes somewhere. */}
-        <button
-          type="button"
-          onClick={() => navigate(`/simulation/${desk.ventureId}/market`)}
-          className="group rounded-2xl nova-ring-soft nova-hover-glow p-4 text-left"
-          data-testid="button-open-market"
-        >
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl nova-chip"><Store className="h-4 w-4" /></span>
-          <h3 className="mt-3 text-sm font-bold">The market</h3>
-          <p className="mt-1 text-xs text-muted-foreground">Three things a year, and everyone bids blind.</p>
-          <p className="mt-2 text-xs font-semibold text-primary group-hover:underline">Open →</p>
-        </button>
-        {/* A whole card to press, like the manager's rail: the chip says what it is, the ring that it goes somewhere. */}
-        <button
-          type="button"
-          onClick={() => navigate(`/simulation/${desk.ventureId}/offers`)}
-          className="group rounded-2xl nova-ring-soft nova-hover-glow p-4 text-left"
-          data-testid="button-open-offers"
-        >
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl nova-chip"><Handshake className="h-4 w-4" /></span>
-          <h3 className="mt-3 text-sm font-bold">The boardroom</h3>
-          <p className="mt-1 text-xs text-muted-foreground">Buy a rival, or take the money for yours.</p>
-          <p className="mt-2 text-xs font-semibold text-primary group-hover:underline">Open →</p>
-        </button>
-        {/* A whole card to press, like the manager's rail: the chip says what it is, the ring that it goes somewhere. */}
-        <button
-          type="button"
-          onClick={() => navigate(`/simulation/${desk.ventureId}/standings`)}
-          className="group rounded-2xl nova-ring-soft nova-hover-glow p-4 text-left"
-          data-testid="button-open-standings"
-        >
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl nova-chip"><Trophy className="h-4 w-4" /></span>
-          <h3 className="mt-3 text-sm font-bold">Standings</h3>
-          <p className="mt-1 text-xs text-muted-foreground">Where you actually stand, incumbents included.</p>
-          <p className="mt-2 text-xs font-semibold text-primary group-hover:underline">Open →</p>
-        </button>
-      </div>
-
-      {/* 4. Everyone else. */}
-      <Card>
-        <CardContent className="p-5">
-          <div className="flex items-center gap-2 mb-3">
-            <Users className="h-4 w-4 text-muted-foreground" />
-            <h3 className="text-sm font-semibold">The table</h3>
-          </div>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {desk.table.map((seat) => (
-              /*
-               * A whole row, not a name with a link in it. The thing being
-               * asked for is "tell me about this person", and on a phone a
-               * four-character first name is not a target.
-               */
-              <button
-                key={seat.userId}
-                type="button"
-                onClick={() => setOpenSeat(seat.userId)}
-                className="flex items-center gap-2.5 text-sm text-left rounded-md -mx-1.5 px-1.5 py-1 hover-elevate active-elevate-2"
-                data-testid={`button-seat-${seat.userId}`}
-              >
-                {seat.filed
-                  ? <CheckCircle2 className="h-4 w-4 text-primary shrink-0" />
-                  : <Circle className="h-4 w-4 text-muted-foreground shrink-0" />}
-                <span className="font-medium truncate">{seat.isYou ? "You" : seat.name}</span>
-                <span className="text-muted-foreground text-xs truncate">{seat.title ?? "no seat"}</span>
-                {!seat.filed && <span className="text-xs text-muted-foreground ml-auto shrink-0">still deciding</span>}
-              </button>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardContent className="p-5">
-          <h3 className="text-sm font-semibold">Who you're up against</h3>
-          <p className="text-xs text-muted-foreground mb-3">Open any of them to read who they are and where they can be taken.</p>
+      {tab === "decisions" && (
+        <>
+        {/* Only for developers and for companies running their own season. */}
+        {desk.canAdvance && desk.phase !== "finished" && desk.seasonId && (
+          <AdvanceYearCard
+            seasonId={desk.seasonId}
+            ventureId={desk.ventureId}
+            year={desk.year}
+            totalYears={desk.totalYears}
+            as={desk.canAdvance}
+          />
+        )}
+        {/* When things are going badly, this is the most important thing on the page. */}
+        {desk.distress.level !== "healthy" && (
+          <DistressCard
+            distress={desk.distress}
+            isCeo={desk.yourRole === "ceo"}
+            seats={desk.table.map((s) => s.role).filter(Boolean) as Role[]}
+            ventureId={desk.ventureId}
+          />
+        )}
+        {/* Your own thing to win, and how last year's went. */}
+        {desk.challenge && <ChallengeCard challenge={desk.challenge} last={desk.lastChallenge} />}
+        {/* 3. The decision. */}
+        {desk.phase === "finished" ? (
+          <Card><CardContent className="p-6 text-sm text-muted-foreground">
+            The season is over. Nothing left to decide — the last year's result is under Past.
+          </CardContent></Card>
+        ) : desk.yourRole && draft ? (
           <div className="space-y-3">
-            {desk.rivals.map((r) => (
-              <button
-                key={r.id}
-                type="button"
-                onClick={() => setOpenCompany(r.id)}
-                className="w-full flex items-start justify-between gap-4 text-left rounded-md -mx-2 px-2 py-1.5 hover-elevate active-elevate-2"
-                data-testid={`button-company-${r.id}`}
-              >
-                <div className="min-w-0">
-                  <p className="text-sm font-medium truncate">
-                    {r.name}
-                    {r.kind === "player" && <Badge variant="outline" className="ml-2 text-[10px]">a team</Badge>}
+            {/* Yours: the one card on the desk that is this seat's to change, so it carries the ring. */}
+            <Card className="rounded-2xl nova-ring" data-testid="card-your-decision">
+              <CardContent className="p-5">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h2 className="font-semibold">{desk.yourTitle}</h2>
+                    <p className="text-xs text-muted-foreground mt-0.5">{desk.yourLevers.join(" · ")}</p>
+                  </div>
+                  {desk.submitted && (
+                    <Badge variant="secondary" className="shrink-0" data-testid="badge-filed">
+                      <CheckCircle2 className="h-3 w-3 mr-1" /> Filed
+                    </Badge>
+                  )}
+                </div>
+
+                <div className="mt-5 space-y-5">
+                  {desk.fields.map((field) => (
+                    <Field
+                      key={field.id}
+                      field={field}
+                      value={draft[field.id]}
+                      error={errors[field.id]}
+                      onChange={(v) => setDraft((d) => ({ ...d!, [field.id]: v }))}
+                      cities={desk.cities}
+                    />
+                  ))}
+                </div>
+
+                {desk.yourRole === "cfo" && Number(draft.raiseAmount) > 0 && (
+                  <p className="text-xs text-amber-600 mt-4" data-testid="text-dilution">
+                    Raising {compact(Number(draft.raiseAmount))} against a company worth about {compact(desk.valuation)} leaves the
+                    founders with roughly {Math.round((desk.company.founderShare * desk.valuation / (desk.valuation + Number(draft.raiseAmount))) * 100)}%
+                    of whatever this becomes. It never has to be repaid, and it never comes back.
                   </p>
-                  {r.posturedAs && <p className="text-xs text-muted-foreground">{r.posturedAs}</p>}
-                </div>
-                <div className="text-right shrink-0">
-                  <p className="text-sm tabular-nums">{r.customers.toLocaleString()}</p>
-                  <p className="text-xs text-muted-foreground">at {money(r.price)}</p>
-                </div>
-              </button>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+                )}
+                {desk.yourRole === "cto" && desk.company.techDebt > 40 && (
+                  <p className="text-xs text-amber-600 mt-4" data-testid="text-tech-debt">
+                    The product owes itself {desk.company.techDebt}. Everything spent here buys{" "}
+                    {desk.company.techDebtCost.product}% less than it would, and every unit costs{" "}
+                    {desk.company.techDebtCost.unitCost}% more. Paying it down shows up in no number this year and in
+                    every number after it.
+                  </p>
+                )}
+                {desk.yourRole === "cto" && Number(draft.researchSpend) > 0 && (
+                  <p className="text-xs text-muted-foreground mt-4" data-testid="text-research">
+                    Roughly +{(saturate(Number(draft.researchSpend), 150_000) * 24 * desk.innovationPace).toFixed(1)} quality,
+                    landing in two years. Shipping lands next year; research the year after — and buys more for the wait.
+                  </p>
+                )}
 
-      <Card>
-        <CardContent className="p-5">
-          <h3 className="text-sm font-semibold">The market</h3>
-          <p className="text-xs text-muted-foreground mb-3">What each segment weighs when it chooses, and what it expects of you this year.</p>
-          <div className="space-y-3">
-            {desk.segments.map((s) => (
-              <div key={s.id}>
-                <div className="flex justify-between gap-3">
-                  <p className="text-sm font-medium">{s.name}</p>
-                  <p className="text-sm tabular-nums shrink-0">{s.yours.toLocaleString()} yours</p>
-                </div>
-                <p className="text-xs text-muted-foreground">{s.description}</p>
-                <p className="text-[11px] text-muted-foreground mt-0.5">
-                  Pays around {money(s.referencePrice)} · {s.loyalty > 0.7 ? "very hard to move once settled" : s.loyalty > 0.4 ? "will switch for a reason" : "switches easily"}
+                <Button
+                  className="w-full mt-6"
+                  onClick={() => submit.mutate()}
+                  disabled={submit.isPending}
+                  data-testid="button-file-decision"
+                >
+                  {submit.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                  {desk.submitted ? "Update this year's decision" : "File this year's decision"}
+                </Button>
+                <p className="text-[11px] text-muted-foreground text-center mt-2">
+                  Changeable until the year resolves. Nothing is locked in before then.
                 </p>
-                <Criteria segment={s} company={c} />
+              </CardContent>
+            </Card>
+
+            {/* Notes on the draft stay with the form; the money and the warnings are pinned in the dock. */}
+            {desk.preview.notes.map((note, i) => (
+              <div key={i} className="rounded-lg bg-muted p-3 flex gap-2">
+                <Info className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+                <p className="text-xs text-muted-foreground">{note}</p>
               </div>
             ))}
           </div>
-        </CardContent>
-      </Card>
+        ) : null}
+        {/* The three rooms off this one: buying things, buying companies, and where you stand. */}
+        <div className="grid gap-3 sm:grid-cols-3">
+          {/* A whole card to press, like the manager's rail: the chip says what it is, the ring that it goes somewhere. */}
+          <button
+            type="button"
+            onClick={() => navigate(`/simulation/${desk.ventureId}/market`)}
+            className="group rounded-2xl nova-ring-soft nova-hover-glow p-4 text-left"
+            data-testid="button-open-market"
+          >
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl nova-chip"><Store className="h-4 w-4" /></span>
+            <h3 className="mt-3 text-sm font-bold">The market</h3>
+            <p className="mt-1 text-xs text-muted-foreground">Three things a year, and everyone bids blind.</p>
+            <p className="mt-2 text-xs font-semibold text-primary group-hover:underline">Open →</p>
+          </button>
+          {/* A whole card to press, like the manager's rail: the chip says what it is, the ring that it goes somewhere. */}
+          <button
+            type="button"
+            onClick={() => navigate(`/simulation/${desk.ventureId}/offers`)}
+            className="group rounded-2xl nova-ring-soft nova-hover-glow p-4 text-left"
+            data-testid="button-open-offers"
+          >
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl nova-chip"><Handshake className="h-4 w-4" /></span>
+            <h3 className="mt-3 text-sm font-bold">The boardroom</h3>
+            <p className="mt-1 text-xs text-muted-foreground">Buy a rival, or take the money for yours.</p>
+            <p className="mt-2 text-xs font-semibold text-primary group-hover:underline">Open →</p>
+          </button>
+          {/* A whole card to press, like the manager's rail: the chip says what it is, the ring that it goes somewhere. */}
+          <button
+            type="button"
+            onClick={() => navigate(`/simulation/${desk.ventureId}/standings`)}
+            className="group rounded-2xl nova-ring-soft nova-hover-glow p-4 text-left"
+            data-testid="button-open-standings"
+          >
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl nova-chip"><Trophy className="h-4 w-4" /></span>
+            <h3 className="mt-3 text-sm font-bold">Standings</h3>
+            <p className="mt-1 text-xs text-muted-foreground">Where you actually stand, incumbents included.</p>
+            <p className="mt-2 text-xs font-semibold text-primary group-hover:underline">Open →</p>
+          </button>
+        </div>
+        {/* 4. Everyone else. */}
+        <Card>
+          <CardContent className="p-5">
+            <div className="flex items-center gap-2 mb-3">
+              <Users className="h-4 w-4 text-muted-foreground" />
+              <h3 className="text-sm font-semibold">The table</h3>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {desk.table.map((seat) => (
+                /*
+                 * A whole row, not a name with a link in it. The thing being
+                 * asked for is "tell me about this person", and on a phone a
+                 * four-character first name is not a target.
+                 */
+                <button
+                  key={seat.userId}
+                  type="button"
+                  onClick={() => setOpenSeat(seat.userId)}
+                  className="flex items-center gap-2.5 text-sm text-left rounded-md -mx-1.5 px-1.5 py-1 hover-elevate active-elevate-2"
+                  data-testid={`button-seat-${seat.userId}`}
+                >
+                  {seat.filed
+                    ? <CheckCircle2 className="h-4 w-4 text-primary shrink-0" />
+                    : <Circle className="h-4 w-4 text-muted-foreground shrink-0" />}
+                  <span className="font-medium truncate">{seat.isYou ? "You" : seat.name}</span>
+                  <span className="text-muted-foreground text-xs truncate">{seat.title ?? "no seat"}</span>
+                  {!seat.filed && <span className="text-xs text-muted-foreground ml-auto shrink-0">still deciding</span>}
+                </button>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+        </>
+      )}
+
+      {tab === "future" && (
+        <>
+        {/*
+          * How many people will want you this year, next to the number that has
+          * to be right about it. Shown to every seat, because the forecast is
+          * the thing marketing moves and operations builds to — and the argument
+          * between them is the one this card exists to have before the tick.
+          */}
+        {/*
+          * The year as it stands — revenue, costs, profit, cash — redrawn as
+          * teammates file and as this seat edits, with what the unfiled draft
+          * here is doing to each number. Keyed on the table's filings so it
+          * re-runs exactly when somebody files.
+          */}
+        <ProjectionPanel
+          ventureId={id!}
+          draft={draft}
+          filedStamp={JSON.stringify(desk.filed ?? {})}
+        />
+
+        {desk.forecast && (
+          <ForecastCard
+            forecast={desk.forecast}
+            voice={v}
+            price={Number(desk.yourRole === "cmo" && draft ? draft.price : (desk.filed as any)?.cmo?.price ?? c.price)}
+            /*
+             * The room the company actually has this year. Capacity ordered now
+             * opens next year, so the lever's value is next year's room — set
+             * against next year's demand in the projection above, not here.
+             * A cut is immediate, so the smaller of the two is what serves.
+             */
+            capacity={Math.min(c.capacity, Number(desk.yourRole === "coo" && draft ? draft.capacityTarget : (desk.filed as any)?.coo?.capacityTarget ?? c.capacity)) + (c.assetCapacity ?? 0)}
+            idleCostPerUnit={desk.idleCostPerUnit}
+            yours={desk.yourRole === "coo" ? "capacity" : desk.yourRole === "cmo" ? "price" : null}
+          />
+        )}
+        {/* What is already in motion: the economy's turn, and the work that lands later (lag.ts). */}
+        <Card className="rounded-2xl nova-ring-soft" data-testid="card-coming">
+          <CardContent className="space-y-4 p-5">
+            <h3 className="flex items-center gap-2 text-sm font-bold">
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg nova-chip"><Telescope className="h-3.5 w-3.5" /></span>
+              What's coming
+            </h3>
+            <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground" data-testid="text-outlook">
+              <span className="rounded-full nova-chip px-2.5 py-0.5 text-xs font-bold">Next year: {desk.economy.outlook}</span>
+              {desk.economy.outlookMeans}
+            </p>
+            {/* What is already on its way — the lag made visible (lag.ts) — as a table rather than more tiles. */}
+            {(c.pipeline > 0 || (c.pipelineLater ?? 0) > 0 || (c.brandPipeline ?? 0) > 0 || c.techDebt > 0) && (
+              <div className="overflow-hidden rounded-xl border border-border bg-background/70" data-testid="table-on-its-way">
+                <p className="bg-muted/50 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">On its way</p>
+                <table className="w-full text-sm">
+                  <tbody className="divide-y divide-border">
+                    {c.pipeline > 0 && <WayRow label="Quality" value={`+${c.pipeline}`} when="lands next year" />}
+                    {(c.pipelineLater ?? 0) > 0 && <WayRow label="Research" value={`+${c.pipelineLater}`} when="lands in two years" />}
+                    {(c.brandPipeline ?? 0) > 0 && <WayRow label="Brand" value={`+${c.brandPipeline}`} when="the rest of this year's campaign" />}
+                    {c.techDebt > 0 && (
+                      <WayRow
+                        label="Technical debt"
+                        value={`${c.techDebt}`}
+                        when={c.techDebtCost.product > 0 ? `product work buys ${c.techDebtCost.product}% less` : "nothing to worry about yet"}
+                        warn={c.techDebt > 55}
+                      />
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {!(c.pipeline > 0 || (c.pipelineLater ?? 0) > 0 || (c.brandPipeline ?? 0) > 0 || c.techDebt > 0) && (
+              <p className="text-xs text-muted-foreground">Nothing already paid for is still on its way. What gets decided this year is what lands next.</p>
+            )}
+          </CardContent>
+        </Card>
+        </>
+      )}
 
       <CompanyProfile ventureId={desk.ventureId} companyId={openCompany} onClose={() => setOpenCompany(null)} />
       <TeammateProfile ventureId={desk.ventureId} userId={openSeat} onClose={() => setOpenSeat(null)} />
@@ -896,8 +926,58 @@ function EventCard({ event }: { event: NonNullable<Desk["lastYear"]>["event"] })
   );
 }
 
-function Shell({ title, subtitle, clock, onBack, nicheId, year, totalYears, rail, bottom, children }: {
+type DeskTab = "past" | "decisions" | "future";
+
+/**
+ * The desk's three tabs. Past carries a dot until the seat has opened a year's
+ * result, because a year resolves overnight and "something new is in there"
+ * is the one thing the switch has to say by itself.
+ */
+function DeskTabs({ tab, onChange, ventureId, lastYear }: { tab: DeskTab; onChange: (t: DeskTab) => void; ventureId: string; lastYear: number | null }) {
+  const key = `sim-desk-seen-${ventureId}`;
+  const [seen, setSeen] = useState<number>(() => {
+    try { return Number(localStorage.getItem(key) ?? 0); } catch { return 0; }
+  });
+  useEffect(() => {
+    if (tab !== "past" || lastYear === null || seen >= lastYear) return;
+    setSeen(lastYear);
+    try { localStorage.setItem(key, String(lastYear)); } catch { /* private window: the dot just comes back */ }
+  }, [tab, lastYear, seen, key]);
+  const fresh = lastYear !== null && seen < lastYear && tab !== "past";
+  const items: { id: DeskTab; label: string; Icon: typeof History }[] = [
+    { id: "past", label: "Past", Icon: History },
+    { id: "decisions", label: "Decisions", Icon: SlidersHorizontal },
+    { id: "future", label: "Future", Icon: Telescope },
+  ];
+  return (
+    <div role="tablist" aria-label="Desk" className="grid grid-cols-3 gap-1 rounded-xl bg-muted/70 p-1" data-testid="desk-tabs">
+      {items.map(({ id, label, Icon }) => (
+        <button
+          key={id}
+          type="button"
+          role="tab"
+          aria-selected={tab === id}
+          onClick={() => onChange(id)}
+          className={`relative flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors sm:text-sm ${
+            tab === id ? "nova-chip shadow-sm" : "text-muted-foreground hover:bg-background/70 hover:text-foreground"
+          }`}
+          data-testid={`tab-${id}`}
+        >
+          <Icon className="h-3.5 w-3.5" />
+          {label}
+          {id === "past" && fresh && (
+            <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-[#a855f7] ring-2 ring-background" aria-label="new result" data-testid="dot-past-new" />
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function Shell({ title, subtitle, clock, onBack, nicheId, year, totalYears, tabs, rail, bottom, children }: {
   title: string; subtitle: string; clock?: string | null; onBack?: () => void; nicheId?: string;
+  /** Past / Decisions / Future, beside the company's name. */
+  tabs?: React.ReactNode;
   /** For the season bar along the header's foot. */
   year?: number; totalYears?: number;
   /** Pinned beside the desk on a wide screen (the projection dock). */
@@ -918,7 +998,7 @@ function Shell({ title, subtitle, clock, onBack, nicheId, year, totalYears, rail
         */}
       <header className="sticky top-0 z-30 -mx-4 bg-background/85 px-4 pb-3 pt-4 backdrop-blur-md" data-testid="desk-header">
         <div className="relative overflow-hidden rounded-2xl nova-ring-page nova-glow px-4 py-3 sm:px-5">
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2.5">
             {onBack && (
               <button onClick={onBack} className="shrink-0 rounded-lg p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="All companies" data-testid="button-back">
                 <ArrowLeft className="h-4 w-4" />
@@ -941,6 +1021,8 @@ function Shell({ title, subtitle, clock, onBack, nicheId, year, totalYears, rail
                 <span className="truncate">{subtitle}</span>
               </p>
             </div>
+            {/* Beside the name on a wide screen; its own full-width row under it on a phone. */}
+            {tabs && <div className="order-last w-full md:order-none md:w-auto">{tabs}</div>}
             {clock && (
               <p className="flex shrink-0 items-center gap-1.5 rounded-full bg-muted/70 px-2.5 py-1 text-[11px] font-semibold tabular-nums sm:text-xs" data-testid="text-resolves">
                 <Clock className="h-3.5 w-3.5 text-muted-foreground" />
