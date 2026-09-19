@@ -26,6 +26,7 @@ import { securityHeaders } from "./security-headers";
 import { stripSealedFields } from "@shared/strip-sealed";
 import { reportError, redact } from "./error-reporting";
 import { pool } from "./db";
+import { migrationState } from "./migration-state";
 
 /**
  * Where an error happened, as a shape rather than as a URL.
@@ -202,7 +203,26 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
     const started = Date.now();
     try {
       await pool.query("SELECT 1");
-      return { status: 200, body: { ready: true, database: "ok", ms: Date.now() - started } };
+      /*
+       * Reachable is not the same as usable. A build whose schema is ahead of
+       * its database answers SELECT 1 perfectly and then 500s on every route
+       * that reads an account — with an error naming one column rather than
+       * the migrations nobody ran (server/migration-state.ts).
+       */
+      const migrations = await migrationState();
+      if (migrations.ok === false) {
+        return {
+          status: 503,
+          body: {
+            ready: false,
+            database: "ok",
+            migrations,
+            detail: `${migrations.pending} migration(s) not applied to this database. Run: npm run db:migrate`,
+            ms: Date.now() - started,
+          },
+        };
+      }
+      return { status: 200, body: { ready: true, database: "ok", migrations, ms: Date.now() - started } };
     } catch (err) {
       const message = String((err as Error)?.message ?? err);
       return {

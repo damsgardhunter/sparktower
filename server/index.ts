@@ -9,6 +9,7 @@ import { backfillMissingProfiles } from "./user-provisioning";
 import { loadSurfaceFlags, startSurfaceFlagRefresh } from "./surfaces";
 import { startBackingJobs } from "./backing-jobs";
 import { startSimulationJobs } from "./simulation-tick";
+import { startSprintBotJobs } from "./sprint-bots";
 import { startAnalyticsJobs } from "./analytics";
 import { startPromotionJobs } from "./promotion-sync";
 import { startModerationJobs } from "./moderation";
@@ -20,6 +21,7 @@ import { warnIfSharedTokenSecret } from "./mobile-auth";
 import { warnIfEmailUnconfigured } from "./email";
 import { warnIfSenderMisaligned, emailLinkHostIsTrusted } from "./public-url";
 import { assertSecretsAtBoot } from "./secrets";
+import { warnIfMigrationsPending } from "./migration-state";
 import { assertEnvironmentAtBoot } from "./preflight";
 import { watchProcessErrors } from "./error-reporting";
 import { storageCredentialMode } from "./replit_integrations/object_storage/objectStorage";
@@ -99,6 +101,7 @@ let appReady = false;
   // timer so a toggle reaches every instance rather than only the one that
   // served it — this deploys to autoscale.
   warnIfSharedTokenSecret();
+  await warnIfMigrationsPending();
   // Email isn't an integration any more: without it, nobody who signs up can use the site (server/email.ts).
   warnIfEmailUnconfigured();
   /*
@@ -144,6 +147,7 @@ let appReady = false;
   // running several server processes is safe.
   startBackingJobs();
   startSimulationJobs();
+  startSprintBotJobs();
   startAnalyticsJobs();
   startPromotionJobs();
   startModerationJobs();

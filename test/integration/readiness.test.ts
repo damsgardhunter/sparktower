@@ -39,6 +39,20 @@ describe("the two health questions", () => {
     expect(typeof res.body.ms).toBe("number");
   });
 
+  it("counts the migrations, because reachable is not the same as usable", async () => {
+    /*
+     * A build whose schema is ahead of its database answers SELECT 1 perfectly
+     * and then 500s on every route that reads an account — with an error naming
+     * a column rather than the migrations nobody ran. That happened: two
+     * pending migrations, and a hundred-column SELECT to work back from.
+     */
+    const app = await getTestApp();
+    const res = await request(app).get("/_ready");
+    expect(res.body.migrations).toMatchObject({ ok: true, pending: 0 });
+    expect(res.body.migrations.applied).toBe(res.body.migrations.expected);
+    expect(res.body.migrations.applied).toBeGreaterThan(0);
+  });
+
   it("says 503 and why when it can't, without leaking the connection string", async () => {
     const app = await getTestApp();
     const spy = vi.spyOn(pool, "query")
