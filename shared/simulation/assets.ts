@@ -236,6 +236,12 @@ export interface Award {
   price: number;
   /** Everyone who bid, so the screen can say how close it was without naming numbers. */
   bidderCount: number;
+  /**
+   * Teams whose bid cleared the reserve and was set aside because they had
+   * already spent the money on an earlier lot. They are owed an explanation:
+   * from where they sit, a winning bid took nothing and said nothing.
+   */
+  couldNotAfford: string[];
   note: string;
 }
 
@@ -249,14 +255,45 @@ export interface Award {
  * Ties break on the venture id, which is arbitrary and, crucially, stable: the
  * same tick re-run awards the same asset to the same team. An arbitrary rule
  * everyone can check beats a fair-sounding one that changes its mind.
+ *
+ * ## One pot of money, spent once
+ *
+ * The lots are settled one after another against a running balance, not each
+ * one independently against the opening one. Independently was what this did,
+ * and it meant a team with a million pounds could bid a million on three
+ * separate lots, win all three, and pay three million. Bids are sealed, so
+ * nothing on any screen would have warned them, and nothing afterwards
+ * recorded a borrowing — the company simply came out of the year two million
+ * overdrawn with no debt against its name and no insolvency until the
+ * following year noticed.
+ *
+ * Bidding on more than you can afford is a perfectly reasonable thing to do
+ * against sealed bids: you do not know which you will win. So it is allowed,
+ * and the consequence is that winning an early lot can take you out of the
+ * running for a later one — which is the actual decision the marketplace is
+ * meant to pose. The team is told exactly that, by name, rather than left to
+ * work out why a bid that cleared the reserve took nothing.
  */
 export function resolveBids(listings: Listing[], bids: Bid[], funds: Record<string, number>): Award[] {
+  /*
+   * A working copy. The caller's record is what the companies actually hold
+   * and mutating it would make this function's result depend on whether it had
+   * been called before.
+   */
+  const left: Record<string, number> = { ...funds };
+
   return listings.map((listing) => {
+    const short: string[] = [];
     const contenders = bids
       .filter((b) => b.listingId === listing.id && b.amount >= listing.reserve)
       // A bid nobody can pay for is not a bid. Checked here rather than when
-      // it was made, because the money may have gone somewhere else since.
-      .filter((b) => (funds[b.ventureId] ?? 0) >= b.amount)
+      // it was made, because the money may have gone somewhere else since —
+      // including, now, to an earlier lot in this same auction.
+      .filter((b) => {
+        if ((left[b.ventureId] ?? 0) >= b.amount) return true;
+        short.push(b.ventureId);
+        return false;
+      })
       .sort((a, b) => b.amount - a.amount || (a.ventureId < b.ventureId ? -1 : 1));
 
     const all = bids.filter((b) => b.listingId === listing.id).length;
@@ -268,11 +305,15 @@ export function resolveBids(listings: Listing[], bids: Bid[], funds: Record<stri
         winnerId: null,
         price: 0,
         bidderCount: all,
+        couldNotAfford: short,
         note: all > 0
           ? `${listing.asset.name} went unsold — nothing on the table cleared the reserve.`
           : `${listing.asset.name} went unsold. Nobody bid.`,
       };
     }
+
+    // Spent. The next lot is bid for with what is left, not with what was there.
+    left[winner.ventureId] = (left[winner.ventureId] ?? 0) - winner.amount;
 
     const runnerUp = contenders[1];
     return {
@@ -280,6 +321,7 @@ export function resolveBids(listings: Listing[], bids: Bid[], funds: Record<stri
       winnerId: winner.ventureId,
       price: winner.amount,
       bidderCount: all,
+      couldNotAfford: short,
       note: runnerUp
         ? `${listing.asset.name} sold for ${winner.amount.toLocaleString()}, against ${contenders.length - 1} other bid${contenders.length === 2 ? "" : "s"}.`
         : `${listing.asset.name} sold for ${winner.amount.toLocaleString()}. Nobody else bid for it.`,

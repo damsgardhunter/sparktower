@@ -358,6 +358,79 @@ describe("two buyers, one company", () => {
     expect(sellerAfter.cash - sellerBefore.cash, "the seller collected more than one payment").toBeLessThan(3_500_000);
   }, 240_000);
 
+  it("cannot buy two companies with the same money", async () => {
+    /*
+     * The mirror of the test above, and it was the half that was broken.
+     *
+     * Nothing moves until the tick, so the affordability check the route runs
+     * sees the same cash every time it is asked. A buyer could offer its whole
+     * reach to one rival, have it accepted — at which point the offer is no
+     * longer `pending` and stops counting against it — then offer the same
+     * money to a second rival and have that accepted too. At the tick both
+     * completed: `applyAcquisition` subtracted the price twice, the buyer
+     * finished on negative cash holding two businesses, and both sellers were
+     * paid in full out of money that never existed.
+     *
+     * The guard for it was written and never armed. `soldThisTick.has(buyer.id)`
+     * was checked at the top of the loop and no buyer was ever added to the
+     * set.
+     */
+    const app = await getTestApp();
+    const { a, b, seasonId } = await twoTeams(app);
+    const c = await thirdTeam(app, seasonId);
+
+    // Enough to buy one of them, comfortably. Not both.
+    await shape(seasonId, a.ventureId, { cash: 5_000_000, creditLimit: 0, debt: 0 });
+    await shape(seasonId, b.ventureId, { customers: { recently_single: 40_000 } });
+    await shape(seasonId, c.ventureId, { customers: { recently_single: 40_000 } });
+
+    await a.ceo.agent.post(`/api/sim/ventures/${a.ventureId}/offers`)
+      .send({ targetId: b.ventureId, amount: 4_000_000 });
+    const [first] = await db.select().from(simOffers).where(and(
+      eq(simOffers.fromVentureId, a.ventureId), eq(simOffers.toVentureId, b.ventureId)));
+    await b.ceo.agent.post(`/api/sim/ventures/${b.ventureId}/offers/${first.id}/respond`).send({ accept: true });
+
+    // The route now refuses a second offer, because an accepted one counts
+    // against the buyer's reach the way a pending one always did.
+    const refused = await a.ceo.agent.post(`/api/sim/ventures/${a.ventureId}/offers`)
+      .send({ targetId: c.ventureId, amount: 4_000_000 });
+    expect(refused.status, "the screen says no before the day is wasted").toBe(409);
+
+    /*
+     * And then the second acceptance is written straight into the database,
+     * which is the case the tick's own guard exists for.
+     *
+     * Going through the route only proves the route. There are two defences
+     * here deliberately — a refusal at the screen and a refusal at settlement —
+     * because the first one is a check against a world that will have a whole
+     * year run through it before the purchase completes, and rows written
+     * before either fix existed are still sitting in seasons that are running
+     * now.
+     */
+    await db.insert(simOffers).values({
+      seasonId,
+      fromVentureId: a.ventureId,
+      toVentureId: c.ventureId,
+      year: 1,
+      amount: 4_000_000,
+      status: "accepted",
+      message: "Smuggled past the route.",
+    });
+
+    const buyerBefore = await companyIn(seasonId, a.ventureId);
+    await makeDue(seasonId);
+    await tickSeason(seasonId);
+    const buyerAfter = await companyIn(seasonId, a.ventureId);
+
+    // One purchase, not two. Eight million never left a five-million company.
+    expect(buyerBefore.cash - buyerAfter.cash, "paid for at most one business").toBeLessThan(6_000_000);
+
+    const sold = [b.ventureId, c.ventureId];
+    const stillTheirs = await Promise.all(sold.map((id) => companyIn(seasonId, id)));
+    const handedOver = stillTheirs.filter((co) => (co as any).soldBusinessIn !== undefined && (co as any).soldBusinessIn !== null);
+    expect(handedOver, "only one rival actually changed hands").toHaveLength(1);
+  }, 240_000);
+
   it("settles simultaneous acceptances to one answer", async () => {
     // Two requests can read "pending" in the same millisecond. The database has
     // to be the thing that decides, as it is for a seat in the lobby.

@@ -177,6 +177,63 @@ describe("everyone gets something of their own", () => {
     expect(before).toBeTruthy();
   }, 180_000);
 
+  it("pays every seat that met theirs, not whichever the database returned last", async () => {
+    /*
+     * The bug: the results came back as a map keyed by company, written once
+     * per challenge row. There are five rows per company per year — one per
+     * seat, which is the entire point of them — so each seat's result
+     * overwrote the last and four of the five were dropped on the floor.
+     *
+     * Every seat's row was still marked, so all five people saw "done" on
+     * their own desk and believed it. The company was paid once. And the desk
+     * says, in as many words: "Everyone on the team gets it — that is why they
+     * want you to win yours."
+     */
+    const app = await getTestApp();
+    const { ventureId, seasonId } = await runningCompany(app);
+
+    const rows = await db.select().from(simChallenges)
+      .where(and(eq(simChallenges.ventureId, ventureId), eq(simChallenges.year, 1)));
+    expect(rows).toHaveLength(5);
+
+    // All five rigged to pay cash, so the total is arithmetic rather than
+    // a judgement about whether a particular year went well.
+    const each = 250_000;
+    for (const row of rows) {
+      await db.update(simChallenges).set({
+        challenge: {
+          ...(row.challenge as any),
+          targets: [{ id: "easy", label: "Exist", goal: -99_000_000, compare: "at_least", metric: "cash" }],
+          reward: { kind: "cash", amount: each, label: "Paid." },
+        },
+      }).where(eq(simChallenges.id, row.id));
+    }
+
+    const before = await companyIn(seasonId, ventureId);
+    await makeDue(seasonId);
+    await tickSeason(seasonId);
+    const after = await companyIn(seasonId, ventureId);
+
+    const marked = await db.select().from(simChallenges)
+      .where(and(eq(simChallenges.ventureId, ventureId), eq(simChallenges.year, 1)));
+    expect(marked.filter((m) => m.outcome === "met"), "all five met theirs").toHaveLength(5);
+
+    /*
+     * A year also earns and spends money, so the claim is not "cash went up by
+     * 1.25m" — it is that the five rewards are all in there. Checked against
+     * the report's own notes, which is where the team reads about them, and
+     * which had one line where it should have had five.
+     */
+    const [report] = await db.select().from(simReportsTable)
+      .where(and(eq(simReportsTable.ventureId, ventureId), eq(simReportsTable.year, 1)));
+    const paid = ((report.report as any).notes as string[]).filter((n) => /Paid\./.test(n));
+    expect(paid, "one note per seat that won theirs").toHaveLength(5);
+
+    // And the money is really there: five rewards, not one.
+    const traded = (report.report as any).profit as number;
+    expect(after.cash - before.cash - traded).toBeCloseTo(each * 5, -3);
+  }, 180_000);
+
   it("sets nothing for a seat that was dissolved", async () => {
     const app = await getTestApp();
     const { ventureId, seasonId } = await runningCompany(app);

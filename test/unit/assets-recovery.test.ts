@@ -175,6 +175,72 @@ describe("the sealed bid", () => {
     expect(awards[0].note).toMatch(/unsold/i);
   });
 
+  it("spends one pot of money once across the whole auction", () => {
+    /*
+     * The bug this exists for: each lot used to be settled independently
+     * against the money the bidder started the auction with, so a team with a
+     * million could bid a million on three lots, win all three, and pay three
+     * million. Bids are sealed, so nothing on any screen warned them, and
+     * nothing afterwards recorded a borrowing — the company simply came out of
+     * the year two million overdrawn with no debt against its name.
+     *
+     * Bidding on more than you can afford is a reasonable thing to do against
+     * sealed bids, because you do not know which you will win. So it is still
+     * allowed. What it now costs you is the later lots, which is the decision
+     * the marketplace is supposed to pose in the first place.
+     */
+    const three = listings.slice(0, 3);
+    const pot = Math.max(...three.map((l) => l.reserve)) + 50_000;
+    const awards = resolveBids(
+      three,
+      three.map((l) => ({ ventureId: "a", listingId: l.id, amount: pot })),
+      { a: pot },
+    );
+
+    const won = awards.filter((a) => a.winnerId === "a");
+    expect(won.length, "one pot buys one lot").toBe(1);
+    expect(won[0].price).toBe(pot);
+    expect(awards.reduce((sum, a) => sum + (a.winnerId === "a" ? a.price : 0), 0)).toBe(pot);
+
+    // And the team is told why two good bids took nothing, by name.
+    const explained = awards.filter((a) => a.couldNotAfford.includes("a"));
+    expect(explained.length, "the dropped bids are accounted for").toBe(2);
+  });
+
+  it("still lets a team win two lots when it can afford two", () => {
+    // The fix must not turn into a one-lot-per-team rule. The constraint is
+    // the money, and a team with enough of it buys as much as it bid for.
+    const two = listings.slice(0, 2);
+    const each = Math.max(...two.map((l) => l.reserve)) + 10_000;
+    const awards = resolveBids(
+      two,
+      two.map((l) => ({ ventureId: "a", listingId: l.id, amount: each })),
+      { a: each * 2 },
+    );
+    expect(awards.filter((a) => a.winnerId === "a").length).toBe(2);
+  });
+
+  it("lets the next bidder have what the broke one could not pay for", () => {
+    /*
+     * A lot must not go unsold because the leading bidder had already spent
+     * the money. Somebody else bid, over the reserve, with cash in hand — the
+     * asset is theirs.
+     */
+    const two = listings.slice(0, 2);
+    const big = Math.max(...two.map((l) => l.reserve)) + 200_000;
+    const awards = resolveBids(
+      two,
+      [
+        { ventureId: "a", listingId: two[0].id, amount: big },
+        { ventureId: "a", listingId: two[1].id, amount: big },
+        { ventureId: "b", listingId: two[1].id, amount: two[1].reserve + 1_000 },
+      ],
+      { a: big, b: 99_000_000 },
+    );
+    expect(awards[0].winnerId, "the first lot goes to the bigger bid").toBe("a");
+    expect(awards[1].winnerId, "and the second to the one who can still pay").toBe("b");
+  });
+
   it("ignores a bid the bidder cannot pay", () => {
     /*
      * Checked when the bids are resolved rather than when they were made: the

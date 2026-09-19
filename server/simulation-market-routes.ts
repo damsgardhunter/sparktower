@@ -278,12 +278,27 @@ export function registerSimulationMarketRoutes(app: Express): void {
     if (!asset) return res.status(404).json({ message: "You don't own that." });
     if (!Number.isFinite(reserve) || reserve < 0) return res.status(400).json({ message: "Set a reserve." });
 
-    const [already] = await db.select().from(simListings).where(and(
+    /*
+     * Is this asset already on the block?
+     *
+     * This used to fetch whichever single open listing the seller happened to
+     * have and compare its asset id — so a company selling two things listed
+     * A, listed B, then listed A again, and the check looked at B, decided
+     * this was something new, and inserted a second open listing for A. At
+     * settlement both resolved: two teams each received a copy of the same
+     * asset and the seller was paid twice for it.
+     *
+     * Matched on the asset now, in the query, rather than on whatever came
+     * back first. Re-listing the same thing sets a new reserve, which is what
+     * the seller meant by doing it.
+     */
+    const open = await db.select().from(simListings).where(and(
       eq(simListings.sellerId, company.id),
       eq(simListings.year, season.year),
       eq(simListings.status, "open"),
     ));
-    if (already && (already.asset as CompanyAsset).id === assetId) {
+    const already = open.find((l) => (l.asset as CompanyAsset).id === assetId);
+    if (already) {
       await db.update(simListings).set({ reserve }).where(eq(simListings.id, already.id));
       return res.json({ ok: true, reserve });
     }
@@ -486,17 +501,31 @@ export function registerSimulationMarketRoutes(app: Express): void {
     const target = world.companies.find((c) => c.id === targetId);
     if (!target) return res.status(404).json({ message: "No such company." });
 
-    const [pending] = await db.select().from(simOffers).where(and(
+    /*
+     * Offers already out there, counting the ones that have been said yes to.
+     *
+     * Only `pending` used to count, which meant an acceptance freed the money
+     * up again: offer three million, have it accepted, then offer the same
+     * three million to somebody else — nothing is `pending`, the affordability
+     * check passes against cash that has not moved because nothing moves until
+     * the tick, and the buyer arrives at the tick owing six.
+     *
+     * The tick now refuses the second purchase outright, so this is the half
+     * that matters to the person at the screen: they find out when they make
+     * the offer rather than when it silently fails to complete a day later,
+     * having tied up a rival's decision in the meantime.
+     */
+    const committed = await db.select().from(simOffers).where(and(
       eq(simOffers.fromVentureId, company.id),
       eq(simOffers.year, season.year),
-      eq(simOffers.status, "pending"),
+      inArray(simOffers.status, ["pending", "accepted"]),
     ));
 
     const allowed = canOffer({
       from: company,
       to: target,
       amount,
-      pendingFrom: pending && pending.toVentureId !== targetId ? 1 : 0,
+      pendingFrom: committed.filter((o) => o.toVentureId !== targetId).length,
       year: season.year,
       totalYears: season.totalYears,
     });

@@ -291,18 +291,62 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
     ));
 
   const soldThisTick = new Set<string>();
-  for (const offer of accepted) {
+  const boughtThisTick = new Set<string>();
+  /*
+   * Settled oldest first, so which of two acceptances lands is a fact about
+   * when people agreed rather than about what order Postgres felt like
+   * returning rows in. A company changing hands for millions should not turn
+   * on that.
+   */
+  for (const offer of [...accepted].sort((a, b) => a.id < b.id ? -1 : 1)) {
     const buyer = world.companies.find((c) => c.id === offer.fromVentureId);
     const seller = world.companies.find((c) => c.id === offer.toVentureId);
     if (!buyer || !seller || buyer.kind !== "player" || seller.kind !== "player") continue;
     /*
-     * A company is sold once, however many acceptances reach here. The route
-     * closes the others now, but an acceptance recorded before that fix — or
-     * two arriving through some future path — must not transfer a business
-     * that has already changed hands and pay for it a second time.
+     * A company is sold once and buys once, however many acceptances reach
+     * here.
+     *
+     * The seller half was already guarded. The buyer half was written and then
+     * never armed — `soldThisTick.has(buyer.id)` was checked and no buyer was
+     * ever added to it — so one team could hold two offers open at three
+     * million each with three million in reach, have both accepted, and pay
+     * six. Nothing moved between the two acceptances, so the affordability
+     * check the route ran passed both times against the same money.
+     *
+     * One purchase a year is also the right rule on its own terms: an
+     * acquisition is supposed to be the decision that costs you your own year.
      */
-    if (soldThisTick.has(seller.id) || soldThisTick.has(buyer.id)) continue;
+    if (soldThisTick.has(seller.id) || boughtThisTick.has(buyer.id)) continue;
+    /*
+     * And a company that has just sold its own business is not in a position
+     * to buy one in the same breath — it has a cheque and no operation, and
+     * letting it round-trip would make "sell to fund a purchase" a free move.
+     */
+    if (soldThisTick.has(buyer.id)) {
+      addNote(buyer.id, `Your agreement to buy ${seller.name} fell through: you sold your own business this year, and the two cannot happen at once.`);
+      addNote(seller.id, `${buyer.name} could not complete — they sold their own business the same year. You keep everything.`);
+      await db.update(simOffers).set({ status: "lapsed" }).where(eq(simOffers.id, offer.id));
+      continue;
+    }
+
+    /*
+     * Can they still pay for it?
+     *
+     * The route checked when the offer was made, against a world that has
+     * since had a year run through it. A buyer who agreed to three million in
+     * a good year and arrives here insolvent must not complete — the seller
+     * would be handing over a business for money that does not exist.
+     */
+    const reach = buyer.cash + Math.max(0, buyer.creditLimit - buyer.debt);
+    if (offer.amount > reach) {
+      addNote(buyer.id, `Your agreement to buy ${seller.name} for ${offer.amount.toLocaleString()} fell through — the year left you unable to pay it.`);
+      addNote(seller.id, `${buyer.name} agreed to buy the business and could not raise the money. You keep everything, including the year you spent expecting otherwise.`);
+      await db.update(simOffers).set({ status: "lapsed" }).where(eq(simOffers.id, offer.id));
+      continue;
+    }
+
     soldThisTick.add(seller.id);
+    boughtThisTick.add(buyer.id);
 
     const out = applyAcquisition({ buyer, seller, amount: offer.amount, year });
     world.companies = world.companies.map((c) =>
@@ -418,12 +462,15 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
    * order is fixed here rather than left to whoever reads it next.
    */
   const challengeResults = await markChallenges({ ventureIds: teams.map((t) => t.id), year, reports, world: nextWorld, decisions });
-  for (const [ventureId, result] of challengeResults) {
-    const company = nextWorld.companies.find((c) => c.id === ventureId);
-    if (!company) continue;
-    nextWorld.companies = nextWorld.companies.map((c) => (c.id === ventureId ? applyReward(c, result.reward) : c));
+  for (const [ventureId, results] of challengeResults) {
     const report = reports.find((r) => r.companyId === ventureId);
-    if (report) report.notes.push(result.note);
+    // Every seat's, not whichever one the database happened to return last.
+    for (const result of results) {
+      const company = nextWorld.companies.find((c) => c.id === ventureId);
+      if (!company) continue;
+      nextWorld.companies = nextWorld.companies.map((c) => (c.id === ventureId ? applyReward(c, result.reward) : c));
+      if (report) report.notes.push(result.note);
+    }
   }
 
   // Covenants, against what the team actually spent rather than what it planned.
@@ -583,16 +630,33 @@ async function setChallenges(input: { world: World; year: number }): Promise<voi
   if (rows.length > 0) await db.insert(simChallenges).values(rows).onConflictDoNothing();
 }
 
-/** Mark the year's objectives, one per seat. */
+/**
+ * Mark the year's objectives, one per seat.
+ *
+ * ## Keyed by company, holding a list
+ *
+ * This returned a `Map<ventureId, result>` and wrote into it once per
+ * challenge row. There are up to five rows per company per year — one per seat,
+ * which is the whole point of them — so each seat's result overwrote the last
+ * and four of the five were silently dropped on the floor.
+ *
+ * Every seat's row was still updated, so all five players saw "done" on their
+ * own desk. The company was paid once. The year's report carried one note
+ * instead of five. A table where all five people met their objective got a
+ * fifth of what they had earned, and the desk says in as many words: "Everyone
+ * on the team gets it — that is why they want you to win yours."
+ *
+ * A list per company, and the caller pays every one of them.
+ */
 async function markChallenges(input: {
   ventureIds: string[];
   year: number;
   reports: { companyId: string }[];
   world: World;
   decisions: TeamDecisions[];
-}): Promise<Map<string, ReturnType<typeof checkChallenge>>> {
+}): Promise<Map<string, ReturnType<typeof checkChallenge>[]>> {
   const { ventureIds, year, world, decisions } = input;
-  const out = new Map<string, ReturnType<typeof checkChallenge>>();
+  const out = new Map<string, ReturnType<typeof checkChallenge>[]>();
   if (ventureIds.length === 0) return out;
 
   const set = await db
@@ -616,7 +680,9 @@ async function markChallenges(input: {
       .set({ result, outcome: result.outcome })
       .where(eq(simChallenges.id, row.id));
 
-    out.set(row.ventureId, result);
+    const theirs = out.get(row.ventureId);
+    if (theirs) theirs.push(result);
+    else out.set(row.ventureId, [result]);
   }
 
   return out;
@@ -676,9 +742,40 @@ async function settleMarket(input: {
   for (const award of awards) {
     const listing = listings.find((l) => l.id === award.listingId)!;
 
+    /*
+     * Does the seller still own the thing?
+     *
+     * Settlement happens after the recovery moves, and a fire sale releases
+     * every asset the company has. So a team could list an asset, file a fire
+     * sale, and be paid twice for it in the same year: once by the forced sale
+     * and once by the auction, which handed a live copy to the winner while
+     * the seller's `assets.filter` removed an asset that was already gone. The
+     * same shape applies after an acquisition, which moves the seller's assets
+     * to the buyer and leaves the seller's listing standing.
+     *
+     * Nothing is sold out from under anybody: the listing is withdrawn and
+     * everyone who bid is told, because a sealed bid that vanishes without a
+     * word is indistinguishable from the auction losing it.
+     */
+    if (listing.sellerId) {
+      const seller = world.companies.find((c) => c.id === listing.sellerId);
+      if (!seller || !seller.assets.some((a) => a.id === listing.asset.id)) {
+        await db.update(simListings).set({ status: "withdrawn" }).where(eq(simListings.id, listing.id));
+        add(listing.sellerId, "unsold", `${listing.asset.name} came off the market — it had already left the company before the auction ran.`);
+        for (const b of bids.filter((x) => x.listingId === listing.id)) {
+          add(b.ventureId, "lost", `${listing.asset.name} was withdrawn before the auction — the seller no longer had it. Your money stays where it is.`);
+        }
+        continue;
+      }
+    }
+
     if (!award.winnerId) {
       // Everyone who tried is told it went nowhere, so a sealed bid is never silent.
-      for (const b of bids.filter((x) => x.listingId === listing.id)) add(b.ventureId, "lost", award.note);
+      for (const b of bids.filter((x) => x.listingId === listing.id)) {
+        add(b.ventureId, "lost", award.couldNotAfford.includes(b.ventureId)
+          ? `Your bid for ${listing.asset.name} cleared the reserve, but the money had already gone on another lot.`
+          : award.note);
+      }
       if (listing.sellerId) {
         add(listing.sellerId, "unsold", `Nobody met your reserve on ${listing.asset.name}.`);
         await db.update(simListings).set({ status: "unsold" }).where(eq(simListings.id, listing.id));
@@ -690,10 +787,23 @@ async function settleMarket(input: {
      * Money moves, then the asset. A seller gets what the winner paid — the
      * discount on a second-hand thing is already in the reserve they chose,
      * so taking another cut here would charge them for it twice.
+     *
+     * A winner who bid beyond their cash is drawing on credit, and that has to
+     * land as debt. It used to come straight out of `cash` and nowhere else,
+     * so a team could finish the year overdrawn with nothing on the balance
+     * sheet saying they had borrowed a penny — no interest, no covenant, and
+     * no insolvency until the following year happened to notice.
      */
     world.companies = world.companies.map((c) => {
       if (c.id === award.winnerId) {
-        return { ...c, cash: c.cash - award.price, assets: [...c.assets, listing.asset] };
+        const fromCash = Math.min(Math.max(0, c.cash), award.price);
+        const borrowed = award.price - fromCash;
+        return {
+          ...c,
+          cash: c.cash - fromCash,
+          debt: c.debt + borrowed,
+          assets: [...c.assets, listing.asset],
+        };
       }
       if (listing.sellerId && c.id === listing.sellerId) {
         return { ...c, cash: c.cash + award.price, assets: c.assets.filter((a) => a.id !== listing.asset.id) };
@@ -702,6 +812,13 @@ async function settleMarket(input: {
     });
 
     add(award.winnerId, "won", `Won ${listing.asset.name} for ${award.price.toLocaleString()}.`);
+    /*
+     * And the teams whose bid was good and whose money was gone. Silence here
+     * reads as the auction having lost their bid.
+     */
+    for (const id of award.couldNotAfford) {
+      add(id, "lost", `Your bid for ${listing.asset.name} cleared the reserve, but the money had already gone on another lot. Sealed bids are committed in the order the lots are listed.`);
+    }
     for (const b of bids.filter((x) => x.listingId === listing.id && x.ventureId !== award.winnerId)) {
       add(b.ventureId, "lost", `${listing.asset.name} went to somebody who bid more. Your money stays where it is.`);
     }
@@ -720,6 +837,26 @@ async function settleMarket(input: {
    */
   for (const [ventureId, assets] of releasedByTeam) {
     for (const asset of assets) {
+      /*
+       * Only if it is not already there.
+       *
+       * This whole function runs outside the transaction that advances the
+       * year, so a tick that dies between here and the commit leaves next
+       * year's listings written and the year unadvanced. The retry a minute
+       * later finds the recovery move still on file, releases the same assets
+       * again, and inserts a second copy of every one of them — and the market
+       * next year shows each fire-sold thing twice, each one buyable.
+       *
+       * There is no natural key to conflict on, so the check is a read. It
+       * races with nothing: the whole tick is already inside an advisory lock.
+       */
+      const existing = await db.select().from(simListings).where(and(
+        eq(simListings.seasonId, seasonId),
+        eq(simListings.sellerId, ventureId),
+        eq(simListings.year, year + 1),
+      ));
+      if (existing.some((l) => (l.asset as CompanyAsset).id === asset.id)) continue;
+
       await db.insert(simListings).values({
         seasonId,
         sellerId: ventureId,
