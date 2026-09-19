@@ -71,6 +71,18 @@ export function notificationText(n: NotificationShape): string {
      * is not the villain of the sentence.
      */
     case "sim_nudge": return `${who} is waiting on your seat this year`;
+    /*
+     * The company-side notifications. The excerpt, shown under the headline,
+     * carries the company's name and the thing itself; the headline says what
+     * kind of thing it is.
+     */
+    case "recruit_invite": return `${who} would like to talk to you about a role`;
+    case "recruit_answer": return `${who} answered your invitation to talk`;
+    case "season_invite": return `${who} invited you to a private training season`;
+    case "challenge_entry": return `${who} entered your challenge`;
+    case "challenge_result": return "There's news on your challenge entry";
+    case "scout_update": return n.projectTitle ? `${n.projectTitle} moved` : "A project you follow moved";
+    case "scout_new_project": return "A new project in an industry you watch";
     default: return `${who} did something`;
   }
 }
@@ -92,6 +104,17 @@ export function notificationHref(n: Pick<NotificationShape, "kind" | "actorId" |
    * to open the right screen, and the desk already knows which year it is on.
    */
   if (n.kind === "sim_nudge") return n.targetId ? `/simulation/${n.targetId.split(":")[0]}` : "/simulation";
+  /*
+   * Company notifications carry `kind:id` targets. The person being recruited
+   * goes to their invitations; everything a company does lands on the
+   * company's own page, on the tab it is about.
+   */
+  if (n.kind === "recruit_invite") return "/talent";
+  if (n.kind === "recruit_answer") return n.targetId ? `/companies/${n.targetId.split(":")[0]}?tab=talent` : "/companies";
+  if (n.kind === "season_invite") return n.targetId ? `/join-season/${n.targetId.split(":")[1] ?? ""}` : "/simulation";
+  if (n.kind === "challenge_entry") return n.targetId ? `/companies/${n.targetId.split(":")[0]}?tab=challenges` : "/companies";
+  if (n.kind === "challenge_result") return n.targetId ? `/challenges/${n.targetId.split(":")[0]}` : "/challenges";
+  if (n.kind === "scout_update" || n.kind === "scout_new_project") return n.projectId ? `/projects/${n.projectId}` : "/companies";
   if (n.kind === "connection_request") return "/profile";
   return `/profile/${n.actorId}`;
 }

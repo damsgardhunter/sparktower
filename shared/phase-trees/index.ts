@@ -3,7 +3,7 @@ import type { PathTree, BackboneMilestone, BackbonePhase, Actor, VerificationTie
 import type { WorkKind } from "./work";
 import { SHIP_TREE } from "./ship";
 import { SYSTEMIZE_TREE } from "./systemize";
-import { FUND_TREE } from "./fund";
+import { RUN_TREE } from "./run";
 
 export * from "./types";
 export { SHARED_MILESTONES } from "./shared";
@@ -13,11 +13,12 @@ export * from "./work";
 export * from "./run-steps";
 export * from "./loops";
 export * from "./intake";
+export { COMPANY_BASICS_QUESTIONS } from "./run";
 
 export const PATH_TREES: Record<ProjectGoal, PathTree> = {
   ship_mvp: SHIP_TREE,
   systemize_business: SYSTEMIZE_TREE,
-  raise_funding: FUND_TREE,
+  run_company: RUN_TREE,
 };
 
 export const treeFor = (goal: ProjectGoal): PathTree => PATH_TREES[goal];
@@ -54,7 +55,7 @@ export interface ResolvedPhase extends Omit<BackbonePhase, "milestones"> {
  * added at runtime against real artifacts, never here.
  *
  * `route` is the route the project has chosen, on a path that has routes (the
- * funding path's debt, seller, investor, hybrid, self-funded): a route's phases
+ * funding routes' debt, seller, investor, hybrid, self-funded, now inside Systemize): a route's phases
  * appear once it's chosen, and only that route's.
  */
 export function resolveTree(goal: ProjectGoal, subcategory: string, route?: string | null): ResolvedPhase[] {

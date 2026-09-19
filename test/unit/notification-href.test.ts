@@ -21,9 +21,12 @@ describe("path notification links", () => {
   });
 
   it("find a task's section from its tags", () => {
-    expect(sectionOfTask(["backbone:FUND.M2.1"], "ship_mvp")).toBe("raise_funding");
+    // Funding milestones kept their FUND ids when they moved into Systemize.
+    expect(sectionOfTask(["backbone:FUND.M2.1"], "ship_mvp")).toBe("systemize_business");
     expect(sectionOfTask(["parent:SYS.M1.1", "actor:user-does"], "ship_mvp")).toBe("systemize_business");
-    expect(sectionOfTask(["track:raise_funding", "backbone:SHIP.M1.1"], "ship_mvp")).toBe("raise_funding");
+    expect(sectionOfTask(["backbone:RUN.S1.2"], "ship_mvp")).toBe("run_company");
+    // A tag naming the retired section still lands somewhere real.
+    expect(sectionOfTask(["track:raise_funding", "backbone:SHIP.M1.1"], "ship_mvp")).toBe("systemize_business");
     expect(sectionOfTask(["injected:x"], "systemize_business")).toBe("systemize_business");
     expect(sectionOfTask(["custom"], "ship_mvp")).toBeNull();
   });

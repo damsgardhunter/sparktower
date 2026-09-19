@@ -13,11 +13,11 @@
  * is a different thing from an error.
  */
 import type { Express } from "express";
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "./db";
-import { simSeasons, simSeats, simVentures, users, userProfiles } from "@shared/schema";
+import { companies, companyMembers, simSeasons, simSeats, simVentures, users, userProfiles } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
-import { enforceRateLimit, ipKey } from "./moderation";
+import { enforceRateLimit, ipKey, rateLimit } from "./moderation";
 import { fillVentureWithBots } from "./simulation-bots";
 import { NICHES, nicheById } from "@shared/simulation/niches";
 import { ROLES, ROLE_LEVERS, ROLE_TITLES, type Role } from "@shared/simulation/types";
@@ -121,6 +121,112 @@ export async function advanceVenture(ventureId: string): Promise<void> {
     .where(eq(simVentures.id, ventureId));
 }
 
+/**
+ * A private season's invite code as typed or pasted: upper case, and nothing
+ * but the code's own alphabet, so "abcd-2345" from a slide and "ABCD2345" from
+ * a link are the same code. Null when it can't be one.
+ *
+ * Codes are 8 characters of Crockford base32 (no I, L, O or U, so nobody
+ * squints at a projector wondering whether that was a one or an L) — 40 bits,
+ * made in server/company-season-routes.ts.
+ */
+export const SEASON_CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+export function normalizeSeasonCode(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const code = raw.toUpperCase().replace(/[^0-9A-Z]/g, "");
+  return code.length === 8 && [...code].every((c) => SEASON_CODE_ALPHABET.includes(c)) ? code : null;
+}
+
+/**
+ * Put someone in a room of this season: the fullest one with space, or a new
+ * one. Must run inside a transaction that already holds the advisory lock
+ * for whatever the caller is choosing between (see /api/sim/join), and is
+ * shared by public matchmaking and a company's invite code so both fill rooms
+ * by exactly the same rules.
+ */
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+async function takeSeatInSeason(tx: Tx, seasonId: string, userId: string): Promise<string> {
+  /*
+   * A room with space, locked while we look at it. Without the lock two
+   * people both see four seats, both take the fifth, and the room ends up
+   * with six.
+   *
+   * The count is a subquery rather than a GROUP BY because Postgres
+   * refuses `FOR UPDATE` with `GROUP BY` — grouping makes the returned
+   * rows no longer correspond to single rows that could be locked. A
+   * correlated count keeps one row per venture, so there is something to
+   * lock.
+   *
+   * It waits rather than skipping. `skip locked` was the first instinct —
+   * nobody queues, everybody gets a room immediately — and it was wrong
+   * for a lobby: five friends pressing join at the same moment skipped
+   * past each other's locked rows and landed in three different rooms.
+   *
+   * With the caller's advisory lock, this row lock is now belt and braces:
+   * it costs nothing and it still holds the line for any future caller
+   * that reaches this query without taking the season lock first.
+   */
+  const rooms = await tx.execute(sql`
+    select v.id
+    from ${simVentures} v
+    where v.season_id = ${seasonId}
+      and v.phase = 'filling'
+      and (select count(*) from ${simSeats} s where s.venture_id = v.id) < ${LOBBY_SIZE}
+    order by (select count(*) from ${simSeats} s where s.venture_id = v.id) desc
+    limit 1
+    for update
+  `);
+  const room = (rooms as unknown as { rows?: { id: string }[] }).rows?.[0]
+    ?? (rooms as unknown as { id: string }[])[0];
+
+  /*
+   * Count again, now that the row is actually locked.
+   *
+   * The count above cannot be trusted and this is the subtle part: under
+   * READ COMMITTED, a `FOR UPDATE` that waits for another transaction
+   * re-checks the locked row's own columns against the new version — but
+   * the seat count is not one of its columns, it is a subquery over
+   * another table. So the second joiner woke up holding the lock and
+   * carrying a count from before the first joiner's insert, and a room
+   * with four seats took two more people. Six in a five-seat room, which
+   * is what the browsers showed and the sequential tests never could.
+   *
+   * Holding the lock is what makes this second count authoritative: every
+   * joiner must hold it before inserting, so nobody can be adding a seat
+   * to this room while we look.
+   */
+  let targetId: string | undefined = room?.id;
+  if (targetId) {
+    const [{ taken }] = await tx
+      .select({ taken: sql<number>`count(*)::int` })
+      .from(simSeats)
+      .where(eq(simSeats.ventureId, targetId));
+    if (taken >= LOBBY_SIZE) targetId = undefined;
+  }
+
+  targetId ??= (await tx.insert(simVentures).values({
+    seasonId,
+    phase: "filling",
+    phaseEndsAt: phaseDeadline("filling"),
+  }).returning())[0].id;
+
+  /*
+   * `joinedAt` is written here rather than left to the column's
+   * `DEFAULT now()`.
+   *
+   * It is a `timestamp` without a zone, and Postgres casts `now()` into
+   * one using the *session's* zone — so on a server running in, say, US
+   * Central, the default lands five hours behind every value Drizzle
+   * writes, which are UTC. Nothing noticed while the column was only
+   * ever displayed; the moment anything measures how long somebody has
+   * been waiting, half the rows are hours out.
+   */
+  await tx.insert(simSeats)
+    .values({ ventureId: targetId, userId, joinedAt: new Date() })
+    .onConflictDoNothing();
+  return targetId;
+}
+
 export function registerSimulationRoutes(app: Express) {
   /** The markets you can start a company in, and what each one is like. */
   app.get("/api/sim/niches", isAuthenticated, async (_req, res) => {
@@ -203,6 +309,13 @@ function pgErrorCode(err: unknown): string | undefined {
           .where(and(
             eq(simSeats.userId, req.user.id),
             eq(simSeasons.nicheId, nicheId),
+            /*
+             * Public rooms only. Someone in their company's training season for
+             * this market is still free to play the public one; without this,
+             * pressing join here would quietly drop them back into the
+             * workshop room instead.
+             */
+            isNull(simSeasons.companyId),
             sql`${simVentures.phase} not in ('retired')`,
           ))
           .limit(1);
@@ -235,7 +348,17 @@ function pgErrorCode(err: unknown): string | undefined {
         const [season] = await tx
           .select()
           .from(simSeasons)
-          .where(and(eq(simSeasons.nicheId, nicheId), eq(simSeasons.status, "forming")))
+          .where(and(
+            eq(simSeasons.nicheId, nicheId),
+            eq(simSeasons.status, "forming"),
+            /*
+             * Never a company's private season. Those are a training room for
+             * one company's own staff, reached only through their invite code
+             * (POST /api/sim/join-code below); a stranger matched into one
+             * would be sitting in somebody else's workshop.
+             */
+            isNull(simSeasons.companyId),
+          ))
           .orderBy(desc(simSeasons.createdAt))
           .limit(1);
 
@@ -244,91 +367,98 @@ function pgErrorCode(err: unknown): string | undefined {
           name: `${niche.name} — season ${new Date().toISOString().slice(0, 10)}`,
         }).returning())[0].id;
 
-        /*
-         * A room with space, locked while we look at it. Without the lock two
-         * people both see four seats, both take the fifth, and the room ends up
-         * with six.
-         *
-         * The count is a subquery rather than a GROUP BY because Postgres
-         * refuses `FOR UPDATE` with `GROUP BY` — grouping makes the returned
-         * rows no longer correspond to single rows that could be locked. A
-         * correlated count keeps one row per venture, so there is something to
-         * lock.
-         *
-         * It waits rather than skipping. `skip locked` was the first instinct —
-         * nobody queues, everybody gets a room immediately — and it was wrong
-         * for a lobby: five friends pressing join at the same moment skipped
-         * past each other's locked rows and landed in three different rooms.
-         *
-         * With the advisory lock above, this row lock is now belt and braces:
-         * it costs nothing and it still holds the line for any future caller
-         * that reaches this query without taking the season lock first.
-         */
-        const rooms = await tx.execute(sql`
-          select v.id
-          from ${simVentures} v
-          where v.season_id = ${seasonId}
-            and v.phase = 'filling'
-            and (select count(*) from ${simSeats} s where s.venture_id = v.id) < ${LOBBY_SIZE}
-          order by (select count(*) from ${simSeats} s where s.venture_id = v.id) desc
-          limit 1
-          for update
-        `);
-        const room = (rooms as unknown as { rows?: { id: string }[] }).rows?.[0]
-          ?? (rooms as unknown as { id: string }[])[0];
-
-        /*
-         * Count again, now that the row is actually locked.
-         *
-         * The count above cannot be trusted and this is the subtle part: under
-         * READ COMMITTED, a `FOR UPDATE` that waits for another transaction
-         * re-checks the locked row's own columns against the new version — but
-         * the seat count is not one of its columns, it is a subquery over
-         * another table. So the second joiner woke up holding the lock and
-         * carrying a count from before the first joiner's insert, and a room
-         * with four seats took two more people. Six in a five-seat room, which
-         * is what the browsers showed and the sequential tests never could.
-         *
-         * Holding the lock is what makes this second count authoritative: every
-         * joiner must hold it before inserting, so nobody can be adding a seat
-         * to this room while we look.
-         */
-        let targetId: string | undefined = room?.id;
-        if (targetId) {
-          const [{ taken }] = await tx
-            .select({ taken: sql<number>`count(*)::int` })
-            .from(simSeats)
-            .where(eq(simSeats.ventureId, targetId));
-          if (taken >= LOBBY_SIZE) targetId = undefined;
-        }
-
-        targetId ??= (await tx.insert(simVentures).values({
-          seasonId,
-          phase: "filling",
-          phaseEndsAt: phaseDeadline("filling"),
-        }).returning())[0].id;
-
-        /*
-         * `joinedAt` is written here rather than left to the column's
-         * `DEFAULT now()`.
-         *
-         * It is a `timestamp` without a zone, and Postgres casts `now()` into
-         * one using the *session's* zone — so on a server running in, say, US
-         * Central, the default lands five hours behind every value Drizzle
-         * writes, which are UTC. Nothing noticed while the column was only
-         * ever displayed; the moment anything measures how long somebody has
-         * been waiting, half the rows are hours out.
-         */
-        await tx.insert(simSeats)
-          .values({ ventureId: targetId, userId: req.user.id, joinedAt: new Date() })
-          .onConflictDoNothing();
-        return targetId;
+        return takeSeatInSeason(tx, seasonId, req.user.id);
       });
 
       await advanceVenture(ventureId);
       res.json({ ventureId });
     } catch (err) {
       console.error("[sim] join failed:", err);
+      res.status(500).json({ message: "Couldn't get you into a room. Try again." });
+    }
+  });
+
+  /**
+   * What a company's invite code opens onto, for the page someone lands on
+   * from the link: whose season, which market, and whether they can join.
+   *
+   * The code is the secret, so anyone holding it may see this much — the
+   * company handed it to them. Whether they may *join* is a separate question,
+   * answered by membership (below).
+   */
+  app.get("/api/sim/join-code/:code", isAuthenticated, async (req: any, res) => {
+    const code = normalizeSeasonCode(req.params.code);
+    if (!code) return res.status(404).json({ message: "That join link isn't valid.", code: "unknown_code" });
+    const [season] = await db.select().from(simSeasons).where(eq(simSeasons.inviteCode, code));
+    if (!season?.companyId) return res.status(404).json({ message: "That join link isn't valid.", code: "unknown_code" });
+    const [company] = await db.select({ id: companies.id, name: companies.name }).from(companies).where(eq(companies.id, season.companyId));
+    const [member] = await db.select({ role: companyMembers.role }).from(companyMembers)
+      .where(and(eq(companyMembers.companyId, season.companyId), eq(companyMembers.userId, req.user.id)));
+    const [seated] = await db.select({ id: simVentures.id }).from(simSeats)
+      .innerJoin(simVentures, eq(simVentures.id, simSeats.ventureId))
+      .where(and(eq(simSeats.userId, req.user.id), eq(simVentures.seasonId, season.id)))
+      .limit(1);
+    const niche = nicheById(season.nicheId);
+    res.json({
+      seasonId: season.id,
+      name: season.name,
+      status: season.status,
+      totalYears: season.totalYears,
+      yearMinutes: season.yearMinutes,
+      niche: { id: season.nicheId, name: niche?.name ?? season.nicheId, premise: niche?.premise ?? null },
+      company: company ? { id: company.id, name: company.name } : null,
+      isMember: !!member,
+      ventureId: seated?.id ?? null,
+    });
+  });
+
+  /**
+   * Join a company's private season with its invite code.
+   *
+   * The same room-filling as public matchmaking, restricted to one season, and
+   * only for people in the company that owns it: a training season is for the
+   * company's own staff, and a code forwarded outside the building should not
+   * seat a stranger at their table. Someone outside gets the same 404 as a
+   * wrong code, so a leaked code says nothing about whose it was.
+   */
+  app.post("/api/sim/join-code", isAuthenticated, rateLimit("session"), async (req: any, res) => {
+    const code = normalizeSeasonCode(req.body?.code);
+    if (!code) return res.status(404).json({ message: "That join link isn't valid.", code: "unknown_code" });
+    const [season] = await db.select().from(simSeasons).where(eq(simSeasons.inviteCode, code));
+    if (!season?.companyId) return res.status(404).json({ message: "That join link isn't valid.", code: "unknown_code" });
+    const [member] = await db.select({ role: companyMembers.role }).from(companyMembers)
+      .where(and(eq(companyMembers.companyId, season.companyId), eq(companyMembers.userId, req.user.id)));
+    if (!member) {
+      return res.status(403).json({ message: "This season is for the company's own people. Ask them to add you to their team first.", code: "not_company_member" });
+    }
+
+    try {
+      const outcome = await db.transaction(async (tx) => {
+        // Already at a table in this season: back to it.
+        const [existing] = await tx.select({ id: simVentures.id }).from(simSeats)
+          .innerJoin(simVentures, eq(simVentures.id, simSeats.ventureId))
+          .where(and(eq(simSeats.userId, req.user.id), eq(simVentures.seasonId, season.id), sql`${simVentures.phase} <> 'retired'`))
+          .limit(1);
+        if (existing) return { ventureId: existing.id };
+
+        /*
+         * The same one-joiner-at-a-time rule as public matchmaking, keyed on
+         * the season rather than the market — the season exists already, so
+         * it is the thing every joiner agrees on. Status is read under the
+         * lock so nobody sits down in a season that started a moment ago.
+         */
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`season:${season.id}`}, 0))`);
+        const [fresh] = await tx.select({ status: simSeasons.status }).from(simSeasons).where(eq(simSeasons.id, season.id));
+        if (fresh?.status !== "forming") return { closed: true as const };
+        return { ventureId: await takeSeatInSeason(tx, season.id, req.user.id) };
+      });
+      if ("closed" in outcome) {
+        return res.status(409).json({ message: "This season has already started, so its tables are full. Ask for a place in the next one.", code: "season_started" });
+      }
+      await advanceVenture(outcome.ventureId);
+      res.json({ ventureId: outcome.ventureId });
+    } catch (err) {
+      console.error("[sim] join by code failed:", err);
       res.status(500).json({ message: "Couldn't get you into a room. Try again." });
     }
   });

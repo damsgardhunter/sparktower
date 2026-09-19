@@ -77,6 +77,7 @@ export const SURFACES: SurfaceDef[] = [
   { id: "investor",   label: "Investor tools",       cls: "later", defaultEnabled: true, note: "In use, and squarely on the mission.", sequence: "supports" },
   { id: "backing",    label: "Backing & merch",      cls: "later", defaultEnabled: true, note: "Real money and an escrow obligation. Pledges are held until a reviewer approves the project. Turn off here if the payment path misbehaves.", sequence: "after-wedge", unlocksWhen: "The wedge is proven, and a project on the Fund path asks for backers." },
   { id: "launch",     label: "Launch, legal, pricing", cls: "later", defaultEnabled: true, note: "Pre-launch tooling.", sequence: "supports" },
+  { id: "companies",  label: "Companies & Run a company", cls: "later", defaultEnabled: true, note: "Company accounts — private training seasons, recruiting from track records, sponsored challenges, scouting — and the weekly rhythm of the Run a company path. Recruiting and challenges reach other people; turn off here if either is abused.", sequence: "supports" },
   { id: "storyboards", label: "Storyboards & video", cls: "later", defaultEnabled: true, note: "Marketing output, including the AI visuals on project pages.", sequence: "after-wedge", unlocksWhen: "The wedge is proven, and published steps show builders want marketing output." },
 
   // --- Network: needs other people to mean anything ---------------------
@@ -135,6 +136,7 @@ export const SURFACE_ROUTES: Record<string, string[]> = {
    */
   feed: ["/posts", "/a/"],
   backing: ["/admin/backing"],
+  companies: ["/companies", "/challenges", "/talent", "/join-season"],
 };
 
 /**
@@ -168,6 +170,7 @@ export const SURFACE_API_PREFIXES: Record<string, string[]> = {
   contests: ["/api/contests"],
   communities: ["/api/communities"],
   liveChat: ["/api/projects/:id/live-chat"],
+  companies: ["/api/companies", "/api/company-invites", "/api/challenges", "/api/talent", "/api/sim/join-code", "/api/projects/:id/rhythm"],
 };
 
 /** True when a path belongs to a surface that's currently off. */

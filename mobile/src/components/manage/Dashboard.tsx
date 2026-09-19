@@ -40,7 +40,7 @@ const HANDOFF_TAB: Record<string, string> = {
   "analytics.healthCheck": "analytics",
 };
 
-const FIRST_STEP: Partial<Record<ProjectGoal, string>> = { systemize_business: "SYS.F1.1", raise_funding: "FUND.C1.1" };
+const FIRST_STEP: Partial<Record<ProjectGoal, string>> = { systemize_business: "SYS.F1.1", run_company: "RUN.S1.1" };
 
 export function Dashboard({ projectId, project, goal, isPrimary, onNavigate, onOpenNova, onStartSection }: {
   projectId: string; project: any; goal: ProjectGoal; isPrimary: boolean; onNavigate: (tab: string) => void;
@@ -80,12 +80,12 @@ export function Dashboard({ projectId, project, goal, isPrimary, onNavigate, onO
               <Text style={{ color: "#FFFFFF", fontFamily: fontFamily.semibold, fontSize: font.sm }}>Nova · your project partner</Text>
             </Row>
             <Text style={{ color: "#FFFFFF", fontFamily: fontFamily.bold, fontSize: font.lg, lineHeight: 23 }}>
-              {goal === "raise_funding" ? "Let's find the money for your business." : "Starting a business can be scary, but you're not doing it alone."}
+              {goal === "run_company" ? "Let's get your week under control." : "Starting a business can be scary, but you're not doing it alone."}
             </Text>
           </NovaGradient>
           <View style={{ padding: spacing.lg, gap: spacing.lg }}>
-            <Clamp color={colors.text} text={goal === "raise_funding"
-              ? "I'm Nova. First I'll get to know what you want from owning a business and where you stand, then build your capital profile — with a score for how fundable you are today and exactly what raises it — and map every route to the money. Start with why. Pick everything that's true."
+            <Clamp color={colors.text} text={goal === "run_company"
+              ? "I'm Nova. You already have a business, so we don't start from zero — we start from this week. A quick picture of the company first, then the five numbers worth watching, and from there a check-in every week and a report every month on what improved. Start with where it stands. Tap what fits."
               : "I'm Nova. The first thing that decides what's possible is money, so that's where we start — what it'll cost, where it comes from, and what gets you there, even from zero. Tap the ranges that fit you. There are no wrong answers, and $0 is a real starting point."} />
             <IntakeView projectId={projectId} taskId={moneyStep.taskId} questions={moneyStep.questions} work={null} done={false} onSaved={() => completeOnboarding.mutate()} />
             <Btn small variant="ghost" label="Skip for now" onPress={() => completeOnboarding.mutate()} style={{ alignSelf: "flex-start" }} />

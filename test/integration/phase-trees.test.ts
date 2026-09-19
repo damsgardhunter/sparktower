@@ -9,6 +9,7 @@ import request from "supertest";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { resolveTree, mainLineMilestones, PATH_TREES } from "@shared/phase-trees";
+import { normaliseGoal, goalOfBackboneId, sectionOfTask } from "@shared/goals";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -53,10 +54,26 @@ describe("the backbone, as data", () => {
 
     const restaurant = mainLineMilestones(resolveTree("systemize_business", "restaurant"));
     expect(restaurant.find((m) => m.id === "SYS.M2.1")!.description).toMatch(/Recipes as specs/);
-    // The funding path shows a route's phases only once that route is chosen.
-    const noRoute = resolveTree("raise_funding", "startup_equity");
-    expect(noRoute.map((p) => p.id)).toEqual(["capital-1", "capital-2"]);
-    expect(resolveTree("raise_funding", "startup_equity", "seller").map((p) => p.id)).toEqual(["capital-1", "capital-2", "seller-1", "seller-2", "seller-3", "seller-4"]);
+    // Systemize's funding weeks show a route's phases only once that route is
+    // chosen, and only that route's — slotted in after the route choice, ahead
+    // of the roadmap week.
+    const operating = ["money-4", "week-1", "week-2", "week-3", "week-4"];
+    const noRoute = resolveTree("systemize_business", "other");
+    expect(noRoute.map((p) => p.id)).toEqual(["money-1", "money-2", "money-3", "capital-1", "capital-2", ...operating]);
+    expect(resolveTree("systemize_business", "other", "seller").map((p) => p.id))
+      .toEqual(["money-1", "money-2", "money-3", "capital-1", "capital-2", "seller-1", "seller-2", "seller-3", "seller-4", ...operating]);
+  });
+
+  it("carries anything still naming the retired funding path to Systemize", () => {
+    // Raise funding's work moved into Systemize. A stored goal, a link's
+    // section, a card's track tag or a milestone id that still says "raise"
+    // has to land on Systemize, not on nothing — and not be offered as a path.
+    expect(Object.keys(PATH_TREES)).not.toContain("raise_funding");
+    expect(normaliseGoal("raise_funding")).toBe("systemize_business");
+    expect(sectionOfTask(["track:raise_funding"], "ship_mvp")).toBe("systemize_business");
+    expect(goalOfBackboneId("FUND.C1.1")).toBe("systemize_business");
+    expect(sectionOfTask(["backbone:FUND.S1.1"], "ship_mvp")).toBe("systemize_business");
+    expect(normaliseGoal("nonsense")).toBeNull();
   });
 
   it("marks every user-does milestone as something only a human can do", () => {
@@ -120,12 +137,12 @@ describe("a new project is born with its path", () => {
   it("does not build a second tree if creation is retried", async () => {
     const app = await getTestApp();
     const agent = await owner(app);
-    const id = (await create(agent, "raise_funding", "startup_equity")).body.id;
+    const id = (await create(agent, "systemize_business", "other")).body.id;
     const { instantiatePathTree } = await import("../../server/phase-trees");
-    const again = await instantiatePathTree(id, "raise_funding", "startup_equity");
+    const again = await instantiatePathTree(id, "systemize_business", "other");
     expect(again.created).toBe(false);
     const path = await agent.get(`/api/projects/${id}/path`);
-    expect(path.body.mainLine.total).toBe(mainLineMilestones(resolveTree("raise_funding", "startup_equity")).length);
+    expect(path.body.mainLine.total).toBe(mainLineMilestones(resolveTree("systemize_business", "other")).length);
   });
 });
 
@@ -379,7 +396,7 @@ describe("Nova works the milestone", () => {
   it("refuses work on a task that isn't on the path", async () => {
     const app = await getTestApp();
     const agent = await owner(app);
-    const id = (await create(agent, "raise_funding", "other", "Not On Path")).body.id;
+    const id = (await create(agent, "run_company", "other", "Not On Path")).body.id;
     const res = await agent.post(`/api/projects/${id}/path/work`).send({ taskId: "00000000-0000-0000-0000-000000000000" });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("not_on_path");

@@ -1,4 +1,5 @@
 import type { PathTree, IntakeQuestion } from "./types";
+import { FUNDING_PHASES } from "./fund";
 
 const h = (n: number) => n * 60;
 
@@ -121,8 +122,8 @@ export const ROADMAP_LENGTH_QUESTIONS: IntakeQuestion[] = [
  */
 export const SYSTEMIZE_TREE: PathTree = {
   goal: "systemize_business",
-  promise: "Get the money right first, then build a business that runs without you in every step",
-  target: "4 weeks to a financing plan, 8 to owner-independence tested",
+  promise: "Get the money right first — how fundable you are, the route to the money, and the plan — then build a business that runs without you in every step",
+  target: "3 weeks to your numbers, then your capital profile and funding route, a roadmap, and 4 weeks to owner-independence tested",
   defaultTier: "evidence",
   phases: [
     {
@@ -185,6 +186,14 @@ export const SYSTEMIZE_TREE: PathTree = {
           description: "The target structure, built out. Buying: a price range from the business's earnings, sources and uses, how the loan, seller note and your equity stack, the monthly payments, and whether cash flow covers them with room to spare. Starting new: which source pays for which cost, the payments the unit economics can carry, and the structure that closes the raise." },
       ],
     },
+    /*
+     * Where the funding path used to be. The scored capital profile tells a
+     * person how fundable they are and exactly what raises it; the map lays
+     * out every way the money could come; the route they pick unlocks its own
+     * four-phase roadmap. Then the roadmap week turns all of it into dates.
+     */
+    ...FUNDING_PHASES,
+
     {
       id: "money-4", title: "Week 4 — Your roadmap",
       checkpoint: "A roadmap at the length you chose, and the first step on it done.",

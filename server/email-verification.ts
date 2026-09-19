@@ -130,6 +130,17 @@ export const REACHES_OTHERS: RegExp[] = [
   // Publishing puts a page on the open internet under this account's name.
   /^\/api\/artifacts\/[^/]+\/publish$/,
   /^\/api\/documents\/[^/]+\/publish$/,
+  /*
+   * Company accounts. Approaching somebody about a job, inviting staff into a
+   * training season and handing out a team link all put a company's name in
+   * front of a person; posting a challenge puts it in front of everyone, and
+   * entering one puts yours in front of a company.
+   */
+  /^\/api\/companies\/[^/]+\/talent\/[^/]+\/invite$/,
+  /^\/api\/companies\/[^/]+\/seasons\/[^/]+\/invite$/,
+  /^\/api\/companies\/[^/]+\/invite-link$/,
+  /^\/api\/companies\/[^/]+\/challenges$/,
+  /^\/api\/challenges\/[^/]+\/enter$/,
 ];
 
 /**

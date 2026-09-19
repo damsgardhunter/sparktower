@@ -4,7 +4,7 @@ import { appHref } from "./networkData";
 
 describe("appHref", () => {
   it("keeps the manager's section, tab and focus", () => {
-    expect(appHref("/projects/p1/manage?section=raise_funding&tab=nova&focus=FUND.M1.2", "u1")).toBe("/manage/p1?section=raise_funding&tab=nova&focus=FUND.M1.2");
+    expect(appHref("/projects/p1/manage?section=systemize_business&tab=nova&focus=FUND.M1.2", "u1")).toBe("/manage/p1?section=systemize_business&tab=nova&focus=FUND.M1.2");
     expect(appHref("/projects/p1/manage", "u1")).toBe("/manage/p1");
     expect(appHref("/projects/p1/manage?tab=team#x", "u1")).toBe("/manage/p1?tab=team");
   });

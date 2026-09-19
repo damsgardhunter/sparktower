@@ -623,13 +623,16 @@ describe("the loops a product runs on", () => {
   it("says plainly when a path doesn't work in loops", async () => {
     const app = await getTestApp();
     const agent = await owner(app);
-    const funding = (await agent.post("/api/projects").send({
-      title: "Raise", description: "Getting the story and the numbers into a shape that gets backed.",
-      category: "saas", goal: "raise_funding", subcategory: "startup_equity",
-    })).body;
+    // Systemize — which now also carries the funding routes — has no fan-out
+    // milestone, so it's the path to ask about.
+    const created = await agent.post("/api/projects").send({
+      title: "Brightside", description: "Getting the numbers, the money and the week into a shape that runs without the owner.",
+      category: "services", goal: "systemize_business", subcategory: "service",
+    });
+    expect(created.status).toBe(200);
     const minted = await tokenFor(agent);
 
-    const res = await loops(app, minted.token, funding.id);
+    const res = await loops(app, minted.token, created.body.id);
     expect(res.status).toBe(200);
     expect(res.body.supported).toBe(false);
     expect(res.body.message).toMatch(/doesn't work in loops/);

@@ -65,6 +65,7 @@ import { registerSimulationRoutes } from "./simulation-routes";
 import { registerSimulationDeskRoutes } from "./simulation-desk-routes";
 import { registerSimulationMarketRoutes } from "./simulation-market-routes";
 import { registerSimulationProfileRoutes } from "./simulation-profile-routes";
+import { registerCompanyFeatures } from "./company-features";
 import { z } from "zod";
 import OpenAI from "openai";
 import { eq, ne, and, sql, inArray, desc, isNull } from "drizzle-orm";
@@ -83,7 +84,7 @@ import {
   checkPrivateProjectQuota, modelFor, memoryLimitFor, taskLimitFor,
   coachingDirectiveFor, reserveOptionalAi,
 } from "./entitlements";
-import { isValidSubcategory, PROJECT_GOALS, isProjectGoal } from "@shared/goals";
+import { isValidSubcategory, PROJECT_GOALS, isProjectGoal, normaliseGoal } from "@shared/goals";
 import { SURFACE_API_PREFIXES } from "@shared/surfaces";
 import { recordActivity } from "./analytics";
 import { seal } from "./secret-box";
@@ -111,6 +112,7 @@ async function isProjectMember(userId: string, projectId: string): Promise<boole
 
 // Built on first use, never at import: server/openai-client.ts.
 import { openai } from "./openai-client";
+import { notifyWatchersOfNewProject } from "./scouting-alerts";
 
 /**
  * URL for a storyboard frame. Always the authenticated streaming route — the
@@ -434,6 +436,7 @@ export async function registerRoutes(
   // Buying, selling, and the moves a company makes in trouble.
   registerSimulationMarketRoutes(app);
   registerSimulationProfileRoutes(app);
+  registerCompanyFeatures(app);
   registerSafetyRoutes(app);
   registerInvestmentRoutes(app);
   registerBackingRoutes(app);
@@ -607,7 +610,7 @@ When presenting the final summary, end with an encouraging note like "✨ This i
 After each user message, respond conversationally AND include a JSON block in your response with any updates you can extract.
 
 Format: Respond with your conversational message, then on a new line include:
-<project_update>{"title": "...", "description": "...", "goal": "ship_mvp" | "systemize_business" | "raise_funding", "subcategory": "<one of the goal's kinds: ship→app|saas|game|website|other, systemize→restaurant|service|retail|other, raise→startup_equity|local_community|loan_grant|other>", "rolesNeeded": [...], "techStack": [...], "teamSize": 2, "estimatedWeeks": 8, "category": "...", "repoUrl": "...", "liveUrl": "..."}</project_update>
+<project_update>{"title": "...", "description": "...", "goal": "ship_mvp" | "systemize_business" | "run_company", "subcategory": "<one of the goal's kinds: ship→app|saas|game|website|other, systemize→restaurant|service|retail|other, run→restaurant|service|retail|agency|software|other>", "rolesNeeded": [...], "techStack": [...], "teamSize": 2, "estimatedWeeks": 8, "category": "...", "repoUrl": "...", "liveUrl": "..."}</project_update>
 
 Only include fields you have enough info to fill. Start empty if needed.`;
 
@@ -733,6 +736,7 @@ Only include fields you have enough info to fill. Start empty if needed.`;
 
     // Announce it on the founder feed. Private projects stay off the feed.
     if (!project.isPrivate) {
+      void notifyWatchersOfNewProject(project.id);
       // The founder badge: a profile says "I built this" the moment the project exists.
       void ensureCreatorBadges(ownerId).catch((e) => console.error("[badges] founder badge failed:", e));
       void publishSystemPost({
@@ -1763,10 +1767,11 @@ If the ask has nothing to do with planning tasks, say so in "summary", return an
        * section's own path milestones, steps and loops — clearing a board
        * shouldn't take the path with it.
        */
-      const track = req.query.track;
-      if (track != null && !isProjectGoal(track)) return res.status(400).json({ message: "Unknown section", code: "invalid_input", field: "track" });
+      // An old link naming the retired funding section means Systemize, which holds it now.
+      const track = req.query.track == null ? null : normaliseGoal(req.query.track);
+      if (req.query.track != null && !track) return res.status(400).json({ message: "Unknown section", code: "invalid_input", field: "track" });
       let removed: number;
-      if (isProjectGoal(track)) {
+      if (track) {
         const onPath = (tags: string[] | null) => (tags ?? []).some((x) => x.startsWith("backbone:") || x.startsWith("parent:") || x.startsWith("injected:") || x === "kind:loop");
         const ids = (tasks as any[]).filter((t) => (t.tags ?? []).includes(`track:${track}`) && !onPath(t.tags) && (!onlyStatus || t.status === onlyStatus)).map((t) => t.id as string);
         removed = ids.length ? (await db.delete(projectKanbanTasks).where(and(eq(projectKanbanTasks.projectId, projectId), inArray(projectKanbanTasks.id, ids))).returning({ id: projectKanbanTasks.id })).length : 0;
@@ -2254,8 +2259,8 @@ ${PLAIN_LANGUAGE_RULES}`;
       if (!ent) return;
 
       const { message, currentTab } = req.body;
-      // The section the builder is in (Ship / Systemize / Raise): Nova answers about that path.
-      const section = isProjectGoal(req.body?.section) ? req.body.section : null;
+      // The section the builder is in (Ship / Systemize / Run): Nova answers about that path.
+      const section = normaliseGoal(req.body?.section);
       if (!message || typeof message !== "string") return res.status(400).json({ message: "Message is required" });
       if (message.length > 5000) return res.status(400).json({ message: "Message too long (max 5000 chars)" });
 
@@ -2416,7 +2421,7 @@ Available actions:
    <nova_action>{"type": "complete_onboarding", "data": {}}</nova_action>
 
 7. remember: Save something the builder told you that should hold from now on — a correction to the brief, something being removed, what the loops or the wedge really are. It goes to the top of every future Nova prompt and outranks the brief and the board. Send the FULL updated note (it replaces the previous one); keep it under 1500 characters, one line per fact.
-   <nova_action>{"type": "remember", "data": {"notes": "The old onboarding quiz is being removed; it is not a loop or the wedge. The loops are the three paths: Ship an MVP, Systemize a business, Raise funding."}}</nova_action>
+   <nova_action>{"type": "remember", "data": {"notes": "The old onboarding quiz is being removed; it is not a loop or the wedge. The loops are the three paths: Ship an MVP, Systemize a business, Run a company."}}</nova_action>
 
 8. write_loops: Write the builder's business loops for them, when they ask you to (or say yes to your offer). Each loop is 3–5 steps in their product's own words, ending with the step that sends the user back to the start, plus what closes it. Send one entry per loop you're writing; an unwritten loop of that kind is filled in, a kind the project doesn't have yet is added, and a loop that's already written is left alone (to change one of those, use edit_project on its task). Product loops can be several; the other four kinds are one each.
    <nova_action>{"type": "write_loops", "data": {"loops": [{"type": "product|growth|retention|revenue|referral", "title": "2–5 words", "steps": "1. … 2. … 3. …", "closes": "what sends the user back to step 1"}]}}</nova_action>
@@ -2857,12 +2862,13 @@ RULES:
   const sectionOf = (req: any, res: any): { ok: true; goal: any } | { ok: false } => {
     const raw = req.query?.goal ?? req.body?.goal;
     if (raw == null || raw === "") return { ok: true, goal: null };
-    if (!isProjectGoal(raw)) { res.status(400).json({ message: "Pick one of the three sections.", code: "invalid_input", field: "goal" }); return { ok: false }; }
-    return { ok: true, goal: raw };
+    const goal = normaliseGoal(raw);
+    if (!goal) { res.status(400).json({ message: "Pick one of the three sections.", code: "invalid_input", field: "goal" }); return { ok: false }; }
+    return { ok: true, goal };
   };
 
   /**
-   * The three sections — Ship, Systemize, Raise — each with whether it's
+   * The three sections — Ship, Systemize, Run — each with whether it's
    * started and how far along it is. Cheap: nothing is synced, so the
    * manager can poll it to keep the section buttons live.
    */
@@ -3490,7 +3496,7 @@ RULES:
   app.post("/api/projects/:id/analytics-events", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      const data = insertAnalyticsEventSchema.parse({ ...pickFields(req.body, WRITABLE.analyticsEvents), track: isProjectGoal(req.body?.track) ? req.body.track : null, projectId: req.params.id });
+      const data = insertAnalyticsEventSchema.parse({ ...pickFields(req.body, WRITABLE.analyticsEvents), track: normaliseGoal(req.body?.track), projectId: req.params.id });
       res.json(await storage.createAnalyticsEvent(data));
     } catch (e) { res.status(500).json({ message: "Failed to create analytics event" }); }
   });
@@ -5667,14 +5673,15 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       const files = await storage.getProjectFiles(req.params.id);
       // `?track=` shows that section's files and the shared ones (no section); absent, everything.
       const track = req.query.track;
-      res.json(isProjectGoal(track) ? files.filter((f) => !f.track || f.track === track) : files);
+      const section = normaliseGoal(track);
+      res.json(section ? files.filter((f) => !f.track || f.track === section) : files);
     } catch (error) { res.status(500).json({ message: "Failed to get files" }); }
   });
 
   app.post("/api/projects/:id/files", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Unauthorized" });
-      const track = isProjectGoal(req.body?.track) ? req.body.track : null;
+      const track = normaliseGoal(req.body?.track);
       const parsed = insertProjectFileSchema.safeParse({ ...pickFields(req.body, WRITABLE.files), track, projectId: req.params.id, uploaderId: (req.user as any).id });
       if (!parsed.success) return res.status(400).json({ message: parsed.error.issues[0]?.message ?? "Invalid file" });
       const file = await storage.createProjectFile(parsed.data);

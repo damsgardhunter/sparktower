@@ -232,6 +232,20 @@
       "when": 1789826048383,
       "tag": "0032_startup_game_drafts",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1789828839981,
+      "tag": "0033_fold_raise_into_systemize",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1789829690464,
+      "tag": "0034_companies_and_company_rhythm",
+      "breakpoints": true
     }
   ]
 }

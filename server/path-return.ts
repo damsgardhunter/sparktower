@@ -22,6 +22,7 @@ import { mainLineMilestones, resolveTree } from "@shared/phase-trees";
 import type { ProjectGoal } from "@shared/goals";
 import { weekStartOf } from "@shared/weeks";
 import { notify } from "./notifications";
+import { notifyScouts } from "./scouting-alerts";
 
 /** Away this many days with a step waiting, and the path sends one nudge for that step. */
 export const NUDGE_AFTER_DAYS = 2;
@@ -123,7 +124,16 @@ async function teamOf(projectId: string): Promise<{ ownerId: string; members: st
  * the project hears, with what's next. When nobody did — Nova's answer was
  * chosen, an audit found it done — the whole team hears, owner included.
  */
-export async function afterPathStepDone(task: { id: string; projectId: string; title: string; completedById?: string | null }): Promise<void> {
+export async function afterPathStepDone(task: { id: string; projectId: string; title: string; completedById?: string | null; tags?: string[] | null }): Promise<void> {
+  /*
+   * Companies following the project hear about milestones only — a task
+   * tagged with its own backbone id — not every sub-step under one. A busy
+   * project finishes a dozen sub-steps a day, and a company that follows ten
+   * of them would learn to ignore the whole feed.
+   */
+  if (task.tags?.some((t) => t.startsWith("backbone:"))) {
+    void notifyScouts(task.projectId, { key: `step:${task.id}`, text: `finished "${task.title}"` });
+  }
   try {
     const team = await teamOf(task.projectId);
     if (!team) return;

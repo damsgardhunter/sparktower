@@ -1,6 +1,6 @@
 /**
  * The project manager's three sections — Ship an MVP, Systemize the business,
- * Raise funds — each its own path on the same project, worked side by side.
+ * Run a company — each its own path on the same project, worked side by side.
  *
  * Restated from client/src/lib/sections.ts (and shared/goals.ts,
  * client/src/lib/audit-status.ts, client/src/components/analytics/starter-metrics.ts)
@@ -16,12 +16,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useFocusEffect } from "expo-router";
 import { api } from "./api/client";
-import { PROJECT_GOALS, PROJECT_SUBCATEGORIES, type ProjectGoal } from "./projectData";
+import { PROJECT_GOALS, PROJECT_SUBCATEGORIES, LEGACY_GOALS, type ProjectGoal } from "./projectData";
 
 export type { ProjectGoal } from "./projectData";
 
 type IoniconName =
-  | "rocket-outline" | "git-network-outline" | "cash-outline";
+  | "rocket-outline" | "git-network-outline" | "calendar-outline";
 
 export interface SectionDef {
   goal: ProjectGoal;
@@ -37,13 +37,13 @@ export interface SectionDef {
 const BLURB: Record<ProjectGoal, string> = {
   ship_mvp: "Build it and get it in front of people",
   systemize_business: "Make it run without you",
-  raise_funding: "Get the money behind it",
+  run_company: "Keep it on track every week",
 };
-const ICON: Record<ProjectGoal, IoniconName> = { ship_mvp: "rocket-outline", systemize_business: "git-network-outline", raise_funding: "cash-outline" };
+const ICON: Record<ProjectGoal, IoniconName> = { ship_mvp: "rocket-outline", systemize_business: "git-network-outline", run_company: "calendar-outline" };
 const KIND_QUESTION: Record<ProjectGoal, string> = {
   ship_mvp: "What kind of thing are you shipping?",
   systemize_business: "What kind of business is it?",
-  raise_funding: "What kind of raise is it?",
+  run_company: "What kind of company is it?",
 };
 
 export const SECTIONS: SectionDef[] = PROJECT_GOALS.map((g) => ({
@@ -51,6 +51,9 @@ export const SECTIONS: SectionDef[] = PROJECT_GOALS.map((g) => ({
 }));
 export const sectionDef = (goal: ProjectGoal) => SECTIONS.find((s) => s.goal === goal)!;
 export const isProjectGoal = (v: unknown): v is ProjectGoal => typeof v === "string" && PROJECT_GOALS.some((g) => g.id === v);
+/** A stored or linked goal, with a retired one mapped to the path that took it over. */
+export const normaliseGoal = (v: unknown): ProjectGoal | null =>
+  typeof v === "string" && LEGACY_GOALS[v] ? LEGACY_GOALS[v] : isProjectGoal(v) ? v : null;
 export const subcategoriesFor = (goal: ProjectGoal) => PROJECT_SUBCATEGORIES[goal];
 
 /** A milestone id's section, from its prefix (shared/goals.ts goalOfBackboneId). */
@@ -58,7 +61,9 @@ export function goalOfBackboneId(id: string | null | undefined): ProjectGoal | n
   if (!id) return null;
   if (id.startsWith("SHIP.")) return "ship_mvp";
   if (id.startsWith("SYS.")) return "systemize_business";
-  if (id.startsWith("FUND.")) return "raise_funding";
+  // The funding milestones kept their ids when they moved into Systemize.
+  if (id.startsWith("FUND.")) return "systemize_business";
+  if (id.startsWith("RUN.")) return "run_company";
   return null;
 }
 
@@ -121,7 +126,8 @@ const tagValue = (tags: string[] | null | undefined, prefix: string) => tags?.fi
  */
 export function sectionOfTask(tags: string[] | null | undefined, primary: ProjectGoal): ProjectGoal | null {
   const tagged = tagValue(tags, "track:");
-  if (isProjectGoal(tagged)) return tagged;
+  const known = normaliseGoal(tagged);
+  if (known) return known;
   const id = tagValue(tags, "backbone:") ?? tagValue(tags, "parent:");
   if (id) return goalOfBackboneId(id) ?? primary;
   if (tagValue(tags, "injected:")) return primary;
@@ -159,11 +165,11 @@ export const STARTER_METRICS: Record<ProjectGoal, StarterMetric[]> = {
     { eventName: "repeat_customer", label: "Repeat customers", category: "retention", description: "A customer buys a second time" },
     { eventName: "referral_received", label: "Referrals", category: "referral", description: "A new customer came from an existing one" },
   ],
-  raise_funding: [
-    { eventName: "investor_intro", label: "Investor intros", category: "referral", description: "A warm intro to an investor" },
-    { eventName: "investor_meeting", label: "Meetings", category: "activation", description: "A first meeting with an investor" },
-    { eventName: "investor_follow_up", label: "Follow-ups", category: "retention", description: "An investor asks for a second meeting or data" },
-    { eventName: "commitment", label: "Commitments", category: "revenue", description: "A soft or signed commitment" },
+  run_company: [
+    { eventName: "weekly_revenue", label: "Weekly revenue", category: "revenue", description: "Money in this week, from the check-in" },
+    { eventName: "new_customer", label: "New customers", category: "activation", description: "A customer buys for the first time" },
+    { eventName: "repeat_customer", label: "Repeat customers", category: "retention", description: "A customer comes back" },
+    { eventName: "job_done_on_time", label: "Jobs on time", category: "retention", description: "A recurring job finished by its due date" },
   ],
 };
 

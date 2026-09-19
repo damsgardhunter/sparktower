@@ -96,7 +96,7 @@ describe("create a project", () => {
     expect(missing.status).toBe(400);
     expect(missing.body.code).toBe("invalid_input");
     expect(missing.body.field).toBe("goal");
-    expect(missing.body.message).toBe("Pick a goal: ship an MVP, systemize a business, or raise funding.");
+    expect(missing.body.message).toBe("Pick a goal: ship an MVP, systemize a business, or run a company.");
 
     const unknown = await agent.post("/api/projects").send(aProject({ goal: "get_rich" }));
     expect(unknown.status).toBe(400);
@@ -127,7 +127,12 @@ describe("create a project", () => {
     expect(right.status).toBe(200);
     expect(right.body.subcategory).toBe("restaurant");
     // "other" is valid on every path — a real answer, not a fallback.
-    expect((await agent.post("/api/projects").send(aProject({ title: "Community Fund", goal: "raise_funding", subcategory: "other" }))).status).toBe(200);
+    expect((await agent.post("/api/projects").send(aProject({ title: "Family Hardware", goal: "run_company", subcategory: "other" }))).status).toBe(200);
+    // The retired funding path isn't a goal a new project can take; its work
+    // lives on Systemize now.
+    const retired = await agent.post("/api/projects").send(aProject({ title: "Community Fund", goal: "raise_funding", subcategory: "other" }));
+    expect(retired.status).toBe(400);
+    expect(retired.body.field).toBe("goal");
 
     // And an update can't orphan it: changing only the goal is refused until
     // the subcategory is changed with it.

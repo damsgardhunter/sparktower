@@ -58,6 +58,10 @@ const DOESNT_REACH_ANYONE: Record<string, string> = {
   "POST /api/projects/:id/application-questions": "sets the questions on their own project",
   "POST /api/projects/:id/health-findings/feedback": "rates a finding Nova gave them, seen by nobody else",
   "DELETE /api/health-findings/feedback/:feedbackId": "removing their own rating",
+  "POST /api/company-invites/accept": "joining a company whose admin sent them the link",
+  "POST /api/talent/invites/:id/answer": "answering an invitation that was sent to them",
+  "POST /api/companies/:id/follows/:projectId": "following is how scouting works, and it carries no words of theirs",
+  "DELETE /api/companies/:id/follows/:projectId": "unfollowing",
   "POST /api/projects/:id/health-check/apply": "applies a health check to their own board",
 };
 

@@ -1,7 +1,9 @@
 /**
- * The funding path through the API:
+ * The funding routes through the API. They used to be a path of their own;
+ * they now sit inside Systemize, after its first three money weeks and before
+ * the roadmap week, so the walk starts by getting past those:
  *
- *   ownership goal → money → experience → business history (filled from a
+ *   Systemize's money weeks done → ownership goal → money → experience → business history (filled from a
  *   résumé) → capital goal → a fundability score on the dashboard → Nova's
  *   profile built on that exact score → choose a route → only that route's
  *   roadmap → switch routes and back without losing work → pipeline mode once
@@ -43,7 +45,7 @@ async function founder(app: any) {
     .send({ email: `cap-${Date.now()}-${Math.random().toString(36).slice(2, 6)}@example.test`, password: "Testpass123!", firstName: "Dana" });
   const project = await agent.post("/api/projects").send({
     title: "Brightside Acquisition", description: "Buying a commercial cleaning company and growing it across the city.",
-    category: "services", goal: "raise_funding", subcategory: "other",
+    category: "services", goal: "systemize_business", subcategory: "other",
   });
   expect(project.status).toBe(200);
   return { agent, userId: reg.body.id as string, projectId: project.body.id as string };
@@ -54,13 +56,36 @@ const answer = (agent: any, id: string, taskId: string, answers: Record<string, 
 const taskFor = async (agent: any, id: string, backbone: string) =>
   (await agent.get(`/api/projects/${id}/kanban`)).body.find((t: any) => t.tags?.includes(`backbone:${backbone}`));
 
-describe("the funding path", () => {
+// Systemize's first three weeks — the numbers — come before the capital
+// profile on the main line. They're marked done the way any step is ticked,
+// so what follows is exactly what someone arriving at the funding weeks sees.
+const SYS_MONEY_WEEKS = [
+  "SYS.F1.1", "SYS.F1.2", "SYS.F1.3", "SYS.F1.4", "SYS.F1.5", "SYS.F1.6",
+  "SYS.F2.1", "SYS.F2.2", "SYS.F2.3", "SYS.F2.4",
+  "SYS.F3.1", "SYS.F3.2", "SYS.F3.3",
+];
+async function pastTheMoneyWeeks(agent: any, id: string) {
+  for (const backbone of SYS_MONEY_WEEKS) {
+    await agent.patch(`/api/kanban/${(await taskFor(agent, id, backbone)).id}`).send({ status: "done" }).expect(200);
+  }
+}
+const phaseIds = (p: any) => p.phases.map((x: any) => x.id);
+const OPERATING_WEEKS = ["money-4", "week-1", "week-2", "week-3", "week-4"];
+
+describe("the funding routes, inside Systemize", () => {
   it("builds a capital profile and score, then the chosen route's roadmap", async () => {
     const app = await getTestApp();
     const { agent, userId, projectId } = await founder(app);
 
+    // Before a route is chosen, only the two weeks everyone walks are on the
+    // path between the money weeks and the roadmap — no route's phases yet.
     let p = await path(agent, projectId);
-    expect(p.phases.map((x: any) => x.id)).toEqual(["capital-1", "capital-2"]);
+    expect(phaseIds(p)).toEqual(["money-1", "money-2", "money-3", "capital-1", "capital-2", ...OPERATING_WEEKS]);
+    expect(p.next.id).toBe("SYS.F1.1");
+    expect(p.capital).toMatchObject({ score: 0, answered: 0, route: null });
+
+    await pastTheMoneyWeeks(agent, projectId);
+    p = await path(agent, projectId);
     expect(p.next).toMatchObject({ id: "FUND.C1.1", workKind: "intake" });
     expect(p.capital).toMatchObject({ score: 0, answered: 0, route: null });
 
@@ -117,7 +142,9 @@ describe("the funding path", () => {
 
     p = await path(agent, projectId);
     expect(p.capital.route).toBe("seller");
-    expect(p.phases.map((x: any) => x.id)).toEqual(["capital-1", "capital-2", "seller-1", "seller-2", "seller-3", "seller-4"]);
+    // The chosen route's roadmap slots in right after the route choice, ahead
+    // of the roadmap week, and it's the next thing to do.
+    expect(phaseIds(p)).toEqual(["money-1", "money-2", "money-3", "capital-1", "capital-2", "seller-1", "seller-2", "seller-3", "seller-4", ...OPERATING_WEEKS]);
     expect(p.next.id).toBe("FUND.S1.1");
     expect((await agent.get(`/api/projects/${projectId}`)).body.capitalRoute).toBe("seller");
 
@@ -126,7 +153,7 @@ describe("the funding path", () => {
     await agent.patch(`/api/kanban/${s11.id}`).send({ status: "done", description: "Services, $400k–$800k SDE, within 30 miles." }).expect(200);
     await answer(agent, projectId, routeTask, { route: "debt" }).expect(200);
     p = await path(agent, projectId);
-    expect(p.phases.map((x: any) => x.id).slice(2)).toEqual(["debt-1", "debt-2", "debt-3", "debt-4"]);
+    expect(phaseIds(p).slice(5)).toEqual(["debt-1", "debt-2", "debt-3", "debt-4", ...OPERATING_WEEKS]);
     expect(p.next.id).toBe("FUND.D1.1");
     const board = (await agent.get(`/api/projects/${projectId}/kanban`)).body;
     expect(board.find((t: any) => t.id === s11.id).tags).toContain("archived:route-seller");
@@ -149,6 +176,8 @@ describe("the funding path", () => {
   it("puts an older funding project's retired steps away, keeping the work on the board", async () => {
     const app = await getTestApp();
     const { agent, projectId } = await founder(app);
+    // A step from the funding path's earliest shape, carried onto Systemize by
+    // the migration: its FUND. id still reads as this path's, but no tree has it.
     const [old] = await db.insert(projectKanbanTasks).values({
       projectId, title: "Situation read", description: "Written back when.", status: "done",
       tags: ["actor:nova-drafts", "tier:artifact", "backbone:FUND.M1.1"],

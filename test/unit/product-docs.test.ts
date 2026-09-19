@@ -56,7 +56,9 @@ describe("splitMergedPaths", () => {
       { title: "Explore builders", steps: "open feed → follow", state: "built", evidence: "" },
       { title: "Raise funding", steps: "generate deck → critique → iterate", state: "partly", evidence: "" },
     ]);
-    expect(out.map((l) => l.title)).toEqual(["Ship an MVP", "Systemize a business", "Raise funding", "Explore builders", "Raise funding"]);
+    // "Fund" names the funding routes, which live in Systemize now — so a
+    // Ship/Systemize/Fund loop is two paths, not three.
+    expect(out.map((l) => l.title)).toEqual(["Ship an MVP", "Systemize a business", "Explore builders", "Raise funding"]);
     expect(out[0].steps).toMatch(/on the Ship an MVP path/);
   });
 });

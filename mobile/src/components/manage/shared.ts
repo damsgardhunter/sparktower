@@ -14,7 +14,7 @@ export type Actor = "nova-builds" | "nova-drafts" | "user-decides" | "user-does"
 export type VerificationTier = "verified" | "artifact" | "evidence" | "claimed";
 export type WorkKind = "options" | "build" | "template" | "plan" | "intake";
 export type LoopType = "product" | "growth" | "retention" | "revenue" | "referral";
-export type ProjectGoal = "ship_mvp" | "systemize_business" | "raise_funding";
+export type ProjectGoal = "ship_mvp" | "systemize_business" | "run_company";
 
 export interface IntakeQuestion {
   id: string;
@@ -94,7 +94,7 @@ export function addableLoopTypes(loops: { type: LoopType }[]): LoopType[] {
 export const PROJECT_GOALS: { id: ProjectGoal; label: string; subs: { id: string; label: string }[] }[] = [
   { id: "ship_mvp", label: "Ship an MVP", subs: [{ id: "app", label: "App" }, { id: "saas", label: "SaaS" }, { id: "game", label: "Game" }, { id: "website", label: "Website" }, { id: "other", label: "Other" }] },
   { id: "systemize_business", label: "Systemize a business", subs: [{ id: "restaurant", label: "Restaurant" }, { id: "service", label: "Service business" }, { id: "retail", label: "Retail" }, { id: "other", label: "Other" }] },
-  { id: "raise_funding", label: "Raise funding", subs: [{ id: "startup_equity", label: "Startup equity" }, { id: "local_community", label: "Local community" }, { id: "loan_grant", label: "Loan or grant" }, { id: "other", label: "Other" }] },
+  { id: "run_company", label: "Run a company", subs: [{ id: "restaurant", label: "Restaurant or café" }, { id: "service", label: "Service business" }, { id: "retail", label: "Retail or e-commerce" }, { id: "agency", label: "Agency or studio" }, { id: "software", label: "Software company" }, { id: "other", label: "Other" }] },
 ];
 export const goalLabel = (g: string) => PROJECT_GOALS.find((x) => x.id === g)?.label ?? g;
 

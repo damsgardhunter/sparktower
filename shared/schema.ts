@@ -124,7 +124,7 @@ export const projects = pgTable("projects", {
    * to rows that predate it — the insert schema below re-requires it, so a new
    * project must say which path it is on. See shared/goals.ts.
    */
-  goal: text("goal", { enum: ["ship_mvp", "systemize_business", "raise_funding"] })
+  goal: text("goal", { enum: ["ship_mvp", "systemize_business", "run_company"] })
     .default("ship_mvp").notNull(),
   /*
    * Required, and only valid as a pair with `goal` — checked in the insert
@@ -1194,6 +1194,20 @@ export const NOTIFICATION_KINDS = [
   "sprint_left",
   // A teammate in a simulated season is waiting on your seat to file this year.
   "sim_nudge",
+  // A company would like to talk to you, having seen your track record.
+  "recruit_invite",
+  // Somebody answered your company's invitation to talk.
+  "recruit_answer",
+  // Your company invited you to a private training season.
+  "season_invite",
+  // Somebody entered your company's challenge.
+  "challenge_entry",
+  // Your challenge entry was shortlisted, or won.
+  "challenge_result",
+  // A project your company follows moved: a milestone, an update.
+  "scout_update",
+  // New projects in an industry your company watches.
+  "scout_new_project",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
@@ -1724,7 +1738,7 @@ export const projectPricingTiers = pgTable("project_pricing_tiers", {
 export const projectAnalyticsEvents = pgTable("project_analytics_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
-  /** The section it belongs to (ship_mvp, systemize_business, raise_funding), or null when it's project-wide. */
+  /** The section it belongs to (ship_mvp, systemize_business, run_company), or null when it's project-wide. */
   track: text("track"),
   eventName: text("event_name").notNull(),
   category: text("category").default("activation"),
@@ -2017,7 +2031,7 @@ export const insertProjectBase = createInsertSchema(projects).omit({
   // missing or wrongly-typed value, and a *wrong* value ("get_rich") still got
   // zod's stock "Invalid enum value. Expected …". One sentence for all three.
   goal: z.enum(PROJECT_GOAL_IDS, {
-    errorMap: () => ({ message: "Pick a goal: ship an MVP, systemize a business, or raise funding." }),
+    errorMap: () => ({ message: "Pick a goal: ship an MVP, systemize a business, or run a company." }),
   }),
   subcategory: z.string({ required_error: "Pick what kind of project it is for that goal.", invalid_type_error: "Pick what kind of project it is for that goal." }).min(1, "Pick what kind of project it is for that goal."),
 });
@@ -2461,6 +2475,201 @@ export const startupGameSubmissions = pgTable("startup_game_submissions", {
   once: unique("startup_game_submissions_once").on(table.gameId, table.userId, table.round),
 }));
 
+// ─── Companies ───────────────────────────────────────────────────────────────
+
+/**
+ * An existing business with an account of its own.
+ *
+ * Distinct from a project. A project is something being built; a company is an
+ * organisation that already exists, has people, and comes here for things only
+ * a company needs: private simulation seasons to train its staff, a way to find
+ * people who have shown commercial judgement, challenges it sponsors, and
+ * startups it wants to keep an eye on. A company can also run itself on the
+ * "Run a company" path, through a project it owns (`projectId`).
+ */
+export const companies = pgTable("companies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  slug: text("slug").notNull(),
+  website: text("website"),
+  industry: text("industry"),
+  size: text("size"),
+  description: text("description"),
+  /** The project it runs itself through, on the Run a company path, if any. */
+  projectId: varchar("project_id").references(() => projects.id, { onDelete: "set null" }),
+  createdBy: varchar("created_by").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  bySlug: unique("companies_slug").on(t.slug),
+}));
+export type Company = typeof companies.$inferSelect;
+
+/** Who acts for a company. An owner can do anything; an admin everything but delete it; a member can see and join. */
+export const companyMembers = pgTable("company_members", {
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  role: text("role", { enum: ["owner", "admin", "member"] }).notNull(),
+  joinedAt: timestamp("joined_at").notNull(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.companyId, t.userId] }),
+  byUser: index("company_members_user_idx").on(t.userId),
+}));
+
+/**
+ * A person who has said companies may look at their record and approach them.
+ *
+ * Opt-in, and off by default. A season records how somebody decided in a seat
+ * under pressure — that is exactly what makes it valuable to an employer, and
+ * exactly why it must never be shown to one without the person choosing it.
+ */
+export const talentProfiles = pgTable("talent_profiles", {
+  userId: varchar("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  open: boolean("open").default(false).notNull(),
+  headline: text("headline"),
+  /** Roles they would take: "operations", "finance", "product", "sales", "general management"… */
+  roles: text("roles").array(),
+  location: text("location"),
+  remote: boolean("remote").default(true).notNull(),
+  updatedAt: timestamp("updated_at").notNull(),
+});
+
+/** A company asking somebody to talk. One per company per person; the person answers yes or no. */
+export const recruitInvites = pgTable("recruit_invites", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  sentBy: varchar("sent_by").notNull().references(() => users.id, { onDelete: "cascade" }),
+  role: text("role"),
+  message: text("message").notNull(),
+  status: text("status", { enum: ["sent", "accepted", "declined"] }).default("sent").notNull(),
+  createdAt: timestamp("created_at").notNull(),
+  answeredAt: timestamp("answered_at"),
+}, (t) => ({
+  once: unique("recruit_invites_once").on(t.companyId, t.userId),
+  byUser: index("recruit_invites_user_idx").on(t.userId),
+}));
+
+/**
+ * A real problem a company puts up, for founders to answer.
+ *
+ * The prize is stated, not held: no money moves through SparkTower. The
+ * company pays its winners directly under its own terms, which entrants accept
+ * when they enter — the same stance the investor introductions take.
+ */
+export const companyChallenges = pgTable("company_challenges", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  brief: text("brief").notNull(),
+  /** What a good answer looks like — how entries are judged. */
+  criteria: text("criteria"),
+  prize: text("prize"),
+  /** The company's own terms for the challenge, which an entrant accepts to enter. */
+  terms: text("terms"),
+  industry: text("industry"),
+  deadline: timestamp("deadline").notNull(),
+  status: text("status", { enum: ["open", "judging", "closed"] }).default("open").notNull(),
+  createdBy: varchar("created_by").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  byStatus: index("company_challenges_status_idx").on(t.status, t.deadline),
+}));
+
+export const challengeEntries = pgTable("challenge_entries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  challengeId: varchar("challenge_id").notNull().references(() => companyChallenges.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** The project the answer is built in, if it is one. */
+  projectId: varchar("project_id").references(() => projects.id, { onDelete: "set null" }),
+  title: text("title").notNull(),
+  pitch: text("pitch").notNull(),
+  link: text("link"),
+  status: text("status", { enum: ["entered", "shortlisted", "winner", "withdrawn"] }).default("entered").notNull(),
+  /** A line of feedback from the company, which the entrant sees. */
+  feedback: text("feedback"),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  once: unique("challenge_entries_once").on(t.challengeId, t.userId),
+}));
+
+/** Startups a company is keeping an eye on. */
+export const companyFollows = pgTable("company_follows", {
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  note: text("note"),
+  createdBy: varchar("created_by").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.companyId, t.projectId] }),
+  byProject: index("company_follows_project_idx").on(t.projectId),
+}));
+
+/** Industries a company watches for new projects. */
+export const companyWatches = pgTable("company_watches", {
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  industry: text("industry").notNull(),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.companyId, t.industry] }),
+}));
+
+// ─── The company rhythm (the Run a company path) ─────────────────────────────
+
+/**
+ * One week's check-in on a project running the Run a company path.
+ *
+ * `weekOf` is the Monday of the week, as YYYY-MM-DD text rather than a
+ * timestamp, so "which week is this" never depends on a timezone.
+ */
+export const projectCheckins = pgTable("project_checkins", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  weekOf: text("week_of").notNull(),
+  /** metric id → value, for the numbers the company watches. */
+  numbers: jsonb("numbers").notNull(),
+  wentRight: text("went_right"),
+  wentWrong: text("went_wrong"),
+  /** Nova's answer: what changed, and the one thing worth doing about it. */
+  reply: text("reply"),
+  createdAt: timestamp("created_at").notNull(),
+  updatedAt: timestamp("updated_at").notNull(),
+}, (t) => ({
+  once: unique("project_checkins_week").on(t.projectId, t.weekOf),
+}));
+
+/** A job that comes round every week, fortnight or month, with somebody's name on it. */
+export const recurringJobs = pgTable("recurring_jobs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  notes: text("notes"),
+  every: text("every", { enum: ["week", "fortnight", "month"] }).notNull(),
+  ownerId: varchar("owner_id").references(() => users.id, { onDelete: "set null" }),
+  backupId: varchar("backup_id").references(() => users.id, { onDelete: "set null" }),
+  /** YYYY-MM-DD, for the same reason `weekOf` is. */
+  nextDue: text("next_due").notNull(),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  byProject: index("recurring_jobs_project_idx").on(t.projectId),
+}));
+
+/** Every time a recurring job was done, and whether it was on time — what the monthly report counts. */
+export const recurringJobRuns = pgTable("recurring_job_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  jobId: varchar("job_id").notNull().references(() => recurringJobs.id, { onDelete: "cascade" }),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  dueOn: text("due_on").notNull(),
+  doneOn: text("done_on").notNull(),
+  doneBy: varchar("done_by").references(() => users.id, { onDelete: "set null" }),
+  onTime: boolean("on_time").notNull(),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  once: unique("recurring_job_runs_once").on(t.jobId, t.dueOn),
+  byProject: index("recurring_job_runs_project_idx").on(t.projectId, t.doneOn),
+}));
+
 /**
  * What a player has typed and not yet put forward.
  *
@@ -2715,8 +2924,26 @@ export const simSeasons = pgTable("sim_seasons", {
   world: jsonb("world"),
   startsAt: timestamp("starts_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  /**
+   * A private season a company runs for its own people — leadership training,
+   * a workshop, an away day. Null for the public seasons everyone else joins.
+   *
+   * A private season is invisible to matchmaking: joining a market never lands
+   * a stranger in one, and its rooms are reached only with `inviteCode`.
+   */
+  companyId: varchar("company_id"),
+  inviteCode: text("invite_code"),
+  /**
+   * How long a year lasts, in minutes, when it isn't a real day. A public
+   * season is one year a day because people play it over a fortnight; a
+   * company running one in an afternoon workshop needs it to move while the
+   * room is still there. Null means a day. The company can also resolve the
+   * year early — see server/company-season-routes.ts.
+   */
+  yearMinutes: integer("year_minutes"),
 }, (table) => ({
   byStatus: index("sim_seasons_status_idx").on(table.status, table.nicheId),
+  byInvite: unique("sim_seasons_invite_code").on(table.inviteCode),
 }));
 
 /**

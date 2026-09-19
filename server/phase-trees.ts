@@ -24,7 +24,7 @@ import {
 import { withRunGroups } from "@shared/phase-trees/run-steps";
 import { describeOp } from "@shared/audit-catchup";
 import { afterPathStepDone } from "./path-return";
-import { PROJECT_GOALS, GOAL_BACKBONE_PREFIX, goalOfBackboneId, isProjectGoal } from "@shared/goals";
+import { PROJECT_GOALS, GOAL_BACKBONE_PREFIX, goalOfBackboneId, isProjectGoal, normaliseGoal } from "@shared/goals";
 import { capitalProfile, renderCapitalProfile, businessHistoryFromResume, CAPITAL_MILESTONES, CAPITAL_ROUTES, type CapitalAnswers } from "@shared/capital";
 import type { ProfileExperience } from "@shared/schema";
 import type { ProjectGoal } from "@shared/goals";
@@ -59,7 +59,8 @@ const minutesOf = (t: { estimateHours: number | null }) => (t.estimateHours ?? 1
  */
 export function trackOfTask(tags: string[] | null | undefined, primary: ProjectGoal): ProjectGoal {
   const tagged = tagValue(tags, "track:");
-  if (isProjectGoal(tagged)) return tagged;
+  const known = normaliseGoal(tagged);
+  if (known) return known;
   return goalOfBackboneId(backboneIdOf(tags) ?? parentOf(tags)) ?? primary;
 }
 
@@ -106,7 +107,8 @@ async function setTrackFields(projectId: string, goal: ProjectGoal, patch: { cap
 async function goalFor(projectId: string, opts: { backboneId?: string | null; goal?: unknown }): Promise<ProjectGoal | null> {
   const fromId = goalOfBackboneId(opts.backboneId);
   if (fromId) return fromId;
-  if (isProjectGoal(opts.goal)) return opts.goal;
+  const asked = normaliseGoal(opts.goal);
+  if (asked) return asked;
   const [project] = await db.select({ goal: projects.goal }).from(projects).where(eq(projects.id, projectId));
   return (project?.goal as ProjectGoal | undefined) ?? null;
 }
@@ -1101,8 +1103,8 @@ export async function collectArtifacts(projectId: string): Promise<Artifact[]> {
       out.push({ label: `milestone:${id}`, kind: "milestone", text: `${t.title}: ${t.description.slice(0, 600)}` });
     }
   }
-  // On the funding path, the scored profile and chosen route: what every funding plan is built on.
-  const funding = await trackState(projectId, "raise_funding");
+  // On Systemize — which now holds the funding routes — the scored profile and chosen route: what every funding plan is built on.
+  const funding = await trackState(projectId, "systemize_business");
   if (funding) {
     const profile = await capitalProfileFor(projectId);
     if (profile.answered > 0) out.push({ label: "capital-profile", kind: "milestone", text: renderCapitalProfile(profile).slice(0, 2000) });
@@ -1381,7 +1383,11 @@ export async function pathStatus(projectId: string, goalArg?: ProjectGoal | null
     rejectedLoops: project.rejectedLoops ?? [],
     auditUpdate: auditUpdateOf(latestAudit),
     proposal: complete ? NEXT_PATHS[goal] : null,
-    /** The funding path's capital profile: the fundability score, its parts, and how each route fits. */
-    capital: goal === "raise_funding" ? { ...(await capitalProfileFor(projectId)), route: project.capitalRoute ?? null } : null,
+    /**
+     * The capital profile: the fundability score, its parts, what raises each,
+     * and how each route fits. It was the funding path's; it now belongs to
+     * Systemize, which took the funding routes over.
+     */
+    capital: goal === "systemize_business" ? { ...(await capitalProfileFor(projectId)), route: project.capitalRoute ?? null } : null,
   };
 }

@@ -12,8 +12,14 @@ path-backbone-v2, shipping-variants, and funding-path-v1.
 | Path | Promise | Target |
 | --- | --- | --- |
 | **Ship an MVP** | Get a first version in front of real people and learn from what they do | 4 weeks |
-| **Systemize a business** | Get the money right first, then build a business that runs without you in every step | 4 weeks to a financing plan, 8 to owner-independence tested |
-| **Raise funding** | Know how fundable you are, pick the route to the money, and build it out step by step | 2 weeks to a capital profile and route, then the route's roadmap |
+| **Systemize a business** | Get the money right first — how fundable you are, the route to the money, and the plan — then build a business that runs without you in every step | 3 weeks to your numbers, then your capital profile and funding route, a roadmap, and 4 weeks to owner-independence tested |
+| **Run a company** | Run the business you already have with a weekly rhythm: the numbers that matter, the team's recurring work, and the next thing to fix | 3 weeks to set up, then a weekly check-in and a monthly report for as long as you run it |
+
+There used to be a **Raise funding** path. Systemize already covered most of it, so everything it
+did that Systemize didn't — the scored capital profile and what raises it, the capital map, the
+route choice and the five route roadmaps, the investor tools — moved into Systemize, keeping its
+`FUND.` milestone ids so finished work carried across. Its slot went to **Run a company**.
+Migration `0033_fold_raise_into_systemize.sql` moved existing Raise projects onto Systemize.
 
 A project picks exactly one at creation. Paths connect rather than compete — most projects walk
 two or three of them over a year, and the tree is designed so work carries across.
@@ -24,7 +30,7 @@ Selected at creation, drives variant content throughout.
 
 - **Ship an MVP** — `app` · `saas` · `game` · `website` · `other`
 - **Systemize a business** — `restaurant` · `service` · `retail` · `other`
-- **Raise funding** — `startup_equity` · `local_community` · `loan_grant` · `other`
+- **Run a company** — `restaurant` · `service` · `retail` · `agency` · `software` · `other`
 
 `other` triggers two setup questions from Nova: what does "done" look like for this project,
 and what evidence proves a milestone is complete. Those answers select the verification tier.
@@ -517,13 +523,15 @@ Nova should say the three-day version is a first proof, not the finish line.
 **M4.5 — Gap list and fixes** · `nova-drafts` · 1h
 
 **M4.6 — What's next** · `user-decides` · 10m
-Deeper systemizing, or Raise funding to finance growth.
+Deeper systemizing, the funding routes to finance growth, or Run a company to keep it on track.
 
 ---
 
-# Part 4 — Raise funding
+# Funding routes — inside Systemize (formerly Part 4, Raise funding)
 
-**Two weeks everyone walks, then a route they choose.** Week 1 is who the person is to a funder —
+These phases now sit in Systemize, after its money weeks and before the roadmap week.
+
+**Two stretches everyone walks, then a route they choose.** Week 1 is who the person is to a funder —
 the capital profile and its fundability score. Week 2 is every way the money could come — the
 capital map — and the choice of route: **debt, seller financing, investors, a hybrid stack, or
 self-funding**. Only the chosen route's four phases appear, each a real roadmap from where the
@@ -608,19 +616,19 @@ or sale of securities.
 Authored once, referenced by ID. This is what makes path switching cheap — work carries over
 instead of being redone.
 
-- `SH-01` Positioning statement — Ship, Raise
-- `SH-02` Pricing model — Ship, Systemize, Raise
+- `SH-01` Positioning statement — Ship, Systemize
+- `SH-02` Pricing model — Ship, Systemize, Run
 - `SH-03` Core metric definition — all three
-- `SH-04` Financial baseline — Systemize, Raise
+- `SH-04` Financial baseline — Systemize, Run
 - `SH-05` Customer list — Ship, Systemize
-- `SH-06` Competitor landscape — Ship, Raise
+- `SH-06` Competitor landscape — Ship, Systemize
 
 ## Typical routes through the tree
 
-- **Idea → product → money:** Ship → Raise → Systemize
-- **Existing business, owner drowning:** Systemize → Raise
-- **Existing business, needs capital:** Raise → Systemize
-- **No money, big idea:** Raise (plan + presales) → Ship → Systemize
+- **Idea → product → money:** Ship → Systemize (funding routes) → Run
+- **Existing business, owner drowning:** Run → Systemize
+- **Existing business, needs capital:** Systemize (capital profile and a route) → Run
+- **Existing business, running well:** Run, for as long as it runs
 
 Nova proposes the next path at each path's final milestone, with the case based on what actually
 happened rather than a default.
@@ -642,3 +650,13 @@ diagnostic: if one path bleeds users, the path content is wrong, not the users.
 - Team task ownership on Ship — solo is drafted; multi-builder needs a claim/assign flow.
 - Credit-building thread needs its own small task set and a display that suits slow waiting.
 - `game` monetization timing — raise at M1.1 or split the milestone by model.
+
+---
+
+# Part 3b — Run a company
+
+**For a business that already exists.** Three weeks set it up to be run from here — the five
+numbers it watches and a first check-in; the team's recurring jobs, each with an owner and a
+cover; and the one thing costing it most — then hand over to the rhythm that doesn't end: a
+weekly check-in Nova answers, the recurring jobs on the board, and a monthly "what improved"
+report. Code: `shared/phase-trees/run.ts`, `shared/company-rhythm.ts`.

@@ -31,11 +31,11 @@ export const STARTER_METRICS: Record<ProjectGoal | "all", StarterMetric[]> = {
     { eventName: "repeat_customer", label: "Repeat customers", category: "retention", description: "A customer buys a second time" },
     { eventName: "referral_received", label: "Referrals", category: "referral", description: "A new customer came from an existing one" },
   ],
-  raise_funding: [
-    { eventName: "investor_intro", label: "Investor intros", category: "referral", description: "A warm intro to an investor" },
-    { eventName: "investor_meeting", label: "Meetings", category: "activation", description: "A first meeting with an investor" },
-    { eventName: "investor_follow_up", label: "Follow-ups", category: "retention", description: "An investor asks for a second meeting or data" },
-    { eventName: "commitment", label: "Commitments", category: "revenue", description: "A soft or signed commitment" },
+  run_company: [
+    { eventName: "weekly_revenue", label: "Weekly revenue", category: "revenue", description: "Money in this week, from the check-in" },
+    { eventName: "new_customer", label: "New customers", category: "activation", description: "A customer buys for the first time" },
+    { eventName: "repeat_customer", label: "Repeat customers", category: "retention", description: "A customer comes back" },
+    { eventName: "job_done_on_time", label: "Jobs on time", category: "retention", description: "A recurring job finished by its due date" },
   ],
   all: [
     { eventName: "user_signed_up", label: "Signups", category: "activation", description: "Someone creates an account" },

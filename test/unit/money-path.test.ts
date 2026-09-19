@@ -12,13 +12,21 @@ import { MONEY_POSITION_QUESTIONS, MONEY_TARGET_QUESTIONS, ROADMAP_LENGTH_QUESTI
 describe("the systemize path", () => {
   const phases = resolveTree("systemize_business", "restaurant");
 
-  it("opens with four money weeks, then the operating weeks", () => {
-    expect(phases.map((p) => p.id)).toEqual(["money-1", "money-2", "money-3", "money-4", "week-1", "week-2", "week-3", "week-4"]);
+  it("opens with money: the numbers, the capital profile and route, the roadmap — then the operating weeks", () => {
+    /*
+     * The funding path's profile and map sit between Systemize's third money
+     * week and its roadmap, so the roadmap is built on the route the person
+     * picked. The route's own four phases appear only once one is chosen.
+     */
+    expect(phases.map((p) => p.id)).toEqual([
+      "money-1", "money-2", "money-3", "capital-1", "capital-2", "money-4", "week-1", "week-2", "week-3", "week-4",
+    ]);
     const ids = mainLineMilestones(phases).map((m) => m.id);
-    expect(ids.slice(0, 16)).toEqual([
+    expect(ids.slice(0, 24)).toEqual([
       "SYS.F1.1", "SYS.F1.2", "SYS.F1.3", "SYS.F1.4", "SYS.F1.5", "SYS.F1.6",
       "SYS.F2.1", "SYS.F2.2", "SYS.F2.3", "SYS.F2.4",
       "SYS.F3.1", "SYS.F3.2", "SYS.F3.3",
+      "FUND.C1.1", "FUND.C1.2", "FUND.C1.3", "FUND.C1.4", "FUND.C1.5", "FUND.C1.6", "FUND.C2.1", "FUND.C2.2",
       "SYS.F4.1", "SYS.F4.2", "SYS.F4.3",
     ]);
   });

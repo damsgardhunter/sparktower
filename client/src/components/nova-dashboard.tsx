@@ -9,6 +9,7 @@ import { Block } from "@/components/section/block";
 import { useSections } from "@/lib/sections";
 import { novaHandoffTab, type NovaHandoff } from "@shared/nova-handoff";
 import type { ProjectGoal } from "@shared/goals";
+import { CompanyRhythm } from "@/components/company-rhythm";
 import { ArrowRight, CheckCircle2, Circle, ChevronDown, ChevronUp, Lightbulb } from "lucide-react";
 
 interface Recommendation {
@@ -38,7 +39,7 @@ const SEVERITY_DOT: Record<string, string> = {
 };
 
 /**
- * A section's dashboard — Ship, Systemize or Raise — on its own path.
+ * A section's dashboard — Ship, Systemize or Run — on its own path.
  *
  * It leads with the one next step, so there is never a question of where to
  * start; progress, the section's own block, the codebase link, activity and
@@ -63,6 +64,8 @@ export function NovaDashboard({
   return (
     <div className="max-w-3xl mx-auto" data-testid="nova-dashboard">
       <PathPanel projectId={projectId} goal={goal} onNavigate={onNavigate} onStartSection={onStartSection} isPrimary={isPrimary} />
+      {/* The Run path's setup hands over to a rhythm that doesn't end; it lives under the path, on the same screen. */}
+      {goal === "run_company" && <CompanyRhythm projectId={projectId} />}
       {isPrimary && <ProjectBriefing projectId={projectId} onNavigate={onNavigate} />}
     </div>
   );

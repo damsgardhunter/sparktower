@@ -31,7 +31,7 @@ import { resolveYear } from "@shared/simulation/resolve";
 import { ROLE_TITLES, repairCompany, type Role, type World } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
 import {
-  buildWorld, decisionsForYear, economyFor, absenceNote, tickDueAt, seasonOver,
+  buildWorld, decisionsForYear, economyFor, absenceNote, tickDueAt, seasonOver, DAY_MS,
 } from "@shared/simulation/season";
 import { advanceVenture } from "./simulation-routes";
 import { fileBotDecisions, fillWaitingLobbies } from "./simulation-bots";
@@ -70,6 +70,18 @@ async function withLock<T>(key: number, run: () => Promise<T>): Promise<T | null
     client.release();
   }
 }
+
+/**
+ * How long one simulated year lasts in this season.
+ *
+ * A day, unless a company running a private training season asked for
+ * minutes (`yearMinutes`, see sim_seasons in shared/schema.ts): a workshop
+ * that meets for an afternoon cannot wait a day between years. Public seasons
+ * never set it, so they are unchanged. Every place that schedules a year goes
+ * through this, so the two clocks cannot drift apart.
+ */
+export const yearMsOf = (season: { yearMinutes: number | null }): number =>
+  season.yearMinutes ? season.yearMinutes * 60_000 : DAY_MS;
 
 /**
  * Push every stalled lobby forward.
@@ -151,7 +163,7 @@ export async function startReadySeasons(): Promise<string[]> {
    * starts, whatever its status says. One with nothing running is left alone.
    */
   const candidates = await db
-    .select({ id: simSeasons.id, nicheId: simSeasons.nicheId, status: simSeasons.status })
+    .select({ id: simSeasons.id, nicheId: simSeasons.nicheId, status: simSeasons.status, yearMinutes: simSeasons.yearMinutes })
     .from(simSeasons)
     .where(inArray(simSeasons.status, ["forming", "abandoned"]))
     .limit(50);
@@ -211,7 +223,7 @@ export async function startReadySeasons(): Promise<string[]> {
     // world.
     const claimed = await db
       .update(simSeasons)
-      .set({ status: "running", year: 1, world, startsAt, nextTickAt: tickDueAt(startsAt, 1) })
+      .set({ status: "running", year: 1, world, startsAt, nextTickAt: tickDueAt(startsAt, 1, yearMsOf(season)) })
       .where(and(eq(simSeasons.id, season.id), eq(simSeasons.status, season.status)))
       .returning({ id: simSeasons.id });
 
@@ -586,7 +598,7 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
   }
 
   const finished = seasonOver(year + 1, season.totalYears);
-  const nextTickAt = season.startsAt && !finished ? tickDueAt(season.startsAt, year + 1) : null;
+  const nextTickAt = season.startsAt && !finished ? tickDueAt(season.startsAt, year + 1, yearMsOf(season)) : null;
 
   await db.transaction(async (tx) => {
     /*

@@ -38,6 +38,12 @@ import SimulationMarketPage from "@/pages/simulation-market";
 import SimulationStandingsPage from "@/pages/simulation-standings";
 import SimulationOffersPage from "@/pages/simulation-offers";
 import SimulationReportPage from "@/pages/simulation-report";
+import CompaniesPage from "@/pages/companies";
+import CompanyPage from "@/pages/company";
+import JoinSeasonPage from "@/pages/join-season";
+import TalentPage from "@/pages/talent";
+import ChallengesPage from "@/pages/challenges";
+import ChallengePage from "@/pages/challenge";
 import ResetPasswordPage from "@/pages/reset-password";
 import { MfaNotice } from "@/components/mfa";
 import { NOVA_GRADIENT, NOVA_GRADIENT_CSS } from "@shared/backing";
@@ -291,6 +297,13 @@ function Router() {
             <Route path="/simulation/:id/standings" component={SimulationStandingsPage} />
             <Route path="/simulation/:id/offers" component={SimulationOffersPage} />
             <Route path="/simulation/:id/report/:year?" component={SimulationReportPage} />
+            {/* Company accounts: training seasons, recruiting, challenges, scouting, running the business. */}
+            <Route path="/companies" component={CompaniesPage} />
+            <Route path="/companies/:id" component={CompanyPage} />
+            <Route path="/join-season/:code" component={JoinSeasonPage} />
+            <Route path="/talent" component={TalentPage} />
+            <Route path="/challenges" component={ChallengesPage} />
+            <Route path="/challenges/:id" component={ChallengePage} />
             <Route path="/simulation/:id" component={SimulationDeskPage} />
             {/* Ten Years From Now. Declared before /sprints/:id, which would
                 otherwise match "boards" and "game" as sprint ids. */}

@@ -19,6 +19,7 @@ import { markStepsShared, shareableSteps } from "./path-return";
 import { validateAsks } from "@shared/feedback-loop";
 import { closableComments, markClosed, markClosureAnswered, projectTeam } from "./feedback-loop-routes";
 import { notify, unnotify, notifyFollowersOfPost, notifyComment } from "./notifications";
+import { notifyScouts } from "./scouting-alerts";
 import { rankFeed, viewerTerms, emptyAffinity, type ViewerAffinity } from "@shared/feed-ranking";
 
 /** Comments on a post, each saying whether its author is on the post's project — only outsiders' count as feedback. */
@@ -107,6 +108,7 @@ export async function publishSystemPost(input: {
     });
     // A milestone landing or a launch is exactly the progress a follower came for.
     void notifyFollowersOfPost(post);
+    void notifyScouts(input.projectId, { key: `post:${post.id}`, text: input.content });
   } catch (err) {
     console.error("Failed to publish system feed post (non-fatal):", err);
   }
@@ -307,6 +309,7 @@ export function registerFeedRoutes(app: Express) {
       await markClosed(post, closes.ids);
       // The Explore loop's way back: people following this builder or project hear there's progress.
       void notifyFollowersOfPost(post);
+      if (post.projectId) void notifyScouts(post.projectId, { key: `post:${post.id}`, text: post.content });
       void notify({ recipients: ((post.mentions as FeedMention[]) ?? []).map((m) => m.userId), actorId: userId, kind: "mention", targetId: post.id, postId: post.id, projectId: post.projectId, excerpt: post.content });
 
       res.json(await storage.getFeedPost(post.id, userId));
