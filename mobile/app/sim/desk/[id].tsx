@@ -9,17 +9,18 @@ import { Callout, Pill, isSwitchedOff } from "../../../src/components/MoreKit";
 import { NoticeBanner, useNotice } from "../../../src/components/Sheet";
 import { SimSectionTitle } from "../../../src/components/sim/SimKit";
 import {
-  ChallengeCard, ChoiceField, CitiesField, CommitmentMeter, DeskBanner, DilutionNote,
-  DistressCard, EconomyStrip, EventCard, FiledRow, LastChallengeCard, NumberField,
-  PipelineNote, ReportCard, RivalRow, ScoreBar, Stat,
+  BufferCutWarning, BufferHoldNote, ChallengeCard, ChoiceField, CitiesField, CommitmentMeter,
+  DeskBanner, DilutionNote, DistressCard, EconomyStrip, EventCard, FiledRow, LastChallengeCard,
+  NumberField, PipelineNote, ReportCard, RivalRow, ScoreBar, Stat, TechDebtNote,
 } from "../../../src/components/sim/DeskKit";
 import { MarketResultCard } from "../../../src/components/sim/MarketKit";
 import { marketNotesRead } from "../../../src/components/sim/market";
 import { ROOM_POLL_MS, useDesk } from "../../../src/components/sim/useSim";
 import {
-  ROLE_ORDER, challengeProgress, challengeStanding, commitment, discretionarySpend,
-  draftMatches, exact, formatUntil, inTrouble, money, reachOf, reachRead, secondsUntil,
-  shareOwnedRead, tableStatus, validateDraft, validateRecovery, withYourDraft,
+  ROLE_ORDER, bufferCut, challengeProgress, challengeStanding, commitment, debtCostRead,
+  debtSeverity, discretionarySpend, draftMatches, exact, formatUntil, inTrouble, money, reachOf,
+  reachRead, seatShare, secondsUntil, shareOwnedRead, tableStatus, validateDraft, validateRecovery,
+  withYourDraft,
   type DeskDistress, type DeskRole, type FileDecisionResult, type RecoveryKind,
 } from "../../../src/components/sim/desk";
 
@@ -313,9 +314,22 @@ export default function Desk() {
    * would tell a table it had broken a ceiling it was nowhere near — see
    * discretionarySpend() in desk.ts, which mirrors the engine's two sums.
    */
-  const committedSpend = discretionarySpend(
-    withYourDraft(data.filed, data.yourRole, data.yourRole ? draft : null),
-  );
+  const tableDraft = withYourDraft(data.filed, data.yourRole, data.yourRole ? draft : null);
+  const committedSpend = discretionarySpend(tableDraft);
+
+  /*
+   * Whether the finance seat's ring-fence is about to cut this year, and by
+   * how much of yours.
+   *
+   * Its own sum rather than a reading of the meter, because the two measure
+   * against different money: the meter counts the unused credit line as
+   * available, which for everything except this it is, and the engine cuts
+   * against cash plus the drawdown alone. A table can sit comfortably clear on
+   * the meter and still lose a fifth of the year — see bufferCut() in desk.ts,
+   * which mirrors resolve()'s `allowed` term.
+   */
+  const cut = company ? bufferCut({ company, decisions: tableDraft }) : null;
+  const yourCutShare = seatShare(data.yourRole, data.yourRole ? draft : null);
 
   /*
    * Last year's market outcomes, as the report carries them.
@@ -479,7 +493,35 @@ export default function Desk() {
                 <Stat label="Landing next year" value={company.pipeline ? `+${company.pipeline}` : "Nothing"}
                   hint={company.pipeline ? "Quality already bought and waiting" : "No research in the pipeline"}
                   tone={company.pipeline ? colors.info : undefined} />
+                {/* What the product owes itself. A bare 62 means nothing to
+                    four of the five seats, so the figure carries what it is
+                    costing them right now — both halves computed by the engine
+                    and sent, because the shape of the drag is its to own. */}
+                {debtSeverity(company.techDebt) !== "none" ? (
+                  <Stat label="Technical debt" value={`${Math.round(company.techDebt ?? 0)}`}
+                    hint={debtSeverity(company.techDebt) === "noted"
+                      ? "Small enough to live with, for now"
+                      : `Product buys ${company.techDebtCost?.product ?? 0}% less · units cost ${company.techDebtCost?.unitCost ?? 0}% more`}
+                    tone={debtSeverity(company.techDebt) === "severe"
+                      ? colors.danger
+                      : debtSeverity(company.techDebt) === "costly" ? colors.warning : undefined} />
+                ) : null}
               </View>
+
+              {/* Said in full, not just as a stat's footnote, once it is
+                  costing enough that every other number on this card is
+                  smaller than it looks. Nobody but the technology seat can
+                  clear it, and everybody is paying for it. */}
+              {debtSeverity(company.techDebt) === "costly" || debtSeverity(company.techDebt) === "severe" ? (
+                <View style={{ flexDirection: "row", gap: 6, alignItems: "flex-start" }}>
+                  <Icon name="construct-outline" size={14}
+                    color={debtSeverity(company.techDebt) === "severe" ? colors.danger : colors.warning} />
+                  <Text testID="desk-tech-debt-line" style={{ flex: 1, color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+                    {debtCostRead(company.techDebtCost)} Only the technology seat can clear it, and clearing it changes
+                    nothing this year.
+                  </Text>
+                </View>
+              ) : null}
 
               {/* The ceiling on everything below it: a company can only be
                   chosen by people in a city it has opened, so a brilliant
@@ -596,6 +638,13 @@ export default function Desk() {
               form on purpose: it is the context every number below it changes. */}
           {live || preview ? (
             <CommitmentMeter commitment={live ?? preview!.commitment} live={!!live && dirty} titleOf={titleOf} />
+          ) : null}
+
+          {/* And what finance has decided the others cannot have. Directly
+              under the meter because it is the one thing the meter cannot say:
+              its `available` includes the credit line, and the cut does not. */}
+          {cut && !finished ? (
+            <BufferCutWarning cut={cut} yours={yourCutShare} isFinance={data.yourRole === "cfo"} />
           ) : null}
 
           {/* 5. The server's warnings, loud; its notes, as advice. */}
@@ -740,6 +789,16 @@ export default function Desk() {
                           spend={draft[field.id]}
                           innovationPace={data.innovationPace}
                         />
+                      ) : null}
+                      {/* The lever that buys nothing visible in the year you
+                          pull it, with what not pulling it is costing right
+                          now. Silent until the debt is worth the room. */}
+                      {field.id === "techDebtPaydown" ? (
+                        <TechDebtNote techDebt={company?.techDebt} cost={company?.techDebtCost} />
+                      ) : null}
+                      {/* And the lever that used to be advice and now binds. */}
+                      {field.id === "cashBuffer" ? (
+                        <BufferHoldNote buffer={draft[field.id]} />
                       ) : null}
                     </View>
                   );

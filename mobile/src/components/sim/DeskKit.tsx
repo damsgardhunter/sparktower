@@ -14,11 +14,12 @@ import { Pill, tintSoft } from "../MoreKit";
 import {
   OUTCOME_LABEL, OUTLOOK_LABEL, METRIC_PENDING, RAISE_VALUATION_FLOOR, bump, capUse,
   citiesOpening, clampToField,
-  commitmentLevel, covenantProgress, dilutionPreview, dissolvableSeats, exact, formatUntil,
+  commitmentLevel, covenantProgress, debtCostRead, debtSeverity, debtWorthSaying,
+  dilutionPreview, dissolvableSeats, exact, formatUntil,
   metricRead, money, openingCost, percent, qualityRead, reachOf, reachRead, researchLanding,
   resolveIsImminent, rewardRead, selectedCities, shareOwnedRead, shortfall, signed,
   targetGoalRead, toggleCity,
-  type Challenge, type ChallengeResult, type Commitment, type CompanyReport,
+  type BufferCut, type Challenge, type ChallengeResult, type Commitment, type CompanyReport,
   type Covenant, type DeskCity, type DeskDistress, type DeskEconomy, type DeskRival, type DeskRole,
   type DeskTableSeat, type LeverField, type RecoveryKind, type RecoveryOption, type ReportEvent,
   type TargetProgress, type TargetResult,
@@ -719,6 +720,168 @@ export function PipelineNote({ pipeline, spend, innovationPace }: {
   );
 }
 
+/**
+ * What the product owes itself, next to the lever that clears it.
+ *
+ * The paydown lever is the one decision on the desk that is guaranteed to
+ * disappoint the person who makes it: it costs real money and buys nothing
+ * visible in the year it is spent. Left unexplained it reads as strictly
+ * worse than ignoring it — which is exactly what it used to be, and is no
+ * longer. So the note says what carrying the debt is costing *now*, in the
+ * engine's own two percentages, and says the silence out loud rather than
+ * letting a CTO discover it in tomorrow's report and conclude the lever is
+ * broken.
+ *
+ * Shown from 40 up, which is where the web desk starts saying it; past 55 it
+ * reads as a warning, which is the engine's own threshold for writing the
+ * company a note about it.
+ */
+export function TechDebtNote({ techDebt, cost }: {
+  techDebt: number | undefined;
+  cost: { product: number; unitCost: number } | undefined;
+}) {
+  if (!debtWorthSaying(techDebt)) return null;
+  const severe = debtSeverity(techDebt) === "severe";
+  const color = severe ? colors.danger : colors.warning;
+
+  return (
+    <View
+      testID="desk-tech-debt-note"
+      style={{
+        gap: 4, padding: spacing.md, borderRadius: radius.sm,
+        backgroundColor: tintSoft(color, 0.08),
+        borderWidth: 1, borderColor: tintSoft(color, 0.3),
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+        <Icon name={severe ? "warning" : "construct-outline"} size={14} color={color} />
+        <Text style={{ flex: 1, color: colors.text, fontSize: font.xs, fontFamily: fontFamily.semibold }}>
+          {severe ? "The product has got hard to work in" : "The product owes itself"}
+        </Text>
+        <Text style={{ color, fontSize: font.base, fontFamily: fontFamily.bold, fontVariant: ["tabular-nums"] }}>
+          {Math.round(Number(techDebt) || 0)}
+        </Text>
+      </View>
+      <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+        {debtCostRead(cost)} Shipping features adds to it; reliability work doesn't.
+      </Text>
+      <Text style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>
+        Paying it down shows up in no number this year and in every number after it. Roughly a point for every 70,000.
+      </Text>
+    </View>
+  );
+}
+
+/**
+ * The finance seat's ring-fence, next to the lever that sets it.
+ *
+ * This lever used to be advice: the preview subtracted it and the tick spent
+ * the money anyway. It now binds, and the difference between "a number I moved
+ * on my own screen" and "the only authority this seat has over the other four"
+ * is worth a sentence at the point the number is set — including the part that
+ * makes it usable, which is that nobody else finds out unless they are told.
+ */
+export function BufferHoldNote({ buffer }: { buffer: any }) {
+  const held = Number(buffer) > 0 ? Number(buffer) : 0;
+  return (
+    <View
+      testID="desk-buffer-note"
+      style={{
+        gap: 4, padding: spacing.md, borderRadius: radius.sm,
+        backgroundColor: tintSoft(colors.novaEmerald, 0.08),
+        borderWidth: 1, borderColor: tintSoft(colors.novaEmerald, 0.3),
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+        <Icon name="lock-closed-outline" size={14} color={colors.novaEmerald} />
+        <Text style={{ flex: 1, color: colors.text, fontSize: font.xs, fontFamily: fontFamily.semibold }}>
+          {held > 0 ? "This holds" : "Nothing is held back"}
+        </Text>
+        {held > 0 ? (
+          <Text style={{ color: colors.novaEmerald, fontSize: font.base, fontFamily: fontFamily.bold, fontVariant: ["tabular-nums"] }}>
+            {money(held)}
+          </Text>
+        ) : null}
+      </View>
+      <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+        {held > 0
+          ? "It isn't a suggestion: if marketing, product and operations together ask for more than the cash left above this, every seat's spending is cut back by the same fraction when the year runs. Salaries are outside it — they're owed whatever anyone decided."
+          : "Set this and the others cannot spend past it: anything above the cash it leaves is cut back, everyone's by the same fraction. It's the only authority this seat has over the other four."}
+      </Text>
+      <Text style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>
+        Worth telling them before the tick rather than after it.
+      </Text>
+    </View>
+  );
+}
+
+/**
+ * The warning for the other four: your year is about to get smaller.
+ *
+ * The commitment meter is not enough on its own, and the reason is worth
+ * keeping: the meter counts the unused credit line as money the company has,
+ * because for every other purpose it is. The cut does not — the engine
+ * measures against cash plus what finance actually drew down — so a table can
+ * read comfortably clear on the meter and still lose a fifth of the year.
+ * That is precisely the gap this card exists to close.
+ *
+ * It names the seat's own number, not just the table's, because "spending is
+ * cut by 23%" is a mechanic and "your 1.2m becomes 920,000" is a decision.
+ */
+export function BufferCutWarning({ cut, yours, isFinance }: {
+  cut: BufferCut;
+  /** What this seat's own draft has in the sum that gets cut. */
+  yours: number;
+  /** The seat that set the buffer gets told it is working, not warned. */
+  isFinance: boolean;
+}) {
+  const lost = Math.round((1 - cut.allowed) * 100);
+  const color = isFinance ? colors.novaEmerald : colors.warning;
+
+  return (
+    <View
+      testID="desk-buffer-cut"
+      accessibilityLabel={`Finance is holding ${exact(cut.buffer)} back, cutting every seat's spending by ${lost}%`}
+      style={{
+        gap: 5, padding: spacing.lg, borderRadius: radius.md,
+        backgroundColor: tintSoft(color, 0.08),
+        borderWidth: 1, borderColor: tintSoft(color, 0.35),
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+        <Icon name={isFinance ? "lock-closed" : "cut"} size={16} color={color} />
+        <Text style={{ flex: 1, color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold }}>
+          {isFinance ? "Your buffer is biting" : "Finance is holding this year back"}
+        </Text>
+        <Text style={{ color, fontSize: font.lg, fontFamily: fontFamily.bold, fontVariant: ["tabular-nums"] }}>
+          −{lost}%
+        </Text>
+      </View>
+
+      <Text style={{ color: colors.textSecondary, fontSize: font.sm, lineHeight: 19, fontFamily: fontFamily.regular }}>
+        {money(cut.buffer)} is ring-fenced, which leaves {money(cut.spendable)} for marketing, product and operations
+        together. They've asked for {money(cut.wanted)}, so {money(cut.cut)} of it doesn't happen — and the cut falls on
+        every seat by the same fraction, not on whoever asked last.
+      </Text>
+
+      {yours > 0 ? (
+        <Text testID="desk-buffer-cut-yours" style={{ color: colors.text, fontSize: font.sm, lineHeight: 19, fontFamily: fontFamily.semibold }}>
+          Your {money(yours)} would become {money(yours * cut.allowed)}.
+        </Text>
+      ) : (
+        <Text style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
+          Nothing of yours is in that sum this year, but everyone else's is.
+        </Text>
+      )}
+
+      <Text style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>
+        Measured against cash and the drawdown only — the credit line the meter above counts is not spendable past the
+        buffer. Salaries and the cost of opening a city sit outside it.
+      </Text>
+    </View>
+  );
+}
+
 // --- Where the company stands --------------------------------------------
 
 /** One figure, with the word that says whether it's good news. */
@@ -969,6 +1132,7 @@ export function FiledRow({ seat, spend }: { seat: DeskTableSeat; spend?: number 
         <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
           <Text style={{ color: colors.text, fontSize: font.sm, fontFamily: fontFamily.semibold }}>{seat.name}</Text>
           {seat.isYou ? <Pill label="You" color={colors.primary} /> : null}
+          {seat.isBot ? <Pill label="Bot" color={colors.textTertiary} /> : null}
         </View>
         <Text style={{ color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.regular }}>
           {seat.title ?? seat.role?.toUpperCase() ?? "No seat"} · {seat.filed ? "filed" : "still deciding"}

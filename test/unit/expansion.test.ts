@@ -143,6 +143,20 @@ describe("taking investors' money", () => {
 });
 
 describe("research", () => {
+  it("is actually paid for", () => {
+    /*
+     * It was not. Research was charged by the commitment meter, counted
+     * against challenge caps and against a creditor's covenant, and never
+     * taken out of the company's cash — a team could put a million a year into
+     * next year's product for free, for fourteen years. Every screen said they
+     * were spending it and only the bank account disagreed.
+     */
+    const free = resolveYear(world(team()), [spend({ cto: { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0, researchSpend: 0 } })]);
+    const paid = resolveYear(world(team()), [spend({ cto: { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0, researchSpend: 1_000_000 } })]);
+    const costs = (r: any) => r.reports.find((x: any) => x.companyId === "t").costs;
+    expect(costs(paid) - costs(free)).toBeCloseTo(1_000_000, 0);
+  });
+
   it("does nothing the year you spend it", () => {
     const researching = resolveYear(world(team()), [spend({ cto: { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0, researchSpend: 800_000 } })]);
     const shipping = resolveYear(world(team()), [spend({ cto: { featureSpend: 800_000, reliabilitySpend: 0, techDebtPaydown: 0 } })]);

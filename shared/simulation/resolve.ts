@@ -316,7 +316,17 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
     const revenue = units * company.price;
     const variable = units * company.unitCost;
     const marketing = (d?.cmo?.brandSpend ?? 0) + (d?.cmo?.performanceSpend ?? 0) + (d?.cmo?.celebritySpend ?? 0);
-    const product = (d?.cto?.featureSpend ?? 0) + (d?.cto?.reliabilitySpend ?? 0) + (d?.cto?.techDebtPaydown ?? 0);
+    /*
+     * Research is in here, and was not.
+     *
+     * It was added as a lever, charged by the commitment meter, counted
+     * against a challenge's spending cap and against a creditor's covenant —
+     * and never taken out of the company's cash. A team could put a million a
+     * year into next year's product for free, for fourteen years. Every screen
+     * said they were spending it; only the bank account disagreed.
+     */
+    const product = (d?.cto?.featureSpend ?? 0) + (d?.cto?.reliabilitySpend ?? 0)
+      + (d?.cto?.techDebtPaydown ?? 0) + (d?.cto?.researchSpend ?? 0);
     const ops = (d?.coo?.supportSpend ?? 0) + (d?.coo?.efficiencySpend ?? 0);
     const fixed = company.kind === "player"
       ? fixedCosts(company, d?.coo?.headcount ?? 0, nextEconomy, reachOf(company, niche)) * focusEffects(d?.ceo?.focus).fixed
@@ -337,7 +347,18 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
      * are owed whatever anybody decided.
      */
     const buffer = Math.max(0, d?.cfo?.cashBuffer ?? 0);
-    const spendable = Math.max(0, company.cash + (d?.cfo?.borrow ?? 0) - buffer);
+    /*
+     * Measured against everything the table could actually spend, which is
+     * what the commitment meter has always shown: cash, plus anything drawn
+     * down, plus the credit still available, less what finance is holding
+     * back. Measuring the cut against cash alone meant a company could read as
+     * comfortably funded on every screen and still lose a third of its year —
+     * two numbers describing the same decision and disagreeing.
+     */
+    const spendable = Math.max(
+      0,
+      company.cash + (d?.cfo?.borrow ?? 0) + Math.max(0, company.creditLimit - company.debt) - buffer,
+    );
     const wanted = marketing + product + ops;
     const allowed = wanted > spendable && wanted > 0 ? spendable / wanted : 1;
     if (company.kind === "player" && allowed < 1) {

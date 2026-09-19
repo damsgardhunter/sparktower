@@ -10,12 +10,13 @@
  */
 import { describe, it, expect } from "vitest";
 import {
-  bump, capUse, challengeProgress, challengeStanding, citiesOpening, clampToField,
-  commitment, commitmentLevel, covenantProgress, dilutionPreview, discretionarySpend,
+  bump, bufferCut, capUse, challengeProgress, challengeStanding, citiesOpening, clampToField,
+  commitment, commitmentLevel, covenantProgress, debtCostRead, debtSeverity, debtWorthSaying,
+  dilutionPreview, discretionarySpend,
   dissolvableSeats, draftMatches, exact, fixedCosts, footprint, formatUntil, inTrouble,
   metricRead, money, openingCost, percent, reachOf, reachRead, resolveIsImminent,
   qualityRead, researchLanding, rewardRead, saturate, secondsUntil, selectedCities,
-  shareOwnedRead, shortfall, signed,
+  seatShare, shareOwnedRead, shortfall, signed,
   stepFor, tableStatus, targetGoalRead, targetProgress, toggleCity, validateDraft,
   validateRecovery, waitingOn, withYourDraft,
   type Challenge, type DeskCity, type DeskCompany, type DeskTableSeat, type FiledDecisions,
@@ -928,5 +929,146 @@ describe("what a year of research lands", () => {
     expect(qualityRead(12)).toBe("12");
     expect(qualityRead(7.44)).toBe("7.4");
     expect(qualityRead(Number.NaN)).toBe("—");
+  });
+});
+
+describe("what the product owes itself", () => {
+  it("says nothing at all about a company with no debt", () => {
+    expect(debtSeverity(0)).toBe("none");
+    expect(debtSeverity(undefined)).toBe("none");
+    expect(debtWorthSaying(0)).toBe(false);
+  });
+
+  it("holds the two thresholds the engine and the web already use", () => {
+    // 40 is where the web desk starts telling the technology seat; 55 is the
+    // line resolve() writes the company a note about. Both are exclusive.
+    expect(debtSeverity(1)).toBe("noted");
+    expect(debtSeverity(40)).toBe("noted");
+    expect(debtSeverity(41)).toBe("costly");
+    expect(debtSeverity(55)).toBe("costly");
+    expect(debtSeverity(56)).toBe("severe");
+    expect(debtSeverity(100)).toBe("severe");
+  });
+
+  it("tells the seat holding the lever from 40 up, and not before", () => {
+    expect(debtWorthSaying(40)).toBe(false);
+    expect(debtWorthSaying(41)).toBe(true);
+    expect(debtWorthSaying(70)).toBe(true);
+  });
+
+  it("reads the engine's two percentages as one sentence", () => {
+    // The server's own worked example: a company at 62 carries a 31% cut to
+    // what product spending buys and a 21% premium on every unit.
+    expect(debtCostRead({ product: 31, unitCost: 21 })).toBe(
+      "Product spending buys 31% less than it would, and every unit costs 21% more.",
+    );
+  });
+
+  it("drops a clause that rounded to nothing rather than printing 0%", () => {
+    expect(debtCostRead({ product: 0, unitCost: 4 })).toBe("Every unit costs 4% more to make and serve.");
+    expect(debtCostRead({ product: 6, unitCost: 0 })).toBe("Product spending buys 6% less than it would.");
+    expect(debtCostRead({ product: 0, unitCost: 0 })).toBe("It isn't costing anything you'd notice yet.");
+  });
+
+  it("survives a payload that never sent the costs", () => {
+    expect(debtCostRead(undefined)).toBe("It isn't costing anything you'd notice yet.");
+    expect(debtCostRead({ product: Number.NaN, unitCost: Number.NaN } as any)).toBe(
+      "It isn't costing anything you'd notice yet.",
+    );
+  });
+});
+
+describe("the cash buffer, now that it holds", () => {
+  const cash = { cash: 3_000_000 };
+  /** 2m of marketing, 0.5m of product, 0.5m of ops: 3m in the sum that gets cut. */
+  const spending: FiledDecisions = {
+    cmo: { brandSpend: 2_000_000 },
+    cto: { featureSpend: 500_000 },
+    coo: { supportSpend: 500_000 },
+  };
+
+  it("cuts nothing when the table stays inside what the buffer leaves", () => {
+    expect(bufferCut({ company: cash, decisions: { ...spending, cfo: { cashBuffer: 0 } } })).toBeNull();
+    // Exactly at the line is not over it.
+    expect(bufferCut({ company: { cash: 3_000_000 }, decisions: { ...spending, cfo: { cashBuffer: 0 } } })).toBeNull();
+  });
+
+  it("cuts every seat by the same fraction once the table is above it", () => {
+    const cut = bufferCut({ company: cash, decisions: { ...spending, cfo: { cashBuffer: 1_000_000 } } })!;
+    expect(cut.buffer).toBe(1_000_000);
+    expect(cut.spendable).toBe(2_000_000);
+    expect(cut.wanted).toBe(3_000_000);
+    expect(cut.allowed).toBeCloseTo(2 / 3, 10);
+    expect(cut.cut).toBeCloseTo(1_000_000, 6);
+  });
+
+  it("counts the drawdown as money that arrived, so borrowing can undo the cut", () => {
+    const decisions = { ...spending, cfo: { cashBuffer: 1_000_000, borrow: 1_000_000 } };
+    expect(bufferCut({ company: cash, decisions })).toBeNull();
+  });
+
+  /*
+   * The one place this deliberately disagrees with the meter above it. The
+   * commitment meter counts the unused credit line as available — for every
+   * other purpose it is — and the engine cuts against cash plus the drawdown
+   * alone, so a table can read clear and still lose a third of the year.
+   */
+  it("ignores the credit line the commitment meter counts", () => {
+    const company = { cash: 3_000_000, debt: 0, creditLimit: 10_000_000, seats: [] as any };
+    const decisions = { ...spending, cfo: { cashBuffer: 1_000_000 } };
+    const meter = commitment({ company, decisions, costIndex: 1 });
+    expect(meter.ratio).toBeLessThan(1); // the meter is comfortable
+    expect(bufferCut({ company, decisions })).not.toBeNull(); // and the year is still cut
+  });
+
+  it("leaves out everything the engine charges outside the cut", () => {
+    // Research, a repayment and the fee for opening a city are all real money
+    // and none of them are in the sum the buffer cuts back.
+    const decisions: FiledDecisions = {
+      cto: { researchSpend: 5_000_000 },
+      cfo: { cashBuffer: 2_900_000, repay: 5_000_000 },
+    };
+    expect(bufferCut({ company: cash, decisions })).toBeNull();
+  });
+
+  it("cuts nothing when nobody is spending, however large the buffer", () => {
+    expect(bufferCut({ company: cash, decisions: { cfo: { cashBuffer: 9_000_000 } } })).toBeNull();
+  });
+
+  it("takes a buffer bigger than the cash as holding all of it", () => {
+    const cut = bufferCut({ company: cash, decisions: { ...spending, cfo: { cashBuffer: 9_000_000 } } })!;
+    expect(cut.spendable).toBe(0);
+    expect(cut.allowed).toBe(0);
+    expect(cut.cut).toBe(3_000_000);
+  });
+
+  it("reads a buffer typed as a string, like every other field on the form", () => {
+    const cut = bufferCut({ company: cash, decisions: { ...spending, cfo: { cashBuffer: "1000000" } } })!;
+    expect(cut.allowed).toBeCloseTo(2 / 3, 10);
+  });
+
+  it("ignores a negative buffer rather than handing the table extra money", () => {
+    expect(bufferCut({ company: cash, decisions: { ...spending, cfo: { cashBuffer: -1_000_000 } } })).toBeNull();
+  });
+});
+
+describe("what one seat has in the sum that gets cut", () => {
+  it("adds only that seat's cuttable spending", () => {
+    expect(seatShare("cmo", { brandSpend: 1_000_000, performanceSpend: 200_000, price: 40 })).toBe(1_200_000);
+    expect(seatShare("cto", { featureSpend: 300_000, reliabilitySpend: 100_000, techDebtPaydown: 50_000 })).toBe(450_000);
+    expect(seatShare("coo", { supportSpend: 100_000, efficiencySpend: 50_000, headcount: 20 })).toBe(150_000);
+  });
+
+  it("leaves out the money the cut does not touch", () => {
+    // Research buys nothing this year and is charged outside the cut; a
+    // repayment is money leaving for a different reason; headcount is fixed.
+    expect(seatShare("cto", { researchSpend: 2_000_000 })).toBe(0);
+    expect(seatShare("cfo", { repay: 1_000_000, borrow: 500_000, cashBuffer: 2_000_000 })).toBe(0);
+    expect(seatShare("ceo", { focus: "growth" })).toBe(0);
+  });
+
+  it("is nothing for a seat with no role and nothing typed", () => {
+    expect(seatShare(null, { brandSpend: 1_000_000 })).toBe(0);
+    expect(seatShare("cmo", null)).toBe(0);
   });
 });

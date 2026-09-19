@@ -247,3 +247,102 @@ test("a sealed bid is placed, shown back, and tells you nothing about anyone els
 
   for (const person of [...people, rival]) await person.context.close();
 });
+
+test("a company in trouble is told what it can do, and only the chief executive can do it", async ({ browser }) => {
+  /*
+   * The recovery arc, which had no browser coverage at all.
+   *
+   * The brief was explicit that running out of money must not end a season,
+   * and the whole design rests on a team in trouble being shown a way out with
+   * its cost stated before they choose it. Every one of these moves is a
+   * genuine trade — sell what makes you good at things, cap your own spending,
+   * dissolve a colleague's seat, take money at a punishing price — and a
+   * screen that offered them without their costs would be a rescue that makes
+   * the careful teams' caution pointless.
+   *
+   * The seat rule matters as much: dissolving somebody's chair or selling a
+   * third of the company is not something one of five people should be able to
+   * do to the other four on their own.
+   */
+  test.setTimeout(300_000);
+
+  const names = ["Cass", "Dov", "Elin", "Fay", "Gus"];
+  const people = [];
+  for (const [i, name] of names.entries()) {
+    people.push(await personIn(browser, `203.0.118.${100 + i}`, name));
+  }
+
+  /*
+   * A market of this test's own.
+   *
+   * A season does not start until every room in it has left the lobby, so one
+   * person sitting alone in a market holds up everybody else's season for the
+   * fifteen minutes it takes their room to expire. The sealed-bid test above
+   * leaves exactly such a joiner behind, and it was blocking this one.
+   *
+   * Worth knowing beyond this file: at launch, when a market has few people in
+   * it, that same wait is real for players too.
+   */
+  const OWN_NICHE = "podcasts";
+
+  let ventureId = "";
+  for (const person of people) {
+    ventureId = (await (await person.api.post("/api/sim/join", { data: { nicheId: OWN_NICHE } })).json()).ventureId;
+  }
+  for (const [i, person] of people.entries()) {
+    await person.api.post(`/api/sim/ventures/${ventureId}/claim`, { data: { role: ROLES[i] } });
+  }
+  await people[0].api.post(`/api/sim/ventures/${ventureId}/name`, { data: { name: "Last Orders", product: "A show" } });
+  await waitForYearOne(people[0].api, ventureId);
+
+  /*
+   * Spend the company into trouble through the desk rather than by editing the
+   * world, so this exercises the path a team actually takes to get there.
+   */
+  const desk = await (await people[0].api.get(`/api/sim/ventures/${ventureId}/desk`)).json();
+  const reach = Math.round(desk.company.cash + desk.company.creditLimit);
+  await people[1].api.post(`/api/sim/ventures/${ventureId}/decisions`, {
+    data: { decision: { price: 5, brandSpend: reach, performanceSpend: 0, celebritySpend: 0, targetCities: [] } },
+  });
+
+  // Let the year land so the damage is real.
+  const deadline = Date.now() + 150_000;
+  let inTrouble = false;
+  while (Date.now() < deadline && !inTrouble) {
+    const now = await (await people[0].api.get(`/api/sim/ventures/${ventureId}/desk`)).json();
+    inTrouble = now.distress?.level && now.distress.level !== "healthy";
+    if (!inTrouble) await new Promise((r) => setTimeout(r, 4_000));
+  }
+
+  if (!inTrouble) {
+    /*
+     * A year is a real day, so a season may not have ticked inside this test's
+     * lifetime. Skipping beats a false pass, and beats an assertion that only
+     * holds when the clock happens to cooperate.
+     */
+    test.skip(true, "the year had not resolved yet — the distress path needs a tick to have run");
+  }
+
+  // Everyone sees the position; the note about it is not the chief executive's alone.
+  const cmo = await people[1].context.newPage();
+  await cmo.goto(`/simulation/${ventureId}`);
+  await cmo.getByTestId("btn-skip-onboarding").click({ timeout: 5_000 }).catch(() => {});
+  await expect(cmo.getByTestId("text-distress")).toBeVisible({ timeout: 30_000 });
+  await expect(cmo.getByText(/chief executive's call/i).first()).toBeVisible();
+  await expect(cmo.locator('[data-testid^="button-recovery-"]'), "no buttons for a seat that cannot act").toHaveCount(0);
+
+  // The chief executive gets the moves, each with what it costs said out loud.
+  const ceo = await people[0].context.newPage();
+  await ceo.goto(`/simulation/${ventureId}`);
+  await expect(ceo.getByTestId("text-distress")).toBeVisible({ timeout: 30_000 });
+  const options = ceo.locator('[data-testid^="button-recovery-"]');
+  await expect(options.first()).toBeVisible();
+
+  // Committing to one shows it as committed, and it can be taken back.
+  await options.first().click();
+  await expect(ceo.getByTestId("button-clear-recovery")).toBeVisible({ timeout: 20_000 });
+  await ceo.getByTestId("button-clear-recovery").click();
+  await expect(ceo.locator('[data-testid^="button-recovery-"]').first()).toBeVisible({ timeout: 20_000 });
+
+  for (const person of people) await person.context.close();
+});

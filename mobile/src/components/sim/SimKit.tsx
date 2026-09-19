@@ -86,6 +86,7 @@ export function SeatRow({ seat, roleTitle }: { seat: SimSeat; roleTitle: string 
         <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <Text style={{ color: colors.text, fontSize: font.base, fontFamily: fontFamily.semibold }}>{seat.name}</Text>
           {seat.isYou ? <Pill label="You" color={colors.primary} /> : null}
+          {seat.isBot ? <Pill label="Bot" color={colors.textTertiary} /> : null}
         </View>
         <Text
           style={{

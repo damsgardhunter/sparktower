@@ -85,6 +85,15 @@ export interface SimSeat {
   role: string | null;
   /** True when the clock dealt this seat out rather than the player choosing it. */
   assigned: boolean;
+  /**
+   * A seat the product is playing, not a person.
+   *
+   * Shown on every surface that lists one. A bot carries an ordinary name so
+   * the room reads like a room, which is exactly why leaving the label off
+   * would be the product telling somebody something untrue about who they are
+   * playing with.
+   */
+  isBot?: boolean;
   isYou: boolean;
 }
 

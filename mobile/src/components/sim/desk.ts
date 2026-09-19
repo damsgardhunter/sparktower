@@ -106,6 +106,26 @@ export interface DeskCompany {
   pipeline?: number;
   /** The segment the company has declared itself for, or null for everybody. */
   positioning?: string | null;
+  /**
+   * What the product owes itself, 0–100. Mirrors `techDebt` in
+   * shared/simulation/types.ts.
+   *
+   * Shipping features runs it up; reliability work does not. Carrying it is
+   * never dramatic in one year, which is exactly why a table lets it run.
+   */
+  techDebt?: number;
+  /**
+   * What carrying it costs right now, as whole percentages, worked out by the
+   * engine before it is sent. Mirrors the `techDebtCost` block the route
+   * builds from debtDrag() — server/simulation-desk-routes.ts.
+   *
+   * Sent rather than derived, and used here rather than recomputed: the shape
+   * of the drag is the engine's to own, and a phone that reimplemented it
+   * would eventually tell five people a number the tick disagrees with.
+   * `product` is how much *less* product spending buys; `unitCost` is how much
+   * *more* each unit costs.
+   */
+  techDebtCost?: { product: number; unitCost: number };
 }
 
 /**
@@ -153,6 +173,8 @@ export interface DeskTableSeat {
   role: DeskRole | null;
   title: string | null;
   filed: boolean;
+  /** A seat the product is playing. Labelled here as it is in the lobby. */
+  isBot?: boolean;
   isYou: boolean;
 }
 
@@ -491,6 +513,130 @@ export const discretionarySpend = (decisions: FiledDecisions): number => (
   num(decisions.cto?.featureSpend) + num(decisions.cto?.reliabilitySpend) + num(decisions.cto?.techDebtPaydown) +
   num(decisions.coo?.supportSpend) + num(decisions.coo?.efficiencySpend)
 );
+
+// --- What the product owes itself ----------------------------------------
+
+/**
+ * How loudly to say a company's technical debt out loud.
+ *
+ * Four states rather than a number, because 62 means nothing to four of the
+ * five people at the table and "everything the product seat spends buys
+ * noticeably less" means something to all of them.
+ *
+ * The two thresholds are borrowed rather than invented. 40 is where the web
+ * desk starts telling the technology seat, and it is roughly where the drag
+ * stops being a rounding error (product work buying a fifth less). 55 is the
+ * engine's own line: crossing it is the year resolve() writes the company a
+ * note about it — shared/simulation/resolve.ts — so a phone that called 60
+ * "fine" would be contradicting the report on the same screen.
+ */
+export type DebtSeverity = "none" | "noted" | "costly" | "severe";
+
+export const DEBT_COSTLY = 40;
+export const DEBT_SEVERE = 55;
+
+export function debtSeverity(techDebt: number | undefined): DebtSeverity {
+  const held = num(techDebt);
+  if (held <= 0) return "none";
+  if (held > DEBT_SEVERE) return "severe";
+  if (held > DEBT_COSTLY) return "costly";
+  return "noted";
+}
+
+/**
+ * Whether the seat holding the paydown lever should be told, next to it.
+ *
+ * Same line the web draws, so a table split across a laptop and two phones is
+ * not arguing about whether the problem exists.
+ */
+export const debtWorthSaying = (techDebt: number | undefined): boolean => {
+  const level = debtSeverity(techDebt);
+  return level === "costly" || level === "severe";
+};
+
+/**
+ * The two percentages as one sentence, in the terms a marketing seat can
+ * argue with.
+ *
+ * Both numbers come down from the server already whole — see `techDebtCost` on
+ * DeskCompany — so this only decides which of them is worth a clause. A debt
+ * small enough to round both to zero gets a sentence that says so rather than
+ * "buys 0% less", which reads as a bug.
+ */
+export function debtCostRead(cost: DeskCompany["techDebtCost"] | undefined): string {
+  const product = Math.max(0, Math.round(num(cost?.product)));
+  const unitCost = Math.max(0, Math.round(num(cost?.unitCost)));
+  if (product <= 0 && unitCost <= 0) return "It isn't costing anything you'd notice yet.";
+  if (product <= 0) return `Every unit costs ${unitCost}% more to make and serve.`;
+  if (unitCost <= 0) return `Product spending buys ${product}% less than it would.`;
+  return `Product spending buys ${product}% less than it would, and every unit costs ${unitCost}% more.`;
+}
+
+// --- The finance seat's ring-fence ---------------------------------------
+
+/**
+ * What the buffer would do to this table's year, if the year ran now.
+ *
+ * `cashBuffer` used to be read by the commitment preview and by nothing else:
+ * a finance seat could ring-fence the company's last two million, watch the
+ * number move on their own screen, and watch it be spent anyway. It now binds
+ * — spending above it is cut back, every seat's by the same fraction — so it
+ * is worth the phone saying whose year is about to get smaller.
+ *
+ * Mirrors the `allowed` term in resolve() (shared/simulation/resolve.ts) term
+ * for term, and note the two places it deliberately disagrees with the
+ * commitment meter directly above it:
+ *
+ * - **The credit line is not in it.** The meter counts unused borrowing as
+ *   money the company has, because it is. The engine cuts against cash plus
+ *   what the finance seat actually drew down, and nothing else — so a table
+ *   can read "clear" on the meter and still be cut.
+ * - **What gets cut is the same sum a covenant cap counts**: marketing,
+ *   product and ops. Not the fee for opening a city, not research, not a
+ *   repayment, and not the fixed bill — salaries are owed whatever anybody
+ *   decided.
+ *
+ * Returns null when nothing would be cut, which is the ordinary case.
+ */
+export interface BufferCut {
+  /** What finance is holding back. */
+  buffer: number;
+  /** What the table has asked to spend out of the money the cut applies to. */
+  wanted: number;
+  /** What is left for them to spend after the buffer. */
+  spendable: number;
+  /** The fraction of every seat's spend that survives, 0–1. */
+  allowed: number;
+  /** How much of the table's year disappears. */
+  cut: number;
+}
+
+export function bufferCut(input: {
+  company: Pick<DeskCompany, "cash">;
+  decisions: FiledDecisions;
+}): BufferCut | null {
+  const { company, decisions } = input;
+  const buffer = Math.max(0, num(decisions.cfo?.cashBuffer));
+  const spendable = Math.max(0, num(company.cash) + num(decisions.cfo?.borrow) - buffer);
+  const wanted = discretionarySpend(decisions);
+  if (wanted <= 0 || wanted <= spendable) return null;
+  const allowed = spendable / wanted;
+  return { buffer, wanted, spendable, allowed, cut: wanted - wanted * allowed };
+}
+
+/**
+ * What one seat's own draft becomes after the cut.
+ *
+ * The table's total is the mechanic; this is the number the person reading it
+ * is actually deciding about. Zero for a seat that spends nothing the cut
+ * touches — the chief executive, and a finance seat whose only outgoing is a
+ * repayment — which is why it is worth showing "nothing of yours" rather than
+ * hiding the warning from them.
+ */
+export function seatShare(role: DeskRole | null | undefined, draft: Record<string, any> | null | undefined): number {
+  if (!role || !draft) return 0;
+  return discretionarySpend({ [role]: draft } as FiledDecisions);
+}
 
 // --- The clock -----------------------------------------------------------
 
