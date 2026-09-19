@@ -44,8 +44,8 @@ async function makeReviewer(userId: string) {
 }
 
 test("a reviewer acts on a report, sees what it did, and records the daily review", async ({ browser }) => {
-  const author = await personIn(browser, "203.0.113.51", "Author");
-  const reporter = await personIn(browser, "203.0.113.52", "Reporter");
+  const author = await personIn(browser, "203.0.113.190", "Author");
+  const reporter = await personIn(browser, "203.0.113.191", "Reporter");
   const reviewer = await personIn(browser, "203.0.113.53", "Reviewer");
   await makeReviewer(reviewer.id);
   // Review tools need 2FA on the session.
