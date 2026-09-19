@@ -21,6 +21,8 @@ import { consumeLocalUpload, LOCAL_UPLOAD_MAX_BYTES } from "./local-uploads";
  */
 /** Said once per process, not once per broken image. */
 let warnedNoBucket = false;
+/** Said once, like the bucket warning: one line per deploy, not one per image. */
+let warnedNoCredentials = false;
 
 export function registerObjectStorageRoutes(app: Express): void {
   const objectStorageService = new ObjectStorageService();
@@ -182,6 +184,30 @@ export function registerObjectStorageRoutes(app: Express): void {
             "[objects] No object storage configured, so every image in the product will fail to load — " +
             "not just new uploads. Set PRIVATE_OBJECT_DIR and GCS_SERVICE_ACCOUNT_KEY (docs/ops/deploy.md). " +
             "Check with: npm run check:env",
+          );
+        }
+        return res.status(503).json({ error: "Image storage isn't configured on this deployment.", code: "storage_unconfigured" });
+      }
+      /*
+       * The other way storage fails, and the one that was unreadable.
+       *
+       * PRIVATE_OBJECT_DIR set, credentials not — or set to something the
+       * bucket won't accept. `file.exists()` throws out of the Google client
+       * with "Could not load the default credentials", and this handler turned
+       * every one of them into "Failed to serve object", which names neither
+       * the cause nor the thing to change. Meanwhile every picture in the
+       * product is a 500: avatars, covers, post media, anything Nova drew. On
+       * a phone that is not a broken-image icon, it is blank space, so the
+       * first report is "the AI images don't work" and the real answer is that
+       * no image works and the deployment has no key.
+       */
+      if (/credential|invalid_grant|unauthorized|permission|forbidden|ENOTFOUND|could not load/i.test(message)) {
+        if (!warnedNoCredentials) {
+          warnedNoCredentials = true;
+          console.error(
+            "[objects] Object storage rejected this deployment's credentials, so every image in the product " +
+            `will fail to load — not just new uploads. Set GCS_SERVICE_ACCOUNT_KEY (and check the bucket in ` +
+            `PRIVATE_OBJECT_DIR is reachable by it). Underlying error: ${message.slice(0, 200)}`,
           );
         }
         return res.status(503).json({ error: "Image storage isn't configured on this deployment.", code: "storage_unconfigured" });

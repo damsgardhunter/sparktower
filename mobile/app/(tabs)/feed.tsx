@@ -12,7 +12,7 @@ import { PostCard } from "../../src/components/PostCard";
 import { VerifyEmailNotice } from "../../src/components/VerifyEmailNotice";
 import { POST_TYPES, type FeedPage, type FeedPost, type PostType } from "../../src/components/feedModel";
 import { Box, GlossyButton, primaryTint } from "../../src/components/feed/Box";
-import { DiscoverNewsLink, FeedbackUsedCard } from "../../src/components/feed/HomeRail";
+import { FeedbackUsedCard } from "../../src/components/feed/HomeRail";
 import { ContinuePathCard, NEXT_STEPS_KEY } from "../../src/components/feed/ContinuePathCard";
 import { ComposerCard } from "../../src/components/feed/ComposerCard";
 import { RAIL_SLOTS, RailModule, type RailModuleKind } from "../../src/components/feed/RailModules";
@@ -155,7 +155,9 @@ export default function Feed() {
         */}
       <VerifyEmailNotice onNotice={show} />
       <GlossyButton label="Create Project" icon="add" onPress={() => router.push("/project/new" as any)} testID="button-create-project-home" />
-      <DiscoverNewsLink />
+      {/* The "new since you last looked" line is gone from here as well as from
+          Discover. It was the same nag in two places, and what it counted was
+          the app's own bookkeeping rather than anything a person asked for. */}
       <ContinuePathCard onNotice={show} />
       <FeedbackUsedCard />
       {/* "Your projects" directly under "Continue your path" was the same list

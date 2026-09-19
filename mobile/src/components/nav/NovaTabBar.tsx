@@ -27,7 +27,16 @@ type BottomTabBarProps = Parameters<NonNullable<ComponentProps<typeof Tabs>["tab
 const TABS: { name: string; label: string; icon: IconName; iconActive: IconName; testID?: string }[] = [
   { name: "feed", label: "Home", icon: "home-outline", iconActive: "home" },
   { name: "discover", label: "Discover", icon: "compass-outline", iconActive: "compass" },
-  { name: "notifications", label: "Alerts", icon: "notifications-outline", iconActive: "notifications" },
+  /*
+   * Sprints holds the slot Alerts used to.
+   *
+   * Alerts is a place you go when something has happened; it does not need a
+   * permanent quarter of the bar, and the bell in the header says when there
+   * is something there. Sprints and the simulation are the opposite — a thing
+   * you come back to on purpose, and until now they were two taps deep behind
+   * the dome.
+   */
+  { name: "sprints", label: "Sprints", icon: "rocket-outline", iconActive: "rocket" },
   // Named Chat on the bar and Messages everywhere else: "Chat" is a third the
   // width at a tenth-of-a-point font, which is what makes five labels fit.
   { name: "messages", label: "Chat", icon: "chatbubble-ellipses-outline", iconActive: "chatbubble-ellipses" },
@@ -108,11 +117,6 @@ function Badge({ value }: { value?: number | string }) {
 export function NovaTabBar({ state, navigation }: BottomTabBarProps) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { data: notes } = useQuery({
-    queryKey: ["notification-count"],
-    queryFn: () => api<{ count: number }>("/api/notifications/unread-count"),
-    refetchInterval: 30_000,
-  });
   const { data: discoverNew } = useQuery({
     queryKey: DISCOVER_NEW_KEY,
     queryFn: () => api<{ count: number; more: boolean }>("/api/discover/new-count"),
@@ -130,7 +134,6 @@ export function NovaTabBar({ state, navigation }: BottomTabBarProps) {
   });
   const cap = (n?: number) => (n ? (n > 99 ? "99+" : n) : undefined);
   const badges: Record<string, number | string | undefined> = {
-    notifications: cap(notes?.count),
     messages: cap(unread?.count),
     discover: discoverNew?.count ? `${Math.min(discoverNew.count, 99)}${discoverNew.more || discoverNew.count > 99 ? "+" : ""}` : undefined,
   };

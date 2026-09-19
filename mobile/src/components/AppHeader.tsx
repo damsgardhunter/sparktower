@@ -7,7 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api, fetchMe } from "../api/client";
 import { colors, font, fontFamily, novaGradient, spacing } from "../theme";
-import { Avatar, assetUri } from "./ui";
+import { Avatar, Icon, assetUri } from "./ui";
 import { useTabBarVisibility } from "./tab-bar-visibility";
 
 /**
@@ -45,6 +45,17 @@ export function AppHeader() {
     queryFn: () => api<{ profile: Profile; stats: Stats }>("/api/profile/summary"),
     staleTime: 60_000,
   });
+
+  /*
+   * The same key the bar used when the count lived there, so moving the badge
+   * moved the query with it rather than adding a second poll for one number.
+   */
+  const { data: notes } = useQuery({
+    queryKey: ["notification-count"],
+    queryFn: () => api<{ count: number }>("/api/notifications/unread-count"),
+    refetchInterval: 30_000,
+  });
+  const notifications = notes?.count ?? 0;
 
   const profile = summary?.profile ?? me?.profile;
   const name = profile?.displayName || me?.user?.firstName || "You";
@@ -124,12 +135,62 @@ export function AppHeader() {
     </Pressable>
   );
 
+  /*
+   * The bell sits on the cover, not on the bar.
+   *
+   * Notifications had a permanent quarter of the bottom bar — a place you go
+   * when something has happened, holding a slot next to the two you use every
+   * day. It is a status, so it lives where the rest of your status does, and
+   * the slot went to Sprints.
+   *
+   * A sibling of the profile press rather than a child of it: a button inside
+   * a button is a coin toss about which one a thumb on the boundary gets.
+   */
+  const withBell = (
+    <View>
+      {body}
+      <Pressable
+        onPress={() => router.push("/(tabs)/notifications")}
+        accessibilityRole="button"
+        accessibilityLabel={notifications ? `Notifications, ${notifications} unread` : "Notifications"}
+        hitSlop={10}
+        testID="header-notifications"
+        style={({ pressed }) => [
+          {
+            position: "absolute",
+            right: spacing.md,
+            top: insets.top + spacing.sm,
+            width: 38, height: 38, borderRadius: 19,
+            alignItems: "center", justifyContent: "center",
+            // Legible on a photograph, whatever the photograph is.
+            backgroundColor: "rgba(0,0,0,0.38)",
+          },
+          pressed && { opacity: 0.7 },
+        ]}
+      >
+        <Icon name="notifications-outline" size={19} color="#fff" />
+        {notifications > 0 && (
+          <View style={{
+            position: "absolute", top: 2, right: 2, minWidth: 17, height: 17, borderRadius: 9,
+            paddingHorizontal: 4, backgroundColor: colors.danger,
+            alignItems: "center", justifyContent: "center",
+            borderWidth: 2, borderColor: "rgba(0,0,0,0.38)",
+          }}>
+            <Text style={{ color: "#fff", fontSize: 10, fontFamily: fontFamily.bold }}>
+              {notifications > 99 ? "99+" : notifications}
+            </Text>
+          </View>
+        )}
+      </Pressable>
+    </View>
+  );
+
   // Outside the tabs there's no scroll driving it: render it fixed.
-  if (!translateY) return <View>{body}</View>;
+  if (!translateY) return withBell;
 
   return (
     <Animated.View onLayout={(e) => setHeight(e.nativeEvent.layout.height)} style={{ transform: [{ translateY }] }}>
-      {body}
+      {withBell}
     </Animated.View>
   );
 }

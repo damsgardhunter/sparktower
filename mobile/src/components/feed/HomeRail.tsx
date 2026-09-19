@@ -11,7 +11,6 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { api } from "../../api/client";
-import { DISCOVER_NEW_KEY } from "../../explore";
 import { colors, font, fontFamily, spacing } from "../../theme";
 import { Avatar, assetUri } from "../ui";
 import { Box, BoxHeader, ProjectTile, primaryTint } from "./Box";
@@ -97,41 +96,6 @@ export function ProfileCard() {
           : stat("Projects", stats.projects, () => router.push("/(tabs)/projects"), "rail-link-projects")}
       </View>
     </Box>
-  );
-}
-
-// --- New since you last looked --------------------------------------------
-
-interface DiscoverNews {
-  count: number;
-  more: boolean;
-  updates: { kind: "builder" | "project"; id: string; name: string; newPosts: number }[];
-}
-
-/** discover-news.tsx: who you've looked at has posted since your last visit to Discover. */
-export function DiscoverNewsLink() {
-  const router = useRouter();
-  const { data } = useQuery({
-    queryKey: DISCOVER_NEW_KEY,
-    queryFn: () => api<DiscoverNews>("/api/discover/new-count"),
-    refetchInterval: 60_000,
-  });
-  if (!data?.count) return null;
-  const names = data.updates.slice(0, 2).map((u) => u.name);
-  const others = data.updates.length - names.length;
-  return (
-    <Pressable
-      onPress={() => router.push("/(tabs)/discover")}
-      style={({ pressed }) => [s.tinted, pressed && { backgroundColor: primaryTint(0.1) }]}
-      testID="link-discover-news"
-    >
-      <Ionicons name="compass-outline" size={17} color={colors.primary} />
-      <Text style={s.tintedText} numberOfLines={2}>
-        <Text style={{ fontFamily: fontFamily.medium }}>{data.count}{data.more ? "+" : ""} new since you last looked</Text>
-        <Text style={{ color: colors.textTertiary }}> · from {names.join(" and ")}{others > 0 ? ` and ${others} more` : ""}</Text>
-      </Text>
-      <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
-    </Pressable>
   );
 }
 

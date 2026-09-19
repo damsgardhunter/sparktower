@@ -8,6 +8,7 @@ import { colors, font, fontFamily, spacing } from "../../src/theme";
 import { Icon, Progress, TAB_BAR_SPACE } from "../../src/components/ui";
 import { GlossyButton } from "../../src/components/feed/Box";
 import { Group, MenuRow, Pill, useSurfaces } from "../../src/components/MoreKit";
+import { ContinuePathCard } from "../../src/components/feed/ContinuePathCard";
 // The header floats over the scene, so this screen leaves its room in the scroll content.
 import { useHeaderSpace } from "../../src/components/AppHeader";
 
@@ -57,15 +58,23 @@ export default function More() {
           floating bar sits over the scene, so the list ends above it. */}
       <ScrollView style={{ flex: 1, backgroundColor: colors.canvas }} contentContainerStyle={{ paddingTop: headerSpace, paddingBottom: TAB_BAR_SPACE, gap: spacing.lg }}>
         {/*
-          * Create a project, where the profile block used to be.
+          * What you are in the middle of, at the top of the menu.
           *
-          * That block was your photo, your name and a "View profile" button —
-          * all three of which the header above this screen now is, so it was
-          * the same card twice on one screen. The most useful thing to put in
-          * the place people's eyes already go is the one action the whole
-          * product is for, and the same button Home has, so it looks like the
-          * same button rather than a second way in.
+          * This spot held the profile block, then the create button. Neither
+          * was what somebody opening this screen was looking for: the profile
+          * is the header directly above it, and creating a project is the one
+          * thing you do before you have any of these and rarely after. The
+          * work in progress is the thing worth a tap, and it is the same card
+          * Home uses, from the same endpoint — so it is recognisably the same
+          * list rather than a second opinion about what you should do next.
+          *
+          * It renders nothing when there are no projects, which is exactly
+          * when the create button below should be the first thing on screen.
           */}
+        <View style={{ paddingHorizontal: spacing.lg }}>
+          <ContinuePathCard />
+        </View>
+
         <View style={{ paddingHorizontal: spacing.lg }}>
           <GlossyButton
             label="Create Project"
@@ -106,8 +115,13 @@ export default function More() {
           {on("sprints") && <MenuRow icon="people" title="Sprints & simulations" subtitle="Trial sprints, matchmaking, and the market simulation" onPress={() => go("/(tabs)/sprints")} testID="more-sprints" />}
           {on("sprints") && <MenuRow icon="school" title="Practice sprint" subtitle="Rehearse the whole sprint with Nova" tint={colors.novaEmerald} onPress={() => go("/sprint/practice")} />}
           {on("contests") && <MenuRow icon="ribbon" title="Contests and Communities" subtitle="Compete, and join people building like you" tint="#E11D48" onPress={() => go("/contests")} testID="more-contests" />}
-          <MenuRow icon="document-text" title="Build my profile" subtitle="Let Nova read your résumé" tint={colors.info} onPress={() => go("/profile-builder")} />
-          <MenuRow icon="options" title="Profile details" subtitle="Skills, interests and co-founder preferences" tint={colors.info} onPress={() => go("/welcome")} />
+          {/*
+            * "Build my profile" and "Profile details" used to sit here. Both
+            * were the onboarding a person has already either done or declined,
+            * offered again in a menu for the rest of the account's life — and
+            * both are editing work that is easier on a keyboard. Editing a
+            * profile is still one tap away, from the profile itself.
+            */}
         </Group>
 
         <Group title="Community">
