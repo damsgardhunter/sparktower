@@ -20,6 +20,7 @@ import { NICHES } from "@shared/simulation/niches";
 import { rng } from "@shared/simulation/random";
 import { ROLES, type Company, type Role, type World } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
+import { applyAcquisition } from "@shared/simulation/mergers";
 
 /** Deliberately hostile decisions, drawn from a seed so a failure can be re-run. */
 function nastyDecisions(seed: string, company: Company, niche: (typeof NICHES)[number]): TeamDecisions {
@@ -216,5 +217,89 @@ describe("the same year, twice", () => {
       expect(JSON.stringify(second.world)).toBe(JSON.stringify(first.world));
       expect(JSON.stringify(second.reports)).toBe(JSON.stringify(first.reports));
     }
+  });
+});
+
+describe("the money adds up", () => {
+  /*
+   * Cash is not a score, it is an account: what a company has at the end of a
+   * year should be what it had, plus what it earned, less what it spent, plus
+   * what it borrowed or raised, less what it repaid. If those do not
+   * reconcile, money is being created or destroyed somewhere — and a leak in
+   * either direction is invisible until somebody with a spreadsheet finds it
+   * and stops trusting every other number on the page.
+   */
+  const niche = NICHES[0];
+
+  const cases = [
+    { name: "a quiet year", cfo: { borrow: 0, repay: 0, cashBuffer: 0 } },
+    { name: "borrowing", cfo: { borrow: 3_000_000, repay: 0, cashBuffer: 0 } },
+    { name: "repaying", cfo: { borrow: 0, repay: 400_000, cashBuffer: 0 } },
+    { name: "raising from investors", cfo: { borrow: 0, repay: 0, cashBuffer: 0, raiseAmount: 5_000_000 } },
+    { name: "borrowing and raising at once", cfo: { borrow: 1_000_000, repay: 0, cashBuffer: 0, raiseAmount: 2_000_000 } },
+  ];
+
+  for (const testCase of cases) {
+    it(`reconciles when ${testCase.name}`, () => {
+      const world = buildWorld({
+        seasonId: "money",
+        niche,
+        teams: [{ id: "t", name: "T", seats: [...ROLES] as Role[] }],
+      });
+      const before = world.companies.find((c) => c.id === "t")!;
+
+      const decisions: TeamDecisions[] = [{
+        companyId: "t",
+        cmo: { price: 40, brandSpend: 600_000, performanceSpend: 300_000, celebritySpend: 0, targetCities: [] },
+        cto: { featureSpend: 400_000, reliabilitySpend: 200_000, techDebtPaydown: 100_000, researchSpend: 250_000 },
+        coo: { capacityTarget: before.capacity, supportSpend: 300_000, efficiencySpend: 150_000, headcount: 4 },
+        cfo: testCase.cfo as any,
+        ceo: { focus: "growth" },
+      }];
+
+      const out = resolveYear({ ...world, year: 2 }, decisions, economyFor("money", 2));
+      const after = out.world.companies.find((c) => c.id === "t")!;
+      const report = out.reports.find((r) => r.companyId === "t")!;
+
+      const borrowed = testCase.cfo.borrow ?? 0;
+      const repaid = testCase.cfo.repay ?? 0;
+      const raised = (testCase.cfo as any).raiseAmount ?? 0;
+
+      /*
+       * Nothing was bought or sold this year, so the only movements are the
+       * trading result and the finance seat's own decisions. Anything left
+       * over is money the engine invented or lost.
+       */
+      const expected = before.cash + report.profit + borrowed + raised - repaid;
+      expect(after.cash, `${testCase.name}: cash does not reconcile`).toBeCloseTo(expected, 0);
+
+      // And what is owed moves by exactly what was borrowed and repaid.
+      expect(after.debt, `${testCase.name}: debt does not reconcile`)
+        .toBeCloseTo(Math.max(0, before.debt + borrowed - repaid), 0);
+    });
+  }
+
+  it("moves money between two companies without creating any", () => {
+    /*
+     * An acquisition is the one place cash crosses between companies. What one
+     * pays the other must receive — a mismatch is either a team paying for
+     * something nobody sold or being paid for something nobody bought.
+     */
+    const world = buildWorld({
+      seasonId: "transfer",
+      niche,
+      teams: [
+        { id: "buyer", name: "Buyer", seats: [...ROLES] as Role[] },
+        { id: "seller", name: "Seller", seats: [...ROLES] as Role[] },
+      ],
+    });
+    const buyer = world.companies.find((c) => c.id === "buyer")!;
+    const seller = world.companies.find((c) => c.id === "seller")!;
+    const before = buyer.cash + seller.cash;
+
+    const out = applyAcquisition({ buyer, seller, amount: 2_500_000, year: 4 });
+    expect(out.buyer.cash + out.seller.cash, "money appeared or vanished in the handover").toBeCloseTo(before, 0);
+    expect(out.buyer.cash).toBe(buyer.cash - 2_500_000);
+    expect(out.seller.cash).toBe(seller.cash + 2_500_000);
   });
 });

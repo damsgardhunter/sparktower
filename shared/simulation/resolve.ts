@@ -122,6 +122,8 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
 
   const notesFor: Record<string, string[]> = {};
   const spendFor: Record<string, number> = {};
+  /** What each company actually earned and spent trading, as opposed to what moved through its bank account. */
+  const ledger: Record<string, { revenue: number; costs: number; profit: number }> = {};
 
   /* 1. Players become the company their decisions describe. */
   const afterDecisions: Company[] = world.companies.map((company) => {
@@ -384,6 +386,11 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
     const interest = company.debt * nextEconomy.interestRate;
     const costs = variable + discretionary + interest;
     const profit = revenue - costs;
+    /*
+     * Kept, because the report used to throw this away and recompute profit as
+     * the change in cash — see the note where the reports are built.
+     */
+    ledger[company.id] = { revenue, costs, profit };
 
     let cash = company.cash + profit + borrowed + raised - repaid;
     let debt = Math.max(0, company.debt + borrowed - repaid);
@@ -534,7 +541,21 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
   const reports: CompanyReport[] = afterEvent.map((company) => {
     const units = Object.values(company.customers).reduce((sum, n) => sum + n, 0);
     const before = world.companies.find((c) => c.id === company.id)!;
-    const revenue = units * company.price;
+    /*
+     * The year's trading, not the year's bank statement.
+     *
+     * Profit used to be defined as the change in cash, with costs derived
+     * backwards from it — so every pound that moved for a reason other than
+     * trading landed in it. A team that borrowed three million was told it had
+     * made a profit on a year it lost two; borrowing, raising, selling an
+     * asset and being acquired all read as earnings. Worse, the finance seat's
+     * challenge to "end the year in profit" could be met by taking out a loan,
+     * which is the exact opposite of the thing it was asking for.
+     *
+     * The engine has always known the real figures at settlement. It just
+     * threw them away here.
+     */
+    const traded = ledger[company.id] ?? { revenue: units * company.price, costs: 0, profit: 0 };
     return {
       companyId: company.id,
       name: company.name,
@@ -543,9 +564,9 @@ export function resolveYear(world: World, decisions: TeamDecisions[], economy?: 
       marketShare: sharesAfter[company.id] ?? 0,
       shareChange: (sharesAfter[company.id] ?? 0) - (sharesBefore[company.id] ?? 0),
       turnedAway: allocation.unserved[company.id] ?? 0,
-      revenue,
-      costs: revenue - (company.cash - before.cash),
-      profit: company.cash - before.cash,
+      revenue: traded.revenue,
+      costs: traded.costs,
+      profit: traded.profit,
       cash: company.cash,
       debt: company.debt,
       reputation: company.reputation,
