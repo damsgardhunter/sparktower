@@ -12,7 +12,7 @@ import { describe, it, expect } from "vitest";
 import {
   bump, bufferCut, capUse, challengeProgress, challengeStanding, citiesOpening, clampToField,
   commitment, commitmentLevel, covenantProgress, debtCostRead, debtSeverity, debtWorthSaying,
-  dilutionPreview, discretionarySpend,
+  covenantSpend, dilutionPreview, discretionarySpend,
   dissolvableSeats, draftMatches, exact, fixedCosts, footprint, formatUntil, inTrouble,
   metricRead, money, openingCost, percent, reachOf, reachRead, resolveIsImminent,
   qualityRead, researchLanding, rewardRead, saturate, secondsUntil, selectedCities,
@@ -61,7 +61,8 @@ describe("what the table has committed", () => {
     const borrowed = run({ cfo: { borrow: 400_000, repay: 0, cashBuffer: 0 } });
     expect(repaid.spend).toBe(400_000);
     expect(borrowed.spend).toBe(0);
-    expect(borrowed.available - repaid.available).toBe(400_000);
+    // And borrowing doesn't add to what's available: the money was already there as unused credit.
+    expect(borrowed.available).toBe(repaid.available);
   });
 
   it("never lets a negative repayment subtract from the table's spend", () => {
@@ -75,14 +76,15 @@ describe("what the table has committed", () => {
   });
 
   it("counts unused credit as available, and the buffer as unavailable", () => {
-    // 4m cash + 0.5m drawn + (3m limit − 1m owed) − 1m held back.
-    expect(run().available).toBe(5_500_000);
+    // 4m cash + 0.5m drawn + (3m limit − 1m owed − the 0.5m just drawn) − 1m held back.
+    // The drawdown counts once: before this, the 0.5m was counted as cash and again as credit.
+    expect(run().available).toBe(5_000_000);
   });
 
   it("gives the ratio the whole bill, fixed costs included", () => {
     const c = run();
-    expect(c.ratio).toBeCloseTo((2_350_000 + 2_485_000) / 5_500_000, 10);
-    expect(shortfall(c)).toBe(-665_000);
+    expect(c.ratio).toBeCloseTo((2_350_000 + 2_485_000) / 5_000_000, 10);
+    expect(shortfall(c)).toBe(-165_000);
   });
 
   it("treats a company with nothing available as infinitely over-committed", () => {
@@ -289,6 +291,21 @@ describe("what the form refuses, and what it deliberately doesn't", () => {
     expect(check.errors.repay).toContain("1,000,000");
   });
 
+  it("refuses a drawdown beyond the credit line, in the server's words", () => {
+    // 3m line, 1m owed: 2m of room.
+    const over = validateDraft(fields, { borrow: 2_500_000, repay: 0, cashBuffer: 0 }, { debt: 1_000_000, creditLimit: 3_000_000 }, "cfo");
+    expect(over.errors.borrow).toBe("The bank will lend at most 2,000,000 more.");
+    expect(validateDraft(fields, { borrow: 2_000_000, repay: 0, cashBuffer: 0 }, { debt: 1_000_000, creditLimit: 3_000_000 }, "cfo").ok).toBe(true);
+    expect(validateDraft(fields, { borrow: 1, repay: 0, cashBuffer: 0 }, { debt: 3_000_000, creditLimit: 3_000_000 }, "cfo").errors.borrow)
+      .toMatch(/fully drawn/);
+  });
+
+  it("counts a drawdown on the meter only up to the line", () => {
+    const within = run({ ...table, cfo: { ...table.cfo, borrow: 2_000_000 } });
+    const over = run({ ...table, cfo: { ...table.cfo, borrow: 50_000_000 } });
+    expect(over.available).toBe(within.available);
+  });
+
   it("leaves that rule to the CFO's seat alone", () => {
     const check = validateDraft(fields, { borrow: 0, repay: 2_000_000, cashBuffer: 0 }, { debt: 1_000_000 }, "cto");
     expect(check.ok).toBe(true);
@@ -445,6 +462,16 @@ describe("how far along a target is", () => {
     expect(p).toMatchObject({ actual: 620_000, source: "committed", met: false });
   });
 
+  it("judges a price target on the drafted price, which is what the year is sold at", () => {
+    // readMetric("price") reads the company after the year, whose price is
+    // the one the CMO filed — not the price standing today.
+    const goal = target({ metric: "price", goal: 30, compare: "at_most" });
+    expect(targetProgress(goal, { company: standing })).toMatchObject({ actual: 40, source: "now", met: false });
+    expect(targetProgress(goal, { company: standing, draftedPrice: 28 })).toMatchObject({ actual: 28, source: "committed", met: true });
+    // A cleared box falls back to today's price rather than reading as zero.
+    expect(targetProgress(goal, { company: standing, draftedPrice: "" as any }).actual).toBe(40);
+  });
+
   it("says nothing about spend when there is no draft to say it from", () => {
     expect(targetProgress(target({ metric: "spend" }), { company: standing }).source).toBe("unknown");
   });
@@ -554,21 +581,24 @@ describe("the spend a cap and a challenge both mean", () => {
     expect(run().spend - discretionarySpend(table)).toBe(250_000);
   });
 
-  it("leaves out the two things the meter counts and the rules don't", () => {
+  it("counts research, as readMetric and the covenant review both do", () => {
     /*
-     * Research buys nothing this year and a city's entry fee comes out of
-     * cash, so neither is inside a creditor's cap or a "without spending your
-     * way there" target — however plainly both are money the table committed.
-     * Taking this sum off the meter instead would tell a CTO they had broken a
-     * ceiling they were nowhere near.
+     * Research is in shared/simulation/challenges.ts's discretionarySpend —
+     * left out, a company under a creditor's cap could pour money into next
+     * year's product and stay "compliant". A city's entry fee is not in this
+     * sum; the covenant adds it on its own (covenantSpend), and a challenge's
+     * spend target never counts it.
      */
     const withExtras: FiledDecisions = {
       cmo: { price: 40, brandSpend: 1_000_000, performanceSpend: 0, celebritySpend: 0, targetCities: ["manchester"] },
       cto: { featureSpend: 300_000, reliabilitySpend: 0, techDebtPaydown: 0, researchSpend: 900_000 },
     };
-    expect(discretionarySpend(withExtras)).toBe(1_300_000);
+    expect(discretionarySpend(withExtras)).toBe(2_200_000);
     const meter = commitment({ company, decisions: withExtras, costIndex: 1, cities: cities() });
     expect(meter.spend).toBe(2_650_000);
+    // The covenant counts what the tick counts: the discretionary sum plus opening Manchester.
+    expect(covenantSpend(withExtras, cities())).toBe(2_650_000);
+    expect(covenantSpend(withExtras, cities()) - discretionarySpend(withExtras)).toBe(openingCost(cities(), ["manchester"]));
   });
 });
 
@@ -1008,24 +1038,45 @@ describe("the cash buffer, now that it holds", () => {
   });
 
   /*
-   * The one place this deliberately disagrees with the meter above it. The
-   * commitment meter counts the unused credit line as available — for every
-   * other purpose it is — and the engine cuts against cash plus the drawdown
-   * alone, so a table can read clear and still lose a third of the year.
+   * The engine measures the cut against cash + drawdown + the credit still
+   * unused − buffer (resolve.ts, `spendable`). This used to leave the unused
+   * credit out, so the phone warned of a cut the year would never make.
    */
-  it("ignores the credit line the commitment meter counts", () => {
+  it("counts the unused credit line, as the engine does", () => {
     const company = { cash: 3_000_000, debt: 0, creditLimit: 10_000_000, seats: [] as any };
     const decisions = { ...spending, cfo: { cashBuffer: 1_000_000 } };
-    const meter = commitment({ company, decisions, costIndex: 1 });
-    expect(meter.ratio).toBeLessThan(1); // the meter is comfortable
-    expect(bufferCut({ company, decisions })).not.toBeNull(); // and the year is still cut
+    expect(bufferCut({ company, decisions })).toBeNull();
+  });
+
+  it("still cuts once the buffer eats past the credit too", () => {
+    // 3m cash + 0.5m unused credit − 1.5m buffer leaves 2m for a 3m table.
+    const company = { cash: 3_000_000, debt: 1_500_000, creditLimit: 2_000_000 };
+    const cut = bufferCut({ company, decisions: { ...spending, cfo: { cashBuffer: 1_500_000 } } })!;
+    expect(cut.spendable).toBe(2_000_000);
+    expect(cut.allowed).toBeCloseTo(2 / 3, 10);
+  });
+
+  it("counts a drawdown only up to the line", () => {
+    // Asking for 50m against 0.5m of room brings in 0.5m, and leaves no line
+    // unused — so the answer is the same as asking for 0.5m: 3m + 0.5m − 2.5m.
+    const company = { cash: 3_000_000, debt: 1_500_000, creditLimit: 2_000_000 };
+    const huge = bufferCut({ company, decisions: { ...spending, cfo: { cashBuffer: 2_500_000, borrow: 50_000_000 } } })!;
+    const fair = bufferCut({ company, decisions: { ...spending, cfo: { cashBuffer: 2_500_000, borrow: 500_000 } } })!;
+    expect(huge.spendable).toBe(fair.spendable);
+    expect(huge.spendable).toBe(1_000_000);
+  });
+
+  it("cuts research along with the rest of product, as the engine does", () => {
+    const decisions: FiledDecisions = { ...spending, cto: { featureSpend: 500_000, researchSpend: 1_000_000 }, cfo: { cashBuffer: 0 } };
+    const cut = bufferCut({ company: cash, decisions })!;
+    expect(cut.wanted).toBe(4_000_000);
   });
 
   it("leaves out everything the engine charges outside the cut", () => {
-    // Research, a repayment and the fee for opening a city are all real money
-    // and none of them are in the sum the buffer cuts back.
+    // A repayment and the fee for opening a city are real money, and neither
+    // is in the sum the buffer cuts back.
     const decisions: FiledDecisions = {
-      cto: { researchSpend: 5_000_000 },
+      cmo: { targetCities: ["manchester"] },
       cfo: { cashBuffer: 2_900_000, repay: 5_000_000 },
     };
     expect(bufferCut({ company: cash, decisions })).toBeNull();
@@ -1060,9 +1111,9 @@ describe("what one seat has in the sum that gets cut", () => {
   });
 
   it("leaves out the money the cut does not touch", () => {
-    // Research buys nothing this year and is charged outside the cut; a
-    // repayment is money leaving for a different reason; headcount is fixed.
-    expect(seatShare("cto", { researchSpend: 2_000_000 })).toBe(0);
+    // A repayment is money leaving for a different reason; headcount is
+    // fixed. (Research is in the cut — the engine's `product` includes it.)
+    expect(seatShare("cto", { researchSpend: 2_000_000 })).toBe(2_000_000);
     expect(seatShare("cfo", { repay: 1_000_000, borrow: 500_000, cashBuffer: 2_000_000 })).toBe(0);
     expect(seatShare("ceo", { focus: "growth" })).toBe(0);
   });

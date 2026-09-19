@@ -110,7 +110,7 @@ export async function advanceVenture(ventureId: string): Promise<void> {
           .where(and(eq(simSeats.ventureId, ventureId), eq(simSeats.userId, seat.userId)));
       }
       await tx.update(simVentures)
-        .set({ phase: move.phase, phaseEndsAt: phaseDeadline(move.phase) })
+        .set({ phase: move.phase, phaseEndsAt: phaseDeadline(move.phase), ...readySince(move.phase) })
         .where(eq(simVentures.id, ventureId));
     });
     return;
@@ -118,9 +118,33 @@ export async function advanceVenture(ventureId: string): Promise<void> {
 
   const name = move.phase === "running" && !venture.name ? placeholderName(ventureId) : venture.name;
   await db.update(simVentures)
-    .set({ phase: move.phase, phaseEndsAt: phaseDeadline(move.phase), name })
+    .set({ phase: move.phase, phaseEndsAt: phaseDeadline(move.phase), name, ...readySince(move.phase) })
     .where(eq(simVentures.id, ventureId));
 }
+
+/**
+ * Stamp the moment a room leaves the lobby, so matchmaking can tell how long
+ * it has been waiting for the rest of its season (see MATCH_ROOM_WAIT_MINUTES).
+ */
+const readySince = (phase: Phase): { runningSince?: Date } =>
+  phase === "running" ? { runningSince: new Date() } : {};
+
+/**
+ * When public matchmaking stops sending people into a forming season, and
+ * starts a new one instead.
+ *
+ * A season starts only once every room in it is out of the lobby, and every
+ * joiner who finds the rooms full opens another. On a busy market that is a
+ * season that never starts: each new room brings its own fifteen-minute lobby,
+ * a steady trickle of joiners keeps one open at all times, and the table that
+ * was ready first waits behind all of them. So a season takes no new joiners
+ * once any of its rooms has been ready for this long, or once it holds this
+ * many rooms — whichever comes first — and the next person starts the next
+ * season. Neither applies to a company's season, which is reached by code and
+ * started by hand.
+ */
+export const MATCH_ROOM_WAIT_MINUTES = 10;
+export const MATCH_MAX_ROOMS = 8;
 
 /**
  * A private season's invite code as typed or pasted: upper case, and nothing
@@ -205,10 +229,12 @@ async function takeSeatInSeason(tx: Tx, seasonId: string, userId: string): Promi
     if (taken >= LOBBY_SIZE) targetId = undefined;
   }
 
+  // `createdAt` passed rather than left to the column's default, for the reason given at `joinedAt` below.
   targetId ??= (await tx.insert(simVentures).values({
     seasonId,
     phase: "filling",
     phaseEndsAt: phaseDeadline("filling"),
+    createdAt: new Date(),
   }).returning())[0].id;
 
   /*
@@ -359,6 +385,22 @@ function pgErrorCode(err: unknown): string | undefined {
              * would be sitting in somebody else's workshop.
              */
             isNull(simSeasons.companyId),
+            /*
+             * And never one that has kept a ready table waiting too long, or
+             * already holds as many tables as a season should — see
+             * MATCH_ROOM_WAIT_MINUTES. Counted in SQL, under the market lock
+             * this transaction already holds, so two joiners cannot both see
+             * seven rooms and make a ninth. The clock is Postgres's, read as
+             * UTC to match the zoneless column.
+             */
+            sql`(select count(*) from ${simVentures} v where v.season_id = ${simSeasons.id}) < ${MATCH_MAX_ROOMS}`,
+            sql`not exists (
+              select 1 from ${simVentures} v
+               where v.season_id = ${simSeasons.id}
+                 and v.phase = 'running'
+                 and coalesce(v.running_since, v.created_at)
+                     < (now() at time zone 'utc') - make_interval(mins => ${MATCH_ROOM_WAIT_MINUTES})
+            )`,
           ))
           .orderBy(desc(simSeasons.createdAt))
           .limit(1);
@@ -366,6 +408,7 @@ function pgErrorCode(err: unknown): string | undefined {
         const seasonId = season?.id ?? (await tx.insert(simSeasons).values({
           nicheId,
           name: `${niche.name} — season ${new Date().toISOString().slice(0, 10)}`,
+          createdAt: new Date(),
         }).returning())[0].id;
 
         return takeSeatInSeason(tx, seasonId, req.user.id);

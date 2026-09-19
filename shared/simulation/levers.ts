@@ -114,9 +114,24 @@ export function defaultDraft(role: Role, company: Company, previous?: any): Reco
   if (previous) {
     // What they did last year, minus the moves that should never repeat by default.
     const carried = { ...previous };
-    if (role === "cfo") { carried.borrow = 0; carried.repay = 0; delete carried.raise; }
+    /*
+     * The one-shot levers, reset by their real field ids.
+     *
+     * This used to `delete carried.raise`, but the lever is `raiseAmount` —
+     * there has never been a `raise` field — so last year's raise survived:
+     * a chief financial officer opened the desk to find another round already
+     * filled in, and a bot (which starts from this same draft and never
+     * touches the CFO's levers) filed it again, selling another slice of the
+     * company every year. Zero rather than delete, so the form still shows
+     * the control at nothing.
+     *
+     * `rehire` goes too: a seat brought back last year is already back, and
+     * carrying the choice forward only leaves a stale value the picker no
+     * longer offers.
+     */
+    if (role === "cfo") { carried.borrow = 0; carried.repay = 0; carried.raiseAmount = 0; }
     if (role === "cmo") carried.celebritySpend = 0;
-    if (role === "ceo") { delete carried.offer; delete carried.dissolveSeats; }
+    if (role === "ceo") { delete carried.offer; delete carried.dissolveSeats; carried.rehire = ""; }
     return carried;
   }
 
@@ -202,6 +217,26 @@ export function validateDecision(role: Role, payload: any, company: Company): Va
   // The one hard stop: you cannot repay money you do not owe.
   if (role === "cfo" && Number(payload.repay) > company.debt) {
     errors.repay = `You only owe ${Math.round(company.debt).toLocaleString()}.`;
+  }
+
+  /*
+   * The other hard stop: you cannot draw down credit the bank has not extended.
+   *
+   * This is not refusing risk — borrowing to the last pound of the line is
+   * allowed, and is exactly the kind of bet the note above protects. It is
+   * refusing money that does not exist. Without it a finance seat could file
+   * fifty million against a two-million line and the engine would fund the
+   * lot, which made the credit rating (the thing that sets the line) decorative.
+   * The engine clamps as well, so a filing that slips past this — an old
+   * client, a line that shrinks before the tick — still cannot overdraw.
+   */
+  if (role === "cfo") {
+    const room = Math.max(0, company.creditLimit - company.debt);
+    if (Number(payload.borrow) > room) {
+      errors.borrow = room > 0
+        ? `The bank will lend at most ${Math.round(room).toLocaleString()} more.`
+        : "The credit line is fully drawn. Repay some of it, or raise from investors.";
+    }
   }
 
   return { ok: Object.keys(errors).length === 0, errors };
@@ -324,8 +359,13 @@ export function commitment(company: Company, decisions: TeamDecisions, economy: 
     niche ? reachOf(company, niche) : 1,
   );
   const borrowable = Math.max(0, company.creditLimit - company.debt);
+  // Clamped to the line the way the engine clamps it, so a draft asking for
+  // more than the bank will lend does not show a table funded by money that
+  // will never arrive.
+  const drawn = Math.min(Math.max(0, decisions.cfo?.borrow ?? 0), borrowable);
+  // What's left on the line after this drawdown, so borrowed money isn't counted twice (see resolveYear).
   const available = Math.max(0,
-    company.cash + (decisions.cfo?.borrow ?? 0) + borrowable - (decisions.cfo?.cashBuffer ?? 0));
+    company.cash + drawn + Math.max(0, borrowable - drawn) - (decisions.cfo?.cashBuffer ?? 0));
 
   return {
     spend,

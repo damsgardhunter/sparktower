@@ -5,6 +5,7 @@
  *   POST /api/companies/:id/seasons                              → a new private season and its join code (run_seasons)
  *   GET  /api/companies/:id/seasons                              → the company's seasons, with how far along each is
  *   POST /api/companies/:id/seasons/:seasonId/invite             → tell colleagues there's a seat for them (run_seasons)
+ *   POST /api/companies/:id/seasons/:seasonId/start              → begin year one once every table is ready (run_seasons)
  *   POST /api/companies/:id/seasons/:seasonId/resolve-year-now   → end this year now rather than at its time (run_seasons)
  *   GET  /api/companies/:id/seasons/:seasonId/report             → the staff report: who played, and how (run_seasons)
  *
@@ -12,13 +13,20 @@
  * public matchmaking, because it fills rooms by the same rules. A private
  * season is invisible to public matchmaking — see the `companyId` checks there.
  *
- * ## Why there is no "start now"
+ * ## Who starts it
  *
- * A season starts when every room in it has finished its lobby: seats taken,
- * company named. Forcing it earlier would start a year with tables still
- * arguing over who is chief executive, so the only lever given to the company
- * is the one after that — ending a year early, for a workshop that has run
- * out of afternoon.
+ * The company does, by pressing start — never the clock. A public season
+ * starts itself the moment every room is out of the lobby, and a training
+ * season used to as well; but a workshop's tables fill with bots after a
+ * minute like any other, so the first table to sit down could be "ready" and
+ * the season under way while half the room was still typing in the link, with
+ * nowhere left for them to sit. The person running the session knows when
+ * everyone is in, and the clock does not.
+ *
+ * What start will not do is start a table that is still arguing: every room
+ * must have finished its lobby (seats taken, company named), or a year would
+ * begin with a team that has no chief executive. The button says how many
+ * tables are ready so the wait is visible.
  */
 import type { Express } from "express";
 import crypto from "node:crypto";
@@ -31,7 +39,7 @@ import { notify } from "./notifications";
 import { companyCan, logCompany } from "./company-access";
 import { companyMembersOf } from "./company-routes";
 import { SEASON_CODE_ALPHABET } from "./simulation-routes";
-import { tickSeason, yearMsOf } from "./simulation-tick";
+import { startSeason, tickSeason, yearMsOf } from "./simulation-tick";
 import { nicheById } from "@shared/simulation/niches";
 import { ROLE_TITLES, type Role, type World } from "@shared/simulation/types";
 import type { CompanyReport } from "@shared/simulation/resolve";
@@ -208,6 +216,51 @@ export function registerCompanySeasonRoutes(app: Express): void {
   });
 
   /**
+   * Begin year one, now that the company says everyone is in.
+   *
+   * Refused while any table is still in its lobby, with how many are ready, so
+   * the screen can say what it is waiting for. `startSeason` takes the same
+   * locks the join-by-code path takes, so nobody can sit down at a new table
+   * in the instant between the check and the start and be left outside the
+   * season.
+   */
+  app.post("/api/companies/:id/seasons/:seasonId/start", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
+    try {
+      const found = await companyCan(res, String(req.params.id), req.user.id, "run_seasons");
+      if (!found) return;
+      const season = await seasonOf(res, found.company.id, String(req.params.seasonId));
+      if (!season) return;
+
+      const result = await startSeason(season.id);
+      switch (result.outcome) {
+        case "started": {
+          await logCompany(found.company.id, req.user.id, "season_started", null, { seasonId: season.id, name: season.name, teams: result.teams });
+          return res.json({ status: "running", year: 1, startsAt: result.startsAt, nextTickAt: result.nextTickAt, teams: result.teams });
+        }
+        case "waiting":
+          return res.status(409).json({
+            code: "tables_not_ready",
+            message: `${result.ready} of ${result.rooms} ${result.rooms === 1 ? "table is" : "tables are"} ready. Every table needs its roles taken and its company named before the season can start.`,
+            rooms: result.rooms,
+            ready: result.ready,
+          });
+        case "empty":
+          return res.status(409).json({ code: "no_tables", message: "Nobody has sat down yet. Share the join link, and start once the tables are ready." });
+        case "abandoned":
+          return res.status(409).json({ code: "no_tables", message: "Every table in this season closed before it was ready, so there is nobody to play it." });
+        default:
+          return res.status(409).json({
+            code: season.status === "finished" ? "not_running" : "already_started",
+            message: season.status === "finished" ? "This season is over." : "This season has already started.",
+          });
+      }
+    } catch (error) {
+      console.error("Company season start error:", error);
+      res.status(500).json({ message: "Couldn't start the season." });
+    }
+  });
+
+  /**
    * End the year being played now, rather than when its time is up.
    *
    * The clock is moved rather than bypassed: the season's start is shifted so
@@ -237,11 +290,18 @@ export function registerCompanySeasonRoutes(app: Express): void {
         .returning({ id: simSeasons.id });
       if (moved.length === 0) return res.status(409).json({ message: "That year has just been resolved.", code: "already_resolved" });
 
-      // Resolved here rather than on the next minute's pass, so the room sees results while it's still in the room.
+      /*
+       * Resolved here rather than on the next minute's pass, so the room sees
+       * results while it's still in the room. `tickSeason` holds the season's
+       * own lock, so a double-click or the minute's pass arriving at the same
+       * moment waits for this one and then finds nothing to do — reported as
+       * the 409 below rather than as a second year resolved.
+       */
       const resolved = await tickSeason(season.id, now);
+      if (resolved == null) return res.status(409).json({ message: "That year has just been resolved.", code: "already_resolved" });
       const [after] = await db.select({ year: simSeasons.year, status: simSeasons.status, nextTickAt: simSeasons.nextTickAt })
         .from(simSeasons).where(eq(simSeasons.id, season.id));
-      res.json({ resolvedYear: resolved ?? season.year, year: after?.year, status: after?.status, nextTickAt: after?.nextTickAt });
+      res.json({ resolvedYear: resolved, year: after?.year, status: after?.status, nextTickAt: after?.nextTickAt });
     } catch (error) {
       console.error("Company season resolve error:", error);
       res.status(500).json({ message: "Couldn't resolve the year." });

@@ -260,6 +260,41 @@
       "when": 1789835292267,
       "tag": "0036_company_fk_set_null",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1789852185910,
+      "tag": "0037_fire_sale_listings",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1789852194499,
+      "tag": "0038_room_running_since",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1789852231426,
+      "tag": "0039_backing_disputes",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1789852428224,
+      "tag": "0040_project_members_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1789854168206,
+      "tag": "0041_web_handoff_tokens",
+      "breakpoints": true
     }
   ]
 }

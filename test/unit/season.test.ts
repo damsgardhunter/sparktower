@@ -207,6 +207,27 @@ describe("the chair nobody sat in", () => {
     expect(decisions.cfo?.borrow).toBe(0);
   });
 
+  it("runs the opening plan for a chair with no decision to fall back on", () => {
+    /*
+     * `previous` is built from each seat's last filing, and a seat that never
+     * filed has no entry in it. The caretaker only scales what it is given,
+     * so that chair came back undefined — which the engine reads as nobody on
+     * the payroll and nothing spent. Everyone fired because one chair was
+     * empty while another was not.
+     */
+    const company = startingCompany({ id: "t", name: "T", niche, seats: ["cmo", "coo"] as Role[] });
+    const previous: TeamDecisions = {
+      companyId: "t",
+      cmo: { price: 15, brandSpend: 10_000, performanceSpend: 0, celebritySpend: 0, targetCities: [] },
+    };
+    const { decisions, absent } = decisionsForYear({ company, niche, submitted: {}, previous });
+    expect(absent).toEqual(["cmo", "coo"]);
+    expect(decisions.coo, "an operations plan, not nothing").toBeDefined();
+    expect(decisions.coo!.headcount).toBeGreaterThan(0);
+    // The chair that did file keeps its own last plan, stepped down.
+    expect(decisions.cmo?.price).toBe(15);
+  });
+
   it("explains itself to the teammate who did show up", () => {
     // The person reading this is usually not the person who missed it.
     const note = absenceNote(["cfo"] as Role[], ROLE_TITLES, 5)!;

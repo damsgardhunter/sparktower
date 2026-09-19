@@ -47,6 +47,9 @@ export function TeamTab({ companyId, canManage, powers = [] }: { companyId: stri
     mutationFn: (userId: string) => apiRequest("DELETE", `/api/companies/${companyId}/members/${userId}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      // Gone, not stale: Back would otherwise show the company as it was, with tabs that now refuse you.
+      queryClient.removeQueries({ queryKey: [`/api/companies/${companyId}`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/feed/my-companies"] });
       navigate("/companies");
     },
     onError: (e) => toast({ title: "Couldn't leave", description: errorText(e), variant: "destructive" }),
@@ -266,6 +269,8 @@ function DeleteCompany({ companyId, name }: { companyId: string; name: string })
     mutationFn: () => apiRequest("DELETE", `/api/companies/${companyId}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      queryClient.removeQueries({ queryKey: [`/api/companies/${companyId}`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/feed/my-companies"] });
       navigate("/companies");
     },
     onError: (e) => toast({ title: "Couldn't delete the company", description: errorText(e), variant: "destructive" }),

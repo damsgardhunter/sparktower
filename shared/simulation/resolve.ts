@@ -642,16 +642,35 @@ export function resolveYear(
      */
     const buffer = Math.max(0, d?.cfo?.cashBuffer ?? 0);
     /*
+     * A drawdown is bounded by the credit line, here as well as at the desk.
+     *
+     * `borrow` used to be taken at face value: validation only asked that it
+     * be a non-negative number, and this added the whole of it to cash and to
+     * debt. A finance seat filing fifty million against a two-million line
+     * funded forty million of spending the bank had never agreed to — the
+     * "bounded by what the company can borrow" in the lever's own help was
+     * true nowhere. Clamped once, here, and used for both what the table may
+     * spend and what lands on the balance sheet, so the two cannot disagree.
+     * Validation refuses the oversized filing up front; this is the backstop
+     * for a decision filed before that check existed, or against a line that
+     * shrank between filing and resolving (a rating downgrade does that).
+     */
+    const borrowed = Math.min(Math.max(0, d?.cfo?.borrow ?? 0), Math.max(0, company.creditLimit - company.debt));
+    /*
      * Measured against everything the table could actually spend, which is
      * what the commitment meter has always shown: cash, plus anything drawn
      * down, plus the credit still available, less what finance is holding
      * back. Measuring the cut against cash alone meant a company could read as
      * comfortably funded on every screen and still lose a third of its year —
      * two numbers describing the same decision and disagreeing.
+     * Drawn money is counted once. What is still available on the line is
+     * what's left *after* this year's drawdown, not before it — counted from
+     * before, a million borrowed appeared twice (as cash in hand and as credit
+     * still to draw), and a table could plan a year the bank would never fund.
      */
     const spendable = Math.max(
       0,
-      company.cash + (d?.cfo?.borrow ?? 0) + Math.max(0, company.creditLimit - company.debt) - buffer,
+      company.cash + borrowed + Math.max(0, company.creditLimit - company.debt - borrowed) - buffer,
     );
     const wanted = marketing + product + ops;
     const allowed = wanted > spendable && wanted > 0 ? spendable / wanted : 1;
@@ -669,7 +688,6 @@ export function resolveYear(
       ? (marketing + product + ops) * allowed
       : (spendFor[company.id] ?? 0);
 
-    const borrowed = Math.max(0, d?.cfo?.borrow ?? 0);
     const repaid = Math.max(0, d?.cfo?.repay ?? 0);
     const raised = Math.max(0, d?.cfo?.raiseAmount ?? d?.cfo?.raise?.amount ?? 0);
 

@@ -148,7 +148,13 @@ export const SURFACE_ROUTES: Record<string, string[]> = {
  * covers "/api/projects/x/nova/apply" and not "/api/projects/x/nova-notes".
  */
 export const SURFACE_API_PREFIXES: Record<string, string[]> = {
-  signup: ["/api/auth/register", "/api/auth/mobile/register", "/api/auth/mobile/google"],
+  /*
+   * Not "/api/auth/mobile/google": that route signs existing accounts in too,
+   * and gating all of it locked every Google user out of the app. Both Google
+   * handlers (web callback and mobile) check `surfaceEnabled("signup")` on the
+   * one branch that creates an account instead.
+   */
+  signup: ["/api/auth/register", "/api/auth/mobile/register"],
   uploads: ["/api/uploads", "/internal-local-upload"],
   nova: ["/api/chat", "/api/projects/:id/nova", "/api/projects/:id/nova-guide", "/api/projects/:id/tasks/nova-assist", "/api/projects/:id/path/work", "/api/projects/:id/path/expand", "/api/projects/:id/path/inject", "/api/projects/:id/path/adopt", "/api/projects/:id/health-check"],
   roadmap: ["/api/projects/:id/roadmap"],

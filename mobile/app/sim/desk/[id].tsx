@@ -18,7 +18,7 @@ import { ProjectionCard } from "../../../src/components/sim/ProjectionCard";
 import { marketNotesRead } from "../../../src/components/sim/market";
 import { ROOM_POLL_MS, useDesk } from "../../../src/components/sim/useSim";
 import {
-  ROLE_ORDER, bufferCut, challengeProgress, challengeStanding, commitment, debtCostRead,
+  ROLE_ORDER, bufferCut, challengeProgress, challengeStanding, commitment, covenantSpend, debtCostRead,
   debtSeverity, discretionarySpend, draftMatches, exact, formatUntil, inTrouble, money, reachOf,
   reachRead, seatShare, secondsUntil, shareOwnedRead, tableStatus, validateDraft, validateRecovery,
   withYourDraft,
@@ -309,25 +309,26 @@ export default function Desk() {
   /*
    * The capped spend is its own sum, not a slice of the meter.
    *
-   * The meter counts two things a creditor's cap and a challenge target both
-   * ignore: the fee for opening a city, which the engine takes out of cash,
-   * and research, which buys nothing this year. Reading the cap off the meter
-   * would tell a table it had broken a ceiling it was nowhere near — see
-   * discretionarySpend() in desk.ts, which mirrors the engine's two sums.
+   * A challenge's spend target counts the four spending seats (research
+   * included) and not the fee for opening a city; the creditor's cap counts
+   * both, because the tick adds the fee when it reviews a covenant. So two
+   * sums, each mirroring the engine's — see discretionarySpend() and
+   * covenantSpend() in desk.ts.
    */
   const tableDraft = withYourDraft(data.filed, data.yourRole, data.yourRole ? draft : null);
   const committedSpend = discretionarySpend(tableDraft);
+  const cappedSpend = covenantSpend(tableDraft, data.cities);
 
   /*
    * Whether the finance seat's ring-fence is about to cut this year, and by
    * how much of yours.
    *
    * Its own sum rather than a reading of the meter, because the two measure
-   * against different money: the meter counts the unused credit line as
-   * available, which for everything except this it is, and the engine cuts
-   * against cash plus the drawdown alone. A table can sit comfortably clear on
-   * the meter and still lose a fifth of the year — see bufferCut() in desk.ts,
-   * which mirrors resolve()'s `allowed` term.
+   * against different things: the meter weighs the fixed bill and the cost of
+   * opening a city too, and the cut only weighs the four seats' spending
+   * against cash, the (clamped) drawdown and the unused credit, less the
+   * buffer — see bufferCut() in desk.ts, which mirrors resolve()'s `allowed`
+   * term.
    */
   const cut = company ? bufferCut({ company, decisions: tableDraft }) : null;
   const yourCutShare = seatShare(data.yourRole, data.yourRole ? draft : null);
@@ -344,7 +345,7 @@ export default function Desk() {
   const marketNews = data.lastYear?.market ?? [];
 
   const challenge = data.challenge ?? null;
-  const progress = challenge ? challengeProgress(challenge, { company: company ?? null, committedSpend }) : [];
+  const progress = challenge ? challengeProgress(challenge, { company: company ?? null, committedSpend, draftedPrice: tableDraft.cmo?.price ?? null }) : [];
   const standing = challenge ? challengeStanding(progress).line : null;
 
   const recoveryCheck = validateRecovery({
@@ -363,7 +364,7 @@ export default function Desk() {
       distress={distress}
       yourRole={data.yourRole}
       seats={company?.seats}
-      spend={committedSpend}
+      spend={cappedSpend}
       chosen={recoveryKind}
       chosenSeat={recoverySeat}
       onChoose={(kind) => {

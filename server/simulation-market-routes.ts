@@ -26,6 +26,7 @@ import type { World, Company, CompanyAsset, Role } from "@shared/simulation/type
 import { marketListings, resaleValue, biddableFunds } from "@shared/simulation/assets";
 import { distressOf, recoveryOptions, type RecoveryKind } from "@shared/simulation/recovery";
 import { valuation, canOffer, assessOffer, alreadySold } from "@shared/simulation/mergers";
+import { YEAR_CLOSING, yearClosing } from "./simulation-tick";
 
 const KINDS: RecoveryKind[] = ["restructure", "fire_sale", "dissolve_seat", "rescue_raise"];
 
@@ -72,6 +73,13 @@ const SEASON_OVER = {
   message: "The season is over. Nothing moves now — but everything that happened is still here to read.",
   code: "season_over",
 };
+
+/*
+ * And every route that changes something also refuses once the year is due
+ * (`yearClosing`): from that moment the tick may already have read the bids,
+ * listings, offers and recovery moves it is going to act on, so anything
+ * accepted now would be recorded and then silently not happen.
+ */
 
 export function registerSimulationMarketRoutes(app: Express): void {
   /**
@@ -204,6 +212,7 @@ export function registerSimulationMarketRoutes(app: Express): void {
     const ctx = await context(req.params.id, req.user.id);
     if (!ctx) return res.status(404).json({ message: "No such company." });
     if (ctx.over) return res.status(409).json(SEASON_OVER);
+    if (yearClosing(ctx.season)) return res.status(409).json(YEAR_CLOSING);
     const { season, company } = ctx;
 
     const listingId = String(req.body?.listingId ?? "");
@@ -242,6 +251,7 @@ export function registerSimulationMarketRoutes(app: Express): void {
     const ctx = await context(req.params.id, req.user.id);
     if (!ctx) return res.status(404).json({ message: "No such company." });
     if (ctx.over) return res.status(409).json(SEASON_OVER);
+    if (yearClosing(ctx.season)) return res.status(409).json(YEAR_CLOSING);
 
     await db.delete(simBids).where(and(
       eq(simBids.ventureId, ctx.company.id),
@@ -264,6 +274,7 @@ export function registerSimulationMarketRoutes(app: Express): void {
     const ctx = await context(req.params.id, req.user.id);
     if (!ctx) return res.status(404).json({ message: "No such company." });
     if (ctx.over) return res.status(409).json(SEASON_OVER);
+    if (yearClosing(ctx.season)) return res.status(409).json(YEAR_CLOSING);
     const { season, company, seat } = ctx;
 
     // Selling the company's things is the chief executive's or the finance
@@ -318,11 +329,14 @@ export function registerSimulationMarketRoutes(app: Express): void {
     const ctx = await context(req.params.id, req.user.id);
     if (!ctx) return res.status(404).json({ message: "No such company." });
     if (ctx.over) return res.status(409).json(SEASON_OVER);
+    if (yearClosing(ctx.season)) return res.status(409).json(YEAR_CLOSING);
 
     await db.update(simListings).set({ status: "withdrawn" }).where(and(
       eq(simListings.id, req.params.listingId),
       eq(simListings.sellerId, ctx.company.id),
       eq(simListings.status, "open"),
+      // A fire sale's lot was sold already, at the forced price; it is not the seller's to take back.
+      eq(simListings.forced, false),
     ));
     res.json({ ok: true });
   });
@@ -345,6 +359,7 @@ export function registerSimulationMarketRoutes(app: Express): void {
     const ctx = await context(req.params.id, req.user.id);
     if (!ctx) return res.status(404).json({ message: "No such company." });
     if (ctx.over) return res.status(409).json(SEASON_OVER);
+    if (yearClosing(ctx.season)) return res.status(409).json(YEAR_CLOSING);
     const { season, company, seat } = ctx;
 
     if (seat.role !== "ceo") {
@@ -487,6 +502,7 @@ export function registerSimulationMarketRoutes(app: Express): void {
     const ctx = await context(req.params.id, req.user.id);
     if (!ctx) return res.status(404).json({ message: "No such company." });
     if (ctx.over) return res.status(409).json(SEASON_OVER);
+    if (yearClosing(ctx.season)) return res.status(409).json(YEAR_CLOSING);
     const { season, company, world, seat } = ctx;
 
     if (seat.role !== "ceo") {
@@ -563,6 +579,7 @@ export function registerSimulationMarketRoutes(app: Express): void {
     const ctx = await context(req.params.id, req.user.id);
     if (!ctx) return res.status(404).json({ message: "No such company." });
     if (ctx.over) return res.status(409).json(SEASON_OVER);
+    if (yearClosing(ctx.season)) return res.status(409).json(YEAR_CLOSING);
     const { company, seat } = ctx;
 
     if (seat.role !== "ceo") {
@@ -636,6 +653,7 @@ export function registerSimulationMarketRoutes(app: Express): void {
     const ctx = await context(req.params.id, req.user.id);
     if (!ctx) return res.status(404).json({ message: "No such company." });
     if (ctx.over) return res.status(409).json(SEASON_OVER);
+    if (yearClosing(ctx.season)) return res.status(409).json(YEAR_CLOSING);
     if (ctx.seat.role !== "ceo") return res.status(403).json({ message: "The chief executive's call.", code: "not_ceo" });
 
     const withdrawn = await db.update(simOffers).set({ status: "withdrawn" }).where(and(
@@ -754,6 +772,7 @@ export function registerSimulationMarketRoutes(app: Express): void {
     const ctx = await context(req.params.id, req.user.id);
     if (!ctx) return res.status(404).json({ message: "No such company." });
     if (ctx.over) return res.status(409).json(SEASON_OVER);
+    if (yearClosing(ctx.season)) return res.status(409).json(YEAR_CLOSING);
     if (ctx.seat.role !== "ceo") return res.status(403).json({ message: "The chief executive's call.", code: "not_ceo" });
 
     await db.delete(simRecoveryMoves).where(and(

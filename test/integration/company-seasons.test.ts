@@ -10,11 +10,11 @@
  */
 import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
-import { simSeasons, simVentures, simSeats, simReports, notifications } from "@shared/schema";
+import { companyAuditLog, simSeasons, simVentures, simSeats, simReports, notifications } from "@shared/schema";
 import { startReadySeasons, tickSeason } from "../../server/simulation-tick";
 
 afterAll(async () => { await closeTestApp(); });
@@ -156,14 +156,40 @@ describe("who can reach a private season", () => {
 });
 
 describe("a private season's clock", () => {
-  it("starts when its table is ready, a year lasts minutes, and a year can be resolved early", async () => {
+  it("starts when the company starts it, a year lasts minutes, and a year can be resolved early", async () => {
     const app = await getTestApp();
     const { owner, companyId, people } = await companyWithStaff(app, 5);
     const { seasonId, inviteCode } = await privateSeason(owner, companyId, { yearMinutes: 30 });
+
+    // Nobody has sat down: nothing to start.
+    const empty = await owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/start`).send({});
+    expect(empty.status).toBe(409);
+    expect(empty.body.code).toBe("no_tables");
+
     // Five of the six; the sixth sits this one out and shows up as not playing.
     const ventureId = await fillTable(people.slice(1), inviteCode);
 
-    expect(await startReadySeasons()).toContain(seasonId);
+    /*
+     * Every table is ready, and still the clock does not start it: the
+     * workshop may not all be in yet, and only the company knows.
+     */
+    expect(await startReadySeasons()).not.toContain(seasonId);
+    const [waiting] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    expect(waiting.status).toBe("forming");
+
+    // Only someone with the power may start it.
+    expect((await people[1].agent.post(`/api/companies/${companyId}/seasons/${seasonId}/start`).send({})).status).toBe(403);
+
+    const start = await owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/start`).send({});
+    expect(start.status, JSON.stringify(start.body)).toBe(200);
+    expect(start.body).toMatchObject({ status: "running", year: 1, teams: 1 });
+    const startAgain = await owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/start`).send({});
+    expect(startAgain.status).toBe(409);
+    expect(startAgain.body.code).toBe("already_started");
+    const [logged] = await db.select().from(companyAuditLog)
+      .where(and(eq(companyAuditLog.companyId, companyId), eq(companyAuditLog.action, "season_started")));
+    expect(logged).toMatchObject({ actorId: owner.id });
+
     const [started] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
     expect(started.status).toBe("running");
     expect(started.nextTickAt!.getTime() - started.startsAt!.getTime(), "a year of 30 minutes, not a day").toBe(30 * 60_000);
@@ -192,6 +218,7 @@ describe("a private season's clock", () => {
     // Running it again resolves nothing: the year isn't due.
     expect(await tickSeason(seasonId)).toBeNull();
 
+
     // The staff report.
     const report = await owner.agent.get(`/api/companies/${companyId}/seasons/${seasonId}/report`);
     expect(report.status, JSON.stringify(report.body)).toBe(200);
@@ -219,6 +246,20 @@ describe("a private season's clock", () => {
     const again = (await owner.agent.get(`/api/companies/${companyId}/seasons/${seasonId}/report`).expect(200)).body;
     expect(again.players).toHaveLength(5);
     expect(again.players.filter((p: any) => p.userId === cmo.id)).toEqual([expect.objectContaining({ ventureId, role: "cmo", teamName: "Blue Harbour" })]);
+
+    /*
+     * A double-click: two presses at once resolve one year, not two, and the
+     * one that lost is told so rather than handed a second result.
+     */
+    const [a, b] = await Promise.all([
+      owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/resolve-year-now`).send({}),
+      owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/resolve-year-now`).send({}),
+    ]);
+    expect([a.status, b.status].sort()).toEqual([200, 409]);
+    expect((a.status === 200 ? a : b).body).toMatchObject({ resolvedYear: 2, year: 3 });
+    expect((a.status === 409 ? a : b).body.code).toBe("already_resolved");
+    const [twice] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    expect(twice.year, "one year resolved, not two").toBe(3);
   }, 180_000);
 
   it("leaves a public season on a day a year", async () => {

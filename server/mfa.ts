@@ -28,7 +28,7 @@ import { deriveKey, mobileTokenKey } from "./secrets";
 import { newTotpSecret, otpauthUrl, verifyTotp } from "./totp";
 import QRCode from "qrcode";
 import { atLeast, isOwner } from "./platform-roles";
-import { enforceRejectionLimit, countRejection, ipKey, rateLimit } from "./moderation";
+import { enforceReservedLimit, refundAttempt, ipKey, rateLimit } from "./moderation";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 
 export const MFA_CHALLENGE_TTL_MS = 5 * 60_000;
@@ -128,26 +128,31 @@ export function readMfaChallenge(token: unknown, now = Date.now()): string | nul
   } catch { return null; }
 }
 
-/** Attempts at a code, per account: eight tries in fifteen minutes, then wait. (Per address is the route's own rateLimit.) */
 /**
- * Whether this account may try another second-factor code.
+ * Takes one attempt at a second-factor code from this account's budget.
  *
- * Checks without counting: a wrong code is counted by `countWrongMfaCode`
- * below, once the code has actually been judged. It used to count every call —
- * every enrolment, every sign-in, and the successful ones too — against eight
- * attempts in fifteen minutes, shared between turning 2FA on and using it. So
- * somebody enrolling could spend the budget on the setup screen and be told
- * "too many sign-in attempts" on their first real code. What this is defending
- * against is somebody guessing six digits, and a guess that works is not a
- * guess.
+ * Reserved up front — checked and counted in one step under a lock
+ * (reserveAttempt, server/moderation.ts), as password sign-in does. It used to
+ * check the count and add a wrong code to it only after the code was judged,
+ * and between those two every request in flight read the same count: a script
+ * sending a few hundred guesses at once had all of them find room under a
+ * limit of ten. Six digits is a million codes; a limit that leaks by however
+ * many requests fit in the air at once is not a limit on that.
+ *
+ * A code that works gives its attempt back (`mfaCodeAccepted`), and so does a
+ * request that stops before a code is judged, so only wrong codes count. It
+ * used to count every call — enrolment, sign-in, successes — and somebody
+ * setting 2FA up could spend the budget on the setup screen and be told "too
+ * many sign-in attempts" on their first real code. A guess that works is not
+ * a guess.
  */
 export async function limitMfaAttempts(_req: Request, res: Response, userId: string): Promise<boolean> {
-  return enforceRejectionLimit(res, `mfa:${userId}`, "mfaCode");
+  return enforceReservedLimit(res, `mfa:${userId}`, "mfaCode");
 }
 
-/** A code that wasn't right. This is the only thing that brings the limit closer. */
-export async function countWrongMfaCode(userId: string): Promise<void> {
-  await countRejection(`mfa:${userId}`, "mfaCode");
+/** The code was right, or was never judged: the attempt `limitMfaAttempts` took goes back. */
+export async function mfaCodeAccepted(userId: string): Promise<void> {
+  await refundAttempt(`mfa:${userId}`, "mfaCode");
 }
 
 const safeUser = (u: UserRow) => {
@@ -212,19 +217,21 @@ export function registerMfaRoutes(app: Express) {
      * here now count wrong codes and nothing else, and they have their own
      * budget rather than sharing the password one.
      */
-    if (!(await enforceRejectionLimit(res, ipKey(req), "mfaCode"))) return;
+    // Both budgets are reserved before the code is judged, and handed back when it's right (see limitMfaAttempts).
+    if (!(await enforceReservedLimit(res, ipKey(req), "mfaCode"))) return;
     const pending = req.session?.mfaPending as { userId: string; at: number } | undefined;
     if (!pending || Date.now() - pending.at > MFA_CHALLENGE_TTL_MS) {
+      await refundAttempt(ipKey(req), "mfaCode");
       if (req.session) delete req.session.mfaPending;
       return res.status(401).json({ message: "That sign-in has expired. Enter your password again.", code: "mfa_challenge_expired" });
     }
-    if (!(await limitMfaAttempts(req, res, pending.userId))) return;
+    if (!(await limitMfaAttempts(req, res, pending.userId))) { await refundAttempt(ipKey(req), "mfaCode"); return; }
     const method = await checkSecondFactor(pending.userId, String(req.body?.code ?? ""));
     if (!method) {
-      await countRejection(ipKey(req), "mfaCode");
-      await countWrongMfaCode(pending.userId);
       return res.status(401).json({ message: "That code isn't right. Check your authenticator app and try again.", code: "mfa_invalid_code" });
     }
+    await refundAttempt(ipKey(req), "mfaCode");
+    await mfaCodeAccepted(pending.userId);
     const [user] = await db.select().from(users).where(eq(users.id, pending.userId));
     if (!user) return res.status(401).json({ message: "That account no longer exists.", code: "mfa_challenge_expired" });
     delete req.session.mfaPending;
@@ -266,14 +273,14 @@ export function registerMfaRoutes(app: Express) {
   app.post("/api/auth/mfa/enable", isAuthenticated, rateLimit("session"), async (req: any, res) => {
     if (!(await limitMfaAttempts(req, res, req.user.id))) return;
     const [user] = await db.select().from(users).where(eq(users.id, req.user.id));
-    if (mfaEnabledFor(user)) return res.status(409).json({ message: "Two-factor authentication is already on.", code: "mfa_already_enabled" });
+    if (mfaEnabledFor(user)) { await mfaCodeAccepted(req.user.id); return res.status(409).json({ message: "Two-factor authentication is already on.", code: "mfa_already_enabled" }); }
     const secret = user?.mfaPendingSecret ? open(user.mfaPendingSecret) : null;
-    if (!secret) return res.status(400).json({ message: "Start setup first.", code: "mfa_not_started" });
+    if (!secret) { await mfaCodeAccepted(req.user.id); return res.status(400).json({ message: "Start setup first.", code: "mfa_not_started" }); }
     const step = verifyTotp(secret, String(req.body?.code ?? ""));
     if (step == null) {
-      await countWrongMfaCode(req.user.id);
       return res.status(401).json({ message: "That code isn't right. Check the time on your phone and try the next one.", code: "mfa_invalid_code" });
     }
+    await mfaCodeAccepted(req.user.id);
     await db.update(users).set({
       mfaSecret: seal(secret), mfaPendingSecret: null, mfaEnabledAt: new Date(), mfaLastStep: step,
     }).where(eq(users.id, req.user.id));

@@ -45,6 +45,27 @@ describe("the levers themselves", () => {
     const draft = defaultDraft("cfo", company(), { borrow: 2_000_000, repay: 0, cashBuffer: 0 });
     expect(draft.borrow).toBe(0);
   });
+
+  it("does not pre-fill last year's raise, and keeps the buffer", () => {
+    // The lever is `raiseAmount`. Resetting a field called `raise` left it in
+    // place, so every year after the first re-filed the same round.
+    const draft = defaultDraft("cfo", company(), { borrow: 0, repay: 500_000, cashBuffer: 1_000_000, raiseAmount: 3_000_000 });
+    expect(draft.raiseAmount).toBe(0);
+    expect(draft.repay).toBe(0);
+    expect(draft.cashBuffer).toBe(1_000_000);
+  });
+
+  it("does not carry a chief executive's one-off moves into the next year", () => {
+    const draft = defaultDraft("ceo", company(), {
+      focus: "margin", positioning: "x", rehire: "cmo", dissolveSeats: ["cto"],
+      offer: { targetCompanyId: "c2", kind: "acquire", amount: 1 },
+    });
+    expect(draft.focus).toBe("margin");
+    expect(draft.positioning).toBe("x");
+    expect(draft.rehire).toBe("");
+    expect(draft.offer).toBeUndefined();
+    expect(draft.dissolveSeats).toBeUndefined();
+  });
 });
 
 describe("what a seat may file", () => {
@@ -107,11 +128,18 @@ describe("what the table has committed", () => {
     expect(withBuffer).toBe(withoutBuffer - 3_000_000);
   });
 
-  it("counts a drawdown as money the table can spend", () => {
-    const c = company();
+  it("counts a drawdown once: it moves money from the line to the bank, it doesn't add to it", () => {
+    /*
+     * This used to expect a million more to spend after borrowing a million —
+     * which is the double count itself: the million was already there as
+     * unused credit. Drawing it changes where the money sits, not how much
+     * there is.
+     */
+    const c = { ...company(), creditLimit: 3_000_000, debt: 0 };
     const plain = commitment(c, { companyId: "t" }, economy).available;
     const borrowed = commitment(c, { companyId: "t", cfo: { borrow: 1_000_000, repay: 0, cashBuffer: 0 } }, economy).available;
-    expect(borrowed).toBe(plain + 1_000_000);
+    expect(borrowed).toBe(plain);
+    expect(plain).toBe(c.cash + 3_000_000);
   });
 
   it("attributes the spend to the seat that chose it", () => {

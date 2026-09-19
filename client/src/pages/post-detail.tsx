@@ -42,7 +42,11 @@ export default function PostDetail() {
   const { id } = useParams<{ id: string }>();
   const [tab, setTab] = useState<FeedReaction | "all">("all");
 
-  const { data: post, isLoading, error } = useQuery<FeedPostWithDetails>({ queryKey: ["/api/feed", id], retry: false });
+  const { data: post, isLoading, error } = useQuery<FeedPostWithDetails>({
+    queryKey: ["/api/feed", id], retry: false,
+    // Usually opened from the bell, about something new on it — a cached copy from this morning wouldn't have it.
+    refetchOnMount: "always",
+  });
   const notFound = (error as { status?: number } | null)?.status === 404;
   // Opening the post is seeing what the bell said about it.
   useEffect(() => {

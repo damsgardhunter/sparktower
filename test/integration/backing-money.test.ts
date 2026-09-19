@@ -56,7 +56,7 @@ vi.mock("../../server/stripeClient", () => ({
 const { getTestApp, closeTestApp } = await import("../helpers/app");
 const { passMfa } = await import("../helpers/mfa");
 const { db } = await import("../../server/db");
-const { users, projects, projectBackings, projectBackingCampaigns } = await import("@shared/schema");
+const { users, projects, projectBackings, projectBackingCampaigns, projectMembers } = await import("@shared/schema");
 const { eq } = await import("drizzle-orm");
 const { runRefundSweep } = await import("../../server/backing-jobs");
 
@@ -132,6 +132,18 @@ describe("releasing held funds to a creator", () => {
     expect(after.stripeTransferId).toBe("tr_already_sent");
   });
 
+  it("won't pay out a pledge under a chargeback", async () => {
+    const reviewer = await account("reviewer");
+    await passMfa(reviewer.agent);
+    const { projectId, pledges } = await campaign("approved", 2);
+    await db.update(projectBackings).set({ disputedAt: new Date() }).where(eq(projectBackings.id, pledges[0].id));
+
+    const res = await reviewer.agent.post(`/api/admin/backing/${projectId}/release`).send({});
+    expect(res.body.released).toBe(1);
+    expect(S.transfers.map((t) => t.metadata.backingId)).toEqual([pledges[1].id]);
+    expect((await status(pledges[0].id)).status).toBe("held");
+  });
+
   it("won't pay out a pledge that was already refunded", async () => {
     const reviewer = await account("reviewer");
     await passMfa(reviewer.agent);
@@ -159,6 +171,31 @@ describe("the refund sweep", () => {
     expect(S.refunds).toEqual([]);
     expect((await status(pledges[0].id)).status).toBe("held");
   });
+
+  it("won't refund a pledge under a chargeback: the bank already has that money", async () => {
+    const { pledges } = await campaign("pending", 1, new Date(Date.now() - 60_000));
+    await db.update(projectBackings).set({ disputedAt: new Date() }).where(eq(projectBackings.id, pledges[0].id));
+    await runRefundSweep();
+    expect(S.refunds).toEqual([]);
+    expect((await status(pledges[0].id)).status).toBe("held");
+  });
+
+  it("isn't starved by an approved project's backlog, and gets through more than one batch", async () => {
+    /*
+     * It read fifty held pledges in no order and dropped approved projects'
+     * afterwards. Fifty or more approved ones filled every read, and nobody
+     * else was ever refunded. Older than anything else here, so they come
+     * first in the order this used to (not) have.
+     */
+    const longAgo = new Date(Date.now() - 400 * 86_400_000);
+    const approved = await campaign("approved", 60, longAgo);
+    const lapsed = await campaign("pending", 55, new Date(Date.now() - 60_000));
+
+    await runRefundSweep();
+    for (const p of lapsed.pledges) expect((await status(p.id)).status, "every lapsed pledge, past the first batch too").toBe("refunded");
+    for (const p of approved.pledges.slice(0, 3)) expect((await status(p.id)).status).toBe("held");
+    expect(S.refunds.filter((r) => approved.pledges.some((p) => p.stripePaymentIntentId === r.payment_intent))).toEqual([]);
+  }, 60_000);
 
   it("won't refund a pledge that has been paid out", async () => {
     const { pledges } = await campaign("pending", 1, new Date(Date.now() - 60_000));
@@ -196,6 +233,45 @@ describe("a campaign a reviewer rejected", () => {
 
     await expect.poll(() => S.refunds.length, { timeout: 10_000 }).toBe(2);
     for (const p of pledges) expect((await status(p.id)).status).toBe("refunded");
+  });
+});
+
+describe("a reviewer with a stake in the project", () => {
+  /*
+   * The reviewer role was all approval and release asked for, so a reviewer
+   * could approve their own project and pay its pledges to themselves.
+   */
+  it("can't approve or release their own project, or one they're on", async () => {
+    const reviewer = await account("reviewer");
+    await passMfa(reviewer.agent);
+    const own = await campaign("pending", 1);
+    await db.update(projects).set({ ownerId: reviewer.id }).where(eq(projects.id, own.projectId));
+    await db.update(users).set({ stripeConnectAccountId: "acct_reviewer" }).where(eq(users.id, reviewer.id));
+
+    const decide = await reviewer.agent.post(`/api/admin/backing/${own.projectId}/decision`).send({ decision: "approved" });
+    expect(decide.status).toBe(403);
+    expect(decide.body.code).toBe("reviewer_conflict");
+    const [still] = await db.select().from(projectBackingCampaigns).where(eq(projectBackingCampaigns.projectId, own.projectId));
+    expect(still.reviewStatus).toBe("pending");
+
+    // Approved by someone else — releasing is still not theirs to do.
+    await db.update(projectBackingCampaigns).set({ reviewStatus: "approved" }).where(eq(projectBackingCampaigns.projectId, own.projectId));
+    const release = await reviewer.agent.post(`/api/admin/backing/${own.projectId}/release`).send({});
+    expect(release.status).toBe(403);
+    expect(S.creates).toBe(0);
+
+    // A teammate's project: the same.
+    const team = await campaign("approved", 1);
+    await db.insert(projectMembers).values({ projectId: team.projectId, userId: reviewer.id, role: "member" } as any);
+    expect((await reviewer.agent.post(`/api/admin/backing/${team.projectId}/release`).send({})).status).toBe(403);
+    expect((await reviewer.agent.post(`/api/admin/backing/${team.projectId}/decision`).send({ decision: "rejected" })).status).toBe(403);
+    expect(S.creates).toBe(0);
+    expect((await status(team.pledges[0].id)).status).toBe("held");
+
+    // Another reviewer can.
+    const other = await account("reviewer");
+    await passMfa(other.agent);
+    expect((await other.agent.post(`/api/admin/backing/${team.projectId}/release`).send({})).body.released).toBe(1);
   });
 });
 

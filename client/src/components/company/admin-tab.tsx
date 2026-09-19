@@ -275,6 +275,7 @@ function describe(e: AuditEntry): string {
     case "role_changed": return `made ${who} ${d.to === "admin" ? "an admin" : d.to === "owner" ? "an owner" : "a member"}${d.from ? ` (was ${d.from})` : ""}`;
     case "permissions_changed": return `changed ${who}'s powers to ${list(d.after)}`;
     case "season_created": return `set up the training season "${d.name ?? ""}"`;
+    case "season_started": return `started the training season "${d.name ?? ""}"`;
     case "candidate_invited": return `invited ${who} to talk`;
     case "challenge_posted": return `posted the challenge "${d.title ?? ""}"`;
     case "challenge_announced": return `announced the results of "${d.title ?? ""}"`;
@@ -296,6 +297,12 @@ function Activity({ companyId }: { companyId: string }) {
       return (await r.json()) as { entries: AuditEntry[]; nextBefore: string | null };
     },
     getNextPageParam: (last) => last.nextBefore,
+    /*
+     * Fresh whenever the tab opens. Most of what it records happens on other
+     * tabs — a season set up, a challenge posted, a post published — and none
+     * of those know to refresh this, so a cached log was missing them.
+     */
+    refetchOnMount: "always",
   });
   const entries = log.data?.pages.flatMap((p) => p.entries) ?? [];
 

@@ -443,7 +443,8 @@ export function TargetCard({
           <Text style={{ color: colors.textSecondary, fontSize: font.xs, lineHeight: 17, fontFamily: fontFamily.regular }}>
             {offerStatusRead(yourOffer.status, "made").line}
           </Text>
-          {isCeo ? (
+          {/* Only a pending offer can be revised or withdrawn; an agreed one is waiting on the tick. */}
+          {isCeo && yourOffer.status === "pending" ? (
             <View style={{ flexDirection: "row", gap: spacing.sm }}>
               <Btn label="Revise it" icon="create-outline" variant="outline" small disabled={busy}
                 onPress={onOpen} style={{ flex: 1 }} testID={`offers-revise-${target.id}`} />

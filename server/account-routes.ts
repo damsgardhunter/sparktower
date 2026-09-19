@@ -10,13 +10,13 @@
  */
 import type { Express } from "express";
 import bcrypt from "bcryptjs";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "./db";
 import { users, projectBackings } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
 import { deleteAccount, exportAccount, projectsLeavingWith } from "./account-data";
-import { checkSecondFactor, countWrongMfaCode, limitMfaAttempts, mfaEnabledFor } from "./mfa";
+import { checkSecondFactor, mfaCodeAccepted, limitMfaAttempts, mfaEnabledFor } from "./mfa";
 import { getUncachableStripeClient } from "./stripeClient";
 
 /** Subscription states Stripe will never bill again. */
@@ -65,6 +65,17 @@ async function cancelBilling(user: { stripeCustomerId: string | null; stripeSubs
     await stripe.subscriptions.cancel(id);
     cancelled += 1;
   }
+
+  /*
+   * And any checkout still open. A subscription or pledge checkout left in
+   * another tab can still be paid after the account is gone — starting a
+   * subscription on a customer no account points at, which nothing here
+   * would ever cancel. Expired, it can't complete.
+   */
+  if (user.stripeCustomerId) {
+    const open = await stripe.checkout.sessions.list({ customer: user.stripeCustomerId, status: "open", limit: 100 });
+    for (const session of open.data) await stripe.checkout.sessions.expire(session.id);
+  }
   return cancelled;
 }
 
@@ -85,7 +96,8 @@ async function refundPledgesLeavingWith(userId: string): Promise<number> {
   const leaving = await projectsLeavingWith(userId);
   if (leaving.length === 0) return 0;
   const held = await db.select().from(projectBackings)
-    .where(and(inArray(projectBackings.projectId, leaving.map((p) => p.id)), eq(projectBackings.status, "held")));
+    // Not a pledge under a chargeback: the backer already has that money back through their bank, and Stripe refuses a refund on a disputed charge.
+    .where(and(inArray(projectBackings.projectId, leaving.map((p) => p.id)), eq(projectBackings.status, "held"), isNull(projectBackings.disputedAt)));
   if (held.length === 0) return 0;
 
   const stripe = await getUncachableStripeClient();
@@ -154,9 +166,9 @@ export function registerAccountRoutes(app: Express) {
         if (!(await limitMfaAttempts(req, res, userId))) return;
         const method = await checkSecondFactor(userId, String(req.body?.code ?? ""));
         if (!method) {
-          await countWrongMfaCode(userId);
           return res.status(401).json({ message: "That code isn't right.", code: "mfa_invalid_code", field: "code" });
         }
+        await mfaCodeAccepted(userId);
       }
 
       /*

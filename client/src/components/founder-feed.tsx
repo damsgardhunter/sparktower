@@ -12,7 +12,7 @@ import { useSurfaces } from "@/hooks/use-surfaces";
 import { PromotionCard } from "@/components/promotion-card";
 import { useFeedPromotions } from "@/hooks/use-feed-promotions";
 import { useNotificationCounts, refreshNotifications } from "@/components/notification-bell";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { FeedPostCard, type FeedPostWithDetails } from "@/components/feed-post-card";
 import { Heart, Loader2, Newspaper, Users, SlidersHorizontal, ChevronDown, X, Sparkles } from "lucide-react";
 import {
@@ -180,7 +180,16 @@ export function FounderFeed({ projectId }: { projectId?: string }) {
       {!projectId && scope === "everyone" && newFromFollowing > 0 && (
         <button
           className="w-full rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-[13px] text-left flex items-center gap-2 hover:bg-primary/10"
-          onClick={() => { setScope("following"); setPages([]); }}
+          onClick={() => {
+            /*
+             * Refetch the Following feed before showing it. Its first page is
+             * cached from whenever it was last opened and never goes stale, so
+             * "See them" showed the old page — and opening it marks the new
+             * posts read, so the banner went too and they were never seen.
+             */
+            queryClient.invalidateQueries({ predicate: (q) => q.queryKey[0] === "/api/feed" && (q.queryKey[1] as any)?.scope === "following" });
+            setScope("following"); setPages([]);
+          }}
           data-testid="button-new-from-following"
         >
           <Heart className="h-3.5 w-3.5 text-primary shrink-0" />

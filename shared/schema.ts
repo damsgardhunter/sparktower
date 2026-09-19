@@ -5,7 +5,7 @@ import { sql } from "drizzle-orm";
 import { PROJECT_GOAL_IDS, isValidSubcategory } from "./goals";
 
 // Re-exporting from auth models as requested
-export { sessions, users, mobileRefreshTokens, mcpTokens, emailVerificationTokens, passwordResetTokens, type User, type UpsertUser, type MobileRefreshToken, type McpToken } from "./models/auth";
+export { sessions, users, mobileRefreshTokens, mcpTokens, emailVerificationTokens, passwordResetTokens, webHandoffTokens, type User, type UpsertUser, type MobileRefreshToken, type McpToken } from "./models/auth";
 import { users, mobileRefreshTokens } from "./models/auth";
 
 export const userProfiles = pgTable("user_profiles", {
@@ -240,7 +240,17 @@ export const projectMembers = pgTable("project_members", {
   availability: text("availability"),
   hoursPerWeek: integer("hours_per_week"),
   skills: varchar("skills").array(),
-});
+}, (table) => ({
+  /*
+   * One membership per person per project. Three paths add a member — the
+   * create (the owner), an accepted application and an accepted invite — and
+   * each checked "already a member?" in its own read before its own insert,
+   * so the two join paths racing, or an application accepted after an
+   * invite, could put someone on a team twice. The index makes the database
+   * the one place that answers, and inserts say onConflictDoNothing.
+   */
+  oneMembership: unique("project_members_project_user_unique").on(table.projectId, table.userId),
+}));
 
 /**
  * An invitation to join a project (shared/invites.ts): the token itself is never
@@ -392,6 +402,15 @@ export const projectBackings = pgTable("project_backings", {
   }).default("refund").notNull(),
   /** createdAt + REFUND_WINDOW_DAYS, denormalised so the sweep is one query. */
   refundDueAt: timestamp("refund_due_at"),
+  /**
+   * Set while the backer's bank is disputing the charge (a chargeback), and
+   * cleared if the dispute is won. The money is frozen by Stripe for as long
+   * as this is set, so payout release and the refund sweep both leave the
+   * pledge alone: releasing it pays the creator for money the platform may
+   * lose, and refunding it returns the money twice. See charge.dispute.* in
+   * server/webhookHandlers.ts.
+   */
+  disputedAt: timestamp("disputed_at"),
   releasedAt: timestamp("released_at"),
   resolvedAt: timestamp("resolved_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -1222,6 +1241,10 @@ export const NOTIFICATION_KINDS = [
   "job_due",
   // It's check-in day for the company you help run.
   "checkin_due",
+  // Someone applied to your project; the owner decided on your application.
+  "project_application", "application_accepted", "application_rejected",
+  // The owner removed you from their project's team.
+  "project_removed",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
@@ -3078,6 +3101,17 @@ export const simVentures = pgTable("sim_ventures", {
   phaseEndsAt: timestamp("phase_ends_at"),
   /** The engine's Company for this venture, after the last resolved year. */
   state: jsonb("state"),
+  /**
+   * When the room left the lobby and sat waiting for its season to start.
+   *
+   * Public matchmaking reads this to stop sending newcomers into a season one
+   * of whose rooms has been ready for a while: every new room pushes year one
+   * back for the rooms already waiting, and without a limit a steady trickle
+   * of joiners could keep a season from ever starting. Null for rooms that
+   * reached `running` before this was recorded; readers fall back to
+   * `createdAt`, which is earlier and so errs towards closing the season.
+   */
+  runningSince: timestamp("running_since"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   bySeason: index("sim_ventures_season_idx").on(table.seasonId, table.phase),
@@ -3180,6 +3214,17 @@ export const simListings = pgTable("sim_listings", {
   /** The CompanyAsset being sold, whole. */
   asset: jsonb("asset").notNull(),
   reserve: integer("reserve").notNull(),
+  /**
+   * Put on the market by a fire sale rather than by the seller's choice.
+   *
+   * The company was paid for these at the forced price when the fire sale ran
+   * and no longer owns them, so this listing is the market's copy of something
+   * already sold: settlement must not look for it in the seller's assets (it
+   * is not there, and never will be) and must not pay the seller a second
+   * time when somebody buys it. The seller is kept as `sellerId` so the lot
+   * can say whose collapse it came from.
+   */
+  forced: boolean("forced").default(false).notNull(),
   status: text("status", { enum: ["open", "sold", "unsold", "withdrawn"] }).default("open").notNull(),
   buyerId: varchar("buyer_id").references(() => simVentures.id, { onDelete: "set null" }),
   soldFor: integer("sold_for"),

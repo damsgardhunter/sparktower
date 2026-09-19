@@ -201,16 +201,23 @@ describe("what the lists cover", () => {
 
   it("every table with a user column is listed as mine, a choice, or kept", async () => {
     const listed = new Set([...MINE, ...CHOICE, ...KEPT].map((o) => `${o.table}.${o.column}`));
-    const schema = readFileSync(join(__dirname, "..", "..", "shared", "schema.ts"), "utf8");
-    const userColumn = /^(user_id|owner_id|author_id|actor_id|recipient_id|sender_id|backer_id|follower_id|followee_id|target_user_id)$/;
+    /*
+     * Any column that points at a user, found by what it references rather
+     * than what it's called. Matching names (user_id, owner_id, …) missed an
+     * investor's application — phone number and LinkedIn — under
+     * `investor_id`, a connection's note under `requester_id`, and every
+     * table in shared/models/auth.ts, which this never read at all.
+     */
     const missing: string[] = [];
-    for (const table of schema.matchAll(/export const \w+ = pgTable\(\s*"([\w_]+)"([\s\S]*?)\n\}/g)) {
-      for (const col of table[2].matchAll(/\w+:\s*\w+\("([\w_]+)"/g)) {
-        if (!userColumn.test(col[1])) continue;
-        const key = `${table[1]}.${col[1]}`;
-        // A project's owner is handled by the transfer step, not by a list.
-        if (key === "projects.owner_id" || listed.has(key)) continue;
-        missing.push(key);
+    for (const file of [["shared", "schema.ts"], ["shared", "models", "auth.ts"]]) {
+      const schema = readFileSync(join(__dirname, "..", "..", ...file), "utf8");
+      for (const table of schema.matchAll(/export const \w+ = pgTable\(\s*"([\w_]+)"([\s\S]*?)\n\}/g)) {
+        for (const col of table[2].matchAll(/\w+:\s*\w+\("([\w_]+)"[^\n]*references\(\(\)\s*=>\s*users\.id/g)) {
+          const key = `${table[1]}.${col[1]}`;
+          // A project's owner is handled by the transfer step; the users table is the account itself.
+          if (key === "projects.owner_id" || listed.has(key)) continue;
+          missing.push(key);
+        }
       }
     }
     expect(missing, "a table keyed to a user that account export and deletion both ignore — add it to MINE, CHOICE or KEPT in server/account-data.ts").toEqual([]);

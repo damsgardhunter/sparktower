@@ -89,6 +89,8 @@ function CreateChallenge({ companyId, onDone }: { companyId: string; onDone: () 
     })).json(),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: listKey(companyId) });
+      // The public list and pages too: an admin who looked at them earlier would otherwise not see this one there.
+      queryClient.invalidateQueries({ predicate: (q) => String(q.queryKey[0]).startsWith("/api/challenges") });
       toast({ title: "Challenge posted", description: "Founders can see it and enter now." });
       onDone();
     },
@@ -165,6 +167,8 @@ function ChallengeRow({ companyId, challenge: c, canManage }: { companyId: strin
     onSuccess: (_d, action) => {
       queryClient.invalidateQueries({ queryKey: listKey(companyId) });
       queryClient.invalidateQueries({ queryKey: [`${base}/entries`] });
+      // The challenge's public page and the open list: "Judging" with no winners, after announcing, is the old page.
+      queryClient.invalidateQueries({ predicate: (q) => String(q.queryKey[0]).startsWith("/api/challenges") });
       toast({ title: action === "announce" ? "Results announced" : "Entries closed", description: action === "announce" ? "Every entrant has been told how they did." : "You can shortlist and pick winners now." });
     },
     onError: (err) => toast({ title: "That didn't work", description: errorText(err), variant: "destructive" }),

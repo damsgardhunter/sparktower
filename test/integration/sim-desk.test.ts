@@ -205,6 +205,21 @@ describe("filing a decision", () => {
     expect(res.body.errors.repay).toBeTruthy();
   }, 120_000);
 
+  it("refuses a drawdown the credit line cannot cover, and says how much there is", async () => {
+    /*
+     * `borrow` used to be taken at face value: fifty million against a line of
+     * a couple of million funded the lot. The desk now refuses it under the
+     * field, in the same words the phone shows before the round trip.
+     */
+    const app = await getTestApp();
+    const { ventureId, seat } = await runningCompany(app);
+
+    const res = await seat("cfo").agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { borrow: 50_000_000, repay: 0, cashBuffer: 0 } });
+    expect(res.status).toBe(400);
+    expect(res.body.errors.borrow).toMatch(/at most|fully drawn/);
+  }, 120_000);
+
   it("refuses a seat that is not yours to file from", async () => {
     const app = await getTestApp();
     const { ventureId } = await runningCompany(app);

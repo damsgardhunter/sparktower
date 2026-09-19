@@ -108,6 +108,10 @@ function AcceptInvite({ token }: { token: string }) {
     mutationFn: () => apiRequest("POST", "/api/company-invites/accept", { token }).then((r) => r.json()),
     onSuccess: (res: { companyId: string; name: string; alreadyMember: boolean }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      // A company you just joined, fresh: a page cached from an earlier membership would show your old role and powers.
+      queryClient.invalidateQueries({ queryKey: [`/api/companies/${res.companyId}`] });
+      // And somewhere you can now post as, if the company gave you that power.
+      queryClient.invalidateQueries({ queryKey: ["/api/feed/my-companies"] });
       toast({ title: res.alreadyMember ? `You're already in ${res.name}` : `You've joined ${res.name}` });
       navigate(`/companies/${res.companyId}`, { replace: true });
     },
@@ -156,6 +160,8 @@ function CreateCompany({ onCancel, onCreated }: { onCancel: () => void; onCreate
     }).then((r) => r.json()),
     onSuccess: (res: { company: { id: string } }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
+      // The composer's "post as" list: you own this one, so you can post as it now.
+      queryClient.invalidateQueries({ queryKey: ["/api/feed/my-companies"] });
       onCreated(res.company.id);
     },
     onError: (e: any) => setError({ field: e?.body?.field, message: errorText(e, "Couldn't create the company.") }),

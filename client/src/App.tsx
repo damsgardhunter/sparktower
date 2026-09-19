@@ -279,8 +279,16 @@ function Router() {
             <Route path="/projects/new/create" component={ProjectCreate} />
             {/* Before /projects/:id so the builder path isn't swallowed by it. */}
             <Route path="/projects/:projectId/documents/:docId" component={DocumentBuilder} />
-            <Route path="/projects/:id/manage" component={ProjectManager} />
-            <Route path="/projects/:id" component={ProjectDashboard} />
+            {/*
+              * Keyed by the project id. With component= wouter reuses the same
+              * instance when only :id changes (a link from one project to
+              * another, a notification, Back), so every useState inside kept the
+              * previous project's tab, selections and drafts — and could act on
+              * them against the new project. A key makes a new project a fresh
+              * mount, the same as arriving from anywhere else.
+              */}
+            <Route path="/projects/:id/manage">{(params) => <ProjectManager key={params.id} />}</Route>
+            <Route path="/projects/:id">{(params) => <ProjectDashboard key={params.id} />}</Route>
             <Route path="/profile" component={Profile} />
             <Route path="/settings/security" component={SecuritySettings} />
             <Route path="/profile/:id" component={Profile} />

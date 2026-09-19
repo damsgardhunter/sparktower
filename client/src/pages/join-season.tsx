@@ -41,10 +41,12 @@ export default function JoinSeasonPage() {
 
   const join = useMutation({
     mutationFn: () => apiRequest("POST", "/api/sim/join-code", { code }).then((r) => r.json()),
-    onSuccess: () => {
-      // The lobby page opens the room you're in; make sure it sees this one.
+    onSuccess: (res: { ventureId?: string }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/sim/ventures"] });
-      navigate("/simulation");
+      // So Back shows "Go to your table" rather than offering to join again, here and on the company's Training tab.
+      queryClient.invalidateQueries({ queryKey: [`/api/sim/join-code/${encodeURIComponent(code ?? "")}`] });
+      queryClient.invalidateQueries({ predicate: (q) => /^\/api\/companies\/[^/]+\/seasons$/.test(String(q.queryKey[0])) });
+      navigate(res?.ventureId ? `/simulation?room=${res.ventureId}` : "/simulation");
     },
   });
 
@@ -78,7 +80,7 @@ export default function JoinSeasonPage() {
 
       <div className="mt-6">
         {data.ventureId ? (
-          <Button onClick={() => navigate("/simulation")} data-testid="button-open-room">Go to your table</Button>
+          <Button onClick={() => navigate(`/simulation?room=${data.ventureId}`)} data-testid="button-open-room">Go to your table</Button>
         ) : !data.isMember ? (
           <p className="text-sm text-muted-foreground">
             This season is only for people at {data.company?.name ?? "the company"}. Ask them for their team invite link first, then come back to this page.

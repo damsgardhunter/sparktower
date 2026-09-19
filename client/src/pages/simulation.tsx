@@ -33,6 +33,7 @@ import { Badge } from "@/components/ui/badge";
 import { UserAvatar } from "@/components/user-avatar";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { errorText } from "@/lib/api-error";
 import { NOVA_GRADIENT_CSS } from "@shared/backing";
 import { countdown, phaseCopy, urgency } from "@shared/simulation/lobby-copy";
 import type { Role } from "@shared/simulation/types";
@@ -67,7 +68,15 @@ interface Room {
 }
 
 export default function SimulationPage() {
-  const [ventureId, setVentureId] = useState<string | null>(null);
+  /*
+   * `?room=` opens that room. Someone at a public table who joins their
+   * company's training season is in two rooms at once, and "Go to your table"
+   * has to mean the one it was pressed for — not whichever the list below
+   * happens to put first.
+   */
+  const [ventureId, setVentureId] = useState<string | null>(() => {
+    try { return new URLSearchParams(window.location.search).get("room"); } catch { return null; }
+  });
 
   /*
    * The room you are already in, found on the way in.
@@ -137,7 +146,8 @@ function MarketPicker({ onJoined }: { onJoined: (ventureId: string) => void }) {
   const join = useMutation({
     mutationFn: (nicheId: string) => apiRequest("POST", "/api/sim/join", { nicheId }).then((r) => r.json()),
     onSuccess: (res: { ventureId: string }) => onJoined(res.ventureId),
-    onError: (e: any) => toast({ title: "Couldn't join", description: e?.message ?? "Try again.", variant: "destructive" }),
+    // errorText, not e.message: an ApiError's message is "409: {…json…}", which is what these toasts used to show.
+    onError: (e: any) => toast({ title: "Couldn't join", description: errorText(e), variant: "destructive" }),
   });
 
   if (isLoading) return <Centered><Loader2 className="h-6 w-6 animate-spin text-primary" /></Centered>;
@@ -195,9 +205,10 @@ function MarketPicker({ onJoined }: { onJoined: (ventureId: string) => void }) {
                   <p className="text-sm font-medium">{s.name}</p>
                   <p className="text-xs text-muted-foreground mt-0.5 leading-snug">{s.description}</p>
                   <p className="mt-2 text-[11px] text-muted-foreground flex items-center gap-1">
-                    {s.loyalty >= 0.7
-                      ? <><ShieldCheck className="h-3 w-3" /> Hard to take: they stay put</>
-                      : <><TrendingDown className="h-3 w-3" /> Winnable: they leave easily</>}
+                    {(() => {
+                      const read = loyaltyRead(s.loyalty);
+                      return <>{s.loyalty >= 0.6 ? <ShieldCheck className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />} {read.label}: {read.hint}</>;
+                    })()}
                   </p>
                 </div>
               ))}
@@ -294,7 +305,7 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
       const taken = e?.code === "role_taken" || /first|before you/i.test(e?.message ?? "");
       toast({
         title: taken ? "Taken" : "Couldn't claim that seat",
-        description: e?.message ?? "Try another.",
+        description: errorText(e, "Try another."),
         variant: taken ? "default" : "destructive",
       });
       queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}`] });
@@ -304,6 +315,15 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
   const release = useMutation({
     mutationFn: () => apiRequest("POST", `/api/sim/ventures/${ventureId}/release`, {}),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}`] }),
+    /*
+     * Usually the clock ran out between the click and the request, and the
+     * seat is already dealt. It used to fail in silence with the button still
+     * there; say why and refetch so the room shows where things stand.
+     */
+    onError: (e) => {
+      toast({ title: "Couldn't give up the seat", description: errorText(e), variant: "destructive" });
+      queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}`] });
+    },
   });
 
   const copy = useMemo(() => room && phaseCopy({
@@ -447,6 +467,8 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
                 Open your desk <ArrowRight className="h-4 w-4 ml-1" />
               </Button>
               <Button variant="outline" size="sm" onClick={() => navigate("/sprints")}>Back to sprints</Button>
+              {/* The page opens on your running room, so without this there was no way to the market list short of leaving the page. */}
+              <Button variant="ghost" size="sm" onClick={onLeave} data-testid="button-pick-another-market">Pick another market</Button>
             </div>
           </CardContent>
         </Card>
@@ -478,7 +500,7 @@ function NamingCard({ ventureId, isCeo }: { ventureId: string; isCeo: boolean })
   const submit = useMutation({
     mutationFn: () => apiRequest("POST", `/api/sim/ventures/${ventureId}/name`, { name }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}`] }),
-    onError: (e: any) => toast({ title: "Couldn't set that", description: e?.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Couldn't set that", description: errorText(e), variant: "destructive" }),
   });
 
   if (!isCeo) {
@@ -507,6 +529,21 @@ function NamingCard({ ventureId, isCeo }: { ventureId: string; isCeo: boolean })
       </CardContent>
     </Card>
   );
+}
+
+/**
+ * What a segment's loyalty means for a team that wants its customers.
+ *
+ * The same four-step scale as loyaltyRead() in mobile/src/components/sim/lobby.ts,
+ * words included. The web used a single cut at 0.7, so a 0.65 segment read
+ * "Winnable: they leave easily" here and "Sticky" on the phone — two screens
+ * giving the same table opposite advice about the same market.
+ */
+function loyaltyRead(loyalty: number): { label: string; hint: string } {
+  if (loyalty >= 0.8) return { label: "Locked in", hint: "Years of consistency, or nothing." };
+  if (loyalty >= 0.6) return { label: "Sticky", hint: "Winnable, slowly, by being better for a long time." };
+  if (loyalty >= 0.4) return { label: "Persuadable", hint: "Moves for a real reason, and moves back just as easily." };
+  return { label: "On the rope", hint: "Already half out of the door. Your first customers." };
 }
 
 const Centered = ({ children }: { children: React.ReactNode }) => (

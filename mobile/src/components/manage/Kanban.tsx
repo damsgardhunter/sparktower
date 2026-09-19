@@ -120,7 +120,14 @@ export function Kanban({ projectId, members, goal, primary }: { projectId: strin
       ) : shown.map((t) => {
         const assignee = members.find((m) => m.userId === t.assigneeId);
         const subs = t.subtasks ?? [];
-        const overdue = t.dueDate && t.status !== "done" && new Date(t.dueDate).getTime() < Date.now();
+        /*
+         * A due date is a calendar day, stored as that day's midnight UTC. Compared
+         * with the clock it went red the evening before it was due anywhere west
+         * of Greenwich; compared as days, it is overdue once the day has passed.
+         */
+        const today = new Date();
+        const todayYmd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+        const overdue = t.dueDate && t.status !== "done" && new Date(t.dueDate).toISOString().slice(0, 10) < todayYmd;
         return (
           <Card key={t.id} onPress={() => setEditing(t)} accent={PRIORITY_COLOR[t.priority]}>
             <Row gap={spacing.sm} style={{ alignItems: "flex-start" }}>
@@ -132,7 +139,7 @@ export function Kanban({ projectId, members, goal, primary }: { projectId: strin
                 {!!t.description && <Meta numberOfLines={2}>{t.description}</Meta>}
                 <Row center gap={spacing.sm} wrap>
                   <Tag label={t.priority} color={PRIORITY_COLOR[t.priority] ?? colors.textSecondary} />
-                  {!!t.dueDate && <Row center gap={3}><Icon name="calendar-outline" size={12} color={overdue ? colors.danger : colors.textTertiary} /><Meta style={overdue ? { color: colors.danger } : undefined}>{new Date(t.dueDate).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</Meta></Row>}
+                  {!!t.dueDate && <Row center gap={3}><Icon name="calendar-outline" size={12} color={overdue ? colors.danger : colors.textTertiary} /><Meta style={overdue ? { color: colors.danger } : undefined}>{new Date(t.dueDate).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" })}</Meta></Row>}
                   {subs.length > 0 && <Row center gap={3}><Icon name="list-outline" size={12} color={colors.textTertiary} /><Meta>{subs.filter((s) => s.done).length}/{subs.length}</Meta></Row>}
                   {t.estimateHours != null && <Meta>{t.estimateHours}h</Meta>}
                   {visibleTags(t.tags).slice(0, 2).map((x) => <Meta key={x}>#{x}</Meta>)}

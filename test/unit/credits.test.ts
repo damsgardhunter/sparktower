@@ -29,13 +29,16 @@ describe("checkout return", () => {
 });
 
 describe("upgrades", () => {
-  it("offers the plans above yours, and refills only on a step up or a paid renewal", () => {
+  it("offers the plans above yours, and refills only on a first paid plan or a paid invoice", () => {
     const plans = ["free", "starter", "builder", "pro"].map((tier) => ({ tier }));
     expect(upgradeOptions(plans, "starter").map((p) => p.tier)).toEqual(["builder", "pro"]);
     expect(upgradeOptions(plans, "pro")).toEqual([]);
     expect(refillsOnTierChange("free", "builder")).toBe(true);
     expect(refillsOnTierChange("builder", "builder")).toBe(false);
     expect(refillsOnTierChange("pro", "starter")).toBe(false);
+    // A paid-to-paid switch is prorated onto the next invoice — nothing is paid now, so nothing refills.
+    expect(refillsOnTierChange("builder", "pro")).toBe(false);
+    expect(refillsOnTierChange("starter", "builder")).toBe(false);
     expect(REFILLING_INVOICE_REASONS.has("subscription_cycle")).toBe(true);
     expect(REFILLING_INVOICE_REASONS.has("manual")).toBe(false);
   });

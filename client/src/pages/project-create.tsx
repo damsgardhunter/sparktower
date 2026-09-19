@@ -1,5 +1,6 @@
 import { withoutEdited, renameInText } from "@shared/project-draft";
-import { errorText } from "@/lib/api-error";
+import { errorText, ApiError } from "@/lib/api-error";
+import { ToastAction } from "@/components/ui/toast";
 import { useState, useRef, useEffect } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -360,7 +361,32 @@ export default function ProjectCreate() {
         description: "Your project has been successfully created.",
       });
       queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
+      // Queries default to staleTime: Infinity, so any list that already holds
+      // "my projects" (the sidebar/profile list, the feed's picker, the profile
+      // counts) would keep showing the world without this project until a hard
+      // reload. Invalidating them here is what makes the new project appear
+      // everywhere the builder looks next, not just on its own page.
+      queryClient.invalidateQueries({ queryKey: ["/api/user/projects"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/feed/my-projects"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profile/summary"] });
       setLocation(fromArtifact ? afterPendingCreatePath(project.id, project.goal) : `/projects/${project.id}/manage`);
+    },
+    onError: (error) => {
+      // Without this, a refused create looked like a dead button: the spinner
+      // stopped and nothing said why. The server refuses for reasons the builder
+      // can act on — a 402 when a private project is over the plan's quota, a
+      // 429 when they're creating too fast — and errorText carries its words
+      // (and the wait, for a rate limit). The quota case gets a way to the
+      // pricing page, the same place the form's private-project note points to.
+      const overQuota = error instanceof ApiError && error.status === 402;
+      toast({
+        title: overQuota ? "Upgrade to create this project" : "Couldn't create the project",
+        description: errorText(error),
+        variant: "destructive",
+        action: overQuota
+          ? <ToastAction altText="See plans" onClick={() => setLocation("/pricing")}>See plans</ToastAction>
+          : undefined,
+      });
     },
   });
 

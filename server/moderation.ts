@@ -465,7 +465,7 @@ export async function enforceRejectionLimit(res: any, key: string, action: RateL
 export async function reserveAttempt(key: string, action: RateLimitAction): Promise<RateCheck> {
   const limit = RATE_LIMITS[action];
   try {
-    return await db.transaction(async (tx) => {
+    const check = await db.transaction(async (tx) => {
       // Two 32-bit ints rather than one: hashtext on the key alone would make
       // two different actions on the same account queue behind each other.
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${key}), hashtext(${action}))`);
@@ -483,7 +483,6 @@ export async function reserveAttempt(key: string, action: RateLimitAction): Prom
 
       const used = Number(row?.n ?? 0);
       if (used >= limit.max) {
-        if (await isExempt(key)) return { ok: true, exempt: true, used, max: limit.max, retryAfterSeconds: 0 };
         const frees = row?.frees == null ? limit.windowMinutes * 60 : Number(row.frees);
         return { ok: false, exempt: false, used, max: limit.max, retryAfterSeconds: Math.min(limit.windowMinutes * 60, Math.max(1, frees)) };
       }
@@ -491,6 +490,14 @@ export async function reserveAttempt(key: string, action: RateLimitAction): Prom
       await tx.insert(rateLimitHits).values({ userId: key, action });
       return { ok: true, exempt: false, used: used + 1, max: limit.max, retryAfterSeconds: 0 };
     });
+    /*
+     * Exemption is asked after the transaction, not inside it. `isExempt` reads
+     * through the pool, and asking while holding this connection and the lock
+     * deadlocked a burst: every pooled connection sat waiting on the lock, and
+     * the holder waited for a connection to ask who the key belonged to.
+     */
+    if (!check.ok && (await isExempt(key))) return { ok: true, exempt: true, used: check.used, max: limit.max, retryAfterSeconds: 0 };
+    return check;
   } catch (err) {
     const closed = failsClosed(action);
     console.error(`[moderation] Atomic reserve failed for ${action}, ${closed ? "refusing" : "allowing"}:`, err);

@@ -7,7 +7,7 @@
  * pledge. The lock is released as soon as the pass finishes; if a process dies
  * holding it, Postgres drops it with the connection.
  */
-import { and, eq, inArray, isNotNull, lt, ne, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
 import { db, pool } from "./db";
 import {
   projectBackings, projectBackingCampaigns, projectMerchOrders, projects,
@@ -129,8 +129,16 @@ export async function runMerchFulfillment(): Promise<{ submitted: number; failed
     }).from(projectMerchOrders)
       .innerJoin(projects, eq(projects.id, projectMerchOrders.projectId))
       .innerJoin(projectBackingCampaigns, eq(projectBackingCampaigns.projectId, projectMerchOrders.projectId))
+      .innerJoin(projectBackings, eq(projectBackings.id, projectMerchOrders.backingId))
       .where(and(
         eq(projectMerchOrders.status, "queued"),
+        /*
+         * Not while the pledge behind it is under a chargeback. The backer
+         * has their money back pending the dispute; printing and posting the
+         * reward as well pays for it twice. It waits, and ships if the
+         * dispute is won — or is cancelled with the pledge if it's lost.
+         */
+        isNull(projectBackings.disputedAt),
         // The gate: a human said the project is real. Held here rather than on
         // the order row so approving a project frees its whole backlog.
         eq(projectBackingCampaigns.reviewStatus, "approved"),
@@ -217,97 +225,129 @@ export async function runMerchFulfillment(): Promise<{ submitted: number; failed
  * Each backer chose at checkout what happens here, so this only carries out an
  * instruction that was already given.
  */
+/** Pledges read per query. The sweep keeps going until a batch comes back short. */
+const SWEEP_BATCH = 50;
+/** A ceiling on one pass, so a pathological backlog can't hold the lock for hours; the next pass carries on. */
+const SWEEP_MAX_BATCHES = 200;
+
 export async function runRefundSweep(): Promise<{ refunded: number; converted: number; failed: number } | null> {
   return withLock(LOCK_SWEEP, async () => {
-    const rows = await db.select({
-      backing: projectBackings,
-      reviewStatus: projectBackingCampaigns.reviewStatus,
-    }).from(projectBackings)
-      .leftJoin(projectBackingCampaigns, eq(projectBackingCampaigns.projectId, projectBackings.projectId))
-      .where(and(
-        eq(projectBackings.status, "held"),
-        isNotNull(projectBackings.refundDueAt),
-        lt(projectBackings.refundDueAt, new Date()),
-      ))
-      .limit(50);
-
-    const due = rows.filter((r) => r.reviewStatus !== "approved");
-    if (due.length === 0) return { refunded: 0, converted: 0, failed: 0 };
-
-    const stripe = await getUncachableStripeClient();
+    let stripe: Awaited<ReturnType<typeof getUncachableStripeClient>> | null = null;
     let refunded = 0, converted = 0, failed = 0;
+    /*
+     * Every pledge this pass has already looked at. Most leave "held" and drop
+     * out of the query by themselves; the ones that don't — a Stripe error, a
+     * missing payment intent, an approval that landed under the lock — are
+     * excluded by id, or the loop below would read them again forever.
+     */
+    const seen = new Set<string>();
 
-    for (const { backing } of due) {
-      try {
-        if (backing.unclaimedPreference === "donate_platform") {
-          // The money is already in the platform balance — there is nothing to
-          // move, only a status to settle.
-          await db.update(projectBackings).set({
-            status: "converted", resolvedAt: new Date(),
-          }).where(eq(projectBackings.id, backing.id));
-          converted++;
-          continue;
-        }
+    /*
+     * Approved campaigns are filtered out here, in the query, and the oldest
+     * due come first. It used to take the first fifty held pledges past their
+     * date in no order and drop the approved ones afterwards, in JS. An
+     * approved project with fifty or more pledges waiting on a payout filled
+     * every batch, the filter emptied it, and no other backer was ever
+     * refunded — the sweep ran hourly and did nothing, indefinitely. And one
+     * batch a pass was a ceiling on its own: a rejection with two hundred
+     * backers took four hours to reach the last of them.
+     */
+    for (let batch = 0; batch < SWEEP_MAX_BATCHES; batch++) {
+      const due = await db.select({
+        backing: projectBackings,
+      }).from(projectBackings)
+        .leftJoin(projectBackingCampaigns, eq(projectBackingCampaigns.projectId, projectBackings.projectId))
+        .where(and(
+          eq(projectBackings.status, "held"),
+          isNotNull(projectBackings.refundDueAt),
+          lt(projectBackings.refundDueAt, new Date()),
+          // A chargeback in progress: Stripe holds that money, and refunding it too would return it twice.
+          isNull(projectBackings.disputedAt),
+          or(isNull(projectBackingCampaigns.reviewStatus), ne(projectBackingCampaigns.reviewStatus, "approved")),
+          ...(seen.size > 0 ? [notInArray(projectBackings.id, [...seen])] : []),
+        ))
+        .orderBy(asc(projectBackings.refundDueAt), asc(projectBackings.id))
+        .limit(SWEEP_BATCH);
 
-        if (!backing.stripePaymentIntentId) throw new Error("No payment intent to refund");
+      if (due.length === 0) break;
+      stripe ??= await getUncachableStripeClient();
 
-        /*
-         * Locked and re-checked before the money moves.
-         *
-         * Payout release takes the same row lock, so the two can't both act on
-         * one pledge: whichever arrives second finds it no longer "held". And
-         * the approval is read again under the lock — the list above was read
-         * before any of this pass's refunds, and a reviewer who approved the
-         * project in the meantime has just made this pledge the creator's.
-         * Refunding it anyway, with a release to follow, pays for it twice.
-         */
-        const outcome = await db.transaction(async (tx) => {
-          const [row] = await tx.select({ id: projectBackings.id }).from(projectBackings)
-            .where(and(eq(projectBackings.id, backing.id), eq(projectBackings.status, "held")))
-            .for("update");
-          if (!row) return "gone" as const;
-          const [campaign] = await tx.select({ reviewStatus: projectBackingCampaigns.reviewStatus })
-            .from(projectBackingCampaigns).where(eq(projectBackingCampaigns.projectId, backing.projectId));
-          if (campaign?.reviewStatus === "approved") return "approved" as const;
-
-          const refund = await stripe.refunds.create({
-            payment_intent: backing.stripePaymentIntentId!,
-            metadata: { backingId: backing.id, reason: "refund_window_elapsed" },
-          }, { idempotencyKey: `sweep_refund_${backing.id}` });
-
-          // The public "raised" figure has to give the money back too — but only
-          // on the move to "refunded". Stripe's charge.refunded webhook may have
-          // recorded this refund first, and gave the money back when it did.
-          const [moved] = await tx.update(projectBackings).set({
-            status: "refunded",
-            stripeRefundId: refund.id,
-            resolvedAt: new Date(),
-          }).where(and(eq(projectBackings.id, backing.id), ne(projectBackings.status, "refunded"))).returning({ id: projectBackings.id });
-          if (moved) {
-            await tx.update(projects)
-              .set({ totalDonations: sql`greatest(0, ${projects.totalDonations} - ${backing.amountCents})` })
-              .where(eq(projects.id, backing.projectId));
+      for (const { backing } of due) {
+        seen.add(backing.id);
+        try {
+          if (backing.unclaimedPreference === "donate_platform") {
+            // The money is already in the platform balance — there is nothing to
+            // move, only a status to settle.
+            await db.update(projectBackings).set({
+              status: "converted", resolvedAt: new Date(),
+            }).where(eq(projectBackings.id, backing.id));
+            converted++;
+            continue;
           }
-          return "refunded" as const;
-        });
-        if (outcome !== "refunded") continue;
 
-        // Nothing physical can have shipped — merch waits on approval and
-        // these are unapproved by definition — so cancelling is safe.
-        await db.update(projectMerchOrders)
-          .set({ status: "canceled", updatedAt: new Date() })
-          .where(and(
-            eq(projectMerchOrders.backingId, backing.id),
-            inArray(projectMerchOrders.status, ["queued", "failed"]),
-          ));
+          if (!backing.stripePaymentIntentId) throw new Error("No payment intent to refund");
 
-        refunded++;
-      } catch (err: any) {
-        console.error(`[sweep] Backing ${backing.id} failed:`, err?.message || err);
-        failed++;
+          /*
+           * Locked and re-checked before the money moves.
+           *
+           * Payout release takes the same row lock, so the two can't both act on
+           * one pledge: whichever arrives second finds it no longer "held". And
+           * the approval is read again under the lock — the list above was read
+           * before any of this pass's refunds, and a reviewer who approved the
+           * project in the meantime has just made this pledge the creator's.
+           * Refunding it anyway, with a release to follow, pays for it twice.
+           */
+          const outcome = await db.transaction(async (tx) => {
+            const [row] = await tx.select({ id: projectBackings.id }).from(projectBackings)
+              .where(and(eq(projectBackings.id, backing.id), eq(projectBackings.status, "held"), isNull(projectBackings.disputedAt)))
+              .for("update");
+            if (!row) return "gone" as const;
+            const [campaign] = await tx.select({ reviewStatus: projectBackingCampaigns.reviewStatus })
+              .from(projectBackingCampaigns).where(eq(projectBackingCampaigns.projectId, backing.projectId));
+            if (campaign?.reviewStatus === "approved") return "approved" as const;
+
+            const refund = await stripe!.refunds.create({
+              payment_intent: backing.stripePaymentIntentId!,
+              metadata: { backingId: backing.id, reason: "refund_window_elapsed" },
+            }, { idempotencyKey: `sweep_refund_${backing.id}` });
+
+            // The public "raised" figure has to give the money back too — but only
+            // on the move to "refunded". Stripe's charge.refunded webhook may have
+            // recorded this refund first, and gave the money back when it did.
+            const [moved] = await tx.update(projectBackings).set({
+              status: "refunded",
+              stripeRefundId: refund.id,
+              resolvedAt: new Date(),
+            }).where(and(eq(projectBackings.id, backing.id), ne(projectBackings.status, "refunded"))).returning({ id: projectBackings.id });
+            if (moved) {
+              await tx.update(projects)
+                .set({ totalDonations: sql`greatest(0, ${projects.totalDonations} - ${backing.amountCents})` })
+                .where(eq(projects.id, backing.projectId));
+            }
+            return "refunded" as const;
+          });
+          if (outcome !== "refunded") continue;
+
+          // Nothing physical can have shipped — merch waits on approval and
+          // these are unapproved by definition — so cancelling is safe.
+          await db.update(projectMerchOrders)
+            .set({ status: "canceled", updatedAt: new Date() })
+            .where(and(
+              eq(projectMerchOrders.backingId, backing.id),
+              inArray(projectMerchOrders.status, ["queued", "failed"]),
+            ));
+
+          refunded++;
+        } catch (err: any) {
+          console.error(`[sweep] Backing ${backing.id} failed:`, err?.message || err);
+          failed++;
+        }
       }
+
+      if (due.length < SWEEP_BATCH) break;
     }
 
+    if (refunded + converted + failed === 0) return { refunded, converted, failed };
     console.log(`[sweep] ${refunded} refunded, ${converted} converted, ${failed} failed`);
     return { refunded, converted, failed };
   });

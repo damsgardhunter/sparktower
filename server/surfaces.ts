@@ -49,12 +49,14 @@ export async function loadSurfaceFlags(): Promise<Record<string, boolean>> {
   } catch (err) {
     if (mine !== generation) return cache;
     /*
-     * Fall back to the shipped defaults rather than failing closed on
-     * everything. A database blip shouldn't take the whole product down, and
-     * the defaults are the conservative set anyway.
+     * Keep the last flags that were read, rather than failing closed on
+     * everything. A database blip shouldn't take the whole product down — and
+     * it shouldn't switch anything back on either. This used to reset to the
+     * shipped defaults, so a kill switch thrown in an emergency undid itself
+     * on every instance whose ten-second refresh hit a hiccup. Before the
+     * first good read the cache already holds the defaults.
      */
-    console.error("[surfaces] Could not load flags, using defaults:", err);
-    cache = defaultSurfaceMap();
+    console.error(`[surfaces] Could not load flags, keeping the ${loaded ? "last read" : "default"} set:`, err);
   }
   return cache;
 }

@@ -15,7 +15,7 @@ import { pathProgress } from "./path-return";
 import crypto from "node:crypto";
 import { and, count, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { db } from "./db";
-import { projectInvites, projectMembers, projects, users, userProfiles } from "@shared/schema";
+import { projectApplications, projectInvites, projectMembers, projects, users, userProfiles } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { enforceRateLimit, ipKey, rateLimit } from "./moderation";
 import { notify } from "./notifications";
@@ -218,8 +218,15 @@ export function registerInviteRoutes(app: Express) {
         if (!project) return { status: 404, body: { message: "That project no longer exists.", code: "invite_not_found" } };
         const alreadyIn = project.ownerId === req.user.id
           || (await tx.select({ id: projectMembers.id }).from(projectMembers).where(and(eq(projectMembers.projectId, project.id), eq(projectMembers.userId, req.user.id)))).length > 0;
-        if (!alreadyIn) await tx.insert(projectMembers).values({ projectId: project.id, userId: req.user.id, role: invite.role });
+        if (!alreadyIn) await tx.insert(projectMembers).values({ projectId: project.id, userId: req.user.id, role: invite.role }).onConflictDoNothing();
         await tx.update(projectInvites).set({ acceptedAt: new Date(), acceptedById: req.user.id }).where(eq(projectInvites.id, invite.id));
+        /*
+         * If they'd also applied, the application is answered: they're in.
+         * Left pending, it sat on the owner's Team tab as a decision still to
+         * make about someone already on the team, and accepting it failed.
+         */
+        await tx.update(projectApplications).set({ status: "accepted" })
+          .where(and(eq(projectApplications.projectId, project.id), eq(projectApplications.userId, req.user.id), eq(projectApplications.status, "pending")));
         return { status: 200, body: { ok: true, projectId: project.id, projectTitle: project.title, role: invite.role, alreadyMember: alreadyIn }, notifyOwner: !alreadyIn ? project : null };
       });
       if (outcome.status === 200 && (outcome as any).notifyOwner) {

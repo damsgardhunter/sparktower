@@ -9,7 +9,7 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Check, Copy, FastForward, FileText, Loader2, Plus, Send } from "lucide-react";
+import { Check, Copy, FastForward, FileText, Loader2, Play, Plus, Send } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
 import { useToast } from "@/hooks/use-toast";
@@ -213,6 +213,24 @@ function SeasonCard({ companyId, season, canManage }: { companyId: string; seaso
     onError: (e) => toast({ title: "Couldn't end the year", description: errorText(e), variant: "destructive" }),
   });
 
+  /*
+   * The company starts its own season: it knows when the workshop is all in,
+   * and the clock does not (see server/company-season-routes.ts). Offered only
+   * once every table is ready, since the server would refuse it before then.
+   */
+  const start = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/companies/${companyId}/seasons/${season.id}/start`, {}).then((r) => r.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/companies/${companyId}/seasons`] });
+      toast({ title: "The season has started", description: "Year one opens in a couple of minutes." });
+    },
+    onError: (e) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/companies/${companyId}/seasons`] });
+      toast({ title: "Couldn't start the season", description: errorText(e), variant: "destructive" });
+    },
+  });
+  const allReady = season.rooms > 0 && season.roomsReady === season.rooms;
+
   const progress =
     season.status === "running" ? `Year ${season.year} of ${season.totalYears}`
     : season.status === "finished" ? `All ${season.totalYears} years played`
@@ -239,7 +257,7 @@ function SeasonCard({ companyId, season, canManage }: { companyId: string; seaso
           </div>
           <div className="flex gap-2 flex-wrap">
             {season.myVentureId ? (
-              <Button size="sm" onClick={() => navigate("/simulation")}>Go to your table</Button>
+              <Button size="sm" onClick={() => navigate(`/simulation?room=${season.myVentureId}`)}>Go to your table</Button>
             ) : season.status === "forming" && season.joinUrl ? (
               <Button size="sm" onClick={() => navigate(season.joinUrl!)} data-testid={`button-join-${season.id}`}>Join</Button>
             ) : null}
@@ -257,6 +275,16 @@ function SeasonCard({ companyId, season, canManage }: { companyId: string; seaso
 
         {canManage && (
           <div className="flex gap-2 flex-wrap">
+            {season.status === "forming" && (
+              <Button
+                size="sm" disabled={!allReady || start.isPending}
+                onClick={() => { if (confirm("Start the season? Nobody can join once it has started.")) start.mutate(); }}
+                data-testid={`button-start-${season.id}`}
+              >
+                {start.isPending ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Play className="h-4 w-4 mr-1.5" />}
+                Start the season{season.rooms > 0 && ` (${season.roomsReady} of ${season.rooms} ${season.rooms === 1 ? "table" : "tables"} ready)`}
+              </Button>
+            )}
             {season.status === "forming" && (
               <Button variant="outline" size="sm" onClick={() => setInviting(true)}><Send className="h-4 w-4 mr-1.5" /> Invite people</Button>
             )}
@@ -277,9 +305,15 @@ function SeasonCard({ companyId, season, canManage }: { companyId: string; seaso
           </div>
         )}
 
-        {season.status === "forming" && season.rooms > 0 && season.roomsReady < season.rooms && (
+        {season.status === "forming" && season.rooms > 0 && (
           <p className="text-xs text-muted-foreground">
-            The season starts on its own once every table has chosen its roles and named its company.
+            {allReady
+              ? canManage
+                ? "Every table is ready. Start the season when everyone who's coming has sat down — nobody can join after."
+                : "Every table is ready. The season starts when an admin starts it."
+              : canManage
+                ? "You can start the season once every table has chosen its roles and named its company."
+                : "The season starts once every table is ready and an admin starts it."}
           </p>
         )}
 

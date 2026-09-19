@@ -32,8 +32,19 @@ export function RunTab({ companyId, canManage }: { companyId: string; canManage:
 
   const start = useMutation({
     mutationFn: () => apiRequest("POST", `/api/companies/${companyId}/run-project`, {}).then((r) => r.json()),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: companyKey }),
-    onError: (e) => toast({ title: "Couldn't set up the Run project", description: errorText(e), variant: "destructive" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: companyKey });
+      // Everyone in the company is on the new project, you included: it belongs in your projects list now.
+      queryClient.invalidateQueries({ queryKey: ["/api/user/projects"] });
+    },
+    onError: (e) => {
+      toast({ title: "Couldn't set up the Run project", description: errorText(e), variant: "destructive" });
+      /*
+       * Most often another admin set it up first (409). Refetch so the button
+       * gives way to the project they made, rather than failing on every press.
+       */
+      queryClient.invalidateQueries({ queryKey: companyKey });
+    },
   });
 
   if (isLoading || !data) return <div className="flex justify-center py-10"><Loader2 className="h-5 w-5 animate-spin text-primary" /></div>;

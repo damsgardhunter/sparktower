@@ -132,6 +132,14 @@ describe("the offers on the table", () => {
     expect(outstandingOffer(undefined)).toBeNull();
   });
 
+  it("counts an accepted offer as outstanding, as the server does", () => {
+    // Nothing changes hands until the tick, so a yes does not free the money
+    // up for a second purchase — the server counts pending and accepted.
+    expect(outstandingOffer([made({ id: "a", status: "accepted" })])?.id).toBe("a");
+    // The one still open to action wins if both are somehow there.
+    expect(outstandingOffer([made({ id: "a", status: "accepted" }), made({ id: "b", status: "pending" })])?.id).toBe("b");
+  });
+
   it("filters the live ones either way round", () => {
     expect(liveOffers([made({ status: "pending" }), made({ status: "withdrawn" })])).toHaveLength(1);
     expect(liveOffers(undefined)).toEqual([]);

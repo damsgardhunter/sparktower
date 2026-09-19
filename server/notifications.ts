@@ -56,14 +56,22 @@ export async function notify(input: {
     const recipients = [...new Set(input.recipients.filter((r): r is string => !!r && (input.allowSelf || r !== input.actorId)))].slice(0, MAX_FANOUT);
     if (!recipients.length) return;
     const excerpt = clip(input.excerpt);
+    /*
+     * The time from here, not the column's default or SQL's now(). The column
+     * is a zoneless timestamp holding UTC; `now()` is written in the database
+     * session's zone, so on a database in US Central every notification was
+     * five hours old the moment it arrived ("5h ago" for something just sent),
+     * and sorted among the rest by the wrong clock.
+     */
+    const now = new Date();
     const insert = db.insert(notifications).values(recipients.map((recipientId) => ({
       recipientId, actorId: input.actorId, kind: input.kind, targetId: input.targetId,
-      postId: input.postId ?? null, projectId: input.projectId ?? null, excerpt,
+      postId: input.postId ?? null, projectId: input.projectId ?? null, excerpt, createdAt: now,
     })));
     if (input.once) await insert.onConflictDoNothing();
     else await insert.onConflictDoUpdate({
       target: [notifications.recipientId, notifications.actorId, notifications.kind, notifications.targetId],
-      set: { readAt: null, createdAt: sql`now()`, excerpt },
+      set: { readAt: null, createdAt: now, excerpt },
     });
   } catch (err) {
     console.error("[notifications] couldn't record (non-fatal):", err);
@@ -236,7 +244,7 @@ export function registerNotificationRoutes(app: Express) {
       if (!ids?.length && !kind && !postId && req.body?.all !== true) {
         return res.status(400).json({ message: "Say which: ids, a kind, or all.", code: "invalid_input" });
       }
-      await db.update(notifications).set({ readAt: sql`now()` }).where(and(
+      await db.update(notifications).set({ readAt: new Date() }).where(and(
         eq(notifications.recipientId, me), isNull(notifications.readAt),
         ids?.length ? inArray(notifications.id, ids) : undefined,
         kind ? eq(notifications.kind, kind as NotificationKind) : undefined,

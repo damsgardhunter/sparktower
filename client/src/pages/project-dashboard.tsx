@@ -220,6 +220,16 @@ export default function ProjectDashboard() {
       queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "members"] });
       toast({ title: "Application accepted" });
     },
+    /*
+     * These three used to fail in silence: the button went back to normal and
+     * nothing said the answer hadn't been recorded. The list is refetched as
+     * well, since a failure often means it's out of date (already answered
+     * from another tab, or the applicant joined by invite meanwhile).
+     */
+    onError: (error) => {
+      toast({ title: "Couldn't accept that application", description: errorText(error), variant: "destructive" });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "applications"] });
+    },
   });
 
   const rejectMutation = useMutation({
@@ -229,6 +239,10 @@ export default function ProjectDashboard() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "applications"] });
       toast({ title: "Application rejected" });
+    },
+    onError: (error) => {
+      toast({ title: "Couldn't reject that application", description: errorText(error), variant: "destructive" });
+      queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "applications"] });
     },
   });
 
@@ -241,6 +255,8 @@ export default function ProjectDashboard() {
       setQuestionsModalOpen(false);
       toast({ title: "Application questions saved" });
     },
+    // The modal stays open with the edits in it; only the toast says why.
+    onError: (error) => toast({ title: "Couldn't save those questions", description: errorText(error), variant: "destructive" }),
   });
 
   const videoMutation = useMutation({

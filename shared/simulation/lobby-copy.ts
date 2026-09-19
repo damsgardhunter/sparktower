@@ -75,7 +75,10 @@ export function phaseCopy(input: {
     return {
       title: yourRole ? "You have a seat" : "Take a seat",
       body: yourRole
-        ? "You can still swap while the clock is running. Talk it out — the seats you leave empty get dealt out at random."
+        // Not "at random": assignRemaining() in lobby.ts deals them in a fixed
+        // order to whoever hasn't chosen, earliest to join first. Saying random
+        // told people a dispute had no answer when it has a precise one.
+        ? "You can still swap while the clock is running. Talk it out — the seats you leave empty go to whoever hasn't chosen, earliest to join first."
         : "One person per seat, first to claim it. Argue about it; that is the point of this bit.",
       deadline: "When the clock runs out, whatever is left is dealt out to whoever hasn't chosen.",
     };

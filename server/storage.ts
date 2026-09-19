@@ -169,7 +169,9 @@ import {
 import { db } from "./db";
 import { eq, desc, or, ilike, sql, and, gte, lte, asc, ne, inArray, isNull, notInArray } from "drizzle-orm";
 import { ago } from "./sql-interval";
+import { publicProject, type TeamOnlyProjectField } from "./project-visibility";
 import { getEntitlements, normalizeTier, FAIR_USE_MONTHLY_CAP } from "@shared/plans";
+import { takeHold, returnCredits } from "./credit-reservations";
 
 /**
  * Was a finished task finished by its due date?
@@ -185,6 +187,32 @@ export function isTaskOnTime(task: { status: string; dueDate: Date | null; compl
 }
 
 /** A project comment with its author, ready to render. */
+/** The most a project listing returns, whoever asks. See getProjects. */
+export const PROJECT_LISTING_CAP = 200;
+
+export interface ProjectListingFilters {
+  category?: string;
+  status?: string;
+  goal?: string;
+  /** One builder's projects, for their profile. */
+  ownerId?: string;
+  /** "solo" is solo builds only; "team" is the ones that take collaborators. */
+  shape?: "solo" | "team";
+  /** A role the project says it needs, matched as a case-insensitive substring. */
+  needs?: string;
+  /** Free text over the title, one-liner, description, stack and roles. */
+  q?: string;
+  /** Owners still see their own private projects in listings. */
+  includePrivateOwnedBy?: string;
+  /** At most PROJECT_LISTING_CAP. */
+  limit?: number;
+}
+
+/** A user's words as an ILIKE substring: their % and _ are literal, not wildcards. */
+function likePattern(text: string): string {
+  return `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+}
+
 export interface ProjectCommentWithAuthor extends ProjectComment {
   author: User;
   profile?: UserProfile;
@@ -232,7 +260,7 @@ export interface IStorage {
   completeOnboarding(userId: string): Promise<void>;
   
   // Projects
-  getProjects(filters?: { category?: string; status?: string }): Promise<(Project & { owner: User; profile?: UserProfile })[]>;
+  getProjects(filters?: ProjectListingFilters): Promise<(Project & { owner: User; profile?: UserProfile })[]>;
   getProject(id: string): Promise<Project | undefined>;
   createProject(data: InsertProject): Promise<Project>;
   updateProject(id: string, data: Partial<InsertProject>): Promise<Project>;
@@ -371,7 +399,7 @@ export interface IStorage {
   // Project Applications
   createApplication(data: { projectId: string; userId: string; resumeUrl?: string; answers?: any; message?: string }): Promise<ProjectApplication>;
   getProjectApplications(projectId: string): Promise<(ProjectApplication & { user: User; profile?: UserProfile })[]>;
-  getUserApplications(userId: string): Promise<(ProjectApplication & { project: Project })[]>;
+  getUserApplications(userId: string): Promise<(ProjectApplication & { project: Omit<Project, TeamOnlyProjectField> })[]>;
   getApplication(id: string): Promise<ProjectApplication | undefined>;
   updateApplicationStatus(id: string, status: "accepted" | "rejected"): Promise<ProjectApplication>;
 
@@ -384,7 +412,7 @@ export interface IStorage {
   isFollowingUser(followerId: string, followeeId: string): Promise<boolean>;
   getUserFollowerCount(userId: string): Promise<number>;
   getFollowingCount(userId: string): Promise<number>;
-  getUserFollowedProjects(userId: string): Promise<(ProjectFollow & { project: Project & { owner: User } })[]>;
+  getUserFollowedProjects(userId: string): Promise<(ProjectFollow & { project: Omit<Project, TeamOnlyProjectField> & { owner: User } })[]>;
   getProjectFollowerCount(projectId: string): Promise<number>;
 
   // Kanban Tasks
@@ -635,15 +663,44 @@ export class DatabaseStorage implements IStorage {
       .where(eq(userProfiles.userId, userId));
   }
 
-  async getProjects(filters?: { category?: string; status?: string; includePrivateOwnedBy?: string }): Promise<(Project & { owner: User; profile?: UserProfile })[]> {
-    let query = db.select().from(projects);
+  /**
+   * The public project listing, and Discover's project half.
+   *
+   * One query, not 1 + 2N. This used to read every project in the database
+   * and then, per row, the owner and the owner's profile — two round trips a
+   * project, unbounded, on an endpoint anyone can call signed out. It's now a
+   * join, newest first, capped (`limit`, default and ceiling
+   * PROJECT_LISTING_CAP): nothing on the site pages past the first couple of
+   * hundred, and a listing that grows with the table is a denial-of-service
+   * waiting for the table to grow.
+   *
+   * The filters that are plain column tests live here so the cap applies
+   * after them — a cap before filtering would make a search for a rare stack
+   * come back empty while matching projects sat on row 201. Free text is a
+   * case-insensitive substring over the columns Discover always searched.
+   */
+  async getProjects(filters?: ProjectListingFilters): Promise<(Project & { owner: User; profile?: UserProfile })[]> {
     const conditions = [];
-
-    if (filters?.category) {
-      conditions.push(eq(projects.category, filters.category));
+    if (filters?.category) conditions.push(eq(projects.category, filters.category));
+    if (filters?.status) conditions.push(eq(projects.status, filters.status as any));
+    if (filters?.goal) conditions.push(eq(projects.goal, filters.goal as any));
+    if (filters?.ownerId) conditions.push(eq(projects.ownerId, filters.ownerId));
+    // solo_mode is nullable: null has always meant "not solo".
+    if (filters?.shape === "solo") conditions.push(eq(projects.soloMode, true));
+    if (filters?.shape === "team") conditions.push(sql`coalesce(${projects.soloMode}, false) = false`);
+    if (filters?.needs) {
+      const pattern = likePattern(filters.needs);
+      conditions.push(sql`exists (select 1 from unnest(${projects.rolesNeeded}) as r(role) where r.role ilike ${pattern})`);
     }
-    if (filters?.status) {
-      conditions.push(eq(projects.status, filters.status as any));
+    if (filters?.q) {
+      const pattern = likePattern(filters.q);
+      conditions.push(or(
+        ilike(projects.title, pattern),
+        ilike(projects.oneLiner, pattern),
+        ilike(projects.description, pattern),
+        sql`array_to_string(${projects.techStack}, ' ') ilike ${pattern}`,
+        sql`array_to_string(${projects.rolesNeeded}, ' ') ilike ${pattern}`,
+      )!);
     }
     // Private projects are excluded from public listings, except for their owner.
     conditions.push(
@@ -652,17 +709,17 @@ export class DatabaseStorage implements IStorage {
         : eq(projects.isPrivate, false)
     );
 
-    const result = await (conditions.length > 0 
-      ? query.where(and(...conditions)) 
-      : query).orderBy(desc(projects.createdAt));
-    
-    return await Promise.all(
-      result.map(async (project) => {
-        const [owner] = await db.select().from(users).where(eq(users.id, project.ownerId));
-        const profile = await this.getUserProfile(project.ownerId);
-        return { ...project, owner, profile };
-      })
-    );
+    const limit = Math.max(1, Math.min(filters?.limit ?? PROJECT_LISTING_CAP, PROJECT_LISTING_CAP));
+    const rows = await db
+      .select({ project: projects, owner: users, profile: userProfiles })
+      .from(projects)
+      .innerJoin(users, eq(users.id, projects.ownerId))
+      .leftJoin(userProfiles, eq(userProfiles.userId, projects.ownerId))
+      .where(and(...conditions))
+      // The id breaks ties, so two projects created in the same millisecond keep one order across calls.
+      .orderBy(desc(projects.createdAt), desc(projects.id))
+      .limit(limit);
+    return rows.map((r) => ({ ...r.project, owner: r.owner, profile: r.profile ?? undefined }));
   }
 
   async getProject(id: string): Promise<Project | undefined> {
@@ -1252,6 +1309,23 @@ export class DatabaseStorage implements IStorage {
    * anything — they just have a much higher ceiling.
    */
   async deductCredits(userId: string, amount: number): Promise<boolean> {
+    /*
+     * requireCredits usually took these already, before the model was called
+     * (server/credit-reservations.ts). Settle against that hold instead of
+     * charging twice: the same amount is done, less gives the rest back, more
+     * charges the difference under the same cap.
+     */
+    const held = takeHold(userId);
+    if (held) {
+      if (amount === held.amount) return true;
+      if (amount < held.amount) { await returnCredits(userId, held.amount - amount); return true; }
+      return this.chargeCredits(userId, amount - held.amount);
+    }
+    return this.chargeCredits(userId, amount);
+  }
+
+  /** The conditional charge itself, with no hold to settle against. requireCredits takes its hold with this. */
+  async chargeCredits(userId: string, amount: number): Promise<boolean> {
     await this.resetCreditsIfNeeded(userId);
     const user = await this.getUser(userId);
     if (!user) return false;
@@ -2097,12 +2171,12 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
-  async getUserApplications(userId: string): Promise<(ProjectApplication & { project: Project })[]> {
-    const apps = await db.select().from(projectApplications).where(eq(projectApplications.userId, userId)).orderBy(desc(projectApplications.createdAt));
-    return await Promise.all(apps.map(async (app) => {
-      const [project] = await db.select().from(projects).where(eq(projects.id, app.projectId));
-      return { ...app, project };
-    }));
+  /** An applicant's own applications, each with the project as the public sees it — they aren't on its team yet. */
+  async getUserApplications(userId: string): Promise<(ProjectApplication & { project: Omit<Project, TeamOnlyProjectField> })[]> {
+    const rows = await db.select({ app: projectApplications, project: projects }).from(projectApplications)
+      .innerJoin(projects, eq(projects.id, projectApplications.projectId))
+      .where(eq(projectApplications.userId, userId)).orderBy(desc(projectApplications.createdAt));
+    return rows.map((r) => ({ ...r.app, project: publicProject(r.project) }));
   }
 
   async getApplication(id: string): Promise<ProjectApplication | undefined> {
@@ -2156,13 +2230,32 @@ export class DatabaseStorage implements IStorage {
     return Number(builders?.n ?? 0) + Number(projectsFollowed?.n ?? 0);
   }
 
-  async getUserFollowedProjects(userId: string): Promise<(ProjectFollow & { project: Project & { owner: User } })[]> {
-    const follows = await db.select().from(projectFollows).where(eq(projectFollows.userId, userId)).orderBy(desc(projectFollows.createdAt));
-    return await Promise.all(follows.map(async (f) => {
-      const [project] = await db.select().from(projects).where(eq(projects.id, f.projectId));
-      const [owner] = await db.select().from(users).where(eq(users.id, project.ownerId));
-      return { ...f, project: { ...project, owner } };
-    }));
+  /**
+   * What someone follows, for their Following list.
+   *
+   * Following used to see through privacy: the follow route took any id, and
+   * this handed back the whole project row for each follow — so following a
+   * private project's id (or following a project before it went private) read
+   * its brief, its notes to Nova and the rest. A private project now appears
+   * only to someone on its team, and everyone gets the public projection;
+   * the full row is what the project's own routes serve its team.
+   */
+  async getUserFollowedProjects(userId: string): Promise<(ProjectFollow & { project: Omit<Project, TeamOnlyProjectField> & { owner: User } })[]> {
+    const rows = await db
+      .select({ follow: projectFollows, project: projects, owner: users, memberId: projectMembers.id })
+      .from(projectFollows)
+      .innerJoin(projects, eq(projects.id, projectFollows.projectId))
+      .innerJoin(users, eq(users.id, projects.ownerId))
+      .leftJoin(projectMembers, and(eq(projectMembers.projectId, projects.id), eq(projectMembers.userId, userId)))
+      .where(and(
+        eq(projectFollows.userId, userId),
+        or(eq(projects.isPrivate, false), eq(projects.ownerId, userId), sql`${projectMembers.id} is not null`),
+      ))
+      .orderBy(desc(projectFollows.createdAt));
+    // A duplicated member row would repeat a follow; one per follow.
+    const seen = new Set<string>();
+    return rows.filter((r) => !seen.has(r.follow.id) && !!seen.add(r.follow.id))
+      .map((r) => ({ ...r.follow, project: { ...publicProject(r.project), owner: r.owner } }));
   }
 
   async getProjectFollowerCount(projectId: string): Promise<number> {

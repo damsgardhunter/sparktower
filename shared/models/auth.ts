@@ -184,6 +184,31 @@ export const passwordResetTokens = pgTable("password_reset_tokens", {
 }));
 
 /**
+ * One-time links from the app into the website, signed in.
+ *
+ * The phone signs in with a Bearer token; its in-app browser has no cookie,
+ * so opening a web page the app doesn't have yet (a company, a challenge, a
+ * season invite) landed on the signed-out home page and lost where it was
+ * going. The app asks for one of these, and the browser trades it for a
+ * session on the page it was sent to. Single use, a minute long, stored only
+ * as a hash — the link is a password for as long as it lives.
+ */
+export const webHandoffTokens = pgTable("web_handoff_tokens", {
+  /** SHA-256 of the token in the link. */
+  tokenHash: varchar("token_hash").primaryKey(),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** Whether the app's own sign-in passed a second factor; the web session inherits exactly that. */
+  mfa: boolean("mfa").notNull().default(false),
+  /** Where to land: a path on this site, checked when it was issued. */
+  next: text("next").notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  usedAt: timestamp("used_at"),
+  createdAt: timestamp("created_at").notNull(),
+}, (table) => ({
+  byUser: index("web_handoff_user_idx").on(table.userId),
+}));
+
+/**
  * Refresh tokens for the native mobile apps.
  *
  * The web app uses cookie sessions, but a native client can't rely on cookies

@@ -6,7 +6,7 @@
  * component, that a company opens — so "this is what companies will see" is
  * a statement the page can keep.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { Briefcase, Check, Loader2, X } from "lucide-react";
@@ -38,7 +38,7 @@ interface Invite {
   status: "sent" | "accepted" | "declined";
   createdAt: string;
   answeredAt: string | null;
-  sentBy: string;
+  sentBy: string | null;
   company: { id: string; name: string; industry: string | null; website: string | null; size: string | null };
 }
 
@@ -52,14 +52,21 @@ export default function TalentPage() {
   const [location, setLocation] = useState("");
   const [remote, setRemote] = useState(true);
 
-  // The form starts from what is saved, once it has loaded.
+  /*
+   * The form starts from what is saved, once, when it first loads. It used to
+   * re-seed on every change to `updatedAt` — and flipping the visibility
+   * switch saves, which moves `updatedAt`, which put the saved headline and
+   * roles back over whatever had been typed and not yet saved.
+   */
+  const seeded = useRef(false);
   useEffect(() => {
-    if (!data) return;
+    if (!data || seeded.current) return;
+    seeded.current = true;
     setHeadline(data.profile.headline ?? "");
     setRoles(data.profile.roles);
     setLocation(data.profile.location ?? "");
     setRemote(data.profile.remote);
-  }, [data?.profile.updatedAt, !!data]);
+  }, [data]);
 
   const save = useMutation({
     mutationFn: async (patch: Partial<Profile>) => (await apiRequest("PUT", "/api/talent/me", patch)).json(),
@@ -210,7 +217,8 @@ export default function TalentPage() {
                     <span><span className="font-medium">{i.company.name}</span>{i.role && <span className="text-muted-foreground"> · {i.role}</span>}</span>
                     <span className="flex items-center gap-2">
                       <Badge variant={i.status === "accepted" ? "default" : "outline"}>{i.status === "accepted" ? "You said yes" : "You said no"}</Badge>
-                      {i.status === "accepted" && <Link href={`/messages?with=${i.sentBy}`} className="text-xs text-primary hover:underline">Open conversation</Link>}
+                      {/* No sender once their account is gone: the conversation is with whoever the company put forward, not "null". */}
+                      {i.status === "accepted" && i.sentBy && <Link href={`/messages?with=${i.sentBy}`} className="text-xs text-primary hover:underline">Open conversation</Link>}
                     </span>
                   </div>
                 ))}

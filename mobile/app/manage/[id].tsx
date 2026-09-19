@@ -27,7 +27,7 @@ import { SectionPathStrip } from "../../src/components/manage/SectionPathStrip";
 import { ALL_TABS, ProjectTabRow, SectionSwitcher, SectionTabRow, type Tab } from "../../src/components/manage/SectionChrome";
 import { mkey } from "../../src/components/manage/shared";
 import { NovaFab, NovaGuideSheet, useNovaMessages } from "../../src/components/manage/path/NovaGuide";
-import { isProjectGoal, normaliseGoal, sectionDef, useScreenFocused, useSections, type ProjectGoal } from "../../src/sections";
+import { normaliseGoal, sectionDef, useScreenFocused, useSections, type ProjectGoal } from "../../src/sections";
 
 /** Paths whose first screen is the money step's bubbles on the dashboard, not the chat (nova-guide.tsx). */
 const MONEY_FIRST = new Set(["systemize_business", "run_company"]);
@@ -73,7 +73,8 @@ export default function Manage() {
     if (linkedSection) { setChosen(linkedSection); setPrefRead(true); return; }
     if (!id) return;
     let live = true;
-    readPref(sectionPrefKey(id)).then((v) => { if (live && isProjectGoal(v)) setChosen((c) => c ?? v); }).catch(() => {}).finally(() => { if (live) setPrefRead(true); });
+    // Normalised like the link above: a remembered "raise_funding" (the retired Raise section) opens the section that took it over, not the default.
+    readPref(sectionPrefKey(id)).then((v) => { const g = normaliseGoal(v); if (live && g) setChosen((c) => c ?? g); }).catch(() => {}).finally(() => { if (live) setPrefRead(true); });
     return () => { live = false; };
   }, [id, sectionParam]);
   useEffect(() => { if (id && chosen) void writePref(sectionPrefKey(id), chosen).catch(() => {}); }, [id, chosen]);

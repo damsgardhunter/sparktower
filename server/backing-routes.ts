@@ -21,13 +21,13 @@
  * methods that every other module has to read past.
  */
 import type { Express } from "express";
-import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "./db";
 import { storage } from "./storage";
 import {
   projects, users, userProfiles, projectBackingCampaigns, projectBackerTiers,
   projectBackings, projectMerchOrders, projectCodeAudits, projectKanbanTasks,
-  backerBadges, type ShippingAddress,
+  backerBadges, projectMembers, type ShippingAddress,
 } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { requireSurface } from "./surfaces";
@@ -50,6 +50,7 @@ import {
 } from "@shared/backing";
 import { rateLimit } from "./moderation";
 import { openPii, sealPii } from "./pii";
+import { ensureStripeCustomer } from "./stripe-customer";
 
 const str = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
 const clampInt = (v: unknown, min: number, max: number, fallback: number) => {
@@ -71,6 +72,23 @@ function effectiveMerchConfig(
 ): MerchConfig {
   const config = { ...DEFAULT_MERCH_CONFIG, ...((stored as object) || {}) } as MerchConfig;
   return { ...config, logoUrl: config.logoUrl || projectLogoUrl || null };
+}
+
+/**
+ * Whether a reviewer has a stake in the project: owns it, or is on its team.
+ *
+ * Approval and release are the two human checks between a backer's money and
+ * a creator, and the reviewer role alone was all either asked for — so a
+ * reviewer could approve their own project and send its pledges to their own
+ * account, or a teammate's. Someone on the project is exactly who shouldn't
+ * be the person vouching for it.
+ */
+async function reviewerHasStake(reviewerId: string, projectId: string): Promise<boolean> {
+  const [project] = await db.select({ ownerId: projects.ownerId }).from(projects).where(eq(projects.id, projectId));
+  if (project?.ownerId === reviewerId) return true;
+  const [member] = await db.select({ id: projectMembers.id }).from(projectMembers)
+    .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, reviewerId)));
+  return !!member;
 }
 
 async function isOwner(userId: string, projectId: string): Promise<boolean> {
@@ -778,15 +796,7 @@ export function registerBackingRoutes(app: Express) {
 
       const stripe = await getUncachableStripeClient();
       const backer = await storage.getUser(backerId);
-      let customerId = backer?.stripeCustomerId;
-      if (!customerId) {
-        const customer = await stripe.customers.create({
-          email: backer?.email || undefined,
-          metadata: { userId: backerId },
-        });
-        await storage.updateUserStripeInfo(backerId, { stripeCustomerId: customer.id });
-        customerId = customer.id;
-      }
+      const customerId = await ensureStripeCustomer(stripe, { id: backerId, email: backer?.email, stripeCustomerId: backer?.stripeCustomerId });
 
       const lineItems: any[] = [{
         price_data: {
@@ -814,6 +824,13 @@ export function registerBackingRoutes(app: Express) {
       const session = await stripe.checkout.sessions.create({
         customer: customerId,
         mode: "payment",
+        /*
+         * Cards only, as subscription checkout is. Stripe otherwise offers
+         * whatever the dashboard has switched on, including methods that
+         * settle days later — the checkout "completes" unpaid, and may never
+         * be paid at all. recordBacking also refuses anything not yet paid.
+         */
+        payment_method_types: ["card"],
         line_items: lineItems,
         ...(needsShipping
           ? { shipping_address_collection: { allowed_countries: ["US", "CA", "GB", "AU", "DE", "FR", "NL", "IE", "NZ"] } }
@@ -901,6 +918,9 @@ export function registerBackingRoutes(app: Express) {
       if (decision !== "approved" && decision !== "rejected") {
         return res.status(400).json({ message: "Decision must be approved or rejected" });
       }
+      if (await reviewerHasStake(req.user.id, projectId)) {
+        return res.status(403).json({ message: "You're on this project, so another reviewer has to decide it.", code: "reviewer_conflict" });
+      }
       const [campaign] = await db.select().from(projectBackingCampaigns)
         .where(eq(projectBackingCampaigns.projectId, projectId));
       if (!campaign) return res.status(404).json({ message: "No campaign for that project" });
@@ -959,6 +979,9 @@ export function registerBackingRoutes(app: Express) {
   app.post("/api/admin/backing/:projectId/release", isAuthenticated, requireReviewer, rateLimit("payout"), async (req: any, res) => {
     try {
       const { projectId } = req.params;
+      if (await reviewerHasStake(req.user.id, projectId)) {
+        return res.status(403).json({ message: "You're on this project, so another reviewer has to release its funds.", code: "reviewer_conflict" });
+      }
       const [campaign] = await db.select().from(projectBackingCampaigns)
         .where(eq(projectBackingCampaigns.projectId, projectId));
       if (campaign?.reviewStatus !== "approved") {
@@ -972,8 +995,9 @@ export function registerBackingRoutes(app: Express) {
         return res.status(422).json({ message: "The creator has no connected Stripe account." });
       }
 
+      // A pledge under a chargeback isn't the platform's to pay out until the dispute is won.
       const pending = await db.select().from(projectBackings)
-        .where(and(eq(projectBackings.projectId, projectId), eq(projectBackings.status, "held")));
+        .where(and(eq(projectBackings.projectId, projectId), eq(projectBackings.status, "held"), isNull(projectBackings.disputedAt)));
       if (pending.length === 0) return res.json({ released: 0, totalCents: 0 });
 
       const stripe = await getUncachableStripeClient();
@@ -1007,7 +1031,7 @@ export function registerBackingRoutes(app: Express) {
            */
           const outcome = await db.transaction(async (tx) => {
             const [row] = await tx.select({ id: projectBackings.id }).from(projectBackings)
-              .where(and(eq(projectBackings.id, backing.id), eq(projectBackings.status, "held")))
+              .where(and(eq(projectBackings.id, backing.id), eq(projectBackings.status, "held"), isNull(projectBackings.disputedAt)))
               .for("update");
             if (!row) return "gone" as const;
 
@@ -1308,6 +1332,20 @@ export async function recordBacking(session: any): Promise<void> {
   const m = session?.metadata || {};
   if (m.type !== "backing") return;
 
+  /*
+   * Only money that has arrived. A checkout completes before a delayed method
+   * (a bank debit, say) has settled — `payment_status` is "unpaid" then, and
+   * may never become "paid" — and this used to record a held pledge, a
+   * believer number and the "raised" total for it all the same. Checkout is
+   * card-only now, so this should never be anything but "paid"; if it is,
+   * checkout.session.async_payment_succeeded brings the session back here
+   * once the money is real.
+   */
+  if (session.payment_status !== "paid") {
+    console.warn(`[backing] checkout ${session.id} completed with payment_status=${session.payment_status}: not recorded until it's paid`);
+    return;
+  }
+
   const existing = await db.select({ id: projectBackings.id }).from(projectBackings)
     .where(eq(projectBackings.stripeCheckoutSessionId, session.id));
   if (existing.length > 0) return; // Stripe retries webhooks; this is expected.
@@ -1315,6 +1353,36 @@ export async function recordBacking(session: any): Promise<void> {
   const amountCents = parseInt(m.amountCents, 10);
   const tipCents = parseInt(m.tipCents, 10) || 0;
   if (!m.projectId || !m.backerId || !Number.isFinite(amountCents)) return;
+  const paymentIntent: string | null = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id ?? null;
+
+  /*
+   * Paid for a campaign that may no longer take it.
+   *
+   * Checkout checks the campaign when the session is created, and a session
+   * stays open for up to a day. In that time the project can be deleted, the
+   * campaign rejected or switched off, or the creator suspended or gone — and
+   * this recorded a held pledge regardless: money for a project that can
+   * never be paid out, sitting in escrow for the whole refund window. It goes
+   * straight back instead. The idempotency key is the session's, so a retried
+   * webhook can't refund twice.
+   */
+  const refundNow = async (reason: string) => {
+    if (!paymentIntent) throw new Error(`Backing checkout ${session.id} has no payment intent to refund (${reason})`);
+    const stripe = await getUncachableStripeClient();
+    await stripe.refunds.create({
+      payment_intent: paymentIntent,
+      metadata: { checkoutSessionId: session.id, projectId: m.projectId, reason },
+    }, { idempotencyKey: `backing_refund_${session.id}` });
+    console.warn(`[backing] checkout ${session.id} for project ${m.projectId} refunded, not recorded: ${reason}`);
+  };
+  const [project] = await db.select({ ownerId: projects.ownerId }).from(projects).where(eq(projects.id, m.projectId));
+  const [openCampaign] = project
+    ? await db.select().from(projectBackingCampaigns).where(eq(projectBackingCampaigns.projectId, m.projectId))
+    : [];
+  if (!project || !(await acceptingBacking(openCampaign, project.ownerId))) {
+    await refundNow(project ? "campaign_closed" : "project_gone");
+    return;
+  }
 
   const shipping = session.shipping_details || session.customer_details;
   const address: ShippingAddress | null = shipping?.address?.line1
@@ -1331,7 +1399,30 @@ export async function recordBacking(session: any): Promise<void> {
 
   const refundDueAt = new Date(Date.now() + REFUND_WINDOW_DAYS * 86_400_000);
 
-  await db.transaction(async (tx) => {
+  const outcome = await db.transaction(async (tx) => {
+    /*
+     * The campaign row is locked first: every pledge to this project queues
+     * here, so the sold-out count and the duplicate check below can't be
+     * raced by a second delivery or a second backer finishing at the same
+     * moment. Checkout's own sold-out check ran when the session opened; a
+     * limited tier with its last slot open could be bought by everyone who
+     * had a checkout page up.
+     */
+    await tx.select({ id: projectBackingCampaigns.id }).from(projectBackingCampaigns)
+      .where(eq(projectBackingCampaigns.projectId, m.projectId)).for("update");
+    const [again] = await tx.select({ id: projectBackings.id }).from(projectBackings)
+      .where(eq(projectBackings.stripeCheckoutSessionId, session.id));
+    if (again) return "duplicate" as const;
+    if (m.tierId) {
+      const [limited] = await tx.select({ maxBackers: projectBackerTiers.maxBackers }).from(projectBackerTiers)
+        .where(eq(projectBackerTiers.id, m.tierId));
+      if (limited?.maxBackers != null) {
+        const [{ n }] = await tx.select({ n: sql<number>`count(*)::int` }).from(projectBackings)
+          .where(and(eq(projectBackings.tierId, m.tierId), inArray(projectBackings.status, ["held", "released"])));
+        if (n >= limited.maxBackers) return "sold_out" as const;
+      }
+    }
+
     const [campaign] = await tx.update(projectBackingCampaigns)
       .set({ believerCount: sql`${projectBackingCampaigns.believerCount} + 1` })
       .where(eq(projectBackingCampaigns.projectId, m.projectId))
@@ -1349,7 +1440,7 @@ export async function recordBacking(session: any): Promise<void> {
       isAnonymous: m.isAnonymous === "1",
       status: "held",
       stripeCheckoutSessionId: session.id,
-      stripePaymentIntentId: session.payment_intent || null,
+      stripePaymentIntentId: paymentIntent,
       // Where somebody lives: sealed, so a database dump isn't a list of addresses.
       shippingAddress: sealPii(address),
       unclaimedPreference: m.unclaimedPreference === "donate_platform" ? "donate_platform" : "refund",
@@ -1383,7 +1474,13 @@ export async function recordBacking(session: any): Promise<void> {
         });
       }
     }
+    return "recorded" as const;
   });
+  if (outcome === "duplicate") return;
+  if (outcome === "sold_out") {
+    await refundNow("tier_sold_out");
+    return;
+  }
 
   /*
    * The badge entitlement is written straight away; the artwork is made later

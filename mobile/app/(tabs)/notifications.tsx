@@ -1,3 +1,4 @@
+import * as WebBrowser from "expo-web-browser";
 import { useCallback, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
@@ -7,7 +8,7 @@ import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
 import { Avatar, Btn, Empty, Icon, Loading, Segments, timeAgo, type IconName } from "../../src/components/ui";
 import { useConnectionStates } from "../../src/components/ConnectActions";
 import { NoticeBanner, useNotice } from "../../src/components/Sheet";
-import { appHref, notificationSection, useConnectionRequests, useInvitationActions } from "../../src/networkData";
+import { appHref, isWebHref, openWebSignedIn, notificationSection, useConnectionRequests, useInvitationActions } from "../../src/networkData";
 import { useHideTabBarOnScroll } from "../../src/components/tab-bar-visibility";
 import { useHeaderSpace } from "../../src/components/AppHeader";
 import { TAB_BAR_SPACE } from "./_layout";
@@ -32,8 +33,19 @@ type Line =
   | { type: "item"; key: string; n: NotificationItem };
 
 const POSTS = new Set(["followed_post", "comment", "reply", "post_reaction", "comment_reaction", "mention", "feedback_used"]);
-const NETWORK = new Set(["follow", "connection_request", "connection_accepted"]);
-const PROJECTS = new Set(["project_follow", "path_step_done", "next_step", "weekly_update", "artifact_signup"]);
+const NETWORK = new Set(["follow", "connection_request", "connection_accepted", "company_added", "company_powers", "recruit_invite", "recruit_answer"]);
+/*
+ * The work you're doing: your projects, the companies you help run, their
+ * challenges, and the simulation. The company and sim kinds were in no filter
+ * at all, so they showed only under All and Unread — a due job or a nudge from
+ * your table hidden from the Projects view it belongs in.
+ */
+const PROJECTS = new Set([
+  "project_follow", "path_step_done", "next_step", "weekly_update", "artifact_signup", "invite_accepted",
+  "job_due", "checkin_due", "scout_update", "scout_new_project", "challenge_entry", "challenge_result",
+  "sim_nudge", "season_invite", "sprint_left",
+  "project_application", "application_accepted", "application_rejected", "project_removed",
+]);
 
 /** The small icon on the avatar's corner: what kind of thing happened. */
 const KIND_ICON: Record<string, { icon: IconName; color: string }> = {
@@ -52,6 +64,24 @@ const KIND_ICON: Record<string, { icon: IconName; color: string }> = {
   weekly_update: { icon: "calendar", color: "#2563EB" },
   artifact_signup: { icon: "sparkles", color: "#7C3AED" },
   feedback_used: { icon: "bulb", color: "#CA8A04" },
+  invite_accepted: { icon: "person-add", color: "#16A34A" },
+  sprint_left: { icon: "exit", color: colors.textSecondary },
+  sim_nudge: { icon: "alarm", color: "#D97706" },
+  season_invite: { icon: "game-controller", color: "#7C3AED" },
+  recruit_invite: { icon: "briefcase", color: "#2563EB" },
+  recruit_answer: { icon: "briefcase", color: "#16A34A" },
+  challenge_entry: { icon: "trophy", color: "#CA8A04" },
+  challenge_result: { icon: "trophy", color: "#16A34A" },
+  scout_update: { icon: "telescope", color: "#0891B2" },
+  scout_new_project: { icon: "telescope", color: "#0891B2" },
+  company_added: { icon: "business", color: colors.primary },
+  company_powers: { icon: "key", color: colors.primary },
+  job_due: { icon: "repeat", color: "#D97706" },
+  checkin_due: { icon: "clipboard", color: "#2563EB" },
+  project_application: { icon: "hand-left", color: "#2563EB" },
+  application_accepted: { icon: "checkmark-circle", color: "#16A34A" },
+  application_rejected: { icon: "close-circle", color: colors.textSecondary },
+  project_removed: { icon: "remove-circle", color: colors.textSecondary },
 };
 
 /**
@@ -78,6 +108,8 @@ export default function Notifications() {
   // Back on the tab: the list re-reads, so what arrived meanwhile is there.
   useFocusEffect(useCallback(() => {
     void qc.invalidateQueries({ queryKey: ["notification-count"] });
+    // The list itself too — the tab stays mounted, so without this the badge said 3 new over yesterday's list.
+    void qc.invalidateQueries({ queryKey: ["notifications"] });
   }, [qc]));
 
   const read = useMutation({
@@ -137,7 +169,9 @@ export default function Notifications() {
 
   const open = (n: NotificationItem) => {
     if (!n.read) read.mutate({ ids: [n.id] });
-    router.push(appHref(n.href, n.actor.id) as any);
+    const to = appHref(n.href, n.actor.id);
+    if (isWebHref(to)) void openWebSignedIn(to, (url) => WebBrowser.openBrowserAsync(url)).catch(() => {});
+    else router.push(to as any);
   };
 
   const header = (
@@ -164,11 +198,17 @@ export default function Notifications() {
     </View>
   );
 
-  if (query.isLoading) return <Loading />;
-
+  /*
+   * Hooks above the early return, always. With the loading return first, the
+   * first render (loading) called two fewer hooks than the next, and React
+   * threw "Rendered more hooks than during the previous render" — the tab
+   * crashed on its very first open.
+   */
   const hideTabBar = useHideTabBarOnScroll();
   // The header floats now, so the list leaves its room rather than sitting under it.
   const headerSpace = useHeaderSpace();
+
+  if (query.isLoading) return <Loading />;
 
   return (
     <>

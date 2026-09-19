@@ -329,7 +329,7 @@ export function buildRouteCoverage(files: RepoFile[]): RouteCoverage {
         // A guard counts wherever it sits in the chain: after an inline
         // middleware, or as an explicit check at the top of the handler.
         auth: AUTH_GUARD.test(chunk) || !!prefixGuard || /\brequireOwner\b|\brequireReviewer\b|\brequireAdmin\b/.test(middleware) || /if\s*\(\s*!req\.user(?:\?\.id)?\s*\)[^\n]*\b401\b/.test(chunk),
-        rateLimited: /\brateLimit\s*\(/.test(chunk) || /\benforce(?:Rate|Rejection)Limit\s*\(/.test(body) || credits,
+        rateLimited: /\brateLimit\s*\(/.test(chunk) || /\benforce(?:Rate|Rejection|Reserved)Limit\s*\(/.test(body) || credits,
         floor: write && underFloor(path),
         surface, credits,
         privileged: /\b(requireOwner|requireReviewer|requireAdmin|isAdmin)\b/.test(middleware + body.slice(0, 600)),

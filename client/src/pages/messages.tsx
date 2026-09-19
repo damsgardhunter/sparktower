@@ -3,6 +3,8 @@ import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
+import { useToast } from "@/hooks/use-toast";
+import { errorText } from "@/lib/api-error";
 import { UserAvatar } from "@/components/user-avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -171,6 +173,7 @@ function ChatPanel({
   currentUserId: string;
 }) {
   const [message, setMessage] = useState("");
+  const { toast } = useToast();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
@@ -193,6 +196,12 @@ function ChatPanel({
       queryClient.invalidateQueries({ queryKey: ["/api/messages/conversations"] });
       queryClient.invalidateQueries({ queryKey: ["/api/messages/unread-count"] });
       setMessage("");
+    },
+    // A refused send (rate limit, a blocked or missing recipient) used to just
+    // stop the spinner, which reads as "sent". The draft is only cleared on
+    // success, so it's still in the box to retry — the toast says why it didn't go.
+    onError: (error) => {
+      toast({ title: "Message not sent", description: errorText(error), variant: "destructive" });
     },
   });
 
@@ -392,7 +401,10 @@ export default function MessagesPage() {
 
       <div className="flex-1 bg-background">
         {selectedUserId ? (
-          <ChatPanel userId={selectedUserId} currentUserId={user.id} />
+          // Keyed by the person: the draft and scroll state belong to one
+          // conversation, and without a remount switching people carried a
+          // half-typed message over to someone else, one Enter from being sent.
+          <ChatPanel key={selectedUserId} userId={selectedUserId} currentUserId={user.id} />
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <MessageSquare className="h-16 w-16 text-muted-foreground mb-4" />

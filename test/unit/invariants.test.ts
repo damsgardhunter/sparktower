@@ -261,7 +261,10 @@ describe("the money adds up", () => {
       const after = out.world.companies.find((c) => c.id === "t")!;
       const report = out.reports.find((r) => r.companyId === "t")!;
 
-      const borrowed = testCase.cfo.borrow ?? 0;
+      // What the bank actually lends: a drawdown is clamped to the unused
+      // credit line. "borrowing" asks for more than a new company's line on
+      // purpose — it used to reconcile only because the engine lent it all.
+      const borrowed = Math.min(testCase.cfo.borrow ?? 0, Math.max(0, before.creditLimit - before.debt));
       const repaid = testCase.cfo.repay ?? 0;
       const raised = (testCase.cfo as any).raiseAmount ?? 0;
 

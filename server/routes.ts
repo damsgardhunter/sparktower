@@ -1,7 +1,7 @@
 import { productNameNote } from "@shared/project-draft";
-import { tierForPrice, PriceTierMissingError, WebhookHandlers } from "./webhookHandlers";
+import { PriceTierMissingError, WebhookHandlers } from "./webhookHandlers";
 import { liveSubscriptions, settleTier } from "./subscription-state";
-import { paidSubscription } from "@shared/subscriptions";
+import { ensureStripeCustomer } from "./stripe-customer";
 import { registerStripeHealthRoutes } from "./stripe-health";
 import { registerDeploymentRoutes } from "./deployment-info";
 import { ROADMAP_DEPTHS, DEFAULT_ROADMAP_DEPTH, MAX_ROADMAP_PHASES, roadmapDepth, depthForRevision, type RoadmapDepth } from "@shared/roadmap";
@@ -9,10 +9,11 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage, isTaskOnTime } from "./storage";
 import { db } from "./db";
-import { users, projectMembers, projects, userProfiles, projectDataShapes, pathWork, projectDecisions, projectFiles, projectLinks, projectKanbanTasks, feedPosts } from "@shared/schema";
+import { users, projectMembers, projects, userProfiles, projectDataShapes, pathWork, projectDecisions, projectFiles, projectLinks, projectKanbanTasks, feedPosts, projectApplications, projectInvites } from "@shared/schema";
 import { setupAuth, isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { registerAuthRoutes } from "./replit_integrations/auth/routes";
 import { attachBearerUser, registerMobileAuthRoutes } from "./mobile-auth";
+import { registerWebHandoffRoutes } from "./web-handoff";
 import { registerObjectStorageRoutes, ObjectStorageService, ObjectNotFoundError } from "./replit_integrations/object_storage";
 import { registerStartupGameRoutes } from "./startup-game-routes";
 import { registerGameIdeaRoutes } from "./game-ideas";
@@ -60,6 +61,7 @@ import { pickFields, WRITABLE } from "./body-fields";
 import { registerEmailVerificationRoutes, requireVerifiedEmail } from "./email-verification";
 import { registerPasswordResetRoutes } from "./password-reset";
 import { recordView, countViews } from "./views";
+import { publicProject, isOnTeam } from "./project-visibility";
 import { registerAdminSecurityRoutes } from "./admin-security-routes";
 import { registerSimulationRoutes } from "./simulation-routes";
 import { registerSimulationDeskRoutes } from "./simulation-desk-routes";
@@ -99,7 +101,7 @@ import { draftExpansionSteps, proposeInjections, readExistingProgress, draftArti
 import { workKindFor, sanitizeLoopAudit, loopTypeOf, LOOP_TYPE_INFO, type WorkPayload } from "@shared/phase-trees";
 import { resolveTree, treeFor } from "@shared/phase-trees";
 import { creditState, lowCreditsAt, checkoutReturnUrls, safeReturnPath } from "@shared/credits";
-import { applyTier, billingIssueFor } from "./billing-credits";
+import { billingIssueFor } from "./billing-credits";
 import { parseModelJson, answerUnreadable, ModelResponseError, respondToAiError } from "./ai-json";
 
 async function isProjectMember(userId: string, projectId: string): Promise<boolean> {
@@ -381,6 +383,8 @@ export async function registerRoutes(
   registerAnalyticsRoutes(app);
   registerAuthRoutes(app);
   registerMobileAuthRoutes(app);
+  // The app's way into web pages it doesn't have yet, signed in (server/web-handoff.ts).
+  registerWebHandoffRoutes(app);
   registerObjectStorageRoutes(app);
   registerStartupGameRoutes(app);
   registerGameIdeaRoutes(app);
@@ -691,12 +695,14 @@ Only include fields you have enough info to fill. Start empty if needed.`;
   app.get("/api/projects", async (req: any, res) => {
     const { category, status } = req.query;
     const projects = await storage.getProjects({
-      category: category as string,
-      status: status as string,
+      // A repeated ?category= arrives as an array; only a single value is a filter.
+      category: typeof category === "string" ? category : undefined,
+      status: typeof status === "string" ? status : undefined,
       // Owners still see their own private projects in listings.
       includePrivateOwnedBy: req.user?.id,
     });
-    res.json(projects);
+    // A listing is a public view: the team's working state (server/project-visibility.ts) only on your own rows.
+    res.json(projects.map((p) => (req.user?.id && p.ownerId === req.user.id ? p : publicProject(p))));
   });
 
   /**
@@ -798,7 +804,15 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       },
     });
     if (outcome === "counted") await storage.incrementProjectViews(req.params.id);
-    res.json(project);
+    /*
+     * The team gets the row; everyone else the public projection. The members
+     * are already loaded for the view count, so being on the team costs no
+     * extra query. The manage screens that read novaNotes, auditAutoApply and
+     * the rest are only reachable by the team.
+     */
+    const viewerId = req.user?.id as string | undefined;
+    const onTeam = !!viewerId && (viewerId === project.ownerId || members.some((m: any) => m.userId === viewerId));
+    res.json(onTeam ? project : publicProject(project));
   });
 
   app.get("/api/projects/:id/members", async (req: any, res) => {
@@ -821,13 +835,21 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       const projectId = req.params.id;
       const { resumeUrl, answers, message } = req.body;
       const project = await storage.getProject(projectId);
-      if (!project) return res.status(404).json({ message: "Project not found" });
+      // A private project isn't there to anyone off its team — the same 404 as one that doesn't exist.
+      if (!project || project.isPrivate) return res.status(404).json({ message: "Project not found" });
       if (project.ownerId === userId) return res.status(400).json({ message: "Cannot apply to your own project" });
       const members = await storage.getProjectMembers(projectId);
       if (members.some(m => m.userId === userId)) return res.status(400).json({ message: "Already a member" });
       const existing = await storage.getUserApplications(userId);
       if (existing.some(a => a.projectId === projectId && a.status === "pending")) return res.status(400).json({ message: "Already applied" });
       const app = await storage.createApplication({ projectId, userId, resumeUrl, answers, message });
+      /*
+       * The owner hears about it. An application used to land in a table that
+       * only the manage page's Team tab read, and nothing pointed there — so
+       * the one person who could say yes found out whenever they next happened
+       * to open that tab, and the applicant waited on silence.
+       */
+      void notify({ recipients: [project.ownerId], actorId: userId, kind: "project_application", targetId: app.id, projectId, excerpt: typeof message === "string" ? message : null });
       res.json(app);
     } catch (error) {
       console.error("Apply error:", error);
@@ -865,10 +887,39 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       const project = await storage.getProject(application.projectId);
       if (!project) return res.status(404).json({ message: "Project not found" });
       if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Only the project owner can accept applications" });
-      if (application.status !== "pending") return res.status(400).json({ message: "Application is not pending" });
-      const updated = await storage.updateApplicationStatus(req.params.id, "accepted");
-      await db.insert(projectMembers).values({ projectId: application.projectId, userId: application.userId, role: req.body.role || "member" });
-      res.json(updated);
+      const role = typeof req.body?.role === "string" && req.body.role.trim() ? req.body.role.trim().slice(0, 60) : "member";
+      /*
+       * One transaction, and idempotent.
+       *
+       * This used to flip the status and then insert the member as two
+       * separate writes, so anything that made the insert fail — most often
+       * the applicant having joined another way in the meantime, through an
+       * invite — left an application marked accepted, a 500 in the owner's
+       * face, and a retry that said "not pending". Now the row is locked, the
+       * member is added only if they aren't one already (the unique index on
+       * project_members backs that up against a concurrent invite), and a
+       * second click on an application that's already accepted is a success
+       * that changes nothing.
+       */
+      const outcome = await db.transaction(async (tx) => {
+        const [row] = await tx.select().from(projectApplications).where(eq(projectApplications.id, application.id)).for("update");
+        if (!row) return { status: 404 as const };
+        if (row.status === "rejected") return { status: 400 as const };
+        const updated = row.status === "accepted"
+          ? row
+          : (await tx.update(projectApplications).set({ status: "accepted" }).where(eq(projectApplications.id, row.id)).returning())[0];
+        const joined = await tx.insert(projectMembers)
+          .values({ projectId: row.projectId, userId: row.userId, role })
+          .onConflictDoNothing()
+          .returning({ id: projectMembers.id });
+        return { status: 200 as const, updated, newlyAccepted: row.status === "pending", joined: joined.length > 0 };
+      });
+      if (outcome.status === 404) return res.status(404).json({ message: "Application not found" });
+      if (outcome.status === 400) return res.status(400).json({ message: "Application is not pending" });
+      if (outcome.newlyAccepted) {
+        void notify({ recipients: [application.userId], actorId: project.ownerId, kind: "application_accepted", targetId: application.id, projectId: project.id, excerpt: project.title });
+      }
+      res.json(outcome.updated);
     } catch (error) {
       console.error("Accept application error:", error);
       res.status(500).json({ message: "Failed to accept application" });
@@ -884,6 +935,8 @@ Only include fields you have enough info to fill. Start empty if needed.`;
       if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Only the project owner can reject applications" });
       if (application.status !== "pending") return res.status(400).json({ message: "Application is not pending" });
       const updated = await storage.updateApplicationStatus(req.params.id, "rejected");
+      // Told either way: a no is an answer, and silence reads as still pending.
+      void notify({ recipients: [application.userId], actorId: project.ownerId, kind: "application_rejected", targetId: application.id, projectId: project.id, excerpt: project.title });
       res.json(updated);
     } catch (error) {
       console.error("Reject application error:", error);
@@ -896,16 +949,28 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     try {
       const userId = (req.user as any).id;
       const projectId = req.params.id;
+      /*
+       * The project has to exist, and a new follow has to be of something the
+       * follower can see. This took any id: following a private project's id
+       * put it in the follower's Following list, which served the whole row —
+       * brief, notes to Nova and all. A private project is a 404 to anyone off
+       * its team, as on every other route. Unfollowing is always allowed, so
+       * someone following a project that has since gone private can let go.
+       */
+      const project = await storage.getProject(projectId);
+      if (!project) return res.status(404).json({ message: "Project not found" });
       const following = await storage.isFollowing(userId, projectId);
       // An explicit `following` sets the state, so a retry or a double tap
       // can't undo itself; without one it toggles, as older clients expect.
       const want = typeof req.body?.following === "boolean" ? req.body.following : !following;
+      if (want && !following && project.isPrivate && !(await isOnTeam(userId, project))) {
+        return res.status(404).json({ message: "Project not found" });
+      }
       if (want && !following) {
         await storage.followProject(userId, projectId);
         // Only a new follow is the loop's action — not a repeat, not an unfollow.
         recordExploreAction(req, EXPLORE_EVENTS.follow, { matchType: "project", targetId: projectId });
-        const project = await storage.getProject(projectId);
-        if (project) void notify({ recipients: [project.ownerId], actorId: userId, kind: "project_follow", targetId: projectId, projectId });
+        void notify({ recipients: [project.ownerId], actorId: userId, kind: "project_follow", targetId: projectId, projectId });
       }
       if (!want && following) {
         await storage.unfollowProject(userId, projectId);
@@ -2201,7 +2266,15 @@ ${PLAIN_LANGUAGE_RULES}`;
     if (!project) return res.status(404).json({ message: "Project not found" });
     if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Unauthorized" });
     
-    const validated = normalizeSoloMode(insertProjectBase.partial().parse(req.body));
+    /*
+     * The same fields a create may set — which excludes `ownerId`. The patch
+     * used to parse the whole body against the insert schema, owner included,
+     * so a project's owner could hand it to any account id with one request:
+     * no consent from the recipient, and the previous owner's membership row
+     * left saying "Owner". Transferring a project, if it's ever a feature,
+     * wants its own route with the other side agreeing.
+     */
+    const validated = normalizeSoloMode(insertProjectBase.partial().parse(pickFields(req.body ?? {}, PROJECT_CREATE_FIELDS)));
     /*
      * The pair is checked against what the row will be, not against the
      * patch alone: a patch that changes only the goal would otherwise leave
@@ -3656,7 +3729,18 @@ RULES:
    * an amount, a message and a date. So the shape is written out here rather
    * than handing over the row.
    */
-  app.get("/api/projects/:id/donations", async (req, res) => {
+  app.get("/api/projects/:id/donations", async (req: any, res) => {
+    /*
+     * Gated like milestones: readable by anyone who can see the project. A
+     * private project's backers, and what they said, are the team's — this
+     * used to answer for any id, signed out, which also confirmed the private
+     * project existed.
+     */
+    const project = await storage.getProject(req.params.id);
+    const viewerId = req.user?.id as string | undefined;
+    if (!project || (project.isPrivate && !(await isOnTeam(viewerId, project)))) {
+      return res.status(404).json({ message: "Project not found" });
+    }
     const donations = await storage.getProjectDonations(req.params.id);
     res.json(donations.map((d) => ({
       id: d.id,
@@ -3971,12 +4055,15 @@ RULES:
     const user = await storage.getUser(req.params.id);
     if (!user) return res.status(404).json({ message: "User not found" });
     const profile = await storage.getUserProfile(req.params.id);
-    const allProjects = await storage.getProjects();
     const viewerId = req.user?.id as string | undefined;
-    const userProjects = [];
-    for (const p of allProjects.filter((x) => x.ownerId === req.params.id)) {
-      if (!p.isPrivate || (viewerId && (viewerId === p.ownerId || (await isProjectMember(viewerId, p.id))))) userProjects.push(p);
-    }
+    /*
+     * Their projects, asked for by owner: the listing is capped now, and
+     * filtering the newest 200 of everyone's would drop an older builder's
+     * work from their own profile. Private ones only for the owner (as
+     * before); anyone but the owner sees the public projection.
+     */
+    const ownProjects = await storage.getProjects({ ownerId: req.params.id, includePrivateOwnedBy: viewerId });
+    const userProjects = ownProjects.map((p) => (viewerId === p.ownerId ? p : publicProject(p)));
     /*
      * Profile views were not recorded anywhere — the number simply did not
      * exist, while the code carried a comment about LinkedIn's "profile
@@ -5740,6 +5827,59 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     } catch (error) { res.status(500).json({ message: "Failed to update member" }); }
   });
 
+  /**
+   * Removing someone from a project, or leaving it.
+   *
+   * There was no way to do either: once on a team, always on it — a
+   * collaborator who'd moved on stayed in the member list, kept reading a
+   * private project, and kept the invite powers a teammate has, and the only
+   * fix was a support request. The owner may remove anyone but themselves;
+   * anyone may remove themselves. The owner can't leave: a project has to
+   * belong to someone, and handing it over is a decision for its own flow.
+   *
+   * In the same transaction, the invites that would undo it are revoked: any
+   * pending invite this person sent (it carries their name and would bring
+   * people in on their say-so after they've gone) and any addressed to them
+   * (which would let a removed member walk straight back in).
+   */
+  app.delete("/api/projects/:id/members/:userId", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
+    try {
+      const me = (req.user as any).id as string;
+      const target = String(req.params.userId);
+      const project = await storage.getProject(req.params.id);
+      // Off the team, a private project doesn't exist, whatever the verb.
+      if (!project || (project.isPrivate && !(await isOnTeam(me, project)))) return res.status(404).json({ message: "Project not found" });
+      if (target === project.ownerId) {
+        return res.status(400).json({ message: "The owner can't leave or be removed from their own project.", code: "owner_cannot_leave" });
+      }
+      if (me !== project.ownerId && me !== target) {
+        return res.status(403).json({ message: "Only the project's owner can remove someone else." });
+      }
+      const [person] = await db.select({ email: users.email }).from(users).where(eq(users.id, target));
+      const removed = await db.transaction(async (tx) => {
+        const gone = await tx.delete(projectMembers)
+          .where(and(eq(projectMembers.projectId, project.id), eq(projectMembers.userId, target)))
+          .returning({ id: projectMembers.id });
+        if (!gone.length) return false;
+        const theirs = person?.email
+          ? sql`(${projectInvites.createdById} = ${target} or lower(${projectInvites.email}) = ${person.email.toLowerCase()})`
+          : eq(projectInvites.createdById, target);
+        await tx.update(projectInvites).set({ revokedAt: new Date() })
+          .where(and(eq(projectInvites.projectId, project.id), isNull(projectInvites.acceptedAt), isNull(projectInvites.revokedAt), theirs));
+        return true;
+      });
+      if (!removed) return res.status(404).json({ message: "That person isn't on this project." });
+      // Leaving is their own act; being removed is news they should get from us, not from a 404.
+      if (me !== target) {
+        void notify({ recipients: [target], actorId: me, kind: "project_removed", targetId: `${project.id}:${target}`, projectId: project.id, excerpt: project.title });
+      }
+      res.json({ removed: true, userId: target, left: me === target });
+    } catch (error) {
+      console.error("Remove member error:", error);
+      res.status(500).json({ message: "Couldn't remove that member" });
+    }
+  });
+
   // --- AI Copilot ---
   app.post("/api/projects/:id/ai/summarize-progress", isAuthenticated, async (req: any, res) => {
     try {
@@ -6344,15 +6484,8 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       const user = await storage.getUser(userId);
       if (!user) return res.status(404).json({ message: "User not found" });
 
-      let customerId = user.stripeCustomerId;
-      if (!customerId) {
-        const customer = await stripe.customers.create({
-          email: user.email || undefined,
-          metadata: { userId },
-        });
-        await storage.updateUserStripeInfo(userId, { stripeCustomerId: customer.id });
-        customerId = customer.id;
-      }
+      // One customer per account, even for two checkouts at once (server/stripe-customer.ts).
+      const customerId = await ensureStripeCustomer(stripe, user);
 
       /*
        * Never a second subscription.
@@ -6505,14 +6638,6 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       }
 
       const stripe = await getUncachableStripeClient();
-      // Every status, then the paying one: a trial pays for its tier here as it
-      // does in the webhook. Asking only for "active" dropped trials to free.
-      const subscriptions = await stripe.subscriptions.list({
-        customer: user.stripeCustomerId,
-        status: "all",
-        limit: 10,
-      });
-
       /*
        * This read is Stripe's answer as of now, so it also sets the mark that
        * makes webhook events older than it no-ops (server/webhookHandlers.ts):
@@ -6520,22 +6645,21 @@ Respond ONLY with valid JSON (no markdown, no code fences):
        * confirmed with Stripe directly.
        */
       const syncedAt = { subscriptionEventAt: new Date() };
-      const sub = paidSubscription(subscriptions.data);
-      if (!sub) {
-        await storage.updateUserStripeInfo(userId, { subscriptionTier: "free", stripeSubscriptionId: undefined });
-        await db.update(users).set(syncedAt).where(eq(users.id, userId));
-        return res.json({ tier: "free" });
-      }
-      const priceId = sub.items.data[0]?.price?.id;
-      if (priceId) {
-        // Price metadata, else product metadata — as checkout reads it. A tier that can't be read changes nothing.
-        const tier = await tierForPrice(priceId);
-        const { refilled } = await applyTier(userId, tier, sub.id);
-        await db.update(users).set(syncedAt).where(eq(users.id, userId));
-        return res.json({ tier, refilled });
-      }
-
-      res.json({ tier: user.subscriptionTier || "free" });
+      /*
+       * The same decision the webhook and checkout make (server/subscription-
+       * state.ts): the highest paid tier among every live subscription. This
+       * used to take whichever paid subscription the list returned first, so a
+       * customer holding two could be set to the lower one here and back up by
+       * the next webhook — each flip up refilling credits. Trials count as
+       * paid, as before; a price whose tier can't be read throws and changes
+       * nothing.
+       */
+      const settled = await settleTier({
+        userId, customer: user.stripeCustomerId, stripe,
+        tierFor: (sub) => WebhookHandlers.tierForSubscription(sub),
+      });
+      await db.update(users).set(syncedAt).where(eq(users.id, userId));
+      res.json({ tier: settled.tier });
     } catch (error) {
       if (error instanceof PriceTierMissingError) {
         console.error("[stripe] Sync: a paid subscription's price has no tier configured:", error.priceId);

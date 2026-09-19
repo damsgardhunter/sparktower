@@ -128,7 +128,11 @@ export function FeedComments({ post }: {
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [picker, setPicker] = useState<string | null>(null);
 
-  const { data: rows, isLoading } = useQuery<FeedCommentRow[]>({ queryKey: ["/api/feed", post.id, "comments"] });
+  const { data: rows, isLoading } = useQuery<FeedCommentRow[]>({
+    queryKey: ["/api/feed", post.id, "comments"],
+    // "Bob commented on your post" opens this: a list cached earlier wouldn't have Bob in it.
+    refetchOnMount: "always",
+  });
   const tree = useMemo(() => buildCommentTree(rows ?? []), [rows]);
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["/api/feed", post.id, "comments"] });
 

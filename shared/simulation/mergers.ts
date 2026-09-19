@@ -201,10 +201,25 @@ export function applyAcquisition(input: { buyer: Company; seller: Company; amoun
     combined[segment] = (combined[segment] ?? 0) + n;
   }
 
+  /*
+   * Paid from cash first, and the rest on credit — the way a marketplace win
+   * is settled (see settleMarket in server/simulation-tick.ts).
+   *
+   * The whole price used to come out of cash. A buyer the tick had just
+   * checked could afford it — cash plus undrawn credit — was left overdrawn
+   * instead of borrowed, and the engine reads negative cash as a company that
+   * cannot pay its bills: it took out an emergency loan on their behalf, at
+   * the emergency rate, with the credit score hit that goes with it. The
+   * credit line the purchase was approved against went unused, and the team
+   * was punished for a deal the game had told them they could make.
+   */
+  const fromCash = Math.min(Math.max(0, buyer.cash), amount);
+  const borrowed = amount - fromCash;
+
   const buyerAfter: Company = {
     ...buyer,
-    cash: buyer.cash - amount,
-    debt: buyer.debt + seller.debt,
+    cash: buyer.cash - fromCash,
+    debt: buyer.debt + seller.debt + borrowed,
     customers: combined,
     assets: [...buyer.assets, ...seller.assets],
   };

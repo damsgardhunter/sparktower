@@ -87,6 +87,11 @@ export function notificationText(n: NotificationShape): string {
     case "company_powers": return `${who} changed what you can do for the company`;
     case "job_due": return "A recurring job of yours is due";
     case "checkin_due": return "It's check-in day";
+    case "project_application": return n.projectTitle ? `${who} applied to join ${n.projectTitle}` : `${who} applied to join your project`;
+    case "application_accepted": return n.projectTitle ? `You're on the team: ${who} accepted your application to ${n.projectTitle}` : `${who} accepted your application`;
+    // Plain, and not dressed up: they asked, and this is the answer.
+    case "application_rejected": return n.projectTitle ? `Your application to ${n.projectTitle} wasn't accepted` : "Your application wasn't accepted";
+    case "project_removed": return n.projectTitle ? `You're no longer on the team for ${n.projectTitle}` : "You were removed from a project's team";
     default: return `${who} did something`;
   }
 }
@@ -100,6 +105,11 @@ export function notificationHref(n: Pick<NotificationShape, "kind" | "actorId" |
   if (n.kind === "artifact_signup" && n.projectId) return `/projects/${n.projectId}/manage`;
   if (n.kind === "project_follow" && n.projectId) return `/projects/${n.projectId}`;
   if (n.kind === "invite_accepted" && n.projectId) return `/projects/${n.projectId}/manage?tab=team`;
+  // The owner decides on the Team tab, where the application is waiting with its buttons.
+  if (n.kind === "project_application" && n.projectId) return `/projects/${n.projectId}/manage?tab=team`;
+  // Accepted: straight into the project they just joined. Declined or removed: its public page, which they can still see.
+  if (n.kind === "application_accepted" && n.projectId) return `/projects/${n.projectId}/manage`;
+  if ((n.kind === "application_rejected" || n.kind === "project_removed") && n.projectId) return `/projects/${n.projectId}`;
   // Straight to the sprint, so the partner sees the state rather than hunting the list.
   if (n.kind === "sprint_left") return n.targetId ? `/sprints/${n.targetId}` : "/sprints";
   /*

@@ -407,11 +407,28 @@ export async function applyProjectOperations(
 
   // Scoping: an id Nova didn't get from this project's state is an id it
   // invented, and must not resolve to another project's row.
-  const [ownTasks, ownMilestones, roadmap] = await Promise.all([
+  const [ownTasks, ownMilestones, roadmap, project] = await Promise.all([
     storage.getProjectKanbanTasks(projectId).catch(() => []),
     storage.getProjectMilestones(projectId).catch(() => []),
     storage.getProjectRoadmap(projectId).catch(() => undefined),
+    storage.getProject(projectId),
   ]);
+  /*
+   * Who is applying these matters, not just that they're on the team.
+   *
+   * The project's own brief and scope (PATCH /api/projects/:id) and its
+   * roadmap phases (PATCH /api/roadmap-phases/:id) are the owner's to change;
+   * a member gets a 403 from those routes. But the operations arrive from the
+   * client — Nova's suggestion, reviewed and sent back — and the apply routes
+   * only check membership, so a member could hand-write an update_project and
+   * rewrite the pitch, or mark the roadmap done, through Nova. Decided here,
+   * from the database, rather than trusted from each caller: there are half a
+   * dozen callers (chat, task planning, health fixes, audits, the editor
+   * bridge, the first plan) and a flag one of them forgets is the same hole.
+   * A member's run still applies everything else; these are reported skipped.
+   */
+  const isOwner = !!project && project.ownerId === userId;
+  const OWNER_ONLY_SKIP = "Only the project's owner can change the project's brief, scope or roadmap.";
   const taskIds = new Set(ownTasks.map((t: any) => t.id));
   // Created tasks append; without a running counter a batch would all share
   // one position and the board couldn't order them.
@@ -426,6 +443,7 @@ export async function applyProjectOperations(
     try {
       switch (operation?.op) {
         case "update_project": {
+          if (!isOwner) { skipped.push(OWNER_ONLY_SKIP); break; }
           const fields: Record<string, unknown> = {};
           for (const field of BRIEF_FIELDS) {
             const value = operation.fields?.[field];
@@ -467,6 +485,7 @@ export async function applyProjectOperations(
         }
 
         case "update_scope": {
+          if (!isOwner) { skipped.push(OWNER_ONLY_SKIP); break; }
           const current = (await storage.getProject(projectId))?.scope as { mvp?: string[]; niceToHave?: string[] } | null;
           const next = { mvp: current?.mvp || [], niceToHave: current?.niceToHave || [] };
           const parts: string[] = [];
@@ -577,6 +596,7 @@ export async function applyProjectOperations(
         }
 
         case "update_phase": {
+          if (!isOwner) { skipped.push(OWNER_ONLY_SKIP); break; }
           if (opts.canEditRoadmap === false) { skipped.push("Roadmap changes need the Builder plan."); break; }
           if (!phaseIds.has(operation.id)) { skipped.push(`A roadmap phase id that isn't on this project (${operation.id}).`); break; }
           const patch: Record<string, unknown> = {};

@@ -221,6 +221,8 @@ export async function fileBotDecisions(input: {
         // The same cleaning a person's submission goes through, so there is one
         // definition of what a seat may file and no second path that can drift.
         payload: cleanDecision(role, decision, cityIds),
+        // Passed, not defaulted: the column's DEFAULT now() is the session's clock, not UTC.
+        submittedAt: new Date(),
       })
       /*
        * Never replaces. A person can hold a bot's seat after a takeover, and

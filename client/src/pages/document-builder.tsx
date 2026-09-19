@@ -58,6 +58,32 @@ export default function DocumentBuilder() {
   /** Count of AI writes in flight. Autosave stands down while any are running. */
   const [aiBusy, setAiBusy] = useState(0);
   const hydratedFor = useRef<string | null>(null);
+  /*
+   * Edits counted, not just flagged. A save is a snapshot of the document at
+   * the moment it was sent, and the builder keeps typing while it's in the
+   * air. When it comes back, "dirty = false" is only true if nothing changed
+   * since the snapshot — otherwise clearing it cancels the pending autosave and
+   * those keystrokes are never sent (and navigating away doesn't even warn).
+   * Each save carries the count it was taken at; the response compares.
+   */
+  const editsRef = useRef(0);
+  /** A save is in the air: the autosave waits for it rather than racing it. */
+  const savingRef = useRef(false);
+  /** Bumped when a save lands behind newer edits, to re-arm the autosave. */
+  const [resaveTick, setResaveTick] = useState(0);
+  /*
+   * The edit count when an AI action or a publish started. Its reply clears
+   * "unsaved" only if nothing was typed meanwhile — otherwise those edits (the
+   * title, the header, anything outside the pages Nova rewrote) were never
+   * sent, and clearing the flag cancelled their autosave and the leave-page
+   * warning with it.
+   */
+  const actionStartedAt = useRef(0);
+  const settleDirty = () => { if (editsRef.current === actionStartedAt.current) setDirty(false); };
+  const markDirty = () => {
+    editsRef.current += 1;
+    setDirty(true);
+  };
 
   const { data: doc, isLoading } = useQuery<ProjectDocument>({
     queryKey: ["/api/documents", docId],
@@ -83,12 +109,17 @@ export default function DocumentBuilder() {
   }, [doc]);
 
   const saveMutation = useMutation({
-    mutationFn: async (payload: { title?: string; pages?: DocumentPage[]; settings?: DocumentSettings }) => {
+    mutationFn: async ({ edit: _edit, ...payload }: { title?: string; pages?: DocumentPage[]; settings?: DocumentSettings; edit: number }) => {
       const res = await apiRequest("PATCH", `/api/documents/${docId}`, payload);
       return res.json() as Promise<ProjectDocument>;
     },
-    onSuccess: (saved) => {
-      setDirty(false);
+    onMutate: () => { savingRef.current = true; },
+    onSettled: () => { savingRef.current = false; },
+    onSuccess: (saved, { edit }) => {
+      // Edits made while this save was in flight aren't in it: stay dirty and
+      // schedule the next save through the normal debounce.
+      if (editsRef.current === edit) setDirty(false);
+      else setResaveTick((n) => n + 1);
       // Keep the cache fresh without re-hydrating local state.
       queryClient.setQueryData(["/api/documents", docId], saved);
       queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "documents"] });
@@ -113,9 +144,15 @@ export default function DocumentBuilder() {
    */
   useEffect(() => {
     if (!dirty || !docId || aiBusy > 0) return;
-    const timer = setTimeout(() => saveRef.current({ title, pages, settings }), 1200);
+    const timer = setTimeout(() => {
+      // One save at a time: two PATCHes in flight can land out of order and
+      // leave the older snapshot on the server. The one in the air re-arms
+      // this (resaveTick) if it comes back behind newer edits.
+      if (savingRef.current) return;
+      saveRef.current({ title, pages, settings, edit: editsRef.current });
+    }, 1200);
     return () => clearTimeout(timer);
-  }, [dirty, title, pages, settings, docId, aiBusy]);
+  }, [dirty, title, pages, settings, docId, aiBusy, resaveTick]);
 
   // Last-ditch warning for a navigation that beats the autosave.
   useEffect(() => {
@@ -127,7 +164,7 @@ export default function DocumentBuilder() {
 
   const mutatePages = (fn: (pages: DocumentPage[]) => DocumentPage[]) => {
     setPages((prev) => fn(prev));
-    setDirty(true);
+    markDirty();
   };
 
   const updateCurrentPage = (fn: (page: DocumentPage) => DocumentPage) =>
@@ -193,7 +230,7 @@ export default function DocumentBuilder() {
     },
     onSuccess: (result) => {
       setPages(((result.document.pages as DocumentPage[]) || []).map(normalizePage));
-      setDirty(false);
+      settleDirty();
       queryClient.setQueryData(["/api/documents", docId], result.document);
       queryClient.invalidateQueries({ queryKey: ["/api/subscription"] });
       queryClient.invalidateQueries({ queryKey: ["/api/documents", docId, "layout-report"] });
@@ -219,7 +256,7 @@ export default function DocumentBuilder() {
       description: describeError(err, "Try again."),
       variant: "destructive",
     }),
-    onMutate: () => setAiBusy((n) => n + 1),
+    onMutate: () => { actionStartedAt.current = editsRef.current; setAiBusy((n) => n + 1); },
     onSettled: () => { setFillingBlockId(null); setAiBusy((n) => Math.max(0, n - 1)); },
   });
 
@@ -232,7 +269,7 @@ export default function DocumentBuilder() {
     onSuccess: (result) => {
       setPages(((result.document.pages as DocumentPage[]) || []).map(normalizePage));
       setPageIndex(0);
-      setDirty(false);
+      settleDirty();
       setApproach(result.approach);
       setReplanOpen(false);
       setReplanFeedback("");
@@ -241,7 +278,7 @@ export default function DocumentBuilder() {
       toast({ title: "Restructured", description: "Your written content was carried across." });
     },
     onError: (err: any) => toast({ title: "Couldn't restructure", description: describeError(err, "Try again."), variant: "destructive" }),
-    onMutate: () => setAiBusy((n) => n + 1),
+    onMutate: () => { actionStartedAt.current = editsRef.current; setAiBusy((n) => n + 1); },
     onSettled: () => setAiBusy((n) => Math.max(0, n - 1)),
   });
 
@@ -256,7 +293,7 @@ export default function DocumentBuilder() {
     },
     onSuccess: (result) => {
       setPages(((result.document.pages as DocumentPage[]) || []).map(normalizePage));
-      setDirty(false);
+      settleDirty();
       queryClient.setQueryData(["/api/documents", docId], result.document);
       queryClient.invalidateQueries({ queryKey: ["/api/documents", docId, "layout-report"] });
       queryClient.invalidateQueries({ queryKey: ["/api/subscription"] });
@@ -268,7 +305,7 @@ export default function DocumentBuilder() {
       });
     },
     onError: (err: any) => toast({ title: "Couldn't tighten it", description: describeError(err, "Try again."), variant: "destructive" }),
-    onMutate: () => setAiBusy((n) => n + 1),
+    onMutate: () => { actionStartedAt.current = editsRef.current; setAiBusy((n) => n + 1); },
     onSettled: () => setAiBusy((n) => Math.max(0, n - 1)),
   });
 
@@ -278,8 +315,9 @@ export default function DocumentBuilder() {
       const res = await apiRequest("POST", `/api/documents/${docId}/publish`, { folder: publishFolder });
       return res.json() as Promise<{ document: ProjectDocument; file: { name: string; folder: string }; bytes: number }>;
     },
+    onMutate: () => { actionStartedAt.current = editsRef.current; },
     onSuccess: (result) => {
-      setDirty(false);
+      settleDirty();
       setPublishOpen(false);
       queryClient.setQueryData(["/api/documents", docId], result.document);
       for (const key of ["files", "documents", "activity"]) {
@@ -376,7 +414,7 @@ export default function DocumentBuilder() {
 
           <Input
             value={title}
-            onChange={(e) => { setTitle(e.target.value); setDirty(true); }}
+            onChange={(e) => { setTitle(e.target.value); markDirty(); }}
             className="max-w-md h-9 font-semibold border-transparent hover:border-border focus:border-border"
             data-testid="input-doc-title"
           />
@@ -473,7 +511,7 @@ export default function DocumentBuilder() {
               <Label className="text-xs">Subtitle</Label>
               <Input
                 value={settings.subtitle}
-                onChange={(e) => { setSettings((s) => ({ ...s, subtitle: e.target.value })); setDirty(true); }}
+                onChange={(e) => { setSettings((s) => ({ ...s, subtitle: e.target.value })); markDirty(); }}
                 className="h-8 text-xs" data-testid="input-doc-subtitle"
               />
             </div>
@@ -481,7 +519,7 @@ export default function DocumentBuilder() {
               <Label className="text-xs">Running header</Label>
               <Input
                 value={settings.header}
-                onChange={(e) => { setSettings((s) => ({ ...s, header: e.target.value })); setDirty(true); }}
+                onChange={(e) => { setSettings((s) => ({ ...s, header: e.target.value })); markDirty(); }}
                 placeholder="Top of every page"
                 className="h-8 text-xs" data-testid="input-doc-header"
               />
@@ -490,7 +528,7 @@ export default function DocumentBuilder() {
               <Label className="text-xs">Footer</Label>
               <Input
                 value={settings.footer}
-                onChange={(e) => { setSettings((s) => ({ ...s, footer: e.target.value })); setDirty(true); }}
+                onChange={(e) => { setSettings((s) => ({ ...s, footer: e.target.value })); markDirty(); }}
                 placeholder="Bottom of every page"
                 className="h-8 text-xs" data-testid="input-doc-footer"
               />
@@ -500,7 +538,7 @@ export default function DocumentBuilder() {
                 <Label className="text-xs">Title page</Label>
                 <Switch
                   checked={settings.titlePage}
-                  onCheckedChange={(v) => { setSettings((s) => ({ ...s, titlePage: v })); setDirty(true); }}
+                  onCheckedChange={(v) => { setSettings((s) => ({ ...s, titlePage: v })); markDirty(); }}
                   data-testid="switch-doc-titlepage"
                 />
               </div>
@@ -508,7 +546,7 @@ export default function DocumentBuilder() {
                 <Label className="text-xs">Page numbers</Label>
                 <Switch
                   checked={settings.showPageNumbers}
-                  onCheckedChange={(v) => { setSettings((s) => ({ ...s, showPageNumbers: v })); setDirty(true); }}
+                  onCheckedChange={(v) => { setSettings((s) => ({ ...s, showPageNumbers: v })); markDirty(); }}
                   data-testid="switch-doc-pagenumbers"
                 />
               </div>
@@ -517,7 +555,7 @@ export default function DocumentBuilder() {
                 <input
                   type="color"
                   value={settings.accentColor}
-                  onChange={(e) => { setSettings((s) => ({ ...s, accentColor: e.target.value })); setDirty(true); }}
+                  onChange={(e) => { setSettings((s) => ({ ...s, accentColor: e.target.value })); markDirty(); }}
                   className="h-6 w-10 rounded border border-border bg-transparent"
                   data-testid="input-doc-accent"
                 />
@@ -619,6 +657,17 @@ export default function DocumentBuilder() {
 
         {/* --- The page canvas --- */}
         <main className="flex-1 min-w-0 overflow-y-auto bg-muted/20 p-6">
+          {/*
+            * The pages are Nova's while it writes them. Its reply replaces
+            * them whole, so anything typed into a block meanwhile would vanish
+            * without a word; locked, with a line saying why, nothing is lost.
+            */}
+          {aiBusy > 0 && (
+            <p className="mx-auto max-w-4xl mb-3 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-primary" data-testid="text-ai-writing">
+              Nova is writing — the pages are locked until it's done, so nothing you type is overwritten.
+            </p>
+          )}
+          <fieldset disabled={aiBusy > 0} className="contents">
           {!page ? (
             <p className="text-sm text-muted-foreground">This document has no pages.</p>
           ) : (
@@ -824,6 +873,7 @@ export default function DocumentBuilder() {
               )}
             </div>
           )}
+          </fieldset>
         </main>
       </div>
 
