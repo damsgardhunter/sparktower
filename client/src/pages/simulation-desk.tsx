@@ -47,10 +47,11 @@ import { TeammateProfile } from "@/components/sim/teammate-profile";
 import { lookOf } from "@/components/sim/market-look";
 import { capacityRisk, type Forecast } from "@shared/simulation/forecast";
 import { ProjectionPanel } from "@/components/sim/projection-panel";
+import { ProjectionRail, ProjectionBar } from "@/components/sim/projection-dock";
 import { AdvanceYearCard } from "@/components/sim/advance-year";
 import {
   Loader2, Clock, TrendingUp, TrendingDown, Minus, AlertTriangle, Info,
-  CheckCircle2, Circle, Banknote, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy, Newspaper,
+  CheckCircle2, Circle, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy, Newspaper,
 } from "lucide-react";
 
 interface Desk {
@@ -299,8 +300,6 @@ export default function SimulationDeskPage() {
    */
   const v = desk.niche.voice;
   const secondsLeft = desk.resolvesAt ? Math.max(0, Math.round((new Date(desk.resolvesAt).getTime() - now) / 1000)) : null;
-  const overCommitted = live ? live.spend + live.fixed > live.available : false;
-  const onCredit = live ? live.spend + live.fixed > c.cash : false;
 
   return (
     <Shell
@@ -309,6 +308,29 @@ export default function SimulationDeskPage() {
       nicheId={desk.niche.id}
       onBack={() => navigate("/simulation")}
       clock={desk.phase === "finished" ? "Season over" : secondsLeft !== null ? `${longCountdown(secondsLeft)} until this year resolves` : null}
+      year={desk.year}
+      totalYears={desk.totalYears}
+      rail={desk.phase !== "finished" ? (
+        <ProjectionRail
+          ventureId={id!}
+          draft={draft}
+          filedStamp={JSON.stringify(desk.filed ?? {})}
+          live={live ?? null}
+          customersWord={v.customers}
+          warnings={desk.preview.warnings}
+          top={112}
+        />
+      ) : undefined}
+      bottom={desk.phase !== "finished" ? (
+        <ProjectionBar
+          ventureId={id!}
+          draft={draft}
+          filedStamp={JSON.stringify(desk.filed ?? {})}
+          live={live ?? null}
+          customersWord={v.customers}
+          warnings={desk.preview.warnings}
+        />
+      ) : undefined}
     >
       {/* Only for developers and for companies running their own season. */}
       {desk.canAdvance && desk.phase !== "finished" && desk.seasonId && (
@@ -445,8 +467,9 @@ export default function SimulationDeskPage() {
           The season is over. Nothing left to decide — the last year's result is above.
         </CardContent></Card>
       ) : desk.yourRole && draft ? (
-        <div className="grid gap-4 lg:grid-cols-[1fr_320px] items-start">
-          <Card>
+        <div className="space-y-3">
+          {/* Yours: the one card on the desk that is this seat's to change, so it carries the ring. */}
+          <Card className="rounded-2xl nova-ring" data-testid="card-your-decision">
             <CardContent className="p-5">
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -510,92 +533,54 @@ export default function SimulationDeskPage() {
             </CardContent>
           </Card>
 
-          {/* The number no single seat could work out alone. */}
-          <div className="space-y-4 lg:sticky lg:top-4">
-            <Card className={overCommitted ? "border-destructive" : onCredit ? "border-amber-500/60" : ""}>
-              <CardContent className="p-5">
-                <div className="flex items-center gap-2">
-                  <Banknote className="h-4 w-4 text-muted-foreground" />
-                  <h3 className="text-sm font-semibold">What the table has committed</h3>
-                </div>
-
-                {live && (
-                  <>
-                    <p className="text-2xl font-bold tabular-nums mt-3" data-testid="text-commitment">
-                      {compact(live.spend + live.fixed)}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      against {compact(live.available)} available · {compact(live.fixed)} of it is salaries nobody chose
-                    </p>
-
-                    <div className="mt-3 h-2 rounded-full bg-muted overflow-hidden">
-                      <div
-                        className={`h-full ${overCommitted ? "bg-destructive" : onCredit ? "bg-amber-500" : "bg-primary"}`}
-                        style={{ width: `${Math.min(100, ((live.spend + live.fixed) / Math.max(1, live.available)) * 100)}%` }}
-                      />
-                    </div>
-
-                    <div className="mt-4 space-y-1.5">
-                      {live.openingCost > 0 && (
-                        <div className="flex justify-between text-xs text-amber-600" data-testid="text-opening-cost">
-                          <span>opening new places</span>
-                          <span className="tabular-nums">{compact(live.openingCost)}</span>
-                        </div>
-                      )}
-                      {live.bySeat.filter((s) => s.spend > 0).map((s) => (
-                        <div key={s.role} className="flex justify-between text-xs">
-                          <span className="text-muted-foreground uppercase">{s.role}</span>
-                          <span className="tabular-nums">{compact(s.spend)}</span>
-                        </div>
-                      ))}
-                      {live.bySeat.every((s) => s.spend === 0) && (
-                        <p className="text-xs text-muted-foreground">Nobody has committed anything yet.</p>
-                      )}
-                    </div>
-                  </>
-                )}
-              </CardContent>
-            </Card>
-
-            {desk.preview.warnings.map((w, i) => (
-              <div key={i} className="rounded-lg bg-destructive/10 p-3 flex gap-2" data-testid="text-warning">
-                <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
-                <p className="text-xs text-destructive">{w}</p>
-              </div>
-            ))}
-            {desk.preview.notes.map((note, i) => (
-              <div key={i} className="rounded-lg bg-muted p-3 flex gap-2">
-                <Info className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-                <p className="text-xs text-muted-foreground">{note}</p>
-              </div>
-            ))}
-          </div>
+          {/* Notes on the draft stay with the form; the money and the warnings are pinned in the dock. */}
+          {desk.preview.notes.map((note, i) => (
+            <div key={i} className="rounded-lg bg-muted p-3 flex gap-2">
+              <Info className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+              <p className="text-xs text-muted-foreground">{note}</p>
+            </div>
+          ))}
         </div>
       ) : null}
 
       {/* The three rooms off this one: buying things, buying companies, and where you stand. */}
       <div className="grid gap-3 sm:grid-cols-3">
-        <Card>
-          <CardContent className="p-4">
-            <h3 className="text-sm font-semibold flex items-center gap-2"><Store className="h-4 w-4 text-muted-foreground" /> The market</h3>
-            <p className="text-xs text-muted-foreground mt-1 mb-3">Three things a year, and everyone bids blind.</p>
-            <Button variant="outline" size="sm" onClick={() => navigate(`/simulation/${desk.ventureId}/market`)} data-testid="button-open-market">Open</Button>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <h3 className="text-sm font-semibold flex items-center gap-2"><Handshake className="h-4 w-4 text-muted-foreground" /> The boardroom</h3>
-            <p className="text-xs text-muted-foreground mt-1 mb-3">Buy a rival, or take the money for yours.</p>
-            <Button variant="outline" size="sm" onClick={() => navigate(`/simulation/${desk.ventureId}/offers`)} data-testid="button-open-offers">Open</Button>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <h3 className="text-sm font-semibold flex items-center gap-2"><Trophy className="h-4 w-4 text-muted-foreground" /> Standings</h3>
-            <p className="text-xs text-muted-foreground mt-1 mb-3">Where you actually stand, incumbents included.</p>
-            <Button variant="outline" size="sm" onClick={() => navigate(`/simulation/${desk.ventureId}/standings`)} data-testid="button-open-standings">Open</Button>
-          </CardContent>
-        </Card>
+        {/* A whole card to press, like the manager's rail: the chip says what it is, the ring that it goes somewhere. */}
+        <button
+          type="button"
+          onClick={() => navigate(`/simulation/${desk.ventureId}/market`)}
+          className="group rounded-2xl nova-ring-soft nova-hover-glow p-4 text-left"
+          data-testid="button-open-market"
+        >
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl nova-chip"><Store className="h-4 w-4" /></span>
+          <h3 className="mt-3 text-sm font-bold">The market</h3>
+          <p className="mt-1 text-xs text-muted-foreground">Three things a year, and everyone bids blind.</p>
+          <p className="mt-2 text-xs font-semibold text-primary group-hover:underline">Open →</p>
+        </button>
+        {/* A whole card to press, like the manager's rail: the chip says what it is, the ring that it goes somewhere. */}
+        <button
+          type="button"
+          onClick={() => navigate(`/simulation/${desk.ventureId}/offers`)}
+          className="group rounded-2xl nova-ring-soft nova-hover-glow p-4 text-left"
+          data-testid="button-open-offers"
+        >
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl nova-chip"><Handshake className="h-4 w-4" /></span>
+          <h3 className="mt-3 text-sm font-bold">The boardroom</h3>
+          <p className="mt-1 text-xs text-muted-foreground">Buy a rival, or take the money for yours.</p>
+          <p className="mt-2 text-xs font-semibold text-primary group-hover:underline">Open →</p>
+        </button>
+        {/* A whole card to press, like the manager's rail: the chip says what it is, the ring that it goes somewhere. */}
+        <button
+          type="button"
+          onClick={() => navigate(`/simulation/${desk.ventureId}/standings`)}
+          className="group rounded-2xl nova-ring-soft nova-hover-glow p-4 text-left"
+          data-testid="button-open-standings"
+        >
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl nova-chip"><Trophy className="h-4 w-4" /></span>
+          <h3 className="mt-3 text-sm font-bold">Standings</h3>
+          <p className="mt-1 text-xs text-muted-foreground">Where you actually stand, incumbents included.</p>
+          <p className="mt-2 text-xs font-semibold text-primary group-hover:underline">Open →</p>
+        </button>
       </div>
 
       {/* 4. Everyone else. */}
@@ -699,7 +684,7 @@ export default function SimulationDeskPage() {
  */
 function ChallengeCard({ challenge, last }: { challenge: Challenge; last: ChallengeResult | null }) {
   return (
-    <Card className="border-primary/40">
+    <Card className="rounded-2xl nova-ring-soft">
       <CardContent className="p-5">
         <div className="flex items-center gap-2">
           <Target className="h-4 w-4 text-primary" />
@@ -880,41 +865,75 @@ function EventCard({ event }: { event: NonNullable<Desk["lastYear"]>["event"] })
   );
 }
 
-function Shell({ title, subtitle, clock, onBack, nicheId, children }: {
-  title: string; subtitle: string; clock?: string | null; onBack?: () => void; nicheId?: string; children: React.ReactNode;
+function Shell({ title, subtitle, clock, onBack, nicheId, year, totalYears, rail, bottom, children }: {
+  title: string; subtitle: string; clock?: string | null; onBack?: () => void; nicheId?: string;
+  /** For the season bar along the header's foot. */
+  year?: number; totalYears?: number;
+  /** Pinned beside the desk on a wide screen (the projection dock). */
+  rail?: React.ReactNode;
+  /** Pinned along the bottom on a phone. */
+  bottom?: React.ReactNode;
+  children: React.ReactNode;
 }) {
   const look = nicheId ? lookOf(nicheId) : null;
+  const seasonPct = year && totalYears ? Math.min(100, Math.max(0, ((year - 1) / totalYears) * 100)) : null;
   return (
-    <div className="mx-auto max-w-4xl px-4 py-8 space-y-4">
-      <div className="rounded-2xl p-[2px]" style={{ backgroundImage: NOVA_GRADIENT_CSS }}>
-        <div className="rounded-[calc(1rem-1px)] bg-background p-6">
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              {onBack && (
-                <button onClick={onBack} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 mb-2" data-testid="button-back">
-                  <ArrowLeft className="h-3 w-3" /> All companies
-                </button>
-              )}
-              <h1 className="text-2xl font-bold tracking-tight truncate" data-testid="text-company-name">{title}</h1>
+    <div className={`mx-auto px-4 pb-8 ${rail ? "max-w-6xl" : "max-w-4xl"}`}>
+      {/*
+        * Pinned. Which company, which market, which year and how long is left
+        * are the four things a seat needs on every screen of a long desk, and
+        * they used to scroll away with the first swipe. Sticks to the top of
+        * the scrolling panel, just under the app bar.
+        */}
+      <header className="sticky top-0 z-30 -mx-4 bg-background/85 px-4 pb-3 pt-4 backdrop-blur-md" data-testid="desk-header">
+        <div className="relative overflow-hidden rounded-2xl nova-ring-page nova-glow px-4 py-3 sm:px-5">
+          <div className="flex items-center gap-3">
+            {onBack && (
+              <button onClick={onBack} className="shrink-0 rounded-lg p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="All companies" data-testid="button-back">
+                <ArrowLeft className="h-4 w-4" />
+              </button>
+            )}
+            {look && (
+              <span className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl nova-chip sm:flex">
+                <look.Icon className="h-4 w-4" />
+              </span>
+            )}
+            <div className="min-w-0 flex-1">
+              <h1 className="truncate text-lg font-extrabold tracking-tight sm:text-xl" data-testid="text-company-name">{title}</h1>
               {/*
                 * The market's mark next to its name. Fourteen days of opening
                 * the same screen is a long time to be unsure at a glance which
                 * of seven worlds you are in — and somebody may well be in two.
                 */}
-              <p className="text-sm text-muted-foreground mt-1 flex items-center gap-1.5">
-                {look && <look.Icon className={`h-3.5 w-3.5 shrink-0 ${look.ink}`} />}
+              <p className="flex items-center gap-1.5 text-xs text-muted-foreground sm:text-sm">
+                {look && <look.Icon className={`h-3.5 w-3.5 shrink-0 sm:hidden ${look.ink}`} />}
                 <span className="truncate">{subtitle}</span>
               </p>
             </div>
             {clock && (
-              <p className="text-xs text-muted-foreground flex items-center gap-1 shrink-0" data-testid="text-resolves">
-                <Clock className="h-3 w-3" /> {clock}
+              <p className="flex shrink-0 items-center gap-1.5 rounded-full bg-muted/70 px-2.5 py-1 text-[11px] font-semibold tabular-nums sm:text-xs" data-testid="text-resolves">
+                <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="hidden sm:inline">{clock}</span>
+                <span className="sm:hidden">{clock.replace(/ until this year resolves$/, "")}</span>
               </p>
             )}
           </div>
+          {/* How far through the season, as a line along the card's foot. */}
+          {seasonPct !== null && (
+            <div className="absolute inset-x-0 bottom-0 h-[3px] bg-muted/60" aria-hidden>
+              <div className="h-full nova-chip" style={{ width: `${Math.max(seasonPct, 2)}%` }} />
+            </div>
+          )}
         </div>
+      </header>
+
+      <div className={rail ? "grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_300px]" : undefined}>
+        <div className="min-w-0 space-y-4">
+          {children}
+          {bottom}
+        </div>
+        {rail}
       </div>
-      {children}
     </div>
   );
 }

@@ -45,7 +45,7 @@ interface Projection {
   nextYearDemand: { likely: number; low: number; high: number } | null;
 }
 
-interface ProjectionResponse {
+export interface ProjectionResponse {
   year: number;
   yourRole: string | null;
   filed: Projection;
@@ -58,7 +58,7 @@ const TITLES: Record<string, string> = {
 };
 
 /** Money the way a person reads it at a glance. */
-function gbp(n: number): string {
+export function gbp(n: number): string {
   const sign = n < 0 ? "−" : "";
   const a = Math.abs(n);
   if (a >= 1_000_000_000) return `${sign}£${(a / 1_000_000_000).toFixed(1)}bn`;
@@ -424,17 +424,15 @@ function Money({ p }: { p: Projection }) {
 
 // ─── The panel ────────────────────────────────────────────────────────────────
 
-export function ProjectionPanel({ ventureId, draft, filedStamp }: {
-  ventureId: string;
-  /** This seat's unfiled draft, or null. */
-  draft: Record<string, any> | null;
-  /** Changes whenever a teammate files, so the projection re-runs exactly then. */
-  filedStamp: string;
-}) {
+/**
+ * The projection for this seat's draft, fetched once however many places show
+ * it. The panel and the desk's pinned dock (projection-dock.tsx) both call
+ * this with the same arguments, so they share one query key and one request.
+ */
+export function useProjection(ventureId: string, draft: Record<string, any> | null, filedStamp: string) {
   const debounced = useDebounced(draft, 450);
   const draftKey = debounced ? JSON.stringify(debounced) : "";
-
-  const { data, isFetching, isError } = useQuery<ProjectionResponse>({
+  return useQuery<ProjectionResponse>({
     queryKey: ["sim-projection", ventureId, draftKey, filedStamp],
     queryFn: async () => {
       const url = `/api/sim/ventures/${ventureId}/projection${draftKey ? `?draft=${encodeURIComponent(draftKey)}` : ""}`;
@@ -446,6 +444,16 @@ export function ProjectionPanel({ ventureId, draft, filedStamp }: {
     placeholderData: keepPreviousData,
     staleTime: 0,
   });
+}
+
+export function ProjectionPanel({ ventureId, draft, filedStamp }: {
+  ventureId: string;
+  /** This seat's unfiled draft, or null. */
+  draft: Record<string, any> | null;
+  /** Changes whenever a teammate files, so the projection re-runs exactly then. */
+  filedStamp: string;
+}) {
+  const { data, isFetching, isError } = useProjection(ventureId, draft, filedStamp);
 
   if (!data) {
     if (isError) return null;
