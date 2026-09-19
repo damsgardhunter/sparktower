@@ -21,6 +21,8 @@ import {
 import { startReadySeasons, tickSeason } from "../../server/simulation-tick";
 import { marketListings } from "@shared/simulation/assets";
 import { nicheById } from "@shared/simulation/niches";
+import { marketListings } from "@shared/simulation/assets";
+import { nicheById } from "@shared/simulation/niches";
 import type { World } from "@shared/simulation/types";
 
 afterAll(async () => { await closeTestApp(); });
@@ -152,6 +154,7 @@ describe("everyone gets something of their own", () => {
      */
     const rows = await db.select().from(simChallenges)
       .where(and(eq(simChallenges.ventureId, ventureId), eq(simChallenges.year, 1)));
+    expect(rows.length, `challenges were set for: ${rows.map((r) => r.role).join(", ") || "nobody"}`).toBe(5);
     const cfo = rows.find((r) => r.role === "cfo")!;
     await db.update(simChallenges).set({
       challenge: {
@@ -287,6 +290,49 @@ describe("the marketplace", () => {
     expect(after.capacity).toBeLessThan(before.capacity + lent);
     expect(after.assets).toHaveLength(1);
   }, 180_000);
+});
+
+describe("the year's report and the year that was saved", () => {
+  it("agrees about the money after a challenge pays and a bid settles", async () => {
+    /*
+     * The report is built when the year resolves. The tick then carries on:
+     * challenge rewards land on the company, covenants are reviewed, and the
+     * marketplace moves cash between teams. All of that changes the world that
+     * gets stored, and none of it reached the report — so a team could be paid
+     * six hundred thousand for a challenge, win an asset at auction, and read
+     * a figure that matched neither the money they had before nor the money
+     * they had after.
+     */
+    const app = await getTestApp();
+    const { ventureId, seasonId } = await runningCompany(app);
+
+    // A challenge that certainly pays, in cash.
+    const rows = await db.select().from(simChallenges)
+      .where(and(eq(simChallenges.ventureId, ventureId), eq(simChallenges.year, 1)));
+    const cfo = rows.find((r) => r.role === "cfo")!;
+    await db.update(simChallenges).set({
+      challenge: {
+        ...(cfo.challenge as any),
+        targets: [{ id: "easy", label: "Exist", goal: -99_000_000, compare: "at_least", metric: "cash" }],
+        reward: { kind: "cash", amount: 750_000, label: "A cheque." },
+      },
+    }).where(eq(simChallenges.id, cfo.id));
+
+    // And a bid that certainly wins.
+    const listing = marketListings({ seasonId, year: 1, niche })[0];
+    await db.insert(simBids).values({ ventureId, listingId: listing.id, year: 1, amount: listing.reserve });
+
+    await makeDue(seasonId);
+    expect(await tickSeason(seasonId)).toBe(1);
+
+    const stored = await companyIn(seasonId, ventureId);
+    const [row] = await db.select().from(simReportsTable)
+      .where(and(eq(simReportsTable.ventureId, ventureId), eq(simReportsTable.year, 1)));
+    const report = row.report as any;
+
+    expect(report.cash, "the report's cash is not the cash that was saved").toBeCloseTo(stored.cash, 0);
+    expect(report.debt).toBeCloseTo(stored.debt, 0);
+  }, 240_000);
 });
 
 describe("the way back", () => {

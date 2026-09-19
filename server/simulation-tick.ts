@@ -446,6 +446,40 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
     if (report) report.market = outcomes;
   }
 
+  /*
+   * Bring the reports back in line with the world that is about to be saved.
+   *
+   * `resolveYear` builds each report from the year it just resolved, and then
+   * the tick carries on: challenge rewards land on companies, covenants are
+   * reviewed, and the marketplace moves cash and assets between teams. All of
+   * that changes what gets stored and none of it reached the report — so a
+   * team could be paid for a challenge, win an asset at auction, and read a
+   * figure that matched neither the money they had before nor the money they
+   * had after. The report is the year's record; it has to describe the year
+   * that was kept.
+   *
+   * The trading figures are deliberately left alone. Revenue, costs and profit
+   * are what the company earned and spent trading, and a cheque for finishing
+   * a challenge is not revenue.
+   */
+  for (const report of reports) {
+    const company = nextWorld.companies.find((c) => c.id === report.companyId);
+    if (!company) continue;
+    const units = Object.values(company.customers).reduce((sum, n) => sum + n, 0);
+    const assets = company.assets.reduce((sum, a) => sum + a.bookValue * 0.8, 0);
+
+    report.cash = company.cash;
+    report.debt = company.debt;
+    report.reputation = company.reputation;
+    report.quality = company.quality;
+    report.brand = company.brand;
+    report.service = company.service;
+    report.founderShare = company.founderShare ?? 1;
+    report.value = Math.max(0, Math.round(units * company.price * 1.2 + assets - company.debt));
+    report.founderValue = Math.round(report.value * report.founderShare);
+    report.bankrupt = !!company.bankruptSince;
+  }
+
   const finished = seasonOver(year + 1, season.totalYears);
   const nextTickAt = season.startsAt && !finished ? tickDueAt(season.startsAt, year + 1) : null;
 

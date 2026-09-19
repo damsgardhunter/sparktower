@@ -303,3 +303,140 @@ describe("the money adds up", () => {
     expect(out.seller.cash).toBe(seller.cash + 2_500_000);
   });
 });
+
+describe("what the report says and what was saved", () => {
+  /*
+   * A player reads the report; the next year is resolved from the world. If
+   * those two disagree, the game a team thinks they are playing is not the one
+   * being played — and the disagreement would only ever show up as a number
+   * that made no sense a day later.
+   */
+  const niche = NICHES[0];
+
+  it("describes the company that was actually stored", () => {
+    let world = buildWorld({
+      seasonId: "mirror",
+      niche,
+      teams: [0, 1].map((i) => ({ id: `t${i}`, name: `Team ${i}`, seats: [...ROLES] as Role[] })),
+    });
+
+    for (let year = 1; year <= SEASON_YEARS; year++) {
+      const decisions = world.companies
+        .filter((c) => c.kind === "player")
+        .map((c) => nastyDecisions(`mirror:${c.id}:${year}`, c, niche));
+
+      const out = resolveYear({ ...world, year }, decisions, economyFor("mirror", year));
+      world = out.world;
+
+      for (const report of out.reports) {
+        const company = world.companies.find((c) => c.id === report.companyId)!;
+        const held = Object.values(company.customers).reduce((sum, n) => sum + n, 0);
+
+        expect(report.cash, `${report.name} y${year}: cash`).toBeCloseTo(company.cash, 4);
+        expect(report.debt, `${report.name} y${year}: debt`).toBeCloseTo(company.debt, 4);
+        expect(report.customers, `${report.name} y${year}: customers`).toBe(held);
+        expect(report.reputation, `${report.name} y${year}: reputation`).toBeCloseTo(company.reputation, 4);
+        expect(report.quality, `${report.name} y${year}: quality`).toBeCloseTo(company.quality, 4);
+        expect(report.brand, `${report.name} y${year}: brand`).toBeCloseTo(company.brand, 4);
+        expect(report.service, `${report.name} y${year}: service`).toBeCloseTo(company.service, 4);
+      }
+    }
+  });
+
+  it("reconciles the cash even in a year something happened", () => {
+    /*
+     * Events land after the market resolves and some of them move money — a
+     * recall costs the company that had it. If the report's trading figures
+     * cannot be reconciled against the cash that was saved, a finance seat
+     * checking the arithmetic finds a hole and has no way to know it is the
+     * event rather than an error.
+     */
+    for (let year = 2; year <= 12; year++) {
+      const world = buildWorld({
+        seasonId: "eventful",
+        niche,
+        teams: [{ id: "t", name: "T", seats: [...ROLES] as Role[] }],
+      });
+      // A company with a poor reputation and a poor product has things coming.
+      world.companies = world.companies.map((c) =>
+        c.id === "t" ? { ...c, reputation: 20, quality: 25, customers: { swipers: 40_000 } } : c);
+
+      const before = world.companies.find((c) => c.id === "t")!;
+      const out = resolveYear({ ...world, year }, [{
+        companyId: "t",
+        cmo: { price: 40, brandSpend: 200_000, performanceSpend: 0, celebritySpend: 0, targetCities: [] },
+        cfo: { borrow: 0, repay: 0, cashBuffer: 0 },
+      }], economyFor("eventful", year));
+
+      const after = out.world.companies.find((c) => c.id === "t")!;
+      const report = out.reports.find((r) => r.companyId === "t")!;
+
+      const unexplained = after.cash - (before.cash + report.profit);
+      if (Math.abs(unexplained) > 1) {
+        /*
+         * A gap is allowed only when something happened that moved money, and
+         * then the team has to be able to see it. Anything else is a leak.
+         */
+        expect(report.event, `y${year}: ${Math.round(unexplained)} moved with nothing to explain it`).toBeTruthy();
+        expect(report.event!.mine, `y${year}: the money moved but the event was not theirs`).toBe(true);
+      }
+    }
+  });
+});
+
+describe("customers are not invented", () => {
+  it("never allocates more of a segment than the segment has", () => {
+    /*
+     * Every company's customers come out of the same finite pool. If the
+     * allocation can hand out more than exists, market share stops meaning
+     * anything and two teams can both be told they have most of the market.
+     */
+    for (const niche of NICHES) {
+      let world: World = buildWorld({
+        seasonId: `pool-${niche.id}`,
+        niche,
+        teams: [0, 1, 2, 3].map((i) => ({ id: `t${i}`, name: `Team ${i}`, seats: [...ROLES] as Role[] })),
+      });
+
+      for (let year = 1; year <= SEASON_YEARS; year++) {
+        const decisions = world.companies
+          .filter((c) => c.kind === "player")
+          .map((c) => nastyDecisions(`pool:${niche.id}:${c.id}:${year}`, c, niche));
+        world = resolveYear({ ...world, year }, decisions, economyFor(`pool-${niche.id}`, year)).world;
+
+        for (const segment of niche.segments) {
+          const held = world.companies.reduce((sum, c) => sum + (c.customers[segment.id] ?? 0), 0);
+          /*
+           * The pool grows each year by the segment's growth and the economy's
+           * demand, so the ceiling is generous — this is checking that it is
+           * bounded at all, not that the growth curve is exact.
+           */
+          const ceiling = segment.size * Math.pow(1 + segment.growth, year) * 1.5;
+          expect(held, `${niche.id} y${year} ${segment.name}: ${Math.round(held)} held of ${Math.round(ceiling)}`)
+            .toBeLessThanOrEqual(ceiling);
+        }
+      }
+    }
+  });
+
+  it("serves nobody it cannot serve", () => {
+    // Capacity is a hard ceiling; anything above it is turned away, and a
+    // company reported as serving more than it can is a company whose
+    // operations seat has no decision to make.
+    const niche = NICHES[0];
+    const world = buildWorld({
+      seasonId: "capacity",
+      niche,
+      teams: [{ id: "t", name: "T", seats: [...ROLES] as Role[] }],
+    });
+
+    const out = resolveYear({ ...world, year: 2 }, [{
+      companyId: "t",
+      cmo: { price: 20, brandSpend: 4_000_000, performanceSpend: 4_000_000, celebritySpend: 0, targetCities: niche.cities.map((c) => c.id) },
+      coo: { capacityTarget: 5_000, supportSpend: 0, efficiencySpend: 0, headcount: 1 },
+    }], economyFor("capacity", 2));
+
+    const report = out.reports.find((r) => r.companyId === "t")!;
+    expect(report.customers, "served more than it could").toBeLessThanOrEqual(5_000);
+  });
+});
