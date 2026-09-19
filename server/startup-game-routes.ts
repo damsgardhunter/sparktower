@@ -229,7 +229,12 @@ export function registerStartupGameRoutes(app: Express) {
      * with the number still landing, which is the right feel for a reveal
      * anyway.
      */
-    if (state.round === "verdict" && !state.verdict) {
+    /*
+     * And again while the verdict is only a placeholder from a failed attempt.
+     * `valueGame` decides whether it is worth asking and paces it, so the
+     * five-second poll costs at most one model call a minute.
+     */
+    if (state.round === "verdict" && (!state.verdict || (state.verdict as any).fromModel === false)) {
       void valueGame(req.params.id).catch((e) => console.error("[game] valuation failed:", e));
     }
 

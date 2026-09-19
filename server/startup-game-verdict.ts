@@ -21,20 +21,24 @@
  * come down to an upstream timeout, and a placeholder that quietly ranks
  * alongside real scores would be worse than no score at all.
  */
-import OpenAI from "openai";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "./db";
 import { startupGames, startupGameVerdicts } from "@shared/schema";
 import { parseModelJson } from "./ai-json";
 import { cleanVerdict, overallScore, DIMENSIONS, type Verdict } from "@shared/sprints/scoring";
 import { summariseBudget, money } from "@shared/sprints/budget";
 import { coreClaims, type Claim } from "@shared/sprints/product";
-
-let client: OpenAI | null = null;
-function getOpenAI(): OpenAI {
-  if (!client) client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  return client;
-}
+/*
+ * The shared client, not one of its own.
+ *
+ * This module built its client from `OPENAI_API_KEY`, which this product
+ * does not set — every other AI feature reads `AI_INTEGRATIONS_OPENAI_API_KEY`
+ * and routes through the gateway's base URL, via server/openai-client.ts. So
+ * every valuation failed at the first call, silently fell back, and every
+ * finished game told its two players "the valuation couldn't be reached this
+ * time". There was no "this time": it could never be reached.
+ */
+import { getOpenAI } from "./openai-client";
 
 /**
  * The company, written out the way a person would describe it.
@@ -128,13 +132,41 @@ export function hasSubstance(game: any): boolean {
  * played well and hit an outage should not read "0 out of 1000" — that is a
  * judgement the product did not make and cannot support.
  */
+export const FALLBACK_SUMMARY =
+  "The valuation couldn't be reached this time, so this game isn't scored yet. Everything you decided is still here, and it will be valued as soon as the valuation can be reached.";
+
 export function fallbackVerdict(): Verdict {
   return cleanVerdict({
     scores: { growth: 500, capital: 500, product: 500, acquisition: 500, risk: 500 },
     tenYear: 0, peak: 0, peakYear: 10,
-    summary: "The valuation couldn't be reached this time, so this game isn't scored. Everything you decided is still here.",
+    summary: FALLBACK_SUMMARY,
     advice: [],
   });
+}
+
+/**
+ * How long a game keeps trying to be valued after the first attempt failed,
+ * and how often.
+ *
+ * A fallback used to be final: it was written as the game's verdict, and
+ * `valueGame` stops at any existing verdict — so one timeout, one malformed
+ * answer, one missing key, and a finished game could never be scored, whatever
+ * the comment below says about outages. Now a fallback is provisional. While
+ * somebody is on the results page (it polls every five seconds) the game is
+ * asked about again once a minute, for up to a day, and the first real answer
+ * replaces the placeholder.
+ */
+export const RETRY_EVERY_MS = 60_000;
+export const RETRY_FOR_MS = 24 * 60 * 60_000;
+const lastTried = new Map<string, number>();
+
+/** Whether a stored verdict is a placeholder worth asking about again. */
+export function shouldRetry(existing: { fromModel: boolean; summary: string; createdAt: Date | null } | undefined, now = Date.now()): boolean {
+  if (!existing || existing.fromModel) return false;
+  // Only the outage placeholder: a game nobody played stays unscored for good.
+  if (existing.summary !== FALLBACK_SUMMARY && !existing.summary.startsWith("The valuation couldn't be reached")) return false;
+  const since = existing.createdAt ? now - new Date(existing.createdAt).getTime() : 0;
+  return since < RETRY_FOR_MS;
 }
 
 /**
@@ -155,13 +187,16 @@ const valuing = new Set<string>();
 export async function valueGame(gameId: string, model = "gpt-4o"): Promise<Verdict | null> {
   if (valuing.has(gameId)) return null;
 
-  const existing = await db.select().from(startupGameVerdicts)
+  const [existing] = await db.select().from(startupGameVerdicts)
     .where(eq(startupGameVerdicts.gameId, gameId));
-  if (existing.length > 0) return null;
+  const retrying = !!existing && shouldRetry(existing);
+  if (existing && !retrying) return null;
+  if (retrying && Date.now() - (lastTried.get(gameId) ?? 0) < RETRY_EVERY_MS) return null;
 
   valuing.add(gameId);
+  lastTried.set(gameId, Date.now());
   try {
-    return await runValuation(gameId, model);
+    return await runValuation(gameId, model, retrying);
   } finally {
     /*
      * Released even when it failed, so a transient outage doesn't leave the
@@ -178,7 +213,7 @@ export async function valueGame(gameId: string, model = "gpt-4o"): Promise<Verdi
  * Idempotent twice over: the in-flight set above stops a second model call,
  * and the verdict row's primary key stops a second write.
  */
-async function runValuation(gameId: string, model: string): Promise<Verdict | null> {
+async function runValuation(gameId: string, model: string, retrying = false): Promise<Verdict | null> {
   const [game] = await db.select().from(startupGames).where(eq(startupGames.id, gameId));
   if (!game || game.round !== "verdict") return null;
 
@@ -215,6 +250,32 @@ async function runValuation(gameId: string, model: string): Promise<Verdict | nu
     }
   } catch (err) {
     console.error(`[game] valuation for ${gameId} failed, falling back:`, err);
+  }
+
+  if (retrying) {
+    // A second failure changes nothing: the placeholder is already there.
+    if (!fromModel) return null;
+    /*
+     * The real answer replaces the placeholder — and only the placeholder. The
+     * condition on `fromModel` means a real verdict that landed in the
+     * meantime, from another request, is never overwritten by this one.
+     */
+    await db.update(startupGameVerdicts)
+      .set({
+        ...verdict.scores,
+        overall: overallScore(verdict.scores),
+        tenYear: verdict.tenYear,
+        peak: verdict.peak,
+        peakYear: verdict.peakYear,
+        summary: verdict.summary,
+        notes: verdict.notes,
+        advice: verdict.advice,
+        fromModel: true,
+        createdAt: new Date(),
+      } as any)
+      .where(and(eq(startupGameVerdicts.gameId, gameId), eq(startupGameVerdicts.fromModel, false)));
+    lastTried.delete(gameId);
+    return verdict;
   }
 
   await writeVerdict(gameId, verdict, fromModel);

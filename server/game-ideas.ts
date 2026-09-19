@@ -10,7 +10,7 @@
  * The era briefs map onto the game's three buttons: the past, now, and the
  * future.
  */
-import OpenAI from "openai";
+import { getOpenAI } from "./openai-client";
 import type { Express } from "express";
 import { storage } from "./storage";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
@@ -18,11 +18,11 @@ import { requireCredits, modelFor } from "./entitlements";
 import { parseModelJson, respondToAiError } from "./ai-json";
 import { CREDIT_COSTS } from "@shared/plans";
 
-let client: OpenAI | null = null;
-function getOpenAI(): OpenAI {
-  if (!client) client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  return client;
-}
+/*
+ * The shared client. This built its own from `OPENAI_API_KEY`, which the
+ * product does not set — so the idea shuffle failed on every press, the same
+ * way the valuation did. See server/openai-client.ts.
+ */
 
 const STYLE_BRIEFS: Record<string, string> = {
   past: "Take something that existed before roughly 2010 — a gadget, a ritual, a service, a fad — and reimagine it for today. Think jukeboxes, video rental stores, pen pals, TV dinners, arcade cabinets, mixtapes, Blockbuster, drive-ins, encyclopedia salesmen.",
