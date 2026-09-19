@@ -13,7 +13,22 @@
 export interface EmailMessage { to: string; subject: string; text: string; html?: string; tag?: string }
 export interface EmailResult { status: "sent" | "logged" | "failed"; id?: string; error?: string }
 
-const OUTBOX_LIMIT = 50;
+/**
+ * How many messages the development outbox keeps.
+ *
+ * Fifty is plenty for a person clicking around a dev server, and far too few
+ * for the test suite. Registering an account sends a confirmation link, the
+ * helper that confirms it reads that link back out of here, and a worker
+ * running several registration-heavy files sends well over fifty — so the
+ * earliest links were evicted before anything read them and the tests failed
+ * on `no verification email`, eight at a time, nowhere near whatever they were
+ * actually checking.
+ *
+ * Under test the cap is large enough that a suite never outruns it. It stays
+ * small elsewhere, because this is a debugging aid held in memory and a
+ * long-lived dev server should not grow one.
+ */
+const OUTBOX_LIMIT = process.env.NODE_ENV === "test" ? 5_000 : 50;
 const outbox: (EmailMessage & { at: string; status: EmailResult["status"] })[] = [];
 
 export const emailConfigured = () => !!process.env.RESEND_API_KEY && !!process.env.EMAIL_FROM && process.env.NODE_ENV !== "test";

@@ -3994,7 +3994,16 @@ RULES:
       id: user.id, firstName: user.firstName, lastName: user.lastName,
       profileImageUrl: user.profileImageUrl, createdAt: user.createdAt,
       profile, projects: userProjects,
-      views: await countViews("profile", req.params.id),
+      /*
+       * Who has looked at a profile is the owner's business, the way a
+       * professional network shows you your own profile views and nobody
+       * else's. It went out to every visitor when it was added — an aggregate,
+       * no identities in it, but this response is an allowlist of what a
+       * stranger may see (test/integration/public-profile.test.ts) and nothing
+       * on the site showed it to one. Still counted for everyone; only shown
+       * to the person it is about.
+       */
+      ...(req.user?.id === req.params.id ? { views: await countViews("profile", req.params.id) } : {}),
     });
   });
 

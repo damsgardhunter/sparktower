@@ -104,5 +104,7 @@ describe("profile views, which were not recorded at all", () => {
     const third = await person(app, "Third");
     await third.agent.get(`/api/users/${me.id}`);
     expect((await me.agent.get(`/api/users/${me.id}`)).body.views).toBe(2);
+    // The owner's number, not the visitors': counted for everyone, shown to one.
+    expect((await visitor.agent.get(`/api/users/${me.id}`)).body.views).toBeUndefined();
   });
 });
