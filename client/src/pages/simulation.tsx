@@ -317,7 +317,7 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
       </div>
 
       {/* Who is here. The same list through every phase — these are the people you're doing this with. */}
-      <Card>
+      <Card className="rounded-2xl nova-ring-soft">
         <CardContent className="p-5">
           <h2 className="font-semibold flex items-center gap-2 text-sm">
             <Users className="h-4 w-4" /> In the room ({room.seats.length}/{room.lobbySize})
@@ -389,15 +389,17 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
       {room.phase === "naming" && <NamingCard ventureId={ventureId} isCeo={room.you.isCeo} />}
 
       {room.phase === "running" && (
-        <Card>
+        /* The company, running: the one thing on this page to do next, so it carries the ring and the glow. */
+        <Card className="rounded-2xl nova-ring nova-glow" data-testid="card-running-company">
           <CardContent className="p-5 space-y-3">
-            <h2 className="font-semibold flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-primary" /> {room.name}
+            <h2 className="flex items-center gap-3 text-lg font-extrabold">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl nova-chip"><Sparkles className="h-5 w-5" /></span>
+              {room.name}
             </h2>
             {room.product && <p className="text-sm text-muted-foreground">{room.product}</p>}
             <p className="text-sm text-muted-foreground">{copy.body}</p>
             <div className="flex gap-2 pt-1">
-              <Button size="sm" onClick={() => navigate(`/simulation/${ventureId}`)} data-testid="button-open-desk">
+              <Button size="sm" className="nova-chip border-0 hover:opacity-90" onClick={() => navigate(`/simulation/${ventureId}`)} data-testid="button-open-desk">
                 Open your desk <ArrowRight className="h-4 w-4 ml-1" />
               </Button>
               <Button variant="outline" size="sm" onClick={() => navigate("/sprints")}>Back to sprints</Button>

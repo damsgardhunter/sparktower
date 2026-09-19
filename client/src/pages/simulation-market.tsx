@@ -35,8 +35,8 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { NOVA_GRADIENT_CSS } from "@shared/backing";
-import { Loader2, ArrowLeft, Store, Gavel, Package, Info } from "lucide-react";
+import { Loader2, Store, Gavel, Package, Info } from "lucide-react";
+import { SimHeader } from "@/components/sim/sim-header";
 
 interface Effect { brand?: number; quality?: number; service?: number; capacity?: number; unitCost?: number }
 interface Listing {
@@ -87,33 +87,25 @@ export default function SimulationMarketPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8 space-y-4">
-      <div className="rounded-2xl p-[2px]" style={{ backgroundImage: NOVA_GRADIENT_CSS }}>
-        <div className="rounded-[calc(1rem-1px)] bg-background p-6">
-          <button onClick={() => navigate(`/simulation/${id}`)} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 mb-2" data-testid="button-back-desk">
-            <ArrowLeft className="h-3 w-3" /> Back to your desk
-          </button>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <Store className="h-5 w-5 text-primary" /> The market
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Year {market.year}. Bids are sealed — nobody sees anyone else's, including you, until the year resolves.
-            The highest offer over the reserve takes it and pays what they bid.
-          </p>
-          <p className="text-sm mt-3">
-            <span className="text-muted-foreground">You can back bids up to </span>
-            <span className="font-semibold tabular-nums" data-testid="text-funds">{compact(market.funds)}</span>
-            <span className="text-muted-foreground"> — cash plus what is still borrowable.</span>
-          </p>
-        </div>
-      </div>
+      <SimHeader icon={Store} title="The market" onBack={() => navigate(`/simulation/${id}`)}>
+        <p className="text-sm text-muted-foreground mt-1">
+          Year {market.year}. Bids are sealed — nobody sees anyone else's, including you, until the year resolves.
+          The highest offer over the reserve takes it and pays what they bid.
+        </p>
+        <p className="text-sm mt-3">
+          <span className="text-muted-foreground">You can back bids up to </span>
+          <span className="font-semibold tabular-nums" data-testid="text-funds">{compact(market.funds)}</span>
+          <span className="text-muted-foreground"> — cash plus what is still borrowable.</span>
+        </p>
+      </SimHeader>
 
       {market.listings.length === 0 ? (
-        <Card><CardContent className="p-6 text-sm text-muted-foreground">Nothing is for sale this year.</CardContent></Card>
+        <Card className="rounded-2xl nova-ring-soft"><CardContent className="p-6 text-sm text-muted-foreground">Nothing is for sale this year.</CardContent></Card>
       ) : (
         market.listings.map((listing) => <ListingCard key={listing.id} listing={listing} ventureId={id} funds={market.funds} />)
       )}
 
-      <Card>
+      <Card className="rounded-2xl nova-ring-soft">
         <CardContent className="p-5">
           <div className="flex items-center gap-2 mb-3">
             <Package className="h-4 w-4 text-muted-foreground" />
@@ -168,7 +160,7 @@ function ListingCard({ listing, ventureId, funds }: { listing: Listing; ventureI
   const beyondMeans = Number.isFinite(n) && n > funds;
 
   return (
-    <Card>
+    <Card className="rounded-2xl nova-ring-soft">
       <CardContent className="p-5">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">

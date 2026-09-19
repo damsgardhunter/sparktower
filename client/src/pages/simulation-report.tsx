@@ -30,12 +30,12 @@ import { useParams, useLocation } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { NOVA_GRADIENT_CSS } from "@shared/backing";
 import type { CompanyReport } from "@shared/simulation/resolve";
 import { lookOf } from "@/components/sim/market-look";
 import {
-  Loader2, ArrowLeft, TrendingUp, TrendingDown, Minus, ArrowRight, Users, Banknote, Receipt, Swords, AlertTriangle,
+  Loader2, TrendingUp, TrendingDown, Minus, ArrowRight, Users, Banknote, Receipt, Swords, AlertTriangle,
 } from "lucide-react";
+import { SimHeader } from "@/components/sim/sim-header";
 
 interface ReportPayload {
   years: number[];
@@ -68,7 +68,7 @@ export default function SimulationReportPage() {
   if (isError || !data) {
     return (
       <div className="mx-auto max-w-4xl px-4 py-8">
-        <Card><CardContent className="p-6 text-sm text-muted-foreground">This report could not be loaded.</CardContent></Card>
+        <Card className="rounded-2xl nova-ring-soft"><CardContent className="p-6 text-sm text-muted-foreground">This report could not be loaded.</CardContent></Card>
       </div>
     );
   }
@@ -79,45 +79,41 @@ export default function SimulationReportPage() {
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-8 space-y-4">
-      <div className="rounded-2xl p-[2px]" style={{ backgroundImage: NOVA_GRADIENT_CSS }}>
-        <div className="rounded-[calc(1rem-1px)] bg-background p-6">
-          <button onClick={() => navigate(`/simulation/${id}`)} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 mb-2" data-testid="button-back">
-            <ArrowLeft className="h-3 w-3" /> Back to the desk
-          </button>
-          <h1 className="text-2xl font-bold tracking-tight" data-testid="text-report-title">
-            {r ? `Year ${r.year}` : "No years yet"}{data.companyName ? ` · ${data.companyName}` : ""}
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1 flex items-center gap-1.5">
-            <look.Icon className={`h-3.5 w-3.5 ${look.ink}`} /> {data.niche.name}
-            {data.totalYears ? ` · of ${data.totalYears}` : ""}
-          </p>
+      <SimHeader
+        icon={look.Icon}
+        title={<>{r ? `Year ${r.year}` : "No years yet"}{data.companyName ? ` · ${data.companyName}` : ""}</>}
+        titleTestId="text-report-title"
+        subtitle={<>{data.niche.name}{data.totalYears ? ` · of ${data.totalYears}` : ""}</>}
+        onBack={() => navigate(`/simulation/${id}`)}
+        backLabel="Back to the desk"
+        backTestId="button-back"
+      >
 
-          {/* Every year of the season, so the story can be read back. */}
-          {data.years.length > 1 && (
-            <div className="flex flex-wrap gap-1.5 mt-4" data-testid="year-picker">
-              {data.years.map((y) => (
-                <Button
-                  key={y}
-                  size="sm"
-                  variant={y === r?.year ? "default" : "outline"}
-                  className="h-7 px-2.5 text-xs"
-                  onClick={() => navigate(`/simulation/${id}/report/${y}`)}
-                  data-testid={`button-year-${y}`}
-                >
-                  {y}
-                </Button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
+        {/* Every year of the season, so the story can be read back. */}
+        {data.years.length > 1 && (
+          <div className="flex flex-wrap gap-1.5 mt-4" data-testid="year-picker">
+            {data.years.map((y) => (
+              <Button
+                key={y}
+                size="sm"
+                variant={y === r?.year ? "default" : "outline"}
+                className="h-7 px-2.5 text-xs"
+                onClick={() => navigate(`/simulation/${id}/report/${y}`)}
+                data-testid={`button-year-${y}`}
+              >
+                {y}
+              </Button>
+            ))}
+          </div>
+        )}
+      </SimHeader>
 
       {!r ? (
-        <Card><CardContent className="p-6 text-sm text-muted-foreground">
+        <Card className="rounded-2xl nova-ring-soft"><CardContent className="p-6 text-sm text-muted-foreground">
           The first year has not resolved yet. Its report appears here the morning after.
         </CardContent></Card>
       ) : !r.pnl ? (
-        <Card><CardContent className="p-6 text-sm text-muted-foreground">
+        <Card className="rounded-2xl nova-ring-soft"><CardContent className="p-6 text-sm text-muted-foreground">
           This year resolved before the full report existed, so only the summary survives: {money(r.revenue)} of sales, {money(r.profit)} of profit, {count(r.customers)} {v.customers}.
         </CardContent></Card>
       ) : (
@@ -128,7 +124,7 @@ export default function SimulationReportPage() {
           <Customers r={r} voice={v} />
           <Rivals r={r} voice={v} />
           {r.notes.length > 0 && (
-            <Card>
+            <Card className="rounded-2xl nova-ring-soft">
               <CardContent className="p-5 space-y-2">
                 <h2 className="text-sm font-semibold">What else the year said</h2>
                 {r.notes.map((n, i) => <p key={i} className="text-sm text-muted-foreground">{n}</p>)}
@@ -145,7 +141,7 @@ function Headline({ r, voice }: { r: CompanyReport; voice: Record<string, string
   const up = r.shareChange > 0.0005;
   const down = r.shareChange < -0.0005;
   return (
-    <Card data-testid="card-headline">
+    <Card className="rounded-2xl nova-ring nova-glow" data-testid="card-headline">
       <CardContent className="p-5 grid grid-cols-2 sm:grid-cols-4 gap-4">
         <Big label="Profit after tax" value={money(r.profit)} tone={r.profit < 0 ? "bad" : "good"} testId="text-profit" />
         <Big label="Sales" value={money(r.revenue)} />
@@ -194,7 +190,7 @@ function Accounts({ r }: { r: CompanyReport }) {
   ];
   const scale = Math.max(p.revenue, ...lines.map((l) => l.amount), 1);
   return (
-    <Card data-testid="card-accounts">
+    <Card className="rounded-2xl nova-ring-soft" data-testid="card-accounts">
       <CardContent className="p-5 space-y-3">
         <h2 className="text-sm font-semibold flex items-center gap-1.5"><Receipt className="h-4 w-4 text-muted-foreground" /> The accounts</h2>
         <Row label="Sales" amount={p.revenue} scale={scale} positive strong />
@@ -254,7 +250,7 @@ function CashBridgeCard({ r }: { r: CompanyReport }) {
   const b = r.cashBridge!;
   let running = b.opening;
   return (
-    <Card data-testid="card-cash">
+    <Card className="rounded-2xl nova-ring-soft" data-testid="card-cash">
       <CardContent className="p-5 space-y-2">
         <h2 className="text-sm font-semibold flex items-center gap-1.5"><Banknote className="h-4 w-4 text-muted-foreground" /> The cash</h2>
         <p className="text-sm text-muted-foreground" data-testid="text-cash-summary">
@@ -294,7 +290,7 @@ function CashBridgeCard({ r }: { r: CompanyReport }) {
  */
 function Customers({ r, voice }: { r: CompanyReport; voice: Record<string, string> }) {
   return (
-    <Card data-testid="card-customers">
+    <Card className="rounded-2xl nova-ring-soft" data-testid="card-customers">
       <CardContent className="p-5 space-y-4">
         <h2 className="text-sm font-semibold flex items-center gap-1.5"><Users className="h-4 w-4 text-muted-foreground" /> Where the {voice.customers} went</h2>
         {r.segments!.map((s) => {
@@ -345,7 +341,7 @@ function Customers({ r, voice }: { r: CompanyReport; voice: Record<string, strin
 function Rivals({ r, voice }: { r: CompanyReport; voice: Record<string, string> }) {
   const rivals = [...(r.rivals ?? [])].sort((a, b) => b.shareAfter - a.shareAfter);
   return (
-    <Card data-testid="card-rivals">
+    <Card className="rounded-2xl nova-ring-soft" data-testid="card-rivals">
       <CardContent className="p-5 space-y-3">
         <h2 className="text-sm font-semibold flex items-center gap-1.5"><Swords className="h-4 w-4 text-muted-foreground" /> What {voice.rivals} did</h2>
         <div className="overflow-x-auto -mx-1">

@@ -34,8 +34,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { NOVA_GRADIENT_CSS } from "@shared/backing";
-import { Loader2, ArrowLeft, Handshake, Check, X, Info } from "lucide-react";
+import { Loader2, Handshake, Check, X, Info } from "lucide-react";
+import { SimHeader } from "@/components/sim/sim-header";
 
 interface Target {
   id: string; name: string; customers: number; distress: string;
@@ -75,29 +75,21 @@ export default function SimulationOffersPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8 space-y-4">
-      <div className="rounded-2xl p-[2px]" style={{ backgroundImage: NOVA_GRADIENT_CSS }}>
-        <div className="rounded-[calc(1rem-1px)] bg-background p-6">
-          <button onClick={() => navigate(`/simulation/${id}`)} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 mb-2" data-testid="button-back-desk">
-            <ArrowLeft className="h-3 w-3" /> Back to your desk
-          </button>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <Handshake className="h-5 w-5 text-primary" /> The boardroom
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            A company can be bought and sold here. What changes hands is the business — customers, what it owns, what it
-            owes. What the seller keeps is the company, every seat, their reputation and the money.
-          </p>
-          <div className="mt-3 text-sm">
-            <p><span className="text-muted-foreground">{data.you.name} is worth about </span>
-              <span className="font-semibold tabular-nums" data-testid="text-your-value">{compact(data.you.fair)}</span></p>
-            <p className="text-xs text-muted-foreground mt-0.5">{data.you.notes.join(" ")}</p>
-            <p className="text-xs text-muted-foreground mt-1">You can back an offer up to {compact(data.reach)}, counting credit.</p>
-          </div>
+      <SimHeader icon={Handshake} title="The boardroom" onBack={() => navigate(`/simulation/${id}`)}>
+        <p className="text-sm text-muted-foreground mt-1">
+          A company can be bought and sold here. What changes hands is the business — customers, what it owns, what it
+          owes. What the seller keeps is the company, every seat, their reputation and the money.
+        </p>
+        <div className="mt-3 text-sm">
+          <p><span className="text-muted-foreground">{data.you.name} is worth about </span>
+            <span className="font-semibold tabular-nums" data-testid="text-your-value">{compact(data.you.fair)}</span></p>
+          <p className="text-xs text-muted-foreground mt-0.5">{data.you.notes.join(" ")}</p>
+          <p className="text-xs text-muted-foreground mt-1">You can back an offer up to {compact(data.reach)}, counting credit.</p>
         </div>
-      </div>
+      </SimHeader>
 
       {!isCeo && (
-        <Card>
+        <Card className="rounded-2xl nova-ring-soft">
           <CardContent className="p-4 text-sm text-muted-foreground flex gap-2">
             <Info className="h-4 w-4 shrink-0 mt-0.5" />
             Buying and selling the company is the chief executive's call. You can see everything here — worth a conversation
@@ -116,7 +108,7 @@ export default function SimulationOffersPage() {
       <div className="space-y-3">
         <h2 className="text-sm font-semibold px-1">Who you could buy</h2>
         {data.targets.length === 0 && (
-          <Card><CardContent className="p-5 text-sm text-muted-foreground">
+          <Card className="rounded-2xl nova-ring-soft"><CardContent className="p-5 text-sm text-muted-foreground">
             Nobody else is running a company in this market. The incumbents are not for sale — they were here before you
             and they intend to be here after.
           </CardContent></Card>
@@ -134,7 +126,7 @@ export default function SimulationOffersPage() {
       </div>
 
       {data.made.filter((m) => m.status !== "pending").length > 0 && (
-        <Card>
+        <Card className="rounded-2xl nova-ring-soft">
           <CardContent className="p-5">
             <h2 className="text-sm font-semibold mb-2">What happened to your offers</h2>
             {data.made.filter((m) => m.status !== "pending").map((m) => (
@@ -242,7 +234,7 @@ function TargetCard({ target, ventureId, isCeo, reach, existing }: {
   });
 
   return (
-    <Card>
+    <Card className="rounded-2xl nova-ring-soft">
       <CardContent className="p-5">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
