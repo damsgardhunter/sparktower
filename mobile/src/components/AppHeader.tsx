@@ -221,6 +221,40 @@ function Stat({ label, value }: { label: string; value?: number | null }) {
 }
 
 /**
+ * A header with nothing in it but the word.
+ *
+ * The menu screen used the profile header like every other tab, which put your
+ * cover photo, your face, your name and your three numbers above a list of
+ * links — and made the whole band a button to your profile. A menu is where
+ * you go to get somewhere else; it does not need to show you yourself, and a
+ * quarter of that screen was spent doing it. The profile is still one tap
+ * away, from the header on every other tab and from the bar.
+ */
+export function PlainHeader({ title }: { title: string }) {
+  const insets = useSafeAreaInsets();
+  return (
+    <View style={{
+      paddingTop: insets.top,
+      backgroundColor: colors.background,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.borderSubtle,
+    }}>
+      <View style={{ height: PLAIN_H, justifyContent: "center", paddingHorizontal: spacing.lg }}>
+        <Text style={{ color: colors.text, fontSize: font.lg, fontFamily: fontFamily.bold }}>{title}</Text>
+      </View>
+    </View>
+  );
+}
+
+/** What a screen under a PlainHeader must leave clear, since it floats like the other one. */
+export function usePlainHeaderSpace(): number {
+  const insets = useSafeAreaInsets();
+  return insets.top + PLAIN_H;
+}
+
+const PLAIN_H = 48;
+
+/**
  * How much room a scrolling screen must leave at the top of its content.
  *
  * The header floats over the scene (headerTransparent in the tabs layout),

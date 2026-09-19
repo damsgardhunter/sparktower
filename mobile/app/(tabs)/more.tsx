@@ -10,7 +10,7 @@ import { GlossyButton } from "../../src/components/feed/Box";
 import { Group, MenuRow, Pill, useSurfaces } from "../../src/components/MoreKit";
 import { ContinuePathCard } from "../../src/components/feed/ContinuePathCard";
 // The header floats over the scene, so this screen leaves its room in the scroll content.
-import { useHeaderSpace } from "../../src/components/AppHeader";
+import { usePlainHeaderSpace } from "../../src/components/AppHeader";
 
 /**
  * Everything that doesn't earn a tab — the phone's version of the web sidebar.
@@ -20,7 +20,7 @@ import { useHeaderSpace } from "../../src/components/AppHeader";
  * (GET /api/surfaces) disappear when it's off, exactly as the sidebar does.
  */
 export default function More() {
-  const headerSpace = useHeaderSpace();
+  const headerSpace = usePlainHeaderSpace();
   const router = useRouter();
   const { signOut } = useAuth();
   const { on } = useSurfaces();
@@ -61,9 +61,9 @@ export default function More() {
           * What you are in the middle of, at the top of the menu.
           *
           * This spot held the profile block, then the create button. Neither
-          * was what somebody opening this screen was looking for: the profile
-          * is the header directly above it, and creating a project is the one
-          * thing you do before you have any of these and rarely after. The
+          * was what somebody opening this screen was looking for — the profile
+          * has since left this screen altogether, and creating a project is
+          * the one thing you do before you have any of these and rarely after. The
           * work in progress is the thing worth a tap, and it is the same card
           * Home uses, from the same endpoint — so it is recognisably the same
           * list rather than a second opinion about what you should do next.

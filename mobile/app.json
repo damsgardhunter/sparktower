@@ -6,7 +6,7 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "sparktower",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": false,
@@ -111,10 +111,18 @@
         "expo-splash-screen",
         {
           "//": "The launch screen. Until SDK 57 this was the top-level `splash` key; nothing reads that any more, so a build made from it opened to a blank white screen — the first thing a store reviewer would have seen.",
-          "image": "./assets/splash-icon.png",
-          "imageWidth": 200,
+          "//2": "The tower, not splash-icon.png: that file is the placeholder Expo ships with a new project — grey concentric circles on a grid — and it was still what this app opened on. The mark is white, so it needs a ground with some colour in it; brand purple in light, black in dark.",
+          "image": "./assets/sparktower-mark.png",
+          "imageWidth": 180,
           "resizeMode": "contain",
-          "backgroundColor": "#FFFFFF"
+          "backgroundColor": "#9745B5",
+          "dark": {
+            "//": "Otherwise a phone in dark mode opens on a full white screen and then drops to black when the app paints — the first half-second of every launch, and the jarring kind.",
+            "image": "./assets/sparktower-mark.png",
+            "imageWidth": 180,
+            "resizeMode": "contain",
+            "backgroundColor": "#000000"
+          }
         }
       ]
     ],

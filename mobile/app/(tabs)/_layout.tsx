@@ -1,6 +1,6 @@
 import { Tabs } from "expo-router";
 import { colors } from "../../src/theme";
-import { AppHeader } from "../../src/components/AppHeader";
+import { AppHeader, PlainHeader } from "../../src/components/AppHeader";
 import { NovaTabBar } from "../../src/components/nav/NovaTabBar";
 import { TabBarVisibilityProvider } from "../../src/components/tab-bar-visibility";
 
@@ -49,7 +49,17 @@ export default function TabsLayout() {
           not part of the path, so every existing link to /more lands on the tab
           rather than a pushed screen. It has no button of its own: the dome in
           the middle of the bar is how you get here. */}
-      <Tabs.Screen name="more" options={{ title: "More", href: null }} />
+      <Tabs.Screen
+        name="more"
+        options={{
+          title: "More",
+          href: null,
+          /* Not the profile header: a menu is for getting somewhere else, and
+             this one was showing you yourself and offering a tap to see more
+             of it. */
+          header: () => <PlainHeader title="Menu" />,
+        }}
+      />
       {/* Off the bar, still tabs: your profile from the header, the rest from More.
           Projects joins them — off the bar, but the screen stays so its deep links still land. */}
       <Tabs.Screen name="projects" options={{ title: "Projects", href: null }} />
