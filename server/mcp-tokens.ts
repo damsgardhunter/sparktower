@@ -19,7 +19,7 @@ import crypto from "node:crypto";
 import type { RequestHandler } from "express";
 import { eq, and, isNull, desc } from "drizzle-orm";
 import { db } from "./db";
-import { mcpTokens } from "@shared/schema";
+import { mcpTokens, users } from "@shared/schema";
 
 /** Recognisable in a log or a leaked gist, which is the point of a prefix. */
 const TOKEN_PREFIX = "nova_pat_";
@@ -52,6 +52,15 @@ export async function mintToken(
     prefix: token.slice(0, DISPLAY_CHARS),
     projectId: opts.projectId ?? null,
     expiresAt,
+    /*
+     * Written here, not left to the column's `DEFAULT now()`. The column is a
+     * `timestamp` without a zone, and Postgres fills a default in the database
+     * session's zone while every Date this app writes is UTC — hours apart on
+     * a server that isn't in UTC. `createdAt` is now compared with the
+     * account's `accessTokensRevokedAt` (see requireMcpToken), and a token made
+     * after a sign-out-everywhere must not read as made before it.
+     */
+    createdAt: new Date(),
   }).returning();
   return { id: row.id, token, label: row.label, prefix: row.prefix, projectId: row.projectId, expiresAt: row.expiresAt, createdAt: row.createdAt };
 }
@@ -61,7 +70,15 @@ export async function listTokens(userId: string) {
   const rows = await db.select().from(mcpTokens)
     .where(and(eq(mcpTokens.userId, userId), isNull(mcpTokens.revokedAt)))
     .orderBy(desc(mcpTokens.createdAt));
-  return rows.map((r) => ({
+  /*
+   * Only tokens that still work. A sign-out-everywhere ends every token made
+   * before it (requireMcpToken) without writing to each row, and a list that
+   * kept showing those as active would be telling the person their editor is
+   * still connected when it isn't.
+   */
+  const [account] = await db.select({ revokedAt: users.accessTokensRevokedAt }).from(users).where(eq(users.id, userId));
+  const cutoff = account?.revokedAt?.getTime() ?? -Infinity;
+  return rows.filter((r) => r.createdAt.getTime() > cutoff).map((r) => ({
     id: r.id, label: r.label, prefix: r.prefix, projectId: r.projectId,
     expiresAt: r.expiresAt, lastUsedAt: r.lastUsedAt, createdAt: r.createdAt,
   }));
@@ -75,7 +92,7 @@ export async function revokeToken(userId: string, id: string): Promise<boolean> 
   return rows.length > 0;
 }
 
-export interface TokenIdentity { userId: string; tokenId: string; projectId: string | null }
+export interface TokenIdentity { userId: string; tokenId: string; projectId: string | null; createdAt: Date }
 
 /** Resolves a presented token, or null for anything expired, revoked, unknown or malformed. */
 export async function resolveToken(presented: string): Promise<TokenIdentity | null> {
@@ -85,7 +102,7 @@ export async function resolveToken(presented: string): Promise<TokenIdentity | n
   if (row.expiresAt && row.expiresAt.getTime() < Date.now()) return null;
   // Best-effort: a failed timestamp write must not fail the request it describes.
   void db.update(mcpTokens).set({ lastUsedAt: new Date() }).where(eq(mcpTokens.id, row.id)).catch(() => {});
-  return { userId: row.userId, tokenId: row.id, projectId: row.projectId };
+  return { userId: row.userId, tokenId: row.id, projectId: row.projectId, createdAt: row.createdAt };
 }
 
 /**
@@ -129,6 +146,43 @@ export const requireMcpToken: RequestHandler = async (req: any, res, next) => {
   if (identity.projectId && target && target !== identity.projectId) {
     return res.status(403).json({ message: "This token is limited to one project, and that isn't it.", code: "token_scope" });
   }
+
+  /*
+   * The account behind the token, asked every time — the two checks every
+   * other way into an account already makes, and this one did not.
+   *
+   * Signed out everywhere. A password reset, a 2FA reset and the console's
+   * "sign out everywhere" all end browser sessions and phone tokens by setting
+   * `accessTokensRevokedAt`; editor tokens were never part of "everywhere". So
+   * a token that leaked kept working after its owner reset their password —
+   * the one thing a reset is for. A token minted before that moment is dead,
+   * the same rule the phone's access tokens follow.
+   *
+   * Suspended. The suspension gate (`blockSuspended`) is mounted on the whole
+   * app, but it runs before this middleware sets `req.user`, so it saw an
+   * anonymous request and waved it through: a suspended account could go on
+   * writing through the editor bridge. Reads stay allowed, as they do
+   * everywhere else for a suspended account.
+   */
+  const [account] = await db
+    .select({ deletedAt: users.deletedAt, suspendedAt: users.suspendedAt, suspendedReason: users.suspendedReason, revokedAt: users.accessTokensRevokedAt })
+    .from(users).where(eq(users.id, identity.userId));
+  if (!account || account.deletedAt) {
+    return res.status(401).json({ message: "That token isn't valid any more. Create a new one in SparkTower.", code: "token_invalid" });
+  }
+  if (account.revokedAt && identity.createdAt.getTime() <= account.revokedAt.getTime()) {
+    return res.status(401).json({
+      message: "This account was signed out everywhere, which ended this token too. Create a new one in SparkTower.",
+      code: "token_invalid",
+    });
+  }
+  if (account.suspendedAt && req.method !== "GET" && req.method !== "HEAD") {
+    return res.status(403).json({
+      message: account.suspendedReason ? `Your account is suspended: ${account.suspendedReason}` : "Your account is suspended.",
+      code: "account_suspended",
+    });
+  }
+
   req.user = { id: identity.userId };
   req.mcpToken = identity;
   next();
