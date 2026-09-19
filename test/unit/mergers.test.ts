@@ -190,8 +190,33 @@ describe("the acquisition itself", () => {
 });
 
 describe("a company with nothing left", () => {
-  it("is not worth approaching again", () => {
-    expect(alreadySold(company("b", { customers: {}, assets: [] }))).toBe(true);
-    expect(alreadySold(company("b", { customers: { recently_single: 1 }, assets: [] }))).toBe(false);
+  it("is not worth approaching again once it has actually sold", () => {
+    expect(alreadySold(company("b", { customers: {}, assets: [], soldBusinessIn: 4 }))).toBe(true);
+  });
+
+  it("does not mistake a company that has not started for one that has sold", () => {
+    /*
+     * The two are identical on paper — no customers, nothing owned — and
+     * reading it off the balance sheet meant that in year one, before anybody
+     * has traded, the boardroom declared every team in the market already sold
+     * and offered nobody for sale at all. Found by a browser walking the flow.
+     */
+    expect(alreadySold(company("b", { customers: {}, assets: [] }))).toBe(false);
+  });
+
+  it("becomes a target again once they have rebuilt", () => {
+    // Being approached twice in a season is a perfectly reasonable thing to
+    // happen to somebody who sold and started over.
+    expect(alreadySold(company("b", { customers: { recently_single: 1 }, assets: [], soldBusinessIn: 4 }))).toBe(false);
+  });
+
+  it("remembers the year the business changed hands", () => {
+    const out = applyAcquisition({
+      buyer: company("a", { cash: 20_000_000 }),
+      seller: company("b", { customers: { recently_single: 5_000 } }),
+      amount: 1_000_000,
+      year: 7,
+    });
+    expect(out.seller.soldBusinessIn).toBe(7);
   });
 });

@@ -192,8 +192,8 @@ export interface AcquisitionOutcome {
  * company — their seats, their name, their reputation, their capacity to build
  * again. They are not removed from anything.
  */
-export function applyAcquisition(input: { buyer: Company; seller: Company; amount: number }): AcquisitionOutcome {
-  const { buyer, seller, amount } = input;
+export function applyAcquisition(input: { buyer: Company; seller: Company; amount: number; year?: number }): AcquisitionOutcome {
+  const { buyer, seller, amount, year } = input;
   const customers = Object.values(seller.customers).reduce((sum, n) => sum + n, 0);
 
   const combined: Record<string, number> = { ...buyer.customers };
@@ -217,6 +217,9 @@ export function applyAcquisition(input: { buyer: Company; seller: Company; amoun
     assets: [],
     // Solvent again, by definition: they have just been paid.
     bankruptSince: undefined,
+    // Remembered, so nobody mistakes a company that sold for one that has not
+    // started — the two look identical on paper.
+    soldBusinessIn: year,
   };
 
   const buyerNotes = [
@@ -242,6 +245,21 @@ export function applyAcquisition(input: { buyer: Company; seller: Company; amoun
   return { buyer: buyerAfter, seller: sellerAfter, buyerNotes, sellerNotes };
 }
 
-/** A company with nothing left to sell is not worth approaching again this year. */
+/**
+ * A company that has already sold its business, and has not rebuilt one yet.
+ *
+ * The obvious test — no customers and nothing owned — is also the exact
+ * description of a company on its first day, so in year one the boardroom
+ * declared every team in the market already sold and offered nobody for sale
+ * at all. The difference between "has nothing left" and "has not started yet"
+ * cannot be read off the balance sheet; it has to be remembered, which is what
+ * `soldBusinessIn` is for.
+ *
+ * It lapses the moment they win a customer back, because a team that has
+ * rebuilt is a target again — and being approached twice in a season is a
+ * perfectly reasonable thing to happen to somebody who sold and started over.
+ */
 export const alreadySold = (company: Company): boolean =>
-  Object.values(company.customers).reduce((sum, n) => sum + n, 0) === 0 && company.assets.length === 0;
+  company.soldBusinessIn !== undefined &&
+  Object.values(company.customers).reduce((sum, n) => sum + n, 0) === 0 &&
+  company.assets.length === 0;

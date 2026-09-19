@@ -282,7 +282,7 @@ export async function tickSeason(seasonId: string, now = new Date()): Promise<nu
     const seller = world.companies.find((c) => c.id === offer.toVentureId);
     if (!buyer || !seller || buyer.kind !== "player" || seller.kind !== "player") continue;
 
-    const out = applyAcquisition({ buyer, seller, amount: offer.amount });
+    const out = applyAcquisition({ buyer, seller, amount: offer.amount, year });
     world.companies = world.companies.map((c) =>
       c.id === buyer.id ? out.buyer : c.id === seller.id ? out.seller : c);
     addNote(buyer.id, ...out.buyerNotes);

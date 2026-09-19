@@ -195,6 +195,14 @@ export interface Company {
   /** Set when a company has run out of money and credit. It does not end the game — see the recovery rules. */
   bankruptSince?: number;
   /**
+   * The year this company sold its business to somebody else.
+   *
+   * Kept because a company that has sold everything and one that has not
+   * started yet are indistinguishable on paper — no customers, nothing owned —
+   * and the boardroom needs to tell them apart. See `alreadySold`.
+   */
+  soldBusinessIn?: number;
+  /**
    * Terms agreed with a creditor after a restructuring: a cap on spending, and
    * the count of consecutive years it has been met. See `recovery.ts` — it
    * lifts itself after two clear years, which is what makes distress an arc
