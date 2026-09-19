@@ -24,7 +24,8 @@ export function AdvanceYearCard({ seasonId, ventureId, year, totalYears, as }: {
   ventureId: string;
   year: number;
   totalYears: number;
-  as: "developer" | "company";
+  /** "dev_flag": a local development server letting anyone seated end the year (SIM_DEV_ADVANCE). */
+  as: "developer" | "dev_flag" | "company";
 }) {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
@@ -56,15 +57,15 @@ export function AdvanceYearCard({ seasonId, ventureId, year, totalYears, as }: {
       <Card className="border-dashed" data-testid="card-advance-year">
         <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
           <div className="flex min-w-0 items-start gap-3">
-            {as === "developer"
+            {as !== "company"
               ? <Wrench className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
               : <Building2 className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />}
             <div className="min-w-0">
               <p className="text-sm font-medium">
-                {as === "developer" ? "Developer controls" : "Training season controls"}
+                {as !== "company" ? "Developer controls" : "Training season controls"}
               </p>
               <p className="text-xs text-muted-foreground">
-                {as === "developer"
+                {as !== "company"
                   ? "You can end this year now rather than waiting for its clock."
                   : "Your company runs this season, so you can end the year whenever the room is ready."}
               </p>
@@ -82,7 +83,7 @@ export function AdvanceYearCard({ seasonId, ventureId, year, totalYears, as }: {
           <AlertDialogHeader>
             <AlertDialogTitle>{last ? "End the season now?" : `End year ${year} now?`}</AlertDialogTitle>
             <AlertDialogDescription>
-              {as === "developer"
+              {as !== "company"
                 ? "This resolves the year for every team in this market — including real players who may still be deciding. Whatever they have not filed runs on last year's plan. It is recorded in the moderation log."
                 : "This resolves the year for every table in this training season, including anyone still deciding. Whatever they have not filed runs on last year's plan."}
               {last ? " It is the last year, so the season ends." : ` Year ${year + 1} opens straight away.`}

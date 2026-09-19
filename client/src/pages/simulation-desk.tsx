@@ -65,7 +65,7 @@ interface Desk {
   resolvesAt: string | null;
   seasonId?: string;
   /** Set only for developers and for companies running this season. */
-  canAdvance?: "developer" | "company" | null;
+  canAdvance?: "developer" | "dev_flag" | "company" | null;
   yourRole: Role | null;
   yourTitle: string | null;
   /** Only before year one: how many rooms in this market are still in a lobby. */
