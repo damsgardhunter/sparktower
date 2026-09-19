@@ -202,7 +202,14 @@ export function registerSimulationDeskRoutes(app: Express): void {
       ventureId: venture.id,
       name: venture.name,
       product: venture.product,
-      niche: { id: niche.id, name: niche.name, premise: niche.premise },
+      /*
+       * The market's own words, carried to the screen. The engine says
+       * "customers" and "capacity" everywhere because the arithmetic is the
+       * same in all seven markets; the desk should say covers, or drops a day,
+       * or concurrent players, and a player should never be able to tell that
+       * underneath it is one spreadsheet.
+       */
+      niche: { id: niche.id, name: niche.name, premise: niche.premise, voice: niche.voice },
       year,
       totalYears: season.totalYears,
       /** Null when the season has finished; otherwise when this year resolves. */

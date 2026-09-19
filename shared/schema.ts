@@ -1190,6 +1190,10 @@ export const NOTIFICATION_KINDS = [
   "artifact_signup",
   // Someone accepted an invite to your project.
   "invite_accepted",
+  // Your sprint partner left. The sprint is over for both of you, and you're free to look again.
+  "sprint_left",
+  // A teammate in a simulated season is waiting on your seat to file this year.
+  "sim_nudge",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
@@ -2207,7 +2211,12 @@ export const cofounderSprints = pgTable("cofounder_sprints", {
   user1Id: varchar("user1_id").notNull().references(() => users.id),
   user2Id: varchar("user2_id").notNull().references(() => users.id),
   duration: text("duration", { enum: ["24h", "72h"] }).notNull(),
-  status: text("status", { enum: ["setup", "ideation", "alignment", "building", "validation", "review", "completed"] }).default("setup").notNull(),
+  /**
+   * `abandoned` is an ending, not a stage: it means somebody left, and the
+   * sprint stops there. It is deliberately not a stage in the sequence — a
+   * sprint never advances *into* it, and nothing advances out of it.
+   */
+  status: text("status", { enum: ["setup", "ideation", "alignment", "building", "validation", "review", "completed", "abandoned"] }).default("setup").notNull(),
   productStyle: text("product_style", { enum: ["past", "modern", "futuristic"] }),
   productName: text("product_name"),
   productDescription: text("product_description"),
@@ -2223,6 +2232,17 @@ export const cofounderSprints = pgTable("cofounder_sprints", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
   startedAt: timestamp("started_at"),
   completedAt: timestamp("completed_at"),
+  /**
+   * Who left, when, and — if they said — why.
+   *
+   * Kept rather than deleting the sprint: the other person spent hours in it,
+   * and a sprint that vanishes reads as a bug rather than as someone leaving.
+   * `abandonedById` is also what lets the remaining partner be told which of
+   * them it was, without inferring it from a status alone.
+   */
+  abandonedAt: timestamp("abandoned_at"),
+  abandonedById: varchar("abandoned_by_id").references(() => users.id),
+  abandonReason: text("abandon_reason"),
 });
 
 export const sprintResponses = pgTable("sprint_responses", {
@@ -2350,6 +2370,155 @@ export const sprintMatchmakingQueue = pgTable("sprint_matchmaking_queue", {
     name: "sprint_matchmaking_queue_matched_sprint_fk",
   }),
 }));
+
+/* ── Ten Years From Now: the startup game ────────────────────────────────── */
+
+/**
+ * One game of Ten Years From Now.
+ *
+ * Two strangers get half an hour to invent a startup, and then a model says
+ * what it thinks the thing is worth in a decade. It replaces the questionnaire
+ * sprint, which asked people to type paragraphs into boxes alone — a
+ * reasonable set of questions and a poor thing to do with another person.
+ *
+ * Kept separate from `cofounder_sprints` rather than bolted onto it. That
+ * table's columns are the questionnaire's shape (`agreed_problem`,
+ * `validation_questions`) and its status enum is the questionnaire's phases;
+ * reusing it would mean every column on both being nullable and neither game
+ * being readable from the schema. A row here is a whole game.
+ *
+ * The decisions live on the game rather than in the submissions table because
+ * they are what the game *is*: a settled customer is a fact about this
+ * company, and reconstructing it by replaying votes every time somebody opens
+ * the screen would be a second source of truth waiting to disagree.
+ */
+export const startupGames = pgTable("startup_games", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  player1Id: varchar("player1_id").notNull().references(() => users.id),
+  player2Id: varchar("player2_id").notNull().references(() => users.id),
+  /**
+   * Which round is open. `verdict` is the result screen; `abandoned` is an
+   * ending rather than a stage, and nothing advances out of it.
+   */
+  round: text("round", { enum: ["idea", "customer", "model", "product", "spend", "verdict", "abandoned"] })
+    .default("idea").notNull(),
+  /** When the open round stops waiting and settles itself. */
+  roundEndsAt: timestamp("round_ends_at"),
+  /** past | modern | futuristic — the flavour both players' ideas are drawn in. */
+  era: text("era", { enum: ["past", "modern", "futuristic"] }),
+
+  /* What they settled on, round by round. Null until that round closes. */
+  /** The chosen idea, whole: name, pitch, the twist. */
+  idea: jsonb("idea"),
+  /** Card id, plus the label, so a custom card survives the deck changing. */
+  customerCardId: varchar("customer_card_id"),
+  customerLabel: text("customer_label"),
+  modelCardId: varchar("model_card_id"),
+  modelLabel: text("model_label"),
+  /** Up to ten ways it beats what exists, each flagged core or not. */
+  productClaims: jsonb("product_claims"),
+  /** The committed allocation of the million: option id → dollars. */
+  budget: jsonb("budget"),
+  /**
+   * How each round ended — agreed, coin, unopposed or nobody — keyed by round.
+   *
+   * Stored because the screen has to be able to say "the coin went your
+   * partner's way". A player whose pick vanished with no explanation writes in
+   * to complain; one who is told they lost a toss does not.
+   */
+  settledBy: jsonb("settled_by"),
+
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  completedAt: timestamp("completed_at"),
+  abandonedAt: timestamp("abandoned_at"),
+  abandonedById: varchar("abandoned_by_id").references(() => users.id),
+}, (table) => ({
+  byPlayer1: index("startup_games_player1_idx").on(table.player1Id, table.round),
+  byPlayer2: index("startup_games_player2_idx").on(table.player2Id, table.round),
+  /** The sweep that settles rounds nobody is watching reads exactly this. */
+  byDeadline: index("startup_games_deadline_idx").on(table.round, table.roundEndsAt),
+}));
+
+/**
+ * What one player put forward in one round, before it settled.
+ *
+ * Kept after the round closes rather than deleted. The results screen is much
+ * better for being able to say what each of you wanted — "you both said night
+ * nurses" and "you wanted the marketplace" are the sentences that make this
+ * feel like something you did together rather than a form that produced a
+ * number.
+ */
+export const startupGameSubmissions = pgTable("startup_game_submissions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  gameId: varchar("game_id").notNull().references(() => startupGames.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  round: text("round").notNull(),
+  /** Whatever that round collects: an idea, a card id, claims, an allocation. */
+  payload: jsonb("payload").notNull(),
+  submittedAt: timestamp("submitted_at").defaultNow().notNull(),
+}, (table) => ({
+  /** One standing submission per player per round; changing your mind replaces it. */
+  once: unique("startup_game_submissions_once").on(table.gameId, table.userId, table.round),
+}));
+
+/** The argument. A round is settled by picking; this is where it gets decided. */
+export const startupGameMessages = pgTable("startup_game_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  gameId: varchar("game_id").notNull().references(() => startupGames.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** Which round it was said in, so the transcript reads as the game did. */
+  round: text("round").notNull(),
+  body: text("body").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  byGame: index("startup_game_messages_game_idx").on(table.gameId, table.createdAt),
+}));
+
+/**
+ * What the model made of it.
+ *
+ * One row per game, written once. The five scores are 0–1000 and are what the
+ * leaderboards rank; `risk` is the one where lower is better, which the
+ * dimension list in @shared/sprints/scoring owns so that nothing sorts it by
+ * guessing.
+ *
+ * The valuations are stored in whole dollars as `bigint` — a ten-year
+ * valuation of a few hundred billion overflows a 32-bit integer, and finding
+ * that out in production is a poor way to find it out.
+ */
+export const startupGameVerdicts = pgTable("startup_game_verdicts", {
+  gameId: varchar("game_id").primaryKey().references(() => startupGames.id, { onDelete: "cascade" }),
+  growth: integer("growth").notNull(),
+  capital: integer("capital").notNull(),
+  product: integer("product").notNull(),
+  acquisition: integer("acquisition").notNull(),
+  /** Higher means riskier. The board is "lowest risk" and sorts ascending. */
+  risk: integer("risk").notNull(),
+  /** Mean of the five with risk inverted, so every board points the same way. */
+  overall: integer("overall").notNull(),
+  tenYear: bigint("ten_year", { mode: "number" }).notNull(),
+  peak: bigint("peak", { mode: "number" }).notNull(),
+  peakYear: integer("peak_year").notNull(),
+  summary: text("summary").notNull(),
+  notes: jsonb("notes"),
+  advice: jsonb("advice"),
+  /**
+   * False when the model could not be reached and the verdict is the honest
+   * fallback rather than a judgement. The screen says so; the leaderboard
+   * leaves these out, because a placeholder that ranks is a lie.
+   */
+  fromModel: boolean("from_model").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /** Every leaderboard is this index, read five ways. */
+  byOverall: index("startup_game_verdicts_overall_idx").on(table.overall),
+}));
+
+export const insertStartupGameSchema = createInsertSchema(startupGames).omit({ id: true, startedAt: true });
+export type StartupGame = typeof startupGames.$inferSelect;
+export type StartupGameSubmission = typeof startupGameSubmissions.$inferSelect;
+export type StartupGameMessage = typeof startupGameMessages.$inferSelect;
+export type StartupGameVerdict = typeof startupGameVerdicts.$inferSelect;
 
 // Sprint insert schemas
 export const insertCofounderSprintSchema = createInsertSchema(cofounderSprints).omit({ id: true, createdAt: true });

@@ -21,10 +21,12 @@
  * into one story — the year the marketing landed, the year the incumbents came
  * back at you — which is the thing people actually recount to each other.
  */
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useParams, useLocation } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { CompanyProfile } from "@/components/sim/company-profile";
 import { NOVA_GRADIENT_CSS } from "@shared/backing";
 import { Loader2, ArrowLeft, Trophy, TrendingUp, TrendingDown, Minus } from "lucide-react";
 
@@ -38,6 +40,7 @@ interface Row {
 }
 interface Standings {
   year: number; totalYears: number; status: string;
+  niche: { id: string; name: string; voice: Record<string, string> } | null;
   rows: Row[];
   history: { year: number; share: number; customers: number; profit: number; rank: number; founderValue: number | null }[];
 }
@@ -48,6 +51,7 @@ const compact = (n: number) =>
 export default function SimulationStandingsPage() {
   const { id } = useParams<{ id: string }>();
   const [, navigate] = useLocation();
+  const [open, setOpen] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery<Standings>({
     queryKey: [`/api/sim/ventures/${id}/standings`],
@@ -103,9 +107,17 @@ export default function SimulationStandingsPage() {
         <CardContent className="p-0">
           <div className="divide-y divide-border">
             {data.rows.map((row) => (
-              <div
+              /*
+               * The whole row opens the company. A league table is the place
+               * somebody is most likely to want to know who a name belongs to
+               * — they are looking at it precisely because somebody above them
+               * is a stranger.
+               */
+              <button
                 key={row.id}
-                className={`flex items-center gap-3 p-4 ${row.isYou ? "bg-primary/5" : ""}`}
+                type="button"
+                onClick={() => setOpen(row.id)}
+                className={`w-full text-left flex items-center gap-3 p-4 hover-elevate active-elevate-2 ${row.isYou ? "bg-primary/5" : ""}`}
                 data-testid={`row-standing-${row.rank}`}
               >
                 <span className={`w-7 text-sm font-semibold tabular-nums ${row.rank <= 3 ? "text-primary" : "text-muted-foreground"}`}>
@@ -124,7 +136,8 @@ export default function SimulationStandingsPage() {
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    {row.customers.toLocaleString()} customers at {compact(row.price)} · reputation {row.reputation}
+                    {row.customers.toLocaleString()} {data.niche?.voice.customers ?? "customers"} at {compact(row.price)}
+                    {data.niche ? ` ${data.niche.voice.per}` : ""} · reputation {row.reputation}
                   </p>
                 </div>
 
@@ -143,7 +156,7 @@ export default function SimulationStandingsPage() {
                     {row.founderShare < 1 && ` · owns ${Math.round(row.founderShare * 100)}%`}
                   </p>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         </CardContent>
@@ -187,6 +200,8 @@ export default function SimulationStandingsPage() {
           </CardContent>
         </Card>
       )}
+
+      <CompanyProfile ventureId={id!} companyId={open} onClose={() => setOpen(null)} />
     </div>
   );
 }

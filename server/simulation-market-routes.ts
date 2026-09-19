@@ -29,7 +29,26 @@ import { valuation, canOffer, assessOffer, alreadySold } from "@shared/simulatio
 
 const KINDS: RecoveryKind[] = ["restructure", "fire_sale", "dissolve_seat", "rescue_raise"];
 
-/** The venture, the season, this person's seat and their company — or nothing at all. */
+/**
+ * The venture, the season, this person's seat and their company — or nothing at all.
+ *
+ * ## A finished season is still a season
+ *
+ * This used to refuse anything whose status was not exactly `running`, which
+ * meant that the instant the fourteenth year resolved, the standings, the
+ * market, the boardroom and the recovery screen all started answering 404 —
+ * and all four clients read a failed query as "still loading". So the end of a
+ * fortnight's play was a spinner on the one screen everybody opens to find out
+ * how it went.
+ *
+ * The giveaway that nobody meant this: both routes serialise `season.status`
+ * and both pages branch on it being "finished", code that could never run.
+ *
+ * So a finished season loads. What it does not do is accept a decision — every
+ * route that changes something checks `over` and says so in words, because
+ * "the season is over" is a different answer from "no such company" and the
+ * person reading it has earned the difference.
+ */
 async function context(ventureId: string, userId: string) {
   const [venture] = await db.select().from(simVentures).where(eq(simVentures.id, ventureId));
   if (!venture) return null;
@@ -39,14 +58,20 @@ async function context(ventureId: string, userId: string) {
   if (!seat) return null;
 
   const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, venture.seasonId));
-  if (!season?.world || season.status !== "running") return null;
+  if (!season?.world || (season.status !== "running" && season.status !== "finished")) return null;
 
   const world = season.world as World;
   const company = world.companies.find((c) => c.id === ventureId);
   if (!company) return null;
 
-  return { venture, seat, season, world, company };
+  return { venture, seat, season, world, company, over: season.status === "finished" };
 }
+
+/** Said once, so every route that changes something refuses it the same way. */
+const SEASON_OVER = {
+  message: "The season is over. Nothing moves now — but everything that happened is still here to read.",
+  code: "season_over",
+};
 
 export function registerSimulationMarketRoutes(app: Express): void {
   /**
@@ -178,6 +203,7 @@ export function registerSimulationMarketRoutes(app: Express): void {
 
     const ctx = await context(req.params.id, req.user.id);
     if (!ctx) return res.status(404).json({ message: "No such company." });
+    if (ctx.over) return res.status(409).json(SEASON_OVER);
     const { season, company } = ctx;
 
     const listingId = String(req.body?.listingId ?? "");
@@ -215,6 +241,7 @@ export function registerSimulationMarketRoutes(app: Express): void {
   app.delete("/api/sim/ventures/:id/bids/:listingId", isAuthenticated, async (req: any, res) => {
     const ctx = await context(req.params.id, req.user.id);
     if (!ctx) return res.status(404).json({ message: "No such company." });
+    if (ctx.over) return res.status(409).json(SEASON_OVER);
 
     await db.delete(simBids).where(and(
       eq(simBids.ventureId, ctx.company.id),
@@ -236,6 +263,7 @@ export function registerSimulationMarketRoutes(app: Express): void {
 
     const ctx = await context(req.params.id, req.user.id);
     if (!ctx) return res.status(404).json({ message: "No such company." });
+    if (ctx.over) return res.status(409).json(SEASON_OVER);
     const { season, company, seat } = ctx;
 
     // Selling the company's things is the chief executive's or the finance
@@ -274,6 +302,7 @@ export function registerSimulationMarketRoutes(app: Express): void {
   app.delete("/api/sim/ventures/:id/listings/:listingId", isAuthenticated, async (req: any, res) => {
     const ctx = await context(req.params.id, req.user.id);
     if (!ctx) return res.status(404).json({ message: "No such company." });
+    if (ctx.over) return res.status(409).json(SEASON_OVER);
 
     await db.update(simListings).set({ status: "withdrawn" }).where(and(
       eq(simListings.id, req.params.listingId),
@@ -300,6 +329,7 @@ export function registerSimulationMarketRoutes(app: Express): void {
 
     const ctx = await context(req.params.id, req.user.id);
     if (!ctx) return res.status(404).json({ message: "No such company." });
+    if (ctx.over) return res.status(409).json(SEASON_OVER);
     const { season, company, seat } = ctx;
 
     if (seat.role !== "ceo") {
@@ -441,6 +471,7 @@ export function registerSimulationMarketRoutes(app: Express): void {
 
     const ctx = await context(req.params.id, req.user.id);
     if (!ctx) return res.status(404).json({ message: "No such company." });
+    if (ctx.over) return res.status(409).json(SEASON_OVER);
     const { season, company, world, seat } = ctx;
 
     if (seat.role !== "ceo") {
@@ -502,6 +533,7 @@ export function registerSimulationMarketRoutes(app: Express): void {
 
     const ctx = await context(req.params.id, req.user.id);
     if (!ctx) return res.status(404).json({ message: "No such company." });
+    if (ctx.over) return res.status(409).json(SEASON_OVER);
     const { company, seat } = ctx;
 
     if (seat.role !== "ceo") {
@@ -574,6 +606,7 @@ export function registerSimulationMarketRoutes(app: Express): void {
   app.delete("/api/sim/ventures/:id/offers/:offerId", isAuthenticated, async (req: any, res) => {
     const ctx = await context(req.params.id, req.user.id);
     if (!ctx) return res.status(404).json({ message: "No such company." });
+    if (ctx.over) return res.status(409).json(SEASON_OVER);
     if (ctx.seat.role !== "ceo") return res.status(403).json({ message: "The chief executive's call.", code: "not_ceo" });
 
     const withdrawn = await db.update(simOffers).set({ status: "withdrawn" }).where(and(
@@ -657,10 +690,19 @@ export function registerSimulationMarketRoutes(app: Express): void {
       .where(and(eq(simReports.seasonId, season.id), eq(simReports.ventureId, company.id)))
       .orderBy(simReports.year);
 
+    const niche = nicheById(season.nicheId);
+
     res.json({
       year: season.year,
       totalYears: season.totalYears,
       status: season.status,
+      /*
+       * The market's own vocabulary, so a league table of restaurants counts
+       * covers and one of podcasts counts listeners. The engine calls them all
+       * customers because the arithmetic is the same; nobody reading this
+       * should be able to tell.
+       */
+      niche: niche ? { id: niche.id, name: niche.name, voice: niche.voice } : null,
       rows,
       history: history.map((h) => ({
         year: h.year,
@@ -682,6 +724,7 @@ export function registerSimulationMarketRoutes(app: Express): void {
   app.delete("/api/sim/ventures/:id/recovery", isAuthenticated, async (req: any, res) => {
     const ctx = await context(req.params.id, req.user.id);
     if (!ctx) return res.status(404).json({ message: "No such company." });
+    if (ctx.over) return res.status(409).json(SEASON_OVER);
     if (ctx.seat.role !== "ceo") return res.status(403).json({ message: "The chief executive's call.", code: "not_ceo" });
 
     await db.delete(simRecoveryMoves).where(and(

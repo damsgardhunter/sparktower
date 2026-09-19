@@ -42,6 +42,8 @@ import { longCountdown } from "@shared/simulation/lobby-copy";
 import { commitment, type LeverField } from "@shared/simulation/levers";
 import { saturate } from "@shared/simulation/market";
 import type { Role } from "@shared/simulation/types";
+import { CompanyProfile } from "@/components/sim/company-profile";
+import { TeammateProfile } from "@/components/sim/teammate-profile";
 import {
   Loader2, Clock, TrendingUp, TrendingDown, Minus, AlertTriangle, Info,
   CheckCircle2, Circle, Banknote, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy, Newspaper,
@@ -52,7 +54,7 @@ interface Desk {
   ventureId: string;
   name: string | null;
   product: string | null;
-  niche: { id: string; name: string; premise: string };
+  niche: { id: string; name: string; premise: string; voice: Record<string, string> };
   year: number;
   totalYears: number;
   resolvesAt: string | null;
@@ -121,6 +123,9 @@ interface ChallengeResult {
   note: string;
 }
 
+/** A market's noun as a column heading: "subscribers" → "Subscribers". */
+const title = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
+
 const money = (n: number) => `£${Math.round(n).toLocaleString()}`;
 const compact = (n: number) =>
   n >= 1_000_000 ? `£${(n / 1_000_000).toFixed(1)}m` : n >= 1_000 ? `£${Math.round(n / 1_000)}k` : `£${Math.round(n)}`;
@@ -165,6 +170,13 @@ export default function SimulationDeskPage() {
 
   /* A local countdown so the deadline moves between polls. */
   const [now, setNow] = useState(Date.now());
+  /*
+   * Which overlay is open, held here rather than in the cards that open them.
+   * A rival can be tapped from the list at the bottom and a teammate from the
+   * table above it, and both have to be able to close the other.
+   */
+  const [openCompany, setOpenCompany] = useState<string | null>(null);
+  const [openSeat, setOpenSeat] = useState<string | null>(null);
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
@@ -261,6 +273,12 @@ export default function SimulationDeskPage() {
   }
 
   const c = desk.company;
+  /*
+   * This market's words. Held in a short name because it is spliced into
+   * labels all over the screen and `desk.niche.voice.capacityShort` inside a
+   * template literal is unreadable.
+   */
+  const v = desk.niche.voice;
   const secondsLeft = desk.resolvesAt ? Math.max(0, Math.round((new Date(desk.resolvesAt).getTime() - now) / 1000)) : null;
   const overCommitted = live ? live.spend + live.fixed > live.available : false;
   const onCredit = live ? live.spend + live.fixed > c.cash : false;
@@ -273,7 +291,7 @@ export default function SimulationDeskPage() {
       clock={desk.phase === "finished" ? "Season over" : secondsLeft !== null ? `${longCountdown(secondsLeft)} until this year resolves` : null}
     >
       {/* 1. What happened last year, before anyone is asked to decide this one. */}
-      {desk.lastYear ? <LastYear report={desk.lastYear} /> : (
+      {desk.lastYear ? <LastYear report={desk.lastYear} voice={v} /> : (
         <Card><CardContent className="p-5">
           <p className="text-sm font-medium">Year one</p>
           <p className="text-sm text-muted-foreground mt-1">
@@ -294,12 +312,23 @@ export default function SimulationDeskPage() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <Stat label="Cash" value={compact(c.cash)} tone={c.cash < 0 ? "bad" : "plain"} />
             <Stat label="Debt" value={compact(c.debt)} sub={`limit ${compact(c.creditLimit)}`} tone={c.debt > c.creditLimit * 0.8 ? "warn" : "plain"} />
-            <Stat label="Customers" value={c.customers.toLocaleString()} sub={`capacity ${c.capacity.toLocaleString()}`} />
-            <Stat label="Price" value={money(c.price)} sub={`costs ${money(c.unitCost)} each`} tone={c.price < c.unitCost ? "bad" : "plain"} />
+            <Stat
+              label={title(v.customers)}
+              value={c.customers.toLocaleString()}
+              sub={`${v.capacityShort} ${c.capacity.toLocaleString()}`}
+            />
+            <Stat label={`Price ${v.per}`} value={money(c.price)} sub={`costs ${money(c.unitCost)} each`} tone={c.price < c.unitCost ? "bad" : "plain"} />
             <Stat label="Reputation" value={`${c.reputation}`} />
-            <Stat label="Quality" value={`${c.quality}`} />
-            <Stat label="Brand" value={`${c.brand}`} />
-            <Stat label="Service" value={`${c.service}`} />
+            {/*
+              * Quality, brand and service are the engine's three words for
+              * three things every market has and no market calls that. A
+              * restaurant's "quality" is whether it is the same in all forty
+              * kitchens; an MMO's is whether the endgame is worth the grind.
+              * The number is the same; the label is the market's own.
+              */}
+            <Stat label="Quality" value={`${c.quality}`} sub={v.quality} />
+            <Stat label="Brand" value={`${c.brand}`} sub={v.brand} />
+            <Stat label="Service" value={`${c.service}`} sub={v.service} />
             <Stat
               label="You own"
               value={`${Math.round(c.founderShare * 100)}%`}
@@ -507,14 +536,25 @@ export default function SimulationDeskPage() {
           </div>
           <div className="grid gap-2 sm:grid-cols-2">
             {desk.table.map((seat) => (
-              <div key={seat.userId} className="flex items-center gap-2.5 text-sm">
+              /*
+               * A whole row, not a name with a link in it. The thing being
+               * asked for is "tell me about this person", and on a phone a
+               * four-character first name is not a target.
+               */
+              <button
+                key={seat.userId}
+                type="button"
+                onClick={() => setOpenSeat(seat.userId)}
+                className="flex items-center gap-2.5 text-sm text-left rounded-md -mx-1.5 px-1.5 py-1 hover-elevate active-elevate-2"
+                data-testid={`button-seat-${seat.userId}`}
+              >
                 {seat.filed
                   ? <CheckCircle2 className="h-4 w-4 text-primary shrink-0" />
                   : <Circle className="h-4 w-4 text-muted-foreground shrink-0" />}
-                <span className="font-medium">{seat.isYou ? "You" : seat.name}</span>
-                <span className="text-muted-foreground text-xs">{seat.title ?? "no seat"}</span>
-                {!seat.filed && <span className="text-xs text-muted-foreground ml-auto">still deciding</span>}
-              </div>
+                <span className="font-medium truncate">{seat.isYou ? "You" : seat.name}</span>
+                <span className="text-muted-foreground text-xs truncate">{seat.title ?? "no seat"}</span>
+                {!seat.filed && <span className="text-xs text-muted-foreground ml-auto shrink-0">still deciding</span>}
+              </button>
             ))}
           </div>
         </CardContent>
@@ -522,10 +562,17 @@ export default function SimulationDeskPage() {
 
       <Card>
         <CardContent className="p-5">
-          <h3 className="text-sm font-semibold mb-3">Who you're up against</h3>
+          <h3 className="text-sm font-semibold">Who you're up against</h3>
+          <p className="text-xs text-muted-foreground mb-3">Open any of them to read who they are and where they can be taken.</p>
           <div className="space-y-3">
             {desk.rivals.map((r) => (
-              <div key={r.id} className="flex items-start justify-between gap-4">
+              <button
+                key={r.id}
+                type="button"
+                onClick={() => setOpenCompany(r.id)}
+                className="w-full flex items-start justify-between gap-4 text-left rounded-md -mx-2 px-2 py-1.5 hover-elevate active-elevate-2"
+                data-testid={`button-company-${r.id}`}
+              >
                 <div className="min-w-0">
                   <p className="text-sm font-medium truncate">
                     {r.name}
@@ -537,7 +584,7 @@ export default function SimulationDeskPage() {
                   <p className="text-sm tabular-nums">{r.customers.toLocaleString()}</p>
                   <p className="text-xs text-muted-foreground">at {money(r.price)}</p>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         </CardContent>
@@ -562,6 +609,9 @@ export default function SimulationDeskPage() {
           </div>
         </CardContent>
       </Card>
+
+      <CompanyProfile ventureId={desk.ventureId} companyId={openCompany} onClose={() => setOpenCompany(null)} />
+      <TeammateProfile ventureId={desk.ventureId} userId={openSeat} onClose={() => setOpenSeat(null)} />
     </Shell>
   );
 }
@@ -798,7 +848,7 @@ function Stat({ label, value, sub, tone = "plain" }: { label: string; value: str
 }
 
 /** Last year, said plainly, with the engine's own explanation of why. */
-function LastYear({ report }: { report: NonNullable<Desk["lastYear"]> }) {
+function LastYear({ report, voice }: { report: NonNullable<Desk["lastYear"]>; voice: Record<string, string> }) {
   const up = report.shareChange > 0.001;
   const down = report.shareChange < -0.001;
   return (
@@ -817,7 +867,17 @@ function LastYear({ report }: { report: NonNullable<Desk["lastYear"]> }) {
           />
           <Stat label="Revenue" value={compact(report.revenue)} />
           <Stat label="Profit" value={compact(report.profit)} tone={report.profit < 0 ? "bad" : "plain"} />
-          <Stat label="Turned away" value={report.turnedAway.toLocaleString()} tone={report.turnedAway > 0 ? "warn" : "plain"} />
+          {/*
+            * The number nobody wants to see, named as the thing it actually
+            * was: orders refused for want of an airframe, people who looked at
+            * the queue and left, players who sat in a login queue and refunded.
+            */}
+          <Stat
+            label="Turned away"
+            value={report.turnedAway.toLocaleString()}
+            sub={report.turnedAway > 0 ? voice.turnedAway : undefined}
+            tone={report.turnedAway > 0 ? "warn" : "plain"}
+          />
         </div>
 
         {report.market && report.market.length > 0 && (

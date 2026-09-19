@@ -13,7 +13,8 @@ import { setupAuth, isAuthenticated } from "./replit_integrations/auth/replitAut
 import { registerAuthRoutes } from "./replit_integrations/auth/routes";
 import { attachBearerUser, registerMobileAuthRoutes } from "./mobile-auth";
 import { registerObjectStorageRoutes, ObjectStorageService, ObjectNotFoundError } from "./replit_integrations/object_storage";
-import { registerSprintRoutes } from "./sprint-routes";
+import { registerStartupGameRoutes } from "./startup-game-routes";
+import { registerGameIdeaRoutes } from "./game-ideas";
 import { registerInvestorRoutes } from "./investor-routes";
 import { registerNovaBriefingRoutes } from "./nova-briefing";
 import { registerFeedbackLoopRoutes } from "./feedback-loop-routes";
@@ -62,6 +63,7 @@ import { registerAdminSecurityRoutes } from "./admin-security-routes";
 import { registerSimulationRoutes } from "./simulation-routes";
 import { registerSimulationDeskRoutes } from "./simulation-desk-routes";
 import { registerSimulationMarketRoutes } from "./simulation-market-routes";
+import { registerSimulationProfileRoutes } from "./simulation-profile-routes";
 import { z } from "zod";
 import OpenAI from "openai";
 import { eq, ne, and, sql, inArray, desc, isNull } from "drizzle-orm";
@@ -377,7 +379,8 @@ export async function registerRoutes(
   registerAuthRoutes(app);
   registerMobileAuthRoutes(app);
   registerObjectStorageRoutes(app);
-  registerSprintRoutes(app);
+  registerStartupGameRoutes(app);
+  registerGameIdeaRoutes(app);
   registerInvestorRoutes(app);
   registerNovaBriefingRoutes(app);
   registerFeedRoutes(app);
@@ -429,6 +432,7 @@ export async function registerRoutes(
   registerSimulationDeskRoutes(app);
   // Buying, selling, and the moves a company makes in trouble.
   registerSimulationMarketRoutes(app);
+  registerSimulationProfileRoutes(app);
   registerSafetyRoutes(app);
   registerInvestmentRoutes(app);
   registerBackingRoutes(app);
