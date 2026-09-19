@@ -342,6 +342,10 @@ function YourData({ mfaEnabled }: { mfaEnabled: boolean }) {
               <p className="text-sm text-muted-foreground">
                 This can't be undone. Projects with other members are handed to another member; projects nobody else is on are deleted with everything in them.
               </p>
+              {/* Said here because it is the question a paying member has, and until now the answer was "you keep being charged". */}
+              <p className="text-sm text-muted-foreground" data-testid="text-delete-billing">
+                A paid plan is cancelled at the same moment, so you won't be charged again.
+              </p>
             </div>
             {!open && (
               <Button variant="outline" size="sm" className="shrink-0 text-destructive border-destructive/40 hover:bg-destructive/10" onClick={() => setOpen(true)} data-testid="button-delete-account">
