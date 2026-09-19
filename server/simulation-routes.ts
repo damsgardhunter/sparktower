@@ -19,6 +19,7 @@ import { companies, companyMembers, simSeasons, simSeats, simVentures, users, us
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { enforceRateLimit, ipKey, rateLimit } from "./moderation";
 import { fillVentureWithBots } from "./simulation-bots";
+import { BOT_FILL_AFTER_SECONDS } from "@shared/bots";
 import { NICHES, nicheById } from "@shared/simulation/niches";
 import { ROLES, ROLE_LEVERS, ROLE_TITLES, type Role } from "@shared/simulation/types";
 import {
@@ -520,9 +521,33 @@ function pgErrorCode(err: unknown): string | undefined {
     }
 
     const seats: SeatView[] = rows.map((r) => ({ userId: r.userId, role: r.role as Role | null, assigned: r.assigned, isBot: !!r.isBot }));
+
+    /*
+     * When the empty seats go to bots, if nobody else turns up: a minute after
+     * the last real person arrived (see fillVentureWithBots). Sent so the room
+     * can show that minute counting down. Without it the only clock on screen
+     * was the fifteen-minute one, and bots arriving at 14:00 read as the room
+     * giving up on people rather than as the wait it had promised.
+     */
+    let botsInSeconds: number | null = null;
+    if (venture.phase === "filling" && rows.length < LOBBY_SIZE) {
+      const lastPerson = Math.max(...rows.filter((r) => !r.isBot).map((r) => r.joinedAt.getTime()));
+      if (Number.isFinite(lastPerson)) {
+        botsInSeconds = Math.max(0, Math.ceil((lastPerson + BOT_FILL_AFTER_SECONDS * 1000 - Date.now()) / 1000));
+      }
+    }
+
     res.json({
       id: venture.id,
       phase: venture.phase,
+      /*
+       * A room is retired for two opposite reasons: it never filled, or its
+       * season ran all fourteen years. The screen has to know which — telling
+       * someone who just finished a whole season that "not enough people
+       * arrived" is wrong, and it hides the final report they came back for.
+       */
+      seasonOver: season?.status === "finished",
+      botsInSeconds,
       /*
        * Null rather than Infinity for a phase with no deadline. JSON.stringify
        * turns Infinity into null regardless, so sending it deliberately means

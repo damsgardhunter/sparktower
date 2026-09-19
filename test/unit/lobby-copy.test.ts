@@ -42,6 +42,21 @@ describe("what each phase says", () => {
      */
     expect(copy.deadline).toMatch(/fills itself/i);
     expect(copy.body).toMatch(/players we run/i);
+    // Real people first: the minute is a wait for them, and it starts again when one arrives.
+    expect(copy.body).toMatch(/real people first/i);
+    expect(copy.body).toMatch(/starts again whenever someone joins/i);
+  });
+
+  it("tells a finished season apart from a room that never filled", () => {
+    /*
+     * Both end retired. Telling someone who has just played fourteen years
+     * that "not enough people arrived" is false, and it sent them away from
+     * the final report they came back to read.
+     */
+    const over = phaseCopy({ ...base, phase: "retired", seasonOver: true });
+    expect(over.title).toMatch(/season over/i);
+    expect(over.body).not.toMatch(/not enough/i);
+    expect(phaseCopy({ ...base, phase: "retired" }).body).toMatch(/not enough people/i);
   });
 
   it("tells someone without a seat to take one, and someone with one that they can still swap", () => {

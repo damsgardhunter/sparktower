@@ -15,7 +15,7 @@
  */
 import { test, expect, type Browser } from "./test";
 import { verifyEmail } from "./verify-email";
-import { clearStrayLobbies } from "./sim-lobbies";
+import { clearStrayLobbies, sql } from "./sim-lobbies";
 
 const password = "Testpass123!";
 const stamp = () => `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -174,4 +174,39 @@ test("somebody who is not in the room is told nothing about it", async ({ browse
 
   await member.context.close();
   await stranger.context.close();
+});
+
+test("a finished season says so, and starting again reaches the markets rather than the old room", async ({ browser }) => {
+  test.setTimeout(120_000);
+  const person = await personIn(browser, "203.0.117.70", "Finley");
+
+  await clearStrayLobbies(NICHE);
+  const ventureId = (await (await person.api.post("/api/sim/join", { data: { nicheId: NICHE } })).json()).ventureId;
+
+  // Open the page while the room is live, so its list of rooms says "you're in one".
+  const page = await person.context.newPage();
+  await page.goto("/simulation");
+  await page.getByTestId("btn-skip-onboarding").click({ timeout: 5_000 }).catch(() => {});
+  await expect(page.getByTestId("text-phase-title")).toContainText(/waiting for/i, { timeout: 20_000 });
+  // And it counts down the minute before bots, rather than leaving only the fifteen-minute clock.
+  await expect(page.getByTestId("text-bots-in")).toContainText(/bots take the empty seats in/i);
+
+  // The season runs its fourteen years out from under the open page.
+  await sql(`UPDATE sim_ventures SET phase = 'retired' WHERE id = $1`, [ventureId]);
+  await sql(`UPDATE sim_seasons SET status = 'finished' WHERE id = (SELECT season_id FROM sim_ventures WHERE id = $1)`, [ventureId]);
+
+  await expect(page.getByTestId("text-phase-title")).toHaveText("Season over", { timeout: 20_000 });
+  await expect(page.getByTestId("button-final-report")).toBeVisible();
+
+  // The bug: this button put you straight back in the room you were leaving.
+  await page.getByTestId("button-pick-market").click();
+  await expect(page.getByTestId(`niche-${NICHE}`)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("card-room-retired")).toHaveCount(0);
+
+  // And joining again lands in a new, live room.
+  await clearStrayLobbies(NICHE);
+  await page.getByTestId(`button-join-${NICHE}`).click();
+  await expect(page.getByTestId("text-phase-title")).toContainText(/waiting for/i, { timeout: 20_000 });
+
+  await person.context.close();
 });

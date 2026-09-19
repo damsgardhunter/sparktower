@@ -102,6 +102,10 @@ describe("what the room says, to whom", () => {
 
   it("explains a retired room instead of leaving a dead end", () => {
     expect(phaseCopy({ ...base, phase: "retired" }).body).toMatch(/another/);
+    // A finished season is not a room that never filled.
+    const over = phaseCopy({ ...base, phase: "retired", seasonOver: true });
+    expect(over.title).toBe("Season over");
+    expect(over.body).not.toMatch(/not enough/i);
   });
 });
 

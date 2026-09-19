@@ -22,7 +22,7 @@
  * `role_taken` means somebody was quicker, which is information, not a
  * failure, and it is shown as such.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -53,6 +53,10 @@ interface Room {
   phase: "filling" | "claiming" | "naming" | "running" | "retired";
   /** Null once the room is running or retired: those phases have no deadline. */
   secondsLeft: number | null;
+  /** Retired because its season ran to the end, not because it never filled. */
+  seasonOver?: boolean;
+  /** While filling: when the empty seats go to bots if nobody else arrives. Null when there's nothing to fill. */
+  botsInSeconds?: number | null;
   name: string | null;
   product: string | null;
   niche: { id: string; name?: string } | null;
@@ -77,22 +81,49 @@ export default function SimulationPage() {
    */
   const { data: mine, isLoading } = useQuery<{ ventures: { id: string; phase: string }[] }>({
     queryKey: ["/api/sim/ventures"],
+    /*
+     * Fresh every time the page opens. The app caches queries for ever by
+     * default, and this list is exactly the one that goes out of date: a
+     * season that finished since it was fetched still read as running, so
+     * the page kept reopening a room that had closed.
+     */
+    staleTime: 0,
+    refetchOnMount: "always",
   });
+
+  /*
+   * Rooms left from this screen in this visit. "Pick a market" on a closed
+   * room cleared the room, and the effect below promptly put the same room
+   * back from the cached list — so the button looked as though it did
+   * nothing. A room you walked away from is not one to be returned to.
+   */
+  const left = useRef(new Set<string>());
 
   useEffect(() => {
     if (ventureId || !mine?.ventures?.length) return;
     // The most recent room that has not been retired. The server orders them.
-    const open = mine.ventures.find((v) => v.phase !== "retired");
+    const open = mine.ventures.find((v) => v.phase !== "retired" && !left.current.has(v.id));
     if (open) setVentureId(open.id);
   }, [mine, ventureId]);
+
+  const leave = () => {
+    if (ventureId) left.current.add(ventureId);
+    queryClient.invalidateQueries({ queryKey: ["/api/sim/ventures"] });
+    setVentureId(null);
+  };
 
   if (isLoading && !ventureId) {
     return <Centered><Loader2 className="h-6 w-6 animate-spin text-primary" /></Centered>;
   }
 
   return ventureId
-    ? <Room ventureId={ventureId} onLeave={() => setVentureId(null)} />
-    : <MarketPicker onJoined={setVentureId} />;
+    ? <Room ventureId={ventureId} onLeave={leave} />
+    : <MarketPicker onJoined={(id) => {
+        // A room you join is one you mean to be in, even if you left it earlier this visit.
+        left.current.delete(id);
+        queryClient.invalidateQueries({ queryKey: ["/api/sim/ventures"] });
+        setVentureId(id);
+      }} />;
 }
 
 /* ── Choosing a market ─────────────────────────────────────────────────── */
@@ -249,6 +280,7 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
     return () => clearInterval(t);
   }, []);
   const secondsLeft = Math.max(0, (room?.secondsLeft ?? 0) - ticked);
+  const botsIn = room?.botsInSeconds == null ? null : Math.max(0, room.botsInSeconds - ticked);
 
   const claim = useMutation({
     mutationFn: (role: Role) => apiRequest("POST", `/api/sim/ventures/${ventureId}/claim`, { role }),
@@ -281,6 +313,7 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
     yourRole: room.you.role,
     isCeo: room.you.isCeo,
     named: !!room.name,
+    seasonOver: !!room.seasonOver,
   }), [room]);
 
   if (isLoading || !room || !copy) return <Centered><Loader2 className="h-6 w-6 animate-spin text-primary" /></Centered>;
@@ -312,6 +345,19 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
               </div>
             )}
           </div>
+          {room.phase === "filling" && botsIn != null && (
+            /*
+             * The minute the room waits for people, on screen. The big clock
+             * is the fifteen-minute one; without this, bots arriving at 14:00
+             * looked like the room giving up on people for no reason.
+             */
+            <p className="mt-3 flex items-center gap-1.5 text-sm" data-testid="text-bots-in">
+              <Users className="h-4 w-4 text-primary shrink-0" />
+              {botsIn > 0
+                ? <span>Waiting for people. Bots take the empty seats in <span className="font-semibold tabular-nums">{countdown(botsIn)}</span> unless someone joins.</span>
+                : <span>Nobody new arrived, so bots are taking the empty seats…</span>}
+            </p>
+          )}
           {copy.deadline && <p className="text-xs text-muted-foreground mt-3 border-t border-border pt-3">{copy.deadline}</p>}
         </div>
       </div>
@@ -407,9 +453,18 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
       )}
 
       {room.phase === "retired" && (
-        <Card><CardContent className="p-5">
+        <Card data-testid="card-room-retired"><CardContent className="p-5">
           <p className="text-sm text-muted-foreground">{copy.body}</p>
-          <Button className="mt-3" size="sm" onClick={onLeave}>Pick a market</Button>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {room.seasonOver && (
+              <Button size="sm" onClick={() => navigate(`/simulation/${ventureId}/report`)} data-testid="button-final-report">
+                See how it finished <ArrowRight className="h-4 w-4 ml-1" />
+              </Button>
+            )}
+            <Button size="sm" variant={room.seasonOver ? "outline" : "default"} onClick={onLeave} data-testid="button-pick-market">
+              {room.seasonOver ? "Start a new company" : "Pick a market"}
+            </Button>
+          </div>
         </CardContent></Card>
       )}
     </div>
