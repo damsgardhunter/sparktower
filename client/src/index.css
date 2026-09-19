@@ -661,3 +661,17 @@
 .landing-type :is(h1, h2, blockquote) {
   font-weight: 800;
 }
+
+/*
+ * The slogan keeps the typeface it was designed in.
+ *
+ * "The fastest growing startup community." was drawn in Space Grotesk at its
+ * heaviest, gradient rim and glow included, before the site moved to Plus
+ * Jakarta Sans — and it was asked to stay that way. Space Grotesk is still in
+ * the font request. More specific than the `.landing-type` headline rule
+ * above, so it wins over that rule's font and its 800 weight.
+ */
+.landing-type .landing-tagline {
+  font-family: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  font-weight: 900;
+}
