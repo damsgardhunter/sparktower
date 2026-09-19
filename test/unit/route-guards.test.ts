@@ -41,6 +41,8 @@ const FLOOR_ONLY_ALLOWED: Record<string, string> = {
   "PATCH /api/projects/:id/interviews/:itemId": "member-only edit",
   "DELETE /api/projects/:id/interviews/:itemId": "member-only delete",
   "PUT /api/projects/:id/nova-notes": "member-only note, one per project",
+  // An autosave while typing: the shared limits (60 in 10 minutes) would run out mid-round and then block real submits.
+  "POST /api/games/:id/draft": "player-only autosave, one row per player per round, paced to one write a second in saveDraft",
   "DELETE /api/storyboards/:id": "owner-only delete",
   "DELETE /api/health-findings/feedback/:feedbackId": "author-only delete",
   "POST /api/messages/:userId/read": "marks read; no content",

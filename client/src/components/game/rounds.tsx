@@ -5,7 +5,7 @@
  * something forward, you can see what your partner put forward, and it settles
  * when you agree or when the clock says so.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -59,9 +59,13 @@ export function EraPicker({ era, onPick }: { era: string | null; onPick: (id: st
  * the instant you both point at the same one.
  */
 export function IdeaRound({
-  mine, theirs, picked, onWrite, onPick, onGenerate, generating, busy,
+  mine, saved, theirs, picked, onWrite, onPick, onGenerate, onDraftChange, generating, busy,
 }: {
   mine: GameIdea | null;
+  /** What you had typed and not put forward, from the server — so a reload puts it back. */
+  saved?: GameIdea | null;
+  /** Called as you type, so the server has a copy if the clock runs out before you submit. */
+  onDraftChange?: (idea: GameIdea) => void;
   theirs: GameIdea | null;
   /** The idea currently submitted, by name. */
   picked: string | null;
@@ -72,9 +76,17 @@ export function IdeaRound({
   generating?: boolean;
   busy?: boolean;
 }) {
-  const [draft, setDraft] = useState<GameIdea>(mine ?? {
+  const [draft, setDraft] = useState<GameIdea>(mine ?? saved ?? {
     name: "", tagline: "", pitch: "", twist: "", whoItsFor: "",
   });
+
+  /*
+   * Every change goes up to be kept, generated ideas included. The text in
+   * these boxes used to exist nowhere but here, so when the round's clock ran
+   * out before "Put this forward", the game carried on with a company that had
+   * no name and no description.
+   */
+  useEffect(() => { onDraftChange?.(draft); }, [draft]);
 
   return (
     <div className="space-y-5">

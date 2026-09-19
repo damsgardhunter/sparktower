@@ -20,7 +20,7 @@
 import { and, eq, inArray, lte, sql } from "drizzle-orm";
 import { db } from "./db";
 import {
-  startupGames, startupGameSubmissions, startupGameMessages, startupGameVerdicts, users,
+  startupGames, startupGameSubmissions, startupGameDrafts, startupGameMessages, startupGameVerdicts, users,
 } from "@shared/schema";
 import {
   ROUND_SECONDS, nextRound, roundCanSettleEarly, settleChoice,
@@ -140,6 +140,73 @@ export function cleanSubmission(round: Round, raw: any, userId: string): any | n
 }
 
 /**
+ * What a player has typed so far, cleaned the way a submission would be.
+ *
+ * The same cleaner as a submission, with one allowance: an idea with a pitch
+ * but no name yet is still worth keeping. Somebody who has written three
+ * paragraphs and not got round to naming the thing has not decided nothing —
+ * and if the clock runs out on them, a company called "Untitled company" with
+ * their pitch is a far better outcome than a company with neither.
+ */
+export function cleanDraft(round: Round, raw: any, userId: string): any | null {
+  if (round === "idea") {
+    const idea = raw?.idea ?? raw;
+    const written = ["tagline", "pitch", "twist", "whoItsFor"].some((k) => String(idea?.[k] ?? "").trim());
+    if (!String(idea?.name ?? "").trim() && written) {
+      return cleanSubmission(round, { ...idea, name: "Untitled company" }, userId);
+    }
+  }
+  return cleanSubmission(round, raw, userId);
+}
+
+/** At most one draft write per player per game every this many milliseconds. */
+const DRAFT_EVERY_MS = 1_000;
+const lastDraft = new Map<string, number>();
+
+/**
+ * Keep what a player has typed, without putting it forward.
+ *
+ * See `startupGameDrafts`: a draft is read only when the round's clock runs
+ * out and the player never submitted. It is never a decision, never seen by
+ * the partner, and never ends a round early.
+ *
+ * Paced here rather than by the shared limiters, which allow sixty requests in
+ * ten minutes — an autosave during a six-minute round of typing would exhaust
+ * that and then start eating the player's real submissions. The cost of a
+ * write is one row per player per round, overwritten, so the only thing worth
+ * bounding is the rate.
+ */
+export async function saveDraft(input: { gameId: string; userId: string; payload: any }):
+  Promise<{ ok: true; saved: boolean } | { ok: false; code: string; message: string }> {
+  const { gameId, userId, payload } = input;
+  const key = `${gameId}:${userId}`;
+  if (Date.now() - (lastDraft.get(key) ?? 0) < DRAFT_EVERY_MS) return { ok: true, saved: false };
+  lastDraft.set(key, Date.now());
+
+  const [game] = await db.select().from(startupGames).where(eq(startupGames.id, gameId));
+  if (!game) return { ok: false, code: "not_found", message: "No such game." };
+  if (!isPlayer(game, userId)) return { ok: false, code: "not_a_player", message: "You're not in this game." };
+  if (game.round === "abandoned" || game.round === "verdict") return { ok: true, saved: false };
+
+  const round = game.round as Round;
+  const clean = cleanDraft(round, payload, userId);
+  if (!clean) {
+    // They cleared the form. A stale draft must not stand in for a blank one.
+    await db.delete(startupGameDrafts).where(and(
+      eq(startupGameDrafts.gameId, gameId), eq(startupGameDrafts.userId, userId), eq(startupGameDrafts.round, round)));
+    return { ok: true, saved: false };
+  }
+
+  await db.insert(startupGameDrafts)
+    .values({ gameId, userId, round, payload: clean, savedAt: new Date() })
+    .onConflictDoUpdate({
+      target: [startupGameDrafts.gameId, startupGameDrafts.userId, startupGameDrafts.round],
+      set: { payload: clean, savedAt: new Date() },
+    });
+  return { ok: true, saved: true };
+}
+
+/**
  * Put a player's answer in, replacing whatever was there.
  *
  * Changing your mind right up to the deadline is the point: the argument that
@@ -188,6 +255,9 @@ export async function submitRound(input: {
         target: [startupGameSubmissions.gameId, startupGameSubmissions.userId, startupGameSubmissions.round],
         set: { payload: clean, submittedAt: new Date() },
       });
+    // A real answer supersedes whatever was being typed.
+    await tx.delete(startupGameDrafts).where(and(
+      eq(startupGameDrafts.gameId, gameId), eq(startupGameDrafts.userId, userId), eq(startupGameDrafts.round, round)));
 
     /*
      * A bot partner answers in the same breath, under the same lock.
@@ -318,6 +388,27 @@ async function settleLocked(tx: any, gameId: string, force: boolean, onlyRound?:
   });
 
   if (!force && !expired && !everyoneAgrees) return false;
+
+  /*
+   * The clock ran out on somebody who was still typing: what they typed
+   * stands in for them.
+   *
+   * Only here, after the early-settle check. A draft is not a decision and
+   * must never be what ends a round early or what an agreement is measured
+   * against — it only fills the gap the clock would otherwise leave. Before
+   * this, that gap was filled with nothing: the idea round closed on a
+   * company with no name and no description while the player's name, tagline
+   * and pitch sat in their text boxes, never sent.
+   */
+  if (expired || force) {
+    const answered = new Set(submissions.map((s) => s.userId));
+    const drafts = await tx.select().from(startupGameDrafts)
+      .where(and(eq(startupGameDrafts.gameId, gameId), eq(startupGameDrafts.round, round)));
+    for (const d of drafts) {
+      if (answered.has(d.userId)) continue;
+      submissions.push({ userId: d.userId, choice: d.payload, at: new Date(d.savedAt).getTime() });
+    }
+  }
 
   const outcome = resolveRound(gameId, round, submissions);
 
@@ -483,6 +574,15 @@ export async function gameState(gameId: string, viewerId: string) {
     ? await db.select().from(startupGameVerdicts).where(eq(startupGameVerdicts.gameId, gameId))
     : [];
 
+  /*
+   * What you had typed and not sent, so a reload puts it back in the boxes.
+   * Yours only: a partner's draft is not an answer and they have not shown it.
+   */
+  const [draft] = round === "verdict" || round === "abandoned"
+    ? []
+    : await db.select({ payload: startupGameDrafts.payload }).from(startupGameDrafts).where(and(
+        eq(startupGameDrafts.gameId, gameId), eq(startupGameDrafts.userId, viewerId), eq(startupGameDrafts.round, round)));
+
   const partnerId = playersOf(game).find((id) => id !== viewerId)!;
 
   return {
@@ -503,6 +603,8 @@ export async function gameState(gameId: string, viewerId: string) {
     }),
     /** Your own answer, whole. */
     yours: rows.find((r) => r.userId === viewerId)?.payload ?? null,
+    /** Typed but not put forward. Null once you submit. */
+    yourDraft: draft?.payload ?? null,
     /**
      * Your partner's answer.
      *

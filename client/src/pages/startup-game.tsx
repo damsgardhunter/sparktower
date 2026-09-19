@@ -172,8 +172,26 @@ function RoundBody({
   const youId: string = state.players?.find((p: any) => p.isYou)?.id ?? "me";
   const [era, setEra] = useState<string | null>(state.game.era ?? null);
   const [customs, setCustoms] = useState<DeckCard[]>([]);
-  const [claims, setClaims] = useState<Claim[]>(state.yours?.claims ?? []);
-  const [allocation, setAllocation] = useState<Allocation>(state.yours?.allocation ?? {});
+  const [claims, setClaims] = useState<Claim[]>(state.yours?.claims ?? state.yourDraft?.claims ?? []);
+  const [allocation, setAllocation] = useState<Allocation>(state.yours?.allocation ?? state.yourDraft?.allocation ?? {});
+  const saveDraft = useDraftSaver(gameId);
+
+  /*
+   * Claims and budget are kept as they change, for the same reason the idea
+   * is: if the clock runs out before the round is committed, what was on the
+   * screen stands in rather than nothing. Skipped on first render, which is
+   * only the saved state coming back.
+   */
+  const firstClaims = useRef(true);
+  useEffect(() => {
+    if (firstClaims.current) { firstClaims.current = false; return; }
+    if (round === "product") saveDraft({ claims });
+  }, [claims]);
+  const firstAllocation = useRef(true);
+  useEffect(() => {
+    if (firstAllocation.current) { firstAllocation.current = false; return; }
+    if (round === "spend") saveDraft({ allocation });
+  }, [allocation]);
 
   const { data: deck } = useQuery<any>({
     queryKey: [`/api/games/${gameId}/deck/${round}`],
@@ -212,6 +230,8 @@ function RoundBody({
         {!state.game.era && <EraPicker era={era} onPick={setEra} />}
         <IdeaRound
           mine={state.yours}
+          saved={state.yourDraft}
+          onDraftChange={(idea) => { if (!state.yours) saveDraft({ idea }); }}
           theirs={state.theirs}
           picked={state.yours?.name ?? null}
           onWrite={(idea) => onSubmit({ idea })}
@@ -398,4 +418,35 @@ function readMessage(err: any): string {
     try { return JSON.parse(raw.slice(start)).message ?? raw; } catch { /* keep */ }
   }
   return raw || "Something went wrong.";
+}
+
+
+/**
+ * Keeps a copy of what is being typed on the server, a moment after typing
+ * stops, and once more on the way out.
+ *
+ * Nothing here submits. The server holds it separately and reads it only if
+ * the round's clock runs out before the player puts an answer forward — see
+ * `saveDraft` in server/startup-game.ts. Failures are ignored on purpose: this
+ * is a safety net under the real submit, and a toast about a background save
+ * would be noise on a screen with a clock on it.
+ */
+function useDraftSaver(gameId: string) {
+  const pending = useRef<any>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const flush = () => {
+    if (timer.current) { clearTimeout(timer.current); timer.current = null; }
+    const payload = pending.current;
+    pending.current = null;
+    if (payload) void apiRequest("POST", `/api/games/${gameId}/draft`, payload).catch(() => {});
+  };
+
+  useEffect(() => () => flush(), [gameId]);
+
+  return (payload: any) => {
+    pending.current = payload;
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(flush, 1_200);
+  };
 }

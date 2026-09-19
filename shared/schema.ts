@@ -1,4 +1,4 @@
-import { pgTable, text, varchar, timestamp, integer, boolean, index, jsonb, unique, foreignKey, bigserial, bigint, real } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, integer, boolean, index, jsonb, unique, foreignKey, bigserial, bigint, real, primaryKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
@@ -2459,6 +2459,30 @@ export const startupGameSubmissions = pgTable("startup_game_submissions", {
 }, (table) => ({
   /** One standing submission per player per round; changing your mind replaces it. */
   once: unique("startup_game_submissions_once").on(table.gameId, table.userId, table.round),
+}));
+
+/**
+ * What a player has typed and not yet put forward.
+ *
+ * Kept apart from submissions on purpose. A submission is a decision — against
+ * a bot partner it closes a pick round the moment it lands — so saving a
+ * half-written idea as one would commit it before the person had finished.
+ * A draft is only ever read when the round's clock runs out and that player
+ * never submitted: then it stands in for them.
+ *
+ * Without it, the clock running out threw away everything on the screen that
+ * had not been sent. A player halfway through writing their company's name,
+ * tagline and pitch found the game had moved on to a company with no name and
+ * no description, because the only copy of their work was in their browser.
+ */
+export const startupGameDrafts = pgTable("startup_game_drafts", {
+  gameId: varchar("game_id").notNull().references(() => startupGames.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  round: text("round").notNull(),
+  payload: jsonb("payload").notNull(),
+  savedAt: timestamp("saved_at").notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.gameId, table.userId, table.round] }),
 }));
 
 /** The argument. A round is settled by picking; this is where it gets decided. */

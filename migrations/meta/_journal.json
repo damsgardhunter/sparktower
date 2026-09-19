@@ -225,6 +225,13 @@
       "when": 1789788679518,
       "tag": "0031_pale_nebula",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1789826048383,
+      "tag": "0032_startup_game_drafts",
+      "breakpoints": true
     }
   ]
 }

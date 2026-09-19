@@ -15,7 +15,7 @@ import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
 import {
   activeGamesFor, createGame, gameState, isPlayer, leaveGame,
-  messagesOf, postMessage, settleIfReady, submitRound,
+  messagesOf, postMessage, settleIfReady, submitRound, saveDraft,
 } from "./startup-game";
 import { valueGame } from "./startup-game-verdict";
 import { ensureBotUser } from "./bot-accounts";
@@ -250,6 +250,19 @@ export function registerStartupGameRoutes(app: Express) {
     }
     const state = await gameState(req.params.id, req.user.id);
     res.json({ settled: out.settled, state });
+  });
+
+  /**
+   * Save what you have typed, without putting it forward. Used only if the
+   * round's clock runs out before you submit — see `saveDraft`.
+   */
+  app.post("/api/games/:id/draft", isAuthenticated, async (req: any, res) => {
+    const out = await saveDraft({ gameId: req.params.id, userId: req.user.id, payload: req.body });
+    if (!out.ok) {
+      const status = out.code === "not_found" ? 404 : out.code === "not_a_player" ? 403 : 400;
+      return res.status(status).json({ message: out.message, code: out.code });
+    }
+    res.json(out);
   });
 
   app.post("/api/games/:id/leave", isAuthenticated, rateLimit("sprint"), async (req: any, res) => {
