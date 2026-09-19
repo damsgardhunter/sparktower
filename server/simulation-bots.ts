@@ -19,11 +19,12 @@
  */
 import { and, eq, inArray, lte, sql } from "drizzle-orm";
 import { db } from "./db";
-import { simDecisions, simSeats, simVentures, users } from "@shared/schema";
+import { simBids, simDecisions, simSeats, simVentures, users } from "@shared/schema";
 import { LOBBY_SIZE } from "@shared/simulation/lobby";
-import { BOT_FILL_AFTER_SECONDS, botDecision, botsForVenture, botsNeeded } from "@shared/simulation/bots";
+import { BOT_FILL_AFTER_SECONDS, botBids, botDecision, botsForVenture, botsNeeded } from "@shared/simulation/bots";
 import { cleanDecision } from "@shared/simulation/levers";
 import { ensureBotUser } from "./bot-accounts";
+import type { Listing } from "@shared/simulation/assets";
 import type { Company, Niche, Role } from "@shared/simulation/types";
 
 /**
@@ -235,4 +236,51 @@ export async function fileBotDecisions(input: {
   }
 
   return filed;
+}
+
+/**
+ * Bid, for the companies whose chief executive is a bot.
+ *
+ * Called from the tick just before the auction settles, so a person who bids
+ * in the last minute is never overwritten: the insert names the seat's own
+ * (venture, listing, year) and does nothing if a bid is already there. Which
+ * also makes it safe on a re-run — the second pass finds its own bid and
+ * leaves it alone.
+ *
+ * Only the chief executive's chair is asked, because that is the seat the
+ * market screen belongs to. A company with a person in that chair bids for
+ * itself, whatever the other four seats are.
+ */
+export async function fileBotBids(input: {
+  companies: { id: string; company: Company }[];
+  listings: Listing[];
+  year: number;
+}): Promise<number> {
+  const { companies, listings, year } = input;
+  if (companies.length === 0 || listings.length === 0) return 0;
+
+  const chairs = await db
+    .select({ ventureId: simSeats.ventureId })
+    .from(simSeats)
+    .innerJoin(users, eq(users.id, simSeats.userId))
+    .where(and(
+      inArray(simSeats.ventureId, companies.map((c) => c.id)),
+      eq(simSeats.role, "ceo"),
+      eq(users.isBot, true),
+    ));
+  if (chairs.length === 0) return 0;
+
+  let placed = 0;
+  for (const chair of chairs) {
+    const company = companies.find((c) => c.id === chair.ventureId)?.company;
+    if (!company) continue;
+    for (const bid of botBids({ ventureId: chair.ventureId, year, company, listings })) {
+      const put = await db.insert(simBids)
+        .values({ ventureId: bid.ventureId, listingId: bid.listingId, year, amount: bid.amount })
+        .onConflictDoNothing({ target: [simBids.ventureId, simBids.listingId, simBids.year] })
+        .returning({ id: simBids.id });
+      if (put.length > 0) placed += 1;
+    }
+  }
+  return placed;
 }
