@@ -27,7 +27,7 @@
  * last confirmed, and a submit that fails puts the message under the field
  * that caused it rather than in a toast that scrolls away.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useParams, useLocation, useSearch } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -48,6 +48,7 @@ import { lookOf } from "@/components/sim/market-look";
 import { capacityRisk, type Forecast } from "@shared/simulation/forecast";
 import { ProjectionPanel } from "@/components/sim/projection-panel";
 import { ProjectionRail, ProjectionBar } from "@/components/sim/projection-dock";
+import { NOVA_GRADIENT } from "@/components/manager/tabs";
 import { AdvanceYearCard } from "@/components/sim/advance-year";
 import {
   Loader2, Clock, TrendingUp, TrendingDown, Minus, AlertTriangle, Info,
@@ -318,7 +319,17 @@ export default function SimulationDeskPage() {
       clock={desk.phase === "finished" ? "Season over" : secondsLeft !== null ? `${longCountdown(secondsLeft)} until this year resolves` : null}
       year={desk.year}
       totalYears={desk.totalYears}
-      tabs={<DeskTabs tab={tab} onChange={setTab} ventureId={desk.ventureId} lastYear={desk.lastYear?.year ?? null} />}
+      tabs={(compact) => (
+        <DeskTabs
+          tab={tab}
+          onChange={setTab}
+          ventureId={desk.ventureId}
+          lastYear={desk.lastYear?.year ?? null}
+          year={desk.year}
+          filed={!!desk.submitted}
+          compact={compact}
+        />
+      )}
       rail={desk.phase !== "finished" ? (
         <ProjectionRail
           ventureId={id!}
@@ -327,7 +338,7 @@ export default function SimulationDeskPage() {
           live={live ?? null}
           customersWord={v.customers}
           warnings={desk.preview.warnings}
-          top={112}
+          top={156}
         />
       ) : undefined}
       bottom={desk.phase !== "finished" ? (
@@ -929,11 +940,21 @@ function EventCard({ event }: { event: NonNullable<Desk["lastYear"]>["event"] })
 type DeskTab = "past" | "decisions" | "future";
 
 /**
- * The desk's three tabs. Past carries a dot until the seat has opened a year's
- * result, because a year resolves overnight and "something new is in there"
- * is the one thing the switch has to say by itself.
+ * The desk's three tabs, as the same tiles as a project's Ship / Systemize /
+ * Funding bar (manager/section-bar.tsx): the open one filled with the nova
+ * gradient, the others plain in a quiet border, each a big symbol with its
+ * word. At the top of the page they are full tiles; once the desk scrolls they
+ * fold to a slim row, because they ride in the pinned header and a hundred
+ * pixels of tile on every screen of a long form is a hundred pixels of form.
+ *
+ * Past carries a dot until the seat has opened a year's result, because a year
+ * resolves overnight and "something new is in there" is the one thing the
+ * switch has to say by itself.
  */
-function DeskTabs({ tab, onChange, ventureId, lastYear }: { tab: DeskTab; onChange: (t: DeskTab) => void; ventureId: string; lastYear: number | null }) {
+function DeskTabs({ tab, onChange, ventureId, lastYear, year, filed, compact }: {
+  tab: DeskTab; onChange: (t: DeskTab) => void; ventureId: string; lastYear: number | null;
+  year: number; filed: boolean; compact: boolean;
+}) {
   const key = `sim-desk-seen-${ventureId}`;
   const [seen, setSeen] = useState<number>(() => {
     try { return Number(localStorage.getItem(key) ?? 0); } catch { return 0; }
@@ -944,40 +965,54 @@ function DeskTabs({ tab, onChange, ventureId, lastYear }: { tab: DeskTab; onChan
     try { localStorage.setItem(key, String(lastYear)); } catch { /* private window: the dot just comes back */ }
   }, [tab, lastYear, seen, key]);
   const fresh = lastYear !== null && seen < lastYear && tab !== "past";
-  const items: { id: DeskTab; label: string; Icon: typeof History }[] = [
-    { id: "past", label: "Past", Icon: History },
-    { id: "decisions", label: "Decisions", Icon: SlidersHorizontal },
-    { id: "future", label: "Future", Icon: Telescope },
+  const items: { id: DeskTab; label: string; sub: string; Icon: typeof History }[] = [
+    { id: "past", label: "Past", sub: lastYear !== null ? `Year ${lastYear} results` : "Nothing yet", Icon: History },
+    { id: "decisions", label: "Decisions", sub: filed ? "Filed" : `Year ${year} to file`, Icon: SlidersHorizontal },
+    { id: "future", label: "Future", sub: "Projections", Icon: Telescope },
   ];
   return (
-    <div role="tablist" aria-label="Desk" className="grid grid-cols-3 gap-1 rounded-xl bg-muted/70 p-1" data-testid="desk-tabs">
-      {items.map(({ id, label, Icon }) => (
-        <button
-          key={id}
-          type="button"
-          role="tab"
-          aria-selected={tab === id}
-          onClick={() => onChange(id)}
-          className={`relative flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors sm:text-sm ${
-            tab === id ? "nova-chip shadow-sm" : "text-muted-foreground hover:bg-background/70 hover:text-foreground"
-          }`}
-          data-testid={`tab-${id}`}
-        >
-          <Icon className="h-3.5 w-3.5" />
-          {label}
-          {id === "past" && fresh && (
-            <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-[#a855f7] ring-2 ring-background" aria-label="new result" data-testid="dot-past-new" />
-          )}
-        </button>
-      ))}
+    <div role="tablist" aria-label="Desk" className="grid grid-cols-3 gap-2 sm:gap-3" data-testid="desk-tabs">
+      {items.map(({ id, label, sub, Icon }) => {
+        const active = tab === id;
+        return (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(id)}
+            className={`group relative rounded-xl p-[2px] transition-shadow ${active ? "bg-background shadow-md shadow-emerald-500/15" : "bg-neutral-200 hover:bg-emerald-300 dark:bg-neutral-800"}`}
+            data-testid={`tab-${id}`}
+          >
+            <div
+              className={`flex h-full rounded-[10px] transition-all ${active ? NOVA_GRADIENT : "bg-background"} ${
+                compact ? "items-center justify-center gap-1.5 px-2 py-1.5" : "min-h-[84px] flex-col items-center justify-center gap-1 px-2 py-2 sm:min-h-[96px]"
+              }`}
+            >
+              <Icon
+                className={`shrink-0 transition-all ${compact ? "h-4 w-4" : "h-7 w-7 sm:h-9 sm:w-9"} ${active ? "text-white drop-shadow-sm" : "text-muted-foreground group-hover:text-emerald-600"}`}
+                strokeWidth={1.5}
+                aria-hidden="true"
+              />
+              <span className={`font-semibold leading-4 ${compact ? "text-xs sm:text-sm" : "text-xs sm:text-sm"} ${active ? "text-white drop-shadow-sm" : "text-foreground"}`}>{label}</span>
+              {!compact && (
+                <span className={`hidden text-[11px] leading-4 sm:block ${active ? "text-white/85" : "text-muted-foreground"}`}>{sub}</span>
+              )}
+            </div>
+            {id === "past" && fresh && (
+              <span className="absolute right-2 top-2 h-2.5 w-2.5 rounded-full bg-[#a855f7] ring-2 ring-background" aria-label="new result" data-testid="dot-past-new" />
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }
 
 function Shell({ title, subtitle, clock, onBack, nicheId, year, totalYears, tabs, rail, bottom, children }: {
   title: string; subtitle: string; clock?: string | null; onBack?: () => void; nicheId?: string;
-  /** Past / Decisions / Future, beside the company's name. */
-  tabs?: React.ReactNode;
+  /** Past / Decisions / Future, under the company's name; told when the desk has scrolled, to fold. */
+  tabs?: (compact: boolean) => React.ReactNode;
   /** For the season bar along the header's foot. */
   year?: number; totalYears?: number;
   /** Pinned beside the desk on a wide screen (the projection dock). */
@@ -987,6 +1022,20 @@ function Shell({ title, subtitle, clock, onBack, nicheId, year, totalYears, tabs
   children: React.ReactNode;
 }) {
   const look = nicheId ? lookOf(nicheId) : null;
+  /*
+   * Scrolled or not, from a sentinel above the header rather than a scroll
+   * listener: the app scrolls inside its own panel, not the window, and an
+   * observer sees the sentinel clipped out of that panel all the same.
+   */
+  const [compact, setCompact] = useState(false);
+  const sentinel = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = sentinel.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(([e]) => setCompact(!e.isIntersecting), { threshold: 0 });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
   const seasonPct = year && totalYears ? Math.min(100, Math.max(0, ((year - 1) / totalYears) * 100)) : null;
   return (
     <div className={`mx-auto px-4 pb-8 ${rail ? "max-w-6xl" : "max-w-4xl"}`}>
@@ -996,9 +1045,10 @@ function Shell({ title, subtitle, clock, onBack, nicheId, year, totalYears, tabs
         * they used to scroll away with the first swipe. Sticks to the top of
         * the scrolling panel, just under the app bar.
         */}
+      <div ref={sentinel} className="h-px" aria-hidden />
       <header className="sticky top-0 z-30 -mx-4 bg-background/85 px-4 pb-3 pt-4 backdrop-blur-md" data-testid="desk-header">
         <div className="relative overflow-hidden rounded-2xl nova-ring-page nova-glow px-4 py-3 sm:px-5">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-2.5">
+          <div className="flex items-center gap-3">
             {onBack && (
               <button onClick={onBack} className="shrink-0 rounded-lg p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="All companies" data-testid="button-back">
                 <ArrowLeft className="h-4 w-4" />
@@ -1021,8 +1071,6 @@ function Shell({ title, subtitle, clock, onBack, nicheId, year, totalYears, tabs
                 <span className="truncate">{subtitle}</span>
               </p>
             </div>
-            {/* Beside the name on a wide screen; its own full-width row under it on a phone. */}
-            {tabs && <div className="order-last w-full md:order-none md:w-auto">{tabs}</div>}
             {clock && (
               <p className="flex shrink-0 items-center gap-1.5 rounded-full bg-muted/70 px-2.5 py-1 text-[11px] font-semibold tabular-nums sm:text-xs" data-testid="text-resolves">
                 <Clock className="h-3.5 w-3.5 text-muted-foreground" />
@@ -1031,6 +1079,7 @@ function Shell({ title, subtitle, clock, onBack, nicheId, year, totalYears, tabs
               </p>
             )}
           </div>
+          {tabs && <div className={compact ? "mt-2" : "mt-3"}>{tabs(compact)}</div>}
           {/* How far through the season, as a line along the card's foot. */}
           {seasonPct !== null && (
             <div className="absolute inset-x-0 bottom-0 h-[3px] bg-muted/60" aria-hidden>
