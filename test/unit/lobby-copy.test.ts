@@ -33,9 +33,15 @@ describe("what each phase says", () => {
   it("counts the people still missing while filling", () => {
     const copy = phaseCopy({ ...base, phase: "filling" });
     expect(copy.title).toMatch(/2 more/);
-    // And says what happens if they never arrive, because a deadline with no
-    // stated consequence is just pressure.
-    expect(copy.deadline).toMatch(/three/i);
+    /*
+     * And says what happens if they never arrive, because a deadline with no
+     * stated consequence is just pressure — and because the answer is the one
+     * a person sitting alone in a room most wants: it fills itself. A chief
+     * executive waiting on four strangers with no idea whether any are coming
+     * is the state this line exists to end.
+     */
+    expect(copy.deadline).toMatch(/fills itself/i);
+    expect(copy.body).toMatch(/players we run/i);
   });
 
   it("tells someone without a seat to take one, and someone with one that they can still swap", () => {

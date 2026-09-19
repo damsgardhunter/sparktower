@@ -67,8 +67,22 @@ async function runningCompany(app: any) {
    * advanced another test's company — which passed alone and failed in a full
    * run, on whichever test happened to be downstream.
    */
-  await db.update(simSeasons).set({ status: "abandoned" })
-    .where(eq(simSeasons.status, "forming"));
+  /*
+   * Its rooms are closed first, then the season.
+   *
+   * `abandoned` is no longer the last word on a season: the starter treats it
+   * as a conclusion and overturns it if a company in that season is still
+   * running, which is what rescues a room whose season was closed around it.
+   * A cleanup that only set the status would therefore undo itself on the next
+   * sweep. Retiring the rooms makes the conclusion true.
+   */
+  const stale = await db.select({ id: simSeasons.id }).from(simSeasons).where(eq(simSeasons.status, "forming"));
+  if (stale.length > 0) {
+    await db.update(simVentures).set({ phase: "retired" })
+      .where(inArray(simVentures.seasonId, stale.map((s) => s.id)));
+    await db.update(simSeasons).set({ status: "abandoned" })
+      .where(inArray(simSeasons.id, stale.map((s) => s.id)));
+  }
 
   const players = [];
   let ventureId = "";
@@ -379,4 +393,38 @@ describe("the year after", () => {
     expect(desk.body.draft.brandSpend).toBe(800_000);
     expect(desk.body.submitted, "a new year is not already filed").toBe(false);
   }, 180_000);
+});
+
+describe("a desk before year one", () => {
+  /*
+   * These two used to be one answer. Whether the season was a minute from
+   * starting or was never going to start, the desk said "waiting for year
+   * one" and kept saying it — and the second case is the one where a person
+   * sits there refreshing a screen that has already ended.
+   */
+  it("says what the wait is on, and that the room doesn't need more people", async () => {
+    const app = await getTestApp();
+    const p = await player(app);
+    const join = await p.agent.post("/api/sim/join").send({ nicheId: NICHE });
+
+    const res = await p.agent.get(`/api/sim/ventures/${join.body.ventureId}/desk`);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.phase).toBe("not_started");
+    expect(res.body.roomsStillChoosing, "its own room is still in the lobby").toBeGreaterThanOrEqual(1);
+  }, 120_000);
+
+  it("tells a room whose season closed that it closed, rather than waiting for ever", async () => {
+    const app = await getTestApp();
+    const p = await player(app);
+    const join = await p.agent.post("/api/sim/join").send({ nicheId: NICHE });
+    const ventureId = join.body.ventureId as string;
+    const [venture] = await db.select().from(simVentures).where(eq(simVentures.id, ventureId));
+
+    await db.update(simVentures).set({ phase: "retired" }).where(eq(simVentures.id, ventureId));
+    await db.update(simSeasons).set({ status: "abandoned" }).where(eq(simSeasons.id, venture.seasonId));
+
+    const res = await p.agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    expect(res.status).toBe(200);
+    expect(res.body.phase).toBe("over");
+  }, 120_000);
 });

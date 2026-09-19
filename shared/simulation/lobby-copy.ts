@@ -64,8 +64,8 @@ export function phaseCopy(input: {
       title: missing === 0 ? "Room full" : `Waiting for ${missing} more`,
       body: missing === 0
         ? "Everyone's here. Seats next."
-        : "Five people run a company between them. You can start with three if nobody else arrives.",
-      deadline: "If there are at least three of you when the clock runs out, you start anyway.",
+        : "Five people run a company between them. If nobody else turns up in the next minute, the empty seats are taken by players we run, so you are never left waiting on strangers.",
+      deadline: "A room that has been waiting a minute fills itself, and it starts either way when the clock runs out.",
     };
   }
 
@@ -83,7 +83,7 @@ export function phaseCopy(input: {
     return {
       title: isCeo ? "Name the company" : "The chief executive is naming the company",
       body: isCeo
-        ? "Yours to decide, and yours to be held to. Say what you sell while you're here."
+        ? "Yours to decide, and yours to be held to. A name is all this asks for — what the company actually sells is the next ten years of arguing."
         : "Naming rights belong to the chief executive. Shout your suggestions at them — this is the last quiet moment you get.",
       deadline: isCeo
         ? "If the clock beats you, the company starts under a placeholder and you can rename it in year one."

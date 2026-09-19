@@ -131,7 +131,16 @@ export function useDesk(id: string | undefined) {
     enabled: !!id,
     refetchInterval: (query) => {
       const phase = query.state.data?.phase;
-      return phase === "finished" || phase === "not_started" ? false : ROOM_POLL_MS;
+      /*
+       * `not_started` keeps polling, and deliberately.
+       *
+       * It was in this list, on the reasoning that nothing changes before year
+       * one. Something does: year one. Stopping meant the desk sat on "waiting
+       * for year one" until the person closed the app and opened it again —
+       * the one screen in the product whose whole content is "this will change
+       * shortly" was the one that had stopped asking.
+       */
+      return phase === "finished" || phase === "over" ? false : ROOM_POLL_MS;
     },
     staleTime: 0,
     retry: false,

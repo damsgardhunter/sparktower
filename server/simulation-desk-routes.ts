@@ -33,6 +33,27 @@ import { economyFor } from "@shared/simulation/season";
 import { debtDrag } from "@shared/simulation/decisions";
 import { postureBlurb } from "@shared/simulation/incumbents";
 import { distressOf, DISTRESS_COPY, recoveryOptions } from "@shared/simulation/recovery";
+import { startReadySeasons } from "./simulation-tick";
+
+/**
+ * The desk nudges the season forward, the way the lobby screen nudges the room.
+ *
+ * Somebody watching "waiting for year one" is watching a background job they
+ * cannot see, and if that job is not running — a single-process deploy that
+ * missed its timer, a dev server restarted at the wrong moment — the wait has
+ * no end and no explanation. Asking here costs three queries and makes the
+ * person looking at the screen the thing that starts their own season.
+ *
+ * Debounced, because this route is polled: at most one sweep every ten
+ * seconds however many desks are open. The sweep itself is idempotent, so a
+ * duplicate is harmless rather than a second world.
+ */
+let lastSweep = 0;
+function nudgeSeasons(): void {
+  if (Date.now() - lastSweep < 10_000) return;
+  lastSweep = Date.now();
+  void startReadySeasons().catch((err) => console.error("[sim] desk sweep failed:", err));
+}
 
 /** The seat this person holds in this venture, or nothing. */
 async function seatOf(ventureId: string, userId: string) {
@@ -77,12 +98,38 @@ export function registerSimulationDeskRoutes(app: Express): void {
     if (!season) return res.status(404).json({ message: "No such season." });
 
     if (season.status === "forming" || !season.world) {
+      /*
+       * Two different things used to look identical here: a season a minute
+       * away from year one, and a season that is never going to have one. Both
+       * said "waiting for year one", indefinitely, which is the worse of the
+       * two answers given to the person it is not true for.
+       */
+      const rooms = await db
+        .select({ id: simVentures.id, phase: simVentures.phase })
+        .from(simVentures)
+        .where(eq(simVentures.seasonId, season.id));
+      const stillPlaying = rooms.filter((r) => r.phase === "running").length;
+
+      if (venture.phase === "retired" || (season.status === "abandoned" && stillPlaying === 0)) {
+        return res.json({
+          phase: "over",
+          ventureId: venture.id,
+          name: venture.name,
+          yourRole: seat.role,
+          yourTitle: seat.role ? ROLE_TITLES[seat.role as Role] : null,
+        });
+      }
+
+      nudgeSeasons();
       return res.json({
         phase: "not_started",
         ventureId: venture.id,
         name: venture.name,
         yourRole: seat.role,
         yourTitle: seat.role ? ROLE_TITLES[seat.role as Role] : null,
+        /** What the season is actually waiting on, so the wait has a shape. */
+        roomsStillChoosing: rooms.filter((r) => r.phase !== "running" && r.phase !== "retired").length,
+        yourRoomReady: venture.phase === "running",
       });
     }
 

@@ -70,8 +70,22 @@ async function readyRoom(app: any) {
    * advanced another test's company — which passed alone and failed in a full
    * run, on whichever test happened to be downstream.
    */
-  await db.update(simSeasons).set({ status: "abandoned" })
-    .where(eq(simSeasons.status, "forming"));
+  /*
+   * Its rooms are closed first, then the season.
+   *
+   * `abandoned` is no longer the last word on a season: the starter treats it
+   * as a conclusion and overturns it if a company in that season is still
+   * running, which is what rescues a room whose season was closed around it.
+   * A cleanup that only set the status would therefore undo itself on the next
+   * sweep. Retiring the rooms makes the conclusion true.
+   */
+  const stale = await db.select({ id: simSeasons.id }).from(simSeasons).where(eq(simSeasons.status, "forming"));
+  if (stale.length > 0) {
+    await db.update(simVentures).set({ phase: "retired" })
+      .where(inArray(simVentures.seasonId, stale.map((s) => s.id)));
+    await db.update(simSeasons).set({ status: "abandoned" })
+      .where(inArray(simSeasons.id, stale.map((s) => s.id)));
+  }
 
   const players = [];
   let ventureId = "";
@@ -161,6 +175,41 @@ describe("starting a season", () => {
 
     const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
     expect(season.status).toBe("forming");
+  }, 120_000);
+
+  it("starts a season that was abandoned while a company was still running", async () => {
+    /*
+     * The state this fixes was real: one room, one chief executive, four bots,
+     * the company running, and the season around it marked abandoned. Nothing
+     * read that status except the starter, so nothing could ever start it, and
+     * the person in the chief executive's chair saw "waiting for year one"
+     * with no end and no explanation.
+     */
+    const app = await getTestApp();
+    const { seasonId, ventureId } = await readyRoom(app);
+    await db.update(simSeasons).set({ status: "abandoned" }).where(eq(simSeasons.id, seasonId));
+
+    await startReadySeasons();
+
+    const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    expect(season.status, "the running room outranks the conclusion").toBe("running");
+    expect(season.world, "and it got a world, not just a status").toBeTruthy();
+    expect((season.world as any).companies.some((c: any) => c.id === ventureId)).toBe(true);
+  }, 120_000);
+
+  it("leaves an abandoned season alone when nothing in it is running", async () => {
+    const app = await getTestApp();
+    const p = await player(app);
+    const join = await p.agent.post("/api/sim/join").send({ nicheId: NICHE });
+    const [venture] = await db.select().from(simVentures).where(eq(simVentures.id, join.body.ventureId));
+    await db.update(simVentures).set({ phase: "retired" }).where(eq(simVentures.id, venture.id));
+    await db.update(simSeasons).set({ status: "abandoned" }).where(eq(simSeasons.id, venture.seasonId));
+
+    await startReadySeasons();
+
+    const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, venture.seasonId));
+    expect(season.status).toBe("abandoned");
+    expect(season.world).toBeFalsy();
   }, 120_000);
 
   it("gives up on a season where every room fell apart", async () => {

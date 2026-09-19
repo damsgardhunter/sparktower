@@ -287,7 +287,12 @@ export interface ReportMarketNote {
 export type FiledDecisions = { companyId?: string } & Partial<Record<DeskRole, Record<string, any>>>;
 
 export interface DeskView {
-  phase: "not_started" | "running" | "finished";
+  /**
+   * `over` is a season that closed before year one — too few people in the
+   * market. It used to arrive as `not_started`, which is a wait, and the wait
+   * never ended because there was nothing left to wait for.
+   */
+  phase: "not_started" | "over" | "running" | "finished";
   ventureId: string;
   name: string | null;
   product?: string | null;

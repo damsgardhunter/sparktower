@@ -48,7 +48,7 @@ import {
 } from "lucide-react";
 
 interface Desk {
-  phase: "not_started" | "running" | "finished";
+  phase: "not_started" | "over" | "running" | "finished";
   ventureId: string;
   name: string | null;
   product: string | null;
@@ -58,6 +58,9 @@ interface Desk {
   resolvesAt: string | null;
   yourRole: Role | null;
   yourTitle: string | null;
+  /** Only before year one: how many rooms in this market are still in a lobby. */
+  roomsStillChoosing?: number;
+  yourRoomReady?: boolean;
   yourLevers: string[];
   fields: LeverField[];
   draft: Record<string, any> | null;
@@ -218,17 +221,39 @@ export default function SimulationDeskPage() {
     return <div className="flex min-h-[60vh] items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>;
   }
 
+  if (desk.phase === "over") {
+    return (
+      <Shell title={desk.name ?? "Your company"} subtitle="This one didn't start">
+        <Card><CardContent className="p-6 space-y-3" data-testid="card-season-over">
+          <p className="text-sm">
+            Not enough people made it into this market in time, so the season closed instead of starting. Nothing you
+            did — rooms need three players to be a company, and this one didn't get there.
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Joining again puts you in a fresh room, and one that has been waiting a minute fills itself so you are
+            never the only one at the table.
+          </p>
+          <Button size="sm" onClick={() => navigate("/simulation")} data-testid="button-pick-market">Pick a market</Button>
+        </CardContent></Card>
+      </Shell>
+    );
+  }
+
   if (desk.phase === "not_started") {
+    const waiting = desk.roomsStillChoosing ?? 0;
     return (
       <Shell title={desk.name ?? "Your company"} subtitle="Waiting for year one">
-        <Card><CardContent className="p-6 space-y-2">
+        <Card><CardContent className="p-6 space-y-2" data-testid="card-not-started">
           <p className="text-sm">
-            The company exists. Year one begins once every room in this market has finished choosing seats — usually a
-            minute or two, and never more than twenty.
+            {waiting === 0
+              ? "Every room in this market has its seats. Year one starts within the minute — this page will move on by itself."
+              : `The company exists. Year one begins once the ${waiting === 1 ? "one room" : `${waiting} rooms`} still choosing seats ${waiting === 1 ? "has" : "have"} finished — usually a minute or two, and never more than twenty.`}
           </p>
           <p className="text-sm text-muted-foreground">
             {desk.yourTitle ? `You have the ${desk.yourTitle.toLowerCase()}'s chair. ` : ""}
-            Nothing is lost by closing this; the season will be here when it starts.
+            You don't need anyone else to turn up: a room that has been waiting a minute is filled out with players the
+            product runs, so a season never depends on five strangers arriving at once. Nothing is lost by closing
+            this; the season will be here when it starts.
           </p>
         </CardContent></Card>
       </Shell>

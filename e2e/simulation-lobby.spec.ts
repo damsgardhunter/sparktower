@@ -104,7 +104,6 @@ test("five people fill a room, race for the same chair, and come out with a comp
   await boss.goto("/simulation");
   await expect(boss.getByTestId("text-phase-title")).toContainText(/name the company/i, { timeout: 20_000 });
   await boss.getByTestId("input-company-name").fill("Northbound");
-  await boss.getByTestId("input-company-product").fill("Training for people who hate training apps");
   await boss.getByTestId("button-name-company").click();
 
   // And the company exists, with a way into it.

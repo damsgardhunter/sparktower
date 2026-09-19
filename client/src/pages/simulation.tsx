@@ -46,7 +46,7 @@ interface NicheView {
   incumbents: { name: string; share: number; posture: string }[];
 }
 interface RoleView { id: Role; title: string; levers: string[] }
-interface Seat { userId: string; name: string; avatarUrl: string | null; role: Role | null; assigned: boolean; isYou: boolean }
+interface Seat { userId: string; name: string; avatarUrl: string | null; role: Role | null; assigned: boolean; isBot: boolean; isYou: boolean }
 interface Room {
   id: string;
   phase: "filling" | "claiming" | "naming" | "running" | "retired";
@@ -299,8 +299,21 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
               <div key={seat.userId} className="flex items-center gap-3 rounded-lg border border-border p-2.5">
                 <UserAvatar name={seat.name} src={seat.avatarUrl ?? undefined} size="sm" />
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">
-                    {seat.name}{seat.isYou && <span className="text-muted-foreground font-normal"> · you</span>}
+                  <p className="text-sm font-medium truncate flex items-center gap-1.5">
+                    <span className="truncate">{seat.name}</span>
+                    {seat.isYou && <span className="text-muted-foreground font-normal">· you</span>}
+                    {/*
+                      * Said plainly, beside the name, on every phase of the
+                      * screen. A bot carries an ordinary name so the room
+                      * reads like a room — which is exactly why leaving this
+                      * off would be the product telling somebody something
+                      * untrue about who they are playing with.
+                      */}
+                    {seat.isBot && (
+                      <Badge variant="outline" className="font-normal shrink-0" data-testid={`badge-bot-${seat.userId}`}>
+                        Bot
+                      </Badge>
+                    )}
                   </p>
                   <p className="text-xs text-muted-foreground">
                     {seat.role ? roleInfo(seat.role)?.title ?? seat.role : "Hasn't chosen yet"}
@@ -378,10 +391,9 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
 function NamingCard({ ventureId, isCeo }: { ventureId: string; isCeo: boolean }) {
   const { toast } = useToast();
   const [name, setName] = useState("");
-  const [product, setProduct] = useState("");
 
   const submit = useMutation({
-    mutationFn: () => apiRequest("POST", `/api/sim/ventures/${ventureId}/name`, { name, product }),
+    mutationFn: () => apiRequest("POST", `/api/sim/ventures/${ventureId}/name`, { name }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}`] }),
     onError: (e: any) => toast({ title: "Couldn't set that", description: e?.message, variant: "destructive" }),
   });
@@ -400,12 +412,11 @@ function NamingCard({ ventureId, isCeo }: { ventureId: string; isCeo: boolean })
     <Card>
       <CardContent className="p-5 space-y-3">
         <div className="space-y-1.5">
-          <Label htmlFor="sim-name">Company name</Label>
+          <Label htmlFor="sim-name">Name the company</Label>
           <Input id="sim-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Northbound" maxLength={60} data-testid="input-company-name" />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="sim-product">What you sell</Label>
-          <Input id="sim-product" value={product} onChange={(e) => setProduct(e.target.value)} placeholder="A training app for people who hate training apps" maxLength={120} data-testid="input-company-product" />
+          <p className="text-xs text-muted-foreground">
+            That's the only thing to decide here. What you sell is what the five of you choose to do with it, year by year.
+          </p>
         </div>
         <Button onClick={() => submit.mutate()} disabled={name.trim().length < 2 || submit.isPending} data-testid="button-name-company">
           {submit.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Start year one"}

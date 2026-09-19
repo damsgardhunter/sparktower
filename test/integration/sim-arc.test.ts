@@ -62,8 +62,22 @@ async function runningCompany(app: any) {
    * advanced another test's company — which passed alone and failed in a full
    * run, on whichever test happened to be downstream.
    */
-  await db.update(simSeasons).set({ status: "abandoned" })
-    .where(eq(simSeasons.status, "forming"));
+  /*
+   * Its rooms are closed first, then the season.
+   *
+   * `abandoned` is no longer the last word on a season: the starter treats it
+   * as a conclusion and overturns it if a company in that season is still
+   * running, which is what rescues a room whose season was closed around it.
+   * A cleanup that only set the status would therefore undo itself on the next
+   * sweep. Retiring the rooms makes the conclusion true.
+   */
+  const stale = await db.select({ id: simSeasons.id }).from(simSeasons).where(eq(simSeasons.status, "forming"));
+  if (stale.length > 0) {
+    await db.update(simVentures).set({ phase: "retired" })
+      .where(inArray(simVentures.seasonId, stale.map((s) => s.id)));
+    await db.update(simSeasons).set({ status: "abandoned" })
+      .where(inArray(simSeasons.id, stale.map((s) => s.id)));
+  }
 
   const players = [];
   let ventureId = "";
