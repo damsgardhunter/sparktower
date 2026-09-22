@@ -381,6 +381,58 @@ describe("events that arrive in the wrong order", () => {
     expect(await tierOf(user.id), "an event older than the applied one changes nothing").toBe("pro");
   });
 
+  /**
+   * The gap the ordering guard had: a checkout settled the plan and left no
+   * mark of when, so the guard had nothing to compare the next event against.
+   *
+   * Stripe retries for three days. A retry from an older subscription
+   * lifecycle landing after a fresh purchase would pass the guard — there was
+   * no timestamp to fail against — and `settleTier` trusts an event's own copy
+   * over the live listing, which is how a subscription that is dead at Stripe
+   * comes back to life on somebody's account.
+   */
+  it("marks the time a checkout settled the plan, so a later retry of an older event can't undo it", async () => {
+    const app = await getTestApp();
+    const { user, customerId } = await aPaidUser();
+    await db.update(users).set({ subscriptionTier: "free", subscriptionEventAt: null }).where(eq(users.id, user.id));
+    const eventAt = async () => (await db.select({ at: users.subscriptionEventAt }).from(users).where(eq(users.id, user.id)))[0].at;
+    expect(await eventAt(), "nothing recorded yet").toBeNull();
+
+    /*
+     * The checkout handler asks Stripe for the subscription it just paid for;
+     * the file's client stubs only `list`, because everything else here is
+     * about signatures. One paid subscription, so the settled tier is real.
+     */
+    const { getUncachableStripeClient } = await import("../../server/stripeClient");
+    const client: any = await getUncachableStripeClient();
+    const retrieve = client.subscriptions.retrieve;
+    const priceRetrieve = client.prices.retrieve;
+    client.subscriptions.retrieve = async () => ({
+      id: "sub_test_123", customer: customerId, status: "active", created: at("2026-04-10T11:59:00Z"),
+      items: { data: [{ price: { id: "price_pro_test" } }] },
+    });
+    // The tier is read off the price's metadata, as it is in production.
+    client.prices.retrieve = async () => ({ id: "price_pro_test", metadata: { tier: "pro" }, product: { metadata: {} } });
+
+    const bought = await deliver(app, {
+      id: "evt_checkout_stamp", object: "event", type: "checkout.session.completed",
+      created: at("2026-04-10T12:00:00Z"),
+      data: { object: { id: "cs_test_stamp", mode: "subscription", subscription: "sub_test_123", customer: customerId } },
+    });
+    expect(bought.status).toBe(200);
+    const stamped = await eventAt();
+    expect(stamped, "the purchase is on the clock").toBeTruthy();
+    expect(stamped!.toISOString()).toBe(new Date(at("2026-04-10T12:00:00Z") * 1000).toISOString());
+
+    // A retry from a week before the purchase: acknowledged, and it changes nothing.
+    await setTier(user.id, "pro");
+    expect((await deliver(app, statusEvent("evt_retry_old", customerId, "canceled", at("2026-04-03T09:00:00Z")))).status).toBe(200);
+    expect(await tierOf(user.id), "an event older than the purchase cannot undo it").toBe("pro");
+    expect((await eventAt())!.toISOString(), "and it does not rewind the clock either").toBe(stamped!.toISOString());
+    client.subscriptions.retrieve = retrieve;
+    client.prices.retrieve = priceRetrieve;
+  });
+
   it("applies an event with no timestamp, and marks the state as of now", async () => {
     const app = await getTestApp();
     const { user, customerId } = await aPaidUser();
