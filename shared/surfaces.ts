@@ -161,7 +161,14 @@ export const SURFACE_API_PREFIXES: Record<string, string[]> = {
   discover: ["/api/discover"],
   feed: ["/api/feed", "/api/projects/:id/comments", "/api/project-comments", "/api/artifacts", "/api/public/artifacts", "/api/promotions"],
   matches: ["/api/matches", "/api/projects/:id/recommend-people"],
-  sprints: ["/api/games"],
+  /*
+   * The market simulation lives under /api/sim, and was not listed here —
+   * so "Sprints & simulations", whose note says it covers the simulation,
+   * switched off the sprint games and left fourteen-day seasons, sealed-bid
+   * auctions and the bot table running and reachable. A kill switch that
+   * leaves the heaviest thing behind it running is not a kill switch.
+   */
+  sprints: ["/api/games", "/api/sim"],
   connections: ["/api/connections"],
   messages: ["/api/messages"],
   leaderboard: ["/api/leaderboard", "/api/reputation"],
