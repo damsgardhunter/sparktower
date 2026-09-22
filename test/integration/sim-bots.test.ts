@@ -75,19 +75,20 @@ const seatsIn = (ventureId: string) =>
  * half-filled room becomes the next test's starting position. What's under
  * test here is what happens to a room that waits, so each one gets its own.
  */
-async function roomOfOne(app: any) {
+async function roomOfOne(app: any, ventureIdOverride?: string) {
   const one = await player(app);
-  const ventureId = await emptyRoom();
+  const ventureId = await emptyRoom(ventureIdOverride);
   // `joinedAt` explicitly, as the join route writes it — see the comment there.
   await db.insert(simSeats).values({ ventureId, userId: one.id, joinedAt: new Date() } as any);
   return { one, ventureId };
 }
 
 /** A room in a season of its own, so nothing else can wander into it. */
-async function emptyRoom(): Promise<string> {
+async function emptyRoom(id?: string): Promise<string> {
   const [season] = await db.insert(simSeasons)
     .values({ nicheId: NICHE, name: `Bots ${Date.now()}-${n}` } as any).returning();
   const [venture] = await db.insert(simVentures).values({
+    ...(id ? { id } : {}),
     seasonId: season.id,
     phase: "filling",
     phaseEndsAt: new Date(Date.now() + 15 * 60_000),
@@ -444,9 +445,20 @@ describe("what the bots bid for", () => {
       asset: { id: "ast-b", kind: "patent", name: "Lot B", effect: { quality: 4 }, bookValue: 2_000_000 } },
   ];
 
-  /** A full room whose chief executive is a bot. */
+  /**
+   * A full room whose chief executive is a bot.
+   *
+   * The room's id is fixed, not generated, because every number a bot chair
+   * decides is seeded on it (`botAmbition`, and the per-lot want and offer in
+   * botBids). With a fresh uuid each run, whether this company bids at all is
+   * a property of that uuid — so the test passed or failed by the draw, which
+   * is exactly the flake that had this file failing in full runs and passing
+   * on its own. A fixed id tests the behaviour instead of the dice; the
+   * spread across *different* seeds is a unit test's job, not this one's.
+   */
+  const BIDDING_ROOM = "botbids-seed-0000";
   async function botRunRoom(app: any) {
-    const { one, ventureId } = await roomOfOne(app);
+    const { one, ventureId } = await roomOfOne(app, BIDDING_ROOM);
     await waitedAMinute(ventureId);
     await fillVentureWithBots(ventureId);
     const bots = (await seatsIn(ventureId)).filter((s) => s.isBot);

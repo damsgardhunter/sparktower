@@ -15,6 +15,7 @@
 import type { Express } from "express";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "./db";
+import { publiclyVisible } from "./visibility";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { projects, projectMembers, feedPosts, projectKanbanTasks } from "@shared/schema";
 import { pathStatus, listTracks } from "./phase-trees";
@@ -176,7 +177,7 @@ export async function lastDoneStep(projectId: string, events: { taskId: string |
     // Shared on its own or in a weekly update: either way the task carries the post that shared it.
     const sharedBy = [...(task.tags ?? [])].reverse().find((t) => t.startsWith("posted:"))?.slice("posted:".length) ?? null;
     const [shared] = sharedBy
-      ? await db.select({ id: feedPosts.id }).from(feedPosts).where(and(eq(feedPosts.id, sharedBy), isNull(feedPosts.hiddenAt))).limit(1)
+      ? await db.select({ id: feedPosts.id }).from(feedPosts).where(and(eq(feedPosts.id, sharedBy), publiclyVisible.feedPost())).limit(1)
       : [];
     return { taskId: task.id, title: task.title, completedAt: new Date(task.completedAt ?? e.createdAt).toISOString(), sharedPostId: shared?.id ?? null };
   }

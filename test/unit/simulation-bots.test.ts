@@ -198,6 +198,57 @@ describe("what a bot files", () => {
  * minutes of one real person watching an empty room tick down. These are the
  * two places the room is allowed to stop waiting early.
  */
+describe("what a bot chair will pay for", () => {
+  /*
+   * Every number here is seeded on the venture's id: how ambitious this bot
+   * company is, which lot it wants, and what it offers. That is the point —
+   * eight bot companies in one market must not all want the same thing at the
+   * same price — and it has a consequence worth stating: whether a *given*
+   * company bids at all is a property of its id.
+   *
+   * So most bid and some don't, and a test that creates a room with a random
+   * id and asserts "it bids" is a test that fails about one run in seven. That
+   * is exactly what was happening in the integration suite, where it read as a
+   * broken auction rather than as the dice. The integration test now fixes its
+   * room id; this is the test that owns the spread, so the behaviour is
+   * described somewhere rather than only being tripped over.
+   */
+  const listings: any = [
+    { id: "lot-a", reserve: 1_000_000, sellerId: null, blurb: "A thing.",
+      asset: { id: "ast-a", kind: "distribution", name: "Lot A", effect: { capacity: 50_000 }, bookValue: 1_000_000 } },
+    { id: "lot-b", reserve: 2_000_000, sellerId: null, blurb: "Another.",
+      asset: { id: "ast-b", kind: "patent", name: "Lot B", effect: { quality: 4 }, bookValue: 2_000_000 } },
+  ];
+  const flush = (id: string): any => ({
+    id, kind: "player", name: "Test Co", cash: 40_000_000, creditLimit: 10_000_000, debt: 0,
+    price: 40, capacity: 250_000, positioning: "", cities: [], customers: {}, assets: [],
+  });
+
+  it("has most well-funded bots bidding, and not all of them", () => {
+    const seeds = Array.from({ length: 200 }, (_, i) => `seed-${i}`);
+    const bidding = seeds.filter((id) => botBids({ ventureId: id, year: 1, company: flush(id), listings }).length > 0);
+    expect(bidding.length / seeds.length, "a market where nobody bids is not an auction").toBeGreaterThan(0.6);
+    expect(bidding.length, "and one where everybody bids the same way is not a market either").toBeLessThan(seeds.length);
+  });
+
+  it("never bids under the reserve, or more than the purse", () => {
+    for (const id of ["seed-1", "seed-7", "seed-23", "seed-99"]) {
+      const bids = botBids({ ventureId: id, year: 1, company: flush(id), listings });
+      let spent = 0;
+      for (const bid of bids) {
+        const lot = listings.find((l: any) => l.id === bid.listingId)!;
+        expect(bid.amount, `${id} bid under the reserve`).toBeGreaterThanOrEqual(lot.reserve);
+        spent += bid.amount;
+      }
+      expect(spent, `${id} bid more than it holds`).toBeLessThanOrEqual(40_000_000);
+    }
+  });
+
+  it("buys nothing when the company is out of money", () => {
+    expect(botBids({ ventureId: "seed-0", year: 1, company: { ...flush("seed-0"), cash: 0 }, listings })).toEqual([]);
+  });
+});
+
 describe("a room that is waiting on bots", () => {
   const seat = (userId: string, role: any, isBot = false) => ({ userId, role, assigned: false, isBot });
   const claiming = (seats: any[], secondsLeft = 120) =>

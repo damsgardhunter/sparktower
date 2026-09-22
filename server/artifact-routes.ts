@@ -14,6 +14,7 @@ import { db } from "./db";
 import { storage } from "./storage";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
+import { publicArtifactVisible } from "./visibility";
 import { publicBaseUrl } from "./public-url";
 import { feedPosts, pathArtifacts, projects, users, userProfiles } from "@shared/schema";
 import { artifactFromStep, artifactIdFromPath, artifactPath, validatePublish, type PageMeta } from "@shared/path-artifacts";
@@ -172,7 +173,20 @@ export async function publicArtifact(id: string, opts: { countView?: boolean } =
     .innerJoin(projects, eq(projects.id, pathArtifacts.projectId))
     .innerJoin(users, eq(users.id, pathArtifacts.authorId))
     .leftJoin(userProfiles, eq(userProfiles.userId, pathArtifacts.authorId))
-    .where(eq(pathArtifacts.id, id));
+    /*
+     * The moderation policy, from the one place it is written
+     * (server/visibility.ts): the page isn't taken down, its project isn't
+     * taken down, and neither its author's account nor the project owner's is
+     * suspended or closed. It is a SQL condition rather than a check on the
+     * row afterwards so that this read and the sitemap's
+     * (`publicArtifactPages`) cannot drift — a sitemap that lists a page which
+     * 404s is the one thing a sitemap must never do.
+     *
+     * The builder's own two choices stay below, where they were: published,
+     * and on a project that isn't private. Those aren't moderation, and
+     * failing them isn't a takedown.
+     */
+    .where(and(eq(pathArtifacts.id, id), publicArtifactVisible()));
   if (!row || row.a.visibility !== "public" || row.projectPrivate) return null;
   if (row.a.publishedPostId) {
     const [post] = await db.select({ hiddenAt: feedPosts.hiddenAt }).from(feedPosts).where(eq(feedPosts.id, row.a.publishedPostId));

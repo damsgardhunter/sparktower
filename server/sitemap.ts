@@ -17,6 +17,7 @@ import { db } from "./db";
 import { feedPosts, pathArtifacts, projects, users, userProfiles } from "@shared/schema";
 import { artifactPath } from "@shared/path-artifacts";
 import { publicBaseUrl } from "./public-url";
+import { authorIsLive, publicArtifactVisible, publiclyVisible } from "./visibility";
 
 /** Sitemaps are capped at 50,000 URLs; well past that we'd need an index file. */
 export const SITEMAP_MAX_URLS = 50_000;
@@ -54,11 +55,18 @@ export async function publicArtifactPages(limit = SITEMAP_MAX_URLS) {
       eq(pathArtifacts.visibility, "public"),
       eq(projects.isPrivate, false),
       isNull(feedPosts.hiddenAt),
-      // A project a reviewer took down takes its artifacts out of the index
-      // with it, and so does a suspended owner. Inviting a crawler to a page
-      // that 404s is the one thing a sitemap must never do.
-      isNull(projects.hiddenAt),
-      isNull(users.suspendedAt),
+      /*
+       * The page's own moderation rules, from the same helper the page reads
+       * (`publicArtifact` in server/artifact-routes.ts): the artifact taken
+       * down, the project taken down, the author's or the owner's account
+       * suspended or closed — any of those and the URL is gone from the index.
+       * Written by hand here, this list was already one condition short: it
+       * tested the owner's suspension but not a closed account, and there was
+       * no test at all for the artifact itself because the column didn't
+       * exist. Inviting a crawler to a page that 404s is the one thing a
+       * sitemap must never do.
+       */
+      publicArtifactVisible(),
     ))
     .orderBy(desc(sql`coalesce(${pathArtifacts.publishedAt}, ${pathArtifacts.updatedAt})`))
     .limit(limit);
@@ -80,8 +88,8 @@ export async function publicProjectPages(limit = SITEMAP_MAX_URLS) {
     .innerJoin(users, eq(users.id, projects.ownerId))
     .where(and(
       eq(projects.isPrivate, false),
-      isNull(projects.hiddenAt),
-      isNull(users.suspendedAt),
+      // The same pair every public project listing applies, from one place.
+      publiclyVisible.project(),
     ))
     .orderBy(desc(projects.createdAt))
     .limit(limit);
@@ -101,9 +109,18 @@ export async function publicProfilePages(limit = SITEMAP_MAX_URLS) {
     .from(users)
     .innerJoin(userProfiles, eq(userProfiles.userId, users.id))
     .where(and(
-      isNull(users.suspendedAt),
+      authorIsLive(users.id),
       eq(userProfiles.isOnboarded, true),
-      sql`coalesce(${userProfiles.bio}, '') <> '' or coalesce(${userProfiles.headline}, '') <> ''`,
+      /*
+       * The brackets matter. `and()` joins its arguments with `and` and
+       * parenthesises the whole, not each part, so a raw fragment containing a
+       * bare `or` binds looser than everything beside it: this read was
+       * `(live and onboarded and bio<>'') or headline<>''`, which listed every
+       * account with a headline — suspended, closed, half-onboarded, all of
+       * them — in the public sitemap. It was invisible because the common case
+       * (a live account with a bio) is in both readings.
+       */
+      sql`(coalesce(${userProfiles.bio}, '') <> '' or coalesce(${userProfiles.headline}, '') <> '')`,
     ))
     .orderBy(desc(users.createdAt))
     .limit(limit);
