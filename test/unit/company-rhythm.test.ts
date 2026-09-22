@@ -101,9 +101,15 @@ describe("metrics", () => {
       expect(answer.ok, name).toBe(false);
       expect((answer as any).message, "and it says which name it won't take").toContain(name);
     }
-    // And the object it does build inherits nothing at all.
-    const clean = cleanNumbers({ sales: 10 });
-    expect(Object.getPrototypeOf((clean as any).numbers)).toBeNull();
+    /*
+     * And the object it builds is an ordinary one, with the pairs defined on
+     * it rather than assigned. A prototype-less object would be safe here and
+     * break further down: it reaches the Postgres driver on the way to jsonb,
+     * and the driver asks every value for its constructor.
+     */
+    const clean = cleanNumbers({ sales: 10 }) as any;
+    expect(Object.getPrototypeOf(clean.numbers)).toBe(Object.prototype);
+    expect(clean.numbers.sales).toBe(10);
     expect(cleanNumbers({}).ok).toBe(false);
     expect(cleanNumbers([1, 2]).ok).toBe(false);
   });

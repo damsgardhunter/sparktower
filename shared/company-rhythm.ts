@@ -269,14 +269,18 @@ export function cleanNumbers(raw: unknown): { ok: true; numbers: CheckinNumbers 
   if (entries.length === 0) return { ok: false, message: "Track at least one number." };
   if (entries.length > 20) return { ok: false, message: "Twenty numbers is the most a check-in can track." };
   /*
-   * Null-prototype, because every key here came from a client and each one is
-   * written straight onto this object. `__proto__` as a metric name would set
-   * this object's prototype instead of a number on it, and `constructor` would
-   * shadow one; the row then goes to jsonb and comes back out through
-   * Object.keys into the rhythm screen. Nothing here needs to inherit
-   * anything, so it inherits nothing.
+   * Built from pairs rather than assigned key by key, because every key here
+   * came from a client: `out[id] = n` with an id of `__proto__` sets this
+   * object's prototype instead of recording a number, and `constructor`
+   * shadows one. `Object.fromEntries` defines own properties, so neither can
+   * reach the prototype however the name is spelled.
+   *
+   * Not `Object.create(null)`, which was the first attempt: an object with no
+   * prototype reaches the Postgres driver on its way to jsonb, and the driver
+   * asks every value for its `constructor`. Eight integration tests turned
+   * into 500s that said "Cannot read properties of null".
    */
-  const out: CheckinNumbers = Object.create(null) as CheckinNumbers;
+  const pairs: [string, number | null][] = [];
   for (const [k, v] of entries) {
     const id = k.trim();
     if (!id || id.length > 60) return { ok: false, message: "Each number needs a short name." };
@@ -285,12 +289,12 @@ export function cleanNumbers(raw: unknown): { ok: true; numbers: CheckinNumbers 
     if (id === "__proto__" || id === "constructor" || id === "prototype") {
       return { ok: false, message: `"${id}" can't be the name of a number.` };
     }
-    if (v === null || v === "" || v === undefined) { out[id] = null; continue; }
+    if (v === null || v === "" || v === undefined) { pairs.push([id, null]); continue; }
     const n = typeof v === "number" ? v : typeof v === "string" ? Number(v.replace(/,/g, "")) : NaN;
     if (!Number.isFinite(n)) return { ok: false, message: `"${metricFor(id).label}" isn't a number.` };
-    out[id] = n;
+    pairs.push([id, n]);
   }
-  return { ok: true, numbers: out };
+  return { ok: true, numbers: Object.fromEntries(pairs) as CheckinNumbers };
 }
 
 // ─── Words ───────────────────────────────────────────────────────────────────
