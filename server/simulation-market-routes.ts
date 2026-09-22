@@ -22,6 +22,7 @@ import {
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { enforceRateLimit } from "./moderation";
 import { nicheById } from "@shared/simulation/niches";
+import { marketOf } from "./simulation-scope";
 import type { World, Company, CompanyAsset, Role } from "@shared/simulation/types";
 import { marketListings, resaleValue, biddableFunds } from "@shared/simulation/assets";
 import { distressOf, recoveryOptions, type RecoveryKind } from "@shared/simulation/recovery";
@@ -94,7 +95,7 @@ export function registerSimulationMarketRoutes(app: Express): void {
     if (!ctx) return res.status(404).json({ message: "No such company." });
     const { season, company, world } = ctx;
 
-    const niche = nicheById(season.nicheId)!;
+    const niche = marketOf(season)!;
     const year = season.year;
 
     const fromTeams = await db.select().from(simListings).where(and(
@@ -238,7 +239,7 @@ const BID_IS_THE_CEOS = {
     if (!listingId) return res.status(400).json({ message: "Which listing?" });
     if (!Number.isFinite(amount) || amount < 0) return res.status(400).json({ message: "That isn't an amount." });
 
-    const niche = nicheById(season.nicheId)!;
+    const niche = marketOf(season)!;
     const year = season.year;
     const open = marketListings({ seasonId: season.id, year, niche }).map((l) => l.id);
     const [fromTeam] = await db.select().from(simListings).where(and(
@@ -756,7 +757,7 @@ const BID_IS_THE_CEOS = {
       .where(and(eq(simReports.seasonId, season.id), eq(simReports.ventureId, company.id)))
       .orderBy(simReports.year);
 
-    const niche = nicheById(season.nicheId);
+    const niche = marketOf(season);
 
     res.json({
       year: season.year,

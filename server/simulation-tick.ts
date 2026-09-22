@@ -27,6 +27,7 @@ import {
   simChallenges, simListings, simBids, simRecoveryMoves, simOffers, users,
 } from "@shared/schema";
 import { nicheById } from "@shared/simulation/niches";
+import { nicheForScope, type Scope } from "@shared/simulation/geography";
 import { resolveYear } from "@shared/simulation/resolve";
 import { ROLE_TITLES, repairCompany, type Role, type World } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
@@ -287,14 +288,25 @@ export async function startSeason(seasonId: string): Promise<StartOutcome> {
       console.warn(`[sim] season ${season.id} was abandoned with ${playing.length} company(s) still running; starting it anyway`);
     }
 
-    const niche = nicheById(season.nicheId);
-    if (!niche) {
+    const market = nicheById(season.nicheId);
+    if (!market) {
       console.error(`[sim] season ${season.id} names a market that no longer exists: ${season.nicheId}`);
       if (season.status !== "abandoned") {
         await tx.update(simSeasons).set({ status: "abandoned" }).where(eq(simSeasons.id, season.id));
       }
       return { outcome: { outcome: "abandoned" } };
     }
+
+    /*
+     * The market as this season plays it.
+     *
+     * A season can be the market's own regions (every public one), the whole
+     * map, or one continent of it. Scoping it here and once means the world
+     * carries its own map from then on — the engine, the desks and the bots
+     * all read `world.niche` and none of them has to know a season was scoped
+     * at all.
+     */
+    const niche = nicheForScope(market, (season.scope ?? "home") as Scope);
 
     /*
      * Who is in each chair, and whether they are a person.
@@ -456,8 +468,14 @@ async function resolveSeasonYear(seasonId: string, now: Date): Promise<number | 
   if (!season || season.status !== "running" || !season.world) return null;
   if (!season.nextTickAt || season.nextTickAt > now) return null;
 
-  const niche = nicheById(season.nicheId);
-  if (!niche) return null;
+  const market = nicheById(season.nicheId);
+  if (!market) return null;
+  /*
+   * Scoped the same way it was when the world was built, for the same reason
+   * the market itself is re-attached below: the map a season plays on is the
+   * season's, and the balance inside it is the code's.
+   */
+  const niche = nicheForScope(market, (season.scope ?? "home") as Scope);
 
   const year = season.year;
   const stored = season.world as World;

@@ -81,6 +81,97 @@ async function fillTable(people: any[], code: string) {
   return ventureId;
 }
 
+describe("a season a company shapes for itself", () => {
+  /*
+   * The two things a company running its own season can change about the world
+   * it plays in: how much of it there is, and who else is in it. Both default
+   * to the game every public season plays, because a company that just wants a
+   * season should get one without answering questions about continents.
+   */
+  it("defaults to the market's own regions and nobody but the people invited", async () => {
+    const app = await getTestApp();
+    const { owner, companyId } = await companyWithStaff(app, 1);
+    const { seasonId } = await privateSeason(owner, companyId);
+
+    const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    expect(season.scope).toBe("home");
+    expect(season.botTeams).toBe(0);
+  }, 120_000);
+
+  it("takes a continent, or the whole world, and refuses a place that isn't one", async () => {
+    const app = await getTestApp();
+    const { owner, companyId } = await companyWithStaff(app, 1);
+
+    for (const scope of ["world", "north_america", "asia"]) {
+      const { seasonId } = await privateSeason(owner, companyId, { scope });
+      const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+      expect(season.scope, scope).toBe(scope);
+    }
+
+    const bad = await owner.agent.post(`/api/companies/${companyId}/seasons`)
+      .send({ nicheId: NICHE, name: "Nowhere", scope: "atlantis" });
+    expect(bad.status).toBe(400);
+    expect(bad.body.field).toBe("scope");
+  }, 180_000);
+
+  it("plays a scoped season on the map, and a home season on its own regions", async () => {
+    const app = await getTestApp();
+    const { owner, companyId, people } = await companyWithStaff(app, 5);
+    const { seasonId, inviteCode } = await privateSeason(owner, companyId, { scope: "north_america" });
+    const ventureId = await fillTable(people, inviteCode);
+    expect((await owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/start`).send({})).status).toBe(200);
+
+    const desk = await people[0].agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    const ids = desk.body.cities.map((c: any) => c.id);
+    expect(ids, "an American season is played in America").toContain("us_east");
+    expect(ids).not.toContain("leeds");
+    // And every region says which continent it is on, so the desk can price
+    // being foreign in it.
+    for (const city of desk.body.cities) expect(city.continent).toBe("north_america");
+  }, 240_000);
+
+  it("seats the rivals a company asked for, and they play the season", async () => {
+    /*
+     * A season with one real table in it is a company with no competition:
+     * every price is the right price, and the lesson the team comes away with
+     * is the wrong one.
+     */
+    const app = await getTestApp();
+    const { owner, companyId, people } = await companyWithStaff(app, 5);
+    const { seasonId, inviteCode } = await privateSeason(owner, companyId, { botTeams: 3 });
+    const ventureId = await fillTable(people, inviteCode);
+
+    const started = await owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/start`).send({});
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    expect(started.body.teams, "the table plus the three it asked for").toBe(4);
+
+    const rooms = await db.select().from(simVentures).where(eq(simVentures.seasonId, seasonId));
+    const rivals = rooms.filter((v) => v.id !== ventureId);
+    expect(rivals).toHaveLength(3);
+    for (const rival of rivals) {
+      expect(rival.botOnly, "a seated rival is a company of bots").toBe(true);
+      expect(rival.name, "and it has a name, not a blank in the standings").toBeTruthy();
+      const seats = await db.select().from(simSeats).where(eq(simSeats.ventureId, rival.id));
+      expect(seats).toHaveLength(5);
+      expect(new Set(seats.map((s) => s.role)).size, "all five chairs").toBe(5);
+    }
+
+    // And they are in the world the season plays, not a list beside it.
+    const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    const players = (season.world as any).companies.filter((c: any) => c.kind === "player");
+    expect(players).toHaveLength(4);
+  }, 240_000);
+
+  it("refuses more rivals than a market can hold", async () => {
+    const app = await getTestApp();
+    const { owner, companyId } = await companyWithStaff(app, 1);
+    const tooMany = await owner.agent.post(`/api/companies/${companyId}/seasons`)
+      .send({ nicheId: NICHE, name: "A crowd", botTeams: 500 });
+    expect(tooMany.status).toBe(400);
+    expect(tooMany.body.field).toBe("botTeams");
+  }, 120_000);
+});
+
 describe("who can reach a private season", () => {
   it("is never chosen by public matchmaking", async () => {
     const app = await getTestApp();

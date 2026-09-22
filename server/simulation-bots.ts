@@ -21,6 +21,7 @@ import { and, eq, inArray, lte, sql } from "drizzle-orm";
 import { db } from "./db";
 import { simBids, simDecisions, simSeats, simVentures, users } from "@shared/schema";
 import { LOBBY_SIZE } from "@shared/simulation/lobby";
+import { pick } from "@shared/simulation/random";
 import { BOT_FILL_AFTER_SECONDS, botBids, botDecision, botsForVenture, botsNeeded } from "@shared/simulation/bots";
 import { cleanDecision } from "@shared/simulation/levers";
 import { dealsFor } from "@shared/simulation/world";
@@ -130,6 +131,93 @@ export async function fillVentureWithBots(ventureId: string): Promise<number> {
 
   if (seated > 0) console.log(`[sim] seated ${seated} bot(s) in venture ${ventureId}`);
   return seated;
+}
+
+/**
+ * Companies made entirely of bots, to fill out a season nobody else is in.
+ *
+ * A season with one real table in it is a company with no competition: every
+ * price is the right price, nobody takes your customers, and the lesson a team
+ * comes away with is wrong. Rather than wait for nine other tables to exist, a
+ * company running its own season can seat them.
+ *
+ * Whole rooms, not spare seats. Each gets five bot chairs with the five roles
+ * claimed, a name, and the "running" phase — a room that has finished arguing
+ * about who does what — so the starter treats it exactly like a room of
+ * people, and everything downstream (the auction, the deals, the standings)
+ * needs to know nothing about how it was filled.
+ *
+ * Idempotent on the count: it seats however many are missing, so calling it
+ * twice on the same season does not double the market.
+ */
+export async function seatBotCompanies(seasonId: string, wanted: number): Promise<number> {
+  if (wanted <= 0) return 0;
+
+  const existing = await db
+    .select({ id: simVentures.id, botOnly: simVentures.botOnly })
+    .from(simVentures)
+    .where(and(eq(simVentures.seasonId, seasonId), eq(simVentures.botOnly, true)));
+  const missing = wanted - existing.length;
+  if (missing <= 0) return 0;
+
+  let made = 0;
+  for (let i = 0; i < missing; i++) {
+    const [venture] = await db.insert(simVentures).values({
+      seasonId,
+      // Named here rather than by a bot chief executive: the naming phase is a
+      // conversation, and there is nobody in this room to have it.
+      name: botCompanyName(`${seasonId}:${existing.length + i}`),
+      phase: "running",
+      botOnly: true,
+    } as any).returning({ id: simVentures.id });
+    if (!venture) continue;
+
+    const cast = botsForVenture(venture.id, LOBBY_SIZE);
+    let seated = 0;
+    for (const [index, bot] of cast.entries()) {
+      const userId = await ensureBotUser(bot);
+      if (!userId) continue;
+      const put = await db.insert(simSeats)
+        .values({ ventureId: venture.id, userId, role: BOT_ROLES[index], joinedAt: new Date() } as any)
+        .onConflictDoNothing({ target: [simSeats.ventureId, simSeats.userId] })
+        .returning({ id: simSeats.id });
+      if (put.length > 0) seated += 1;
+    }
+
+    /*
+     * A room that could not be seated is retired rather than left standing.
+     * An empty "running" room would hold the season open forever, waiting for
+     * players who are never coming.
+     */
+    if (seated === 0) {
+      await db.update(simVentures).set({ phase: "retired" }).where(eq(simVentures.id, venture.id));
+      continue;
+    }
+    made += 1;
+  }
+
+  if (made > 0) console.log(`[sim] seated ${made} bot-run company(s) in season ${seasonId}`);
+  return made;
+}
+
+/** The five chairs, in the order the cast is drawn. */
+const BOT_ROLES: Role[] = ["ceo", "cmo", "cfo", "cto", "coo"];
+
+/**
+ * What a bot-run company calls itself.
+ *
+ * Plain, plausible names of the kind a team would pick in thirty seconds, so
+ * the standings read like a market rather than like a test fixture.
+ */
+const BOT_COMPANY_WORDS = [
+  ["North", "Ember", "Tide", "Lantern", "Harbour", "Vantage", "Kestrel", "Meridian", "Orchard", "Copper"],
+  ["bound", "line", "works", "field", "point", "wright", "stone", "haven", "crest", "gate"],
+];
+
+export function botCompanyName(seed: string): string {
+  const first = pick(`${seed}:name:first`, BOT_COMPANY_WORDS[0]);
+  const second = pick(`${seed}:name:second`, BOT_COMPANY_WORDS[1]);
+  return `${first}${second}`;
 }
 
 /** Every venture still gathering players, so the sweep doesn't need a caller. */

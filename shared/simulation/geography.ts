@@ -384,3 +384,67 @@ export const openableIn = (regions: City[], home: ContinentId | undefined): City
     const r = regionById(c.id);
     return !r || canEnter(r, home);
   });
+
+// ─── How much of the world a season plays on ─────────────────────────────────
+
+/**
+ * A season's scope.
+ *
+ * `home` is the game as it has always been: the ten regions a market wrote for
+ * itself, and no map at all. Every public season is this, and changing that is
+ * not a decision to make by accident.
+ *
+ * `world` is the whole map. A continent id is that continent alone — a season
+ * fought out entirely in North America, or entirely in Asia, which is a
+ * genuinely different game: in Asia every serious region is guarded and the
+ * company from Shanghai has an advantage nobody can buy, and in North America
+ * three of the five regions are the same country.
+ */
+export type Scope = "home" | "world" | ContinentId;
+
+export const isContinent = (scope: string): scope is ContinentId =>
+  CONTINENTS.some((c) => c.id === scope);
+
+export const SCOPES: { id: Scope; name: string; blurb: string }[] = [
+  { id: "home", name: "One country", blurb: "The market's own regions, as every public season plays it." },
+  { id: "world", name: "The whole world", blurb: "Forty regions across seven continents. Getting in is most of the game." },
+  ...CONTINENTS.map((c) => ({
+    id: c.id as Scope,
+    name: c.name,
+    blurb: `${c.regions.length} regions, and nowhere else to go.`,
+  })),
+];
+
+/**
+ * The regions a season actually has.
+ *
+ * Built once, when the world is built, and then carried on the world itself —
+ * so every screen, the engine and the bots all read the same map and none of
+ * them has to know a season was scoped at all.
+ */
+export function regionsForScope(niche: Niche, scope: Scope): City[] {
+  if (scope === "home") return niche.cities;
+
+  const all = worldRegionsFor(niche);
+  if (scope === "world") return all;
+
+  /*
+   * One continent. The market's own regions come with it when its home is
+   * there — a dating app playing a European season still opens in Leeds —
+   * and the weights are normalised again so a continent is a whole market.
+   */
+  const home = niche.worldHome ? regionById(niche.worldHome) : undefined;
+  const ownIds = new Set(niche.cities.map((c) => c.id));
+  const kept = all.filter((c) => {
+    if (ownIds.has(c.id)) return home?.continent === scope;
+    return regionById(c.id)?.continent === scope;
+  });
+  if (kept.length === 0) return all;
+
+  const total = kept.reduce((sum, c) => sum + c.weight, 0) || 1;
+  return kept.map((c) => ({ ...c, weight: c.weight / total }));
+}
+
+/** A market as this season plays it, ready to be built into a world. */
+export const nicheForScope = (niche: Niche, scope: Scope): Niche =>
+  scope === "home" ? niche : { ...niche, cities: regionsForScope(niche, scope) };

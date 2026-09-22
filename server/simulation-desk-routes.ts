@@ -26,6 +26,8 @@ import { simSeasons, simSeats, simVentures, simDecisions, simReports, simChallen
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { enforceRateLimit, rateLimit } from "./moderation";
 import { nicheById } from "@shared/simulation/niches";
+import { marketOf } from "./simulation-scope";
+import { canEnter, continentOf, regionById } from "@shared/simulation/geography";
 import { ROLE_TITLES, ROLE_LEVERS, type Role, type World, type Company, type Niche, type Economy } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
 import { LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision, draftPreview, speak } from "@shared/simulation/levers";
@@ -174,7 +176,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
       });
     }
 
-    const niche = nicheById(season.nicheId)!;
+    const niche = marketOf(season)!;
     const world = season.world as World;
     const company = world.companies.find((c) => c.id === venture.id);
     if (!company) return res.status(404).json({ message: "No such company." });
@@ -243,6 +245,13 @@ export function registerSimulationDeskRoutes(app: Express): void {
      * next move was visible would be a puzzle rather than an opponent, and the
      * player teams' drafts are their own business until the tick.
      */
+    /*
+     * The continent this company is from — the one its first region is on.
+     * Being from somewhere is worth more than any amount of money on a guarded
+     * market, so everything about entry is measured against it.
+     */
+    const home = continentOf((company.cities ?? [])[0] ?? "");
+
     const rivals = world.companies
       .filter((c) => c.id !== company.id)
       .map((c) => ({
@@ -567,10 +576,28 @@ export function registerSimulationDeskRoutes(app: Express): void {
        * seat picks from this; everyone else needs it to understand why a good
        * product is reaching so few people.
        */
-      cities: niche.cities.map((city) => ({
-        ...city,
-        open: (company.cities ?? niche.cities.map((c) => c.id)).includes(city.id),
-      })),
+      cities: niche.cities.map((city) => {
+        const open = (company.cities ?? niche.cities.map((c) => c.id)).includes(city.id);
+        const region = regionById(city.id);
+        return {
+          ...city,
+          open,
+          /*
+           * Where this region is, and what it costs to be foreign in it.
+           *
+           * A season played on the map has regions a company cannot simply
+           * buy its way into: another continent is dearer and works less
+           * well, a guarded market much more so, and a closed one cannot be
+           * entered at all from outside. The desk says which, because the
+           * alternative is a team filing an expansion that quietly does
+           * nothing.
+           */
+          continent: region?.continent ?? null,
+          access: region?.access ?? "open",
+          enterable: open || !region || canEnter(region, home),
+          foreign: region ? region.continent !== home : false,
+        };
+      }),
       /** Seats that could be filled again, for the chief executive's rehire lever. */
       dissolvedSeats: (["ceo", "cmo", "cfo", "cto", "coo"] as Role[]).filter((r) => !company.seats.includes(r)),
 
@@ -722,7 +749,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
       return res.status(409).json({ message: "This season isn't running.", code: "not_running" });
     }
 
-    const niche = nicheById(season.nicheId)!;
+    const niche = marketOf(season)!;
     const year = season.year;
     const world = { ...(season.world as World), niche, year };
 
@@ -784,7 +811,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
     // Refused once the year is due: the tick may already have read this year's filings.
     if (yearClosing(season)) return res.status(409).json(YEAR_CLOSING);
 
-    const niche = nicheById(season.nicheId)!;
+    const niche = marketOf(season)!;
     const world = season.world as World;
     const company = world.companies.find((c) => c.id === venture.id);
     if (!company) return res.status(404).json({ message: "No such company." });

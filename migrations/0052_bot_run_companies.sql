@@ -1,0 +1,1 @@
+ALTER TABLE "sim_ventures" ADD COLUMN "bot_only" boolean DEFAULT false NOT NULL;

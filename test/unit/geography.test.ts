@@ -12,7 +12,7 @@ import { describe, it, expect } from "vitest";
 import {
   CONTINENTS, ALL_REGIONS, WORLD_POPULATION, regionById, continentOf, marketWeightOf,
   canEnter, entryMultiplier, fitMultiplier, worldRegionsFor, openableIn,
-  GUARDED_ENTRY, GUARDED_FIT,
+  GUARDED_ENTRY, GUARDED_FIT, regionsForScope, nicheForScope, isContinent, SCOPES,
 } from "@shared/simulation/geography";
 import { NICHES, nicheById } from "@shared/simulation/niches";
 
@@ -184,5 +184,59 @@ describe("a market placed on the map", () => {
         expect(china.entryCost / china.weight).toBeGreaterThan(sea.entryCost / sea.weight);
       }
     }
+  });
+});
+
+describe("how much of the world a season plays on", () => {
+  const dating = nicheById("dating_apps")!;
+
+  it("leaves a home season exactly as it was", () => {
+    /*
+     * The rule that keeps every public season playing the game it has always
+     * played: scoping is something a company opts into, never something that
+     * happens to a market because a map was added.
+     */
+    for (const niche of NICHES) {
+      expect(regionsForScope(niche, "home")).toEqual(niche.cities);
+      expect(nicheForScope(niche, "home")).toBe(niche);
+    }
+  });
+
+  it("offers one country, the whole world, and each continent on its own", () => {
+    expect(SCOPES.map((s) => s.id)).toContain("home");
+    expect(SCOPES.map((s) => s.id)).toContain("world");
+    expect(SCOPES.filter((s) => isContinent(s.id as string))).toHaveLength(7);
+  });
+
+  it("keeps a continent season inside that continent, and still a whole market", () => {
+    for (const scope of ["north_america", "asia", "europe", "africa"] as const) {
+      const regions = regionsForScope(dating, scope);
+      expect(regions.length, scope).toBeGreaterThan(1);
+      const total = regions.reduce((sum, c) => sum + c.weight, 0);
+      expect(total, `${scope} does not add up`).toBeCloseTo(1, 6);
+      for (const c of regions) {
+        const r = regionById(c.id);
+        // Either a region of this continent, or this market's own detail
+        // inside one — Leeds is in Europe, and a European season has it.
+        const own = dating.cities.some((o) => o.id === c.id);
+        expect(r ? r.continent === scope : own, `${scope} got ${c.id}`).toBe(true);
+      }
+    }
+  });
+
+  it("gives an American season an American shape", () => {
+    const regions = regionsForScope(dating, "north_america");
+    expect(regions).toHaveLength(5);
+    const us = regions.filter((c) => c.id.startsWith("us_")).reduce((sum, c) => sum + c.weight, 0);
+    expect(us, "three of the five regions are one country").toBeGreaterThan(0.8);
+  });
+
+  it("makes an Asian season a season about getting in", () => {
+    const regions = regionsForScope(dating, "asia");
+    const guarded = regions.filter((c) => regionById(c.id)?.access === "guarded");
+    const share = guarded.reduce((sum, c) => sum + c.weight, 0);
+    expect(share, "most of Asia should be behind the door").toBeGreaterThan(0.4);
+    // And the open ways in are still there, and still small.
+    expect(regions.find((c) => c.id === "hong_kong")!.weight).toBeLessThan(0.1);
   });
 });

@@ -3377,6 +3377,24 @@ export const simSeasons = pgTable("sim_seasons", {
    * year early — see server/company-season-routes.ts.
    */
   yearMinutes: integer("year_minutes"),
+  /**
+   * How much of the world this season plays on: "home" for the market's own
+   * regions, "world" for the whole map, or a continent's id for that continent
+   * alone (see shared/simulation/geography.ts).
+   *
+   * Every public season is "home", which is the game as it has always been.
+   * A company running its own season can widen it, because "where in the world
+   * do we go next" is the question a company season is for.
+   */
+  scope: text("scope").default("home").notNull(),
+  /**
+   * How many companies to fill the season with, run entirely by bots.
+   *
+   * A season with one real team in it is a company with no competition, which
+   * teaches the wrong lesson about every decision in it. Rather than wait for
+   * nine other tables to exist, a company can seat them.
+   */
+  botTeams: integer("bot_teams").default(0).notNull(),
 }, (table) => ({
   byStatus: index("sim_seasons_status_idx").on(table.status, table.nicheId),
   byInvite: unique("sim_seasons_invite_code").on(table.inviteCode),
@@ -3405,6 +3423,14 @@ export const simVentures = pgTable("sim_ventures", {
    * hostage.
    */
   phase: text("phase", { enum: ["filling", "claiming", "naming", "running", "retired"] }).default("filling").notNull(),
+  /**
+   * A company with nobody in it: every chair a bot, seated to fill out a
+   * season that would otherwise have one table in it and no competition.
+   *
+   * Distinct from a room where bots took the seats nobody claimed — that room
+   * has a person in it, and the bots are colleagues. This one is a rival.
+   */
+  botOnly: boolean("bot_only").default(false).notNull(),
   /** When the current phase stops waiting and resolves itself. */
   phaseEndsAt: timestamp("phase_ends_at"),
   /** The engine's Company for this venture, after the last resolved year. */

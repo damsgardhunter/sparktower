@@ -43,6 +43,8 @@ import { startSeason, tickSeason, yearMsOf } from "./simulation-tick";
 import { nicheById } from "@shared/simulation/niches";
 import { ROLE_TITLES, type Role, type World } from "@shared/simulation/types";
 import type { CompanyReport } from "@shared/simulation/resolve";
+import { isContinent } from "@shared/simulation/geography";
+import { seatBotCompanies } from "./simulation-bots";
 
 /** Shortest and longest year a company can choose, in minutes. Ten is about the least a table can argue a price in; a day is what the public game uses. */
 export const YEAR_MINUTES_MIN = 10;
@@ -50,6 +52,15 @@ export const YEAR_MINUTES_MAX = 1440;
 /** Fewer than four years and nothing a team does has time to come back to them. */
 export const TRAINING_YEARS_MIN = 4;
 export const TRAINING_YEARS_MAX = 14;
+/**
+ * The most companies of bots a season can be seated with.
+ *
+ * A season with one real table in it is a company with no competition, which
+ * teaches the wrong lesson about every decision taken in it. Fifty is the
+ * ceiling because a year resolves every company in one pass, and because a
+ * market with fifty companies in it is already a crowd.
+ */
+export const BOT_TEAMS_MAX = 50;
 
 export const joinPathFor = (code: string) => `/join-season/${code}`;
 
@@ -109,6 +120,23 @@ export function registerCompanySeasonRoutes(app: Express): void {
         // 1440 minutes is a day; storing null keeps "a day" meaning one thing.
         if (yearMinutes === YEAR_MINUTES_MAX) yearMinutes = null;
       }
+      /*
+       * How much of the world, and who else is in it.
+       *
+       * Both default to the game as it has always been — the market's own
+       * regions, and nobody but the people who were invited — because a
+       * company that just wants a season should get one without answering
+       * questions about continents.
+       */
+      const scope = String(body.scope ?? "home");
+      if (scope !== "home" && scope !== "world" && !isContinent(scope)) {
+        return res.status(400).json({ message: "That isn't a place to play.", code: "invalid_input", field: "scope" });
+      }
+      const botTeams = body.botTeams == null || body.botTeams === "" ? 0 : Number(body.botTeams);
+      if (!Number.isInteger(botTeams) || botTeams < 0 || botTeams > BOT_TEAMS_MAX) {
+        return res.status(400).json({ message: `A season can seat up to ${BOT_TEAMS_MAX} companies of bots.`, code: "invalid_input", field: "botTeams" });
+      }
+
       const totalYears = body.totalYears == null || body.totalYears === "" ? TRAINING_YEARS_MAX : Number(body.totalYears);
       if (!Number.isInteger(totalYears) || totalYears < TRAINING_YEARS_MIN || totalYears > TRAINING_YEARS_MAX) {
         return res.status(400).json({ message: `A season runs ${TRAINING_YEARS_MIN} to ${TRAINING_YEARS_MAX} years.`, code: "invalid_input", field: "totalYears" });
@@ -121,9 +149,10 @@ export function registerCompanySeasonRoutes(app: Express): void {
           const [season] = await db.insert(simSeasons).values({
             nicheId: niche.id, name, status: "forming", totalYears, yearMinutes,
             companyId: found.company.id, inviteCode, createdAt: new Date(),
+            scope, botTeams,
           }).returning();
-          await logCompany(found.company.id, req.user.id, "season_created", null, { seasonId: season.id, name, nicheId: niche.id });
-          return res.status(201).json({ seasonId: season.id, inviteCode, joinUrl: joinPathFor(inviteCode) });
+          await logCompany(found.company.id, req.user.id, "season_created", null, { seasonId: season.id, name, nicheId: niche.id, scope, botTeams });
+          return res.status(201).json({ seasonId: season.id, inviteCode, joinUrl: joinPathFor(inviteCode), scope, botTeams });
         } catch (err) {
           if (!isUniqueViolation(err)) throw err;
         }
@@ -230,6 +259,16 @@ export function registerCompanySeasonRoutes(app: Express): void {
       if (!found) return;
       const season = await seasonOf(res, found.company.id, String(req.params.seasonId));
       if (!season) return;
+
+      /*
+       * The rivals the company asked for, seated before the world is built —
+       * a bot-run company that arrived afterwards would be a company that did
+       * not exist in year one, which the engine has no way to express.
+       */
+      if ((season.botTeams ?? 0) > 0) {
+        await seatBotCompanies(season.id, season.botTeams).catch((err) =>
+          console.error(`[sim] seating bot companies for season ${season.id} failed:`, err));
+      }
 
       const result = await startSeason(season.id);
       switch (result.outcome) {
