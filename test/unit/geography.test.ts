@@ -16,12 +16,18 @@ import {
 } from "@shared/simulation/geography";
 import { NICHES, nicheById } from "@shared/simulation/niches";
 
+/** The mainland, as the four markets it is. All guarded, all one licence regime. */
+const CHINA = ["yangtze", "greater_bay", "north_china", "inland_china"];
+const AMERICA = ["us_east", "us_central", "us_west"];
+
 describe("the map", () => {
-  it("is seven continents of five regions, each somewhere real", () => {
+  it("is seven continents, cut where the lines actually are", () => {
     expect(CONTINENTS).toHaveLength(7);
-    for (const c of CONTINENTS) expect(c.regions, c.id).toHaveLength(5);
-    expect(ALL_REGIONS).toHaveLength(35);
-    expect(new Set(ALL_REGIONS.map((r) => r.id)).size, "two regions share an id").toBe(35);
+    // Five each, except Asia: China alone is four markets, and Hong Kong and
+    // Taiwan are not behind the same door as the mainland.
+    for (const c of CONTINENTS) expect(c.regions.length, c.id).toBeGreaterThanOrEqual(5);
+    expect(ALL_REGIONS.length).toBeGreaterThanOrEqual(35);
+    expect(new Set(ALL_REGIONS.map((r) => r.id)).size, "two regions share an id").toBe(ALL_REGIONS.length);
   });
 
   it("holds about as many people as the world does", () => {
@@ -32,12 +38,13 @@ describe("the map", () => {
 
   it("knows where the people actually are", () => {
     // Not a design decision — a fact, and one the game should not get wrong.
-    const china = regionById("china")!;
+    const china = CHINA.map((id) => regionById(id)!);
     const india = regionById("india")!;
-    expect(china.population).toBeGreaterThan(1_300);
+    const chinaPeople = china.reduce((sum, r) => sum + r.population, 0);
+    expect(chinaPeople).toBeGreaterThan(1_300);
     expect(india.population).toBeGreaterThan(1_300);
-    expect(china.population + india.population).toBeGreaterThan(WORLD_POPULATION * 0.3);
-    expect(continentOf("china")).toBe("asia");
+    expect(chinaPeople + india.population).toBeGreaterThan(WORLD_POPULATION * 0.3);
+    expect(continentOf("yangtze")).toBe("asia");
     expect(continentOf("uk_ireland")).toBe("europe");
 
     // And that Africa is the biggest young market and the poorest to sell to.
@@ -62,7 +69,7 @@ describe("getting in", () => {
   it("charges for distance, and charges properly for a guarded market", () => {
     const dach = regionById("dach")!;
     const brazil = regionById("brazil")!;
-    const china = regionById("china")!;
+    const china = regionById("yangtze")!;
 
     // Your own continent is your own continent.
     expect(entryMultiplier(dach, home)).toBe(1);
@@ -78,7 +85,7 @@ describe("getting in", () => {
   });
 
   it("gives the company that started there the advantage nobody can buy", () => {
-    const china = regionById("china")!;
+    const china = regionById("inland_china")!;
     expect(entryMultiplier(china, "asia"), "a company from Asia pays the ordinary price").toBe(1);
     expect(fitMultiplier(china, "asia"), "and sells there as a local does").toBe(1);
   });
@@ -115,12 +122,37 @@ describe("a market placed on the map", () => {
     }
   });
 
-  it("puts the people where the people are", () => {
-    const regions = worldRegionsFor(nicheById("mmos")!);
+  it("puts the market where the money is, not only where the people are", () => {
+    /*
+     * The correction that makes the map usable. Measured in heads, every
+     * market sends every company to the places with the most people and the
+     * least money to spend; measured in money, America is the largest thing
+     * on it, which is what it is.
+     */
+    const regions = worldRegionsFor(nicheById("project_saas")!);
     const by = (id: string) => regions.find((c) => c.id === id)!.weight;
-    expect(by("china"), "China should be the largest single region in a game market").toBeGreaterThan(by("us_east"));
-    expect(by("us_east")).toBeGreaterThan(by("png"));
+    const sum = (ids: string[]) => ids.reduce((total, id) => total + by(id), 0);
+
+    expect(by("us_east"), "the largest single region a business sells to").toBeGreaterThan(by("inland_china"));
+    expect(sum(AMERICA), "America, against India's people").toBeGreaterThan(by("india") * 4);
     expect(by("png")).toBeGreaterThan(0);
+
+    // Where the industry lives, the industry's home wins: games are Asia's.
+    const games = worldRegionsFor(nicheById("mmos")!);
+    const inGames = (ids: string[]) => ids.reduce((t, id) => t + games.find((c) => c.id === id)!.weight, 0);
+    expect(inGames(CHINA)).toBeGreaterThan(inGames(AMERICA));
+  });
+
+  it("makes the mainland four markets, and leaves Hong Kong its own way in", () => {
+    const regions = worldRegionsFor(nicheById("mmos")!);
+    const by = (id: string) => regions.find((c) => c.id === id)!;
+    for (const id of CHINA) expect(by(id), id).toBeTruthy();
+    // No single square holds a fifth of the board any more.
+    for (const id of CHINA) expect(by(id).weight, id).toBeLessThan(0.15);
+    // And the open door beside it: small, and nothing like the same thing.
+    expect(regionById("hong_kong")!.access).toBe("open");
+    expect(by("hong_kong").weight).toBeLessThan(by("yangtze").weight);
+    expect(by("hong_kong").entryCost).toBeLessThan(by("yangtze").entryCost);
   });
 
   it("lets a market say what it is worth to it, without rewriting the world", () => {
@@ -145,7 +177,7 @@ describe("a market placed on the map", () => {
         // thousand times it, which is what happens when a builder invents money.
         expect(c.entryCost, `${niche.id}/${c.id} costs ${c.entryCost} against ${own}`).toBeLessThan(own * 120);
       }
-      const china = regions.find((c) => c.id === "china");
+      const china = regions.find((c) => c.id === "yangtze");
       const sea = regions.find((c) => c.id === "sea");
       if (china && sea) {
         // Guarded, and so dearer than its size alone would say.

@@ -51,9 +51,17 @@ export interface WorldRegion {
   /** People who live there, in millions. Rounded 2024 estimates. */
   population: number;
   /**
-   * How rich the region is, as a multiple of the world average, roughly.
-   * A hundred people in Switzerland are not a hundred people in Malawi, and a
-   * market priced in money rather than heads has to know the difference.
+   * What one person there can spend, against the world average — real income
+   * per head, near enough, where the average is about fourteen thousand
+   * dollars.
+   *
+   * These were compressed when the map was first drawn: America sat at 2.6 and
+   * China at 1.2, which is roughly half the real gap and made the largest
+   * market in the world by money look like a third of China by accident. The
+   * true spread is wide — the United States is six times the world average and
+   * India a fifth of it — and it is the single most important number here,
+   * because a market measured in heads sends every company to the places with
+   * the most people and the least money to spend.
    */
   wealth: number;
   access: Access;
@@ -74,23 +82,24 @@ const region = (
 /**
  * The map.
  *
- * Five regions a continent, drawn where the lines actually are rather than
- * evenly: the United States is three regions because it behaves like three,
- * and the whole of Oceania is five because the alternative is pretending
- * Papua New Guinea is a market.
+ * Drawn where the lines actually are rather than evenly: the United States is
+ * three regions because it behaves like three, China is six because the
+ * Yangtze delta and inland Sichuan are further apart in income than Germany
+ * and Mexico, and the whole of Oceania is five because the alternative is
+ * pretending Papua New Guinea is a market.
  */
 export const CONTINENTS: Continent[] = [
   {
     id: "north_america",
     name: "North America",
     regions: [
-      region("us_east", "US East", "north_america", 140, 2.6, "open",
+      region("us_east", "US East", "north_america", 140, 6.3, "open",
         "The money and the media. Everything launched here is judged here."),
-      region("us_central", "US Central", "north_america", 95, 2.1, "open",
+      region("us_central", "US Central", "north_america", 95, 5.4, "open",
         "Cheaper to serve and slower to switch. Loyalty here is real loyalty."),
-      region("us_west", "US West", "north_america", 100, 2.8, "open",
+      region("us_west", "US West", "north_america", 100, 6.6, "open",
         "Early to everything, and the first to leave for whatever is next."),
-      region("canada", "Canada", "north_america", 40, 2.4, "open",
+      region("canada", "Canada", "north_america", 40, 3.9, "open",
         "Small, wealthy and concentrated in five cities. Easy to reach, hard to grow."),
       region("mexico", "Mexico", "north_america", 130, 1.0, "open",
         "Young, urban, and priced nothing like the country above it."),
@@ -100,15 +109,15 @@ export const CONTINENTS: Continent[] = [
     id: "south_america",
     name: "South America",
     regions: [
-      region("brazil", "Brazil", "south_america", 215, 0.9, "open",
+      region("brazil", "Brazil", "south_america", 215, 0.75, "open",
         "A continent's worth of people in one language. Nobody wins the rest without it."),
-      region("andean", "Andean states", "south_america", 120, 0.7, "open",
+      region("andean", "Andean states", "south_america", 120, 0.5, "open",
         "Colombia, Peru, Ecuador, Bolivia. Mobile-first, cash-poor, and growing fast."),
-      region("southern_cone", "Southern Cone", "south_america", 60, 1.1, "open",
+      region("southern_cone", "Southern Cone", "south_america", 60, 1.0, "open",
         "Argentina, Chile, Uruguay. The wealthiest here, and the least predictable currency."),
-      region("caribbean", "Caribbean", "south_america", 45, 0.9, "open",
+      region("caribbean", "Caribbean", "south_america", 45, 0.7, "open",
         "Dozens of small markets that each need their own answer."),
-      region("central_america", "Central America", "south_america", 50, 0.7, "open",
+      region("central_america", "Central America", "south_america", 50, 0.45, "open",
         "Tied to the north economically and to the south culturally."),
     ],
   },
@@ -116,15 +125,15 @@ export const CONTINENTS: Continent[] = [
     id: "europe",
     name: "Europe",
     regions: [
-      region("uk_ireland", "UK & Ireland", "europe", 75, 2.0, "open",
+      region("uk_ireland", "UK & Ireland", "europe", 75, 4.0, "open",
         "One language, one regulator, and a press that decides quickly whether it likes you."),
-      region("dach", "DACH", "europe", 100, 2.4, "open",
+      region("dach", "DACH", "europe", 100, 4.3, "open",
         "Germany, Austria, Switzerland. Slow to adopt, expensive to lose, and it reads the terms."),
-      region("france_benelux", "France & Benelux", "europe", 100, 2.1, "open",
+      region("france_benelux", "France & Benelux", "europe", 100, 3.7, "open",
         "Protective of its own, and worth the trouble once you are one of them."),
-      region("southern_europe", "Southern Europe", "europe", 125, 1.4, "open",
+      region("southern_europe", "Southern Europe", "europe", 125, 2.4, "open",
         "Spain, Italy, Portugal, Greece. Price-sensitive, social, and it spreads by word of mouth."),
-      region("eastern_europe", "Eastern Europe", "europe", 120, 1.0, "open",
+      region("eastern_europe", "Eastern Europe", "europe", 120, 1.4, "open",
         "Technical, cheap to serve, and it will build its own if you overcharge."),
     ],
   },
@@ -132,15 +141,15 @@ export const CONTINENTS: Continent[] = [
     id: "africa",
     name: "Africa",
     regions: [
-      region("west_africa", "West Africa", "africa", 420, 0.35, "open",
+      region("west_africa", "West Africa", "africa", 420, 0.16, "open",
         "Nigeria and its neighbours. The youngest large market on earth, and the loudest."),
-      region("east_africa", "East Africa", "africa", 300, 0.3, "open",
+      region("east_africa", "East Africa", "africa", 300, 0.1, "open",
         "Kenya, Ethiopia, Tanzania. Mobile money worked here before it worked anywhere."),
-      region("north_africa", "North Africa", "africa", 260, 0.6, "open",
+      region("north_africa", "North Africa", "africa", 260, 0.3, "open",
         "Egypt and the Maghreb. Arabic-speaking, and it looks north as much as south."),
-      region("southern_africa", "Southern Africa", "africa", 95, 0.8, "open",
+      region("southern_africa", "Southern Africa", "africa", 95, 0.47, "open",
         "South Africa and around it. The continent's deepest infrastructure, and its sharpest inequality."),
-      region("central_africa", "Central Africa", "africa", 150, 0.25, "open",
+      region("central_africa", "Central Africa", "africa", 150, 0.11, "open",
         "Enormous, young, and the hardest place here to deliver anything at all."),
     ],
   },
@@ -148,15 +157,15 @@ export const CONTINENTS: Continent[] = [
     id: "middle_east",
     name: "Middle East",
     regions: [
-      region("gulf", "The Gulf", "middle_east", 60, 2.6, "open",
+      region("gulf", "The Gulf", "middle_east", 60, 3.2, "open",
         "Small, extremely wealthy, and it buys the best available rather than the cheapest."),
-      region("turkey", "Türkiye", "middle_east", 85, 1.0, "open",
+      region("turkey", "Türkiye", "middle_east", 85, 0.95, "open",
         "Young, urban, and it sits in both directions at once."),
-      region("levant", "Levant", "middle_east", 60, 0.6, "open",
+      region("levant", "Levant", "middle_east", 60, 0.36, "open",
         "Fragmented and well-educated. Hard logistics, cheap talent."),
-      region("iran", "Iran", "middle_east", 90, 0.5, "closed",
+      region("iran", "Iran", "middle_east", 90, 0.36, "closed",
         "Ninety million people behind sanctions. Nobody sells here from outside."),
-      region("central_asia", "Central Asia", "middle_east", 80, 0.7, "open",
+      region("central_asia", "Central Asia", "middle_east", 80, 0.36, "open",
         "The Stans. Newly reachable, and nobody has bothered yet."),
     ],
   },
@@ -164,15 +173,40 @@ export const CONTINENTS: Continent[] = [
     id: "asia",
     name: "Asia",
     regions: [
-      region("china", "China", "asia", 1410, 1.2, "guarded",
-        "A fifth of the world, a licence regime, and a domestic competitor for everything. Being from here is worth more than any amount of money."),
-      region("india", "India", "asia", 1430, 0.5, "open",
+      /*
+       * China, as the four markets it actually is.
+       *
+       * One region holding a fifth of the world made every market a question
+       * about one square on the board. It is also wrong: the Yangtze delta and
+       * inland Sichuan are further apart in income than Germany and Mexico,
+       * and a company sells into them separately. Each is guarded on its own —
+       * the licence regime is national — and together they are still the
+       * largest thing on the map.
+       */
+      region("yangtze", "Yangtze Delta", "asia", 240, 1.9, "guarded",
+        "Shanghai and the provinces around it. China's richest customers and its most demanding."),
+      region("greater_bay", "Greater Bay", "asia", 130, 1.8, "guarded",
+        "Shenzhen, Guangzhou, Dongguan. Whatever you make, somebody here already makes it cheaper."),
+      region("north_china", "Northern China", "asia", 350, 1.1, "guarded",
+        "Beijing, Tianjin, Shandong and the north-east. Where the rules are written."),
+      region("inland_china", "Inland China", "asia", 690, 0.6, "guarded",
+        "Sichuan, Henan, Hubei and the west. Seven hundred million people, and almost nobody selling to them from outside."),
+      /*
+       * And the two that are not behind the same door. Hong Kong is the
+       * classic way in — tiny, rich, open, and everybody who wants the region
+       * tries it first — and Taiwan is its own market entirely.
+       */
+      region("hong_kong", "Hong Kong & Macau", "asia", 8, 3.6, "open",
+        "Small, wealthy and wide open. The usual first step into the region, and a poor substitute for it."),
+      region("taiwan", "Taiwan", "asia", 23, 2.6, "open",
+        "Demanding, technical, and it decides fast. The whole hardware world runs through it."),
+      region("india", "India", "asia", 1430, 0.2, "open",
         "The same size and the opposite problem: open to anyone, and it will not pay much."),
-      region("sea", "Southeast Asia", "asia", 690, 0.7, "open",
+      region("sea", "Southeast Asia", "asia", 690, 0.43, "open",
         "Indonesia, Vietnam, Philippines, Thailand. Eleven markets sold as one, to everyone's cost."),
-      region("japan_korea", "Japan & Korea", "asia", 175, 2.2, "open",
+      region("japan_korea", "Japan & Korea", "asia", 175, 2.7, "open",
         "Demanding, wealthy, and unforgiving about quality. The best reference customers on earth."),
-      region("south_asia", "Pakistan & Bangladesh", "asia", 420, 0.35, "open",
+      region("south_asia", "Pakistan & Bangladesh", "asia", 420, 0.15, "open",
         "Vast, young and almost entirely unserved by anybody's software."),
     ],
   },
@@ -180,15 +214,15 @@ export const CONTINENTS: Continent[] = [
     id: "oceania",
     name: "Oceania",
     regions: [
-      region("australia_east", "Eastern Australia", "oceania", 20, 2.5, "open",
+      region("australia_east", "Eastern Australia", "oceania", 20, 4.7, "open",
         "Sydney, Melbourne, Brisbane. Where the money and the head offices are."),
-      region("australia_west", "Western Australia", "oceania", 7, 2.4, "open",
+      region("australia_west", "Western Australia", "oceania", 7, 4.6, "open",
         "Resources money, a long way from everywhere, including the rest of Australia."),
-      region("new_zealand", "New Zealand", "oceania", 5, 2.0, "open",
+      region("new_zealand", "New Zealand", "oceania", 5, 3.5, "open",
         "Small enough to take seriously as a test, and it knows it."),
-      region("pacific", "Pacific Islands", "oceania", 12, 0.5, "open",
+      region("pacific", "Pacific Islands", "oceania", 12, 0.3, "open",
         "Hundreds of islands and no cheap way to reach any of them."),
-      region("png", "Papua New Guinea", "oceania", 10, 0.3, "open",
+      region("png", "Papua New Guinea", "oceania", 10, 0.2, "open",
         "Ten million people, eight hundred languages, and almost no infrastructure."),
     ],
   },
