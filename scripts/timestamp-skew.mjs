@@ -32,6 +32,7 @@
  * pass --again and mean it.
  */
 import pg from "pg";
+import { quoteKnownIdentifier } from "./lib/sql-identifier.mjs";
 
 const arg = (name, fallback = null) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -95,20 +96,31 @@ if (done.rowCount > 0) {
   }
 }
 
+/*
+ * The only names this script may build SQL with. Every identifier below is
+ * checked against these and quoted (scripts/lib/sql-identifier.mjs) rather
+ * than dropped into the string as it is — values are parameters, and names
+ * cannot be, so names get the other kind of check.
+ */
+const TABLES = Object.keys(TARGETS);
+const COLUMNS = [...new Set(Object.values(TARGETS).flat())];
+
 let total = 0;
-for (const [table, columns] of Object.entries(TARGETS)) {
-  for (const column of columns) {
+for (const [rawTable, columns] of Object.entries(TARGETS)) {
+  const table = quoteKnownIdentifier(rawTable, TABLES);
+  for (const rawColumn of columns) {
+    const column = quoteKnownIdentifier(rawColumn, COLUMNS);
     const exists = await client.query(
       "select 1 from information_schema.columns where table_schema='public' and table_name=$1 and column_name=$2",
-      [table, column],
+      [rawTable, rawColumn],
     );
-    if (exists.rowCount === 0) { console.log(`${table}.${column}: not in this database`); continue; }
+    if (exists.rowCount === 0) { console.log(`${rawTable}.${rawColumn}: not in this database`); continue; }
 
     const cutoff = before ? `and ${column} < $1` : "";
     const params = before ? [before] : [];
     const { rows: [count] } = await client.query(
       `select count(*)::int n, min(${column}) oldest, max(${column}) newest from ${table} where ${column} is not null ${cutoff}`, params);
-    if (count.n === 0) { console.log(`${table}.${column}: nothing to do`); continue; }
+    if (count.n === 0) { console.log(`${rawTable}.${rawColumn}: nothing to do`); continue; }
 
     /*
      * Both sides as text, deliberately. Reading a zoneless column back through
@@ -120,7 +132,7 @@ for (const [table, columns] of Object.entries(TARGETS)) {
       `select to_char(${column}, 'YYYY-MM-DD HH24:MI:SS') stored,
               to_char((${column} at time zone $${params.length + 1}) at time zone 'UTC', 'YYYY-MM-DD HH24:MI:SS') fixed
        from ${table} where ${column} is not null ${cutoff} order by ${column} desc limit 1`, [...params, zone]);
-    console.log(`${table}.${column}: ${count.n} rows, newest ${sample.stored} → ${sample.fixed} (UTC)`);
+    console.log(`${rawTable}.${rawColumn}: ${count.n} rows, newest ${sample.stored} → ${sample.fixed} (UTC)`);
     total += count.n;
 
     if (apply && before) {
