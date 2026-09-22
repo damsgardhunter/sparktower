@@ -179,9 +179,18 @@ class LocalFile {
 }
 
 export class ObjectNotFoundError extends Error {
-  constructor() {
+  /**
+   * Where a local-dev store was searched, when the path was well formed and
+   * the file simply was not there. Absent when the path itself was refused —
+   * a traversal attempt is not a misplaced folder, and saying so would put
+   * somebody's probing in the log as advice.
+   */
+  readonly searchedIn?: string;
+
+  constructor(searchedIn?: string) {
     super("Object not found");
     this.name = "ObjectNotFoundError";
+    this.searchedIn = searchedIn;
     Object.setPrototypeOf(this, ObjectNotFoundError.prototype);
   }
 }
@@ -494,7 +503,8 @@ export class ObjectStorageService {
         await fsPromises.access(localPath, fs.constants.R_OK);
         return new (LocalFile as any)(localPath) as any;
       } catch {
-        throw new ObjectNotFoundError();
+        // Well formed, and not there: the caller can say which folder it looked in.
+        throw new ObjectNotFoundError(LOCAL_OBJECT_ROOT);
       }
     }
 

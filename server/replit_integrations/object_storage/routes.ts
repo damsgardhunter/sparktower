@@ -21,6 +21,7 @@ import { consumeLocalUpload, LOCAL_UPLOAD_MAX_BYTES } from "./local-uploads";
  */
 /** Said once per process, not once per broken image. */
 let warnedNoBucket = false;
+let warnedMissingLocal = false;
 /** Said once, like the bucket warning: one line per deploy, not one per image. */
 let warnedNoCredentials = false;
 
@@ -164,6 +165,22 @@ export function registerObjectStorageRoutes(app: Express): void {
       await objectStorageService.downloadObject(objectFile, res);
     } catch (error) {
       if (error instanceof ObjectNotFoundError) {
+        /*
+         * Missing, and in local dev that is nearly always the same cause: the
+         * store is relative to the directory the server was started from, so
+         * running the app from another checkout serves nothing while the files
+         * sit in the other one. Said once, with the folder it searched, because
+         * the 404 alone sends you looking at the database or the upload code.
+         */
+        const root = (error as ObjectNotFoundError).searchedIn ?? null;
+        if (root && !warnedMissingLocal) {
+          warnedMissingLocal = true;
+          console.warn(
+            `[objects] ${req.path} is not in ${root}, so it will not load. ` +
+            "Local uploads live under the directory the server was started from unless LOCAL_OBJECT_ROOT says otherwise — " +
+            "if the files are in another checkout, point LOCAL_OBJECT_ROOT at it and restart.",
+          );
+        }
         return res.status(404).json({ error: "Object not found" });
       }
       /*
