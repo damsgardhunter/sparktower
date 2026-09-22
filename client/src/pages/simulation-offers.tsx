@@ -34,6 +34,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { errorText } from "@/lib/api-error";
 import { Loader2, Handshake, Check, X, Info } from "lucide-react";
 import { SimHeader } from "@/components/sim/sim-header";
 
@@ -64,6 +65,14 @@ export default function SimulationOffersPage() {
   const { data, isLoading } = useQuery<Offers>({
     queryKey: [`/api/sim/ventures/${id}/offers`],
     refetchInterval: 15_000,
+    /*
+     * The app's default is `staleTime: Infinity`, so coming back to this page
+     * after a year resolved showed last year's offers until the next poll —
+     * offers that had lapsed or completed at the tick, still with buttons on
+     * them. Always refetch on arrival; the poll carries it from there.
+     */
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 
   if (isLoading || !data) {
@@ -145,9 +154,15 @@ function ReceivedCard({ offer, ventureId, isCeo }: { offer: Received; ventureId:
   const { toast } = useToast();
 
   const respond = useMutation({
+    /*
+     * The body, not the Response. `apiRequest` resolves to the raw Response,
+     * whose `status` is the HTTP 200 — never "accepted" — so every acceptance
+     * was toasted as "Declined", on the one decision on this screen that
+     * sells the business. Read the server's own status and message instead.
+     */
     mutationFn: (accept: boolean) =>
-      apiRequest("POST", `/api/sim/ventures/${ventureId}/offers/${offer.id}/respond`, { accept }),
-    onSuccess: async (res: any) => {
+      apiRequest("POST", `/api/sim/ventures/${ventureId}/offers/${offer.id}/respond`, { accept }).then((r) => r.json()),
+    onSuccess: async (res: { status?: string; message?: string }) => {
       toast({ title: res?.status === "accepted" ? "Agreed" : "Declined", description: res?.message });
       queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/offers`] });
     },
@@ -231,6 +246,16 @@ function TargetCard({ target, ventureId, isCeo, reach, existing }: {
   const withdraw = useMutation({
     mutationFn: () => apiRequest("DELETE", `/api/sim/ventures/${ventureId}/offers/${existing!.id}`, undefined),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/offers`] }),
+    /*
+     * The usual failure is a 409: the seller answered while this was being
+     * read. Silently doing nothing left the old card on screen with a button
+     * that kept failing, so say what the server said and refetch, which
+     * replaces the card with whatever actually happened.
+     */
+    onError: (err) => {
+      toast({ title: "Couldn't withdraw that", description: errorText(err), variant: "destructive" });
+      queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/offers`] });
+    },
   });
 
   return (

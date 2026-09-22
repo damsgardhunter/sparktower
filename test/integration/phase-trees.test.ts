@@ -9,6 +9,7 @@ import request from "supertest";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { resolveTree, mainLineMilestones, PATH_TREES } from "@shared/phase-trees";
+import { normaliseGoal, goalOfBackboneId, sectionOfTask } from "@shared/goals";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -53,10 +54,26 @@ describe("the backbone, as data", () => {
 
     const restaurant = mainLineMilestones(resolveTree("systemize_business", "restaurant"));
     expect(restaurant.find((m) => m.id === "SYS.M2.1")!.description).toMatch(/Recipes as specs/);
-    // The funding path shows a route's phases only once that route is chosen.
-    const noRoute = resolveTree("raise_funding", "startup_equity");
-    expect(noRoute.map((p) => p.id)).toEqual(["capital-1", "capital-2"]);
-    expect(resolveTree("raise_funding", "startup_equity", "seller").map((p) => p.id)).toEqual(["capital-1", "capital-2", "seller-1", "seller-2", "seller-3", "seller-4"]);
+    // Systemize's funding weeks show a route's phases only once that route is
+    // chosen, and only that route's — slotted in after the route choice, ahead
+    // of the roadmap week.
+    const operating = ["money-4", "week-1", "week-2", "week-3", "week-4"];
+    const noRoute = resolveTree("systemize_business", "other");
+    expect(noRoute.map((p) => p.id)).toEqual(["money-1", "money-2", "money-3", "capital-1", "capital-2", ...operating]);
+    expect(resolveTree("systemize_business", "other", "seller").map((p) => p.id))
+      .toEqual(["money-1", "money-2", "money-3", "capital-1", "capital-2", "seller-1", "seller-2", "seller-3", "seller-4", ...operating]);
+  });
+
+  it("carries anything still naming the retired funding path to Systemize", () => {
+    // Raise funding's work moved into Systemize. A stored goal, a link's
+    // section, a card's track tag or a milestone id that still says "raise"
+    // has to land on Systemize, not on nothing — and not be offered as a path.
+    expect(Object.keys(PATH_TREES)).not.toContain("raise_funding");
+    expect(normaliseGoal("raise_funding")).toBe("systemize_business");
+    expect(sectionOfTask(["track:raise_funding"], "ship_mvp")).toBe("systemize_business");
+    expect(goalOfBackboneId("FUND.C1.1")).toBe("systemize_business");
+    expect(sectionOfTask(["backbone:FUND.S1.1"], "ship_mvp")).toBe("systemize_business");
+    expect(normaliseGoal("nonsense")).toBeNull();
   });
 
   it("marks every user-does milestone as something only a human can do", () => {
@@ -120,12 +137,12 @@ describe("a new project is born with its path", () => {
   it("does not build a second tree if creation is retried", async () => {
     const app = await getTestApp();
     const agent = await owner(app);
-    const id = (await create(agent, "raise_funding", "startup_equity")).body.id;
+    const id = (await create(agent, "systemize_business", "other")).body.id;
     const { instantiatePathTree } = await import("../../server/phase-trees");
-    const again = await instantiatePathTree(id, "raise_funding", "startup_equity");
+    const again = await instantiatePathTree(id, "systemize_business", "other");
     expect(again.created).toBe(false);
     const path = await agent.get(`/api/projects/${id}/path`);
-    expect(path.body.mainLine.total).toBe(mainLineMilestones(resolveTree("raise_funding", "startup_equity")).length);
+    expect(path.body.mainLine.total).toBe(mainLineMilestones(resolveTree("systemize_business", "other")).length);
   });
 });
 
@@ -308,7 +325,7 @@ describe("a project that predates paths", () => {
     expect(roadmaps.status).toBe(200);
 
     // The builder catches up by hand from the map.
-    const marked = await agent.post(`/api/projects/${id}/path/mark`).send({ ids: ["SHIP.M1.1", "SHIP.M1.5", "SHIP.M1.8"] });
+    const marked = await agent.post(`/api/projects/${id}/path/mark`).send({ ids: ["SHIP.M1.1", "SHIP.M1.5", "SHIP.M1.8"], evidence: "This was finished before the path existed." });
     expect(marked.body.marked).toEqual(["SHIP.M1.1", "SHIP.M1.5", "SHIP.M1.8"]);
     const after = (await agent.get(`/api/projects/${id}/path`)).body;
     expect(after.adopted).toBe(true);
@@ -367,7 +384,7 @@ describe("Nova works the milestone", () => {
     expect((await agent.get(`/api/projects/${id}/path`)).body.next.id).toBe("SHIP.M1.2");
     await writeLoops(agent, id);
     for (const m of ["SHIP.M1.3", "SHIP.M1.4", "SHIP.M1.5", "SHIP.M1.6", "SHIP.M1.7", "SHIP.M1.8"]) {
-      const marked = await agent.post(`/api/projects/${id}/path/mark`).send({ ids: [m] });
+      const marked = await agent.post(`/api/projects/${id}/path/mark`).send({ ids: [m], evidence: "This was finished before the path existed." });
       expect(marked.status, `${m}: ${JSON.stringify(marked.body).slice(0, 200)}`).toBe(200);
     }
     const week2 = (await agent.get(`/api/projects/${id}/path`)).body;
@@ -379,7 +396,7 @@ describe("Nova works the milestone", () => {
   it("refuses work on a task that isn't on the path", async () => {
     const app = await getTestApp();
     const agent = await owner(app);
-    const id = (await create(agent, "raise_funding", "other", "Not On Path")).body.id;
+    const id = (await create(agent, "run_company", "other", "Not On Path")).body.id;
     const res = await agent.post(`/api/projects/${id}/path/work`).send({ taskId: "00000000-0000-0000-0000-000000000000" });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("not_on_path");
@@ -404,7 +421,7 @@ describe("clicking into a step", () => {
     expect(done.task).toMatchObject({ status: "done", how: "done", answer: "Players stack towers under pressure." });
     expect(done.task.work.chosenIndex).toBe(0);
 
-    await agent.post(`/api/projects/${id}/path/mark`).send({ ids: ["SHIP.M1.4"] });
+    await agent.post(`/api/projects/${id}/path/mark`).send({ ids: ["SHIP.M1.4"], evidence: "This was finished before the path existed." });
     expect((await agent.get(`/api/projects/${id}/path/milestones/SHIP.M1.4`)).body.task.how).toBe("you-marked");
 
     const { created } = await createExpansion(id, "SHIP.M2.1", [{ title: "Move", description: "" }, { title: "Stack", description: "" }]);
@@ -480,7 +497,7 @@ describe("more than one loop", () => {
     const core = (await agent.get(`/api/projects/${id}/path/milestones/SHIP.M1.2`)).body;
     expect(core.isSource).toBe(true);
     expect(core.loops.map((l: any) => l.title)).toEqual(["Product loop", "Growth loop", "Retention loop", "Revenue loop", "Referral loop", "Build", "The feed"]);
-    for (const m of ["SHIP.M1.1"]) await agent.post(`/api/projects/${id}/path/mark`).send({ ids: [m] });
+    for (const m of ["SHIP.M1.1"]) await agent.post(`/api/projects/${id}/path/mark`).send({ ids: [m], evidence: "This was finished before the path existed." });
     let status = (await agent.get(`/api/projects/${id}/path`)).body;
     expect(status.next.id).toBe("SHIP.M1.2");
     expect(status.next.loops.map((l: any) => l.title)).toEqual(["Product loop", "Build", "The feed", "Growth loop", "Retention loop", "Revenue loop", "Referral loop"]);
@@ -537,10 +554,10 @@ describe("keep building", () => {
     const week = (n: number) => (async () => (await agent.get(`/api/projects/${id}/path`)).body.phases.find((p: any) => p.id === `week-${n}`).milestones.map((m: any) => m.id))();
     await writeLoops(agent, id);
 
-    await agent.post(`/api/projects/${id}/path/mark`).send({ ids: await week(1) });
+    await agent.post(`/api/projects/${id}/path/mark`).send({ ids: await week(1), evidence: "This was finished before the path existed." });
     let s = (await agent.get(`/api/projects/${id}/path`)).body;
     expect(s.offer).toBeNull();
-    await agent.post(`/api/projects/${id}/path/mark`).send({ ids: await week(2) });
+    await agent.post(`/api/projects/${id}/path/mark`).send({ ids: await week(2), evidence: "This was finished before the path existed." });
     s = (await agent.get(`/api/projects/${id}/path`)).body;
     // Week 2 done: week 3 would be next, and the extension is offered instead of skipped.
     expect(s.current.id).toBe("week-3");
@@ -557,15 +574,20 @@ describe("keep building", () => {
     expect(s.branch).toMatchObject({ phaseId: "branch-build", open: true, round: 1 });
 
     // Work through the round; branch work is pace.
-    const beforeEvents = s.events.length;
     const kanban = await agent.get(`/api/projects/${id}/kanban`);
     expect(kanban.status, JSON.stringify(kanban.body).slice(0, 300)).toBe(200);
     const tasks = kanban.body;
     for (const b of ["SHIP.B.1", "SHIP.B.2", "SHIP.B.3"]) await agent.patch(`/api/kanban/${tasks.find((t: any) => t.tags?.includes(`backbone:${b}`)).id}`).send({ status: "done" });
     s = (await agent.get(`/api/projects/${id}/path`)).body;
     expect(s.next.id).toBe("SHIP.B.4");
-    // Writing the loops was already effort; the branch's own work adds to it.
-    expect(s.events.length).toBeGreaterThan(beforeEvents);
+    /*
+     * Writing the loops was already effort; the branch's own work adds to it.
+     * Checked by what's in the log rather than by its length: the log shows
+     * the last ten events, and a catch-up that marks a whole week done now
+     * writes one per milestone (every completion reaches the pace log, however
+     * the work was closed), so it is routinely already full by here.
+     */
+    expect(s.events.map((e: any) => e.backboneId)).toEqual(expect.arrayContaining(["SHIP.B.1", "SHIP.B.2", "SHIP.B.3"]));
     expect(s.pace.multiplier).not.toBeNull();
 
     // Extend again: the branch reopens as round 2.
@@ -747,7 +769,7 @@ describe("verified by the audit", () => {
     const agent = await owner(app);
     const id = (await create(agent, "ship_mvp", "saas", "Verify Test")).body.id;
     const { verifyMilestonesFromAudit } = await import("../../server/phase-tree-verifiers");
-    await agent.post(`/api/projects/${id}/path/mark`).send({ ids: ["SHIP.M3.5"] });
+    await agent.post(`/api/projects/${id}/path/mark`).send({ ids: ["SHIP.M3.5"], evidence: "This was finished before the path existed." });
 
     const proof = {
       id: "audit-1",

@@ -1,7 +1,7 @@
 /**
  * A section's path as its dashboard shows it, one shape for every section:
  * the one next step first, then progress, the section's own block (loops for
- * Ship, fundability for Raise), the codebase link, recent activity and the
+ * Ship, fundability for Systemize), the codebase link, recent activity and the
  * whole path — each block between thin rules, words kept to labels.
  */
 import { useState } from "react";

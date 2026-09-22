@@ -33,6 +33,14 @@ const PUBLIC_WRITES: Record<string, string> = {
   "POST /api/auth/mobile/mfa/verify": "a signed challenge, plus a code",
   "POST /api/auth/mobile/logout": "the refresh token it revokes; it can only end that session",
   "POST /api/track": "nothing — an analytics beacon, limited per address, no account touched",
+  /*
+   * The one page on the site built for people with no account is the one page
+   * that had no way to report anything on it. Trusts nothing: no free text, a
+   * reason from a fixed list, an artifact that must already be public, five an
+   * hour per address, and the reporter kept as a hash of that address so a
+   * second press is the same report rather than a second row in the queue.
+   */
+  "POST /api/public/artifacts/:id/report": "nothing — a report on an already-public page, no free text, limited per address",
   "POST /api/stripe/webhook": "Stripe's signature over the raw body",
   "PUT /internal-local-upload/:id": "an id this server issued, once, and never in production",
 };

@@ -14,6 +14,7 @@ import { db } from "./db";
 import { storage } from "./storage";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
+import { publicBaseUrl } from "./public-url";
 import { feedPosts, pathArtifacts, projects, users, userProfiles } from "@shared/schema";
 import { artifactFromStep, artifactIdFromPath, artifactPath, validatePublish, type PageMeta } from "@shared/path-artifacts";
 import { PROJECT_GOALS } from "@shared/goals";
@@ -39,16 +40,124 @@ export async function generateArtifact(projectId: string, taskId: string, author
   }
   const [existing] = await db.select().from(pathArtifacts).where(eq(pathArtifacts.taskId, taskId));
   if (existing) {
+    /*
+     * A page that is already live is not refreshed in place.
+     *
+     * This function runs whenever the publish dialog opens — the client calls
+     * it to get a preview — so on a published artifact it re-read the step and
+     * wrote the result straight over `summary` and `body`. The step is a
+     * working surface: builders keep a customer's name, an unannounced price,
+     * or a note to themselves in the answer while they think. All of it went
+     * to /a/<id> the moment the dialog opened. No button was pressed, nothing
+     * said it had happened, and the only way to find out was to look at the
+     * public page.
+     *
+     * So a refresh of a public artifact lands in the draft columns and the
+     * live text is left exactly as published. `/publish` is what moves it
+     * across, which is also the point at which somebody has read it.
+     */
+    if (existing.visibility === "public") {
+      const unchanged = existing.summary === assembled.summary
+        && existing.body === assembled.body
+        && JSON.stringify(existing.files ?? []) === JSON.stringify(assembled.files);
+      if (unchanged) {
+        // Nothing new to hold back, and an old draft that now matches what is
+        // live is noise: clearing it stops the editor claiming a pending change.
+        const [same] = await db.update(pathArtifacts).set({
+          draftSummary: null, draftBody: null, draftFiles: null, draftAt: null,
+        }).where(eq(pathArtifacts.id, existing.id)).returning();
+        return { ...same, hasDraft: false };
+      }
+      const [held] = await db.update(pathArtifacts).set({
+        draftSummary: assembled.summary, draftBody: assembled.body, draftFiles: assembled.files,
+        draftAt: new Date(), updatedAt: new Date(),
+      }).where(eq(pathArtifacts.id, existing.id)).returning();
+      return { ...held, hasDraft: true };
+    }
     const [updated] = await db.update(pathArtifacts).set({
       summary: assembled.summary, body: assembled.body, files: assembled.files, updatedAt: new Date(),
     }).where(eq(pathArtifacts.id, existing.id)).returning();
-    return updated;
+    return { ...updated, hasDraft: false };
   }
   const [created] = await db.insert(pathArtifacts).values({
     projectId, taskId, backboneId: backboneIdOf(task.tags), authorId,
     title: assembled.title, summary: assembled.summary, body: assembled.body, files: assembled.files,
   }).returning();
-  return created;
+  return { ...created, hasDraft: false };
+}
+
+/*
+ * Two small caches in front of the public page, both bounded and both in this
+ * process only.
+ *
+ * `pathProgress` walks every task on the project to answer "3 of 11 steps
+ * done". That is a full per-project scan, and it ran on every anonymous GET of
+ * /a/<id> — so a link doing well on someone else's feed turned into one scan
+ * per reader, on a query nobody is watching change second by second. Sixty
+ * seconds stale is invisible to a reader and the difference between one scan
+ * and a thousand. Only this is cached: the artifact row itself is read fresh
+ * every time, because unpublishing a page or making its project private has to
+ * take effect on the next request, not a minute later.
+ *
+ * The other remembers who has already been counted. A view was counted on
+ * every GET, so the number said "reloads", not "readers", and its own author
+ * could run it up by refreshing — which makes the one metric the growth loop
+ * reports useless for deciding whether a page is working.
+ */
+const VIEW_DEBOUNCE_MS = 6 * 60 * 60 * 1000;
+const PROGRESS_TTL_MS = 60_000;
+const MAX_CACHE_ENTRIES = 20_000;
+
+type Progress = Awaited<ReturnType<typeof pathProgress>>;
+const progressCache = new Map<string, { at: number; value: Progress }>();
+const seenViews = new Map<string, number>();
+
+/** Drops everything past its time, and the oldest entries if the map is still too big. */
+function sweep<T>(map: Map<string, T>, expired: (v: T) => boolean) {
+  for (const [k, v] of map) if (expired(v)) map.delete(k);
+  while (map.size > MAX_CACHE_ENTRIES) {
+    const oldest = map.keys().next();
+    if (oldest.done) break;
+    map.delete(oldest.value);
+  }
+}
+
+/** Called wherever a project's path visibly changes, so the cached count isn't a lie people act on. */
+export function forgetArtifactProgress(projectId: string): void {
+  progressCache.delete(projectId);
+}
+
+async function cachedProgress(projectId: string): Promise<Progress | null> {
+  const now = Date.now();
+  const hit = progressCache.get(projectId);
+  if (hit && now - hit.at < PROGRESS_TTL_MS) return hit.value;
+  const value = await pathProgress(projectId).catch(() => null);
+  if (value) {
+    sweep(progressCache, (e) => now - e.at > PROGRESS_TTL_MS);
+    progressCache.set(projectId, { at: now, value });
+  }
+  return value;
+}
+
+/**
+ * Whether this visitor's read of this artifact counts. First time yes, then
+ * not again for six hours — long enough that refreshing, or coming back to
+ * re-read your own page, doesn't move the number.
+ */
+function isFreshViewer(id: string, visitorId: string | undefined): boolean {
+  const last = seenViews.get(`${id}|${visitorId || "unknown"}`);
+  return last === undefined || Date.now() - last >= VIEW_DEBOUNCE_MS;
+}
+
+/**
+ * Remembered only once the page was actually served. Marking on the way in
+ * would spend a visitor's one countable read on a request that 404'd, so the
+ * first real read after the page went up wouldn't count.
+ */
+function markViewed(id: string, visitorId: string | undefined): void {
+  const now = Date.now();
+  sweep(seenViews, (at) => now - at > VIEW_DEBOUNCE_MS);
+  seenViews.set(`${id}|${visitorId || "unknown"}`, now);
 }
 
 /** The public view of an artifact, or null when it isn't public (or its project isn't). Counts a view when asked. */
@@ -72,7 +181,7 @@ export async function publicArtifact(id: string, opts: { countView?: boolean } =
   }
   if (opts.countView) await db.update(pathArtifacts).set({ views: sql`${pathArtifacts.views} + 1` }).where(eq(pathArtifacts.id, id));
   // Read-only: an anonymous page view must never sync someone's path.
-  const progress = await pathProgress(row.a.projectId).catch(() => null);
+  const progress = await cachedProgress(row.a.projectId);
   const goal = PROJECT_GOALS.find((g) => g.id === row.goal);
   return {
     id: row.a.id, title: row.a.title, summary: row.a.summary, body: row.a.body, files: row.a.files, tags: row.a.tags,
@@ -112,7 +221,15 @@ export async function artifactPageMeta(req: Request, res: Response, next: NextFu
   try {
     const artifact = await publicArtifact(String(req.params.id));
     if (artifact) {
-      const base = process.env.SERVER_BASE_URL || `${req.protocol}://${req.get("host")}`;
+      /*
+       * `publicBaseUrl`, not the request's own Host header. This URL goes into
+       * the page's canonical and OpenGraph tags, so with nothing configured a
+       * single request carrying a forged Host made us hand a crawler — or a
+       * chat app unfurling the link — someone else's domain as the canonical
+       * home of our content. Same function every email link and the sitemap
+       * use, so the site's address is decided in one place.
+       */
+      const base = publicBaseUrl(req);
       res.locals.pageMeta = {
         title: `${artifact.title} — ${artifact.project.title} on SparkTower`,
         description: artifact.summary || `${artifact.path.goalLabel}: a step on ${artifact.project.title}'s path.`,
@@ -176,11 +293,23 @@ export function registerArtifactRoutes(app: Express) {
       const asked = validateAsks(req.body?.asks);
       if ("error" in asked) return res.status(400).json({ message: asked.error, code: "invalid_input", field: "asks" });
 
+      /*
+       * A held-back refresh is promoted here and nowhere else.
+       *
+       * This is the one moment somebody has looked at the text and pressed a
+       * button, which is exactly the property that regenerating an artifact
+       * didn't have.
+       */
+      const promoted = artifact.draftAt
+        ? { summary: artifact.draftSummary ?? artifact.summary, body: artifact.draftBody ?? artifact.body, files: artifact.draftFiles ?? artifact.files }
+        : null;
+      const liveSummary = promoted?.summary ?? artifact.summary;
+
       let postId = artifact.publishedPostId;
       if (!postId) {
         const post = await storage.createFeedPost({
           authorId: req.user.id, projectId: artifact.projectId, postType: "project_update",
-          content: `${checked.title}\n\n${artifact.summary}`.trim(),
+          content: `${checked.title}\n\n${liveSummary}`.trim(),
           mediaUrls: [], mentions: [], asks: asked.asks, isSystemGenerated: false,
           entityType: "path_artifact", entityId: artifact.id,
         } as any);
@@ -190,23 +319,55 @@ export function registerArtifactRoutes(app: Express) {
       const [published] = await db.update(pathArtifacts).set({
         title: checked.title, tags: checked.tags, visibility: "public", publishedPostId: postId,
         publishedAt: artifact.publishedAt ?? new Date(), updatedAt: new Date(),
+        ...(promoted ? { ...promoted, draftSummary: null, draftBody: null, draftFiles: null, draftAt: null } : {}),
       }).where(eq(pathArtifacts.id, artifact.id)).returning();
-      res.json({ artifact: published, postId, url: artifactPath(published.id) });
+      forgetArtifactProgress(artifact.projectId);
+      res.json({ artifact: published, postId, url: artifactPath(published.id), promotedDraft: !!promoted });
     } catch (error) {
       console.error("Artifact publish error:", error);
       res.status(500).json({ message: "Couldn't publish that" });
     }
   });
 
-  /** Taking it back: the page and the preview go; the feed post is the author's to delete. */
+  /**
+   * Taking it back: the page and the preview go.
+   *
+   * The feed post announcing the page is the other half, and it used to be
+   * left standing with no mention of it — a post whose whole content is
+   * "here's what we made" linking to a page that now 404s, sitting at the top
+   * of the project's feed. Whoever took the page down almost never wanted the
+   * post to stay, and the only way to find out it had was to scroll the feed.
+   *
+   * `removePost` does it in the same handler; the id comes back either way so
+   * the client can offer it and say what was left behind.
+   */
   app.post("/api/artifacts/:id/unpublish", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
       const [artifact] = await db.select().from(pathArtifacts).where(eq(pathArtifacts.id, req.params.id));
       if (!artifact) return res.status(404).json({ message: "Artifact not found" });
       const team = await projectTeam(artifact.projectId);
       if (!team?.has(req.user.id)) return res.status(403).json({ message: "Only the project's team can do that." });
-      const [updated] = await db.update(pathArtifacts).set({ visibility: "private", updatedAt: new Date() }).where(eq(pathArtifacts.id, artifact.id)).returning();
-      res.json({ artifact: updated });
+
+      const postId = artifact.publishedPostId;
+      let post: "deleted" | "kept" | "hidden" | "left" | "not_yours" = "left";
+      if (postId && req.body?.removePost === true) {
+        /*
+         * Through the ordinary delete, so a post other people have replied
+         * under becomes a headstone instead of taking their comments with it —
+         * the same rule the feed applies to anyone deleting their own post.
+         * Only the post's author can; a teammate taking the page down gets
+         * told the post isn't theirs rather than silently nothing happening.
+         */
+        const outcome = await storage.deleteFeedPost(postId, req.user.id);
+        post = outcome === false ? "not_yours" : outcome;
+      }
+
+      const [updated] = await db.update(pathArtifacts).set({
+        visibility: "private", updatedAt: new Date(),
+        ...(post === "deleted" ? { publishedPostId: null } : {}),
+      }).where(eq(pathArtifacts.id, artifact.id)).returning();
+      forgetArtifactProgress(artifact.projectId);
+      res.json({ artifact: updated, postId, post });
     } catch (error) {
       console.error("Artifact unpublish error:", error);
       res.status(500).json({ message: "Couldn't do that" });
@@ -214,10 +375,13 @@ export function registerArtifactRoutes(app: Express) {
   });
 
   /** The public page's data. No account needed — that's the point. */
-  app.get("/api/public/artifacts/:id", async (req, res) => {
+  app.get("/api/public/artifacts/:id", async (req: any, res) => {
     try {
-      const artifact = await publicArtifact(String(req.params.id), { countView: true });
+      const id = String(req.params.id);
+      const fresh = isFreshViewer(id, req.visitorId);
+      const artifact = await publicArtifact(id, { countView: fresh });
       if (!artifact) return res.status(404).json({ message: "This artifact isn't published." });
+      if (fresh) markViewed(id, req.visitorId);
       res.json(artifact);
     } catch (error) {
       console.error("Public artifact error:", error);

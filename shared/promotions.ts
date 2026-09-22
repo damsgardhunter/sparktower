@@ -192,7 +192,7 @@ export const PROMOTION_CATALOG: CatalogPromotion[] = [
 export const GOAL_AFFINITY: Record<ProjectGoal, PromotionCategory[]> = {
   ship_mvp: ["ai_coding", "models", "hosting", "backend", "auth_payments", "design", "launch"],
   systemize_business: ["workflow", "no_code", "analytics", "auth_payments", "misc"],
-  raise_funding: ["launch", "analytics", "hosting", "design"],
+  run_company: ["workflow", "analytics", "no_code", "misc"],
 };
 
 /** A promotion as the feed shows it: the catalog entry with what an admin set for it. */

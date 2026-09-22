@@ -7,6 +7,7 @@ import {
 } from "@shared/plans";
 import { TEXT_MODEL, PRIORITY_TEXT_MODEL } from "./aiModels";
 import { enforceRateLimit, consumeRateLimit } from "./moderation";
+import { holdCredits } from "./credit-reservations";
 
 export interface UserEntitlements extends Entitlements {
   tier: TierId;
@@ -109,40 +110,51 @@ export async function requireCredits(
   if (!(await enforceRateLimit(res, userId, "ai"))) return null;
 
   const ent = await getUserEntitlements(userId);
-  const sub = await storage.getUserSubscription(userId);
+  let sub = await storage.getUserSubscription(userId);
 
-  if (ent.credits === Infinity) {
-    if (sub.creditsUsed + amount > FAIR_USE_MONTHLY_CAP) {
-      res.status(429).json({
-        message:
-          `You've reached the fair-use limit of ${FAIR_USE_MONTHLY_CAP.toLocaleString()} AI actions ` +
-          `this month. Get in touch and we'll sort it out.`,
-        code: "fair_use_limit",
-        creditsUsed: sub.creditsUsed,
-        fairUseCap: FAIR_USE_MONTHLY_CAP,
-        tier: ent.tier,
-      });
-      return null;
-    }
+  /*
+   * The credits are taken here, before the model is called, not only checked
+   * (server/credit-reservations.ts). Checking alone let every request in a
+   * burst pass against the same balance and reach the model; the deduction
+   * after it was conditional, but by then the call was paid for. The charge is
+   * the same conditional update, so it can't take the balance past the cap —
+   * the fair-use ceiling for unlimited tiers — and a route that never deducts
+   * gets the credits back before its response goes out.
+   */
+  const unlimited = ent.credits === Infinity;
+  const refused = unlimited ? sub.creditsUsed + amount > FAIR_USE_MONTHLY_CAP : sub.creditsRemaining < amount;
+  if (!refused && (await storage.chargeCredits(userId, amount))) {
+    holdCredits(res, userId, amount);
     return ent;
   }
+  // Refused by the check, or by the charge because a request running alongside took the last of them.
+  if (!refused) sub = await storage.getUserSubscription(userId);
 
-  if (sub.creditsRemaining < amount) {
-    res.status(403).json({
-      message: `Not enough credits for ${label}. This costs ${amount} credit${amount === 1 ? "" : "s"}.`,
-      code: "insufficient_credits",
-      cost: amount,
-      creditsRemaining: sub.creditsRemaining,
-      creditsLimit: sub.creditsLimit,
+  if (unlimited) {
+    res.status(429).json({
+      message:
+        `You've reached the fair-use limit of ${FAIR_USE_MONTHLY_CAP.toLocaleString()} AI actions ` +
+        `this month. Get in touch and we'll sort it out.`,
+      code: "fair_use_limit",
+      creditsUsed: sub.creditsUsed,
+      fairUseCap: FAIR_USE_MONTHLY_CAP,
       tier: ent.tier,
-      // What the client needs to offer the way on: "Upgrade to keep generating".
-      creditState: "out",
-      upgradeUrl: "/pricing",
     });
     return null;
   }
 
-  return ent;
+  res.status(403).json({
+    message: `Not enough credits for ${label}. This costs ${amount} credit${amount === 1 ? "" : "s"}.`,
+    code: "insufficient_credits",
+    cost: amount,
+    creditsRemaining: sub.creditsRemaining,
+    creditsLimit: sub.creditsLimit,
+    tier: ent.tier,
+    // What the client needs to offer the way on: "Upgrade to keep generating".
+    creditState: "out",
+    upgradeUrl: "/pricing",
+  });
+  return null;
 }
 
 /**

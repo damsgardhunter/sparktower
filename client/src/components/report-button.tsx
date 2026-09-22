@@ -24,9 +24,18 @@ type Step = "reason" | "detail" | "confirm";
  * click rather than a form to fill in, because a report nobody finishes helps
  * nobody.
  *
- * Hidden from signed-out visitors — an anonymous report button on a public
- * page is a button for scripts. The server limits how many reports one person
- * can send an hour and a day, and one report per person per thing.
+ * Hidden from signed-out visitors everywhere except a published artifact page,
+ * which is the one surface built for people who have no account: hiding the
+ * button there meant a stranger who landed on something abusive could only
+ * close the tab, and "sign up to tell us about this" is a good way to never
+ * hear about it. Pass `anonymousArtifactId` there. That path posts to a route
+ * of its own — limited per address, no free-text note (an anonymous text box
+ * is a way to write abuse onto a reviewer's screen), and it reports the
+ * artifact's published post, which is what a reviewer already knows how to
+ * take down.
+ *
+ * The server limits how many reports one person can send an hour and a day,
+ * and one report per person per thing.
  *
  * The response is the same whether the report is new or a duplicate, so
  * nobody can use it to find out what's already been flagged.
@@ -35,12 +44,14 @@ type Step = "reason" | "detail" | "confirm";
  * default is the quiet flag icon.
  */
 export function ReportButton({
-  targetType, targetId, className, variant = "icon",
+  targetType, targetId, className, variant = "icon", anonymousArtifactId,
 }: {
   targetType: ReportTarget;
   targetId: string;
   className?: string;
   variant?: "icon" | "action";
+  /** On /a/:id: lets a reader with no account report the page. */
+  anonymousArtifactId?: string;
 }) {
   const { isAuthenticated } = useAuth();
   const { toast } = useToast();
@@ -53,9 +64,15 @@ export function ReportButton({
 
   const close = () => { setOpen(false); setStep("reason"); setReason(null); setDetail(null); setNote(""); };
 
+  // With no account there is nowhere to send a note, so the confirm step
+  // shows the summary alone and the button sends straight from it.
+  const anonymous = !isAuthenticated && !!anonymousArtifactId;
+
   const send = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/reports", { targetType, targetId, reason, detail, note });
+      const res = anonymous
+        ? await apiRequest("POST", `/api/public/artifacts/${anonymousArtifactId}/report`, { reason, detail })
+        : await apiRequest("POST", "/api/reports", { targetType, targetId, reason, detail, note });
       return res.json();
     },
     onSuccess: () => {
@@ -76,7 +93,7 @@ export function ReportButton({
     },
   });
 
-  if (!isAuthenticated) return null;
+  if (!isAuthenticated && !anonymousArtifactId) return null;
 
   const option = (label: string, onClick: () => void, testId: string, selected = false) => (
     <button
@@ -132,7 +149,9 @@ export function ReportButton({
                 ? "A person reads every report. Nothing happens to the author automatically."
                 : step === "detail"
                   ? "Which is closest?"
-                  : "Add anything that would help us judge it — or just send it."}
+                  : anonymous
+                    ? "That's all we need. A person reads every report."
+                    : "Add anything that would help us judge it — or just send it."}
             </DialogDescription>
           </DialogHeader>
 
@@ -154,7 +173,7 @@ export function ReportButton({
                 <p className="font-medium">{reasonLabel}</p>
                 {detailLabel && <p className="text-muted-foreground text-xs">{detailLabel}</p>}
               </div>
-              <div className="space-y-1.5">
+              {!anonymous && <div className="space-y-1.5">
                 <div className="flex items-baseline justify-between">
                   <Label className="text-xs">Anything else ({detail === "something_else" ? "tell us what" : "optional"})</Label>
                   <span className="text-[11px] text-muted-foreground tabular-nums">{note.length}/{REPORT_NOTE_MAX}</span>
@@ -166,7 +185,7 @@ export function ReportButton({
                   className="min-h-[70px]"
                   data-testid="input-report-note"
                 />
-              </div>
+              </div>}
             </div>
           )}
 
@@ -180,7 +199,7 @@ export function ReportButton({
             )}
             {step === "confirm" && (
               <Button
-                disabled={!reason || send.isPending || (detail === "something_else" && !note.trim())}
+                disabled={!reason || send.isPending || (!anonymous && detail === "something_else" && !note.trim())}
                 onClick={() => send.mutate()}
                 data-testid="button-submit-report"
               >

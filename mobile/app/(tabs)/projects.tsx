@@ -24,7 +24,11 @@ const STATUSES = [
 ];
 
 /** The list is an Explore surface on the web too; its events say "projects". */
-const SOURCE = "projects" as ExploreSource;
+// No cast any more: "projects" is one of the eight sources src/explore.ts
+// mirrors from shared/explore-events.ts, and the annotation is what keeps it
+// that way — a source this app invents now fails to compile here rather than
+// being dropped by the server and counted as nothing.
+const SOURCE: ExploreSource = "projects";
 
 /**
  * Projects — off the tab bar since Discover absorbed browsing, but kept as a

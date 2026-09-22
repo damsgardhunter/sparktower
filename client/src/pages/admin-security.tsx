@@ -31,7 +31,10 @@ interface Privileged {
 }
 interface Overview {
   privileged: Privileged[];
+  /** Real refusals: activity events the limiter wrote when it turned somebody away. */
   refusalsLastDay: { action: string; n: number; subjects: number }[];
+  /** What got through, for scale. This is what `refusalsLastDay` used to hold, misnamed. */
+  allowedAttemptsLastDay?: { action: string; n: number; subjects: number }[];
   suspended: { id: string; email: string; suspendedAt: string | null; reason: string | null }[];
   recentActions: { id: string; action: string; actorId: string | null; targetUserId: string | null; reason: string | null; createdAt: string }[];
 }

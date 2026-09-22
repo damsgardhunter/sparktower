@@ -47,23 +47,34 @@ test("a founder builds a capital profile, picks a route, and takes an investment
     { title: "Owner", company: "Sparkle Pro Cleaning", startDate: "2016-01", endDate: "2021-06", current: false, description: "Office cleaning, 9 staff" },
   ])]);
 
+  /*
+   * A Systemize project: the funding path's capital profile, map and routes
+   * now live inside it, after its first three money weeks. Those weeks are
+   * marked done through the API — they have their own coverage — so the
+   * browser starts where the funding work does.
+   */
   const created = await founder.api.post("/api/projects", {
-    data: { title: "Brightside Acquisition", description: "Buying a commercial cleaning company and growing it across the city.", category: "services", goal: "raise_funding", subcategory: "other" },
+    data: { title: "Brightside Acquisition", description: "Buying a commercial cleaning company and growing it across the city.", category: "services", goal: "systemize_business", subcategory: "service" },
   });
+  expect(created.ok(), "a Systemize project").toBeTruthy();
   const projectId = (await created.json()).id as string;
+  expect((await founder.api.post(`/api/projects/${projectId}/nova-guide/complete-onboarding`)).ok()).toBeTruthy();
+  const board = (await (await founder.api.get(`/api/projects/${projectId}/kanban`)).json()) as any[];
+  const moneyWeeks = board.filter((t) => t.tags?.some((tag: string) => /^backbone:SYS\.F[123]\./.test(tag)));
+  expect(moneyWeeks.length, "Systemize's first three money weeks").toBeGreaterThan(8);
+  for (const t of moneyWeeks) {
+    expect((await founder.api.patch(`/api/kanban/${t.id}`, { data: { status: "done" } })).ok()).toBeTruthy();
+  }
   const page = await founder.context.newPage();
 
-  // 1. Nova opens on why.
-  await page.goto(`/projects/${projectId}/manage`);
-  const welcome = page.getByTestId("nova-money-first");
-  await expect(welcome).toContainText("Let's find the money for your business");
-  await welcome.getByTestId("intake-why-wealth").click();
-  await welcome.getByTestId("intake-why-legacy").click();
-  await welcome.getByTestId("intake-path-buy").click();
-  await welcome.getByTestId("intake-role-operator").click();
-  await welcome.getByTestId("intake-horizon-forever").click();
-  await welcome.getByTestId("button-intake-save").click();
-  await expect(page.getByTestId("nova-onboarding-overlay")).toHaveCount(0);
+  // 1. The funding work opens on why.
+  await page.goto(`/projects/${projectId}/manage?section=systemize_business`);
+  await page.getByTestId("intake-why-wealth").click({ timeout: 30_000 });
+  await page.getByTestId("intake-why-legacy").click();
+  await page.getByTestId("intake-path-buy").click();
+  await page.getByTestId("intake-role-operator").click();
+  await page.getByTestId("intake-horizon-forever").click();
+  await page.getByTestId("button-intake-save").click();
 
   // 2. Money today, then experience — and the score appears.
   await page.getByTestId("intake-cash-25k_100k").click();

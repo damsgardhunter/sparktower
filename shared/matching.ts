@@ -299,13 +299,29 @@ export function scoreMatch(
  * connected with: a match is an introduction, and you don't need introducing
  * to someone in your network. A pending request either way counts too; the
  * introduction is already in flight.
+ *
+ * `blockedIds` is the harder rule and the reason this check is a function
+ * rather than a filter written inline: matching is an *introduction service*,
+ * and introducing someone to the person they blocked — or to the person who
+ * blocked them — is the product undoing the one protective action the site
+ * offers. It's kept separate from `relatedUserIds` on purpose. Related people
+ * are people you already know, and the day someone decides a match should be
+ * allowed to resurface an old declined request, they must not be able to let a
+ * block through with the same edit.
  */
 export function isMatchable(
   candidateId: string,
-  opts: { viewerId: string; isOnboarded: boolean; relatedUserIds: ReadonlySet<string> },
+  opts: {
+    viewerId: string;
+    isOnboarded: boolean;
+    relatedUserIds: ReadonlySet<string>;
+    /** People cut off from the viewer in either direction — see server/blocks.ts blockedIdsFor. */
+    blockedIds?: ReadonlySet<string>;
+  },
 ): boolean {
   if (candidateId === opts.viewerId) return false;
   if (!opts.isOnboarded) return false;
+  if (opts.blockedIds?.has(candidateId)) return false;
   return !opts.relatedUserIds.has(candidateId);
 }
 

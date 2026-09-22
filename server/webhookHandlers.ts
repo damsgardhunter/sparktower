@@ -96,6 +96,7 @@ export class WebhookHandlers {
       await WebhookHandlers.handleSubscriptionEvent(event);
       await WebhookHandlers.handleCheckoutCompleted(event);
       await WebhookHandlers.handleRefund(event);
+      await WebhookHandlers.handleDispute(event);
       await WebhookHandlers.handlePaymentFailure(event);
       await onInvoicePaid(event, async (subscriptionId) => {
         const stripe = await getUncachableStripeClient();
@@ -193,14 +194,18 @@ export class WebhookHandlers {
   }
 
   static async handleCheckoutCompleted(event: any): Promise<void> {
-    if (event.type !== 'checkout.session.completed') return;
+    // A delayed payment method completes the checkout unpaid and settles later, as async_payment_succeeded.
+    const settledLater = event.type === 'checkout.session.async_payment_succeeded';
+    if (event.type !== 'checkout.session.completed' && !settledLater) return;
     const session = event.data?.object;
     if (!session) return;
 
     // Backing pledges are held in escrow and have their own ledger, believer
     // numbers and merch queue — see server/backing-routes.ts. It dedupes by
-    // session id itself. Errors propagate: a lost pledge is worth a retry.
+    // session id itself, and records only a session that's actually paid.
+    // Errors propagate: a lost pledge is worth a retry.
     if (session.metadata?.type === 'backing') { await recordBacking(session); return; }
+    if (settledLater) return;
 
     if (session.metadata?.type === 'donation') {
       const { projectId, donorId, amount } = session.metadata;
@@ -318,6 +323,75 @@ export class WebhookHandlers {
       const stripe = await getUncachableStripeClient();
       const payments = await (stripe as any).invoicePayments.list({ payment: { type: "payment_intent", payment_intent: paymentIntent }, limit: 1 });
       return (payments?.data?.length ?? 0) > 0;
+    });
+  }
+
+  /**
+   * Chargebacks on a pledge.
+   *
+   * A dispute is the backer's bank taking the money back by force: Stripe
+   * pulls the amount (and a fee) from the platform balance the moment it's
+   * opened, and returns it only if the dispute is won. This handler used to
+   * know nothing about them, so a disputed pledge stayed plain "held" — and
+   * the next payout release sent the creator money the platform no longer
+   * had, or the refund sweep returned it to a backer whose bank already had.
+   * Either way the platform paid for one pledge twice.
+   *
+   *   - charge.dispute.created marks the pledge (`disputedAt`). Release and the
+   *     sweep both skip a marked pledge, under their row locks.
+   *   - charge.dispute.closed settles it: won (or an inquiry closed without a
+   *     chargeback) clears the mark and the pledge is held again, as before;
+   *     lost means the backer has their money back, so the pledge is refunded
+   *     and the public total gives it back, as a dashboard refund would.
+   *
+   * A dispute on a pledge already paid out is recorded and reported: the
+   * creator has that money, and getting it back is a person's call.
+   */
+  static async handleDispute(event: any): Promise<void> {
+    if (event.type !== 'charge.dispute.created' && event.type !== 'charge.dispute.closed') return;
+    const dispute = event.data?.object;
+    if (!dispute) return;
+    const paymentIntent: string | null = typeof dispute.payment_intent === "string" ? dispute.payment_intent : dispute.payment_intent?.id ?? null;
+    const chargeId: string | null = typeof dispute.charge === "string" ? dispute.charge : dispute.charge?.id ?? null;
+    if (!paymentIntent && !chargeId) return;
+    const match = or(
+      ...(paymentIntent ? [eq(projectBackings.stripePaymentIntentId, paymentIntent)] : []),
+      ...(chargeId ? [eq(projectBackings.stripeChargeId, chargeId)] : []),
+    );
+
+    await db.transaction(async (tx) => {
+      // The same lock release and the sweep take, so neither can act on this pledge mid-decision.
+      const [backing] = await tx.select({ id: projectBackings.id, status: projectBackings.status, amountCents: projectBackings.amountCents, projectId: projectBackings.projectId, disputedAt: projectBackings.disputedAt, stripeChargeId: projectBackings.stripeChargeId })
+        .from(projectBackings).where(match).for("update");
+      if (!backing) return;
+
+      if (event.type === 'charge.dispute.created') {
+        if (!backing.disputedAt) {
+          await tx.update(projectBackings).set({ disputedAt: new Date(), stripeChargeId: backing.stripeChargeId ?? chargeId }).where(eq(projectBackings.id, backing.id));
+        }
+        if (backing.status === 'released') console.error(`[stripe] dispute ${dispute.id} opened on backing ${backing.id}, which was already paid out to the creator — needs a person`);
+        else console.warn(`[stripe] dispute ${dispute.id} opened on backing ${backing.id} (${backing.status}): held back from release and the refund sweep`);
+        return;
+      }
+
+      // Closed. "won" and "warning_closed" (an inquiry that never became a chargeback) leave the money with us.
+      if (dispute.status === 'won' || dispute.status === 'warning_closed') {
+        await tx.update(projectBackings).set({ disputedAt: null }).where(eq(projectBackings.id, backing.id));
+        console.log(`[stripe] dispute ${dispute.id} on backing ${backing.id} closed ${dispute.status}: ${backing.status === 'held' ? 'held again' : backing.status}`);
+        return;
+      }
+      if (dispute.status !== 'lost') return;
+
+      if (backing.status === 'held' || backing.status === 'pending') {
+        // Lost: the backer's bank returned the money. The mark stays, as the record of how.
+        await tx.update(projectBackings).set({ status: 'refunded', resolvedAt: new Date(), disputedAt: backing.disputedAt ?? new Date() }).where(eq(projectBackings.id, backing.id));
+        await tx.update(projects).set({ totalDonations: sql`greatest(0, ${projects.totalDonations} - ${backing.amountCents})` }).where(eq(projects.id, backing.projectId));
+        await tx.update(projectMerchOrders).set({ status: 'canceled', updatedAt: new Date() })
+          .where(and(eq(projectMerchOrders.backingId, backing.id), inArray(projectMerchOrders.status, ['queued', 'failed'])));
+        console.log(`[stripe] dispute ${dispute.id} lost: backing ${backing.id} refunded by the bank; project ${backing.projectId} total reduced by ${backing.amountCents}`);
+      } else if (backing.status === 'released') {
+        console.error(`[stripe] dispute ${dispute.id} lost on backing ${backing.id}, already paid out to the creator — the platform is out ${backing.amountCents} cents; needs a person`);
+      }
     });
   }
 

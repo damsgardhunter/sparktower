@@ -35,6 +35,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { errorText } from "@/lib/api-error";
 import { Loader2, Store, Gavel, Package, Info } from "lucide-react";
 import { SimHeader } from "@/components/sim/sim-header";
 
@@ -79,6 +80,13 @@ export default function SimulationMarketPage() {
   const { data: market, isLoading } = useQuery<Market>({
     queryKey: [`/api/sim/ventures/${id}/market`],
     refetchInterval: 15_000,
+    /*
+     * The app default is `staleTime: Infinity`: after a year resolved this
+     * showed listings that had already sold at the tick, with bid buttons on
+     * them. Always refetch on arrival; the poll carries it from there.
+     */
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 
   if (isLoading || !market) {
@@ -153,6 +161,15 @@ function ListingCard({ listing, ventureId, funds }: { listing: Listing; ventureI
   const withdraw = useMutation({
     mutationFn: () => apiRequest("DELETE", `/api/sim/ventures/${ventureId}/bids/${listing.id}`, undefined),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/market`] }),
+    /*
+     * It used to fail in silence — the listing had settled, or the season
+     * ended, and the button just stopped doing anything. Say why, and refetch
+     * so the card shows what actually happened to the bid.
+     */
+    onError: (err) => {
+      toast({ title: "Couldn't withdraw the bid", description: errorText(err), variant: "destructive" });
+      queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/market`] });
+    },
   });
 
   const n = Number(amount);

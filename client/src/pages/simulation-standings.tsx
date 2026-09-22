@@ -56,6 +56,13 @@ export default function SimulationStandingsPage() {
   const { data, isLoading } = useQuery<Standings>({
     queryKey: [`/api/sim/ventures/${id}/standings`],
     refetchInterval: 30_000,
+    /*
+     * The app default is `staleTime: Infinity`, so arriving here after a year
+     * resolved showed the table from before it for up to thirty seconds — the
+     * one moment everybody opens this page is the moment it was wrong.
+     */
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 
   if (isLoading || !data) {

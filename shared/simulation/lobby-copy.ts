@@ -55,8 +55,10 @@ export function phaseCopy(input: {
   yourRole: Role | null;
   isCeo: boolean;
   named: boolean;
+  /** A retired room whose season ran to the end, rather than one that never filled. */
+  seasonOver?: boolean;
 }): PhaseCopy {
-  const { phase, seated, lobbySize, yourRole, isCeo, named } = input;
+  const { phase, seated, lobbySize, yourRole, isCeo, named, seasonOver } = input;
 
   if (phase === "filling") {
     const missing = Math.max(0, lobbySize - seated);
@@ -64,8 +66,8 @@ export function phaseCopy(input: {
       title: missing === 0 ? "Room full" : `Waiting for ${missing} more`,
       body: missing === 0
         ? "Everyone's here. Seats next."
-        : "Five people run a company between them. If nobody else turns up in the next minute, the empty seats are taken by players we run, so you are never left waiting on strangers.",
-      deadline: "A room that has been waiting a minute fills itself, and it starts either way when the clock runs out.",
+        : "Five people run a company between them, and the room waits for real people first. If nobody new arrives for a minute, players we run take the empty seats — and that minute starts again whenever someone joins.",
+      deadline: "The room fills itself only once people stop arriving, and a bot is marked as a bot all season.",
     };
   }
 
@@ -73,7 +75,10 @@ export function phaseCopy(input: {
     return {
       title: yourRole ? "You have a seat" : "Take a seat",
       body: yourRole
-        ? "You can still swap while the clock is running. Talk it out — the seats you leave empty get dealt out at random."
+        // Not "at random": assignRemaining() in lobby.ts deals them in a fixed
+        // order to whoever hasn't chosen, earliest to join first. Saying random
+        // told people a dispute had no answer when it has a precise one.
+        ? "You can still swap while the clock is running. Talk it out — the seats you leave empty go to whoever hasn't chosen, earliest to join first."
         : "One person per seat, first to claim it. Argue about it; that is the point of this bit.",
       deadline: "When the clock runs out, whatever is left is dealt out to whoever hasn't chosen.",
     };
@@ -95,6 +100,14 @@ export function phaseCopy(input: {
     return {
       title: named ? "Year one has begun" : "Year one has begun, unnamed",
       body: "Fourteen days, fourteen years. Each of you decides your own part of the year, and the market resolves at the end of every day.",
+      deadline: "",
+    };
+  }
+
+  if (seasonOver) {
+    return {
+      title: "Season over",
+      body: "Your company played all fourteen years. See how it finished, then start a new company in any market.",
       deadline: "",
     };
   }

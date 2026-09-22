@@ -335,7 +335,7 @@ export function ProjectSocialTabs({
                         )}
                         {m.targetDate && (
                           <p className="text-xs text-muted-foreground">
-                            Target {new Date(m.targetDate).toLocaleDateString()}
+                            Target {new Date(m.targetDate).toLocaleDateString(undefined, { timeZone: "UTC" })}
                           </p>
                         )}
                       </div>

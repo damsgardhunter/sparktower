@@ -277,6 +277,15 @@ export const CREDIT_COSTS = {
   reputationEvaluation: 0,
   /** Checks pricing against the target customer and comparable products. */
   pricingAnalysis: 5,
+  /**
+   * "What would it take?" — the route from a running company's real numbers to
+   * $1m, $100m, $1bn or $50bn a year. Priced with the readiness score: one
+   * reasoned read over every check-in, goal and recurring job the company has
+   * filed, ending in a staged plan and a verdict. It is meant to be re-run
+   * every few months rather than every week, so it is not priced as a chat
+   * turn — a cheap version of this would be run daily and read as noise.
+   */
+  whatWouldItTake: 5,
   // Investor readiness suite
   pitchDeckOutline: 8,
   investorReadinessScore: 5,

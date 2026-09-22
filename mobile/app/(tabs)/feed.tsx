@@ -4,7 +4,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { api } from "../../src/api/client";
-import { DISCOVER_NEW_KEY } from "../../src/explore";
+import { DISCOVER_NEW_KEY, viewMatchCard } from "../../src/explore";
 import { colors, font, fontFamily, spacing } from "../../src/theme";
 import { ListItem, type IconName } from "../../src/components/ui";
 import { NoticeBanner, Sheet, useNotice } from "../../src/components/Sheet";
@@ -106,8 +106,24 @@ export default function Feed() {
   const viewability = useRef({
     viewabilityConfig: { itemVisiblePercentThreshold: 50 },
     onViewableItemsChanged: ({ viewableItems }: { viewableItems: ViewToken[] }) => {
-      for (const { item } of viewableItems) {
-        if (item && typeof item === "object" && "promo" in item) promoSeenRef.current((item as { promo: PromotionSlot }).promo);
+      for (const { item, index } of viewableItems) {
+        if (!item || typeof item !== "object") continue;
+        if ("promo" in item) { promoSeenRef.current((item as { promo: PromotionSlot }).promo); continue; }
+        /*
+         * "Saw a match", from the one place in the app that already knows what
+         * is genuinely on screen. The threshold above is the web's — half the
+         * card — so the same rule decides an impression on both, and
+         * viewMatchCard drops the repeats a viewability callback produces as a
+         * row wobbles at the edge of the viewport.
+         *
+         * A post is its project where it has one and its author otherwise,
+         * which is what the card's two tap targets are.
+         */
+        if ("post" in item) {
+          const post = (item as { post: FeedPost }).post;
+          const target = post.project ? { matchType: "project" as const, targetId: post.project.id } : { matchType: "builder" as const, targetId: post.authorId };
+          viewMatchCard({ ...target, source: "feed", rankPosition: typeof index === "number" ? index + 1 : undefined }, "/feed");
+        }
       }
     },
   }).current;

@@ -109,7 +109,8 @@ describe("the loop's actions", () => {
     const conn = (await ana1.post("/api/connections/request").send({ userId: bea.id, explore: { source: "discover", rankPosition: 1 } })).body;
     // Refused actions record nothing: a message before they've accepted, a second request.
     expect((await ana1.post(`/api/messages/${bea.id}`).send({ content: "too early" })).status).toBe(403);
-    expect((await ana1.post("/api/connections/request").send({ userId: bea.id })).status).toBe(400);
+    // A second request is the same request: answered plainly, recorded once.
+    expect((await ana1.post("/api/connections/request").send({ userId: bea.id })).status).toBe(200);
     await as(app, bea, "vis-act-bea", "ses-act-bea").post(`/api/connections/${conn.id}/accept`).send({});
     expect((await ana1.post(`/api/messages/${bea.id}`).send({ content: "hello", explore: { source: "messages" } })).status).toBe(200);
 

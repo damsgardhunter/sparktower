@@ -113,7 +113,14 @@ export default function More() {
 
         <Group title="Build">
           {on("sprints") && <MenuRow icon="people" title="Sprints & simulations" subtitle="Trial sprints, matchmaking, and the market simulation" onPress={() => go("/(tabs)/sprints")} testID="more-sprints" />}
-          {on("sprints") && <MenuRow icon="school" title="Practice sprint" subtitle="Rehearse the whole sprint with Nova" tint={colors.novaEmerald} onPress={() => go("/sprint/practice")} />}
+          {/*
+            * "Practice sprint" used to sit here, pointing at /sprint/practice.
+            * There is no app/sprint/ directory any more — the screen was never
+            * ported — so the row opened expo-router's "unmatched route" page.
+            * A menu item that leads nowhere is worse than a missing one: it
+            * reads as the app being broken rather than the feature being
+            * absent. Sprints themselves are the row above.
+            */}
           {on("contests") && <MenuRow icon="ribbon" title="Contests and Communities" subtitle="Compete, and join people building like you" tint="#E11D48" onPress={() => go("/contests")} testID="more-contests" />}
           {/*
             * "Build my profile" and "Profile details" used to sit here. Both

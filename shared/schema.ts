@@ -1,11 +1,11 @@
-import { pgTable, text, varchar, timestamp, integer, boolean, index, jsonb, unique, foreignKey, bigserial, bigint, real, primaryKey } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, integer, boolean, index, uniqueIndex, jsonb, unique, foreignKey, bigserial, bigint, real, primaryKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
 import { PROJECT_GOAL_IDS, isValidSubcategory } from "./goals";
 
 // Re-exporting from auth models as requested
-export { sessions, users, mobileRefreshTokens, mcpTokens, emailVerificationTokens, passwordResetTokens, type User, type UpsertUser, type MobileRefreshToken, type McpToken } from "./models/auth";
+export { sessions, users, mobileRefreshTokens, mcpTokens, emailVerificationTokens, passwordResetTokens, webHandoffTokens, type User, type UpsertUser, type MobileRefreshToken, type McpToken } from "./models/auth";
 import { users, mobileRefreshTokens } from "./models/auth";
 
 export const userProfiles = pgTable("user_profiles", {
@@ -124,7 +124,7 @@ export const projects = pgTable("projects", {
    * to rows that predate it — the insert schema below re-requires it, so a new
    * project must say which path it is on. See shared/goals.ts.
    */
-  goal: text("goal", { enum: ["ship_mvp", "systemize_business", "raise_funding"] })
+  goal: text("goal", { enum: ["ship_mvp", "systemize_business", "run_company"] })
     .default("ship_mvp").notNull(),
   /*
    * Required, and only valid as a pair with `goal` — checked in the insert
@@ -219,6 +219,22 @@ export const projects = pgTable("projects", {
   // Private projects are a paid entitlement; see checkPrivateProjectQuota.
   isPrivate: boolean("is_private").default(false).notNull(),
   externalTractionUrl: text("external_traction_url"),
+  /*
+   * Taken down by a reviewer. A project was a *reportable* thing but not an
+   * actionable one: the queue could file the report, mark it actioned, and
+   * change nothing. The only lever was suspending the owner, and a suspension
+   * blocks writes — it does not unpublish anything — so a doxxing or spam
+   * project stayed on the public listing, the leaderboard, Discover and the
+   * sitemap while its report read "handled".
+   *
+   * Same three columns as every other takedown target (feed posts, project
+   * comments, feed comments), so `TAKEDOWN_TABLES`, the undo path and the
+   * moderation log all treat a project exactly like any other content.
+   * Reads that serve strangers must test `hiddenAt is null`.
+   */
+  hiddenAt: timestamp("hidden_at"),
+  hiddenById: varchar("hidden_by_id").references(() => users.id),
+  hiddenReason: text("hidden_reason"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -240,7 +256,17 @@ export const projectMembers = pgTable("project_members", {
   availability: text("availability"),
   hoursPerWeek: integer("hours_per_week"),
   skills: varchar("skills").array(),
-});
+}, (table) => ({
+  /*
+   * One membership per person per project. Three paths add a member — the
+   * create (the owner), an accepted application and an accepted invite — and
+   * each checked "already a member?" in its own read before its own insert,
+   * so the two join paths racing, or an application accepted after an
+   * invite, could put someone on a team twice. The index makes the database
+   * the one place that answers, and inserts say onConflictDoNothing.
+   */
+  oneMembership: unique("project_members_project_user_unique").on(table.projectId, table.userId),
+}));
 
 /**
  * An invitation to join a project (shared/invites.ts): the token itself is never
@@ -392,6 +418,15 @@ export const projectBackings = pgTable("project_backings", {
   }).default("refund").notNull(),
   /** createdAt + REFUND_WINDOW_DAYS, denormalised so the sweep is one query. */
   refundDueAt: timestamp("refund_due_at"),
+  /**
+   * Set while the backer's bank is disputing the charge (a chargeback), and
+   * cleared if the dispute is won. The money is frozen by Stripe for as long
+   * as this is set, so payout release and the refund sweep both leave the
+   * pledge alone: releasing it pays the creator for money the platform may
+   * lose, and refunding it returns the money twice. See charge.dispute.* in
+   * server/webhookHandlers.ts.
+   */
+  disputedAt: timestamp("disputed_at"),
   releasedAt: timestamp("released_at"),
   resolvedAt: timestamp("resolved_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -512,7 +547,19 @@ export const userBadges = pgTable("user_badges", {
   userId: varchar("user_id").notNull().references(() => users.id),
   badgeId: varchar("badge_id").notNull().references(() => badges.id),
   awardedAt: timestamp("awarded_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  /**
+   * You can hold a badge once.
+   *
+   * `awardBadge` used to select-then-insert, which is a check-then-act with a
+   * network round trip in the middle: one request that trips two milestones,
+   * or two requests landing together, both read "not awarded" and both write.
+   * The profile then shows the same badge twice and no amount of re-reading
+   * fixes it. With this index the second write is a no-op instead
+   * (`onConflictDoNothing`), so the race has no outcome at all.
+   */
+  oneAwardPerBadge: uniqueIndex("user_badges_user_badge_unique").on(table.userId, table.badgeId),
+}));
 
 export const contests = pgTable("contests", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -538,7 +585,22 @@ export const contestParticipants = pgTable("contest_participants", {
   submissionNote: text("submission_note"),
   score: integer("score"),
   joinedAt: timestamp("joined_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  /*
+   * One entry per person per contest.
+   *
+   * Joining was a check-then-insert with nothing underneath it: read "are they
+   * already in?", read the participant count against `maxParticipants`, then
+   * insert. A double-clicked button — or two tabs — ran both reads before
+   * either insert, so one person could end up in the table twice. That
+   * double-counted the entrants shown on the contest, let a contest overfill
+   * past its own maximum, and would have given one person two places in the
+   * judging. The database is now the thing that answers, and `joinContest`
+   * inserts with `onConflictDoNothing` and enforces the cap in the insert's
+   * own WHERE rather than in a read before it.
+   */
+  oneEntry: unique("contest_participants_contest_user_unique").on(table.contestId, table.userId),
+}));
 
 export const connections = pgTable("connections", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -553,6 +615,25 @@ export const connections = pgTable("connections", {
   note: text("note"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+/*
+ * There is one more constraint on this table than drizzle can describe:
+ *
+ *   create unique index connections_pair_unique
+ *     on connections (least(requester_id, receiver_id), greatest(requester_id, receiver_id));
+ *
+ * It is an expression index, so it lives in the migration (0042) rather than
+ * here. It is the thing that makes a connection a fact about a *pair* rather
+ * than about a direction. Without it `sendConnectionRequest` was a
+ * check-then-insert with nothing underneath it: a double-submitted button, or
+ * A and B pressing "connect" on each other in the same second, left two rows
+ * for one pair. From then on `getConnectionStatus` returned whichever row the
+ * planner handed back first, so messaging between the two 403'd on some
+ * requests and worked on others — the shape of bug nobody can reproduce.
+ *
+ * drizzle-kit doesn't know about it, which is fine: it only drops what it
+ * knows. Don't add a plain unique on (requester_id, receiver_id) as well — it
+ * would allow exactly the reversed-pair duplicate this one exists to stop.
+ */
 
 export const directMessages = pgTable("direct_messages", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -611,6 +692,50 @@ export const userFollows = pgTable("user_follows", {
 }));
 
 export type UserFollow = typeof userFollows.$inferSelect;
+
+/**
+ * One person deciding they never want to hear from another again.
+ *
+ * Reporting was the only tool anyone had, and a report changes nothing
+ * between two people: it opens a queue item for a reviewer and, in the
+ * meantime, the person being harassed still gets connection requests with a
+ * 280-character note attached, still sees their harasser in matches and
+ * search, and still gets a bell ping every time they react to something. The
+ * block is the part the person being harassed controls, and it takes effect
+ * the moment it's made.
+ *
+ * Deliberately one-directional as a row and two-directional in effect: `a`
+ * blocking `b` means neither can reach the other, but only `a` is ever told
+ * the block exists. The blocked person sees a profile that is simply absent
+ * and requests that simply don't arrive — telling them "you were blocked" is
+ * how a block turns into the next argument.
+ *
+ * `reason` is for the blocker's own memory when they review the list months
+ * later. It is never shown to the blocked person and never leaves this row.
+ */
+export const userBlocks = pgTable("user_blocks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  blockerId: varchar("blocker_id").notNull().references(() => users.id),
+  blockedId: varchar("blocked_id").notNull().references(() => users.id),
+  reason: text("reason"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /*
+   * In column order, for the same drizzle-kit reason as project_follows above.
+   * Blocking twice (a double-tap on the confirm) must be the same block, not
+   * two rows that then need two unblocks to undo.
+   */
+  blockerBlockedUnique: unique().on(table.blockerId, table.blockedId),
+  /*
+   * The unique covers "who have I blocked"; this covers the question every
+   * reach check actually asks — "who has blocked me" — which otherwise
+   * sequentially scans the table on every notification fan-out.
+   */
+  blockedIdx: index("user_blocks_blocked_idx").on(table.blockedId),
+}));
+
+export type UserBlock = typeof userBlocks.$inferSelect;
+export type InsertUserBlock = typeof userBlocks.$inferInsert;
 
 export const projectKanbanTasks = pgTable("project_kanban_tasks", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -791,6 +916,36 @@ export const codeAuditRuns = pgTable("code_audit_runs", {
 
 export type CodeAuditRun = typeof codeAuditRuns.$inferSelect;
 
+/**
+ * One record per batch of project operations that has actually been applied.
+ *
+ * Every "apply what Nova suggested" route took a raw array of operations and
+ * ran it, so a double click, or a client retrying a slow request, applied the
+ * whole batch twice: two of every task, two of every milestone, and — worse —
+ * an update_scope replaying a stale array, silently discarding everything
+ * added to the bucket since. The key is either the caller's Idempotency-Key or
+ * a fingerprint of the batch itself, so protection does not depend on the
+ * client having been updated to send one. The stored result lets a genuine
+ * retry receive the original answer rather than an error.
+ */
+export const projectOperationApplications = pgTable("project_operation_applications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** The caller's Idempotency-Key, or a hash of the operations when there is none. */
+  key: text("key").notNull(),
+  /** Which route applied it, for reading the table back. */
+  source: text("source").notNull(),
+  /** The answer the first apply gave, replayed to a retry. */
+  result: jsonb("result").default({}),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [
+  unique("project_operation_applications_key_idx").on(t.projectId, t.key),
+  index("project_operation_applications_made_idx").on(t.createdAt),
+]);
+
+export type ProjectOperationApplication = typeof projectOperationApplications.$inferSelect;
+
 export const projectCodeAudits = pgTable("project_code_audits", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
@@ -865,6 +1020,29 @@ export const projectDocuments = pgTable("project_documents", {
   fileId: varchar("file_id"),
   /** Object-storage path of the most recent PDF render, if any. */
   pdfUrl: text("pdf_url"),
+  /*
+   * The last few versions of `pages`, newest first, stamped before anything
+   * that rewrites the whole structure (a re-plan).
+   *
+   * A restructure is a model call: it can decide a page is redundant and drop
+   * it, taking prose the builder wrote with it. Before this there was no way
+   * back — the pages column had been overwritten and the only copy of those
+   * paragraphs was in the PDF, if one had ever been published. Bounded to a
+   * handful of versions because a thirty-page document is a large JSON blob
+   * and this is an undo, not an archive.
+   */
+  pagesHistory: jsonb("pages_history").$type<{ at: string; reason: string; pages: unknown }[]>().default([]).notNull(),
+  /*
+   * Block ids whose last fill produced nothing, so the failure outlives the
+   * one response that mentioned it.
+   *
+   * A fill that fails on three pages out of twenty used to say so in a single
+   * toast and then forget. Reload the editor and those blocks look like blocks
+   * nobody has got to yet, indistinguishable from the ones never asked for, so
+   * the builder either re-fills the whole document (paying again for the
+   * nineteen pages that worked) or ships with holes in it.
+   */
+  fillFailures: jsonb("fill_failures").$type<string[]>().default([]).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -1061,6 +1239,13 @@ export const feedPosts = pgTable("feed_posts", {
   authorId: varchar("author_id").notNull().references(() => users.id),
   /** The project this post is about. Null for general founder chatter. */
   projectId: varchar("project_id").references(() => projects.id, { onDelete: "cascade" }),
+  /**
+   * Posted as a company rather than as the person. The person who wrote it is
+   * still `authorId` — for moderation, and so a company can see who posted in
+   * its name — but the feed shows the company. Only somebody the company has
+   * given the "post as the company" power can set it.
+   */
+  companyId: varchar("company_id").references(() => companies.id, { onDelete: "set null" }),
   postType: text("post_type", { enum: FEED_POST_TYPES }).notNull(),
   content: text("content").notNull(),
   mediaUrls: varchar("media_urls").array().default([]),
@@ -1166,6 +1351,23 @@ export const pathArtifacts = pgTable("path_artifacts", {
   files: jsonb("files").$type<{ path: string; purpose?: string }[]>().default([]).notNull(),
   tags: text("tags").array().default([]).notNull(),
   visibility: text("visibility", { enum: ["private", "public"] }).default("private").notNull(),
+  /*
+   * A re-assembled version of a page that is already live, held back until
+   * somebody publishes it.
+   *
+   * Regenerating an artifact re-reads the step it came from, and that step is
+   * a working surface: a builder pastes a customer's name, a price they
+   * haven't announced or a note to themselves into the step's answer while
+   * thinking. Writing that straight over `body` put it on /a/<id> the instant
+   * the dialog opened — no button pressed, no warning, and no way to know it
+   * had happened. So a refresh of a public artifact lands here instead, and
+   * the publish route is what moves it across.
+   */
+  draftSummary: text("draft_summary"),
+  draftBody: text("draft_body"),
+  draftFiles: jsonb("draft_files").$type<{ path: string; purpose?: string }[]>(),
+  /** When the held-back draft was assembled. Null means there isn't one. */
+  draftAt: timestamp("draft_at"),
   publishedPostId: varchar("published_post_id"),
   publishedAt: timestamp("published_at"),
   views: integer("views").default(0).notNull(),
@@ -1206,6 +1408,33 @@ export const NOTIFICATION_KINDS = [
   "sprint_left",
   // A teammate in a simulated season is waiting on your seat to file this year.
   "sim_nudge",
+  // A company would like to talk to you, having seen your track record.
+  "recruit_invite",
+  // Somebody answered your company's invitation to talk.
+  "recruit_answer",
+  // Your company invited you to a private training season.
+  "season_invite",
+  // Somebody entered your company's challenge.
+  "challenge_entry",
+  // Your challenge entry was shortlisted, or won.
+  "challenge_result",
+  // A project your company follows moved: a milestone, an update.
+  "scout_update",
+  // New projects in an industry your company watches.
+  "scout_new_project",
+  // A company leader added you to their company, or changed what you can do there.
+  "company_added",
+  "company_powers",
+  // A recurring job of yours is due or overdue.
+  "job_due",
+  // It's check-in day for the company you help run.
+  "checkin_due",
+  // Money: somebody backed your project, a reviewer decided, a pledge was released or refunded.
+  "pledge_received", "campaign_decision", "pledge_refunding", "pledge_released", "pledge_refunded",
+  // Someone applied to your project; the owner decided on your application.
+  "project_application", "application_accepted", "application_rejected",
+  // The owner removed you from their project's team.
+  "project_removed",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
@@ -1460,6 +1689,22 @@ export const activityEvents = pgTable("activity_events", {
   /* One person's trail, newest first. */
   visitorIdx: index("activity_events_visitor_idx").on(table.visitorId, table.createdAt),
 }));
+/*
+ * One more index than drizzle can describe here:
+ *
+ *   create index activity_events_view_dedupe_idx
+ *     on activity_events (name, (props->>'targetId'), coalesce(user_id, visitor_id), created_at)
+ *     where name in ('project.view', 'profile.view');
+ *
+ * It is a partial expression index, so it lives in its migration rather than
+ * in this table definition. It exists for exactly one query: the "have I
+ * already counted this viewer for this thing today?" check in server/views.ts,
+ * which runs on every anonymous GET of a public project page or profile. With
+ * no index that check was a sequential scan of the whole behaviour stream —
+ * the busiest table in the database, on the cheapest-to-call surface there is,
+ * with no rate limit in front of it because it is a GET. The table grows, the
+ * scan grows with it, and the page a stranger lands on gets slower every week.
+ */
 
 /**
  * Which feature areas are switched on.
@@ -1594,7 +1839,28 @@ export const exploreSeen = pgTable("explore_seen", {
 
 export const contentReports = pgTable("content_reports", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  reporterId: varchar("reporter_id").notNull().references(() => users.id),
+  /**
+   * Null for a report filed with no account.
+   *
+   * A public artifact page is the one surface built for people who have never
+   * signed in, and until now it had no way to report anything: the only report
+   * route required an account, so a stranger who landed on something abusive
+   * could close the tab and that was the whole of it. Requiring a signup before
+   * someone can tell you about abuse is asking for the abuse not to be
+   * reported. `reporterAddressHash` stands in for the reporter on those rows.
+   */
+  reporterId: varchar("reporter_id").references(() => users.id),
+  /**
+   * SHA-256 of the reporting address, on anonymous reports only.
+   *
+   * Hashed rather than stored: this only has to answer "is this the same
+   * reporter as that one?", which a hash does, and keeping visitors' addresses
+   * in a table that lives forever is a cost with no matching benefit. It makes
+   * "one report per reporter per thing" true for anonymous reports too — the
+   * unique index below can't do it, because in SQL one null is never equal to
+   * another and every anonymous row would slip past it.
+   */
+  reporterAddressHash: varchar("reporter_address_hash"),
   /** One of REPORT_TARGETS — see shared/moderation.ts. */
   targetType: text("target_type").notNull(),
   targetId: varchar("target_id").notNull(),
@@ -1621,6 +1887,18 @@ export const contentReports = pgTable("content_reports", {
   /** One report per person per thing — re-reporting shouldn't inflate a queue. */
   oneReportPerPerson: unique().on(table.reporterId, table.targetType, table.targetId),
 }));
+/*
+ * And the same rule for reports with no account behind them, which the index
+ * above cannot express:
+ *
+ *   create unique index content_reports_anon_unique
+ *     on content_reports (reporter_address_hash, target_type, target_id)
+ *     where reporter_id is null;
+ *
+ * A partial index, so it lives in its migration. Without it every anonymous
+ * report is unique as far as the database is concerned — `null <> null` — and
+ * one reader pressing the button twice would be two rows in the queue.
+ */
 
 export const surfaceFlags = pgTable("surface_flags", {
   surfaceId: varchar("surface_id").primaryKey(),
@@ -1736,7 +2014,7 @@ export const projectPricingTiers = pgTable("project_pricing_tiers", {
 export const projectAnalyticsEvents = pgTable("project_analytics_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
-  /** The section it belongs to (ship_mvp, systemize_business, raise_funding), or null when it's project-wide. */
+  /** The section it belongs to (ship_mvp, systemize_business, run_company), or null when it's project-wide. */
   track: text("track"),
   eventName: text("event_name").notNull(),
   category: text("category").default("activation"),
@@ -2029,7 +2307,7 @@ export const insertProjectBase = createInsertSchema(projects).omit({
   // missing or wrongly-typed value, and a *wrong* value ("get_rich") still got
   // zod's stock "Invalid enum value. Expected …". One sentence for all three.
   goal: z.enum(PROJECT_GOAL_IDS, {
-    errorMap: () => ({ message: "Pick a goal: ship an MVP, systemize a business, or raise funding." }),
+    errorMap: () => ({ message: "Pick a goal: ship an MVP, systemize a business, or run a company." }),
   }),
   subcategory: z.string({ required_error: "Pick what kind of project it is for that goal.", invalid_type_error: "Pick what kind of project it is for that goal." }).min(1, "Pick what kind of project it is for that goal."),
 });
@@ -2488,6 +2766,324 @@ export const startupGameSubmissions = pgTable("startup_game_submissions", {
   once: unique("startup_game_submissions_once").on(table.gameId, table.userId, table.round),
 }));
 
+// ─── Companies ───────────────────────────────────────────────────────────────
+
+/**
+ * An existing business with an account of its own.
+ *
+ * Distinct from a project. A project is something being built; a company is an
+ * organisation that already exists, has people, and comes here for things only
+ * a company needs: private simulation seasons to train its staff, a way to find
+ * people who have shown commercial judgement, challenges it sponsors, and
+ * startups it wants to keep an eye on. A company can also run itself on the
+ * "Run a company" path, through a project it owns (`projectId`).
+ */
+export const companies = pgTable("companies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  slug: text("slug").notNull(),
+  website: text("website"),
+  industry: text("industry"),
+  size: text("size"),
+  description: text("description"),
+  /** The project it runs itself through, on the Run a company path, if any. */
+  projectId: varchar("project_id").references(() => projects.id, { onDelete: "set null" }),
+  /*
+   * Who did it, for the record — and only for the record. Set null, not
+   * cascade, when that account goes: one person closing their account must
+   * never take the company's work with it while its other people remain.
+   */
+  createdBy: varchar("created_by").references(() => users.id, { onDelete: "set null" }),
+  /**
+   * Which generation of invite links is valid. Every link carries the number
+   * it was made under; raising it (a leader's "reset invite links", and every
+   * removal) makes every earlier link stop working at once.
+   */
+  inviteKeyVersion: integer("invite_key_version").default(0).notNull(),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  bySlug: unique("companies_slug").on(t.slug),
+}));
+export type Company = typeof companies.$inferSelect;
+
+/** Who acts for a company. An owner can do anything; an admin everything but delete it; a member can see and join. */
+export const companyMembers = pgTable("company_members", {
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  role: text("role", { enum: ["owner", "admin", "member"] }).notNull(),
+  /**
+   * Powers given to this member on top of what their role carries — see
+   * COMPANY_PERMISSIONS in shared/companies.ts. Owners and admins hold every
+   * power by virtue of the role; a member holds only what is listed here, so
+   * a leader can let one person run training seasons and another post for the
+   * company without making either of them an admin.
+   */
+  permissions: text("permissions").array().default(sql`'{}'::text[]`).notNull(),
+  joinedAt: timestamp("joined_at").notNull(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.companyId, t.userId] }),
+  byUser: index("company_members_user_idx").on(t.userId),
+}));
+
+/**
+ * A person who has said companies may look at their record and approach them.
+ *
+ * Opt-in, and off by default. A season records how somebody decided in a seat
+ * under pressure — that is exactly what makes it valuable to an employer, and
+ * exactly why it must never be shown to one without the person choosing it.
+ */
+export const talentProfiles = pgTable("talent_profiles", {
+  userId: varchar("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  open: boolean("open").default(false).notNull(),
+  headline: text("headline"),
+  /** Roles they would take: "operations", "finance", "product", "sales", "general management"… */
+  roles: text("roles").array(),
+  location: text("location"),
+  remote: boolean("remote").default(true).notNull(),
+  updatedAt: timestamp("updated_at").notNull(),
+});
+
+/** A company asking somebody to talk. One per company per person; the person answers yes or no. */
+export const recruitInvites = pgTable("recruit_invites", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** Who at the company sent it. Set null if their account goes; the invite is the company's. */
+  sentBy: varchar("sent_by").references(() => users.id, { onDelete: "set null" }),
+  role: text("role"),
+  message: text("message").notNull(),
+  status: text("status", { enum: ["sent", "accepted", "declined"] }).default("sent").notNull(),
+  createdAt: timestamp("created_at").notNull(),
+  answeredAt: timestamp("answered_at"),
+}, (t) => ({
+  once: unique("recruit_invites_once").on(t.companyId, t.userId),
+  byUser: index("recruit_invites_user_idx").on(t.userId),
+}));
+
+/**
+ * A real problem a company puts up, for founders to answer.
+ *
+ * The prize is stated, not held: no money moves through SparkTower. The
+ * company pays its winners directly under its own terms, which entrants accept
+ * when they enter — the same stance the investor introductions take.
+ */
+export const companyChallenges = pgTable("company_challenges", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  brief: text("brief").notNull(),
+  /** What a good answer looks like — how entries are judged. */
+  criteria: text("criteria"),
+  prize: text("prize"),
+  /** The company's own terms for the challenge, which an entrant accepts to enter. */
+  terms: text("terms"),
+  industry: text("industry"),
+  deadline: timestamp("deadline").notNull(),
+  status: text("status", { enum: ["open", "judging", "closed"] }).default("open").notNull(),
+  /*
+   * Who did it, for the record — and only for the record. Set null, not
+   * cascade, when that account goes: one person closing their account must
+   * never take the company's work with it while its other people remain.
+   */
+  createdBy: varchar("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  byStatus: index("company_challenges_status_idx").on(t.status, t.deadline),
+}));
+
+export const challengeEntries = pgTable("challenge_entries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  challengeId: varchar("challenge_id").notNull().references(() => companyChallenges.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** The project the answer is built in, if it is one. */
+  projectId: varchar("project_id").references(() => projects.id, { onDelete: "set null" }),
+  title: text("title").notNull(),
+  pitch: text("pitch").notNull(),
+  link: text("link"),
+  status: text("status", { enum: ["entered", "shortlisted", "winner", "withdrawn"] }).default("entered").notNull(),
+  /** A line of feedback from the company, which the entrant sees. */
+  feedback: text("feedback"),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  once: unique("challenge_entries_once").on(t.challengeId, t.userId),
+}));
+
+/**
+ * Everything done to a company's people and powers, and by whom.
+ *
+ * Leaders can add, remove and empower people freely, which is the point — and
+ * exactly why it is written down. "Who removed Sam, and when" should never be
+ * a matter of memory.
+ */
+export const companyAuditLog = pgTable("company_audit_log", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  actorId: varchar("actor_id").references(() => users.id, { onDelete: "set null" }),
+  /** "member_added", "member_removed", "role_changed", "permissions_changed", "post_published", … */
+  action: text("action").notNull(),
+  targetUserId: varchar("target_user_id").references(() => users.id, { onDelete: "set null" }),
+  detail: jsonb("detail"),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  byCompany: index("company_audit_log_company_idx").on(t.companyId, t.createdAt),
+}));
+
+/** Startups a company is keeping an eye on. */
+export const companyFollows = pgTable("company_follows", {
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  note: text("note"),
+  /** Who followed it. Set null if their account goes; the company still follows the project. */
+  createdBy: varchar("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.companyId, t.projectId] }),
+  byProject: index("company_follows_project_idx").on(t.projectId),
+}));
+
+/** Industries a company watches for new projects. */
+export const companyWatches = pgTable("company_watches", {
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  industry: text("industry").notNull(),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.companyId, t.industry] }),
+}));
+
+// ─── The company rhythm (the Run a company path) ─────────────────────────────
+
+/**
+ * One week's check-in on a project running the Run a company path.
+ *
+ * `weekOf` is the Monday of the week, as YYYY-MM-DD text rather than a
+ * timestamp, so "which week is this" never depends on a timezone.
+ */
+export const projectCheckins = pgTable("project_checkins", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  weekOf: text("week_of").notNull(),
+  /** metric id → value, for the numbers the company watches. */
+  numbers: jsonb("numbers").notNull(),
+  wentRight: text("went_right"),
+  wentWrong: text("went_wrong"),
+  /** Nova's answer: what changed, and the one thing worth doing about it. */
+  reply: text("reply"),
+  createdAt: timestamp("created_at").notNull(),
+  updatedAt: timestamp("updated_at").notNull(),
+}, (t) => ({
+  once: unique("project_checkins_week").on(t.projectId, t.weekOf),
+}));
+
+/** A job that comes round every week, fortnight or month, with somebody's name on it. */
+export const recurringJobs = pgTable("recurring_jobs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  notes: text("notes"),
+  every: text("every", { enum: ["week", "fortnight", "month"] }).notNull(),
+  ownerId: varchar("owner_id").references(() => users.id, { onDelete: "set null" }),
+  backupId: varchar("backup_id").references(() => users.id, { onDelete: "set null" }),
+  /** YYYY-MM-DD, for the same reason `weekOf` is. */
+  nextDue: text("next_due").notNull(),
+  /**
+   * For a monthly job, the day of the month it belongs on. Without it a job
+   * due on the 31st was moved to the 28th by February and stayed there; with
+   * it, each month lands on the anchor day or the month's last day if shorter.
+   */
+  anchorDay: integer("anchor_day"),
+  /** The due date a reminder was last sent for, so each occurrence is announced once. */
+  remindedFor: text("reminded_for"),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  byProject: index("recurring_jobs_project_idx").on(t.projectId),
+}));
+
+/**
+ * How a company on the Run path keeps its rhythm: which day the weekly
+ * check-in happens and who is reminded. One row per project.
+ */
+export const rhythmSettings = pgTable("rhythm_settings", {
+  projectId: varchar("project_id").primaryKey().references(() => projects.id, { onDelete: "cascade" }),
+  /** 0 = Monday … 6 = Sunday. The day the check-in is due, and the reminder goes out. */
+  checkinDay: integer("checkin_day").default(0).notNull(),
+  /** Who is reminded; empty means every project member. */
+  remindUserIds: text("remind_user_ids").array().default(sql`'{}'::text[]`).notNull(),
+  /** The week a check-in reminder was last sent for. */
+  remindedWeek: text("reminded_week"),
+  updatedAt: timestamp("updated_at").notNull(),
+});
+
+/**
+ * The quarter's goals (RUN.S4.3), tracked against the numbers the weekly
+ * check-ins record rather than ticked by hand.
+ */
+export const quarterGoals = pgTable("quarter_goals", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  /** "2026-Q3". */
+  quarter: text("quarter").notNull(),
+  title: text("title").notNull(),
+  /** A check-in metric id the goal is measured by, or null for a goal ticked by hand. */
+  metricId: text("metric_id"),
+  /** The value that means done, and whether above or below it is good. */
+  target: real("target"),
+  direction: text("direction", { enum: ["up", "down"] }),
+  ownerId: varchar("owner_id").references(() => users.id, { onDelete: "set null" }),
+  status: text("status", { enum: ["active", "done", "dropped"] }).default("active").notNull(),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  byProject: index("quarter_goals_project_idx").on(t.projectId, t.quarter),
+}));
+
+/** Every time a recurring job was done, and whether it was on time — what the monthly report counts. */
+export const recurringJobRuns = pgTable("recurring_job_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  jobId: varchar("job_id").notNull().references(() => recurringJobs.id, { onDelete: "cascade" }),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  dueOn: text("due_on").notNull(),
+  doneOn: text("done_on").notNull(),
+  doneBy: varchar("done_by").references(() => users.id, { onDelete: "set null" }),
+  onTime: boolean("on_time").notNull(),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  once: unique("recurring_job_runs_once").on(t.jobId, t.dueOn),
+  byProject: index("recurring_job_runs_project_idx").on(t.projectId, t.doneOn),
+}));
+
+/**
+ * One "What would it take?" roadmap: a company's route from where it is to
+ * $1m, $100m, $1bn or $50bn a year.
+ *
+ * Every run is kept, not just the latest. The point of the feature is that a
+ * company runs it again in six months and sees whether the gap moved, and that
+ * comparison is only possible because each row carries `grounding` — the
+ * revenue, the week and the check-in count the roadmap was built from. A row
+ * that stored only the answer would leave "is this better than last time?"
+ * unanswerable, which is the question that makes it worth coming back to.
+ *
+ * `generated_at` is a zoneless timestamp holding UTC, written from JS.
+ */
+export const whatWouldItTakeRoadmaps = pgTable("what_would_it_take_roadmaps", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  /** One of shared/what-would-it-take.ts's target ids: m1, m100, b1, b50. */
+  target: text("target").notNull(),
+  /** The numbers it was built from (WwitGrounding). */
+  grounding: jsonb("grounding").notNull(),
+  /** The roadmap itself (WwitRoadmapBody), plus the computed gap. */
+  roadmap: jsonb("roadmap").notNull(),
+  /** Kept for the comparison view, so "how big was the gap then" needs no re-derivation. */
+  annualRevenue: real("annual_revenue"),
+  /** Who ran it. Set null if their account goes; the company keeps its roadmap. */
+  generatedBy: varchar("generated_by").references(() => users.id, { onDelete: "set null" }),
+  generatedAt: timestamp("generated_at").notNull(),
+}, (t) => ({
+  /** Every read is "this project's runs for this target, newest first". */
+  byTarget: index("wwit_project_target_idx").on(t.projectId, t.target, t.generatedAt),
+}));
+
 /**
  * What a player has typed and not yet put forward.
  *
@@ -2742,8 +3338,26 @@ export const simSeasons = pgTable("sim_seasons", {
   world: jsonb("world"),
   startsAt: timestamp("starts_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  /**
+   * A private season a company runs for its own people — leadership training,
+   * a workshop, an away day. Null for the public seasons everyone else joins.
+   *
+   * A private season is invisible to matchmaking: joining a market never lands
+   * a stranger in one, and its rooms are reached only with `inviteCode`.
+   */
+  companyId: varchar("company_id"),
+  inviteCode: text("invite_code"),
+  /**
+   * How long a year lasts, in minutes, when it isn't a real day. A public
+   * season is one year a day because people play it over a fortnight; a
+   * company running one in an afternoon workshop needs it to move while the
+   * room is still there. Null means a day. The company can also resolve the
+   * year early — see server/company-season-routes.ts.
+   */
+  yearMinutes: integer("year_minutes"),
 }, (table) => ({
   byStatus: index("sim_seasons_status_idx").on(table.status, table.nicheId),
+  byInvite: unique("sim_seasons_invite_code").on(table.inviteCode),
 }));
 
 /**
@@ -2773,6 +3387,17 @@ export const simVentures = pgTable("sim_ventures", {
   phaseEndsAt: timestamp("phase_ends_at"),
   /** The engine's Company for this venture, after the last resolved year. */
   state: jsonb("state"),
+  /**
+   * When the room left the lobby and sat waiting for its season to start.
+   *
+   * Public matchmaking reads this to stop sending newcomers into a season one
+   * of whose rooms has been ready for a while: every new room pushes year one
+   * back for the rooms already waiting, and without a limit a steady trickle
+   * of joiners could keep a season from ever starting. Null for rooms that
+   * reached `running` before this was recorded; readers fall back to
+   * `createdAt`, which is earlier and so errs towards closing the season.
+   */
+  runningSince: timestamp("running_since"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   bySeason: index("sim_ventures_season_idx").on(table.seasonId, table.phase),
@@ -2875,6 +3500,17 @@ export const simListings = pgTable("sim_listings", {
   /** The CompanyAsset being sold, whole. */
   asset: jsonb("asset").notNull(),
   reserve: integer("reserve").notNull(),
+  /**
+   * Put on the market by a fire sale rather than by the seller's choice.
+   *
+   * The company was paid for these at the forced price when the fire sale ran
+   * and no longer owns them, so this listing is the market's copy of something
+   * already sold: settlement must not look for it in the seller's assets (it
+   * is not there, and never will be) and must not pay the seller a second
+   * time when somebody buys it. The seller is kept as `sellerId` so the lot
+   * can say whose collapse it came from.
+   */
+  forced: boolean("forced").default(false).notNull(),
   status: text("status", { enum: ["open", "sold", "unsold", "withdrawn"] }).default("open").notNull(),
   buyerId: varchar("buyer_id").references(() => simVentures.id, { onDelete: "set null" }),
   soldFor: integer("sold_for"),

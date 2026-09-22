@@ -15,8 +15,11 @@
 export const PROJECT_GOALS = [
   { id: "ship_mvp", label: "Ship an MVP", short: "Ship", description: "Get a first version in front of real people and learn from what they do." },
   { id: "systemize_business", label: "Systemize a business", short: "Systemize", description: "Turn something that already works into something that runs without you in every step." },
-  { id: "raise_funding", label: "Raise funding", short: "Raise", description: "Get the story, the numbers and the plan into a shape investors will back." },
+  { id: "run_company", label: "Run a company", short: "Run", description: "Keep an existing business on track every week: the numbers, the team's recurring work, and what to fix next." },
 ] as const;
+
+/** Retired goals and the path that took over their work (shared/goals.ts LEGACY_GOALS). */
+export const LEGACY_GOALS: Record<string, ProjectGoal> = { raise_funding: "systemize_business" };
 
 export type ProjectGoal = (typeof PROJECT_GOALS)[number]["id"];
 
@@ -34,10 +37,12 @@ export const PROJECT_SUBCATEGORIES: Record<ProjectGoal, readonly { id: string; l
     { id: "retail", label: "Retail" },
     { id: "other", label: "Other" },
   ],
-  raise_funding: [
-    { id: "startup_equity", label: "Startup equity" },
-    { id: "local_community", label: "Local community" },
-    { id: "loan_grant", label: "Loan or grant" },
+  run_company: [
+    { id: "restaurant", label: "Restaurant or café" },
+    { id: "service", label: "Service business" },
+    { id: "retail", label: "Retail or e-commerce" },
+    { id: "agency", label: "Agency or studio" },
+    { id: "software", label: "Software company" },
     { id: "other", label: "Other" },
   ],
 };
@@ -46,17 +51,18 @@ export const PROJECT_SUBCATEGORIES: Record<ProjectGoal, readonly { id: string; l
 export const isValidSubcategory = (goal: string | null | undefined, sub: string | null | undefined): boolean =>
   !!goal && !!sub && (PROJECT_SUBCATEGORIES as Record<string, readonly { id: string }[]>)[goal]?.some((s) => s.id === sub) === true;
 
-export const projectGoal = (id: string | null | undefined) => PROJECT_GOALS.find((g) => g.id === id) ?? PROJECT_GOALS[0];
+export const projectGoal = (id: string | null | undefined) =>
+  PROJECT_GOALS.find((g) => g.id === (id && LEGACY_GOALS[id] ? LEGACY_GOALS[id] : id)) ?? PROJECT_GOALS[0];
 
-export const GOAL_ICONS: Record<ProjectGoal, "rocket-outline" | "git-network-outline" | "trending-up-outline"> = {
+export const GOAL_ICONS: Record<ProjectGoal, "rocket-outline" | "git-network-outline" | "calendar-outline"> = {
   ship_mvp: "rocket-outline",
   systemize_business: "git-network-outline",
-  raise_funding: "trending-up-outline",
+  run_company: "calendar-outline",
 };
 
 /** The kind question, worded for its goal, as on the web. */
 export const subcategoryQuestion = (goal: string | null | undefined) =>
-  goal === "raise_funding" ? "What kind of raise is it?" : goal === "systemize_business" ? "What kind of business is it?" : "What kind of thing are you shipping?";
+  goal === "run_company" ? "What kind of company is it?" : goal === "systemize_business" ? "What kind of business is it?" : "What kind of thing are you shipping?";
 
 // --- The stepper (shared/new-project-steps.ts) ------------------------------
 

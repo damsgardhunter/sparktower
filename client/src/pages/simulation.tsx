@@ -22,7 +22,7 @@
  * `role_taken` means somebody was quicker, which is information, not a
  * failure, and it is shown as such.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -58,6 +58,10 @@ interface Room {
   phase: "filling" | "claiming" | "naming" | "running" | "retired";
   /** Null once the room is running or retired: those phases have no deadline. */
   secondsLeft: number | null;
+  /** Retired because its season ran to the end, not because it never filled. */
+  seasonOver?: boolean;
+  /** While filling: when the empty seats go to bots if nobody else arrives. Null when there's nothing to fill. */
+  botsInSeconds?: number | null;
   name: string | null;
   product: string | null;
   niche: { id: string; name?: string } | null;
@@ -68,7 +72,15 @@ interface Room {
 }
 
 export default function SimulationPage() {
-  const [ventureId, setVentureId] = useState<string | null>(null);
+  /*
+   * `?room=` opens that room. Someone at a public table who joins their
+   * company's training season is in two rooms at once, and "Go to your table"
+   * has to mean the one it was pressed for — not whichever the list below
+   * happens to put first.
+   */
+  const [ventureId, setVentureId] = useState<string | null>(() => {
+    try { return new URLSearchParams(window.location.search).get("room"); } catch { return null; }
+  });
 
   /*
    * The room you are already in, found on the way in.
@@ -82,28 +94,62 @@ export default function SimulationPage() {
    */
   const { data: mine, isLoading } = useQuery<{ ventures: { id: string; phase: string; seasonStatus?: string }[] }>({
     queryKey: ["/api/sim/ventures"],
+    /*
+     * Fresh every time the page opens. The app caches queries for ever by
+     * default, and this list is exactly the one that goes out of date: a
+     * season that finished since it was fetched still read as running, so
+     * the page kept reopening a room that had closed.
+     */
+    staleTime: 0,
+    refetchOnMount: "always",
   });
+
+  /*
+   * Rooms left from this screen in this visit. "Pick a market" on a closed
+   * room cleared the room, and the effect below promptly put the same room
+   * back from the cached list — so the button looked as though it did
+   * nothing. A room you walked away from is not one to be returned to.
+   */
+  const left = useRef(new Set<string>());
 
   useEffect(() => {
     if (ventureId || !mine?.ventures?.length) return;
     /*
-     * The most recent room still being played. The server orders them.
+     * The most recent room still being played, and not one walked out of.
+     * The server orders them.
      *
-     * A venture stays in phase "running" after its season ends, so this used
-     * to reopen a company whose fourteen years were up and offer no way past
-     * it — the market picker was unreachable for as long as that seat existed.
+     * Two ways this reopened a room it shouldn't. A venture stays in phase
+     * "running" after its season ends, so a company whose fourteen years were
+     * up was handed back for ever and the market picker was unreachable —
+     * hence the season's own status, which is the server's answer rather than
+     * the venture's. And a room left during this visit is not one to be
+     * returned to, however the cached list still describes it.
      */
-    const open = mine.ventures.find((v) => v.phase !== "retired" && v.seasonStatus !== "finished" && v.seasonStatus !== "abandoned");
+    const open = mine.ventures.find((v) =>
+      v.phase !== "retired"
+      && v.seasonStatus !== "finished" && v.seasonStatus !== "abandoned"
+      && !left.current.has(v.id));
     if (open) setVentureId(open.id);
   }, [mine, ventureId]);
+
+  const leave = () => {
+    if (ventureId) left.current.add(ventureId);
+    queryClient.invalidateQueries({ queryKey: ["/api/sim/ventures"] });
+    setVentureId(null);
+  };
 
   if (isLoading && !ventureId) {
     return <Centered><Loader2 className="h-6 w-6 animate-spin text-primary" /></Centered>;
   }
 
   return ventureId
-    ? <Room ventureId={ventureId} onLeave={() => setVentureId(null)} />
-    : <MarketPicker onJoined={setVentureId} />;
+    ? <Room ventureId={ventureId} onLeave={leave} />
+    : <MarketPicker onJoined={(id) => {
+        // A room you join is one you mean to be in, even if you left it earlier this visit.
+        left.current.delete(id);
+        queryClient.invalidateQueries({ queryKey: ["/api/sim/ventures"] });
+        setVentureId(id);
+      }} />;
 }
 
 /* ── Choosing a market ─────────────────────────────────────────────────── */
@@ -117,7 +163,8 @@ function MarketPicker({ onJoined }: { onJoined: (ventureId: string) => void }) {
   const join = useMutation({
     mutationFn: (nicheId: string) => apiRequest("POST", "/api/sim/join", { nicheId }).then((r) => r.json()),
     onSuccess: (res: { ventureId: string }) => onJoined(res.ventureId),
-    onError: (e: any) => toast({ title: "Couldn't join", description: e?.message ?? "Try again.", variant: "destructive" }),
+    // errorText, not e.message: an ApiError's message is "409: {…json…}", which is what these toasts used to show.
+    onError: (e: any) => toast({ title: "Couldn't join", description: errorText(e), variant: "destructive" }),
   });
 
   if (isLoading) return <Centered><Loader2 className="h-6 w-6 animate-spin text-primary" /></Centered>;
@@ -175,9 +222,10 @@ function MarketPicker({ onJoined }: { onJoined: (ventureId: string) => void }) {
                   <p className="text-sm font-medium">{s.name}</p>
                   <p className="text-xs text-muted-foreground mt-0.5 leading-snug">{s.description}</p>
                   <p className="mt-2 text-[11px] text-muted-foreground flex items-center gap-1">
-                    {s.loyalty >= 0.7
-                      ? <><ShieldCheck className="h-3 w-3" /> Hard to take: they stay put</>
-                      : <><TrendingDown className="h-3 w-3" /> Winnable: they leave easily</>}
+                    {(() => {
+                      const read = loyaltyRead(s.loyalty);
+                      return <>{s.loyalty >= 0.6 ? <ShieldCheck className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />} {read.label}: {read.hint}</>;
+                    })()}
                   </p>
                 </div>
               ))}
@@ -260,6 +308,7 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
     return () => clearInterval(t);
   }, []);
   const secondsLeft = Math.max(0, (room?.secondsLeft ?? 0) - ticked);
+  const botsIn = room?.botsInSeconds == null ? null : Math.max(0, room.botsInSeconds - ticked);
 
   const claim = useMutation({
     mutationFn: (role: Role) => apiRequest("POST", `/api/sim/ventures/${ventureId}/claim`, { role }),
@@ -273,7 +322,7 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
       const taken = e?.code === "role_taken" || /first|before you/i.test(e?.message ?? "");
       toast({
         title: taken ? "Taken" : "Couldn't claim that seat",
-        description: e?.message ?? "Try another.",
+        description: errorText(e, "Try another."),
         variant: taken ? "default" : "destructive",
       });
       queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}`] });
@@ -308,6 +357,15 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
   const release = useMutation({
     mutationFn: () => apiRequest("POST", `/api/sim/ventures/${ventureId}/release`, {}),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}`] }),
+    /*
+     * Usually the clock ran out between the click and the request, and the
+     * seat is already dealt. It used to fail in silence with the button still
+     * there; say why and refetch so the room shows where things stand.
+     */
+    onError: (e) => {
+      toast({ title: "Couldn't give up the seat", description: errorText(e), variant: "destructive" });
+      queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}`] });
+    },
   });
 
   const copy = useMemo(() => room && phaseCopy({
@@ -317,6 +375,7 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
     yourRole: room.you.role,
     isCeo: room.you.isCeo,
     named: !!room.name,
+    seasonOver: !!room.seasonOver,
   }), [room]);
 
   if (isLoading || !room || !copy) return <Centered><Loader2 className="h-6 w-6 animate-spin text-primary" /></Centered>;
@@ -350,6 +409,19 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
               </div>
             )}
           </div>
+          {room.phase === "filling" && botsIn != null && (
+            /*
+             * The minute the room waits for people, on screen. The big clock
+             * is the fifteen-minute one; without this, bots arriving at 14:00
+             * looked like the room giving up on people for no reason.
+             */
+            <p className="mt-3 flex items-center gap-1.5 text-sm" data-testid="text-bots-in">
+              <Users className="h-4 w-4 text-primary shrink-0" />
+              {botsIn > 0
+                ? <span>Waiting for people. Bots take the empty seats in <span className="font-semibold tabular-nums">{countdown(botsIn)}</span> unless someone joins.</span>
+                : <span>Nobody new arrived, so bots are taking the empty seats…</span>}
+            </p>
+          )}
           {copy.deadline && <p className="text-xs text-muted-foreground mt-3 border-t border-border pt-3">{copy.deadline}</p>}
         </div>
       </div>
@@ -441,15 +513,26 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
                 Open your desk <ArrowRight className="h-4 w-4 ml-1" />
               </Button>
               <Button variant="outline" size="sm" onClick={() => navigate("/sprints")}>Back to sprints</Button>
+              {/* The page opens on your running room, so without this there was no way to the market list short of leaving the page. */}
+              <Button variant="ghost" size="sm" onClick={onLeave} data-testid="button-pick-another-market">Pick another market</Button>
             </div>
           </CardContent>
         </Card>
       )}
 
       {room.phase === "retired" && (
-        <Card><CardContent className="p-5">
+        <Card data-testid="card-room-retired"><CardContent className="p-5">
           <p className="text-sm text-muted-foreground">{copy.body}</p>
-          <Button className="mt-3" size="sm" onClick={onLeave}>Pick a market</Button>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {room.seasonOver && (
+              <Button size="sm" onClick={() => navigate(`/simulation/${ventureId}/report`)} data-testid="button-final-report">
+                See how it finished <ArrowRight className="h-4 w-4 ml-1" />
+              </Button>
+            )}
+            <Button size="sm" variant={room.seasonOver ? "outline" : "default"} onClick={onLeave} data-testid="button-pick-market">
+              {room.seasonOver ? "Start a new company" : "Pick a market"}
+            </Button>
+          </div>
         </CardContent></Card>
       )}
 
@@ -499,7 +582,7 @@ function NamingCard({ ventureId, isCeo }: { ventureId: string; isCeo: boolean })
   const submit = useMutation({
     mutationFn: () => apiRequest("POST", `/api/sim/ventures/${ventureId}/name`, { name }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}`] }),
-    onError: (e: any) => toast({ title: "Couldn't set that", description: e?.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Couldn't set that", description: errorText(e), variant: "destructive" }),
   });
 
   if (!isCeo) {
@@ -528,6 +611,21 @@ function NamingCard({ ventureId, isCeo }: { ventureId: string; isCeo: boolean })
       </CardContent>
     </Card>
   );
+}
+
+/**
+ * What a segment's loyalty means for a team that wants its customers.
+ *
+ * The same four-step scale as loyaltyRead() in mobile/src/components/sim/lobby.ts,
+ * words included. The web used a single cut at 0.7, so a 0.65 segment read
+ * "Winnable: they leave easily" here and "Sticky" on the phone — two screens
+ * giving the same table opposite advice about the same market.
+ */
+function loyaltyRead(loyalty: number): { label: string; hint: string } {
+  if (loyalty >= 0.8) return { label: "Locked in", hint: "Years of consistency, or nothing." };
+  if (loyalty >= 0.6) return { label: "Sticky", hint: "Winnable, slowly, by being better for a long time." };
+  if (loyalty >= 0.4) return { label: "Persuadable", hint: "Moves for a real reason, and moves back just as easily." };
+  return { label: "On the rope", hint: "Already half out of the door. Your first customers." };
 }
 
 const Centered = ({ children }: { children: React.ReactNode }) => (

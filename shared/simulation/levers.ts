@@ -427,10 +427,15 @@ export function validateDecision(role: Role, payload: any, company: Company): Va
   }
 
   /*
-   * The other: you cannot draw down credit the bank has not extended. Not
-   * refusing risk — borrowing to the last pound of the line is allowed — but
-   * money that does not exist. The engine clamps too, for a line that shrinks
-   * between filing and the tick.
+   * The other hard stop: you cannot draw down credit the bank has not extended.
+   *
+   * This is not refusing risk — borrowing to the last pound of the line is
+   * allowed, and is exactly the kind of bet the note above protects. It is
+   * refusing money that does not exist. Without it a finance seat could file
+   * fifty million against a two-million line and the engine would fund the
+   * lot, which made the credit rating (the thing that sets the line) decorative.
+   * The engine clamps as well, so a filing that slips past this — an old
+   * client, a line that shrinks before the tick — still cannot overdraw.
    */
   if (role === "cfo") {
     const room = Math.max(0, company.creditLimit - company.debt);
@@ -731,7 +736,11 @@ export function commitment(
     niche ? reachOf(company, niche) : 1,
   );
   const borrowable = Math.max(0, company.creditLimit - company.debt);
-  // Drawn money counted once, and never more than the bank will lend (see `drawdown`).
+  /*
+   * Clamped to the line the way the engine clamps it, so a draft asking for
+   * more than the bank will lend does not show a table funded by money that
+   * will never arrive — and counted once, not twice (see `drawdown`).
+   */
   const drawn = drawdown(company, decisions.cfo?.borrow);
   const available = Math.max(0,
     company.cash + drawn + Math.max(0, borrowable - drawn) - (decisions.cfo?.cashBuffer ?? 0));

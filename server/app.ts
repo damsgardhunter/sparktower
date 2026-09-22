@@ -17,6 +17,7 @@ import express, { type Express, type Request, type Response, type NextFunction }
 import type { Server } from "http";
 import { ZodError } from "zod";
 import { registerRoutes } from "./routes";
+import { ensureBadgeCatalog, backfillEarnedBadges } from "./badges";
 import { sameOriginWrites } from "./csrf";
 import { registerSecurityTxt } from "./security-txt";
 import { WebhookHandlers, WebhookVerificationError } from "./webhookHandlers";
@@ -378,6 +379,22 @@ export async function createApp(opts: CreateAppOptions): Promise<Express> {
   }
 
   await registerRoutes(httpServer, app);
+
+  /*
+   * The badge catalog, before anyone can earn one.
+   *
+   * Badges shipped as three tables, an award function and a profile panel with
+   * nothing in the `badges` table at all — so the single award site looked one
+   * up, found nothing and silently did nothing, for the entire life of the
+   * feature. The catalog is code now (`@shared/badges`), upserted here so it
+   * exists in every environment that runs the app, tests included, without a
+   * seed script anybody has to remember.
+   *
+   * Non-fatal: a server that cannot decorate a profile should still serve.
+   */
+  await ensureBadgeCatalog().catch((e) => console.error("[badges] catalog seed failed:", e));
+  // …and then the awards people had already earned before anything awarded them. See backfillEarnedBadges.
+  await backfillEarnedBadges().catch((e) => console.error("[badges] back-fill failed:", e));
 
   /*
    * An API path nothing answers is a 404 in JSON — not the web app's HTML,

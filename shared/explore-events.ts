@@ -109,7 +109,7 @@ export const EXPLORE_LABEL: Record<ExploreEventName, string> = {
 export const exploreLabel = (name: string): string | null => (isExploreEvent(name) ? EXPLORE_LABEL[name] : null);
 
 export const EXPLORE_MATCH_TYPES = ["builder", "project"] as const;
-export const EXPLORE_SOURCES = ["discover", "matches", "projects", "profile_page", "project_page", "messages", "feed", "post_page"] as const;
+export const EXPLORE_SOURCES = ["discover", "matches", "projects", "profile_page", "project_page", "messages", "feed", "post_page", "search"] as const;
 
 export type ExploreMatchType = (typeof EXPLORE_MATCH_TYPES)[number];
 export type ExploreSource = (typeof EXPLORE_SOURCES)[number];

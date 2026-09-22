@@ -538,8 +538,12 @@ export function commitment(input: {
   const spend = bySeat.reduce((sum, s) => sum + s.spend, 0);
   const fixed = fixedCosts(num(coo.headcount), costIndex, company.seats?.length ?? 0, reach ?? 1);
   const borrowable = Math.max(0, company.creditLimit - company.debt);
-  // Drawn money counted once, and never more than the bank will lend. Mirrors drawdown() in shared/simulation/responsibilities.ts.
-  const drawn = Math.min(Math.max(0, num(cfo.borrow)), borrowable);
+  // A drawdown counts only up to the line, as commitment() and resolve() both
+  // clamp it: asking the bank for fifty million against a two-million line
+  // brings in two, and a meter that counted the fifty would show a table
+  // funded by money that is never coming.
+  // The line left after this drawdown, so borrowed money isn't counted twice — the engine's rule.
+  const drawn = drawdown(cfo.borrow, company);
   const available = Math.max(0, company.cash + drawn + Math.max(0, borrowable - drawn) - num(cfo.cashBuffer));
 
   return {
@@ -591,18 +595,51 @@ export const shortfall = (c: Commitment): number => c.spend + c.fixed - c.availa
  * that meant different things would make one of them a lie.
  *
  * Read from the decisions rather than from the commitment meter's `bySeat`,
- * which is the whole reason this is its own sum. The meter now carries two
- * things these two rules do not count: the cost of opening a city, which the
- * engine charges against cash, and research, which buys nothing this year.
- * Deriving a cap from the meter would tell a CTO they had broken a ceiling
- * they were nowhere near — the same class of failure as a wrong total, wearing
- * the badge of the thing that was meant to prevent it.
+ * because the meter also carries the cost of opening a city, which the
+ * engine charges against cash rather than counting as spend here. The
+ * covenant adds that fee back on its own — see covenantSpend() below.
+ *
+ * Research is in it. It was left out here after the engine had put it back:
+ * the engine's comment on its own sum explains why (a company under a
+ * creditor's cap could pour money into next year's product and stay
+ * "compliant"), and the phone kept telling a CTO under a cap they had room
+ * the tick would then say they did not. It is also in the sum the finance
+ * seat's buffer cuts, so bufferCut() below was under-reading the cut too.
  */
 export const discretionarySpend = (decisions: FiledDecisions): number => (
   num(decisions.cmo?.brandSpend) + num(decisions.cmo?.performanceSpend) + num(decisions.cmo?.celebritySpend) +
   num(decisions.cto?.featureSpend) + num(decisions.cto?.reliabilitySpend) + num(decisions.cto?.techDebtPaydown) +
+  num(decisions.cto?.researchSpend) +
   num(decisions.coo?.supportSpend) + num(decisions.coo?.efficiencySpend)
 );
+
+/**
+ * What a creditor's spending cap is reviewed against.
+ *
+ * Mirrors the covenant review in server/simulation-tick.ts: the discretionary
+ * sum above plus the entry fee for every city this year's draft opens. A cap
+ * that ignored the fee would let a team under one open half the country and
+ * meet the creditor's terms on paper. A challenge's "spend" target does not
+ * add the fee (readMetric in shared/simulation/challenges.ts), which is why
+ * this is its own function rather than a change to the one above.
+ */
+export const covenantSpend = (decisions: FiledDecisions, cities: DeskCity[] | undefined): number =>
+  discretionarySpend(decisions) + openingCost(cities, decisions.cmo?.targetCities);
+
+/**
+ * The part of a drawdown the bank will actually lend.
+ *
+ * Mirrors the clamp in resolve() (shared/simulation/resolve.ts): whatever the
+ * finance seat asks for, what arrives is at most the credit line's unused
+ * room. A company from a payload without the line reads as unclamped, which
+ * is the old behaviour rather than a made-up limit.
+ */
+export function drawdown(borrow: any, company: { debt?: number; creditLimit?: number }): number {
+  const asked = Math.max(0, num(borrow));
+  const limit = Number(company.creditLimit);
+  if (!Number.isFinite(limit)) return asked;
+  return Math.min(asked, Math.max(0, limit - num(company.debt)));
+}
 
 // --- What the product owes itself ----------------------------------------
 
@@ -677,14 +714,17 @@ export function debtCostRead(cost: DeskCompany["techDebtCost"] | undefined): str
  * for term, and note the two places it deliberately disagrees with the
  * commitment meter directly above it:
  *
- * - **The credit line is not in it.** The meter counts unused borrowing as
- *   money the company has, because it is. The engine cuts against cash plus
- *   what the finance seat actually drew down, and nothing else — so a table
- *   can read "clear" on the meter and still be cut.
- * - **What gets cut is the same sum a covenant cap counts**: marketing,
- *   product and ops. Not the fee for opening a city, not research, not a
- *   repayment, and not the fixed bill — salaries are owed whatever anybody
- *   decided.
+ * - **The credit line is in it, the same way the engine counts it**: cash,
+ *   plus what the finance seat draws down (clamped to the line), plus the
+ *   credit still unused, less the buffer. This used to leave the unused
+ *   credit out, on the belief that the engine did — it does not, and the
+ *   phone was warning tables about cuts the year would never make. It still
+ *   differs from the meter in what it measures against: the meter counts the
+ *   fixed bill and the cost of opening a city, and the cut does not.
+ * - **What gets cut is the sum a challenge's spend target counts**:
+ *   marketing, product (research included) and ops. Not the fee for opening a
+ *   city, not a repayment, and not the fixed bill — salaries are owed
+ *   whatever anybody decided.
  *
  * Returns null when nothing would be cut, which is the ordinary case.
  */
@@ -702,12 +742,15 @@ export interface BufferCut {
 }
 
 export function bufferCut(input: {
-  company: Pick<DeskCompany, "cash">;
+  /** Debt and the line are optional so an old payload reads as "no credit", not as NaN. */
+  company: Pick<DeskCompany, "cash"> & Partial<Pick<DeskCompany, "debt" | "creditLimit">>;
   decisions: FiledDecisions;
 }): BufferCut | null {
   const { company, decisions } = input;
   const buffer = Math.max(0, num(decisions.cfo?.cashBuffer));
-  const spendable = Math.max(0, num(company.cash) + num(decisions.cfo?.borrow) - buffer);
+  const unused = Math.max(0, num(company.creditLimit) - num(company.debt));
+  const drawn = drawdown(decisions.cfo?.borrow, company);
+  const spendable = Math.max(0, num(company.cash) + drawn + Math.max(0, unused - drawn) - buffer);
   const wanted = discretionarySpend(decisions);
   if (wanted <= 0 || wanted <= spendable) return null;
   const allowed = spendable / wanted;
@@ -1079,9 +1122,14 @@ export function validateDraft(
     errors.repay = `You only owe ${Math.round(company.debt).toLocaleString()}.`;
   }
 
-  // And the other: you cannot draw down credit the bank has not extended. Mirrors validateDecision().
-  if (role === "cfo" && company.creditLimit !== undefined) {
-    const room = Math.max(0, company.creditLimit - company.debt);
+  /*
+   * And the other: you cannot draw down credit the bank has not extended.
+   * Mirrors the borrow check in validateDecision(), message included, so the
+   * words under the box are the ones the server would send back. Skipped when
+   * the payload carries no credit line, rather than inventing one.
+   */
+  if (role === "cfo" && Number.isFinite(Number(company.creditLimit))) {
+    const room = Math.max(0, Number(company.creditLimit) - company.debt);
     if (Number(draft?.borrow) > room) {
       errors.borrow = room > 0
         ? `The bank will lend at most ${Math.round(room).toLocaleString()} more.`
@@ -1313,6 +1361,15 @@ export function targetProgress(target: Target, from: {
   company?: Pick<DeskCompany, "customers" | "reputation" | "quality" | "brand" | "service" | "price" | "unitCost" | "cash" | "debt" | "capacity"> | null;
   /** This year's discretionary spend, as the commitment meter computes it. */
   committedSpend?: number | null;
+  /**
+   * The price in the marketing seat's draft.
+   *
+   * A price target is judged on the price the year was sold at — readMetric()
+   * reads the company after the year, whose price is the one the CMO filed —
+   * so measuring it against today's price told a CMO who had just typed the
+   * right number that they were still missing the target, and the reverse.
+   */
+  draftedPrice?: number | null;
 }): TargetProgress {
   const read = LIVE_METRICS[target.metric];
   let actual: number | null = null;
@@ -1320,6 +1377,9 @@ export function targetProgress(target: Target, from: {
 
   if (target.metric === "spend" && from.committedSpend != null && Number.isFinite(from.committedSpend)) {
     actual = from.committedSpend;
+    source = "committed";
+  } else if (target.metric === "price" && from.draftedPrice != null && from.draftedPrice !== ("" as any) && Number.isFinite(Number(from.draftedPrice))) {
+    actual = Number(from.draftedPrice);
     source = "committed";
   } else if (read && from.company) {
     const value = read(from.company as DeskCompany);
@@ -1556,9 +1616,10 @@ export function covenantProgress(covenant: Covenant): {
 /**
  * How much of the spending cap this year's draft has used.
  *
- * The cap is on discretionary spend — what the four spending seats commit —
- * and the covenant is reviewed against what was actually spent, so the number
- * that matters is the same one the commitment meter is already showing.
+ * The cap is on discretionary spend — what the four spending seats commit,
+ * plus whatever opening a city costs — and the covenant is reviewed against
+ * what was actually spent. Pass covenantSpend(), which is that sum; the
+ * commitment meter's total also carries the fixed bill and is not it.
  */
 export function capUse(spend: number, covenant: Covenant | null | undefined): {
   over: boolean; fraction: number; left: number;

@@ -40,8 +40,16 @@ export function AppHeader() {
   const [height, setHeight] = useState(220);
 
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: fetchMe });
+  /*
+   * `["profile-summary"]`, the key every other consumer and every invalidation
+   * in the app uses (ProfileView, HomeRail, profile/edit, welcome, the feed's
+   * pull-to-refresh). This used to be keyed by its URL, which made it a second,
+   * private cache entry: editing your name or cover invalidated the other one
+   * and this header kept the old avatar, cover, name and numbers for the whole
+   * session, while every cold start fetched the same endpoint twice.
+   */
   const { data: summary } = useQuery({
-    queryKey: ["/api/profile/summary"],
+    queryKey: ["profile-summary"],
     queryFn: () => api<{ profile: Profile; stats: Stats }>("/api/profile/summary"),
     staleTime: 60_000,
   });

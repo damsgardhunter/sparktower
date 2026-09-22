@@ -5,10 +5,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Download, KeyRound, Loader2, LogOut, ShieldCheck, Trash2 } from "lucide-react";
+import { Ban, Download, KeyRound, Loader2, LogOut, ShieldCheck, Trash2 } from "lucide-react";
 import { postJson, type MfaStatus } from "@/components/mfa";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/hooks/use-auth";
+
+/** One row of the blocked list, as GET /api/blocks returns it. */
+interface BlockedPerson { userId: string; name: string; username: string | null; avatarUrl: string | null; reason: string | null; blockedAt: string }
 
 /** What the two session-ending routes report back. */
 interface SessionsEnded { sessionsEnded: number; devicesSignedOut: number }
@@ -133,6 +136,7 @@ export default function SecuritySettings() {
         </CardContent>
       </Card>
       <Password />
+      <BlockedPeople />
       <SignOutEverywhere />
       <YourData mfaEnabled={status.enabled} />
     </div>
@@ -385,6 +389,78 @@ function YourData({ mfaEnabled }: { mfaEnabled: boolean }) {
             </form>
           )}
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Who you've blocked, and the one control that undoes it.
+ *
+ * A block has to be reversible somewhere findable, or it becomes a thing
+ * people are afraid to use: blocking a colleague after an argument is a
+ * reasonable thing to do on Tuesday and a thing to undo on Friday, and if the
+ * only way back is to find their profile — which the block has hidden — there
+ * is no way back at all. That is the whole reason this list exists.
+ *
+ * It lists only blocks *you* made. Blocks made against you are not shown, here
+ * or anywhere: the person who blocked you is not obliged to tell you.
+ */
+function BlockedPeople() {
+  const queryClient = useQueryClient();
+  const [busy, setBusy] = useState<string | null>(null);
+  const { data: blocked = [], isLoading } = useQuery<BlockedPerson[]>({ queryKey: ["/api/blocks"] });
+
+  const unblock = async (userId: string) => {
+    setBusy(userId);
+    try {
+      await fetch(`/api/blocks/${userId}`, { method: "DELETE", credentials: "include" });
+      await queryClient.invalidateQueries({ queryKey: ["/api/blocks"] });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <Card data-testid="card-blocked-people">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-lg">
+          <Ban className="h-5 w-5 text-primary" /> Blocked people
+        </CardTitle>
+        <CardDescription>
+          They can't message you, send you a connection request or see your profile, and you won't see
+          theirs. They were never told. Unblocking doesn't restore a connection — you'd both have to ask again.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {isLoading ? (
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        ) : blocked.length === 0 ? (
+          <p className="text-sm text-muted-foreground" data-testid="text-no-blocks">You haven't blocked anyone.</p>
+        ) : (
+          blocked.map((b) => (
+            <div key={b.userId} className="flex items-center justify-between gap-4" data-testid={`row-blocked-${b.userId}`}>
+              <div className="min-w-0">
+                <p className="text-sm font-medium truncate">{b.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  Blocked {new Date(b.blockedAt).toLocaleDateString()}
+                  {b.reason ? ` — ${b.reason}` : ""}
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="shrink-0"
+                disabled={busy === b.userId}
+                onClick={() => unblock(b.userId)}
+                data-testid={`button-unblock-${b.userId}`}
+              >
+                {busy === b.userId ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : null}
+                Unblock
+              </Button>
+            </div>
+          ))
+        )}
       </CardContent>
     </Card>
   );

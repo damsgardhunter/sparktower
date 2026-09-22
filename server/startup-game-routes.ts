@@ -8,14 +8,14 @@
  * depending on a background job having run.
  */
 import type { Express } from "express";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "./db";
 import { startupGames, startupGameVerdicts, users } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
 import {
-  activeGamesFor, createGame, gameState, isPlayer, leaveGame,
-  messagesOf, postMessage, settleIfReady, submitRound, saveDraft,
+  activeGamesFor, gameState, isPlayer, leaveGame,
+  messagesOf, pastGamesFor, postMessage, settleIfReady, startGameFor, submitRound, saveDraft,
 } from "./startup-game";
 import { valueGame } from "./startup-game-verdict";
 import { ensureBotUser } from "./bot-accounts";
@@ -24,7 +24,7 @@ import { DECKS, SPEND_OPTIONS, MAX_CUSTOM_CARDS } from "@shared/sprints/cards";
 import { BUDGET_TOTAL } from "@shared/sprints/budget";
 import { MAX_CLAIMS, MAX_CORE_CLAIMS } from "@shared/sprints/product";
 import {
-  DIMENSIONS, rankBy, rankOn, scoreBand, type DimensionId, type Scores,
+  DIMENSIONS, scoreBand,
 } from "@shared/sprints/scoring";
 import { ROUND_COPY, ROUND_SECONDS, TOTAL_SECONDS, dealOrder } from "@shared/sprints/game";
 
@@ -100,39 +100,47 @@ export function registerStartupGameRoutes(app: Express) {
     const board = String(req.query.board ?? "overall");
     const limit = Math.min(50, Math.max(5, Number(req.query.limit) || 20));
 
+    const dimension = DIMENSIONS.find((d) => d.id === board);
+
+    /*
+     * Ranked in the database, on the column this board is actually about.
+     *
+     * This used to pull the top 500 rows *by overall score* and then rank each
+     * dimension inside that slice. Every part of that is wrong once there are
+     * more than 500 scored games: the best capital-efficiency result in the
+     * world is missing from the capital board if its overall was mediocre, the
+     * ranks are positions within an arbitrary sample, and every standing reads
+     * "of 500" — a number that is neither how many games were played nor how
+     * many were ranked. The game's own results page, which counted every
+     * verdict, then disagreed with the board it claimed a place on.
+     *
+     * `rank()` gives the same tie rule `rankOn` does — equal scores share a
+     * rank and the next one skips — and both window functions are evaluated
+     * over the whole set before LIMIT, so `count(*) over ()` is the true
+     * total, not the page size.
+     */
+    const scoreCol = dimension
+      ? (startupGameVerdicts as any)[dimension.id]
+      : startupGameVerdicts.overall;
+    const ordering = dimension?.betterIs === "lower" ? sql`${scoreCol} asc` : sql`${scoreCol} desc`;
+
     const rows = await db
       .select({
         gameId: startupGameVerdicts.gameId,
-        growth: startupGameVerdicts.growth,
-        capital: startupGameVerdicts.capital,
-        product: startupGameVerdicts.product,
-        acquisition: startupGameVerdicts.acquisition,
-        risk: startupGameVerdicts.risk,
-        overall: startupGameVerdicts.overall,
+        score: scoreCol as any,
         tenYear: startupGameVerdicts.tenYear,
         peak: startupGameVerdicts.peak,
         name: sql<string>`${startupGames.idea}->>'name'`,
         player1Id: startupGames.player1Id,
         player2Id: startupGames.player2Id,
+        rank: sql<number>`(rank() over (order by ${ordering}))::int`,
+        of: sql<number>`(count(*) over ())::int`,
       })
       .from(startupGameVerdicts)
       .innerJoin(startupGames, eq(startupGames.id, startupGameVerdicts.gameId))
       .where(eq(startupGameVerdicts.fromModel, true))
-      .orderBy(desc(startupGameVerdicts.overall))
-      .limit(500);
-
-    const scoresOf = (r: typeof rows[number]): Scores => ({
-      growth: r.growth, capital: r.capital, product: r.product,
-      acquisition: r.acquisition, risk: r.risk,
-    });
-
-    const dimension = DIMENSIONS.find((d) => d.id === board);
-    const standings = dimension
-      ? rankBy(rows, dimension.id as DimensionId, scoresOf)
-      // The overall board is not a dimension, but it shares the tie rule: two
-      // identical results are identical, and ranking them 1st and 2nd by array
-      // position invents a difference and then shows it to both of them.
-      : rankOn(rows, (r) => r.overall);
+      .orderBy(ordering)
+      .limit(limit);
 
     const names = await playerNames(rows.flatMap((r) => [r.player1Id, r.player2Id]));
 
@@ -143,19 +151,19 @@ export function registerStartupGameRoutes(app: Express) {
         { id: "overall", title: "Overall", blurb: "All five, with risk counted the right way round." },
         ...DIMENSIONS,
       ],
-      standings: standings.slice(0, limit).map((s) => ({
+      standings: rows.map((s) => ({
         rank: s.rank,
         of: s.of,
         score: s.score,
         band: scoreBand(dimension?.betterIs === "lower" ? 1000 - s.score : s.score),
-        name: s.entry.name || "Unnamed",
-        tenYear: s.entry.tenYear,
-        peak: s.entry.peak,
-        players: [s.entry.player1Id, s.entry.player2Id].map((id) => {
+        name: s.name || "Unnamed",
+        tenYear: s.tenYear,
+        peak: s.peak,
+        players: [s.player1Id, s.player2Id].map((id) => {
           const who = names.get(id);
           return { name: who?.name ?? "Someone", isBot: !!who?.isBot };
         }),
-        isYours: [s.entry.player1Id, s.entry.player2Id].includes(req.user.id),
+        isYours: [s.player1Id, s.player2Id].includes(req.user.id),
       })),
     });
   });
@@ -190,6 +198,14 @@ export function registerStartupGameRoutes(app: Express) {
       return res.status(400).json({ message: "Pick an era." });
     }
 
+    /*
+     * Answered early so the common case costs nothing, but it is *not* the
+     * guard — `startGameFor` re-checks under an advisory lock inside the
+     * insert's transaction. Two taps in the same second (phone and laptop) got
+     * past a check up here every time, and the loser of that race was left
+     * with a second game nobody could open which still blocked them from
+     * starting another.
+     */
     const open = await activeGamesFor(req.user.id);
     if (open.length > 0) {
       return res.status(409).json({ message: "You're already in a game.", code: "already_playing", gameId: open[0].id });
@@ -201,14 +217,33 @@ export function registerStartupGameRoutes(app: Express) {
     const botUserId = await ensureBotUser(bot);
     if (!botUserId) return res.status(503).json({ message: "Couldn't find you a partner." });
 
-    const id = await createGame({ player1Id: req.user.id, player2Id: botUserId, era });
-    res.status(201).json({ id });
+    const started = await startGameFor({ playerId: req.user.id, partnerId: botUserId, era });
+    if (!started.ok) {
+      return res.status(409).json({ message: "You're already in a game.", code: "already_playing", gameId: started.existingId });
+    }
+    res.status(201).json({ id: started.id });
   });
 
   /** Whatever game you're in the middle of, if any. */
   app.get("/api/games/active", isAuthenticated, async (req: any, res) => {
     const open = await activeGamesFor(req.user.id);
     res.json({ games: open });
+  });
+
+  /**
+   * The ones you already finished.
+   *
+   * Registered before `/api/games/:id` for the reason written above the
+   * leaderboard: Express matches in registration order, and `:id` declared
+   * first would swallow this whole and 404 it forever.
+   *
+   * It exists because a finished game used to vanish the moment you navigated
+   * away. `/api/games/active` returns playable rounds only, so the verdict —
+   * the entire point of playing — was reachable from exactly one URL, the one
+   * you happened to still have open.
+   */
+  app.get("/api/games/history", isAuthenticated, async (req: any, res) => {
+    res.json({ games: await pastGamesFor(req.user.id, Number(req.query.limit) || 20) });
   });
 
   /**
@@ -291,23 +326,41 @@ export function registerStartupGameRoutes(app: Express) {
     const [game] = await db.select().from(startupGames).where(eq(startupGames.id, req.params.id));
     if (!game || !isPlayer(game, req.user.id)) return res.status(404).json({ message: "No such game." });
 
-    const rows = await db.select().from(startupGameVerdicts)
-      .where(eq(startupGameVerdicts.fromModel, true));
-    const mine = rows.find((r) => r.gameId === req.params.id);
+    /*
+     * Only this game's verdict, then one aggregate query for the places.
+     *
+     * This used to `select *` every scored verdict on the site and rank them
+     * all in memory — on a page that polls every five seconds, per viewer.
+     * Counting how many beat you answers the same question in one row, and it
+     * is the same arithmetic `rank()` does on the boards (ties share a place,
+     * so the rank is "how many are strictly better, plus one"). Both surfaces
+     * now count over every scored game, which is why they finally agree: the
+     * board used to rank inside a 500-row slice while this counted the lot.
+     */
+    const [mine] = await db.select().from(startupGameVerdicts)
+      .where(and(eq(startupGameVerdicts.gameId, req.params.id), eq(startupGameVerdicts.fromModel, true)));
     if (!mine) return res.json({ scored: false, standings: null });
 
-    const scoresOf = (r: typeof rows[number]): Scores => ({
-      growth: r.growth, capital: r.capital, product: r.product,
-      acquisition: r.acquisition, risk: r.risk,
-    });
+    const beats = (col: any, value: number, betterIs: "higher" | "lower") =>
+      sql<number>`(count(*) filter (where ${col} ${betterIs === "lower" ? sql`<` : sql`>`} ${value}))::int`;
+
+    const [counts] = await db.select({
+      of: sql<number>`(count(*))::int`,
+      growth: beats(startupGameVerdicts.growth, mine.growth, "higher"),
+      capital: beats(startupGameVerdicts.capital, mine.capital, "higher"),
+      product: beats(startupGameVerdicts.product, mine.product, "higher"),
+      acquisition: beats(startupGameVerdicts.acquisition, mine.acquisition, "higher"),
+      risk: beats(startupGameVerdicts.risk, mine.risk, "lower"),
+    }).from(startupGameVerdicts).where(eq(startupGameVerdicts.fromModel, true));
 
     const standings = DIMENSIONS.map((d) => {
-      const place = rankBy(rows, d.id, scoresOf).find((s) => s.entry.gameId === mine.gameId)!;
+      const score = (mine as any)[d.id] as number;
       return {
         id: d.id, title: d.title, blurb: d.blurb,
-        score: place.score,
-        band: scoreBand(d.betterIs === "lower" ? 1000 - place.score : place.score),
-        rank: place.rank, of: place.of,
+        score,
+        band: scoreBand(d.betterIs === "lower" ? 1000 - score : score),
+        rank: ((counts as any)[d.id] as number) + 1,
+        of: counts.of,
       };
     });
 

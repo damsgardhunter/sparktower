@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as DocumentPicker from "expo-document-picker";
 import { api, uploadFile } from "../src/api/client";
+import { takePendingDestination } from "../src/pendingDestination";
 import { useAuth } from "../src/auth/AuthContext";
 import { colors, font, fontFamily, radius, spacing } from "../src/theme";
 import { Btn, ErrorNote, Field, Icon, NovaGradient, errText, type IconName } from "../src/components/ui";
@@ -161,6 +162,16 @@ export default function Welcome() {
       // Let AuthGate wave them through before the refresh lands.
       markOnboarded();
       void refreshUser();
+      /*
+       * Most new accounts should go and make a project. An account that was
+       * created to accept an invite, or from a published artifact, should go
+       * back to the thing that brought it here instead — signing up was the
+       * obstacle, not the errand. Onboarding is the other place that finishes
+       * that journey, because a brand-new account reaches it before it ever
+       * reaches app/index.tsx.
+       */
+      const destination = await takePendingDestination();
+      if (destination) { router.replace(destination as any); return; }
       // A new account has no projects; the next thing to do is make one — with Nova.
       router.replace("/project/new" as any);
     },

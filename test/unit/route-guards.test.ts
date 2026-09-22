@@ -161,6 +161,7 @@ describe("authentication on the write surface", () => {
     "POST /api/auth/forgot-password": "sends a link to an address it already holds and tells the caller nothing about whether an account exists; limited per address and per account so it can't enumerate or mailbomb",
     "POST /api/auth/reset-password": "the emailed token is the credential; hashed, unexpired, spent once, and everyone who needs it is locked out by definition; limited per address",
     "POST /api/track": "anonymous analytics beacons; limited per address",
+    "POST /api/public/artifacts/:id/report": "reporting a public page with no account — the page exists for people who have none; no free text, reason must be one of the listed codes, target must already be public, limited per address, reporter stored as an address hash",
     "PUT /internal-local-upload/:id": "development only; the issued, single-use id is the credential, size-capped",
   };
 
@@ -186,7 +187,10 @@ const AFTER_WEDGE_FAMILIES: Record<string, RegExp> = {
   backing: /\/(backing|backings|backing-tiers|backer-badges|merch|merch-orders|printful|payouts|donations|donate|donate-checkout)(\/|$)|\/badges\/backer|\/me\/badges|\/stripe\/connect-/,
   storyboards: /\/(storyboards|visuals|generate-video)(\/|$)/,
   matches: /\/(matches|recommend-people)(\/|$)/,
-  sprints: /\/games(\/|$)/,
+  // `/sim` as well as `/games`: the surface owns the market simulation too, and
+  // for a long time every `/api/sim` route sat outside its flag because this
+  // pattern only knew about the sprint games. Widened so the gap can't return.
+  sprints: /\/(games|sim)(\/|$)/,
   connections: /\/connections(\/|$)/,
   messages: /\/(messages|conversations)(\/|$)/,
   leaderboard: /\/(leaderboard|reputation)(\/|$)/,

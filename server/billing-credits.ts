@@ -3,8 +3,10 @@
  * side after checkout.
  *
  * - A tier set from Stripe (webhook, checkout, or the post-checkout sync)
- *   refills the month's allowance when it's an upgrade, so what someone just
- *   paid for is there when they come back.
+ *   refills the month's allowance only when it's the first paid plan (free to
+ *   paid), so what someone just paid for is there when they come back. A
+ *   switch between paid plans doesn't: it's prorated onto the next invoice, so
+ *   nothing has been paid yet (refillsOnTierChange, shared/credits.ts).
  * - Each paid renewal refills it again, and clears a failed payment.
  * - A failed subscription payment is kept on the account, so the app can say
  *   "update your card" — the tier still follows the subscription's status.

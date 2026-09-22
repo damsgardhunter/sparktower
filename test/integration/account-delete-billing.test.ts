@@ -19,6 +19,8 @@ const stripe = {
   subs: [] as { id: string; status: string }[],
   failWith: null as null | Error,
   calls: 0,
+  openCheckouts: [] as string[],
+  expired: [] as string[],
 };
 
 vi.mock("../../server/stripeClient", () => ({
@@ -34,6 +36,12 @@ vi.mock("../../server/stripeClient", () => ({
           return sub;
         },
         cancel: async (id: string) => { stripe.cancelled.push(id); return { id, status: "canceled" }; },
+      },
+      checkout: {
+        sessions: {
+          list: async () => ({ data: stripe.openCheckouts.map((id) => ({ id })) }),
+          expire: async (id: string) => { stripe.expired.push(id); return { id, status: "expired" }; },
+        },
       },
       refunds: {
         create: async ({ payment_intent }: { payment_intent: string }) => {
@@ -53,7 +61,7 @@ const { users, projects, projectBackings, projectMembers } = await import("@shar
 const { eq } = await import("drizzle-orm");
 
 afterAll(async () => { await closeTestApp(); });
-beforeEach(() => { stripe.cancelled = []; stripe.subs = []; stripe.failWith = null; stripe.calls = 0; stripe.refunded = []; stripe.failRefunds = false; });
+beforeEach(() => { stripe.cancelled = []; stripe.subs = []; stripe.failWith = null; stripe.calls = 0; stripe.refunded = []; stripe.failRefunds = false; stripe.openCheckouts = []; stripe.expired = []; });
 
 let n = 0;
 const password = "Testpass123!";
@@ -85,11 +93,14 @@ describe("deleting an account that pays", () => {
       // Already over: cancelling it again would be an error, not a safety.
       { id: "sub_old", status: "canceled" },
     ];
+    // A checkout left open in another tab could otherwise start a subscription on a customer nobody owns.
+    stripe.openCheckouts = ["cs_open_tab"];
 
     const res = await m.agent.post("/api/account/delete").send({ password });
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(res.body.billingCancelled).toBe(2);
     expect(stripe.cancelled.sort()).toEqual(["sub_current", "sub_leftover"]);
+    expect(stripe.expired).toEqual(["cs_open_tab"]);
 
     const [after] = await db.select().from(users).where(eq(users.id, m.id));
     expect(after.deletedAt, "the account is gone").toBeTruthy();

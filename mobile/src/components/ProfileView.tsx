@@ -31,6 +31,7 @@ import {
 import { EditorAccess } from "./profile/EditorAccess";
 import { OutlineButton, ProfileTabs, type ProfileTab } from "./profile/kit";
 import { pickAndUploadImage } from "./profilePhoto";
+import { BlockAction } from "./BlockAction";
 
 export type ProfileTabName = "about" | "projects" | "connections" | "following" | "earnings" | "editor" | "behaviour";
 
@@ -168,6 +169,18 @@ export function ProfileView({ userId: routeId, isOwn: ownRoute, onName, initialT
     <Row gap={spacing.sm} center wrap>
       <FollowBuilderButton userId={routeId!} name={profile?.displayName || person?.firstName || "them"} notify={show} />
       <ConnectionButton userId={routeId!} name={firstName} notify={show} />
+      {/*
+        * Block, beside Connect. The profile is where somebody goes to work out
+        * who is contacting them, so it's where the decision to stop it gets
+        * made — and it's the only place an existing block can be lifted from
+        * the phone, which is why the button becomes "Unblock" rather than
+        * disappearing.
+        */}
+      <BlockAction
+        userId={routeId!}
+        name={profile?.displayName || person?.firstName || null}
+        onBlocked={() => router.back()}
+      />
     </Row>
   );
 
@@ -206,7 +219,7 @@ export function ProfileView({ userId: routeId, isOwn: ownRoute, onName, initialT
             <AboutCard profile={profile} isOwn={isOwn} />
             <Credentials profile={profile} />
             <InterestsCard interests={profile?.interests} />
-            <EarnedBadges userId={userId} />
+            <EarnedBadges userId={userId} isOwn={isOwn} />
             <BadgeShowcase userId={userId} isOwn={isOwn} notify={show} />
             <BackerCredits userId={userId} isOwn={isOwn} notify={show} />
             {/* Then the main column: posts, what they're building, and the Builder Index. */}

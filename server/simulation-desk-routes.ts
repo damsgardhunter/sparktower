@@ -50,7 +50,7 @@ import { assetEffects } from "@shared/simulation/assets";
 import { RATING_START, interestOn, ratingGrade } from "@shared/simulation/finance";
 import { postureBlurb } from "@shared/simulation/incumbents";
 import { distressOf, DISTRESS_COPY, recoveryOptions } from "@shared/simulation/recovery";
-import { startReadySeasons } from "./simulation-tick";
+import { startReadySeasons, YEAR_CLOSING, yearClosing } from "./simulation-tick";
 
 /**
  * The desk nudges the season forward, the way the lobby screen nudges the room.
@@ -748,6 +748,8 @@ export function registerSimulationDeskRoutes(app: Express): void {
     if (!season || season.status !== "running" || !season.world) {
       return res.status(409).json({ message: "This season isn't running.", code: "not_running" });
     }
+    // Refused once the year is due: the tick may already have read this year's filings.
+    if (yearClosing(season)) return res.status(409).json(YEAR_CLOSING);
 
     const niche = nicheById(season.nicheId)!;
     const world = season.world as World;
@@ -776,7 +778,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
     const clean = cleanDecision(role, payload, niche.cities.map((c) => c.id), { year: season.year, segmentIds: niche.segments.map((s) => s.id) });
 
     await db.insert(simDecisions)
-      .values({ ventureId: venture.id, userId: req.user.id, role, year: season.year, payload: clean })
+      .values({ ventureId: venture.id, userId: req.user.id, role, year: season.year, payload: clean, submittedAt: new Date() })
       .onConflictDoUpdate({
         target: [simDecisions.ventureId, simDecisions.role, simDecisions.year],
         set: { payload: clean, userId: req.user.id, submittedAt: new Date() },

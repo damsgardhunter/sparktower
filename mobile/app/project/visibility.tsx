@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
 import { colors, fontFamily, spacing } from "../../src/theme";
 import {
-  Body, Btn, Card, Chip, ErrorNote, H2, Label, Loading, Meta, Row, Screen, errText,
+  Body, Btn, Card, Chip, ErrorNote, ErrorState, H2, Label, Loading, Meta, Row, Screen, errText,
 } from "../../src/components/ui";
 import {
   PROJECT_SECTIONS, SECTION_GROUPS, isSectionEnabled, sectionHasContent,
@@ -26,7 +26,7 @@ export default function Visibility() {
   const [isPrivate, setIsPrivate] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const { data: project, isLoading } = useQuery({
+  const { data: project, isLoading, error: loadError, refetch } = useQuery({
     queryKey: ["project", id],
     queryFn: () => api<any>(`/api/projects/${id}`),
     enabled: !!id,
@@ -55,6 +55,28 @@ export default function Visibility() {
     },
     onError: (e) => setError(errText(e, "Couldn't save your changes.")),
   });
+
+  /*
+   * A failed load is not a slow load. These two used to share one branch, so a
+   * project that couldn't be fetched — offline, signed out, deleted — left the
+   * spinner up with no way back except closing the screen. Which is worse here
+   * than elsewhere: this is the page that decides what strangers can see, and
+   * someone who came to make a project private needs to know it didn't happen.
+   */
+  if (loadError || (!isLoading && !project)) {
+    return (
+      <>
+        <Stack.Screen options={{ title: "Public page" }} />
+        <Screen canvas scroll={false} contentStyle={{ justifyContent: "center" }}>
+          <ErrorState
+            title="Couldn't load this project"
+            message={loadError ? errText(loadError, "We couldn't reach the server.") : "It may have been deleted."}
+            onRetry={() => void refetch()}
+          />
+        </Screen>
+      </>
+    );
+  }
 
   if (isLoading || !project || !overrides) {
     return (

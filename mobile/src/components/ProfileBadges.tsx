@@ -269,8 +269,11 @@ function BadgePicker({ badges, onClose, onGenerate, generatingId, onSave, saving
   );
 }
 
+// Every icon the catalog names (shared/badges.ts). A missing one still draws —
+// as the generic ribbon — which is how differently-earned badges end up looking alike.
 const PLATFORM_BADGE_ICONS: Record<string, IconName> = {
-  rocket: "rocket", star: "star", trophy: "trophy", users: "people", sparkles: "sparkles", award: "ribbon",
+  rocket: "rocket", star: "star", trophy: "trophy", users: "people", sparkles: "sparkles",
+  award: "ribbon", "user-check": "person-circle",
 };
 const RARITY: Record<string, { bg: string; border: string }> = {
   common: { bg: "#F3F4F6", border: "#D1D5DB" },
@@ -279,20 +282,35 @@ const RARITY: Record<string, { bg: string; border: string }> = {
   legendary: { bg: "#FEFCE8", border: "#FACC15" },
 };
 
-/** Platform achievements (first project, streaks…). Nothing when none are earned. */
-export function EarnedBadges({ userId }: { userId: string }) {
+/**
+ * Platform achievements (first project, a finished profile, a storyboard).
+ *
+ * On your own profile it shows the whole catalog with the earned ones lit and
+ * the rest greyed out with what to do — an empty panel told a new member
+ * nothing, not even that badges existed. On somebody else's it shows only what
+ * they hold, and disappears when that is nothing: their profile is about what
+ * they've done, not what they haven't.
+ */
+export function EarnedBadges({ userId, isOwn = false }: { userId: string; isOwn?: boolean }) {
   const [open, setOpen] = useState<string | null>(null);
   const { data } = useQuery({
     queryKey: ["user-badges", userId],
     queryFn: () => api<any[]>(`/api/users/${userId}/badges`).catch(() => []),
   });
-  if (!data?.length) return null;
-  const described = data.find((ub) => ub.id === open);
+  const { data: catalog } = useQuery({
+    queryKey: ["badge-catalog"],
+    queryFn: () => api<any[]>("/api/badges/catalog").catch(() => []),
+    enabled: isOwn,
+    staleTime: 60 * 60 * 1000,
+  });
+  const locked = isOwn ? (catalog ?? []).filter((b) => !(data ?? []).some((ub) => ub.badge?.id === b.id)) : [];
+  if (!data?.length && locked.length === 0) return null;
+  const described = (data ?? []).find((ub) => ub.id === open);
   return (
     <PCard>
-      <CardTitle>Earned Badges</CardTitle>
+      <CardTitle>{isOwn && catalog?.length ? `Badges · ${data?.length ?? 0} of ${catalog.length}` : "Earned Badges"}</CardTitle>
       <Row wrap gap={spacing.md - 2}>
-        {data.map((ub) => {
+        {(data ?? []).map((ub) => {
           const r = RARITY[ub.badge?.rarity] ?? RARITY.common;
           return (
             <Pressable key={ub.id} onPress={() => setOpen(open === ub.id ? null : ub.id)}
@@ -305,6 +323,16 @@ export function EarnedBadges({ userId }: { userId: string }) {
             </Pressable>
           );
         })}
+        {locked.map((b) => (
+          <View key={b.id}
+            style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radius.sm, borderWidth: 1, borderStyle: "dashed", backgroundColor: colors.canvas, borderColor: colors.border, opacity: 0.75 }}>
+            <Icon name={PLATFORM_BADGE_ICONS[b.icon] ?? "ribbon"} size={16} color={colors.textTertiary} />
+            <View>
+              <Text style={{ fontSize: font.xs, fontFamily: fontFamily.semibold, color: colors.textSecondary }}>{b.name}</Text>
+              <Text style={{ fontSize: 10, fontFamily: fontFamily.regular, color: colors.textTertiary }}>{b.howTo}</Text>
+            </View>
+          </View>
+        ))}
       </Row>
       {described?.badge?.description ? <Meta style={{ fontSize: font.xs + 1 }}>{described.badge.description}</Meta> : null}
     </PCard>

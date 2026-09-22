@@ -18,13 +18,38 @@ import { api, currentVisit } from "./api/client";
 
 export const EXPLORE = {
   openDiscover: "explore.open_discover",
+  /**
+   * A card at least half on screen. Once per card per visit to a list.
+   *
+   * This was missing, which made the funnel's second step ("Saw a match") read
+   * zero for every phone session — not "the app is bad at this", but "the app
+   * never said". Everything after it looked like people leaping from opening
+   * Discover straight to opening a profile.
+   */
+  viewMatchCard: "explore.view_match_card",
   openProfile: "explore.open_profile",
   openProject: "explore.open_project",
   returnToDiscover: "explore.return_to_discover",
   sessionEnd: "explore.session_end",
 } as const;
 
-export type ExploreSource = "discover" | "profile_page" | "project_page" | "messages";
+/**
+ * All eight of shared/explore-events.ts's sources, restated.
+ *
+ * Four of them were missing here, and the funnel pays for a gap in a mirror
+ * quietly: the server drops a `source` it doesn't recognise (sanitizeExploreProps)
+ * and stores the event anyway, so a wrong or absent source is an event that
+ * counts under the wrong heading rather than an error anyone sees. Screens
+ * worked around the short union by casting or by sending "discover" from
+ * Matches and Search, which is how two surfaces came to report themselves as a
+ * third.
+ */
+export const EXPLORE_SOURCES = [
+  "discover", "matches", "projects", "profile_page", "project_page", "messages", "feed", "post_page",
+  "search",
+] as const;
+
+export type ExploreSource = (typeof EXPLORE_SOURCES)[number];
 
 /** What the server adds to the event it records for an action. */
 export interface ExploreContext {
@@ -39,6 +64,8 @@ let openedAt = 0;
 let openedInVisit = "";
 /** Something happened in the loop, so leaving the app is worth recording. */
 let active = false;
+/** Cards already counted as seen, so one card scrolled past twice is one impression. */
+const impressions = new Set<string>();
 
 type Props = { matchType?: "builder" | "project"; targetId?: string; rankPosition?: number; source?: ExploreSource };
 
@@ -71,8 +98,30 @@ export function openDiscover() {
   const returning = openedInVisit === visit;
   openedInVisit = visit;
   openedAt = Date.now();
+  // "Saw it" means on this visit to the list, as it does on the web.
+  impressions.clear();
   trackExplore(EXPLORE.openDiscover, { source: "discover" });
   if (returning) trackExplore(EXPLORE.returnToDiscover, { source: "discover" });
+}
+
+/**
+ * "Saw a match": a card at least half on screen, counted once.
+ *
+ * Rendering isn't seeing — a FlatList holds rows above and below the viewport,
+ * and counting those would make every list look fully read. The caller is the
+ * viewability callback, which already applies the 50% threshold the web's
+ * IntersectionObserver uses, so the only thing left to do here is refuse the
+ * repeats a viewability callback naturally produces as a row wobbles in and
+ * out of view.
+ */
+export function viewMatchCard(
+  props: { matchType: "builder" | "project"; targetId: string; source: ExploreSource; rankPosition?: number },
+  path = "/discover",
+) {
+  const key = `${props.source}:${props.matchType}:${props.targetId}`;
+  if (impressions.has(key)) return;
+  impressions.add(key);
+  trackExplore(EXPLORE.viewMatchCard, props, path);
 }
 
 /** Sent as `explore` with a follow, connection request or message. */

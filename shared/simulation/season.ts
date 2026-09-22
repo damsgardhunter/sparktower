@@ -398,7 +398,8 @@ export function decisionsForYear(input: {
   previous?: TeamDecisions;
 }): YearDecisions {
   const { company, niche, submitted, previous } = input;
-  const fallback = previous ? caretakerDecisions(previous, company) : openingDecisions(company, niche);
+  const opening = openingDecisions(company, niche);
+  const fallback = previous ? caretakerDecisions(previous, company) : opening;
 
   const decisions: TeamDecisions = { companyId: company.id };
   const absent: Role[] = [];
@@ -410,7 +411,18 @@ export function decisionsForYear(input: {
       (decisions as any)[key] = theirs;
     } else {
       absent.push(role);
-      (decisions as any)[key] = (fallback as any)[key];
+      /*
+       * Per key, with the opening plan behind it.
+       *
+       * `previous` is assembled from whatever each seat last filed, and a seat
+       * that has never filed has no entry in it — so the caretaker, which only
+       * scales what it is given, hands that key back as undefined. The engine
+       * reads an undefined operations plan as a headcount of zero and nothing
+       * spent, which fires everyone at a company whose only fault was that one
+       * chair was empty. The opening plan is what a chair nobody has ever sat
+       * in runs in year one; it is the right thing for it to run later, too.
+       */
+      (decisions as any)[key] = (fallback as any)[key] ?? (opening as any)[key];
     }
   }
 

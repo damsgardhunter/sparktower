@@ -21,8 +21,6 @@ import {
 import { startReadySeasons, tickSeason } from "../../server/simulation-tick";
 import { marketListings } from "@shared/simulation/assets";
 import { nicheById } from "@shared/simulation/niches";
-import { marketListings } from "@shared/simulation/assets";
-import { nicheById } from "@shared/simulation/niches";
 import type { World } from "@shared/simulation/types";
 
 afterAll(async () => { await closeTestApp(); });
@@ -502,6 +500,53 @@ describe("the way back", () => {
     // Cheaply, which is what makes another team's collapse an opportunity.
     expect(listed[0].reserve).toBeLessThan((listed[0].asset as any).bookValue);
   }, 180_000);
+
+  it("sells a fire-sold asset to whoever bids for it, without paying the seller twice", async () => {
+    /*
+     * The fire sale lists what it sold under the company that sold it — which,
+     * by then, owns none of it. Settlement asked "does the seller still own
+     * this?", got no, and withdrew every such listing, so the forced sale that
+     * exists to put a failed team's things in front of everybody else put them
+     * in front of nobody. The seller was paid when the fire sale ran; the
+     * buyer's money goes nowhere near them.
+     */
+    const app = await getTestApp();
+    const { ventureId, seasonId, players } = await runningCompany(app);
+
+    const asset = marketListings({ seasonId, year: 1, niche })[0].asset;
+    await setCompany(seasonId, ventureId, { cash: 200_000, creditLimit: 0, assets: [asset] });
+    await db.insert(simRecoveryMoves).values({ ventureId, userId: players[0].id, year: 1, kind: "fire_sale" });
+    await makeDue(seasonId);
+    expect(await tickSeason(seasonId)).toBe(1);
+
+    const [lot] = await db.select().from(simListings)
+      .where(and(eq(simListings.seasonId, seasonId), eq(simListings.year, 2)));
+    expect(lot.forced).toBe(true);
+
+    // A second team in the same market, with money, to buy it.
+    const [rivalRow] = await db.insert(simVentures)
+      .values({ seasonId, name: "Rival", phase: "running", createdAt: new Date() }).returning();
+    const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    const world = season.world as World;
+    const seller = world.companies.find((c) => c.id === ventureId)!;
+    world.companies.push({ ...seller, id: rivalRow.id, name: "Rival", cash: 20_000_000, debt: 0, assets: [], bankruptSince: undefined, covenant: undefined });
+    await db.update(simSeasons).set({ world }).where(eq(simSeasons.id, seasonId));
+    await db.insert(simBids).values({ ventureId: rivalRow.id, listingId: lot.id, year: 2, amount: lot.reserve });
+
+    await makeDue(seasonId);
+    expect(await tickSeason(seasonId)).toBe(2);
+
+    const rival = await companyIn(seasonId, rivalRow.id);
+    expect(rival.assets.map((a) => a.id), "the bidder owns it now").toContain(asset.id);
+    const [sold] = await db.select().from(simListings).where(eq(simListings.id, lot.id));
+    expect(sold).toMatchObject({ status: "sold", buyerId: rivalRow.id, soldFor: lot.reserve });
+
+    const [report] = await db.select().from(simReportsTable)
+      .where(and(eq(simReportsTable.ventureId, ventureId), eq(simReportsTable.year, 2)));
+    const body = report.report as any;
+    expect(body.market ?? [], "the seller is not told they sold it again").not.toContainEqual(expect.objectContaining({ kind: "sold" }));
+    expect((body.cashBridge?.lines ?? []).map((l: any) => l.label), "and is not paid for it again").not.toContain("The marketplace");
+  }, 240_000);
 
   it("checks a covenant against what was spent, not what was planned", async () => {
     const app = await getTestApp();

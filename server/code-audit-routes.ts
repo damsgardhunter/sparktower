@@ -14,7 +14,7 @@ import OpenAI from "openai";
 import { storage } from "./storage";
 import { scanSecurity, renderSecurityGaps } from "@shared/security-checks";
 import { db } from "./db";
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { codeAuditRuns } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
@@ -45,6 +45,7 @@ import {
 import { fetchCommitsSince } from "./code-ingest";
 import { sanitizeLoopClosures } from "@shared/phase-trees";
 import { rereadOpenLoops } from "./audit-loop-reads";
+import { withProjectLock } from "./project-lock";
 
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
@@ -162,6 +163,8 @@ CATCHING THE PROJECT UP. Builders work ahead: they ship features without writing
 - The brief, scope and tech stack: update_project / update_scope only where the code shows the project has moved — a new direction, a feature now core, a stack that changed, a live URL. Rewrite the field in the builder's voice; don't pad it.
 - The core loops follow the product. When the code shows the product has changed direction — a loop now works differently, a new cycle has become central, an old one is gone — change them: update_loop to rewrite one (or change its kind), create_loop for a kind that isn't written, retire_loop for a loop the product no longer runs (never the last of its kind; rewrite that instead). Change a loop only on clear evidence in the code, say what changed in the steps, and never propose anything the builder REMOVED.
 - THE BOARD MUST NOT CONTRADICT THE CODE OR THE BUILDER'S STANDING NOTES. When a task or loop build step is for something the code has removed or the standing notes say is retired, propose retire_task for it with the reason (for a whole loop, retire_loop). When a task is marked done but the code has no trace of it, propose update_task back to "todo" and list it under taskReconciliation.notStarted. These wait for the builder's OK, so propose them whenever the evidence is clear — naming the drift in a risk or note without these operations is a failed audit. Never retire a path milestone (a backbone: task).
+- TAKING WORK AWAY NEEDS EVIDENCE OF REMOVAL, NOT AN ABSENCE OF EVIDENCE. This digest is a view of the repository: lists are clipped, most files appear as excerpts, and the archive may predate work finished this week. So "I cannot see it" is a fact about the digest, not about the product. Only propose retire_task, retire_loop, or reopening a card the builder marked done when one of these is true, and say which in the reason: the STANDING NOTES say it is retired; a commit in WHAT CHANGED shows it deleted; or the code shows the thing that replaced it, cited by path. Otherwise leave it alone — and if it matters, put it in "questions" for the builder rather than in operations. A builder who has shipped a wedge into the product and is told to cancel it has been failed by the audit, however tidy the board looks afterwards.
+- WHEN THE CODE IS AHEAD OF THE PLAN, MOVE THE PLAN. That is the ordinary case, not a problem: builders build faster than they write things down. A whole cycle working in the code that no written loop describes is a create_loop with its steps, the built ones marked done — never a reason to retire the loop that is written. A feature the brief doesn't mention is an update_project and a create_task with "status": "done". A milestone the code has reached is a complete_path_milestone. The plan is a description of the product, and when they disagree and the code is real, the description is what changes.
 - SECURITY BEFORE RELEASE. SECURITY CHECKS lists what the deterministic checklist found missing or partial. "securityPlan" is up to 8 fixes in priority order for THIS codebase: every release blocker (a missing high-severity check) first, then the rest that matter, then anything the checks can't see that the code shows (an unguarded admin route, a secret logged, a token in a URL) — each with the exact file and package to change. Never list a check that passed. For each release blocker also propose ONE create_task titled "Security: <what to fix>" with "priority": "high" and "tags": ["security"], unless the board already has it.
 - What's next: create_task for real gaps in the direction the builder is heading (at most 10), update_task where a task's scope changed. Milestones and roadmap phases only where they're plainly out of date.
 - A note that names a problem with no operation for it is a failed audit. If catchUpNote says the direction needs reconciling — a loop that contradicts THE BUILDER'S STANDING NOTES, two loops that are the same loop (see POSSIBLE DUPLICATE LOOPS), a brief that describes a product the code has moved away from — operations must contain the edits that reconcile it: update_loop to rewrite, retire_loop to drop a duplicate or a dead loop, update_project for the brief.
@@ -226,6 +229,19 @@ export async function auditRunStatus(projectId: string) {
   }).from(codeAuditRuns).where(eq(codeAuditRuns.projectId, projectId)).orderBy(desc(codeAuditRuns.startedAt)).limit(5);
   const runningRow = rows.find((r) => !r.run.finishedAt && Number(r.ageSeconds) * 1000 < AUDIT_RUN_STALE_MS) ?? null;
   const running = runningRow?.run ?? null;
+  /*
+   * A run that died mid-flight — a restart, a crash, a dropped connection —
+   * never got its finishedAt, so it was neither "running" (too old) nor "last"
+   * (never finished): the card went quiet and nothing ever told the builder to
+   * try again. Stamping it here, on the read that notices, closes it as the
+   * failure it was, so the status shows "the last audit didn't finish".
+   */
+  const stale = rows.filter((r) => !r.run.finishedAt && Number(r.ageSeconds) * 1000 >= AUDIT_RUN_STALE_MS);
+  for (const r of stale) {
+    const error = "The audit stopped before it finished — the server restarted or the connection dropped. Run it again.";
+    await db.update(codeAuditRuns).set({ finishedAt: new Date(), error }).where(and(eq(codeAuditRuns.id, r.run.id), isNull(codeAuditRuns.finishedAt))).catch(() => {});
+    r.run = { ...r.run, finishedAt: new Date(), error } as typeof r.run;
+  }
   const last = rows.find((r) => r.run.finishedAt)?.run ?? null;
   const starter = running ? await storage.getUser(running.startedById).catch(() => undefined) : undefined;
   return {
@@ -481,6 +497,17 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
     rejectedLoops: project.rejectedLoops ?? [],
     pathDone: new Set(board.filter((t) => t.status === "done").map((t) => backboneIdOf(t.tags)).filter(Boolean) as string[]),
     declined,
+    /*
+     * Did this audit see the whole codebase?
+     *
+     * The archive can be cut to a budget, and files can be skipped for being
+     * large or binary. Either way the digest is a view, and a view is a poor
+     * basis for telling somebody to cancel their work — see the removal rule
+     * in tidyCatchUp. Half the files read is generous rather than strict: an
+     * audit that saw most of the repository can still be wrong about the part
+     * it didn't, so anything that takes work away waits for a full reading.
+     */
+    partialView: snapshot.truncated || digest.signals.readCount < digest.signals.fileCount,
   });
   (findings as any).catchUp = {
     note: clipToSentence(str(parsed.catchUpNote, 2000), 900),
@@ -551,12 +578,41 @@ export async function applyAuditSections(
   auditId: string, userId: string, ent: { aiMilestones?: boolean; roadmapUpdates?: boolean },
   sections: readonly string[], opts: { declineOthers: boolean },
 ) {
+  /*
+   * Serialized, and each edit's outcome written as it happens.
+   *
+   * The whole run used to mark operations applied in memory and save the array
+   * once at the end. A double click, a client retry on a slow apply, or a crash
+   * part-way through left every operation still reading "pending" — so the
+   * second run applied the lot again, and a thirty-operation catch-up produced
+   * thirty duplicate tasks and milestones. Now the second caller waits for the
+   * first, re-reads inside the lock, finds nothing pending and is told so (409),
+   * and a crash mid-run loses at most the one operation in flight.
+   */
+  return withProjectLock("audit-apply", auditId, () => applyAuditSectionsLocked(auditId, userId, ent, sections, opts));
+}
+
+async function applyAuditSectionsLocked(
+  auditId: string, userId: string, ent: { aiMilestones?: boolean; roadmapUpdates?: boolean },
+  sections: readonly string[], opts: { declineOthers: boolean },
+) {
+  // Read inside the lock: whatever the caller checked before it queued may have been applied by then.
   const audit = await storage.getCodeAudit(auditId);
   if (!audit) throw Object.assign(new Error("Audit not found"), { status: 404 });
   const ops = ((audit.operations as any[]) ?? []).map((o) => ({ ...o }));
   const pending = (o: any) => !o._status || o._status === "pending";
+  const mine = (o: any) => pending(o) && sections.includes(o._section ?? "plan");
+  if (!ops.some(mine)) {
+    throw Object.assign(
+      new Error("Nothing from this audit is waiting — it has already been applied. Run a new audit to pick up changes since."),
+      { status: 409, code: "already_applied" },
+    );
+  }
   const changes: Awaited<ReturnType<typeof applyProjectOperations>>["changes"] = [];
   const skipped: string[] = [];
+  /** The operation statuses, saved as they are decided, so a crash can't replay what already ran. */
+  const persist = () => storage.updateCodeAudit(audit.id, { operations: ops } as any)
+    .catch((e) => console.error("[audit] couldn't record an operation's outcome:", e));
   /*
    * One edit at a time, so each is marked with what really happened to it. As
    * a batch, an edit the engine skipped (a loop kind already written, a task
@@ -566,16 +622,25 @@ export async function applyAuditSections(
   for (const o of ops) {
     if (!pending(o)) continue;
     if (!sections.includes(o._section ?? "plan")) {
-      if (opts.declineOthers) o._status = "declined";
+      if (opts.declineOthers) { o._status = "declined"; await persist(); }
       continue;
     }
     const { _section, _status, _label, _reason, ...op } = o;
+    /*
+     * Claimed before it runs. If the process dies between the apply and the
+     * save, the operation is left "applying" rather than "pending", so the
+     * next run reports it instead of doing it a second time — a duplicate is
+     * worse than a line saying an edit needs checking.
+     */
+    o._status = "applying";
+    await persist();
     const r = await applyProjectOperations(audit.projectId, userId, [op], {
       canEditMilestones: ent.aiMilestones, canEditRoadmap: ent.roadmapUpdates, maxOperations: 1, source: "audit",
-    });
-    changes.push(...r.changes);
-    if (r.changes.length) o._status = "applied";
-    else { o._status = "skipped"; o._reason = r.skipped[0] ?? "Nothing changed."; skipped.push(`${o._label ?? op.op}: ${o._reason}`); }
+    }).catch((e) => { console.error("[audit] operation failed:", e); return null; });
+    changes.push(...(r?.changes ?? []));
+    if (r?.changes.length) o._status = "applied";
+    else { o._status = "skipped"; o._reason = r?.skipped[0] ?? "Nothing changed."; skipped.push(`${_label ?? op.op}: ${o._reason}`); }
+    await persist();
   }
   const findings = (audit.findings as any) ?? {};
   if (findings.catchUp) {

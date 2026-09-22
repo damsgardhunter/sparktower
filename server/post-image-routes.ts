@@ -92,7 +92,16 @@ export function registerPostImageRoutes(app: Express) {
       // An answer with no image in it is an unreadable answer: same 502 and machine code as every other AI route, so a client can tell "try again" from "we're broken".
       if (!b64) return res.status(502).json({ message: "Couldn't draw that this time. Nothing was charged — try again.", code: "model_unreadable" });
 
-      const url = await new ObjectStorageService().writeObjectBuffer(Buffer.from(b64, "base64"), "image/png");
+      // Public by decision, not by omission: this image is drawn to be attached
+      // to a feed post that strangers and signed-out visitors will scroll past,
+      // and it loads through <img> with no credentials. The owner is recorded
+      // so an object written here can be traced back to the account that paid
+      // for it. (An object with no policy at all is served to anyone too — the
+      // difference is that nobody chose it.)
+      const url = await new ObjectStorageService().writeObjectBuffer(Buffer.from(b64, "base64"), "image/png", {
+        owner: userId,
+        visibility: "public",
+      });
       await storage.deductCredits(userId, CREDIT_COSTS.postImage);
       res.json({ url, usedLogo: !!logo, creditsCharged: CREDIT_COSTS.postImage });
     } catch (error: any) {

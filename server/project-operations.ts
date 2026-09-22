@@ -16,13 +16,13 @@ import { renderAuditDelta } from "@shared/audit-delta";
 import { renderRuntime } from "./runtime-probe";
 import { renderDataShape } from "@shared/data-shape";
 import { getDataShape } from "./data-shape";
-import { applyLoopDrafts, reconcileMilestones, setLoopType, createExpansion, deleteLoop } from "./phase-trees";
+import { applyLoopDrafts, reconcileMilestones, setLoopType, createExpansion, deleteLoop, updateTaskWithPath, onPathTaskDone } from "./phase-trees";
 import { isLoopType, resolveTree } from "@shared/phase-trees";
 
 /** One edit Nova wants to make. Shapes mirror the JSON Nova is told to emit. */
 export type ProjectOperation =
   | { op: "update_project"; fields: Record<string, string | string[]> }
-  | { op: "update_scope"; mvp?: string[]; niceToHave?: string[] }
+  | { op: "update_scope"; mvp?: string[]; niceToHave?: string[]; replace?: boolean; expect?: { mvp?: string[]; niceToHave?: string[] } }
   | { op: "create_task"; title: string; description?: string; priority?: string; status?: string; estimateHours?: number; tags?: string[]; milestoneId?: string | null; dueDate?: string | null; subtasks?: { title: string; done?: boolean }[] }
   | { op: "update_task"; id: string; title?: string; description?: string; priority?: string; status?: string; order?: number; blockedByTaskId?: string | null; estimateHours?: number; tags?: string[]; milestoneId?: string | null; dueDate?: string | null; subtasks?: { title: string; done?: boolean }[] }
   | { op: "create_milestone"; title: string; description?: string; targetDate?: string | null }
@@ -38,6 +38,84 @@ export type ProjectOperation =
   | { op: "retire_loop"; id: string; reason: string }
   | { op: "retire_task"; id: string; reason: string };
 
+/**
+ * The operation vocabulary, in one place.
+ *
+ * The model's answer used to be forwarded to the builder untouched: up to
+ * sixty arbitrary objects, with a parallel list of human-readable items that
+ * nothing ever checked against them. So a hallucinated op — a verb that does
+ * not exist, an id from another project, a task with no title — was shown as a
+ * change that would be made, the builder approved it, and the apply silently
+ * dropped it. The plan they read and the plan that ran were different plans.
+ *
+ * `parseOperation` is the gate: it answers "would this do anything?" using the
+ * same vocabulary the apply engine switches on, so the two can't drift.
+ */
+export const OPERATION_OPS = [
+  "update_project", "update_scope", "create_task", "update_task", "create_milestone", "update_milestone",
+  "update_phase", "create_interview", "create_experiment", "create_pricing_tier", "create_loop", "update_loop",
+  "complete_path_milestone", "add_loop_steps", "retire_loop", "retire_task",
+] as const;
+
+/** Whether this is a verb the apply engine knows at all. */
+export const isKnownOp = (op: unknown): op is (typeof OPERATION_OPS)[number] =>
+  typeof op === "string" && (OPERATION_OPS as readonly string[]).includes(op);
+
+/** The ids an operation is allowed to name, read off the project it will be applied to. */
+export interface KnownIds { taskIds: Set<string>; milestoneIds: Set<string>; phaseIds: Set<string>; loopIds: Set<string>; backboneIds: Set<string> }
+
+const nonEmpty = (v: unknown) => typeof v === "string" && v.trim().length > 0;
+
+/**
+ * An operation, or null when it would be dropped at apply time anyway —
+ * unknown verb, missing the field that gives it meaning, or naming an id that
+ * isn't on this project. Nothing here writes; it only decides what is worth
+ * showing to the builder.
+ */
+export function parseOperation(raw: unknown, known?: KnownIds): ProjectOperation | null {
+  const op = (raw ?? {}) as any;
+  if (!raw || typeof raw !== "object" || !isKnownOp(op.op)) return null;
+  switch (op.op) {
+    case "update_project": return op.fields && typeof op.fields === "object" && Object.keys(op.fields).length ? op : null;
+    case "update_scope": return Array.isArray(op.mvp) || Array.isArray(op.niceToHave) ? op : null;
+    case "create_task": return nonEmpty(op.title) ? op : null;
+    case "update_task": return nonEmpty(op.id) && (!known || known.taskIds.has(op.id)) ? op : null;
+    case "retire_task": return nonEmpty(op.id) && (!known || known.taskIds.has(op.id)) ? op : null;
+    case "create_milestone": return nonEmpty(op.title) ? op : null;
+    case "update_milestone": return nonEmpty(op.id) && (!known || known.milestoneIds.has(op.id)) ? op : null;
+    case "update_phase": return nonEmpty(op.id) && (!known || known.phaseIds.has(op.id)) ? op : null;
+    case "create_interview": return nonEmpty(op.intervieweeName) ? op : null;
+    case "create_experiment": return nonEmpty(op.hypothesis) ? op : null;
+    case "create_pricing_tier": return nonEmpty(op.name) ? op : null;
+    case "create_loop": return nonEmpty(op.type) && nonEmpty(op.title) ? op : null;
+    case "update_loop": return nonEmpty(op.id) && (!known || known.loopIds.has(op.id)) ? op : null;
+    case "retire_loop": return nonEmpty(op.id) && (!known || known.loopIds.has(op.id)) ? op : null;
+    case "add_loop_steps": return nonEmpty(op.loopId) && Array.isArray(op.steps) && op.steps.length
+      && (!known || known.loopIds.has(op.loopId)) ? op : null;
+    case "complete_path_milestone": return nonEmpty(op.backboneId) && nonEmpty(op.evidence)
+      && (!known || !known.backboneIds.size || known.backboneIds.has(op.backboneId)) ? op : null;
+    default: return null;
+  }
+}
+
+/** The ids on a project that operations may name. */
+export async function knownIdsFor(projectId: string): Promise<KnownIds> {
+  const [tasks, milestones, roadmap] = await Promise.all([
+    storage.getProjectKanbanTasks(projectId).catch(() => [] as any[]),
+    storage.getProjectMilestones(projectId).catch(() => []),
+    storage.getProjectRoadmap(projectId).catch(() => undefined),
+  ]);
+  const backboneIds = new Set<string>();
+  for (const t of tasks as any[]) for (const tag of (t.tags ?? [])) if (typeof tag === "string" && tag.startsWith("backbone:")) backboneIds.add(tag.slice("backbone:".length));
+  return {
+    taskIds: new Set((tasks as any[]).map((t) => t.id)),
+    milestoneIds: new Set(milestones.map((m) => m.id)),
+    phaseIds: new Set((roadmap?.phases || []).map((p: any) => p.id)),
+    loopIds: new Set((tasks as any[]).filter((t) => (t.tags ?? []).includes("kind:loop")).map((t) => t.id)),
+    backboneIds,
+  };
+}
+
 export interface AppliedChange {
   /** Machine-readable, for the client to route an invalidation. */
   entity: "project" | "scope" | "task" | "milestone" | "phase" | "interview" | "experiment" | "pricing" | "loop" | "path";
@@ -52,7 +130,7 @@ export const OPERATION_SCHEMA_INSTRUCTIONS = `Each operation is one object. Vali
 
 { "op": "update_project", "fields": { "oneLiner"|"mission"|"valueProposition"|"targetCustomerProfile"|"problemStatement"|"targetUser"|"successMetrics": "new text", "techStack": ["React","Express"], "repoUrl": "https://…", "liveUrl": "https://…", "status": "planning"|"active"|"completed" } }
    // "techStack" REPLACES the list. Use it to correct a stale stack against what an audit found in the code.
-{ "op": "update_scope", "mvp": ["short feature name"], "niceToHave": ["short feature name"] }   // a list you send REPLACES that bucket; omit a bucket to leave it alone
+{ "op": "update_scope", "mvp": ["short feature name"], "niceToHave": ["short feature name"], "replace": false, "expect": { "mvp": ["the bucket exactly as you were shown it"] } }   // by default a list you send is ADDED to that bucket; omit a bucket to leave it alone. To drop items, send "replace": true AND "expect" with the bucket exactly as the current state shows it — the edit is refused if it changed since, so nothing added meanwhile is lost
 { "op": "create_task", "title": "", "description": "", "priority": "low"|"medium"|"high", "estimateHours": 3, "tags": ["short label"], "milestoneId": "the milestone this is work toward, or null", "dueDate": "YYYY-MM-DD", "subtasks": [{ "title": "" }] }
 { "op": "update_task", "id": "existing task id", "title": "", "description": "", "priority": "", "status": "todo"|"in-progress"|"review"|"done", "order": 0, "blockedByTaskId": "id of a task this one waits on, or null", "estimateHours": 3, "tags": [], "milestoneId": "", "subtasks": [{ "title": "", "done": false }] }
    // "order" sorts the board ascending — send it for every task you are re-sequencing, and always put a prerequisite before the task that needs it
@@ -407,11 +485,28 @@ export async function applyProjectOperations(
 
   // Scoping: an id Nova didn't get from this project's state is an id it
   // invented, and must not resolve to another project's row.
-  const [ownTasks, ownMilestones, roadmap] = await Promise.all([
+  const [ownTasks, ownMilestones, roadmap, project] = await Promise.all([
     storage.getProjectKanbanTasks(projectId).catch(() => []),
     storage.getProjectMilestones(projectId).catch(() => []),
     storage.getProjectRoadmap(projectId).catch(() => undefined),
+    storage.getProject(projectId),
   ]);
+  /*
+   * Who is applying these matters, not just that they're on the team.
+   *
+   * The project's own brief and scope (PATCH /api/projects/:id) and its
+   * roadmap phases (PATCH /api/roadmap-phases/:id) are the owner's to change;
+   * a member gets a 403 from those routes. But the operations arrive from the
+   * client — Nova's suggestion, reviewed and sent back — and the apply routes
+   * only check membership, so a member could hand-write an update_project and
+   * rewrite the pitch, or mark the roadmap done, through Nova. Decided here,
+   * from the database, rather than trusted from each caller: there are half a
+   * dozen callers (chat, task planning, health fixes, audits, the editor
+   * bridge, the first plan) and a flag one of them forgets is the same hole.
+   * A member's run still applies everything else; these are reported skipped.
+   */
+  const isOwner = !!project && project.ownerId === userId;
+  const OWNER_ONLY_SKIP = "Only the project's owner can change the project's brief, scope or roadmap.";
   const taskIds = new Set(ownTasks.map((t: any) => t.id));
   // Created tasks append; without a running counter a batch would all share
   // one position and the board couldn't order them.
@@ -423,9 +518,13 @@ export async function applyProjectOperations(
 
   for (const raw of queued) {
     const operation = raw as any;
+    // One vocabulary, shared with the parser the suggest routes filter on, so
+    // what a builder is shown and what can actually be applied are the same set.
+    if (!isKnownOp(operation?.op)) { skipped.push(`An unknown operation: ${String(operation?.op).slice(0, 40)}.`); continue; }
     try {
       switch (operation?.op) {
         case "update_project": {
+          if (!isOwner) { skipped.push(OWNER_ONLY_SKIP); break; }
           const fields: Record<string, unknown> = {};
           for (const field of BRIEF_FIELDS) {
             const value = operation.fields?.[field];
@@ -467,20 +566,56 @@ export async function applyProjectOperations(
         }
 
         case "update_scope": {
+          if (!isOwner) { skipped.push(OWNER_ONLY_SKIP); break; }
           const current = (await storage.getProject(projectId))?.scope as { mvp?: string[]; niceToHave?: string[] } | null;
           const next = { mvp: current?.mvp || [], niceToHave: current?.niceToHave || [] };
           const parts: string[] = [];
-          if (Array.isArray(operation.mvp)) {
-            next.mvp = operation.mvp.map((s: unknown) => text(s, 80)).filter(Boolean).slice(0, 20);
-            parts.push(`MVP now ${next.mvp.length} items (was ${current?.mvp?.length || 0})`);
+          let stale = false;
+          /*
+           * Merged, not overwritten.
+           *
+           * This used to replace a whole bucket with whatever array arrived.
+           * The arrays come from a model's proposal made minutes — sometimes
+           * days — earlier, and every apply route could be replayed, so a
+           * second click, or an apply of a suggestion left open in another tab,
+           * quietly deleted every scope item added in between. Nobody would see
+           * it happen: the change reads "Updated the scope" either way.
+           *
+           * Dropping items is still possible, but only deliberately: the caller
+           * says `replace` and sends `expect`, the bucket as it believed it to
+           * be. If the real bucket has moved on, the edit is refused instead of
+           * silently winning.
+           */
+          const same = (a: string[], b: string[]) => a.length === b.length
+            && [...a].map((x) => x.toLowerCase()).sort().join("\u0000") === [...b].map((x) => x.toLowerCase()).sort().join("\u0000");
+          const merge = (have: string[], add: string[]) => {
+            const seen = new Set(have.map((x) => x.toLowerCase()));
+            return [...have, ...add.filter((x) => !seen.has(x.toLowerCase()) && seen.add(x.toLowerCase()))].slice(0, 20);
+          };
+          for (const bucket of ["mvp", "niceToHave"] as const) {
+            const proposed = (operation as any)[bucket];
+            if (!Array.isArray(proposed)) continue;
+            const clean = proposed.map((s: unknown) => text(s, 80)).filter(Boolean).slice(0, 20);
+            const have = next[bucket];
+            if (operation.replace === true) {
+              const expected = Array.isArray(operation.expect?.[bucket]) ? operation.expect![bucket]!.map((s: unknown) => text(s, 80)).filter(Boolean) : null;
+              if (!expected || !same(expected, have)) {
+                skipped.push(`The ${bucket === "mvp" ? "MVP" : "nice-to-have"} list has changed since that was proposed — nothing was replaced.`);
+                stale = true;
+                continue;
+              }
+              next[bucket] = clean;
+              parts.push(`${bucket === "mvp" ? "MVP" : "nice-to-have"} replaced with ${clean.length} items`);
+            } else {
+              const merged = merge(have, clean);
+              if (merged.length === have.length) continue;
+              next[bucket] = merged;
+              parts.push(`${merged.length - have.length} added to ${bucket === "mvp" ? "the MVP" : "nice-to-have"}`);
+            }
           }
-          if (Array.isArray(operation.niceToHave)) {
-            next.niceToHave = operation.niceToHave.map((s: unknown) => text(s, 80)).filter(Boolean).slice(0, 20);
-            parts.push(`nice-to-have now ${next.niceToHave.length} items`);
-          }
-          if (!parts.length) { skipped.push("An update_scope with no lists."); break; }
+          if (!parts.length) { if (!stale) skipped.push("An update_scope that would change nothing."); break; }
           await storage.updateProject(projectId, { scope: next } as any);
-          changes.push({ entity: "scope", action: "updated", description: `Reset the scope: ${parts.join(", ")}` });
+          changes.push({ entity: "scope", action: "updated", description: `Updated the scope: ${parts.join(", ")}` });
           break;
         }
 
@@ -506,6 +641,13 @@ export async function applyProjectOperations(
             milestoneId: milestoneIds.has(operation.milestoneId) ? operation.milestoneId : null,
             order: nextOrder++,
           } as any);
+          /*
+           * A task created already finished is finished work: if it landed on
+           * the path (a tag naming a milestone), the path has to hear about it
+           * like any other completion, or the work exists with no record that
+           * it happened and can never be shared.
+           */
+          if (status === "done") await onPathTaskDone({ ...(created as any), completedById: userId }).catch((e) => console.error("[operations] path advance failed (non-fatal):", e));
           changes.push({
             entity: "task", action: "created",
             description: status === "done" ? `Recorded finished work "${title}"` : `Added task "${title}"${estimate ? ` (~${estimate}h)` : ""}`,
@@ -541,7 +683,10 @@ export async function applyProjectOperations(
             else skipped.push("A blocker that isn't a task on this project.");
           }
           if (!Object.keys(patch).length) { skipped.push("An update_task with nothing to change."); break; }
-          const updated = await storage.updateKanbanTask(operation.id, patch as any);
+          // Through the path helper: closing a task here has to move the path,
+          // tell the team and reach the pace log, exactly as the board's own
+          // PATCH does. See updateTaskWithPath.
+          const updated = await updateTaskWithPath(operation.id, patch, { completedById: userId });
           changes.push({ entity: "task", action: "updated", description: `Updated task "${updated.title}"`, entityId: updated.id });
           break;
         }
@@ -577,6 +722,7 @@ export async function applyProjectOperations(
         }
 
         case "update_phase": {
+          if (!isOwner) { skipped.push(OWNER_ONLY_SKIP); break; }
           if (opts.canEditRoadmap === false) { skipped.push("Roadmap changes need the Builder plan."); break; }
           if (!phaseIds.has(operation.id)) { skipped.push(`A roadmap phase id that isn't on this project (${operation.id}).`); break; }
           const patch: Record<string, unknown> = {};
@@ -673,7 +819,8 @@ export async function applyProjectOperations(
           if (isLoopType(operation.type)) {
             try { await setLoopType(projectId, loop.id, operation.type); } catch (err: any) { skipped.push(`Loop "${loop.title}": ${err?.message ?? "couldn't change its kind"}`); }
           }
-          if (Object.keys(patch).length) await storage.updateKanbanTask(loop.id, patch as any);
+          // A written loop is finished work on the path, so it closes through the helper.
+          if (Object.keys(patch).length) await updateTaskWithPath(loop.id, patch, { completedById: userId });
           changes.push({ entity: "loop", action: "updated", description: `Rewrote the loop "${(patch.title as string) ?? loop.title}"`, entityId: loop.id });
           break;
         }
@@ -699,7 +846,7 @@ export async function applyProjectOperations(
           if (!steps.length) { skipped.push(`No steps for "${loop.title}".`); break; }
           const { created } = await createExpansion(projectId, fanOut.id, steps, { loopTaskId: loop.id, append: true });
           const done = created.filter((_t: any, i: number) => steps[i]?.done);
-          for (const t of done) await storage.updateKanbanTask(t.id, { status: "done", completedAt: new Date() } as any);
+          for (const t of done) await updateTaskWithPath(t.id, { status: "done", completedAt: new Date() }, { completedById: userId });
           changes.push({
             entity: "loop", action: "updated", entityId: loop.id,
             description: `Added ${created.length} build step${created.length === 1 ? "" : "s"} to "${loop.title}"${done.length ? ` (${done.length} already built)` : ""}`,

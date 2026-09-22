@@ -9,7 +9,7 @@
  *
  * The company cases are kept, skipped, for when company accounts reach main.
  */
-import { describe, it, expect, afterAll, afterEach } from "vitest";
+import { describe, it, expect, afterAll, afterEach, beforeEach } from "vitest";
 import request from "supertest";
 import { and, eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
@@ -21,7 +21,15 @@ import { startReadySeasons } from "../../server/simulation-tick";
 import { devAdvanceOn } from "../../server/season-control";
 
 afterAll(async () => { await closeTestApp(); });
+/*
+ * The flag is off unless a test turns it on, whatever the machine's own .env
+ * says. Restoring the inherited value between tests meant that on a developer
+ * box running with SIM_DEV_ADVANCE=1 — which is exactly who has it set — the
+ * cases asserting the *default* (a player sees no clock) inherited the flag
+ * and failed. What a test claims must not depend on whose laptop runs it.
+ */
 const flagBefore = process.env.SIM_DEV_ADVANCE;
+beforeEach(() => { delete process.env.SIM_DEV_ADVANCE; });
 afterEach(() => {
   if (flagBefore === undefined) delete process.env.SIM_DEV_ADVANCE;
   else process.env.SIM_DEV_ADVANCE = flagBefore;

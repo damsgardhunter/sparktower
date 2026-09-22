@@ -58,8 +58,22 @@ export function upgradeOptions<T extends { tier: string }>(plans: T[], currentTi
   return plans.filter((p) => tierRank(p.tier) > tierRank(currentTier));
 }
 
-/** A new tier refills the month's allowance only when it's a step up. */
-export const refillsOnTierChange = (from: string | null | undefined, to: string) => tierRank(to) > tierRank(from);
+/**
+ * A new tier refills the month's allowance only when it's the first paid plan
+ * — free to anything above it.
+ *
+ * It used to refill on any step up. But a plan change between paid tiers goes
+ * through `stripe.subscriptions.update` with prorations, which charges nothing
+ * today: the difference lands on the next invoice. So Builder → Pro → Builder
+ * → Pro refilled the allowance on every "up" for about nothing, as many times
+ * as someone cared to click. A move up between paid plans now raises the cap
+ * and keeps what's been used; the allowance refills when an invoice is
+ * actually paid (REFILLING_INVOICE_REASONS, via invoice.paid). Coming from
+ * free always means a first payment — a new subscription's checkout — so the
+ * refill there is for money that really arrived, and it's there the moment
+ * the person returns rather than whenever the webhook lands.
+ */
+export const refillsOnTierChange = (from: string | null | undefined, to: string) => tierRank(from) <= 0 && tierRank(to) > 0;
 
 /** Renewal invoices that refill the allowance: each paid cycle, and the first payment. */
 export const REFILLING_INVOICE_REASONS = new Set(["subscription_cycle", "subscription_create"]);

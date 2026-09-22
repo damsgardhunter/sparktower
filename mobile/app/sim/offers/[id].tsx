@@ -284,11 +284,19 @@ export default function Offers() {
               body="Anything bought now would never trade a single year, so the offer routes are closed. What is on the table already still resolves."
             />
           ) : outstanding ? (
+            /*
+             * Agreed and waiting on the tick is outstanding too — the server
+             * counts it — but it cannot be withdrawn, so it gets its own words.
+             */
             <Callout
               icon="information-circle"
               tone="info"
-              title={`One offer at a time — yours is with ${outstanding.to}`}
-              body="Withdraw it on their card below if you would rather put the money somewhere else."
+              title={outstanding.status === "accepted"
+                ? `${outstanding.to} agreed to sell — one purchase a year`
+                : `One offer at a time — yours is with ${outstanding.to}`}
+              body={outstanding.status === "accepted"
+                ? "It completes when the year resolves. Until then the money is spoken for, so there is no second offer to make this year."
+                : "Withdraw it on their card below if you would rather put the money somewhere else."}
             />
           ) : null}
 

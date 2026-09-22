@@ -25,7 +25,8 @@
 import type { Express, RequestHandler, Response } from "express";
 import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { db } from "./db";
-import { users, mobileRefreshTokens, rateLimitHits, moderationLog } from "@shared/schema";
+import { users, mobileRefreshTokens, rateLimitHits, moderationLog, activityEvents } from "@shared/schema";
+import { SAFETY_EVENTS } from "@shared/safety";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { mfaGate } from "./mfa";
 import { atLeast } from "./platform-roles";
@@ -82,9 +83,38 @@ export function registerAdminSecurityRoutes(app: Express) {
        * The refusals, by kind, over a day. This is the number that says whether
        * anything is being attacked: a hundred `loginAccount` refusals against
        * one account is somebody working through a password list.
+       *
+       * It used to count `rate_limit_hits`, which is the opposite number. A row
+       * lands in that table when an action *passes* — it is the limiter's
+       * tally of allowed uses, not of refusals — so the panel labelled
+       * "refusals in the last day" was reporting successful activity. A quiet
+       * day of ordinary use read as an attack, and a real attack, which is
+       * refused and therefore writes no hits, read as nothing happening. That
+       * is worse than no number: it points an operator at the wrong thing at
+       * the hour they can least afford it.
+       *
+       * A real refusal is an activity event named SAFETY_EVENTS.limitRefused
+       * (`recordRefusal` in server/moderation.ts). Those rows are bucketed —
+       * one row per person, limit and minute, carrying `count` — so they are
+       * summed rather than counted, the same way server/safety-routes.ts reads
+       * them. The allowed-attempt tally is kept alongside under a name that
+       * says what it is, since "refused 3 out of 900 attempts" and "refused 3
+       * out of 4" are very different situations.
        */
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
       const refusals = await db
+        .select({
+          action: sql<string>`${activityEvents.props}->>'action'`,
+          n: sql<number>`coalesce(sum(coalesce((${activityEvents.props}->>'count')::int, 1)), 0)::int`,
+          subjects: sql<number>`count(distinct coalesce(${activityEvents.userId}, ${activityEvents.visitorId}))::int`,
+        })
+        .from(activityEvents)
+        .where(and(eq(activityEvents.name, SAFETY_EVENTS.limitRefused), gt(activityEvents.createdAt, since)))
+        .groupBy(sql`${activityEvents.props}->>'action'`)
+        .orderBy(sql`coalesce(sum(coalesce((${activityEvents.props}->>'count')::int, 1)), 0) desc`);
+
+      /** What got through, for scale. Not refusals — see above. */
+      const attempts = await db
         .select({ action: rateLimitHits.action, n: sql<number>`count(*)::int`, subjects: sql<number>`count(distinct ${rateLimitHits.userId})::int` })
         .from(rateLimitHits)
         .where(gt(rateLimitHits.createdAt, since))
@@ -110,6 +140,8 @@ export function registerAdminSecurityRoutes(app: Express) {
           twoFactor: p.mfaEnabledAt ? "on" : "OFF",
         })),
         refusalsLastDay: refusals,
+        /** Renamed, not removed: this is what the old `refusalsLastDay` really held. */
+        allowedAttemptsLastDay: attempts,
         suspended: suspended.map((s) => ({ ...s, email: maskEmail(s.email) })),
         recentActions,
       });

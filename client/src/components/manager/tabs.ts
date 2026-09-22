@@ -5,14 +5,14 @@
  */
 import {
   Sparkles, Map, ListChecks, FolderOpen, BarChart3, Eye, Flag, Activity, Target,
-  Beaker, Crosshair, HandCoins, Rocket, Headphones, LayoutDashboard, ScanSearch, Users, MessageSquare,
+  Beaker, Crosshair, HandCoins, Rocket, Headphones, LayoutDashboard, ScanSearch, Users, MessageSquare, Gamepad2,
   type LucideIcon,
 } from "lucide-react";
 
 export type TabId =
   | "nova" | "roadmap" | "kanban" | "files" | "analytics"
   | "public" | "milestones" | "activity" | "personas" | "research" | "strategy" | "investors" | "launch" | "support"
-  | "setup" | "codebase" | "team" | "chat";
+  | "setup" | "codebase" | "team" | "chat" | "simulations";
 
 /** `surface`: the kill switch that hides the tab (shared/surfaces.ts). The path's own tabs have none. */
 export interface TabDef { id: TabId; label: string; icon: LucideIcon; ownerOnly?: boolean; surface?: string }
@@ -38,11 +38,20 @@ export const MORE_TABS: TabDef[] = [
   { id: "support", label: "Support", icon: Headphones, surface: "launch" },
 ];
 
-/** The project-wide tabs, always on the right. */
+/**
+ * The project-wide tabs, always on the right.
+ *
+ * Simulations sits directly under Team because it is a thing you do *with*
+ * the team on this project: a company's people take the five seats of one
+ * company in a market and run it for a fortnight. It shows for every project
+ * — a project no company owns says so, and points at the public market
+ * instead of pretending the panel is broken.
+ */
 export const RAIL_TABS: TabDef[] = [
   { id: "setup", label: "Setup", icon: LayoutDashboard },
   { id: "codebase", label: "Codebase", icon: ScanSearch, surface: "codeAudit" },
   { id: "team", label: "Team", icon: Users },
+  { id: "simulations", label: "Simulations", icon: Gamepad2, surface: "sprints" },
   { id: "chat", label: "Chat", icon: MessageSquare, surface: "liveChat" },
 ];
 

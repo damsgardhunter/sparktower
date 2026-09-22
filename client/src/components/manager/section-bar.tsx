@@ -20,7 +20,7 @@ import { NOVA_GRADIENT } from "./tabs";
 const WORD: Record<ProjectGoal, string> = {
   ship_mvp: "Ship",
   systemize_business: "Systemize",
-  raise_funding: "Funding",
+  run_company: "Run",
 };
 
 export function SectionBar({ tracks, selected, onSelect }: {

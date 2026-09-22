@@ -180,27 +180,31 @@ describe("coming back to the next step", () => {
   it("sends a path notification to the section its step is on, focused on the next step", async () => {
     const app = await getTestApp();
     const owner = await person(app, "Sections");
-    const mate = await person(app, "Raiser");
-    const project = (await owner.agent.post("/api/projects").send({ title: "Two Sections", description: "A project shipping and raising at once, so steps land in different sections.", category: "saas", goal: "ship_mvp", subcategory: "saas" })).body;
+    const mate = await person(app, "Runner");
+    const project = (await owner.agent.post("/api/projects").send({ title: "Two Sections", description: "A project shipping, systemizing and running at once, so steps land in different sections.", category: "saas", goal: "ship_mvp", subcategory: "saas" })).body;
     await db.insert(projectMembers).values({ projectId: project.id, userId: mate.id, role: "Engineer" } as any);
 
-    // A step on the Raise path (not the project's primary), and one tagged into Systemize by hand.
-    const [raiseStep] = await db.insert(projectKanbanTasks).values({ projectId: project.id, title: "Capital profile", status: "done", tags: ["backbone:FUND.M1.1"] } as any).returning();
-    const [sysStep] = await db.insert(projectKanbanTasks).values({ projectId: project.id, title: "Map the process", status: "done", tags: ["track:systemize_business"] } as any).returning();
-    await notify({ recipients: [owner.id], actorId: mate.id, kind: "path_step_done", targetId: raiseStep.id, projectId: project.id });
-    await notify({ recipients: [owner.id], actorId: mate.id, kind: "path_step_done", targetId: sysStep.id, projectId: project.id });
+    // A funding step (not the project's primary path) — its FUND. id belongs to
+    // Systemize now, which took the funding routes over — and one tagged into
+    // Run by hand.
+    const [fundStep] = await db.insert(projectKanbanTasks).values({ projectId: project.id, title: "Capital profile", status: "done", tags: ["backbone:FUND.M1.1"] } as any).returning();
+    const [runStep] = await db.insert(projectKanbanTasks).values({ projectId: project.id, title: "This week's numbers", status: "done", tags: ["track:run_company"] } as any).returning();
+    await notify({ recipients: [owner.id], actorId: mate.id, kind: "path_step_done", targetId: fundStep.id, projectId: project.id });
+    await notify({ recipients: [owner.id], actorId: mate.id, kind: "path_step_done", targetId: runStep.id, projectId: project.id });
     // A nudge stored the way path-return writes it: projectId:milestoneId.
     await notify({ recipients: [owner.id], actorId: owner.id, allowSelf: true, kind: "next_step", targetId: `${project.id}:FUND.M1.2`, projectId: project.id });
     await settle();
 
     const items = (await bell(owner)).filter((x) => x.project?.id === project.id);
     const hrefs = items.map((x) => x.href);
-    expect(hrefs).toContain(`/projects/${project.id}/manage?section=raise_funding&tab=nova&focus=next`);
     expect(hrefs).toContain(`/projects/${project.id}/manage?section=systemize_business&tab=nova&focus=next`);
-    expect(hrefs).toContain(`/projects/${project.id}/manage?section=raise_funding&tab=nova&focus=FUND.M1.2`);
+    expect(hrefs).toContain(`/projects/${project.id}/manage?section=run_company&tab=nova&focus=next`);
+    expect(hrefs).toContain(`/projects/${project.id}/manage?section=systemize_business&tab=nova&focus=FUND.M1.2`);
+    // Nothing links to the retired section any more.
+    expect(hrefs.some((h) => h?.includes("raise_funding"))).toBe(false);
 
     // A task that's since been deleted still links somewhere useful: the project's dashboard.
-    await db.delete(projectKanbanTasks).where(eq(projectKanbanTasks.id, sysStep.id));
+    await db.delete(projectKanbanTasks).where(eq(projectKanbanTasks.id, runStep.id));
     expect((await bell(owner)).map((x) => x.href)).toContain(`/projects/${project.id}/manage?tab=nova&focus=next`);
   });
 });

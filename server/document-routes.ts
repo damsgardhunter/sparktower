@@ -44,6 +44,59 @@ function getOpenAI(): OpenAI {
 
 const str = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
 
+/**
+ * How many pages one fill request will attempt before handing the rest back to
+ * the client to ask for again.
+ *
+ * The number that matters isn't the page count, it's the wall-clock time: a
+ * page is a model call, and a request that makes twenty of them runs for
+ * minutes, which is longer than most proxies will hold a connection and long
+ * enough that the builder's own edits pile up behind it.
+ */
+const FILL_PAGES_PER_REQUEST = 3;
+
+/** The most versions of `pages` kept for undo. An undo, not an archive. */
+const PAGES_HISTORY_DEPTH = 5;
+
+/**
+ * When a re-plan has to ask first.
+ *
+ * Below the word floor there is nothing much to lose and a confirmation is
+ * just a dialog in the way; above it, losing more than this fraction of the
+ * builder's own writing is the kind of thing they should be told about before
+ * it happens rather than after.
+ */
+const REPLAN_MIN_WORDS_TO_GUARD = 150;
+const REPLAN_MAX_DISCARD_FRACTION = 0.4;
+
+/**
+ * The document's outstanding fill failures after a run: what was already
+ * waiting, minus anything that has now been written, plus whatever just
+ * failed. Kept sorted-by-insertion and deduplicated, and bounded so a
+ * pathological document can't grow the column without limit.
+ */
+function mergeFillFailures(existing: string[] | null, failed: string[], succeeded: string[]): string[] {
+  const done = new Set(succeeded);
+  const out: string[] = [];
+  for (const id of [...(existing ?? []), ...failed]) {
+    if (done.has(id) || out.includes(id)) continue;
+    out.push(id);
+  }
+  return out.slice(-MAX_PAGES * MAX_BLOCKS_PER_PAGE);
+}
+
+/**
+ * The document's `pages` as it stands, pushed onto its undo stack.
+ *
+ * Taken before anything that rewrites the whole structure. A re-plan is a
+ * model call that decides which pages survive, and when it decides wrong the
+ * prose it dropped had nowhere else to exist.
+ */
+function pushPagesHistory(doc: any, reason: string): { at: string; reason: string; pages: unknown }[] {
+  const history = Array.isArray(doc.pagesHistory) ? (doc.pagesHistory as any[]) : [];
+  return [{ at: new Date().toISOString(), reason, pages: doc.pages ?? [] }, ...history].slice(0, PAGES_HISTORY_DEPTH);
+}
+
 function parseJson(raw: string): any {
   const match = raw.match(/\{[\s\S]*\}/);
   return parseModelJson(raw);
@@ -249,6 +302,8 @@ export function registerDocumentRoutes(app: Express) {
         ...d,
         pages: undefined,
         pageCount: Array.isArray(d.pages) ? (d.pages as DocumentPage[]).length : 0,
+        /** Blocks still empty. Without it, a list with the pages stripped can't tell a finished document from a skeleton. */
+        pendingBlocks: Array.isArray(d.pages) ? emptyBlocks(d.pages as DocumentPage[]).length : 0,
       })));
     } catch (error) {
       console.error("List documents error:", error);
@@ -449,8 +504,26 @@ Respond ONLY with valid JSON (no markdown, no code fences):
    * page rather than one for the whole document — a thirty-page document in a
    * single completion runs out of output tokens halfway through and returns
    * unparseable JSON.
+   *
+   * Two things this request deliberately is not:
+   *
+   * It is not unbounded. It used to accept "fill everything" and then make one
+   * model call per page — up to MAX_PAGES of them, plus a PDF render between
+   * tighten passes — inside a single HTTP request. That runs for minutes, dies
+   * to any proxy's idle timeout with the work half done and nothing written,
+   * and holds a connection the whole time. At most FILL_PAGES_PER_REQUEST
+   * pages are attempted here; the response says how many are left and the
+   * client asks again, so progress is saved between pages instead of at the
+   * end.
+   *
+   * And it is not a whole-document write. The blocks it filled are merged onto
+   * whatever the document says *now*, read back after the model calls return.
+   * The old code snapshotted `pages` at the top of the request and PATCHed the
+   * whole array back minutes later, so every edit the builder made while
+   * waiting — typing in another block, moving one, renaming a page — was
+   * silently reverted to the snapshot.
    */
-  app.post("/api/documents/:docId/fill", isAuthenticated, async (req: any, res) => {
+  app.post("/api/documents/:docId/fill", isAuthenticated, rateLimit("ai"), async (req: any, res) => {
     try {
       const doc = await loadDocument(req, res);
       if (!doc) return;
@@ -459,8 +532,8 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       const ent = await requireFeature(res, userId, "aiMilestones", "The Nova document builder");
       if (!ent) return;
 
-      const { blockId, guidance, refill, pageIndex } = req.body as {
-        blockId?: string; guidance?: string; refill?: boolean; pageIndex?: number;
+      const { blockId, guidance, refill, pageIndex, retryFailed } = req.body as {
+        blockId?: string; guidance?: string; refill?: boolean; pageIndex?: number; retryFailed?: boolean;
       };
       const pages = (doc.pages as DocumentPage[]) || [];
       const settings = coerceSettings(doc.settings);
@@ -472,6 +545,14 @@ Respond ONLY with valid JSON (no markdown, no code fences):
           for (const b of p.blocks) if (b.id === blockId) targets.push({ pageIndex, block: b });
         });
         if (!targets.length) return res.status(404).json({ message: "That block isn't in this document." });
+      } else if (retryFailed) {
+        // Exactly the blocks a previous run couldn't write, remembered on the
+        // document so the builder isn't paying to re-fill the pages that worked.
+        const wanted = new Set((doc.fillFailures as string[] | null) ?? []);
+        pages.forEach((p, idx) => {
+          for (const b of p.blocks) if (b.kind !== "spacer" && wanted.has(b.id)) targets.push({ pageIndex: idx, block: b });
+        });
+        if (!targets.length) return res.status(400).json({ message: "Nothing is waiting on a retry." });
       } else if (Number.isFinite(Number(pageIndex))) {
         // One page at a time, so a builder is never stuck because the
         // whole-document run believes there's nothing left to do.
@@ -494,13 +575,6 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         return res.status(400).json({ message: "Every block already has content. Use a re-fill if you want it rewritten." });
       }
 
-      const cost = blockId ? CREDIT_COSTS.documentBlockFill : documentFillCost(targets.length);
-      if (!(await requireCredits(res, userId, cost, "filling in the document"))) return;
-
-      const project = await storage.getProject(doc.projectId);
-      const state = await buildOperableProjectState(doc.projectId, { includeIds: false });
-      const knownIds = await collectProjectIds(doc.projectId);
-
       // Grouped by page: one completion per page keeps each response small
       // enough to come back as valid JSON.
       const byPage = new Map<number, DocumentBlock[]>();
@@ -509,6 +583,25 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         list.push(t.block);
         byPage.set(t.pageIndex, list);
       }
+
+      /*
+       * The bound on this request. Pages beyond it are left for the next call,
+       * and `pagesRemaining` in the response is what tells the client to make
+       * it. Three because that is roughly a minute of model time — long enough
+       * to be worth one round trip, short enough to land inside any proxy's
+       * idle timeout with the result written.
+       */
+      const deferred = [...byPage.keys()].sort((a, b) => a - b).slice(FILL_PAGES_PER_REQUEST);
+      for (const index of deferred) byPage.delete(index);
+      const attempted = new Set(targets.filter((t) => byPage.has(t.pageIndex)).map((t) => t.block.id));
+
+      // Priced on what this request will actually attempt, not on everything
+      // the builder asked for across the whole loop.
+      const cost = blockId ? CREDIT_COSTS.documentBlockFill : documentFillCost(attempted.size);
+      if (!(await requireCredits(res, userId, cost, "filling in the document"))) return;
+
+      const state = await buildOperableProjectState(doc.projectId, { includeIds: false });
+      const knownIds = await collectProjectIds(doc.projectId);
 
       const filled = new Map<string, string>();
       const failedPages: string[] = [];
@@ -596,20 +689,53 @@ Return one entry per block you were asked to write, and nothing else.`,
         }
       }
 
+      /*
+       * Which blocks this run was asked for and did not deliver.
+       *
+       * Remembered on the document rather than mentioned once in this
+       * response. A block that failed looks exactly like a block nobody has
+       * written yet, so without this the only honest recovery was re-filling
+       * the whole document and paying for the pages that already worked.
+       */
+      const failedBlockIds = [...attempted].filter((id) => !filled.has(id));
+
       if (!filled.size) {
+        await storage.updateDocument(doc.id, {
+          fillFailures: mergeFillFailures(doc.fillFailures as string[] | null, failedBlockIds, []),
+        } as any).catch((err) => console.error("Couldn't record fill failures:", err));
         return res.status(502).json({
           message: "Nova couldn't write any of that. Please try again.",
-          failedPages,
+          failedPages, failedBlockIds,
         });
       }
 
-      // Through normalizePage so per-kind content rules are enforced on the
-      // way in — a heading block that came back as three paragraphs becomes
-      // one line here rather than rendering as a wall of 15pt text.
-      const nextPages = pages.map((page) => normalizePage({
+      /*
+       * Merge onto the document as it is NOW, not as it was when this request
+       * started.
+       *
+       * Minutes have passed and the builder has been typing the whole time:
+       * autosave has written their edits, and re-sending the snapshot this
+       * request opened with would delete every one of them. Only the blocks
+       * this run was responsible for are touched; a block that has since been
+       * deleted is simply not there to write to.
+       *
+       * Through normalizePage so per-kind content rules are enforced on the
+       * way in — a heading block that came back as three paragraphs becomes
+       * one line here rather than rendering as a wall of 15pt text.
+       */
+      const current = await storage.getDocument(doc.id);
+      const currentPages = ((current?.pages as DocumentPage[]) || pages);
+      const landed = new Set<string>();
+      const nextPages = currentPages.map((page) => normalizePage({
         ...page,
-        blocks: page.blocks.map((b) => (filled.has(b.id) ? { ...b, content: filled.get(b.id)! } : b)),
+        blocks: page.blocks.map((b) => {
+          if (!filled.has(b.id)) return b;
+          landed.add(b.id);
+          return { ...b, content: filled.get(b.id)! };
+        }),
       }));
+      /** Written by Nova, then found to have no home: the builder deleted the block while it wrote. */
+      const droppedBlocks = filled.size - landed.size;
 
       /*
        * Verify the fill against the plan before saving.
@@ -619,18 +745,24 @@ Return one entry per block you were asked to write, and nothing else.`,
        * The word budgets in the prompt get close but a model still runs over,
        * so this measures the real render and shortens any page that spills.
        * Included in the fill's price: they paid for a document that fits.
+       *
+       * Scoped to the pages this run wrote. Tightening a page the builder
+       * filled last week, in a request they made about a different page, is a
+       * rewrite they didn't ask for.
        */
       let finalPages = nextPages;
       let tightened = 0;
       let stillOverflowing = 0;
       if (!blockId) {
+        const touched = [...byPage.keys()].filter((i) => i < nextPages.length);
         const project = await storage.getProject(doc.projectId);
         const result = await tightenPages({
-          title: doc.title,
+          title: current?.title || doc.title,
           pages: nextPages,
           settings,
           projectTitle: project?.title || "",
           ent,
+          only: touched,
           maxPasses: 2,
           knownIds,
         }).catch((err) => {
@@ -644,7 +776,10 @@ Return one entry per block you were asked to write, and nothing else.`,
         }
       }
 
-      const updated = await storage.updateDocument(doc.id, { pages: finalPages } as any);
+      const updated = await storage.updateDocument(doc.id, {
+        pages: finalPages,
+        fillFailures: mergeFillFailures(current?.fillFailures as string[] | null, failedBlockIds, [...landed]),
+      } as any);
 
       /*
        * Charged for what actually landed, not what was attempted. A page whose
@@ -658,10 +793,21 @@ Return one entry per block you were asked to write, and nothing else.`,
       res.json({
         document: updated,
         blocksFilled: filled.size,
-        blocksRequested: targets.length,
+        blocksRequested: attempted.size || targets.length,
         blocksTightened: tightened,
         stillOverflowing,
         failedPages,
+        failedBlockIds: (updated.fillFailures as string[]) ?? [],
+        // Content Nova wrote for a block the builder deleted meanwhile. Not an
+        // error, but it is why "wrote 6 blocks" can show 5 of them.
+        droppedBlocks,
+        /*
+         * How much of the ask this request did not attempt. The client loops
+         * on this rather than the server holding one connection open for the
+         * whole document.
+         */
+        pagesRemaining: deferred.length,
+        nextPageIndex: deferred.length ? deferred[0] : null,
         // Surfaced so a partial run is visible rather than silent.
         unmatchedIds: unmatched.length,
         creditsCharged: actualCost,
@@ -685,7 +831,7 @@ Return one entry per block you were asked to write, and nothing else.`,
       const ent = await requireFeature(res, userId, "aiMilestones", "The Nova document builder");
       if (!ent) return;
 
-      const { feedback } = req.body as { feedback?: string };
+      const { feedback, confirmDiscard } = req.body as { feedback?: string; confirmDiscard?: boolean };
       if (!(await requireCredits(res, userId, CREDIT_COSTS.documentPlan, "a document re-plan"))) return;
 
       const pages = (doc.pages as DocumentPage[]) || [];
@@ -734,19 +880,79 @@ Respond ONLY with valid JSON:
         return res.status(502).json({ message: "Nova couldn't restructure that. Try describing what you want differently.", code: "model_unreadable" });
       }
 
-      // Carry existing content across by id, so a restructure never silently
-      // discards prose the builder already has.
-      const existingContent = new Map<string, string>();
-      for (const p of pages) for (const b of p.blocks) if (b.content.trim()) existingContent.set(b.id, b.content);
-      for (const p of nextPages) {
-        for (const b of p.blocks) {
-          if (!b.content.trim() && existingContent.has(b.id)) b.content = existingContent.get(b.id)!;
-        }
+      /*
+       * Carry existing content across, so a restructure never silently
+       * discards prose the builder already has.
+       *
+       * By id first, then by what the block actually is. Matching on id alone
+       * was not enough and quietly lost work: the prompt asks for new blocks to
+       * carry an empty id, and `coercePages` mints a fresh UUID for any block
+       * that arrives without one — so a model that re-emits a surviving block
+       * without repeating its id produces a block that is, as far as the id is
+       * concerned, brand new, and its paragraphs are gone. The fallback key is
+       * the parts of a block a restructure doesn't change: what it is called,
+       * what kind it is, and where on its page it sits. Each source block is
+       * spent once, so two blocks with the same headline can't both claim it.
+       */
+      const written = pages.flatMap((p, pageIdx) => p.blocks
+        .filter((b) => b.content.trim())
+        .map((b) => ({ block: b, pageIdx })));
+      const byId = new Map(written.map((w) => [w.block.id, w] as const));
+      const shapeKey = (b: DocumentBlock, pageIdx: number) =>
+        `${pageIdx}|${b.kind}|${b.col},${b.row}|${b.headline.trim().toLowerCase()}`;
+      const byShape = new Map<string, typeof written[number]>();
+      for (const w of written) {
+        const key = shapeKey(w.block, w.pageIdx);
+        if (!byShape.has(key)) byShape.set(key, w);
       }
 
-      const updated = await storage.updateDocument(doc.id, { pages: nextPages } as any);
+      const claimed = new Set<string>();
+      nextPages.forEach((p, pageIdx) => {
+        for (const b of p.blocks) {
+          if (b.content.trim()) continue;
+          const match = byId.get(b.id) ?? byShape.get(shapeKey(b, pageIdx));
+          if (!match || claimed.has(match.block.id)) continue;
+          claimed.add(match.block.id);
+          b.content = match.block.content;
+        }
+      });
+
+      /*
+       * Refuse a restructure that would throw most of the writing away.
+       *
+       * Measured in words, not blocks: dropping four empty planned blocks is
+       * nothing, dropping the one block holding two thousand words is the
+       * document. Over the threshold the builder is asked rather than told —
+       * `confirmDiscard` is them saying yes, having been shown the number. The
+       * credit isn't spent on a refusal.
+       */
+      const wordsOf = (text: string) => text.trim().split(/\s+/).filter(Boolean).length;
+      const totalWords = written.reduce((n, w) => n + wordsOf(w.block.content), 0);
+      const keptWords = written.filter((w) => claimed.has(w.block.id)).reduce((n, w) => n + wordsOf(w.block.content), 0);
+      const lostWords = totalWords - keptWords;
+      if (!confirmDiscard && totalWords >= REPLAN_MIN_WORDS_TO_GUARD && lostWords / totalWords > REPLAN_MAX_DISCARD_FRACTION) {
+        return res.status(422).json({
+          message: `That restructure drops ${lostWords} of your ${totalWords} written words. Confirm if you want it anyway.`,
+          code: "replan_discards_content",
+          lostWords, totalWords,
+          lostBlocks: written.filter((w) => !claimed.has(w.block.id)).map((w) => ({
+            headline: w.block.headline, page: pages[w.pageIdx]?.title ?? `Page ${w.pageIdx + 1}`, words: wordsOf(w.block.content),
+          })),
+        });
+      }
+
+      const updated = await storage.updateDocument(doc.id, {
+        pages: nextPages,
+        // Taken before the overwrite, so /undo has something to go back to.
+        pagesHistory: pushPagesHistory(doc, "replan"),
+      } as any);
       await storage.deductCredits(userId, CREDIT_COSTS.documentPlan);
-      res.json({ document: updated, approach: str(parsed.approach, 1000), creditsCharged: CREDIT_COSTS.documentPlan });
+      res.json({
+        document: updated, approach: str(parsed.approach, 1000),
+        creditsCharged: CREDIT_COSTS.documentPlan,
+        carriedBlocks: claimed.size, lostWords, totalWords,
+        canUndo: true,
+      });
     } catch (error) {
       console.error("Document replan error:", error);
       respondToAiError(res, error, "Nova couldn't restructure that document");
@@ -911,8 +1117,30 @@ Respond ONLY with valid JSON:
         projectTitle: project?.title || "",
       });
 
+      /*
+       * The PDF is private, readable by the project's team.
+       *
+       * It was written with no ACL policy at all, and `GET /objects/...` only
+       * enforces access on objects whose policy says "private" — so a
+       * published document was downloadable by anyone holding the URL, with no
+       * account and no session. That URL is not a secret: it is stored on a
+       * `project_files` row, handed to every team member, and quoted in
+       * activity. A business plan, a financial model or a board update on a
+       * private project was one copied link away from the open internet.
+       *
+       * Owner alone isn't enough either: the rest of the team downloads this
+       * from the Files tab, so the project's members are named as readers.
+       */
       const { ObjectStorageService } = await import("./replit_integrations/object_storage");
-      const objectPath = await new ObjectStorageService().writeObjectBuffer(pdf, "application/pdf");
+      const { ObjectAccessGroupType, ObjectPermission } = await import("./replit_integrations/object_storage/objectAcl");
+      const objectPath = await new ObjectStorageService().writeObjectBuffer(pdf, "application/pdf", {
+        owner: userId,
+        visibility: "private",
+        aclRules: [{
+          group: { type: ObjectAccessGroupType.PROJECT_MEMBER, id: doc.projectId },
+          permission: ObjectPermission.READ,
+        }],
+      });
 
       const fileName = `${safeFileName(doc.title)}.pdf`;
       let file;
@@ -951,13 +1179,73 @@ Respond ONLY with valid JSON:
     }
   });
 
+  /**
+   * Puts the structure back the way it was before the last re-plan.
+   *
+   * A restructure is the one action here that can destroy prose, and it is a
+   * model call, so "it dropped the section I cared about" is a normal outcome
+   * rather than a bug. Without this the only recovery was retyping. The
+   * current pages go on the stack on the way past, so undo is itself
+   * undoable — pressing it twice returns to where you were, which is what
+   * everyone expects from undo and nobody expects from a restore.
+   */
+  app.post("/api/documents/:docId/undo", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
+    try {
+      const doc = await loadDocument(req, res);
+      if (!doc) return;
+      const history = Array.isArray(doc.pagesHistory) ? (doc.pagesHistory as { at: string; reason: string; pages: unknown }[]) : [];
+      const [previous, ...rest] = history;
+      if (!previous) return res.status(400).json({ message: "There's nothing to undo on this document.", code: "no_history" });
+
+      const restored = coercePages(previous.pages);
+      if (!restored.length) return res.status(400).json({ message: "That earlier version can't be restored.", code: "no_history" });
+
+      const updated = await storage.updateDocument(doc.id, {
+        pages: restored,
+        pagesHistory: [{ at: new Date().toISOString(), reason: "undo", pages: doc.pages ?? [] }, ...rest].slice(0, PAGES_HISTORY_DEPTH),
+      } as any);
+      res.json({ document: updated, restoredFrom: previous.at, reason: previous.reason, canUndo: true });
+    } catch (error) {
+      console.error("Document undo error:", error);
+      res.status(500).json({ message: "Couldn't undo that" });
+    }
+  });
+
   app.delete("/api/documents/:docId", isAuthenticated, async (req: any, res) => {
     try {
       const doc = await loadDocument(req, res);
       if (!doc) return;
+
+      /*
+       * The document's published PDF goes with it.
+       *
+       * Deleting the document used to delete one row and leave two things
+       * standing: the `project_files` entry, which kept the PDF listed in the
+       * Files tab pointing at a document that no longer exists, and the stored
+       * object itself, still served by `GET /objects/...` to anyone with the
+       * link. So "delete this document" removed it from the editor and left
+       * the finished, downloadable copy exactly where it was.
+       *
+       * The object is made unreadable rather than erased: the bytes may still
+       * be referenced by an older Files row a member kept, and a dangling ACL
+       * on a deleted object costs nothing, while a 404 on someone's live file
+       * costs them their file. Both steps are best-effort — the document is
+       * going either way, and failing the delete because the bucket hiccuped
+       * would leave the builder unable to remove it at all.
+       */
+      if (doc.fileId) {
+        await storage.deleteProjectFile(doc.fileId)
+          .catch((err) => console.error(`[documents] couldn't remove the Files row for ${doc.id}:`, err));
+      }
+      if (doc.pdfUrl?.startsWith("/objects/")) {
+        await revokePublishedPdf(doc.pdfUrl, (req.user as any).id)
+          .catch((err) => console.error(`[documents] couldn't lock down the PDF for ${doc.id}:`, err));
+      }
+
       await storage.deleteDocument(doc.id);
       res.json({ success: true });
     } catch (error) {
+      console.error("Document delete error:", error);
       res.status(500).json({ message: "Failed to delete the document" });
     }
   });
@@ -982,6 +1270,23 @@ async function loadDocument(req: any, res: any) {
     return null;
   }
   return doc;
+}
+
+/**
+ * Makes a published PDF unreadable, for a document that no longer exists.
+ *
+ * A private policy with nobody on it. The serving route enforces
+ * `visibility: "private"`, the owner is deliberately set to a value no account
+ * can ever have — an owner always passes the check, so naming the person who
+ * pressed delete would leave the file readable by exactly the person who asked
+ * for it to be gone. Deleting the bytes would be tidier and is deliberately
+ * not what happens: object paths outlive the rows that point at them, and
+ * taking away access is reversible in a way that taking away the file is not.
+ */
+async function revokePublishedPdf(objectPath: string, deletedBy: string): Promise<void> {
+  const { ObjectStorageService, setObjectAclPolicy } = await import("./replit_integrations/object_storage");
+  const file = await new ObjectStorageService().getObjectEntityFile(objectPath);
+  await setObjectAclPolicy(file, { owner: `deleted-document:${deletedBy}`, visibility: "private", aclRules: [] });
 }
 
 function safeFileName(title: string): string {

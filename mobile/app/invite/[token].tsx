@@ -17,9 +17,7 @@ import { api, writePref } from "../../src/api/client";
 import { useAuth } from "../../src/auth/AuthContext";
 import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
 import { Avatar, Btn, Loading } from "../../src/components/ui";
-
-/** The same key the web uses (shared/invites.ts); mobile can't import from @shared. */
-const PENDING_INVITE_KEY = "st_pending_invite";
+import { PENDING_INVITE_KEY } from "../../src/pendingDestination";
 
 interface InviteView {
   status: "pending" | "accepted" | "revoked" | "expired";
@@ -55,6 +53,10 @@ export default function InviteAccept() {
    * Held on the device, not just in this screen's state: someone signing up
    * from here goes through sign-in and onboarding first, and the link they
    * tapped is long gone by the time they come back.
+   *
+   * Read back by takePendingDestination() in app/index.tsx and at the end of
+   * onboarding in app/welcome.tsx — which is what makes the promise below
+   * ("we'll bring you back here") true.
    */
   useEffect(() => { if (token && !user) writePref(PENDING_INVITE_KEY, String(token)); }, [token, user]);
 

@@ -48,7 +48,7 @@ export const promotionCategoryLabel = (id: string) => PROMOTION_CATEGORIES.find(
 export const GOAL_AFFINITY: Record<string, string[]> = {
   ship_mvp: ["ai_coding", "models", "hosting", "backend", "auth_payments", "design", "launch"],
   systemize_business: ["workflow", "no_code", "analytics", "auth_payments", "misc"],
-  raise_funding: ["launch", "analytics", "hosting", "design"],
+  run_company: ["workflow", "analytics", "no_code", "misc"],
 };
 
 // ─── Video links ─────────────────────────────────────────────────────────────

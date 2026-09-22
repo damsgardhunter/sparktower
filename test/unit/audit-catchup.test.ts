@@ -47,6 +47,41 @@ describe("keeping the catch-up brief and true", () => {
     expect(sectionOf({ op: "update_scope" })).toBe("brief");
   });
 
+  it("won't tell a builder to cancel work when it only read part of the codebase", () => {
+    /*
+     * The failure this exists to stop: a builder had shipped a whole wedge
+     * into the product, the audit read a snapshot taken before that work
+     * landed, saw "no trace of it in the code", and proposed retiring the
+     * loop and the cards for the thing they had just built. Absence in a
+     * digest is a fact about the digest.
+     *
+     * What still lands is everything that adds: the feature it can see, the
+     * loop it can see, the milestone it can see. A partial audit goes on
+     * helping with what is there and stops arguing with what it could not.
+     */
+    const board = ctx({
+      partialView: true,
+      tasks: [
+        { id: "t1", title: "Weekly check-in composer", status: "todo" },
+        { id: "t2", title: "Stripe checkout", status: "done" },
+      ],
+      loops: [
+        { id: "l1", title: "Ship an MVP", description: "1. a 2. b", type: "product" },
+        { id: "l2", title: "Invite a collaborator", description: "1. invite 2. accept", type: "growth" },
+      ],
+    });
+    const { operations, dropped } = tidyCatchUp([
+      { op: "retire_loop", id: "l2", reason: "no trace of invites in the code" },
+      { op: "retire_task", id: "t1", reason: "check-ins are not in the code" },
+      { op: "update_task", id: "t2", status: "todo" },
+      { op: "create_task", title: "Company accounts with training seasons", status: "done", description: "server/company-routes.ts" },
+      { op: "complete_path_milestone", backboneId: "SHIP.M1.5", evidence: "client/src/pages/companies.tsx" },
+    ], board);
+
+    expect(operations.map((o) => o.op), "nothing that takes work away").toEqual(["create_task", "complete_path_milestone"]);
+    expect(dropped.find((d) => d.reason.includes("only saw part of the codebase"))?.count).toBe(3);
+  });
+
   it("files drift — a card for removed work, a done card with no code — for the builder's OK", () => {
     expect(sectionOf({ op: "retire_task", id: "t1", reason: "feature removed" })).toBe("drift");
     const board = ctx({

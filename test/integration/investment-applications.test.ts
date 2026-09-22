@@ -35,9 +35,13 @@ describe("investment applications", () => {
   it("go from the public page to the founder's inbox, and back to the investor as a status", async () => {
     const app = await getTestApp();
     const [founder, investor, stranger] = [await person(app, "Founder"), await person(app, "Investor"), await person(app, "Stranger")];
-    const project = (await founder.agent.post("/api/projects").send({
-      title: "Brightside", description: "A commercial cleaning company growing across the city.", category: "services", goal: "raise_funding", subcategory: "other",
-    })).body;
+    // Investment applications are the investor route's tool, which lives on
+    // Systemize now that the funding path has folded into it.
+    const created = await founder.agent.post("/api/projects").send({
+      title: "Brightside", description: "A commercial cleaning company growing across the city.", category: "services", goal: "systemize_business", subcategory: "service",
+    });
+    expect(created.status).toBe(200);
+    const project = created.body;
     const url = `/api/projects/${project.id}/investment`;
 
     // Closed by default; opening needs a headline.
@@ -99,9 +103,11 @@ describe("investment applications", () => {
   it("aren't taken by a private project", async () => {
     const app = await getTestApp();
     const founder = await person(app, "Quiet");
-    const project = (await founder.agent.post("/api/projects").send({
-      title: "Quiet Co", description: "A private project that shouldn't be taking investment applications.", category: "services", goal: "raise_funding", subcategory: "other",
-    })).body;
+    const created = await founder.agent.post("/api/projects").send({
+      title: "Quiet Co", description: "A private project that shouldn't be taking investment applications.", category: "services", goal: "systemize_business", subcategory: "service",
+    });
+    expect(created.status).toBe(200);
+    const project = created.body;
     // Private projects are a paid plan; set it directly rather than buy one.
     await db.update(projects).set({ isPrivate: true }).where(eq(projects.id, project.id));
     const res = await founder.agent.patch(`/api/projects/${project.id}/investment`).send({ open: true, ask: { headline: "Raising" } });

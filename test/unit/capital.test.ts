@@ -9,6 +9,7 @@ import {
   BUSINESS_HISTORY_QUESTIONS, CAPITAL_GOAL_QUESTIONS,
 } from "@shared/capital";
 import { validateIntake, renderIntake, resolveTree, mainLineMilestones, allMilestoneIds, PATH_TREES } from "@shared/phase-trees";
+import { goalOfBackboneId, normaliseGoal } from "@shared/goals";
 
 const strong = {
   goal: { why: ["wealth", "legacy"], path: ["buy"], role: ["operator"], horizon: ["forever"] },
@@ -135,27 +136,47 @@ describe("a résumé", () => {
   });
 });
 
-describe("the funding path", () => {
-  it("is the capital profile and map, then only the chosen route's four phases", () => {
-    expect(mainLineMilestones(resolveTree("raise_funding", "other")).map((m) => m.id)).toEqual([
+describe("the funding routes, inside Systemize", () => {
+  /*
+   * The Raise path was retired and its phases moved into Systemize intact.
+   * These are the claims that make that a move rather than a loss: the same
+   * capital profile and map, the same route choice, each route's four phases,
+   * and the same FUND ids — which is what lets finished work and the score
+   * carry across without rewriting a single task.
+   */
+  const fundIds = (phases: ReturnType<typeof resolveTree>) =>
+    phases.flatMap((p) => p.milestones).map((m) => m.id).filter((id) => id.startsWith("FUND."));
+
+  it("keeps the capital profile and map on Systemize's main line", () => {
+    expect(fundIds(resolveTree("systemize_business", "other").filter((p) => !p.route))).toEqual([
       "FUND.C1.1", "FUND.C1.2", "FUND.C1.3", "FUND.C1.4", "FUND.C1.5", "FUND.C1.6", "FUND.C2.1", "FUND.C2.2",
     ]);
+    const main = mainLineMilestones(resolveTree("systemize_business", "other"));
+    expect(main.find((m) => m.id === "FUND.C2.2")!.routeQuestion).toBe("route");
+    expect(main.find((m) => m.id === "FUND.C1.4")!.prefill).toBe("resume");
+  });
+
+  it("shows only the chosen route's four phases", () => {
     for (const route of CAPITAL_ROUTE_IDS) {
-      const phases = resolveTree("raise_funding", "other", route).slice(2);
+      const phases = resolveTree("systemize_business", "other", route).filter((p) => p.route);
       expect(phases, route).toHaveLength(4);
       expect(phases.every((p) => p.route === route)).toBe(true);
       expect(phases.flatMap((p) => p.milestones).length, route).toBeGreaterThanOrEqual(12);
       expect(phases.flatMap((p) => p.milestones).some((m) => m.inMarket), `${route} has a moment it goes to market`).toBe(true);
     }
-    const route = mainLineMilestones(resolveTree("raise_funding", "other")).find((m) => m.id === "FUND.C2.2")!;
-    expect(route.routeQuestion).toBe("route");
-    expect(mainLineMilestones(resolveTree("raise_funding", "other")).find((m) => m.id === "FUND.C1.4")!.prefill).toBe("resume");
   });
 
-  it("knows every milestone it has authored, across routes", () => {
-    const ids = allMilestoneIds("raise_funding");
+  it("knows every funding milestone it has authored, across routes", () => {
+    const ids = allMilestoneIds("systemize_business");
     expect(ids.has("FUND.D4.3") && ids.has("FUND.F4.3") && ids.has("FUND.C1.1")).toBe(true);
-    expect(ids.has("FUND.M1.1")).toBe(false);
-    expect(ids.size).toBe(PATH_TREES.raise_funding.phases.flatMap((p) => p.milestones).length);
+    expect(ids.has("SYS.F1.1")).toBe(true);
+    expect(ids.size).toBe(PATH_TREES.systemize_business.phases.flatMap((p) => p.milestones).length);
+  });
+
+  it("files FUND milestones under Systemize, so old work lands there", () => {
+    expect(goalOfBackboneId("FUND.C1.6")).toBe("systemize_business");
+    expect(goalOfBackboneId("RUN.S1.1")).toBe("run_company");
+    expect(normaliseGoal("raise_funding")).toBe("systemize_business");
+    expect(PATH_TREES).not.toHaveProperty("raise_funding");
   });
 });

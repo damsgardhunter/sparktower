@@ -18,7 +18,7 @@ import { pgTable, timestamp } from "drizzle-orm/pg-core";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
-import { simSeasons, simSeats, simVentures, simDecisions, simReports } from "@shared/schema";
+import { simSeasons, simSeats, simVentures, simDecisions, simReports, simListings, simRecoveryMoves } from "@shared/schema";
 import { settleLobbies, startReadySeasons, tickSeason, runSimulationPass } from "../../server/simulation-tick";
 import type { World } from "@shared/simulation/types";
 
@@ -524,5 +524,188 @@ describe("the pass", () => {
     await makeDue(seasonId);
     const second = await runSimulationPass();
     expect(second!.resolved).toBeGreaterThanOrEqual(1);
+  }, 180_000);
+});
+
+describe("a seat that stays away", () => {
+  it("keeps its staff through a second missed year, rather than firing everyone", async () => {
+    /*
+     * The operations chair files in year one and then misses two years while
+     * the marketing chair keeps filing. "Last year" used to mean year minus
+     * one and nothing older, so in year three the operations chair's caretaker
+     * was handed nothing — and nothing, to the engine, is a headcount of zero.
+     * Its last real decision is what it should run on, stepped down.
+     */
+    const app = await getTestApp();
+    const { players, ventureId, seasonId } = await readyRoom(app);
+    await startReadySeasons();
+
+    const [started] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    const team = (started.world as World).companies.find((c) => c.id === ventureId)!;
+    const cmo = (year: number) => ({
+      ventureId, userId: players[1].id, role: "cmo", year, submittedAt: new Date(),
+      payload: { price: 19, brandSpend: 100_000, performanceSpend: 50_000, celebritySpend: 0, targetCities: [] },
+    });
+    await db.insert(simDecisions).values([
+      {
+        ventureId, userId: players[4].id, role: "coo", year: 1, submittedAt: new Date(),
+        payload: { capacityTarget: team.capacity, supportSpend: 100_000, efficiencySpend: 0, headcount: 12 },
+      },
+      cmo(1), cmo(2), cmo(3),
+    ]);
+
+    for (const year of [1, 2, 3]) {
+      await makeDue(seasonId);
+      expect(await tickSeason(seasonId), `year ${year}`).toBe(year);
+      const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+      const company = (season.world as World).companies.find((c) => c.id === ventureId)!;
+      expect(company.staff, `staff after year ${year}`).toBe(12);
+    }
+  }, 180_000);
+});
+
+describe("one tick at a time", () => {
+  it("resolves a year once when two callers arrive together, and lists a fire sale once", async () => {
+    /*
+     * A double-click on "end this year now", or a click landing while the
+     * minute's pass is mid-tick. Both used to run the whole year; the loser's
+     * marketplace writes stood even though its world was thrown away, so every
+     * fire-sold asset went on the market twice.
+     */
+    const app = await getTestApp();
+    const { players, ventureId, seasonId } = await readyRoom(app);
+    await startReadySeasons();
+
+    const [started] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    const world = started.world as World;
+    const assets = [
+      { id: "twice-a", kind: "patent", name: "Matching patent", effect: { quality: 3 }, bookValue: 1_000_000 },
+      { id: "twice-b", kind: "site", name: "Second office", effect: { capacity: 1000 }, bookValue: 800_000 },
+    ];
+    world.companies = world.companies.map((c) => (c.id === ventureId ? { ...c, cash: 100_000, creditLimit: 0, assets } as any : c));
+    await db.update(simSeasons).set({ world }).where(eq(simSeasons.id, seasonId));
+    await db.insert(simRecoveryMoves).values({ ventureId, userId: players[0].id, year: 1, kind: "fire_sale" });
+
+    await makeDue(seasonId);
+    const results = await Promise.all([tickSeason(seasonId), tickSeason(seasonId)]);
+    expect(results.sort()).toEqual([1, null]);
+
+    const [after] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    expect(after.year).toBe(2);
+    const listed = await db.select().from(simListings)
+      .where(and(eq(simListings.seasonId, seasonId), eq(simListings.year, 2)));
+    expect(listed.map((l) => (l.asset as any).id).sort(), "each fire-sold asset listed once").toEqual(["twice-a", "twice-b"]);
+    expect(listed.every((l) => l.forced), "and marked as a fire sale").toBe(true);
+  }, 180_000);
+});
+
+describe("a year that is closing", () => {
+  it("refuses decisions, bids and recovery moves once the year is due, and says why", async () => {
+    /*
+     * From the moment a year is due the tick may already have read what was
+     * filed. Something accepted after that was recorded and then ignored — the
+     * person believed they had acted. Refused instead, with a reason.
+     */
+    const app = await getTestApp();
+    const { players, ventureId, seasonId } = await readyRoom(app);
+    await startReadySeasons();
+
+    // Open: a filing goes in.
+    const open = await players[1].agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { price: 19, brandSpend: 100_000, performanceSpend: 50_000, celebritySpend: 0 } });
+    expect(open.status, JSON.stringify(open.body)).toBe(200);
+
+    await makeDue(seasonId);
+    const late = await players[1].agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { price: 25, brandSpend: 100_000, performanceSpend: 50_000, celebritySpend: 0 } });
+    expect(late.status).toBe(409);
+    expect(late.body).toEqual({ code: "year_closing", message: "This year is closing — it'll open for next year in a moment." });
+
+    const bid = await players[0].agent.post(`/api/sim/ventures/${ventureId}/bids`).send({ listingId: "anything", amount: 1 });
+    expect(bid.status).toBe(409);
+    expect(bid.body.code).toBe("year_closing");
+    const rescue = await players[0].agent.post(`/api/sim/ventures/${ventureId}/recovery`).send({ kind: "restructure" });
+    expect(rescue.status).toBe(409);
+    expect(rescue.body.code).toBe("year_closing");
+
+    // Once the year has moved on, the new one is open.
+    expect(await tickSeason(seasonId)).toBe(1);
+    const next = await players[1].agent.post(`/api/sim/ventures/${ventureId}/decisions`)
+      .send({ decision: { price: 25, brandSpend: 100_000, performanceSpend: 50_000, celebritySpend: 0 } });
+    expect(next.status, JSON.stringify(next.body)).toBe(200);
+    expect(next.body.year).toBe(2);
+  }, 180_000);
+});
+
+describe("after downtime", () => {
+  it("gives the next year a full year from now rather than resolving the overdue ones back to back", async () => {
+    const app = await getTestApp();
+    const { seasonId } = await readyRoom(app);
+    await startReadySeasons();
+
+    // The server was away for five days: years two to five are all "overdue".
+    await db.update(simSeasons)
+      .set({ startsAt: new Date(Date.now() - 5 * 24 * 60 * 60_000), nextTickAt: new Date(Date.now() - 4 * 24 * 60 * 60_000) })
+      .where(eq(simSeasons.id, seasonId));
+
+    expect(await tickSeason(seasonId)).toBe(1);
+    const [after] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    const untilNext = after.nextTickAt!.getTime() - Date.now();
+    expect(untilNext, "a whole year away, not already due").toBeGreaterThan(23 * 60 * 60_000);
+    expect(untilNext).toBeLessThanOrEqual(24 * 60 * 60_000);
+    expect(await tickSeason(seasonId), "nothing more is due").toBeNull();
+  }, 180_000);
+});
+
+describe("matchmaking into a season that is waiting", () => {
+  it("starts a new season rather than keep a ready table waiting past ten minutes", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId } = await readyRoom(app);
+
+    // Ready a minute ago: a newcomer still joins this season.
+    const early = await player(app);
+    const joined = await early.agent.post("/api/sim/join").send({ nicheId: NICHE });
+    const [first] = await db.select().from(simVentures).where(eq(simVentures.id, joined.body.ventureId));
+    expect(first.seasonId).toBe(seasonId);
+
+    // Ready eleven minutes ago: the season takes nobody else.
+    await db.update(simVentures).set({ runningSince: new Date(Date.now() - 11 * 60_000) }).where(eq(simVentures.id, ventureId));
+    const late = await player(app);
+    const placed = await late.agent.post("/api/sim/join").send({ nicheId: NICHE });
+    const [second] = await db.select().from(simVentures).where(eq(simVentures.id, placed.body.ventureId));
+    expect(second.seasonId, "a new season, not the one holding a table up").not.toBe(seasonId);
+  }, 180_000);
+
+  it("stops adding rooms to a season that already has eight", async () => {
+    const app = await getTestApp();
+    const { seasonId } = await readyRoom(app);
+    await db.insert(simVentures).values(Array.from({ length: 7 }, () => ({
+      seasonId, phase: "retired" as const, createdAt: new Date(),
+    })));
+
+    const p = await player(app);
+    const join = await p.agent.post("/api/sim/join").send({ nicheId: NICHE });
+    const [venture] = await db.select().from(simVentures).where(eq(simVentures.id, join.body.ventureId));
+    expect(venture.seasonId).not.toBe(seasonId);
+  }, 180_000);
+});
+
+describe("a room left outside its season", () => {
+  it("is closed rather than left waiting for a year one that has already happened", async () => {
+    /*
+     * A join that committed a new room just after the starter read the
+     * season's rooms left that room in a started season but outside its
+     * world — resolved by nothing, told nothing, for the rest of the season.
+     */
+    const app = await getTestApp();
+    const { seasonId } = await readyRoom(app);
+    await startReadySeasons();
+    const [stranded] = await db.insert(simVentures).values({
+      seasonId, phase: "filling", phaseEndsAt: new Date(Date.now() + 10 * 60_000), createdAt: new Date(),
+    }).returning();
+
+    await startReadySeasons();
+    const [after] = await db.select().from(simVentures).where(eq(simVentures.id, stranded.id));
+    expect(after.phase).toBe("retired");
   }, 180_000);
 });

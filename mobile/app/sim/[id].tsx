@@ -43,6 +43,8 @@ export default function Room() {
   const { data: meta } = useNiches();
 
   const { seconds, text: clock } = useCountdown(venture?.secondsLeft, dataUpdatedAt);
+  // The minute the room waits for people before bots take the empty seats; restarts when someone joins.
+  const bots = useCountdown(venture?.botsInSeconds ?? undefined, dataUpdatedAt);
 
   const roles: SimRole[] = meta?.roles ?? [];
   const roleById = useMemo(() => new Map(roles.map((r) => [r.id, r])), [roles]);
@@ -144,6 +146,7 @@ export default function Room() {
     isCeo: !!venture.you?.isCeo,
     ceoName: ceo?.name ?? null,
     companyName: venture.name,
+    seasonOver: !!venture.seasonOver,
   });
 
   const openSeats = (venture.openRoles ?? [])
@@ -178,6 +181,13 @@ export default function Room() {
               seats.map((seat) => <SeatRow key={seat.userId} seat={seat} roleTitle={titleOf(seat.role)} />)
             )}
             {venture.phase === "filling" && Array.from({ length: waiting }, (_, i) => <EmptySeatRow key={`empty-${i}`} index={i} />)}
+            {venture.phase === "filling" && venture.botsInSeconds != null && (
+              <Text testID="sim-bots-in" style={{ color: colors.textSecondary, fontSize: font.sm, lineHeight: 20, fontFamily: fontFamily.regular, marginTop: spacing.xs }}>
+                {bots.seconds > 0
+                  ? `Waiting for people. Bots take the empty seats in ${bots.text} unless someone joins.`
+                  : "Nobody new arrived, so bots are taking the empty seats…"}
+              </Text>
+            )}
           </Card>
 
           {venture.phase === "claiming" && (
@@ -286,9 +296,10 @@ export default function Room() {
 
           {venture.phase === "retired" && (
             <Card style={{ borderStyle: "dashed" }}>
-              <Empty icon="close-circle-outline" title="This room was retired"
-                body="Not enough people joined before the clock ran out. Nothing was lost — start another."
-                action="Pick a market" onAction={() => router.replace("/sim")} />
+              {/* Two opposite endings share this phase: a season played to the end, and a room that never filled. */}
+              <Empty icon={venture.seasonOver ? "trophy-outline" : "close-circle-outline"} title={copy.title}
+                body={copy.body}
+                action={venture.seasonOver ? "Start a new company" : "Pick a market"} onAction={() => router.replace("/sim")} />
             </Card>
           )}
 

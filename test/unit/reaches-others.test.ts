@@ -50,6 +50,11 @@ const DOESNT_REACH_ANYONE: Record<string, string> = {
   "POST /api/connections/:id/reject": "answering a request that was sent to them",
   "POST /api/messages/:userId/read": "marks a conversation read, for them",
   "POST /api/contests/:id/join": "entering a contest",
+  // Both admin-only, and the admin routes additionally require a session that
+  // has proved its second factor — an account that has not confirmed its own
+  // address cannot be an admin with 2FA on, so the email gate would add nothing.
+  "POST /api/admin/contests": "an admin publishing a contest; admin role plus a proved second factor",
+  "PUT /api/admin/contests/:id": "an admin editing a contest; admin role plus a proved second factor",
   "POST /api/games/:id/submit": "a decision inside a game the two of them already share",
   "POST /api/games/:id/leave": "walking out of a game they are already in",
   "POST /api/contests/:id/submit": "a contest entry, judged by the organiser",
@@ -58,6 +63,11 @@ const DOESNT_REACH_ANYONE: Record<string, string> = {
   "POST /api/projects/:id/application-questions": "sets the questions on their own project",
   "POST /api/projects/:id/health-findings/feedback": "rates a finding Nova gave them, seen by nobody else",
   "DELETE /api/health-findings/feedback/:feedbackId": "removing their own rating",
+  "POST /api/company-invites/accept": "joining a company whose admin sent them the link",
+  "POST /api/talent/invites/:id/answer": "answering an invitation that was sent to them",
+  "POST /api/companies/:id/invite-link/reset": "retires the company's own invite links; tells nobody",
+  "POST /api/companies/:id/follows/:projectId": "following is how scouting works, and it carries no words of theirs",
+  "DELETE /api/companies/:id/follows/:projectId": "unfollowing",
   "POST /api/projects/:id/health-check/apply": "applies a health check to their own board",
 };
 
@@ -87,11 +97,13 @@ describe("writes that reach other people", () => {
       "/api/projects/p1/apply", "/api/projects/p1/investment/applications",
       "/api/artifacts/a1/publish", "/api/documents/d1/publish",
       "/api/feed/p1/react", "/api/feed/comments/c1/react", "/api/project-comments/c1/react",
-      "/api/games/g1/messages",
+      "/api/games/g1/messages", "/api/companies/c1/members",
     ]) expect(gated(path), path).toBe(true);
 
     // And leave alone what stays inside their own work.
-    for (const path of ["/api/projects/p1/kanban", "/api/projects/p1", "/api/invites/tok/accept", "/api/feed/p1", "/api/projects/p1/follow"]) {
+    for (const path of ["/api/projects/p1/kanban", "/api/projects/p1", "/api/invites/tok/accept", "/api/feed/p1", "/api/projects/p1/follow",
+      // Changing a colleague's powers or removing them stays inside the company.
+      "/api/companies/c1/members/u1", "/api/companies/c1/members/u1/permissions"]) {
       expect(gated(path), path).toBe(false);
     }
   });

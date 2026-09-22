@@ -39,6 +39,18 @@ export const RATE_LIMITS = {
     max: 60, windowMinutes: 10,
     message: "You're sending messages very quickly. Try again in a few minutes.",
   },
+  /*
+   * Blocking and unblocking. Generous on purpose: this is the one action a
+   * person takes *because* something is going wrong for them, and somebody
+   * working through a pile of harassment from a dozen throwaway accounts must
+   * not be told to come back in an hour. The limit is here only so the pair of
+   * endpoints can't be used as a write amplifier (block/unblock in a loop,
+   * each one deleting connections and matches).
+   */
+  block: {
+    max: 60, windowMinutes: 10,
+    message: "That's a lot of changes to your blocked list at once. Try again in a few minutes.",
+  },
   project: {
     max: 5, windowMinutes: 60,
     message: "You've created several projects already. Try again in an hour.",
@@ -46,6 +58,21 @@ export const RATE_LIMITS = {
   report: {
     max: 10, windowMinutes: 60,
     message: "You've filed several reports. We'll look at those first.",
+  },
+  /**
+   * A report from somebody with no account, filed from a public artifact page.
+   *
+   * There was no way at all for a signed-out reader to report what they were
+   * looking at: the page is the one thing on the site designed to be read by
+   * strangers, and the only response it offered to something abusive was to
+   * close the tab. Reporting it is worth far more than the report form is worth
+   * protecting, so the route exists — counted per address, since there is no
+   * account to count against, and low, because an address that files six
+   * reports on public pages in an hour is not six readers.
+   */
+  reportAnon: {
+    max: 5, windowMinutes: 60,
+    message: "You've reported a few things from here already. We're looking at those.",
   },
   /** Under the hourly limit: a steady trickle of reports all day is a campaign, not a person reading the feed. */
   reportDaily: {
@@ -362,8 +389,18 @@ export type DuplicateAction = keyof typeof DUPLICATE_RULES;
 
 // --- Reports ------------------------------------------------------------
 
-/** What a new report can be filed against. */
-export const REPORT_TARGETS = ["comment", "feed_post", "feed_comment", "project", "user"] as const;
+/**
+ * What a new report can be filed against.
+ *
+ * `message` — a single direct message — was missing, and its absence had a
+ * shape: the only thing you could report about a private conversation was the
+ * *person*. So somebody being threatened in their inbox had to file "this
+ * account is abusive" and hope a reviewer took their word for it, because
+ * nothing carried what was actually said. Reporting the message itself
+ * snapshots the words at the moment of the report, which is what a reviewer
+ * needs and what survives the sender deleting their account.
+ */
+export const REPORT_TARGETS = ["comment", "feed_post", "feed_comment", "message", "project", "user"] as const;
 export type ReportTarget = (typeof REPORT_TARGETS)[number];
 
 /**
@@ -385,6 +422,7 @@ export const REPORT_TARGET_LABEL: Record<StoredReportTarget, string> = {
   comment: "Comment",
   feed_post: "Post",
   feed_comment: "Comment",
+  message: "Direct message",
   project: "Project",
   user: "Person",
 };
@@ -459,11 +497,20 @@ export const REPORT_NOTE_MAX = 500;
  */
 /**
  * Report types a reviewer decides from the queue itself, rather than with the
- * buttons on the content. Every kind of content that can be taken down is
- * here; a report about a whole project or an account is still handled with the
- * takedown and suspend buttons, which do more than hide one row.
+ * buttons on the content. Every kind of content that can be taken down is here.
+ *
+ * `project` joined the list because a reported project previously had no
+ * outcome at all. It was a report *target* but not an actionable one, so the
+ * queue's only lever was suspending the owner — and a suspension blocks writes
+ * without unpublishing anything. A project set up to dox somebody, or to spam,
+ * stayed on the public listing, the leaderboard, Discover and the sitemap while
+ * the report was marked "actioned" and nothing had changed. It is taken down
+ * the same way a post is, through `projects.hiddenAt`.
+ *
+ * `user` is still not here: an account is handled with the suspend button,
+ * which does more than hide one row.
  */
-export const ACTIONABLE_TARGETS = ["comment", "feed_post", "feed_comment"] as const satisfies readonly ReportTarget[];
+export const ACTIONABLE_TARGETS = ["comment", "feed_post", "feed_comment", "project"] as const satisfies readonly ReportTarget[];
 export const isActionableTarget = (t: string): boolean => (ACTIONABLE_TARGETS as readonly string[]).includes(t);
 
 /** What a reviewer can do about a reported comment. */

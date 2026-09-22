@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator, Image, KeyboardAvoidingView, Modal, Platform, Pressable,
   ScrollView, StyleSheet, Text, TextInput, View,
@@ -8,7 +8,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as DocumentPicker from "expo-document-picker";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { api, uploadFile } from "../api/client";
+import { api, readPref, uploadFile, writePref } from "../api/client";
 import { colors, font, fontFamily, radius, spacing } from "../theme";
 import { Avatar, Btn, ListItem, assetUri, errText } from "./ui";
 import { Sheet } from "./Sheet";
@@ -17,6 +17,21 @@ import {
   ASK_MAX, COMPOSER_POST_TYPES, MAX_ASKS, MAX_POST_LENGTH, MAX_POST_MEDIA,
   creditLine, postTypeDef, type Mention, type PostType,
 } from "./feedModel";
+
+/**
+ * Where a half-written post is kept, per person, per audience and per kind.
+ *
+ * Not one key for the composer: "the update I'm writing for Orbit" and "the
+ * question I'm asking as myself" are different pieces of writing, and a single
+ * slot would hand one of them back under the other's heading. The same shape
+ * as the project wizard's draft (app/project/new.tsx), including the debounce
+ * and the tolerance for a corrupt value.
+ */
+const draftKeyFor = (userId: string | null | undefined, postType: string, projectId?: string) =>
+  userId ? `post-draft.${userId}.${postType}.${projectId ?? "me"}` : null;
+
+/** What survives being backgrounded. Uploads and credit choices don't: the URLs may expire and the feedback list may have moved on. */
+interface PostDraft { content: string; mentions: Mention[]; asks: string[] }
 
 interface MyProject { id: string; title: string; isPrivate: boolean }
 interface InboxItem {
@@ -62,6 +77,46 @@ export function PostComposer({
   const [picking, setPicking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  /*
+   * Backgrounding the app mid-update used to lose it.
+   *
+   * A post is often the longest thing anyone writes in this app, and it lived
+   * in component state only — so a phone call, a photo picker that took the
+   * foreground, or iOS reclaiming memory behind a locked screen threw it away
+   * with nothing to say about it. The only signal was coming back to an empty
+   * box. Everything here is best-effort and per-device; it never goes to the
+   * server, and a read that fails just means starting fresh.
+   */
+  const draftKey = draftKeyFor(me.id, postType, projectId);
+  const [restored, setRestored] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!draftKey || restored === draftKey) return;
+    let cancelled = false;
+    void readPref(draftKey).then((raw) => {
+      if (cancelled) return;
+      try {
+        const d: Partial<PostDraft> | null = raw ? JSON.parse(raw) : null;
+        if (typeof d?.content === "string") setContent(d.content);
+        if (Array.isArray(d?.mentions)) setMentions(d.mentions);
+        if (Array.isArray(d?.asks)) setAsks(d.asks.filter((a) => typeof a === "string").slice(0, MAX_ASKS));
+      } catch { /* a corrupt draft isn't worth a crash */ }
+      setRestored(draftKey);
+    }).catch(() => { if (!cancelled) setRestored(draftKey); });
+    return () => { cancelled = true; };
+  }, [draftKey, restored]);
+
+  useEffect(() => {
+    // Only once this key's draft has been read back: writing first would
+    // overwrite what's stored with the empty state it is about to replace.
+    if (!draftKey || restored !== draftKey) return;
+    const empty = !content.trim() && mentions.length === 0 && asks.length === 0;
+    const t = setTimeout(() => {
+      void writePref(draftKey, empty ? null : JSON.stringify({ content, mentions, asks } satisfies PostDraft)).catch(() => {});
+    }, 400);
+    return () => clearTimeout(t);
+  }, [draftKey, restored, content, mentions, asks]);
+
   const { data: projects } = useQuery({
     queryKey: ["feed", "my-projects"],
     queryFn: () => api<MyProject[]>("/api/feed/my-projects"),
@@ -88,6 +143,10 @@ export function PostComposer({
       },
     }),
     onSuccess: () => {
+      // The post is out, so the draft it came from has to go — otherwise
+      // opening the composer again hands back what was just published and
+      // people post it twice.
+      if (draftKey) void writePref(draftKey, null).catch(() => {});
       setContent(""); setMentions([]); setMediaUrls([]); setAsks([]); setCloses(null); setError(null);
       qc.invalidateQueries({ queryKey: ["feed"] });
       if (projectId) qc.invalidateQueries({ queryKey: ["project", projectId] });

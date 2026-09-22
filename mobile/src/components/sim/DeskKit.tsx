@@ -1060,8 +1060,8 @@ export function BufferCutWarning({ cut, yours, isFinance }: {
       )}
 
       <Text style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}>
-        Measured against cash and the drawdown only — the credit line the meter above counts is not spendable past the
-        buffer. Salaries and the cost of opening a city sit outside it.
+        Measured against cash, the drawdown and the credit still unused, as the year counts it. Salaries and the cost
+        of opening a city sit outside it.
       </Text>
     </View>
   );
@@ -1500,7 +1500,7 @@ function TargetRow({ progress }: { progress: TargetProgress }) {
             <View style={{ width: `${Math.round((fraction ?? 0) * 100)}%`, height: "100%", backgroundColor: color }} />
           </View>
           <Text style={{ color: colors.textSecondary, fontSize: font.xs, fontFamily: fontFamily.medium, fontVariant: ["tabular-nums"] }}>
-            {source === "committed" ? "Committed so far" : "Now"} {metricRead(target.metric, actual)}
+            {source === "committed" ? (target.metric === "price" ? "In the draft" : "Committed so far") : "Now"} {metricRead(target.metric, actual)}
             <Text style={{ color: colors.textTertiary, fontFamily: fontFamily.regular }}>
               {" · needs "}{targetGoalRead(target)}
             </Text>

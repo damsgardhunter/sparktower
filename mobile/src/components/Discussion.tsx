@@ -5,7 +5,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { useRouter } from "expo-router";
 import { api } from "../api/client";
 import { colors, font, fontFamily, radius, spacing } from "../theme";
-import { Avatar, Btn, Loading, Meta, timeAgo } from "./ui";
+import { Avatar, Btn, ErrorNote, Loading, Meta, errText, timeAgo } from "./ui";
 import { FeedText, MentionInput, ReportSheet, useMe } from "./FeedParts";
 import { MAX_COMMENT_LENGTH, type Mention } from "./feedModel";
 
@@ -37,6 +37,16 @@ export function Discussion({
   const [content, setContent] = useState("");
   const [mentions, setMentions] = useState<Mention[]>([]);
   const [reportId, setReportId] = useState<string | null>(null);
+  /*
+   * What went wrong with the last thing this thread tried.
+   *
+   * Inline rather than the floating NoticeBanner the screens use: a Discussion
+   * is a block inside somebody else's scrolling page, and NoticeBanner is
+   * absolutely positioned — dropped in here it would anchor to this block and
+   * land in the middle of the page rather than above the bottom edge. The
+   * message belongs next to the box that failed anyway.
+   */
+  const [problem, setProblem] = useState<string | null>(null);
 
   const key = ["project", projectId, "comments", targetType, targetId];
 
@@ -53,22 +63,37 @@ export function Discussion({
     qc.invalidateQueries({ queryKey: ["project", projectId, "comment-counts"] });
   };
 
+  /*
+   * All three of these used to fail without saying anything.
+   *
+   * The comment was the expensive one: a refused post (rate limit, a
+   * moderation hold, no connection) cleared nothing and showed nothing, so
+   * what someone had written just sat there looking un-sent while they tapped
+   * Comment again and again. Note that the box is only emptied in onSuccess —
+   * a failure keeps the typed draft and its @mentions exactly as they were, so
+   * "try again" is one tap and not a retype.
+   */
   const post = useMutation({
     mutationFn: () => api(`/api/projects/${projectId}/comments`, {
       method: "POST",
       body: { targetType, targetId, content, mentions },
     }),
-    onSuccess: () => { setContent(""); setMentions([]); invalidate(); },
+    onSuccess: () => { setContent(""); setMentions([]); setProblem(null); invalidate(); },
+    onError: (e) => setProblem(errText(e, "Couldn't post that comment. It's still here — try again.")),
   });
 
   const react = useMutation({
     mutationFn: (commentId: string) => api(`/api/project-comments/${commentId}/react`, { method: "POST" }),
-    onSuccess: invalidate,
+    onSuccess: () => { setProblem(null); invalidate(); },
+    onError: (e) => setProblem(errText(e, "Couldn't register that. Try again.")),
   });
 
   const remove = useMutation({
     mutationFn: (commentId: string) => api(`/api/project-comments/${commentId}`, { method: "DELETE" }),
-    onSuccess: invalidate,
+    onSuccess: () => { setProblem(null); invalidate(); },
+    // A delete that silently does nothing is the worst of the three: the
+    // comment stays on screen and the person assumes it's gone from the page.
+    onError: (e) => setProblem(errText(e, "Couldn't delete that comment. It's still there.")),
   });
 
   if (!open) {
@@ -130,6 +155,7 @@ export function Discussion({
       )}
 
       <View style={{ gap: spacing.xs }}>
+        {problem && <ErrorNote message={problem} />}
         <MentionInput
           value={content}
           onChangeText={setContent}
