@@ -90,11 +90,12 @@ import {
   CHARGEABLE, NO_CHARGE,
   OUTCOME_COPY, formatMoney,
   type TierId,
+  PAY_ENDPOINTS,
 } from "@shared/plans";
 import { walletOf, buyDayPass, spend, recentLedger, hasBuildPass } from "./wallet";
 import { novaBuildPasses } from "@shared/schema";
 import {
-  getUserEntitlements, requireFeature, requireLevel, requireCredits, paymentRequired, PAY_ENDPOINTS,
+  getUserEntitlements, requireFeature, requireLevel, requireCredits, paymentRequired,
   checkPrivateProjectQuota, modelFor, memoryLimitFor, taskLimitFor,
   coachingDirectiveFor, reserveOptionalAi,
 } from "./entitlements";
@@ -6860,7 +6861,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       if (!user) return res.status(404).json({ message: "User not found" });
       const customerId = await ensureStripeCustomer(stripe, user);
 
-      const urls = checkoutReturnUrls(`${req.protocol}://${req.get("host")}`, req.body?.returnTo);
+      const urls = checkoutReturnUrls(`${req.protocol}://${req.get("host")}`, req.body?.returnTo, "topup");
       const session = await stripe.checkout.sessions.create({
         customer: customerId,
         payment_method_types: ["card"],

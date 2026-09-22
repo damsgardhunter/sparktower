@@ -34,20 +34,10 @@ import { users, novaLedger, novaBuildPasses } from "@shared/schema";
 import {
   DAY_PASS_HOURS, MONTHLY_SMALL_ACTIONS, OUTCOME_PRICE_CENTS,
   formatMoney, type PricedOutcomeId,
+  type Wallet,
 } from "@shared/plans";
 
 /** Everything a dialog needs to say where somebody stands, in one object. */
-export interface Wallet {
-  balanceCents: number;
-  balanceDisplay: string;
-  /** Small actions used this calendar month, and the free allowance they come out of. */
-  allowanceUsed: number;
-  allowanceLimit: number;
-  allowanceRemaining: number;
-  /** When the current day pass runs out, or null. */
-  dayPassUntil: string | null;
-  dayPassActive: boolean;
-}
 
 export function walletFrom(row: { balanceCents: number; creditsUsed: number; dayPassUntil: Date | null }): Wallet {
   const used = Math.max(0, row.creditsUsed ?? 0);

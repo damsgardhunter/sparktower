@@ -3,12 +3,13 @@ import { storage } from "./storage";
 import {
   getEntitlements, normalizeTier, MEMORY_MESSAGE_LIMIT, TASK_GEN_LIMIT,
   OUTCOME_PRICE_CENTS, DAY_PASS_HOURS, TOP_UP_CENTS, topUpFor, formatMoney,
+  PAY_ENDPOINTS, type PaymentRequiredBody, type Wallet,
   type BooleanFeature, type Entitlements, type TierId, type PricedOutcomeId,
 } from "@shared/plans";
 import { TEXT_MODEL, PRIORITY_TEXT_MODEL } from "./aiModels";
 import { enforceRateLimit, consumeRateLimit } from "./moderation";
 import { holdCredits, holdMoney } from "./credit-reservations";
-import { spend, walletOf, dayPassActive, hasBuildPass, type Wallet } from "./wallet";
+import { spend, walletOf, dayPassActive, hasBuildPass } from "./wallet";
 
 export interface UserEntitlements extends Entitlements {
   tier: TierId;
@@ -83,28 +84,6 @@ export async function requireLevel<K extends keyof Entitlements>(
  *                      can lead with one button and offer the rest behind it.
  *   - "none"         — nothing to buy (a rate limit, or an account problem).
  */
-export interface PaymentRequiredBody {
-  code: "payment_required";
-  message: string;
-  /** Human name of what they were trying to do ("a codebase audit"). */
-  label: string;
-  /** Which priced outcome, or null for a small action off the allowance. */
-  outcome: PricedOutcomeId | null;
-  price: { cents: number; display: string } | null;
-  wallet: Wallet;
-  remedy: "buy_day_pass" | "top_up" | "none";
-  topUp: { shortfallCents: number; suggestCents: number; optionsCents: readonly number[] } | null;
-  /** So the client never hard-codes a path that moves. */
-  endpoints: { wallet: string; dayPass: string; topUp: string; build: string };
-}
-
-export const PAY_ENDPOINTS = {
-  wallet: "/api/nova/wallet",
-  dayPass: "/api/nova/day-pass",
-  topUp: "/api/nova/top-up",
-  build: "/api/nova/build-my-business",
-} as const;
-
 /** Builds the 402 body without sending it — company seasons need the same shape from a non-Nova route. */
 export function paymentRequired(opts: {
   message: string;

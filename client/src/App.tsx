@@ -50,6 +50,7 @@ import { MfaNotice } from "@/components/mfa";
 import { NOVA_GRADIENT, NOVA_GRADIENT_CSS } from "@shared/backing";
 import { AnimatedTowerLogo } from "@/components/animated-tower-logo";
 import { UpgradeToKeepGenerating, CheckoutReturn, BillingIssueNotice } from "@/components/upgrade-to-keep-generating";
+import { PaymentDialog, TopUpReturn, PurchaseConfirmProvider } from "@/components/payment-dialog";
 import { useSurfaces } from "@/hooks/use-surfaces";
 import { isPathDisabled } from "@shared/surfaces";
 import PostDetail from "@/pages/post-detail";
@@ -247,6 +248,9 @@ function Router() {
         <BillingIssueNotice />
         <UpgradeToKeepGenerating />
         <CheckoutReturn />
+        {/* Every 402 in the product, in one place. See payment-dialog. */}
+        <PaymentDialog />
+        <TopUpReturn />
         {/* Room for the logo hanging below the bar, so it never covers the top of a page — inside each page's own background. */}
         <main className="flex-1 overflow-y-auto [&>*]:pt-6">
           <Switch>
@@ -359,10 +363,13 @@ function App() {
       <ThemeProvider defaultTheme="light" storageKey="sparktower-theme">
         <TooltipProvider>
           <SidebarProvider style={style as React.CSSProperties}>
-            <div className="w-full min-h-screen bg-background text-foreground">
-              <Router />
-              <Toaster />
-            </div>
+            {/* Anything priced asks before it spends. See payment-dialog. */}
+            <PurchaseConfirmProvider>
+              <div className="w-full min-h-screen bg-background text-foreground">
+                <Router />
+                <Toaster />
+              </div>
+            </PurchaseConfirmProvider>
           </SidebarProvider>
         </TooltipProvider>
       </ThemeProvider>

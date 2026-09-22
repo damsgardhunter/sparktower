@@ -10,6 +10,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { useConfirmPurchase } from "@/components/payment-dialog";
 import { useEntitlements } from "@/hooks/use-entitlements";
 import { Loader2, FileText, Sparkles, Lock } from "lucide-react";
 import { CREDIT_COSTS } from "@shared/plans";
@@ -67,6 +68,7 @@ export function DocumentStartDialog({
   sourceTaskId?: string;
 }) {
   const { toast } = useToast();
+  const confirmPurchase = useConfirmPurchase();
   const { can } = useEntitlements();
   const [, setLocation] = useLocation();
   const [title, setTitle] = useState(initialTitle);
@@ -85,6 +87,12 @@ export function DocumentStartDialog({
 
   const planMutation = useMutation({
     mutationFn: async () => {
+      /*
+       * Priced once, here. Filling, re-planning and tightening inside the
+       * document afterwards are free — one price for the whole document
+       * however long it turns out to be (CHARGE_FOR, shared/plans.ts).
+       */
+      if (!(await confirmPurchase("documentPlan"))) return null;
       const res = await apiRequest("POST", `/api/projects/${projectId}/documents/plan`, {
         title, description,
         sourceTaskId,
@@ -93,6 +101,7 @@ export function DocumentStartDialog({
       return res.json() as Promise<{ document: ProjectDocument; approach: string }>;
     },
     onSuccess: (result) => {
+      if (!result) return;  // They cancelled at the price.
       queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "documents"] });
       queryClient.invalidateQueries({ queryKey: ["/api/subscription"] });
       onOpenChange(false);

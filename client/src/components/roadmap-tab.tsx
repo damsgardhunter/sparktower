@@ -12,6 +12,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { useConfirmPurchase } from "@/components/payment-dialog";
 import { useEntitlements } from "@/hooks/use-entitlements";
 import { UpgradePrompt } from "@/components/upgrade-prompt";
 import { NovaActionButton } from "@/components/nova-action-button";
@@ -92,6 +93,7 @@ export function RoadmapTab({ projectId, isOwner, goal }: { projectId: string; is
 
 function AiRoadmap({ projectId, isOwner }: { projectId: string; isOwner: boolean }) {
   const { toast } = useToast();
+  const confirmPurchase = useConfirmPurchase();
   const { can, creditsRemaining, isUnlimited } = useEntitlements();
 
   const [goal, setGoal] = useState("");
@@ -135,12 +137,15 @@ function AiRoadmap({ projectId, isOwner }: { projectId: string; isOwner: boolean
 
   const generateMutation = useMutation({
     mutationFn: async () => {
+      // Priced: asked before it spends, never after. See payment-dialog.
+      if (!(await confirmPurchase("roadmapGeneration"))) return null;
       const res = await apiRequest("POST", `/api/projects/${projectId}/roadmap/generate`, {
         goal, startingPoint: startingPoint || undefined, targetDate: targetDate || undefined, depth,
       });
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (!result) return;  // They cancelled at the price.
       toast({ title: "Roadmap ready", description: "Nova mapped out your path. Review the phases below." });
       setGoal(""); setStartingPoint(""); setTargetDate("");
       invalidate();
@@ -188,6 +193,14 @@ function AiRoadmap({ projectId, isOwner }: { projectId: string; isOwner: boolean
 
   const rebuildMutation = useMutation({
     mutationFn: async () => {
+      /*
+       * A rebuild is the same purchase as a first build — it is the roadmap
+       * being written again. Keeping a bought roadmap current is the free
+       * "update" above, which is the distinction worth protecting: charge for
+       * the rebuild and people stop rebuilding; charge for the nudge and they
+       * stop touching the plan at all.
+       */
+      if (!(await confirmPurchase("roadmapRebuild"))) return null;
       const res = await apiRequest("POST", `/api/projects/${projectId}/roadmap/rebuild`, {
         whatChanged: whatChanged || undefined,
         newGoal: newGoal || undefined,
@@ -196,6 +209,7 @@ function AiRoadmap({ projectId, isOwner }: { projectId: string; isOwner: boolean
       return res.json();
     },
     onSuccess: (result) => {
+      if (!result) return;  // They cancelled at the price.
       toast({
         title: `Roadmap rebuilt (v${result?.roadmap?.version ?? "?"})`,
         description: `${result.milestonesUpdated} milestones resequenced, ${result.tasksUpdated} tasks re-prioritised.`,

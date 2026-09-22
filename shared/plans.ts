@@ -115,6 +115,55 @@ export function formatMoney(cents: number): string {
   return `$${whole ? cents / 100 : (cents / 100).toFixed(2)}`;
 }
 
+/**
+ * What a person has to spend, and what this month's allowance has left.
+ *
+ * Shared rather than server-side, because the 402 below carries one and the
+ * dialog that reads it must be describing the same thing the route charged.
+ */
+export interface Wallet {
+  balanceCents: number;
+  balanceDisplay: string;
+  /** Small actions used this calendar month, and the free allowance they come out of. */
+  allowanceUsed: number;
+  allowanceLimit: number;
+  allowanceRemaining: number;
+  /** When the current day pass runs out, or null. */
+  dayPassUntil: string | null;
+  dayPassActive: boolean;
+}
+
+/**
+ * The body of every 402 this product sends.
+ *
+ * It carries everything a dialog needs — what was being bought, what it costs,
+ * what is on the account, and which one thing to offer — so that no screen has
+ * to know the price list, and a price that changes on the server changes in
+ * every dialog at once. `remedy` is the server's answer to "what is the button
+ * for", and there is deliberately only ever one.
+ */
+export interface PaymentRequiredBody {
+  code: "payment_required";
+  message: string;
+  /** Human name of what they were trying to do ("a codebase audit"). */
+  label: string;
+  /** Which priced outcome, or null for a small action off the allowance. */
+  outcome: PricedOutcomeId | null;
+  price: { cents: number; display: string } | null;
+  wallet: Wallet;
+  remedy: "buy_day_pass" | "top_up" | "none";
+  topUp: { shortfallCents: number; suggestCents: number; optionsCents: readonly number[] } | null;
+  /** So the client never hard-codes a path that moves. */
+  endpoints: { wallet: string; dayPass: string; topUp: string; build: string };
+}
+
+export const PAY_ENDPOINTS = {
+  wallet: "/api/nova/wallet",
+  dayPass: "/api/nova/day-pass",
+  topUp: "/api/nova/top-up",
+  build: "/api/nova/build-my-business",
+} as const;
+
 /** The smallest offered top-up that clears a shortfall, or the largest if nothing does. */
 export function topUpFor(shortfallCents: number): number {
   return TOP_UP_CENTS.find((c) => c >= shortfallCents) ?? TOP_UP_CENTS[TOP_UP_CENTS.length - 1];

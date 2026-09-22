@@ -8,6 +8,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
+import { useConfirmPurchase } from "@/components/payment-dialog";
 import { useEntitlements } from "@/hooks/use-entitlements";
 import { useUpload } from "@/hooks/use-upload";
 import {
@@ -219,6 +220,7 @@ const change = (before: number | null | undefined, after: number | null | undefi
 
 export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId: string; repoUrl?: string | null; isOwner?: boolean }) {
   const { toast } = useToast();
+  const confirmPurchase = useConfirmPurchase();
   const { can, creditsRemaining, isUnlimited } = useEntitlements();
   const { uploadFile, isUploading } = useUpload();
 
@@ -254,6 +256,8 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
 
   const auditMutation = useMutation({
     mutationFn: async (payload: { repoUrl?: string; token?: string; objectPath?: string; fileName?: string }) => {
+      // Priced: asked before it spends, never after. See payment-dialog.
+      if (!(await confirmPurchase("codeAudit"))) return null;
       const res = await apiRequest("POST", `/api/projects/${projectId}/code-audit`, payload);
       return res.json() as Promise<{ audit: ProjectCodeAudit; creditsCharged: number; autoApplied: { changes: string[]; skipped: string[] } | null }>;
     },
@@ -263,6 +267,7 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
       setTimeout(() => queryClient.invalidateQueries({ queryKey: auditStatusKey(projectId) }), 800);
     },
     onSuccess: (result) => {
+      if (!result) return;  // They cancelled at the price.
       seenNewest.current = result.audit.id;
       setSelectedId(null);
       setEditingSource(false);
