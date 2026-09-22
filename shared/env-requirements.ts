@@ -107,8 +107,20 @@ export const ENV_RULES: EnvRule[] = [
   },
   {
     name: "PUBLIC_URL",
-    // The fallback chain the code actually uses (server/sitemap.ts, server/invite-routes.ts).
-    alternatives: ["SERVER_BASE_URL", "RENDER_EXTERNAL_URL"],
+    /*
+     * The fallback chain the code actually uses (server/public-url.ts).
+     *
+     * `RENDER_EXTERNAL_URL` used to be listed here and does not belong: nothing
+     * that builds a link reads it — not publicBaseUrl, not the CSRF guard's
+     * trusted origins, not the Stripe webhook registration at boot. Render sets
+     * it on every service automatically, so listing it meant a production
+     * deploy with no address configured at all passed this check, came up
+     * healthy, and then built every link from whatever host each request
+     * happened to arrive on. It is also the wrong address: it is the
+     * onrender.com host, which is the exact mismatch render.yaml's PUBLIC_URL
+     * comment records as having already happened once.
+     */
+    alternatives: ["SERVER_BASE_URL"],
     severity: "fatal",
     productionOnly: true,
     breaks: "every link this product sends anyone: confirm-your-email, password reset, invites, published artifact pages, the sitemap and OAuth callbacks",

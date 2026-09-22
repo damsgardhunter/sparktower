@@ -62,3 +62,32 @@ describe("what the phone restates about the next step", () => {
     }
   });
 });
+
+/**
+ * The phone's own sign-in copy of a couple of server constants.
+ *
+ * Password recovery arrived on the phone after an audit found it had none, and
+ * the screen restates two things it can't import: the code every refusal
+ * carries, and how long a reset link lives. Both drift silently — a wrong code
+ * means the "try again in a minute" branch never runs, and a wrong window
+ * means the screen tells people something untrue about their own email.
+ */
+describe("what the phone's forgot-password screen restates", () => {
+  const forgot = readFileSync(join(root, "mobile", "app", "(auth)", "forgot-password.tsx"), "utf8");
+
+  it("uses the refusal code the server actually sends", async () => {
+    const { RATE_LIMITED } = await import("@shared/moderation");
+    expect(forgot).toContain(`const RATE_LIMITED = "${RATE_LIMITED}"`);
+  });
+
+  it("tells people the window a reset link really has", async () => {
+    const { resetWindowPhrase } = await import("@shared/password-reset");
+    expect(forgot).toContain(`const RESET_WINDOW = "${resetWindowPhrase()}"`);
+  });
+
+  it("is reachable from sign-in, which is where somebody is when they need it", () => {
+    const signIn = readFileSync(join(root, "mobile", "app", "(auth)", "sign-in.tsx"), "utf8");
+    expect(signIn).toContain("link-forgot-password");
+    expect(signIn).toContain("/(auth)/forgot-password");
+  });
+});

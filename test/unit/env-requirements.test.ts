@@ -58,15 +58,28 @@ describe("a production environment", () => {
     expect(finding.detail).toMatch(/link|callback/i);
   });
 
-  it("accepts the other variables the code already falls back to", () => {
-    // server/sitemap.ts and server/invite-routes.ts read these in turn; the
-    // rule has to agree with the code, or it refuses a deploy that works.
-    for (const alternative of ["SERVER_BASE_URL", "RENDER_EXTERNAL_URL"]) {
-      const env = { ...HEALTHY, PUBLIC_URL: "", [alternative]: "https://sparktower.onrender.com" };
-      const report = checkEnvironment(env);
-      expect(report.blocking.map((f) => f.name), alternative).not.toContain("PUBLIC_URL");
-      expect(report.findings.find((f) => f.name === "PUBLIC_URL")?.satisfiedBy).toBe(alternative);
-    }
+  it("accepts the other variable the code actually falls back to", () => {
+    // server/public-url.ts reads these in turn; the rule has to agree with the
+    // code, or it refuses a deploy that works.
+    const env = { ...HEALTHY, PUBLIC_URL: "", SERVER_BASE_URL: "https://sparktower.app" };
+    const report = checkEnvironment(env);
+    expect(report.blocking.map((f) => f.name)).not.toContain("PUBLIC_URL");
+    expect(report.findings.find((f) => f.name === "PUBLIC_URL")?.satisfiedBy).toBe("SERVER_BASE_URL");
+  });
+
+  it("is not satisfied by the address Render sets by itself", () => {
+    /*
+     * RENDER_EXTERNAL_URL was listed as an alternative and is not one. Render
+     * sets it on every service without anybody choosing it, so accepting it
+     * meant a production deploy with no address configured at all passed this
+     * check — and then built every link from whatever host each request
+     * arrived on, because nothing that builds a link reads that variable:
+     * not publicBaseUrl, not the CSRF guard, not the Stripe webhook
+     * registration at boot. It is also the wrong address, the onrender.com
+     * one, which is the mismatch render.yaml records as having happened.
+     */
+    const env = { ...HEALTHY, PUBLIC_URL: "", RENDER_EXTERNAL_URL: "https://sparktower.onrender.com" };
+    expect(blockingNames(env), "a Render deploy that sets nothing must not boot").toContain("PUBLIC_URL");
   });
 
   it("refuses a session secret that is short or published", () => {
