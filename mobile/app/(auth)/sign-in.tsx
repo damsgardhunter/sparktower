@@ -3,7 +3,7 @@ import {
   ActivityIndicator, Image, KeyboardAvoidingView, Platform, Pressable,
   ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
-import { useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../../src/auth/AuthContext";
 import { colors, font, fontFamily, radius, shadow, spacing } from "../../src/theme";
@@ -29,6 +29,7 @@ export default function SignIn() {
   const params = useLocalSearchParams<{ signup?: string }>();
   // Arriving with ?signup=1 opens straight onto sign up, as on the web.
   const arrivedToSignUp = params.signup === "1";
+  const router = useRouter();
   const { signIn, signUp, signInWithGoogle, googleAvailable, mfaPending, verifyMfa, cancelMfa } = useAuth();
   const [code, setCode] = useState("");
   const [tab, setTab] = useState<Tab>(arrivedToSignUp ? "signup" : "login");
@@ -234,6 +235,17 @@ export default function SignIn() {
                     onSubmitEditing={submit} returnKeyType="go" testID="input-signup-confirm" />
                 )}
 
+                {/*
+                  * The way back in when the password is the thing you've lost.
+                  * Under the password field, where somebody is already looking
+                  * when they realise they don't know it.
+                  */}
+                {tab === "login" && (
+                  <Pressable onPress={() => router.push("/(auth)/forgot-password")} hitSlop={8} testID="link-forgot-password">
+                    <Text style={styles.forgot}>Forgot your password?</Text>
+                  </Pressable>
+                )}
+
                 <Pressable onPress={submit} disabled={busy} testID={tab === "login" ? "button-submit-login" : "button-submit-signup"}
                   style={({ pressed }) => [styles.primaryButton, (pressed || busy) && styles.pressed]}>
                   {busy ? <ActivityIndicator color={colors.primaryText} /> : (
@@ -347,6 +359,7 @@ const styles = StyleSheet.create({
   divider: { flex: 1, height: 1, backgroundColor: colors.border },
   dividerText: { color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.regular },
   hint: { color: colors.textTertiary, fontSize: font.xs, textAlign: "center", fontFamily: fontFamily.regular },
+  forgot: { color: colors.primary, fontFamily: fontFamily.medium, fontSize: font.sm, textAlign: "right" },
   switch: { color: colors.textSecondary, fontSize: font.sm, textAlign: "center", fontFamily: fontFamily.regular },
   switchLink: { color: colors.primary, fontFamily: fontFamily.semibold },
 });

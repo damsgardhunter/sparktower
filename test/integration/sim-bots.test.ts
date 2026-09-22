@@ -431,8 +431,28 @@ describe("what the bots bid for", () => {
     const app = await getTestApp();
     const { ventureId } = await botRunRoom(app);
 
-    const placed = await fileBotBids({ companies: [{ id: ventureId, company: rich(ventureId) }], listings, year: 1 });
-    expect(placed, "a bot chair bids").toBeGreaterThan(0);
+    /*
+     * What fileBotBids is about to look for, asked the same way it asks.
+     *
+     * This failed twice in CI as "expected 0 to be greater than 0", which is
+     * true whether nobody bid or nobody was found to bid — and the room's own
+     * assertions above had already passed. Naming the chair separately means
+     * the next failure says which of the two it is.
+     */
+    const chairs = await db
+      .select({ userId: simSeats.userId, role: simSeats.role, isBot: users.isBot })
+      .from(simSeats)
+      .innerJoin(users, eq(users.id, simSeats.userId))
+      .where(and(eq(simSeats.ventureId, ventureId), eq(simSeats.role, "ceo")));
+    expect(chairs.map((c) => c.isBot), "a bot, in the chair, as the query sees it").toEqual([true]);
+
+    const company = rich(ventureId);
+    const { botBids } = await import("@shared/simulation/bots");
+    const wanted = botBids({ ventureId, year: 1, company, listings });
+    expect(wanted.length, `the bot wanted something (cash ${company.cash}, ${listings.length} lots)`).toBeGreaterThan(0);
+
+    const placed = await fileBotBids({ companies: [{ id: ventureId, company }], listings, year: 1 });
+    expect(placed, "a bot chair bids").toBe(wanted.length);
 
     const rows = await db.select().from(simBids).where(eq(simBids.ventureId, ventureId));
     expect(rows.length).toBe(placed);
