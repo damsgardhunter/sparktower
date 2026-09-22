@@ -56,6 +56,8 @@ import {
   CheckCircle2, Circle, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy, Newspaper, ChevronDown, Gauge, History, SlidersHorizontal, Telescope,
 } from "lucide-react";
 
+import { WhatTheTableDecided, WhereTheMarketSits, type AuctionRow, type Standing } from "@/components/sim/past-year";
+
 interface Desk {
   phase: "not_started" | "over" | "running" | "finished";
   ventureId: string;
@@ -128,10 +130,15 @@ interface Desk {
     revenue: number; costs: number; profit: number; cash: number; debt: number;
     reputation: number; reputationChange: number; rank: number; notes: string[]; bankrupt: boolean;
     market?: { kind: "won" | "lost" | "sold" | "unsold"; text: string }[];
+    auctions?: AuctionRow[];
     event?: { headline: string; body: string; advice: string; scope: "market" | "company"; mine: boolean };
     founderValue?: number; founderShare?: number;
   } | null;
   rivals: { id: string; name: string; kind: string; price: number; customers: number; posture: string | null; posturedAs: string | null }[];
+  /** Every company in the market, placed — for the map on the Past tab. */
+  standing?: Standing[];
+  /** What the table filed last year, which is the only record of it anywhere. */
+  lastFiled?: { decisions: Record<string, any>; filedBy: Record<string, string> } | null;
   challenge: Challenge | null;
   lastChallenge: ChallengeResult | null;
   distress: {
@@ -397,6 +404,30 @@ export default function SimulationDeskPage() {
 
         {/* What happened to the market, which is the thing people talk about. */}
         {desk.lastYear?.event && <EventCard event={desk.lastYear.event} />}
+
+        {/*
+          * And then the two that say why: what the five of you actually filed
+          * and what it bought, and where that left everybody on the map. Both
+          * only exist once there is a year behind you.
+          */}
+        {desk.lastYear && (
+          <WhatTheTableDecided
+            year={desk.lastYear.year}
+            seats={desk.table.map((t) => ({ userId: t.userId, name: t.name, role: t.role, title: t.title, isYou: t.isYou }))}
+            filed={desk.lastFiled?.decisions ?? null}
+            auctions={desk.lastYear.auctions ?? []}
+            standing={desk.standing ?? []}
+            onOpen={() => navigate(`/simulation/${desk.ventureId}/report/${desk.lastYear!.year}`)}
+          />
+        )}
+        {desk.lastYear && (desk.standing?.length ?? 0) > 0 && (
+          <WhereTheMarketSits
+            standing={desk.standing!}
+            segments={desk.segments}
+            cities={desk.cities}
+            voice={desk.niche.voice}
+          />
+        )}
         {/*
           * 2. Where the company stands, as KPIs rather than a grid of equal
           * labels. Grouped by the question each answers — the money, the

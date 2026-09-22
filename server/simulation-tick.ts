@@ -47,6 +47,29 @@ import type { Company, CompanyAsset } from "@shared/simulation/types";
 /** What the market did to one company in one year. */
 type MarketOutcome = { kind: "won" | "lost" | "sold" | "unsold"; text: string };
 
+/**
+ * What happened at one lot, once the year is over.
+ *
+ * Bids are sealed while they can still be changed, and the rows are deleted
+ * the moment they settle — so a team could lose a third of its cash at
+ * auction and find no record of it anywhere afterwards but one line of prose.
+ * This is the record: what was up, who bid, who took it and for how much.
+ * Written after the auction has run, when there is nothing left to leak.
+ */
+export type AuctionRow = {
+  listingId: string;
+  name: string;
+  kind: string;
+  reserve: number;
+  /** How many companies put money on it. */
+  bidders: number;
+  winner: string | null;
+  winnerId: string | null;
+  price: number | null;
+  /** Filled in per company as the reports are written. */
+  yourBid?: number | null;
+};
+
 /** Distinct from the backing jobs' lock ids so the two never wait on each other. */
 const LOCK_SIM_TICK = 918_2711;
 
@@ -762,10 +785,21 @@ async function resolveSeasonYear(seasonId: string, now: Date): Promise<number | 
   }
 
   // The marketplace settles, and things change hands.
-  const { notes: marketNotes, writes: marketWrites } = await settleMarket({ seasonId, year, niche, world: nextWorld, releasedByTeam });
+  const { notes: marketNotes, writes: marketWrites, auctions, bidsBy } = await settleMarket({ seasonId, year, niche, world: nextWorld, releasedByTeam });
   for (const [ventureId, outcomes] of marketNotes) {
     const report = reports.find((r) => r.companyId === ventureId);
     if (report) report.market = outcomes;
+  }
+  /*
+   * And the year's auctions as a record rather than as prose, each company's
+   * own bid beside the result. Every team gets the same rows: the seal is on
+   * a bid that can still be changed, and this is written once it cannot.
+   */
+  if (auctions.length > 0) {
+    for (const report of reports) {
+      const mine = bidsBy.get(report.companyId);
+      report.auctions = auctions.map((row) => ({ ...row, yourBid: mine?.get(row.listingId) ?? null }));
+    }
   }
 
   /*
@@ -1095,9 +1129,12 @@ async function settleMarket(input: {
   niche: NonNullable<ReturnType<typeof nicheById>>;
   world: World;
   releasedByTeam: Map<string, CompanyAsset[]>;
-}): Promise<{ notes: Map<string, MarketOutcome[]>; writes: MarketWrites }> {
+}): Promise<{ notes: Map<string, MarketOutcome[]>; writes: MarketWrites; auctions: AuctionRow[]; bidsBy: Map<string, Map<string, number>> }> {
   const { seasonId, year, niche, world, releasedByTeam } = input;
   const notes = new Map<string, MarketOutcome[]>();
+  const auctions: AuctionRow[] = [];
+  /** What each company offered, by listing, kept for the record written below. */
+  const bidsBy = new Map<string, Map<string, number>>();
   const writes: MarketWrites = { listings: [], fireSales: [], spentBids: null };
   const add = (id: string, kind: MarketOutcome["kind"], text: string) =>
     notes.set(id, [...(notes.get(id) ?? []), { kind, text }]);
@@ -1155,8 +1192,25 @@ async function settleMarket(input: {
     const bids: Bid[] = bidRows.map((b) => ({ ventureId: b.ventureId, listingId: b.listingId, amount: b.amount }));
     const awards = resolveBids(listings, bids, funds);
 
+    for (const b of bids) {
+      const mine = bidsBy.get(b.ventureId) ?? new Map<string, number>();
+      mine.set(b.listingId, b.amount);
+      bidsBy.set(b.ventureId, mine);
+    }
+
     for (const award of awards) {
       const listing = listings.find((l) => l.id === award.listingId)!;
+      const nameOf = (id: string | null) => world.companies.find((c) => c.id === id)?.name ?? null;
+      auctions.push({
+        listingId: listing.id,
+        name: listing.asset.name,
+        kind: listing.asset.kind,
+        reserve: listing.reserve,
+        bidders: bids.filter((b) => b.listingId === listing.id).length,
+        winner: award.winnerId ? nameOf(award.winnerId) : null,
+        winnerId: award.winnerId ?? null,
+        price: award.winnerId ? award.price : null,
+      });
       const isForced = forced.has(listing.id);
       /*
        * Who, if anyone, is paid. A fire sale's seller was paid in full, at the
@@ -1288,7 +1342,7 @@ async function settleMarket(input: {
     }
   }
 
-  return { notes, writes };
+  return { notes, writes, auctions, bidsBy };
 }
 
 /** Resolve every season that is due. */

@@ -112,6 +112,21 @@ export interface CompanyReport {
    */
   market?: { kind: "won" | "lost" | "sold" | "unsold"; text: string }[];
   /**
+   * The year's auctions as a record: every lot, who bid, who took it and for
+   * how much, with this company's own offer beside it.
+   *
+   * Written by the tick once the auction has settled — the seal covers a bid
+   * that can still be changed, and by the time this exists none can. Without
+   * it a team that spent a third of its cash at auction could find no trace of
+   * it afterwards: the bid rows are deleted at settlement, and one line of
+   * prose was the whole record.
+   */
+  auctions?: {
+    listingId: string; name: string; kind: string; reserve: number;
+    bidders: number; winner: string | null; winnerId: string | null;
+    price: number | null; yourBid?: number | null;
+  }[];
+  /**
    * The year's event, typed, for the same reason the market outcomes are:
    * a screen that wants to lead with "a supplier failed" should not have to
    * recognise the sentence to know that is what happened.

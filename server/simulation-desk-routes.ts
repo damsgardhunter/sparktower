@@ -181,6 +181,13 @@ export function registerSimulationDeskRoutes(app: Express): void {
 
     const year = season.year;
     const { decisions, filedBy } = await draftFor(venture.id, year);
+    /*
+     * And what the table filed last year, which is the only record of it
+     * anywhere: the desk has always shown this year's decisions and the
+     * report has always shown what they produced, with nothing joining the
+     * two. A team could not look back at what it actually decided.
+     */
+    const lastFiled = year > 1 ? (await draftFor(venture.id, year - 1)) : null;
     const economy = economyFor(season.id, year);
     /*
      * The year's offers, worked out once: the chief executive answers them,
@@ -248,6 +255,30 @@ export function registerSimulationDeskRoutes(app: Express): void {
         posturedAs: c.posture ? postureBlurb(c.posture) : null,
       }))
       .sort((a, b) => b.customers - a.customers);
+
+    /*
+     * Where everybody stands, for a market you can look at rather than read.
+     *
+     * Price against quality with the size of the company as the size of the
+     * dot, plus what each one is rated to borrow at. A rival's standing is
+     * already public here — the standings screen shows its distress, and the
+     * point of a market is that you can see who you are up against — and a
+     * rating nobody can compare theirs to teaches nothing.
+     */
+    const standing = world.companies.map((c) => ({
+      id: c.id,
+      name: c.name,
+      kind: c.kind,
+      isYou: c.id === company.id,
+      price: Math.round(c.price),
+      quality: Math.round(c.quality),
+      service: Math.round(c.service),
+      brand: Math.round(c.brand),
+      customers: Object.values(c.customers).reduce((sum, n) => sum + n, 0),
+      positioning: c.positioning ?? null,
+      grade: c.kind === "player" ? ratingGrade(c.creditScore ?? RATING_START) : null,
+      creditScore: c.kind === "player" ? Math.round(c.creditScore ?? RATING_START) : null,
+    }));
 
     res.json({
       phase: season.status === "finished" ? "finished" : "running",
@@ -632,7 +663,9 @@ export function registerSimulationDeskRoutes(app: Express): void {
       filed: decisions,
       preview,
       lastYear: lastReport?.report ?? null,
+      lastFiled: lastFiled ? { decisions: lastFiled.decisions, filedBy: lastFiled.filedBy } : null,
       rivals,
+      standing,
 
       /*
        * This seat's own objective for the year.
