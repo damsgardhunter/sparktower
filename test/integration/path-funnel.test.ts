@@ -70,9 +70,13 @@ describe("what the loop writes down", () => {
     const author = await builder(app, "Ada");
     const { artifactId } = await publishedStep(app, author.agent);
 
-    // Published: the loop's last step, and somebody else's first.
-    const published = await eventsFor(PATH_FUNNEL_EVENTS.published, artifactId);
-    expect(published.length, "publishing is on the record").toBe(1);
+    /*
+     * Published: the loop's last step, and somebody else's first. Polled,
+     * because the row is written fire-and-forget — a publish is never held up
+     * by its own analytics, so the write lands just after the response.
+     */
+    await expect.poll(async () => (await eventsFor(PATH_FUNNEL_EVENTS.published, artifactId)).length, { timeout: 5_000 })
+      .toBe(1);
 
     // Read by a stranger with no account at all.
     const stranger = request.agent(app);

@@ -405,15 +405,25 @@ describe("what the bots bid for", () => {
       asset: { id: "ast-b", kind: "patent", name: "Lot B", effect: { quality: 4 }, bookValue: 2_000_000 } },
   ];
 
-  /** A full room whose chief executive is a bot. */
+  /**
+   * A full room whose chief executive is a bot.
+   *
+   * The seating is asserted rather than assumed: when this failed in CI it
+   * failed as "expected 0 to be greater than 0" from the bidding assertion,
+   * which says nothing about whether the room ever had a bot in the chair.
+   */
   async function botRunRoom(app: any) {
     const { one, ventureId } = await roomOfOne(app);
     await waitedAMinute(ventureId);
     await fillVentureWithBots(ventureId);
     const bots = (await seatsIn(ventureId)).filter((s) => s.isBot);
+    expect(bots.length, "the room filled with bots").toBeGreaterThan(0);
+
     await db.update(simSeats).set({ role: "cmo" }).where(and(eq(simSeats.ventureId, ventureId), eq(simSeats.userId, one.id)));
-    await db.update(simSeats).set({ role: "ceo" })
-      .where(and(eq(simSeats.ventureId, ventureId), eq(simSeats.userId, bots[0].userId)));
+    const seated = await db.update(simSeats).set({ role: "ceo" })
+      .where(and(eq(simSeats.ventureId, ventureId), eq(simSeats.userId, bots[0].userId)))
+      .returning({ id: simSeats.id });
+    expect(seated.length, "a bot is in the chief executive's chair").toBe(1);
     return { ventureId, chair: bots[0].userId };
   }
 

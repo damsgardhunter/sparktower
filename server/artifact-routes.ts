@@ -17,7 +17,8 @@ import { rateLimit } from "./moderation";
 import { feedPosts, pathArtifacts, projects, users, userProfiles } from "@shared/schema";
 import { artifactFromStep, artifactIdFromPath, artifactPath, validatePublish, type PageMeta } from "@shared/path-artifacts";
 import { PROJECT_GOALS } from "@shared/goals";
-import { latestWork, backboneIdOf } from "./phase-trees";
+import { latestWork, backboneIdOf, trackOfTask, trackState } from "./phase-trees";
+import { authoredTextFor, resolveTree } from "@shared/phase-trees";
 import { projectTeam } from "./feedback-loop-routes";
 import { markStepsShared, pathProgress } from "./path-return";
 import { notify } from "./notifications";
@@ -29,13 +30,51 @@ import { feedDisplayName } from "./feed-routes";
 const isPathTask = (tags: string[] | null) => (tags ?? []).some((t) => t.startsWith("backbone:") || t.startsWith("parent:") || t.startsWith("injected:"))
   && !(tags ?? []).some((t) => t.startsWith("archived:") || t === "kind:loop");
 
+/**
+ * The milestone a task was born from, with this project's own variant text —
+ * which is what "still the authored text" has to be measured against. A task
+ * on a second section is resolved against that section's tree, not the
+ * project's primary one.
+ */
+async function authoredMilestone(projectId: string, tags: string[] | null, backboneId: string) {
+  const [project] = await db.select({ goal: projects.goal }).from(projects).where(eq(projects.id, projectId));
+  if (!project) return null;
+  const goal = trackOfTask(tags, project.goal as any);
+  const state = await trackState(projectId, goal);
+  if (!state) return null;
+  return resolveTree(goal, state.subcategory, state.capitalRoute)
+    .flatMap((p) => p.milestones)
+    .find((m) => m.id === backboneId) ?? null;
+}
+
 /** Makes (or refreshes) the artifact for a finished step. A title and tags someone chose are kept. */
 export async function generateArtifact(projectId: string, taskId: string, authorId: string) {
   const task = await storage.getKanbanTask(taskId);
   if (!task || task.projectId !== projectId || !isPathTask(task.tags)) throw Object.assign(new Error("That isn't a step on this project's path."), { status: 400, code: "not_on_path" });
   if (task.status !== "done") throw Object.assign(new Error("Finish the step first — its answer is the artifact."), { status: 400, code: "step_not_done" });
   const work = await latestWork(taskId);
-  const assembled = artifactFromStep({ title: task.title, answer: task.description }, work ? { kind: work.kind, payload: work.payload } : null);
+
+  /*
+   * The step's own answer, and not the path's.
+   *
+   * A backbone task is born holding the milestone's authored description —
+   * what the step is asking for — and that text stays there until somebody
+   * answers over it. Built straight from the task, a step ticked without a
+   * word written produced a page of SparkTower's prose under the builder's
+   * name, and every ship_mvp project would have published the same one. The
+   * tree keeps `supersedes` precisely so a rewritten prompt is not mistaken
+   * for an answer (authoredTextFor, shared/phase-trees).
+   */
+  const backboneId = backboneIdOf(task.tags);
+  const milestone = backboneId ? await authoredMilestone(projectId, task.tags, backboneId) : null;
+  const authored = authoredTextFor(milestone, task.description);
+  const written = (task.description ?? "").trim();
+  const answered = !!written && written !== authored.trim();
+
+  const assembled = artifactFromStep(
+    { title: task.title, answer: answered ? task.description : null },
+    work ? { kind: work.kind, payload: work.payload } : null,
+  );
   if (!assembled.body.trim() && !assembled.files.length) {
     throw Object.assign(new Error("This step has nothing written on it yet, so there's nothing to publish."), { status: 400, code: "artifact_empty" });
   }

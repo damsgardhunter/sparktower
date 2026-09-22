@@ -32,18 +32,48 @@ export function NextStep({ projectId, data, onNavigate }: { projectId: string; d
   const [sharingStep, setSharingStep] = useState(false);
   const [publishingStep, setPublishingStep] = useState(false);
   const [postingWeek, setPostingWeek] = useState(false);
+  const [publishingFinished, setPublishingFinished] = useState<{ taskId: string; title: string } | null>(null);
   const highlighted = usePathFocus(data, () => setPostingWeek(true));
 
   const { next, current } = data;
   const sources = new Set(data.phases.flatMap((p) => p.milestones).map((m) => m.expandsFrom).filter(Boolean));
   const isSource = (id: string) => sources.has(id);
 
-  const markDone = useMutation({ mutationFn: (taskId: string) => apiRequest("PATCH", `/api/kanban/${taskId}`, { status: "done" }), onSuccess: refresh, onError: fail });
-  // The builder's own answer, without Nova: it becomes the step's written answer — what Publish makes the artifact from.
+  /**
+   * Finishing a step, and the thing it made.
+   *
+   * Marking a step done used to be the end of it: the artifact — the page that
+   * step's answer becomes — was built later, by a different button, in a
+   * dialog somebody had to think to open. So the work that the growth loop
+   * runs on was made only by the people who already knew it existed, and a
+   * step finished on a Tuesday became shareable on a Thursday if at all.
+   *
+   * Now a step ends where it should: done, the artifact stored against the
+   * task, and the page it makes offered on the spot. The generate call is
+   * idempotent (it upserts on the task), so doing this every time costs a row
+   * that would have been written later anyway.
+   */
+  const [finished, setFinished] = useState<{ taskId: string; title: string; empty: boolean } | null>(null);
   const [writing, setWriting] = useState<string | null>(null);
-  const writeDone = useMutation({
-    mutationFn: (b: { taskId: string; description: string }) => apiRequest("PATCH", `/api/kanban/${b.taskId}`, { status: "done", description: b.description }),
-    onSuccess: () => { setWriting(null); refresh(); },
+
+  const finishStep = useMutation({
+    mutationFn: async (b: { taskId: string; title: string; description?: string }) => {
+      await apiRequest("PATCH", `/api/kanban/${b.taskId}`, { status: "done", ...(b.description ? { description: b.description } : {}) });
+      try {
+        await apiRequest("POST", `/api/projects/${projectId}/path/tasks/${b.taskId}/artifact`, {});
+        return { ...b, empty: false };
+      } catch (error: any) {
+        /*
+         * A step closed with nothing written on it has nothing to make a page
+         * from, and that is a real answer rather than a failure — "I did this"
+         * steps exist. The card says so instead of pretending, and offers the
+         * box that would give it something.
+         */
+        if (String(error?.message ?? "").includes("artifact_empty")) return { ...b, empty: true };
+        throw error;
+      }
+    },
+    onSuccess: (r) => { setWriting(null); setFinished({ taskId: r.taskId, title: r.title, empty: r.empty }); refresh(); },
     onError: fail,
   });
   const [draft, setDraft] = useState<{ backboneId: string; loopTaskId: string | null; sourceTitle: string; text: string } | null>(null);
@@ -116,6 +146,46 @@ export function NextStep({ projectId, data, onNavigate }: { projectId: string; d
           <span className="text-muted-foreground">{data.weekly.steps.length} steps done this week, not shared</span>
           <button className="text-primary hover:underline" onClick={() => setPostingWeek(true)} data-testid="button-path-weekly-update">Post weekly update</button>
         </div>
+      )}
+      {/*
+        * What the step just made, the moment it is made.
+        *
+        * Publishing is the continuation of finishing, not a separate errand:
+        * the page exists already, this says so and offers to put it out. "Not
+        * now" is a real answer — it stays on the task either way, and the
+        * Publish control on the finished-step line is still there later.
+        */}
+      {finished && (
+        <div className="rounded-xl border border-primary/30 bg-primary/5 p-3 space-y-2" data-testid="step-finished">
+          <p className="text-sm font-medium flex items-center gap-1.5">
+            <PartyPopper className="h-4 w-4 text-primary shrink-0" />
+            {finished.empty ? `"${finished.title}" is done.` : `"${finished.title}" is done — and it made a page.`}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {finished.empty
+              ? "Nothing was written on this one, so there's no page to share. Write what you decided and it becomes one."
+              : "Your answer, as a page anyone can read without an account. Publishing it also posts it to your feed."}
+          </p>
+          <div className="flex gap-2 flex-wrap">
+            {finished.empty ? (
+              <Button size="sm" variant="outline" onClick={() => { setWriting(""); setFinished(null); }} data-testid="button-finished-write">
+                Write what you decided
+              </Button>
+            ) : (
+              <Button size="sm" onClick={() => setPublishingFinished(finished)} data-testid="button-finished-publish">
+                <Globe className="h-3.5 w-3.5 mr-1.5" />Publish it
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" onClick={() => setFinished(null)} data-testid="button-finished-dismiss">Not now</Button>
+          </div>
+        </div>
+      )}
+      {publishingFinished && (
+        <PublishArtifactDialog
+          projectId={projectId} projectTitle={title}
+          step={{ taskId: publishingFinished.taskId, title: publishingFinished.title }}
+          open onClose={() => { setPublishingFinished(null); setFinished(null); refresh(); }}
+        />
       )}
       {postingWeek && data.weekly && <WeeklyUpdateDialog projectId={projectId} projectTitle={title} steps={data.weekly.steps} open onClose={() => setPostingWeek(false)} />}
       {publishingStep && data.lastDone && <PublishArtifactDialog projectId={projectId} projectTitle={title} step={data.lastDone} open onClose={() => setPublishingStep(false)} />}
@@ -220,8 +290,8 @@ export function NextStep({ projectId, data, onNavigate }: { projectId: string; d
               </Button>
             )}
             {next.taskId && (
-              <Button size="sm" variant="outline" onClick={() => markDone.mutate(next.step?.taskId ?? next.taskId!)} disabled={markDone.isPending} data-testid="button-next-done">
-                {markDone.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />}
+              <Button size="sm" variant="outline" onClick={() => finishStep.mutate({ taskId: next.step?.taskId ?? next.taskId!, title: next.step?.title ?? next.title })} disabled={finishStep.isPending} data-testid="button-next-done">
+                {finishStep.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />}
                 {next.tier === "claimed" ? "I did this" : "Done"}
               </Button>
             )}
@@ -235,8 +305,8 @@ export function NextStep({ projectId, data, onNavigate }: { projectId: string; d
             <div className="space-y-2 border-t border-border pt-3" data-testid="next-write-form">
               <Textarea rows={5} className="text-sm" autoFocus placeholder="Your answer to this step. It's what Publish turns into a public page." value={writing} onChange={(e) => setWriting(e.target.value)} data-testid="input-next-answer" />
               <div className="flex gap-2">
-                <Button size="sm" disabled={writeDone.isPending || !writing.trim()} onClick={() => writeDone.mutate({ taskId: next.step?.taskId ?? next.taskId!, description: writing.trim() })} data-testid="button-next-save-done">
-                  {writeDone.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />}Save and mark done
+                <Button size="sm" disabled={finishStep.isPending || !writing.trim()} onClick={() => finishStep.mutate({ taskId: next.step?.taskId ?? next.taskId!, title: next.step?.title ?? next.title, description: writing.trim() })} data-testid="button-next-save-done">
+                  {finishStep.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />}Save and mark done
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => setWriting(null)}>Cancel</Button>
               </div>
