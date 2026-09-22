@@ -502,7 +502,15 @@ export function cleanDecision(
           : [];
         break;
       case "levels": {
-        const out: Record<string, string> = {};
+        /*
+         * Pairs, then fromEntries: the keys of this map come from the client,
+         * and `out[key] = …` with a key of `__proto__` sets the object's
+         * prototype instead of filing an answer. fromEntries defines own
+         * properties, so no spelling of a key can reach the prototype. (Not a
+         * prototype-less object: this goes to jsonb, and the Postgres driver
+         * asks every value for its constructor.)
+         */
+        const pairs: [string, string][] = [];
         const answers = (field.choices ?? []).map((c) => c.value);
         /*
          * Targets are keyed by seat, and nothing else is a seat. Everything
@@ -514,16 +522,19 @@ export function cleanDecision(
         if (raw && typeof raw === "object" && !Array.isArray(raw)) {
           for (const [k, v] of Object.entries(raw)) {
             const key = seatsOnly ? (["cmo", "cfo", "cto", "coo"].includes(k) ? k : null) : k.slice(0, 64);
-            if (key && answers.includes(String(v))) out[key] = String(v);
+            if (key && answers.includes(String(v))) pairs.push([key, String(v)]);
           }
         }
+        const out = Object.fromEntries(pairs);
         if (Object.keys(out).length) clean[field.id] = out;
         break;
       }
       case "tiers":
       case "allocation": {
         // A map of numbers keyed by segment or by seat, and nothing else.
-        const out: Record<string, number> = {};
+        // Built from pairs for the same reason as above: client keys, and
+        // `allowed` is not always there to bound them.
+        const numbers: [string, number][] = [];
         /*
          * What the keys of this particular map are allowed to be. They are
          * not all the same shape: the budget is split between seats, the
@@ -539,11 +550,12 @@ export function cleanDecision(
             if (v === "" || v === null || v === undefined) continue;
             if (allowed && !allowed.includes(k)) continue;
             const n = Number(v);
-            if (Number.isFinite(n) && n >= 0) out[String(k).slice(0, 64)] = field.max !== undefined ? Math.min(field.max, n) : n;
+            if (Number.isFinite(n) && n >= 0) numbers.push([String(k).slice(0, 64), field.max !== undefined ? Math.min(field.max, n) : n]);
           }
         }
         // Empty means none: no split, no tiers. Left out rather than filed as {}.
-        if (Object.keys(out).length) clean[field.id] = out;
+        const filed = Object.fromEntries(numbers);
+        if (Object.keys(filed).length) clean[field.id] = filed;
         break;
       }
       default: {

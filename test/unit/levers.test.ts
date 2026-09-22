@@ -9,7 +9,7 @@
  */
 import { describe, it, expect } from "vitest";
 import {
-  LEVER_FIELDS, defaultDraft, validateDecision, commitment, draftPreview, filedRoles,
+  LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision, commitment, draftPreview, filedRoles,
 } from "@shared/simulation/levers";
 import { startingCompany, economyFor } from "@shared/simulation/season";
 import { nicheById } from "@shared/simulation/niches";
@@ -237,5 +237,28 @@ describe("who has filed", () => {
       ceo: { focus: "growth" },
     });
     expect(filed.sort()).toEqual(["ceo", "cmo"]);
+  });
+});
+
+/**
+ * The keys of two of these maps come from the client and are only bounded in
+ * length: the answers to a season's offers, and an allocation whose allowed
+ * keys aren't known to this deployment. `out[key] = …` with a key of
+ * `__proto__` sets the object's prototype instead of filing anything, and the
+ * result goes to jsonb and comes back out as a decision.
+ */
+describe("a decision keyed by whatever the client sent", () => {
+  it("never lets a key reach the prototype, and files an ordinary object", () => {
+    const filed = cleanDecision("cmo", {
+      budget: { __proto__: 5, constructor: 4 },
+      priceTiers: { __proto__: 9 },
+    } as any, [], {});
+
+    expect(({} as any)[5], "nothing reached Object.prototype").toBeUndefined();
+    for (const value of Object.values(filed)) {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        expect(Object.getPrototypeOf(value), "an ordinary object, which is what the Postgres driver can serialise").toBe(Object.prototype);
+      }
+    }
   });
 });
