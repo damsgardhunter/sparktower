@@ -20,8 +20,42 @@ import {
 } from "@shared/surfaces";
 import { logModeration } from "./moderation";
 
-let cache: Record<string, boolean> = defaultSurfaceMap();
+// Applied here too, so the window between the process starting and the first
+// database read isn't the one window in which uploads are on.
+let cache: Record<string, boolean> = applyEnvironment(defaultSurfaceMap());
 let loaded = false;
+
+/**
+ * Surfaces this environment cannot run, whatever the flag row says.
+ *
+ * Uploads are the case this exists for. `PRIVATE_OBJECT_DIR` is degraded
+ * rather than fatal — refusing to serve the whole site because there is no
+ * bucket would be the worse outage — so a production deploy missing it comes
+ * up, reports itself healthy, and then fails every avatar, cover and post
+ * image at the moment somebody tries one. The boot log said "uploads will
+ * fail" and nothing acted on it.
+ *
+ * Acting on it means the same thing a kill switch means: the surface is off,
+ * and says so in the one place the client already asks. A 404 from a surface
+ * that is switched off is an answer; a 500 from a route that cannot possibly
+ * work is a bug report from every user who found it.
+ *
+ * Environment, not database: a flag row is somebody's decision and survives a
+ * deploy. This is a fact about the machine and is re-read from it each boot,
+ * so setting the variable and deploying is all it takes to get uploads back.
+ */
+export function environmentDisabledSurfaces(
+  env: Record<string, string | undefined> = process.env,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (env.NODE_ENV === "production" && !env.PRIVATE_OBJECT_DIR?.trim()) {
+    out.uploads = "PRIVATE_OBJECT_DIR is not set, so there is no bucket to write to. Set it and deploy again.";
+  }
+  return out;
+}
+
+/** The reasons, for the admin screen — empty when the environment is complete. */
+export const surfaceBlockers = (): Record<string, string> => environmentDisabledSurfaces();
 
 /** Reads the flags into memory. Called at boot and after every change. */
 /**
@@ -44,7 +78,7 @@ export async function loadSurfaceFlags(): Promise<Record<string, boolean>> {
       if (row.surfaceId in next) next[row.surfaceId] = row.enabled;
     }
     if (mine !== generation) return cache;
-    cache = next;
+    cache = applyEnvironment(next);
     loaded = true;
   } catch (err) {
     if (mine !== generation) return cache;
@@ -54,9 +88,18 @@ export async function loadSurfaceFlags(): Promise<Record<string, boolean>> {
      * the defaults are the conservative set anyway.
      */
     console.error("[surfaces] Could not load flags, using defaults:", err);
-    cache = defaultSurfaceMap();
+    cache = applyEnvironment(defaultSurfaceMap());
   }
   return cache;
+}
+
+/** Whatever the flags say, a surface the environment can't run is off. */
+function applyEnvironment(map: Record<string, boolean>): Record<string, boolean> {
+  for (const [id, why] of Object.entries(environmentDisabledSurfaces())) {
+    if (id in map && map[id] !== false) console.warn(`[surfaces] ${id} is off: ${why}`);
+    if (id in map) map[id] = false;
+  }
+  return map;
 }
 
 /**
@@ -114,14 +157,16 @@ export function registerSurfaceRoutes(app: Express) {
    * and the answer is the same for everyone.
    */
   app.get("/api/surfaces", (_req, res) => {
-    res.json({ enabled: surfaceMap(), loaded });
+    res.json({ enabled: surfaceMap(), loaded, blocked: surfaceBlockers() });
   });
 
   /** The full registry with notes, for the admin toggle. */
   app.get("/api/admin/surfaces", isAuthenticated, requireReviewer, (_req, res) => {
     const enabled = surfaceMap();
+    const blocked = surfaceBlockers();
     res.json({
-      surfaces: SURFACES.map((s) => ({ ...s, enabled: enabled[s.id] !== false })),
+      // `blockedBy` is why a toggle won't stick: the environment, not a decision.
+      surfaces: SURFACES.map((s) => ({ ...s, enabled: enabled[s.id] !== false, blockedBy: blocked[s.id] ?? null })),
     });
   });
 
@@ -141,12 +186,19 @@ export function registerSurfaceRoutes(app: Express) {
         });
 
       await loadSurfaceFlags();
-      console.log(`[surfaces] ${id} -> ${enabled ? "on" : "off"} by ${req.user.id}`);
+      /*
+       * What it actually is now, which is not always what was asked for: a
+       * surface this environment cannot run stays off however the toggle is
+       * set, and saying "on" here would be a lie the admin screen then shows.
+       */
+      const now = surfaceEnabled(id);
+      const blockedBy = surfaceBlockers()[id] ?? null;
+      console.log(`[surfaces] ${id} -> ${now ? "on" : "off"} by ${req.user.id}${blockedBy ? ` (held off: ${blockedBy})` : ""}`);
       await logModeration({
         action: "surface_toggled", actorId: req.user.id,
         targetType: "surface", targetId: id, details: { enabled },
       });
-      res.json({ id, enabled, label: surface(id)?.label });
+      res.json({ id, enabled: now, requested: enabled, blockedBy, label: surface(id)?.label });
     } catch (error) {
       console.error("Surface toggle error:", error);
       res.status(500).json({ message: "Couldn't change that" });

@@ -12,7 +12,13 @@ import {
   SURFACE_CLASS_LABEL, SURFACE_SEQUENCE_LABEL, WEDGE_PROOF, type SurfaceClass, type SurfaceDef, type SurfaceSequence,
 } from "@shared/surfaces";
 
-type Row = SurfaceDef & { enabled: boolean };
+/**
+ * `blockedBy` is set when this deployment cannot run the surface whatever the
+ * toggle says — no object storage, for instance. The switch is then off and
+ * stays off, and the reason belongs on screen rather than in a boot log
+ * nobody is reading at the moment they wonder why it won't turn on.
+ */
+type Row = SurfaceDef & { enabled: boolean; blockedBy?: string | null };
 
 const ORDER: SurfaceClass[] = ["core", "momentum", "later", "network", "off"];
 
@@ -140,10 +146,15 @@ export default function AdminSurfaces() {
                       </div>
                       <p className="text-xs text-muted-foreground leading-relaxed">{s.note}</p>
                       {s.unlocksWhen && <p className="text-[11px] text-muted-foreground"><span className="font-medium">Unlocks when:</span> {s.unlocksWhen}</p>}
+                      {s.blockedBy && (
+                        <p className="text-[11px] text-destructive" data-testid={`blocked-${s.id}`}>
+                          <span className="font-medium">Held off by this deployment:</span> {s.blockedBy}
+                        </p>
+                      )}
                     </div>
                     <Switch
                       checked={s.enabled}
-                      disabled={toggle.isPending}
+                      disabled={toggle.isPending || !!s.blockedBy}
                       onCheckedChange={(v) => toggle.mutate({ id: s.id, enabled: v })}
                       data-testid={`toggle-${s.id}`}
                     />

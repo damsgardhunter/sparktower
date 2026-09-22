@@ -21,6 +21,7 @@ import { createApp, log } from "./app";
 import { warnIfSharedTokenSecret } from "./mobile-auth";
 import { warnIfEmailUnconfigured } from "./email";
 import { warnIfSenderMisaligned, emailLinkHostIsTrusted } from "./public-url";
+import { publicUrlFact } from "./deployment-info";
 import { assertSecretsAtBoot } from "./secrets";
 import { warnIfMigrationsPending } from "./migration-state";
 import { assertEnvironmentAtBoot } from "./preflight";
@@ -77,15 +78,31 @@ let appReady = false;
 
       const stripeSync = await getStripeSync();
 
-      // Stripe can only reach a publicly routable URL, so skip webhook
-      // registration when running locally without one.
-      const publicDomain = process.env.PUBLIC_URL || process.env.REPLIT_DOMAINS?.split(",")[0];
-      if (publicDomain) {
-        const webhookBaseUrl = publicDomain.startsWith("http") ? publicDomain : `https://${publicDomain}`;
-        const webhookResult = await stripeSync.findOrCreateManagedWebhook(
-          `${webhookBaseUrl}/api/stripe/webhook`
-        );
+      /*
+       * Stripe can only reach a publicly routable URL, so registration is
+       * skipped when there isn't one — which on a laptop is the normal case.
+       *
+       * Asked of `publicUrlFact` rather than of `process.env` directly. The
+       * chain here used to be `PUBLIC_URL || REPLIT_DOMAINS`, which is neither
+       * the chain every link is built from (SERVER_BASE_URL sits between them)
+       * nor the one the preflight accepts: a production deploy configured with
+       * SERVER_BASE_URL alone booted clean, served everything, and silently
+       * registered no webhook — so no subscription, payment or cancellation
+       * ever reached this app, while the service looked entirely healthy.
+       *
+       * One resolver now, and in production a missing address is an error
+       * rather than a note in the log, because payments are off until it is
+       * fixed.
+       */
+      const site = publicUrlFact();
+      if (site.source !== "request") {
+        const webhookResult = await stripeSync.findOrCreateManagedWebhook(`${site.url}/api/stripe/webhook`);
         console.log("Webhook configured:", JSON.stringify(webhookResult?.webhook?.url || webhookResult?.id || "ok"));
+      } else if (process.env.NODE_ENV === "production") {
+        console.error(
+          "[stripe] No public URL configured (PUBLIC_URL), so no webhook was registered: " +
+          "Stripe has nowhere to send subscription, payment or cancellation events and none of them will be recorded.",
+        );
       } else {
         console.log("Skipping Stripe webhook registration: no public URL (set PUBLIC_URL to enable)");
       }

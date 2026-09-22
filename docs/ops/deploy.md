@@ -218,6 +218,25 @@ URL it will send people to, and whether it skipped Stripe webhook registration
 for want of a public URL. Those three lines are where a wrong `PUBLIC_URL` or a
 missing bucket announces itself.
 
+### What a half-configured production deploy now does instead of pretending
+
+Two settings used to be logged and otherwise ignored, so the service came up,
+answered `/_health` with a 200, and was quietly missing a whole feature:
+
+- **No `PRIVATE_OBJECT_DIR`** switches the **Uploads** surface off, exactly as
+  the admin kill switch would: every upload route answers 404, and
+  `/admin/surfaces` shows the reason next to a switch that won't move. Without
+  this, each avatar, cover and post image failed on its own, one user at a
+  time. Set the variable and deploy again and uploads come back by themselves —
+  it is read from the environment at boot, not stored as a decision.
+- **No `PUBLIC_URL`** (or `SERVER_BASE_URL`) stops the boot outright. Render
+  sets `RENDER_EXTERNAL_URL` on every service by itself, and it used to count
+  as an answer here; it isn't one, because nothing that builds a link reads it
+  and it names the `onrender.com` host rather than the one people use. The
+  Stripe webhook is registered from the same resolver as every emailed link,
+  so "payments recorded nothing for a week" and "links pointed at the wrong
+  host" can no longer be two different configurations.
+
 The fuller pass — auth, Stripe, uploads, the wedge, the owner's console — is
 [release-checklist.md §4](../release-checklist.md).
 
