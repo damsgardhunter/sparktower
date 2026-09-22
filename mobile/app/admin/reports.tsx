@@ -54,6 +54,8 @@ const ACTION_WORDS: Record<string, string> = {
   comment_restore: "Put back",
   feed_post_remove: "Post removed", feed_post_ban: "Author banned, post removed", feed_post_dismiss: "Dismissed", feed_post_restore: "Post put back",
   feed_comment_remove: "Comment removed", feed_comment_ban: "Author banned, comment removed", feed_comment_dismiss: "Dismissed", feed_comment_restore: "Comment put back",
+  path_artifact_remove: "Published page taken down", path_artifact_ban: "Author banned, page taken down",
+  path_artifact_dismiss: "Dismissed", path_artifact_restore: "Page put back",
   report_reopened: "Reopened", suspend: "Account suspended", reinstate: "Account reinstated",
 };
 
@@ -62,6 +64,7 @@ const UNDOABLE_ACTIONS: Record<string, string> = {
   comment_remove: "comment_restore", comment_shadow_hide: "comment_restore", comment_ban: "comment_restore", comment_dismiss: "report_reopened",
   feed_post_remove: "feed_post_restore", feed_post_ban: "feed_post_restore", feed_post_dismiss: "report_reopened",
   feed_comment_remove: "feed_comment_restore", feed_comment_ban: "feed_comment_restore", feed_comment_dismiss: "report_reopened",
+  path_artifact_remove: "path_artifact_restore", path_artifact_ban: "path_artifact_restore", path_artifact_dismiss: "report_reopened",
   content_hidden: "content_restored", content_restored: "content_hidden", suspend: "reinstate", reinstate: "suspend",
 };
 const UNDO_REASON_CODES = [
@@ -100,6 +103,8 @@ function targetRoute(r: Report): string | null {
   // Check-ins are retired: old reports keep their label but have nowhere to go.
   if (r.targetType === "check_in") return null;
   if (r.targetPostId) return `/post/${r.targetPostId}`;
+  // The published page itself: what the reader saw, and what is being judged.
+  if (r.targetType === "path_artifact") return `/a/${r.targetId}`;
   if (r.targetType === "project") return `/project/${r.targetId}`;
   if (r.targetType === "user") return `/user/${r.targetId}`;
   if (r.projectId) return `/project/${r.projectId}`;

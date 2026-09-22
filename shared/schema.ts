@@ -1373,6 +1373,28 @@ export const pathArtifacts = pgTable("path_artifacts", {
   views: integer("views").default(0).notNull(),
   /** People who signed up having landed on this artifact first. */
   signups: integer("signups").default(0).notNull(),
+  /*
+   * Taken down by a reviewer.
+   *
+   * These three columns did not exist, and their absence was the widest hole
+   * in the moderation chain. `/a/:id` is the one page built for people who
+   * have never signed in — it previews on social, it is in the sitemap, it is
+   * what a stranger's first contact with SparkTower looks like — and there was
+   * no way to take one down. The only lever was hiding its *published feed
+   * post*, which `publicArtifact` happened to check; an artifact published
+   * without a post, or one whose post was restored, stayed up regardless, and
+   * a reviewer looking at an abusive public page had nothing to press.
+   *
+   * Same three columns, same names, as every other takedown target (projects,
+   * feed posts, both kinds of comment), so `TAKEDOWN_TABLES`, the queue's
+   * decide route, the undo path and the moderation log treat a published page
+   * exactly like a post. No `hidden_mode`: shadow-hiding a public page would
+   * mean showing its author a page strangers cannot reach, which is a lie the
+   * growth loop would then measure views on.
+   */
+  hiddenAt: timestamp("hidden_at"),
+  hiddenById: varchar("hidden_by_id").references(() => users.id),
+  hiddenReason: text("hidden_reason"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({

@@ -400,7 +400,15 @@ export type DuplicateAction = keyof typeof DUPLICATE_RULES;
  * snapshots the words at the moment of the report, which is what a reviewer
  * needs and what survives the sender deleting their account.
  */
-export const REPORT_TARGETS = ["comment", "feed_post", "feed_comment", "message", "project", "user"] as const;
+/*
+ * `path_artifact` — a published page at /a/:id — was missing for the same
+ * reason `project` once was, and it mattered more. That page is the one
+ * surface designed to be read by people who have never signed in, so the only
+ * report a reader could file about it was against its *feed post*, an object
+ * they cannot see and which need not exist. A page with no post behind it was
+ * unreportable and untakedownable at once.
+ */
+export const REPORT_TARGETS = ["comment", "feed_post", "feed_comment", "message", "project", "path_artifact", "user"] as const;
 export type ReportTarget = (typeof REPORT_TARGETS)[number];
 
 /**
@@ -424,6 +432,7 @@ export const REPORT_TARGET_LABEL: Record<StoredReportTarget, string> = {
   feed_comment: "Comment",
   message: "Direct message",
   project: "Project",
+  path_artifact: "Published page",
   user: "Person",
 };
 
@@ -509,8 +518,14 @@ export const REPORT_NOTE_MAX = 500;
  *
  * `user` is still not here: an account is handled with the suspend button,
  * which does more than hide one row.
+ *
+ * `path_artifact` joined for the reason above: a reviewer looking at an
+ * abusive public page had no button at all, because the page had no hidden
+ * column to set. It is taken down the same way a project is, through
+ * `path_artifacts.hiddenAt`, and /a/:id and the public artifact API both stop
+ * serving it.
  */
-export const ACTIONABLE_TARGETS = ["comment", "feed_post", "feed_comment", "project"] as const satisfies readonly ReportTarget[];
+export const ACTIONABLE_TARGETS = ["comment", "feed_post", "feed_comment", "project", "path_artifact"] as const satisfies readonly ReportTarget[];
 export const isActionableTarget = (t: string): boolean => (ACTIONABLE_TARGETS as readonly string[]).includes(t);
 
 /** What a reviewer can do about a reported comment. */
@@ -580,6 +595,9 @@ export const UNDOABLE_ACTIONS: Record<string, string> = {
   feed_comment_remove: "feed_comment_restore",
   feed_comment_ban: "feed_comment_restore",
   feed_comment_dismiss: "report_reopened",
+  path_artifact_remove: "path_artifact_restore",
+  path_artifact_ban: "path_artifact_restore",
+  path_artifact_dismiss: "report_reopened",
   content_hidden: "content_restored",
   content_restored: "content_hidden",
   suspend: "reinstate",

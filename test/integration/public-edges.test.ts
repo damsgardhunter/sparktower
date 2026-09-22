@@ -228,7 +228,7 @@ describe("a reader with no account can report a public artifact", () => {
     return { post, artifact };
   }
 
-  it("files a report against the published post, once per address, with nobody signed in", async () => {
+  it("files a report against the page itself, once per address, with nobody signed in", async () => {
     const app = await getTestApp();
     const author = await person(app, "Author");
     const p = await project(author.agent, `Published Work ${Date.now()}`);
@@ -240,9 +240,17 @@ describe("a reader with no account can report a public artifact", () => {
     expect(sent.status, JSON.stringify(sent.body)).toBe(200);
     expect(sent.body.received).toBe(true);
 
+    /*
+     * Against `path_artifact`, not against the artifact's feed post. It used
+     * to be the post, on the reasoning that hiding the post took the page down
+     * with it — true only for artifacts that have one. A page published
+     * without a post, or one whose post a reviewer had already restored, could
+     * not be reported and could not be taken down: the reader saw a page and
+     * the queue saw nothing. The page is its own takedown target now.
+     */
     const rows = await db.select().from(contentReports)
-      .where(and(eq(contentReports.targetType, "feed_post"), eq(contentReports.targetId, post.id)));
-    expect(rows, "one report, filed against the artifact's published post").toHaveLength(1);
+      .where(and(eq(contentReports.targetType, "path_artifact"), eq(contentReports.targetId, artifact.id)));
+    expect(rows, "one report, filed against the page").toHaveLength(1);
     expect(rows[0].reporterId, "no account behind it").toBeNull();
     expect(rows[0].reporterAddressHash, "the reporter is an address hash, not an address").toBeTruthy();
     expect(rows[0].reporterAddressHash).not.toContain(address);
@@ -254,7 +262,7 @@ describe("a reader with no account can report a public artifact", () => {
     expect(again.status).toBe(200);
     expect(again.body.received).toBe(true);
     expect(await db.select().from(contentReports)
-      .where(and(eq(contentReports.targetType, "feed_post"), eq(contentReports.targetId, post.id)))).toHaveLength(1);
+      .where(and(eq(contentReports.targetType, "path_artifact"), eq(contentReports.targetId, artifact.id)))).toHaveLength(1);
   });
 
   it("refuses a made-up reason, an unpublished artifact, and one already taken down", async () => {
@@ -278,6 +286,13 @@ describe("a reader with no account can report a public artifact", () => {
     // Public again but the post is already hidden: same answer, for the same reason.
     await db.update(pathArtifacts).set({ visibility: "public" }).where(eq(pathArtifacts.id, artifact.id));
     await db.update(feedPosts).set({ hiddenAt: new Date() }).where(eq(feedPosts.id, post.id));
+    expect((await request(app).post(`/api/public/artifacts/${artifact.id}/report`)
+      .set("x-forwarded-for", ip()).send({ reason: "spam" })).status).toBe(404);
+
+    // And the page taken down in its own right, which is the case that had no
+    // answer at all before `path_artifacts.hidden_at` existed.
+    await db.update(feedPosts).set({ hiddenAt: null }).where(eq(feedPosts.id, post.id));
+    await db.update(pathArtifacts).set({ hiddenAt: new Date() }).where(eq(pathArtifacts.id, artifact.id));
     expect((await request(app).post(`/api/public/artifacts/${artifact.id}/report`)
       .set("x-forwarded-for", ip()).send({ reason: "spam" })).status).toBe(404);
   });

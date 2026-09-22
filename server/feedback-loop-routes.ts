@@ -12,6 +12,7 @@
 import type { Express } from "express";
 import { and, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "./db";
+import { notTakenDown } from "./visibility";
 import { storage } from "./storage";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
@@ -55,12 +56,15 @@ export interface FeedbackItem {
 export async function projectFeedback(projectId: string) {
   const team = await projectTeam(projectId);
   if (!team) return null;
-  const posts = await db.select().from(feedPosts).where(and(eq(feedPosts.projectId, projectId), isNull(feedPosts.hiddenAt)));
+  const posts = await db.select().from(feedPosts).where(and(eq(feedPosts.projectId, projectId), notTakenDown.feedPost()));
   if (!posts.length) return { items: [] as FeedbackItem[], counts: countsOf([]) };
   const postById = new Map(posts.map((p) => [p.id, p]));
-  const comments = (await db.select().from(feedComments).where(inArray(feedComments.postId, posts.map((p) => p.id))).orderBy(desc(feedComments.createdAt)))
-    // Taken-down and deleted comments aren't feedback anyone can act on.
-    .filter((c) => isFeedback(c, team) && !c.hiddenAt && !c.deletedAt);
+  // Taken-down comments aren't feedback anyone can act on, and the takedown
+  // test belongs in the query rather than in a `.filter` a refactor can drop.
+  const comments = (await db.select().from(feedComments)
+    .where(and(inArray(feedComments.postId, posts.map((p) => p.id)), notTakenDown.feedComment()))
+    .orderBy(desc(feedComments.createdAt)))
+    .filter((c) => isFeedback(c, team) && !c.deletedAt);
   const taskIds = comments.map((c) => c.appliedTaskId).filter(Boolean) as string[];
   const tasks = taskIds.length ? await db.select({ id: projectKanbanTasks.id, title: projectKanbanTasks.title, status: projectKanbanTasks.status }).from(projectKanbanTasks).where(inArray(projectKanbanTasks.id, taskIds)) : [];
   const names = new Map<string, Awaited<ReturnType<typeof nameOf>>>();
@@ -218,7 +222,7 @@ export function registerFeedbackLoopRoutes(app: Express) {
         .orderBy(desc(feedComments.createdAt)).limit(20);
       const out = [];
       for (const r of rows) {
-        const [update] = await db.select().from(feedPosts).where(and(eq(feedPosts.id, r.comment.closedByPostId!), isNull(feedPosts.hiddenAt)));
+        const [update] = await db.select().from(feedPosts).where(and(eq(feedPosts.id, r.comment.closedByPostId!), notTakenDown.feedPost()));
         const [project] = r.projectId ? await db.select({ id: projects.id, title: projects.title, isPrivate: projects.isPrivate }).from(projects).where(eq(projects.id, r.projectId)) : [];
         // An update that's gone, or a project that went private, has nothing left to show.
         if (!update || !project || project.isPrivate) continue;

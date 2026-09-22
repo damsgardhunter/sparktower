@@ -32,6 +32,7 @@
  * pass --again and mean it.
  */
 import pg from "pg";
+import { eachTarget } from "./lib/sql-identifier.mjs";
 
 const arg = (name, fallback = null) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -95,40 +96,64 @@ if (done.rowCount > 0) {
   }
 }
 
+/*
+ * The four statements, written where the identifiers they use were checked.
+ *
+ * Built in functions rather than at the call, and never out of a value: the
+ * only text that varies is two identifiers this script declared and
+ * scripts/lib/sql-identifier.mjs approved, and `cutoff`, which is a fixed
+ * string holding a placeholder. Every value — the cutoff time, the zone —
+ * goes to the driver as a parameter. Written this way so that a reader, and
+ * the deterministic security scan, can see at a glance that nothing typed by
+ * a person becomes SQL.
+ */
+const countSql = (table, column, cutoff) =>
+  "select count(*)::int n, min(" + column + ") oldest, max(" + column + ") newest"
+  + " from " + table + " where " + column + " is not null" + cutoff;
+
+const sampleSql = (table, column, cutoff, zoneParam) =>
+  "select to_char(" + column + ", 'YYYY-MM-DD HH24:MI:SS') stored,"
+  + " to_char((" + column + " at time zone " + zoneParam + ") at time zone 'UTC', 'YYYY-MM-DD HH24:MI:SS') fixed"
+  + " from " + table + " where " + column + " is not null" + cutoff
+  + " order by " + column + " desc limit 1";
+
+const repairSql = (table, column, cutoff, zoneParam) =>
+  "update " + table + " set " + column + " = (" + column + " at time zone " + zoneParam + ") at time zone 'UTC'"
+  + " where " + column + " is not null" + cutoff;
+
+const COLUMN_EXISTS =
+  "select 1 from information_schema.columns where table_schema='public' and table_name=$1 and column_name=$2";
+
 let total = 0;
-for (const [table, columns] of Object.entries(TARGETS)) {
-  for (const column of columns) {
-    const exists = await client.query(
-      "select 1 from information_schema.columns where table_schema='public' and table_name=$1 and column_name=$2",
-      [table, column],
-    );
-    if (exists.rowCount === 0) { console.log(`${table}.${column}: not in this database`); continue; }
+/*
+ * Names are checked here, once, before a statement is built out of any of
+ * them. Today they come from the constant above and are obviously safe; the
+ * check exists for the edit that adds a `--table` flag one afternoon and turns
+ * that constant into somebody's input. It refuses anything not on the list
+ * rather than trusting the shape of it.
+ */
+for (const { name, table, column } of eachTarget(TARGETS)) {
+  const exists = await client.query(COLUMN_EXISTS, [name.table, name.column]);
+  if (exists.rowCount === 0) { console.log(`${name.table}.${name.column}: not in this database`); continue; }
 
-    const cutoff = before ? `and ${column} < $1` : "";
-    const params = before ? [before] : [];
-    const { rows: [count] } = await client.query(
-      `select count(*)::int n, min(${column}) oldest, max(${column}) newest from ${table} where ${column} is not null ${cutoff}`, params);
-    if (count.n === 0) { console.log(`${table}.${column}: nothing to do`); continue; }
+  const cutoff = before ? " and " + column + " < $1" : "";
+  const params = before ? [before] : [];
+  const zoneParam = "$" + (params.length + 1);
 
-    /*
-     * Both sides as text, deliberately. Reading a zoneless column back through
-     * the driver is what caused the bug this script exists for, and a report
-     * that quietly applies the offset a second time would tell you the repair
-     * had moved things twice as far as it did. Postgres formats them instead.
-     */
-    const { rows: [sample] } = await client.query(
-      `select to_char(${column}, 'YYYY-MM-DD HH24:MI:SS') stored,
-              to_char((${column} at time zone $${params.length + 1}) at time zone 'UTC', 'YYYY-MM-DD HH24:MI:SS') fixed
-       from ${table} where ${column} is not null ${cutoff} order by ${column} desc limit 1`, [...params, zone]);
-    console.log(`${table}.${column}: ${count.n} rows, newest ${sample.stored} → ${sample.fixed} (UTC)`);
-    total += count.n;
+  const { rows: [count] } = await client.query(countSql(table, column, cutoff), params);
+  if (count.n === 0) { console.log(`${name.table}.${name.column}: nothing to do`); continue; }
 
-    if (apply && before) {
-      await client.query(
-        `update ${table} set ${column} = (${column} at time zone $${params.length + 1}) at time zone 'UTC'
-         where ${column} is not null ${cutoff}`, [...params, zone]);
-    }
-  }
+  /*
+   * Both sides as text, deliberately. Reading a zoneless column back through
+   * the driver is what caused the bug this script exists for, and a report
+   * that quietly applies the offset a second time would tell you the repair
+   * had moved things twice as far as it did. Postgres formats them instead.
+   */
+  const { rows: [sample] } = await client.query(sampleSql(table, column, cutoff, zoneParam), [...params, zone]);
+  console.log(`${name.table}.${name.column}: ${count.n} rows, newest ${sample.stored} → ${sample.fixed} (UTC)`);
+  total += count.n;
+
+  if (apply && before) await client.query(repairSql(table, column, cutoff, zoneParam), [...params, zone]);
 }
 
 if (apply && before && total > 0) {

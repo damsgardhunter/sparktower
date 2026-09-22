@@ -13,6 +13,7 @@
  */
 import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db } from "./db";
+import { notTakenDown } from "./visibility";
 import { storage } from "./storage";
 import { projects, projectKanbanTasks, feedPosts, projectRoadmaps, pathPace, pathPaceEvents, pathWork, projectCodeAudits, projectTracks } from "@shared/schema";
 import {
@@ -422,7 +423,7 @@ export async function refreshPace(projectId: string, effort?: {
   // already counted. Its age is worked out by the database: its timestamps read back into JS
   // are off by the server's timezone.
   const [lastPost] = await db.select({ ageSeconds: sql<number | null>`extract(epoch from (now() - max(${feedPosts.createdAt})))::float8` })
-    .from(feedPosts).where(and(eq(feedPosts.projectId, projectId), eq(feedPosts.isSystemGenerated, false), isNull(feedPosts.hiddenAt)));
+    .from(feedPosts).where(and(eq(feedPosts.projectId, projectId), eq(feedPosts.isSystemGenerated, false), notTakenDown.feedPost()));
   const postActivity = lastPost?.ageSeconds != null ? [new Date(Date.now() - Number(lastPost.ageSeconds) * 1000)] : [];
   // Code evidence: an audit whose delta shows the code moved is a day of activity.
   const audits = await db.select({ at: projectCodeAudits.createdAt, delta: projectCodeAudits.delta }).from(projectCodeAudits).where(eq(projectCodeAudits.projectId, projectId));
@@ -1199,7 +1200,7 @@ export async function collectArtifacts(projectId: string): Promise<Artifact[]> {
   }
   // The project's latest update posts: what the builder has written, in public, that they did.
   const updates = await db.select({ id: feedPosts.id, content: feedPosts.content }).from(feedPosts)
-    .where(and(eq(feedPosts.projectId, projectId), eq(feedPosts.isSystemGenerated, false), isNull(feedPosts.hiddenAt)))
+    .where(and(eq(feedPosts.projectId, projectId), eq(feedPosts.isSystemGenerated, false), notTakenDown.feedPost()))
     .orderBy(desc(feedPosts.createdAt)).limit(4);
   for (const u of updates) out.push({ label: `update:${u.id}`, kind: "update", text: u.content.slice(0, 600) });
   const decisions = await storage.getProjectDecisions(projectId).catch(() => []);
