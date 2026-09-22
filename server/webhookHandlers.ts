@@ -240,6 +240,24 @@ export class WebhookHandlers {
         tierFor: (sub) => WebhookHandlers.tierForSubscription(sub),
         fresh: subscription as any,
       });
+      /*
+       * On the clock, like every subscription event.
+       *
+       * This paid for the plan the account is now on, and it left no mark of
+       * when — so the ordering guard in handleSubscriptionEvent had nothing to
+       * compare against afterwards, and a retry of an event from an older
+       * subscription lifecycle (Stripe retries for three days) would be
+       * applied as though it were news. `settleTier` then trusts that event's
+       * own copy over the live listing, which is how a subscription that is
+       * dead at Stripe comes back to life on an account.
+       *
+       * Stamped only forward, so a checkout whose event is itself a late
+       * retry cannot rewind the clock either.
+       */
+      const eventAt = WebhookHandlers.eventTime(event) ?? new Date();
+      if (!user.subscriptionEventAt || eventAt > user.subscriptionEventAt) {
+        await db.update(users).set({ subscriptionEventAt: eventAt }).where(eq(users.id, user.id));
+      }
       console.log(`Checkout subscription for user ${user.id}: tier=${settled.tier}`);
     }
   }

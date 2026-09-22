@@ -22,6 +22,7 @@
  */
 import { and, eq, inArray, isNull, lte, sql } from "drizzle-orm";
 import { db, pool } from "./db";
+import { surfaceEnabled } from "./surfaces";
 import {
   simSeasons, simVentures, simSeats, simDecisions, simReports,
   simChallenges, simListings, simBids, simRecoveryMoves, simOffers, users,
@@ -1312,6 +1313,17 @@ export async function runDueTicks(now = new Date()): Promise<number> {
 
 /** One pass of everything, under one lock. Exported so a test can run it directly. */
 export async function runSimulationPass(now = new Date()): Promise<{ settled: number; started: number; resolved: number } | null> {
+  /*
+   * Nothing while the surface is off.
+   *
+   * The switch used to stop only the screens: seasons went on resolving every
+   * minute, bots went on filing, auctions went on settling — the after-wedge
+   * surface that costs the most to run kept running, invisibly, for as long as
+   * it was "off". Checked here rather than in the timer so every caller is
+   * covered, including a hand-run pass. Turning it back on resumes where the
+   * clock left it, because a season's next tick is a time, not a tally.
+   */
+  if (!surfaceEnabled("sprints")) return null;
   return withLock(LOCK_SIM_TICK, async () => {
     // Before settling: a room that has waited its minute gets its bots, so the
     // deadline it is about to hit finds five players rather than one.

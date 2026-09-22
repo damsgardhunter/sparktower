@@ -75,20 +75,19 @@ const seatsIn = (ventureId: string) =>
  * half-filled room becomes the next test's starting position. What's under
  * test here is what happens to a room that waits, so each one gets its own.
  */
-async function roomOfOne(app: any, id?: string) {
+async function roomOfOne(app: any) {
   const one = await player(app);
-  const ventureId = await emptyRoom(id);
+  const ventureId = await emptyRoom();
   // `joinedAt` explicitly, as the join route writes it — see the comment there.
   await db.insert(simSeats).values({ ventureId, userId: one.id, joinedAt: new Date() } as any);
   return { one, ventureId };
 }
 
 /** A room in a season of its own, so nothing else can wander into it. */
-async function emptyRoom(id?: string): Promise<string> {
+async function emptyRoom(): Promise<string> {
   const [season] = await db.insert(simSeasons)
     .values({ nicheId: NICHE, name: `Bots ${Date.now()}-${n}` } as any).returning();
   const [venture] = await db.insert(simVentures).values({
-    ...(id ? { id } : {}),
     seasonId: season.id,
     phase: "filling",
     phaseEndsAt: new Date(Date.now() + 15 * 60_000),
@@ -223,45 +222,6 @@ describe("filling a waiting room", () => {
  * finance seat reads left out everything the bots would spend. A person can't
  * react to a plan they can't see — and the day is when they're trying to.
  */
-describe("what the room says about the wait", () => {
-  it("counts down the minute for people, and starts it again when someone joins", async () => {
-    const app = await getTestApp();
-    const { one, ventureId } = await roomOfOne(app);
-
-    const fresh = await one.agent.get(`/api/sim/ventures/${ventureId}`);
-    expect(fresh.status).toBe(200);
-    expect(fresh.body.phase).toBe("filling");
-    // Just arrived: nearly the whole minute to go, and no bots yet.
-    expect(fresh.body.botsInSeconds).toBeGreaterThan(BOT_FILL_AFTER_SECONDS - 5);
-    expect(fresh.body.botsInSeconds).toBeLessThanOrEqual(BOT_FILL_AFTER_SECONDS);
-    expect(fresh.body.seats.filter((s: any) => s.isBot)).toHaveLength(0);
-
-    // Forty seconds on, someone else turns up: the minute is theirs now, not what was left of the first one.
-    await db.update(simSeats).set({ joinedAt: new Date(Date.now() - 40_000) }).where(eq(simSeats.ventureId, ventureId));
-    const waited = await one.agent.get(`/api/sim/ventures/${ventureId}`);
-    expect(waited.body.botsInSeconds).toBeLessThanOrEqual(BOT_FILL_AFTER_SECONDS - 39);
-    const two = await player(app);
-    await db.insert(simSeats).values({ ventureId, userId: two.id, joinedAt: new Date() } as any);
-    const again = await one.agent.get(`/api/sim/ventures/${ventureId}`);
-    expect(again.body.botsInSeconds).toBeGreaterThan(BOT_FILL_AFTER_SECONDS - 5);
-    expect(again.body.seats.filter((s: any) => s.isBot)).toHaveLength(0);
-  }, 120_000);
-
-  it("says a finished season is over, not that nobody came", async () => {
-    const app = await getTestApp();
-    const { one, ventureId } = await roomOfOne(app);
-    const [v] = await db.select().from(simVentures).where(eq(simVentures.id, ventureId));
-    await db.update(simVentures).set({ phase: "retired" }).where(eq(simVentures.id, ventureId));
-
-    const closed = await one.agent.get(`/api/sim/ventures/${ventureId}`);
-    expect(closed.body).toMatchObject({ phase: "retired", seasonOver: false, botsInSeconds: null });
-
-    await db.update(simSeasons).set({ status: "finished" }).where(eq(simSeasons.id, v.seasonId));
-    const over = await one.agent.get(`/api/sim/ventures/${ventureId}`);
-    expect(over.body).toMatchObject({ phase: "retired", seasonOver: true });
-  }, 120_000);
-});
-
 describe("when the bots' plans are on the table", () => {
   it("files the bots' year-one decisions the moment the season starts", async () => {
     const app = await getTestApp();
@@ -445,32 +405,31 @@ describe("what the bots bid for", () => {
       asset: { id: "ast-b", kind: "patent", name: "Lot B", effect: { quality: 4 }, bookValue: 2_000_000 } },
   ];
 
-  /** A full room whose chief executive is a bot. */
-  /*
-   * A named venture, because what a bot bids is seeded on the venture's id.
+  /**
+   * A full room whose chief executive is a bot.
    *
-   * How keen a bot is (`botAmbition`) is drawn from that id, and its offer is
-   * the reserve times that keenness times a draw of its own — so a timid
-   * company bids under the reserve and files nothing, on purpose. With a
-   * random id this test asked "was this company born keen?", and failed about
-   * one run in four. This one is keen, every year.
+   * The seating is asserted rather than assumed: when this failed in CI it
+   * failed as "expected 0 to be greater than 0" from the bidding assertion,
+   * which says nothing about whether the room ever had a bot in the chair.
    */
-  const KEEN = "9e391d27-2c38-4575-bf9a-b63e6fc9f528";
-
-  async function botRunRoom(app: any, id?: string) {
-    const { one, ventureId } = await roomOfOne(app, id);
+  async function botRunRoom(app: any) {
+    const { one, ventureId } = await roomOfOne(app);
     await waitedAMinute(ventureId);
     await fillVentureWithBots(ventureId);
     const bots = (await seatsIn(ventureId)).filter((s) => s.isBot);
+    expect(bots.length, "the room filled with bots").toBeGreaterThan(0);
+
     await db.update(simSeats).set({ role: "cmo" }).where(and(eq(simSeats.ventureId, ventureId), eq(simSeats.userId, one.id)));
-    await db.update(simSeats).set({ role: "ceo" })
-      .where(and(eq(simSeats.ventureId, ventureId), eq(simSeats.userId, bots[0].userId)));
+    const seated = await db.update(simSeats).set({ role: "ceo" })
+      .where(and(eq(simSeats.ventureId, ventureId), eq(simSeats.userId, bots[0].userId)))
+      .returning({ id: simSeats.id });
+    expect(seated.length, "a bot is in the chief executive's chair").toBe(1);
     return { ventureId, chair: bots[0].userId };
   }
 
   it("puts money on the table for a company whose chief executive is a bot", async () => {
     const app = await getTestApp();
-    const { ventureId } = await botRunRoom(app, KEEN);
+    const { ventureId } = await botRunRoom(app);
 
     const placed = await fileBotBids({ companies: [{ id: ventureId, company: rich(ventureId) }], listings, year: 1 });
     expect(placed, "a bot chair bids").toBeGreaterThan(0);
@@ -503,5 +462,44 @@ describe("what the bots bid for", () => {
     const [kept] = await db.select().from(simBids)
       .where(and(eq(simBids.ventureId, ventureId), eq(simBids.listingId, "lot-a"), eq(simBids.year, 1)));
     expect(kept.amount, "the bid that was there stands").toBe(9_999_999);
+  }, 120_000);
+});
+
+describe("what the room says about the wait", () => {
+  it("counts down the minute for people, and starts it again when someone joins", async () => {
+    const app = await getTestApp();
+    const { one, ventureId } = await roomOfOne(app);
+
+    const fresh = await one.agent.get(`/api/sim/ventures/${ventureId}`);
+    expect(fresh.status).toBe(200);
+    expect(fresh.body.phase).toBe("filling");
+    // Just arrived: nearly the whole minute to go, and no bots yet.
+    expect(fresh.body.botsInSeconds).toBeGreaterThan(BOT_FILL_AFTER_SECONDS - 5);
+    expect(fresh.body.botsInSeconds).toBeLessThanOrEqual(BOT_FILL_AFTER_SECONDS);
+    expect(fresh.body.seats.filter((s: any) => s.isBot)).toHaveLength(0);
+
+    // Forty seconds on, someone else turns up: the minute is theirs now, not what was left of the first one.
+    await db.update(simSeats).set({ joinedAt: new Date(Date.now() - 40_000) }).where(eq(simSeats.ventureId, ventureId));
+    const waited = await one.agent.get(`/api/sim/ventures/${ventureId}`);
+    expect(waited.body.botsInSeconds).toBeLessThanOrEqual(BOT_FILL_AFTER_SECONDS - 39);
+    const two = await player(app);
+    await db.insert(simSeats).values({ ventureId, userId: two.id, joinedAt: new Date() } as any);
+    const again = await one.agent.get(`/api/sim/ventures/${ventureId}`);
+    expect(again.body.botsInSeconds).toBeGreaterThan(BOT_FILL_AFTER_SECONDS - 5);
+    expect(again.body.seats.filter((s: any) => s.isBot)).toHaveLength(0);
+  }, 120_000);
+
+  it("says a finished season is over, not that nobody came", async () => {
+    const app = await getTestApp();
+    const { one, ventureId } = await roomOfOne(app);
+    const [v] = await db.select().from(simVentures).where(eq(simVentures.id, ventureId));
+    await db.update(simVentures).set({ phase: "retired" }).where(eq(simVentures.id, ventureId));
+
+    const closed = await one.agent.get(`/api/sim/ventures/${ventureId}`);
+    expect(closed.body).toMatchObject({ phase: "retired", seasonOver: false, botsInSeconds: null });
+
+    await db.update(simSeasons).set({ status: "finished" }).where(eq(simSeasons.id, v.seasonId));
+    const over = await one.agent.get(`/api/sim/ventures/${ventureId}`);
+    expect(over.body).toMatchObject({ phase: "retired", seasonOver: true });
   }, 120_000);
 });

@@ -17,29 +17,17 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { errorText } from "@/lib/api-error";
 import { MAX_ASKS } from "@shared/feedback-loop";
-import { ArrowRight, ChevronDown, Compass, EyeOff, Globe, Loader2, Share2, Sparkles, User } from "lucide-react";
+import { ArrowRight, ChevronDown, Compass, EyeOff, Globe, Loader2, Plus, Share2, Sparkles, User } from "lucide-react";
 import { ARTIFACT_MAX_TAGS, ARTIFACT_TITLE_MAX, artifactPath } from "@shared/path-artifacts";
 import { InviteCollaboratorDialog } from "@/components/invite-collaborator-dialog";
+import { ACTOR_SHORT, NEXT_STEP_COPY, type NextStepItem } from "@shared/next-step";
 
-export interface NextStepItem {
-  project: { id: string; title: string; logoUrl: string | null };
-  phase: string;
-  progress: { done: number; total: number };
-  next: { id: string; title: string; actor: string; estimateMinutes: number | null; step: string | null } | null;
-  daysSinceActivity: number;
-  projectedAt: string | null;
-  lastDone: { taskId: string; title: string; completedAt: string; sharedPostId: string | null } | null;
-  weekly?: { due: boolean; steps: { taskId: string; title: string; completedAt: string }[] };
-  /** The section this item is for — one item per started section. Absent from an older server. */
-  track?: { goal: string; label: string; short: string; primary: boolean };
-}
-
-const ACTOR_SHORT: Record<string, string> = {
-  "nova-builds": "Nova builds it",
-  "nova-drafts": "Nova drafts it",
-  "user-decides": "You choose",
-  "user-does": "Only you",
-};
+/*
+ * The shape and the shared wording come from @shared/next-step, which the
+ * server builds and the phone renders too. This file used to declare its own
+ * copy of both, and they had drifted from the server's.
+ */
+export type { NextStepItem } from "@shared/next-step";
 
 const estimate = (m: number | null) => (m == null ? null : m < 60 ? `${m}m` : `${Math.round(m / 60)}h`);
 
@@ -365,6 +353,58 @@ export function WeeklyUpdateDialog({ projectId, projectTitle, steps, open, onClo
  * because two renderings of "what should I do next" would disagree within a
  * week — and this is the sentence the whole retention loop turns on.
  */
+/**
+ * A project with no path, and the way to give it one.
+ *
+ * This is the state the home card used to skip in silence, which left the
+ * newest project — the one somebody had just made — missing from the only
+ * screen that answers "what now". Starting a section builds the tree;
+ * adopting reads the work that is already there and marks what is finished,
+ * which is why the two say different things before you press them.
+ */
+function StartPath({ item, idSuffix }: { item: NextStepItem; idSuffix: string }) {
+  const { toast } = useToast();
+  const needs = item.needsPath!;
+  const start = useMutation({
+    mutationFn: async () => {
+      if (needs.kind === "start") {
+        await apiRequest("POST", `/api/projects/${item.project.id}/tracks`, { goal: item.track.goal });
+      }
+      /*
+       * Adoption follows in both cases: starting a section builds the tree,
+       * and a project that predates paths has work to read. It is idempotent,
+       * so running it on a tree that needs nothing is a no-op.
+       */
+      await apiRequest("POST", `/api/projects/${item.project.id}/path/adopt?goal=${item.track.goal}`, {});
+    },
+    onSuccess: () => refreshNextSteps(item.project.id),
+    onError: (error) => toast({
+      title: NEXT_STEP_COPY.failed,
+      description: errorText(error, ""),
+      variant: "destructive",
+    }),
+  });
+
+  return (
+    <div className="space-y-1.5" data-testid={`continue-path-needs-${idSuffix}`}>
+      <p className="font-medium">{needs.kind === "adopt" ? NEXT_STEP_COPY.adoptTitle : NEXT_STEP_COPY.startTitle}</p>
+      <p className="text-[11px] text-muted-foreground">
+        {needs.kind === "adopt" ? NEXT_STEP_COPY.adoptBody(needs.existingDone, needs.existingTasks) : NEXT_STEP_COPY.startBody}
+      </p>
+      <Button
+        size="sm"
+        className="h-7 gap-1"
+        onClick={() => start.mutate()}
+        disabled={start.isPending}
+        data-testid={`button-start-path-${idSuffix}`}
+      >
+        {start.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+        {needs.kind === "adopt" ? NEXT_STEP_COPY.adoptAction : NEXT_STEP_COPY.startAction}
+      </Button>
+    </div>
+  );
+}
+
 export function NextStepRow({ item, onShare, onWeekly }: {
   item: NextStepItem;
   onShare: (item: NextStepItem) => void;
@@ -399,10 +439,12 @@ export function NextStepRow({ item, onShare, onWeekly }: {
           {novaActs ? <Sparkles className="h-3.5 w-3.5 text-primary shrink-0" /> : <User className="h-3.5 w-3.5 shrink-0" />}
           <span className="text-muted-foreground">Next:</span>
           <span className="font-medium">{item.next.step ?? item.next.title}</span>
-          <span className="text-[11px] text-muted-foreground">· {ACTOR_SHORT[item.next.actor] ?? item.next.actor}{estimate(item.next.estimateMinutes) ? ` · ${estimate(item.next.estimateMinutes)}` : ""}</span>
+          <span className="text-[11px] text-muted-foreground">· {ACTOR_SHORT[item.next.actor as keyof typeof ACTOR_SHORT] ?? item.next.actor}{estimate(item.next.estimateMinutes) ? ` · ${estimate(item.next.estimateMinutes)}` : ""}</span>
         </p>
+      ) : item.needsPath ? (
+        <StartPath item={item} idSuffix={idSuffix} />
       ) : (
-        <p className="text-muted-foreground">Main line done — pick what's next.</p>
+        <p className="text-muted-foreground">{NEXT_STEP_COPY.mainLineDone}</p>
       )}
       {/* Several steps this week: the weekly update. One: share that step. */}
       {item.weekly?.due && item.weekly.steps.length > 1 && (
@@ -419,17 +461,57 @@ export function NextStepRow({ item, onShare, onWeekly }: {
   );
 }
 
-export function ContinuePathCard() {
-  const { data } = useQuery<{ items: NextStepItem[] }>({ queryKey: ["/api/me/next-steps"] });
+/**
+ * "Continue your path", in two shapes.
+ *
+ * `lead` is the home screen: the path is the first thing on the page, open,
+ * with the project being worked on at the top of it. It used to be a closed
+ * dropdown under "Create", which put the product's own loop — come back, take
+ * the next step — one click behind a button for starting something else. A
+ * builder with a project in flight was shown a feed of other people's work and
+ * asked to go looking for their own.
+ *
+ * Without `lead` it is the old toggle, for anywhere the path is a secondary
+ * thing on the page.
+ */
+export function ContinuePathCard({ lead = false }: { lead?: boolean }) {
+  const { data, isLoading } = useQuery<{ items: NextStepItem[] }>({ queryKey: ["/api/me/next-steps"] });
   const [sharing, setSharing] = useState<NextStepItem | null>(null);
   const [weekly, setWeekly] = useState<NextStepItem | null>(null);
-  // Closed until asked for: the home screen leads with Create Project, and the paths are one click away.
-  const [open, setOpen] = useState(false);
+  // Closed until asked for, unless it is what the page is for.
+  const [open, setOpen] = useState(lead);
   const items = data?.items ?? [];
-  if (!items.length) return null;
+
+  if (!items.length) {
+    /*
+     * On the home screen an empty path still says something — there is no
+     * project yet, or every path is finished — and both answers are the same
+     * one. Elsewhere it stays out of the way.
+     */
+    if (!lead || isLoading) return null;
+    return (
+      <Card className="rounded-lg border-primary/30 bg-background dark:bg-card" data-testid="continue-path-empty">
+        <CardContent className="p-5 text-center space-y-2">
+          <p className="font-medium">{NEXT_STEP_COPY.nothingWaiting}</p>
+          <p className="text-sm text-muted-foreground">{NEXT_STEP_COPY.startBody}</p>
+          <Button asChild size="sm" data-testid="button-path-empty-new-project">
+            <Link href="/projects/new"><Plus className="h-4 w-4 mr-1" /> Start a project</Link>
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <>
+      {lead ? (
+        <div className="flex items-center gap-2 px-0.5" data-testid="continue-path-heading">
+          <Compass className="h-4 w-4 text-primary" />
+          <h2 className="text-[15px] font-semibold">Continue your path</h2>
+          <span className="rounded-full bg-primary/10 text-primary px-2 py-px text-[11px] font-medium" data-testid="continue-path-count">{items.length}</span>
+          <Link href="/path" className="ml-auto text-xs text-primary hover:underline" data-testid="link-path-home">All of them</Link>
+        </div>
+      ) : (
       <Button
         variant="outline"
         className="w-full h-11 gap-2 text-[15px] font-semibold border-primary/30 bg-background dark:bg-card"
@@ -443,6 +525,7 @@ export function ContinuePathCard() {
         <span className="rounded-full bg-primary/10 text-primary px-2 py-px text-[11px] font-medium" data-testid="continue-path-count">{items.length}</span>
         <ChevronDown className={`h-4 w-4 ml-auto transition-transform ${open ? "rotate-180" : ""}`} />
       </Button>
+      )}
       {open && (
       <Card id="continue-path-list" className="rounded-lg shadow-none border-primary/30 bg-background dark:bg-card" data-testid="continue-path-card">
         <CardContent className="p-0 text-[13px]">

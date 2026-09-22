@@ -1,96 +1,104 @@
 /**
- * The one part of a statement that cannot be a bound parameter.
+ * Names built into SQL by hand.
  *
- * `select * from $1` is not a thing Postgres will do, so a script that works
- * across several tables has to put that name in as text — and that is the only
- * place in this repository where a value becomes SQL rather than being handed
- * to the driver. scripts/lib/sql-identifier.mjs is the gate, and these are the
- * things it must refuse.
+ * Values are parameters everywhere in this codebase. Identifiers cannot be —
+ * Postgres has no `$1` for "which table" — so a maintenance script that walks
+ * a list of tables builds that part of the string itself, and that is the one
+ * remaining place injection could get in. The defence is not "the list is a
+ * constant, nobody can reach it": that is true of today's code and stops being
+ * true the moment somebody adds a flag.
  *
- * The allowlist is the lock being tested here, not the shape check. A name
- * that looks perfectly ordinary and is not one this script works on is exactly
- * as dangerous as a name with a quote in it: `users` instead of `feed_posts`
- * rewrites the wrong table, and every timestamp in it moves five hours.
+ * So the helper refuses anything that isn't a name, and this checks it refuses
+ * the things an attacker would try — and that the script actually uses it,
+ * which is the part a helper alone can't guarantee.
  */
 import { describe, it, expect } from "vitest";
-// @ts-expect-error — a plain .mjs helper, deliberately outside the TypeScript build.
-import { escapeIdentifier, escapeColumnOf, eachTarget, UnsafeIdentifierError } from "../../scripts/lib/sql-identifier.mjs";
+import { readFileSync } from "fs";
+import { join } from "path";
+// @ts-expect-error — a plain .mjs script helper, imported for what it does rather than its types.
+import { quoteIdentifier, quoteKnownIdentifier, UnsafeIdentifierError, IDENTIFIER } from "../../scripts/lib/sql-identifier.mjs";
 
-const TARGETS = {
-  feed_posts: ["created_at"],
-  feed_comments: ["created_at"],
-  users: ["created_at"],
-};
+const script = readFileSync(join(__dirname, "..", "..", "scripts", "timestamp-skew.mjs"), "utf8");
 
-describe("the names a maintenance script is allowed to put in a statement", () => {
-  it("quotes a name that is on the list", () => {
-    expect(escapeIdentifier("feed_posts", TARGETS)).toBe('"feed_posts"');
-    expect(escapeIdentifier("created_at", ["created_at"])).toBe('"created_at"');
+describe("a name going into SQL", () => {
+  it("takes the names this schema actually uses", () => {
+    for (const name of ["feed_posts", "created_at", "users", "_private", "sim_pace_events2"]) {
+      expect(quoteIdentifier(name)).toBe(`"${name}"`);
+    }
   });
 
-  it("refuses a perfectly ordinary name that nobody declared", () => {
-    // The dangerous case that no shape check catches: a real table, wrong one.
-    expect(() => escapeIdentifier("users", { feed_posts: ["created_at"] })).toThrow(UnsafeIdentifierError);
-    expect(() => escapeIdentifier("password_reset_tokens", TARGETS)).toThrow(/not one of the names/);
+  it("quotes even a valid name, so a reserved word is unambiguous", () => {
+    expect(quoteIdentifier("user")).toBe('"user"');
+    expect(quoteIdentifier("order")).toBe('"order"');
   });
 
-  it("refuses anything that isn't a plain lower-case identifier", () => {
+  it("refuses the things somebody would try", () => {
     const attempts = [
-      'feed_posts"; drop table users; --',
-      "feed_posts; delete from users",
-      "feed_posts--",
-      "feed_posts /* */",
-      "feed posts",
-      "feed_posts)",
-      "public.feed_posts",
-      "FEED_POSTS",     // upper case would match the allowlist by accident and a different table in Postgres
-      "feed_posts\u0000",
-      "feed_posts\n",
-      "1_feed_posts",
+      'users"; drop table users; --',
+      "users; delete from users",
+      "users--",
+      "users/*",
+      "users'",
+      'users"',
+      "users users",
+      "users\nusers",
+      "users\u0000",
+      "pg_catalog.pg_user",
+      "public.users",
+      "Users",          // upper case: nothing here is called that
+      "1users",         // a name cannot start with a digit
       "",
+      "   ",
+      "\t",
     ];
     for (const attempt of attempts) {
-      expect(() => escapeIdentifier(attempt, [...Object.keys(TARGETS), attempt]), attempt).toThrow(UnsafeIdentifierError);
+      expect(() => quoteIdentifier(attempt), JSON.stringify(attempt)).toThrow(UnsafeIdentifierError);
     }
   });
 
-  it("refuses anything that isn't a string, however plausible", () => {
-    for (const attempt of [null, undefined, 7, {}, ["feed_posts"], Symbol("feed_posts")] as unknown[]) {
-      expect(() => escapeIdentifier(attempt as string, TARGETS)).toThrow(UnsafeIdentifierError);
+  it("refuses anything that isn't a string at all", () => {
+    for (const attempt of [null, undefined, 7, {}, [], { toString: () => "users" }]) {
+      expect(() => quoteIdentifier(attempt as any)).toThrow(UnsafeIdentifierError);
     }
   });
 
-  it("refuses a name Postgres would truncate, because it is then a different name", () => {
-    const long = "a".repeat(64);
-    expect(() => escapeIdentifier(long, [long])).toThrow(/longer than Postgres will keep/);
-    expect(escapeIdentifier("a".repeat(63), ["a".repeat(63)])).toBe(`"${"a".repeat(63)}"`);
+  it("refuses a name longer than Postgres would keep", () => {
+    expect(() => quoteIdentifier("a".repeat(64))).toThrow(UnsafeIdentifierError);
+    expect(quoteIdentifier("a".repeat(63))).toBe(`"${"a".repeat(63)}"`);
   });
 
-  it("refuses to work with no allowlist at all", () => {
-    // Not "allow everything": an identifier is only safe because something expected it.
-    expect(() => escapeIdentifier("feed_posts", [])).toThrow(/No allowlist/);
-    expect(() => escapeIdentifier("feed_posts", undefined as never)).toThrow(/No allowlist/);
+  it("refuses a well-formed name the caller never listed", () => {
+    expect(quoteKnownIdentifier("feed_posts", ["feed_posts", "users"])).toBe('"feed_posts"');
+    expect(() => quoteKnownIdentifier("secrets", ["feed_posts", "users"])).toThrow(UnsafeIdentifierError);
+    // Trimmed before the check, so whitespace can't smuggle a name past the list.
+    expect(quoteKnownIdentifier(" users ", ["users"])).toBe('"users"');
   });
 
-  it("checks a column against its own table, not against every table", () => {
-    const targets = { feed_posts: ["created_at"], recurring_jobs: ["next_due"] };
-    expect(escapeColumnOf("feed_posts", "created_at", targets)).toEqual({ table: '"feed_posts"', column: '"created_at"' });
-    // `next_due` is a real column on a declared table — just not on this one.
-    expect(() => escapeColumnOf("feed_posts", "next_due", targets)).toThrow(UnsafeIdentifierError);
-    expect(() => escapeColumnOf("password_reset_tokens", "created_at", targets)).toThrow(UnsafeIdentifierError);
+  it("matches names the way the schema writes them", () => {
+    expect(IDENTIFIER.test("project_task_completions")).toBe(true);
+    expect(IDENTIFIER.test("project-task")).toBe(false);
+  });
+});
+
+describe("the repair script", () => {
+  it("checks every name it builds SQL with", () => {
+    expect(script).toContain("quoteKnownIdentifier");
+    /*
+     * The loop's raw names are used only as *values* — the existence check's
+     * $1/$2 and the console lines. If a raw name is ever interpolated into a
+     * query again, this fails.
+     */
+    const queries = [...script.matchAll(/`([^`]*(?:select|update|insert|delete)[^`]*)`/gi)].map((m) => m[1]);
+    expect(queries.length, "the script still builds SQL").toBeGreaterThan(0);
+    for (const query of queries) {
+      expect(query, `raw table name in: ${query.slice(0, 60)}`).not.toMatch(/\$\{rawTable\}/);
+      expect(query, `raw column name in: ${query.slice(0, 60)}`).not.toMatch(/\$\{rawColumn\}/);
+    }
   });
 
-  it("hands back every declared pair, quoted, with the plain names for lookups", () => {
-    const all = eachTarget({ feed_posts: ["created_at"], users: ["created_at"] });
-    expect(all).toHaveLength(2);
-    expect(all[0]).toEqual({ name: { table: "feed_posts", column: "created_at" }, table: '"feed_posts"', column: '"created_at"' });
-    // The plain names go to information_schema as bound parameters; the quoted ones into the statement.
-    expect(all.every((t: any) => t.table.startsWith('"') && !t.name.table.startsWith('"'))).toBe(true);
-  });
-
-  it("quotes a name that needs it rather than changing what the statement means", () => {
-    // Nothing in this schema is called `order`, but the escaping is what makes
-    // that survivable if one ever is, instead of a syntax error at 2am.
-    expect(escapeIdentifier("order", ["order"])).toBe('"order"');
+  it("still passes its own zone and cutoff as parameters, not as text", () => {
+    expect(script, "the timezone is a parameter").toMatch(/at time zone \$\$\{params\.length \+ 1\}/);
+    expect(script).not.toMatch(/at time zone '\$\{zone\}'/);
+    expect(script, "the cutoff is a parameter").toMatch(/< \$1/);
   });
 });

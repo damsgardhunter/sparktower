@@ -431,6 +431,65 @@ function refuse(res: any, key: string, action: RateLimitAction, check: RateCheck
 }
 
 /**
+ * The 503 path, reachable from a test without breaking the database.
+ *
+ * `refuse` is private on purpose — every limiter here goes through it — but
+ * the "counter is down" branch is otherwise only reachable by making the
+ * database fail mid-request, and a test that stages an outage to check a
+ * header is a test that will one day fail for the wrong reason.
+ */
+export const refuseForTest = (res: any, key: string, action: RateLimitAction, check: RateCheck) =>
+  refuse(res, key, action, check);
+
+/**
+ * A refusal from a limit this module doesn't own.
+ *
+ * A handful of places count something themselves — invites per project per
+ * day, live verification links per account, the fair-use ceiling on an
+ * unmetered plan — and each had grown its own refusal: the right status, but a
+ * body missing half the fields and no `Retry-After` at all. A client cannot
+ * have one piece of code for being refused if being refused looks like four
+ * different things, and the one field that tells it when to come back was the
+ * one most often left out.
+ *
+ * So they come through here. The wait is the caller's to work out — only they
+ * know whether it is a minute or until tomorrow — and everything else is the
+ * same shape every other limit answers with.
+ */
+export function refuseWithRetry(
+  res: any,
+  input: {
+    action: RateLimitAction;
+    message: string;
+    retryAfterSeconds: number;
+    /*
+     * A more specific code, where a client already branches on one. The fair-use
+     * ceiling is the case: the phone sends "fair_use_limit" to the pricing
+     * screen, because a month's quota is answered by a plan rather than by
+     * waiting, and flattening it to "rate_limited" would send somebody to a
+     * clock instead. The *shape* is what has to match — the fields and the
+     * header — not the one word that says which wall this is.
+     */
+    code?: string;
+    extra?: Record<string, unknown>;
+  },
+): false {
+  const retryAfterSeconds = Math.max(1, Math.round(input.retryAfterSeconds));
+  const body: RateLimitedBody & Record<string, unknown> = {
+    message: input.message,
+    code: (input.code ?? RATE_LIMITED) as typeof RATE_LIMITED,
+    action: input.action,
+    retryAfterSeconds,
+    retryAfterMinutes: Math.ceil(retryAfterSeconds / 60),
+    ...(input.extra ?? {}),
+  };
+  recordRefusal(res.req, input.action, "volume");
+  res.setHeader("Retry-After", String(retryAfterSeconds));
+  res.status(429).json(body);
+  return false;
+}
+
+/**
  * For handlers that check inside their own body rather than as middleware —
  * the credit check every AI endpoint runs through is the one that matters.
  * Returns true to proceed; on false the 429 has already been written.

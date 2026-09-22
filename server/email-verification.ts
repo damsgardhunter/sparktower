@@ -20,7 +20,7 @@ import { db } from "./db";
 import { emailVerificationTokens, users } from "@shared/schema";
 import { sendEmail } from "./email";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
-import { enforceRateLimit, ipKey } from "./moderation";
+import { enforceRateLimit, ipKey , refuseWithRetry } from "./moderation";
 import { publicBaseUrl } from "./public-url";
 
 export const VERIFICATION_TTL_HOURS = 48;
@@ -209,7 +209,25 @@ export function registerEmailVerificationRoutes(app: Express) {
       // Not more than a handful of live links at once, however often the button is pressed.
       const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(emailVerificationTokens)
         .where(and(eq(emailVerificationTokens.userId, user.id), isNull(emailVerificationTokens.usedAt), gt(emailVerificationTokens.expiresAt, new Date())));
-      if (n >= 5) return res.status(429).json({ message: "We've sent several links already — check your inbox and spam folder.", code: "too_many_links" });
+      if (n >= 5) {
+        /*
+         * Through the shared refusal, so this looks like every other limit and
+         * carries a Retry-After. The wait is until the oldest live link
+         * expires, which is when a sixth would be worth sending — the code
+         * stays "too_many_links" as an extra, because the client's copy for
+         * this one is about the inbox rather than about waiting.
+         */
+        const [oldest] = await db.select({ at: emailVerificationTokens.expiresAt }).from(emailVerificationTokens)
+          .where(and(eq(emailVerificationTokens.userId, user.id), isNull(emailVerificationTokens.usedAt), gt(emailVerificationTokens.expiresAt, new Date())))
+          .orderBy(emailVerificationTokens.expiresAt).limit(1);
+        return refuseWithRetry(res, {
+          action: "session",
+          message: "We've sent several links already — check your inbox and spam folder.",
+          retryAfterSeconds: Math.max(60, Math.round(((oldest?.at?.getTime() ?? Date.now() + 60_000) - Date.now()) / 1000)),
+          code: "too_many_links",
+          extra: { live: n },
+        });
+      }
       await sendVerificationEmail(user, req);
       res.json({ ok: true, sentTo: user.email });
     } catch (err) {

@@ -24,6 +24,7 @@ import type { ProjectGoal } from "@shared/goals";
 import { weekStartOf } from "@shared/weeks";
 import { notify } from "./notifications";
 import { notifyScouts } from "./scouting-alerts";
+import type { NextStepItem, WeeklyUpdate, NeedsPath } from "@shared/next-step";
 
 /** Away this many days with a step waiting, and the path sends one nudge for that step. */
 export const NUDGE_AFTER_DAYS = 2;
@@ -40,22 +41,7 @@ const MAX_ITEMS = 5;
  */
 const MAX_PROJECTS = 8;
 
-export interface NextStepItem {
-  project: { id: string; title: string; logoUrl: string | null };
-  /** The section this step is on: each started section of a project is its own item. */
-  track: { goal: ProjectGoal; label: string; short: string; primary: boolean };
-  phase: string;
-  progress: { done: number; total: number };
-  next: { id: string; title: string; actor: string; estimateMinutes: number | null; step: string | null } | null;
-  daysSinceActivity: number;
-  projectedAt: string | null;
-  /** The step finished most recently, if it can still be shared for feedback. */
-  lastDone: { taskId: string; title: string; completedAt: string; sharedPostId: string | null } | null;
-  /** This week's progress update: finished steps nobody has shared yet. Due when there's at least one. */
-  weekly: WeeklyUpdate;
-}
-
-export interface WeeklyUpdate { due: boolean; steps: { taskId: string; title: string; completedAt: string }[] }
+export type { NextStepItem, WeeklyUpdate, NeedsPath } from "@shared/next-step";
 
 /** Steps count toward this week's update for this long after they're finished. */
 export const WEEKLY_WINDOW_DAYS = 7;
@@ -233,10 +219,42 @@ export async function nextStepsFor(userId: string): Promise<NextStepItem[]> {
     // The weekly update is the project's, not a section's: offered once, on its first item.
     const weekly = await weeklyUpdateFor(p.id);
     let first = true;
+
+    /*
+     * A project with no section started at all still belongs on this list.
+     *
+     * It used to be dropped in silence — no step, no explanation, no way in —
+     * which meant the one screen a person opens to find out what to do said
+     * nothing about the project they had just made. It now says what it needs
+     * and carries the button that gives it one.
+     */
+    if (sections.length === 0) {
+      const all = await listTracks(p.id).catch(() => null);
+      const primary = all?.tracks.find((t) => t.primary) ?? all?.tracks[0];
+      if (primary) {
+        items.push(pathlessItem(p, primary, { kind: "start", existingTasks: 0, existingDone: 0 }, weekly));
+        continue;
+      }
+    }
+
     for (const section of sections) {
     // Read-only: a GET of the home screen must never create path tasks. See pathStatus.
     const status = await pathStatus(p.id, section.goal, { sync: false }).catch(() => null);
-    if (!status?.adopted) continue;
+    if (!status) continue;
+    /*
+     * Started, but made before paths existed: there are tasks and no tree.
+     * Adoption reads what is already finished, so the card offers that rather
+     * than a step that would pretend the project is on week one.
+     */
+    if (!status.adopted) {
+      items.push(pathlessItem(p, section, {
+        kind: status.started ? "adopt" : "start",
+        existingTasks: status.existingTasks ?? 0,
+        existingDone: status.existingDone ?? 0,
+      }, first ? weekly : { due: false, steps: [] }));
+      first = false;
+      continue;
+    }
     const lastDone = await lastDoneStep(p.id, status.events);
     items.push({
       project: { id: p.id, title: p.title, logoUrl: p.logoUrl },
@@ -257,6 +275,37 @@ export async function nextStepsFor(userId: string): Promise<NextStepItem[]> {
   }
   // Most recently worked first: the path someone is in the middle of leads.
   return items.sort((a, b) => a.daysSinceActivity - b.daysSinceActivity).slice(0, MAX_ITEMS);
+}
+
+/**
+ * An item for a project that has no path to take a step on.
+ *
+ * The same shape as every other item, so both cards render it in the same row
+ * they render a step in — with `needsPath` in place of `next`, which is what
+ * tells them to draw the offer instead.
+ */
+function pathlessItem(
+  p: { id: string; title: string; logoUrl: string | null },
+  section: { goal: ProjectGoal; label: string; short: string; primary: boolean },
+  needsPath: NeedsPath,
+  weekly: WeeklyUpdate,
+): NextStepItem {
+  return {
+    project: { id: p.id, title: p.title, logoUrl: p.logoUrl },
+    track: { goal: section.goal, label: section.label, short: section.short, primary: section.primary },
+    phase: needsPath.kind === "adopt" ? "Ready for its path" : "No path yet",
+    progress: { done: 0, total: 0 },
+    next: null,
+    /*
+     * Sorted last among waiting work: a project that needs setting up is not
+     * more urgent than one somebody is in the middle of.
+     */
+    daysSinceActivity: Number.MAX_SAFE_INTEGER,
+    projectedAt: null,
+    lastDone: null,
+    weekly,
+    needsPath,
+  };
 }
 
 /**

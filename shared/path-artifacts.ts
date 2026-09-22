@@ -74,6 +74,15 @@ export function validatePublish(raw: { title?: unknown; tags?: unknown }): { tit
 export const PENDING_PATH_KEY = "st_pending_path";
 export interface PendingPath {
   goal: string;
+  /**
+   * The kind of project the artifact was written on — a restaurant, a game, a
+   * SaaS. The public page has always known it and never passed it on, so
+   * somebody who arrived from a restaurant's path was asked, two screens
+   * later, what kind of thing they were building. The tree's variant text
+   * hangs off this, so getting it right early is most of what makes the first
+   * step read as though it were written for them.
+   */
+  subcategory?: string;
   fromArtifact: string;
   /** "start": open project create on this goal. "explore": see the artifact's project first. */
   intent?: "start" | "explore";
@@ -105,6 +114,38 @@ export function afterOnboardingPath(pending: PendingPath | null): string {
  * with the first step up next and Publish beside it once it's done.
  */
 export const afterPendingCreatePath = (projectId: string, goal: string) => `/projects/${projectId}/manage?section=${encodeURIComponent(goal)}`;
+
+/**
+ * The same choice, in the address.
+ *
+ * localStorage is the carrier, and in a private window or with site data
+ * blocked it silently isn't there: the visitor signs up, lands in project
+ * create with nothing pre-filled, and the artifact they came from is never
+ * credited. The address survives that, so it carries the choice as well — the
+ * store is read first, and this is what's left when the store is empty.
+ */
+export function pendingPathQuery(pending: PendingPath): string {
+  const params = new URLSearchParams({ signup: "1", artifact: pending.fromArtifact, goal: pending.goal });
+  if (pending.subcategory) params.set("subcategory", pending.subcategory);
+  if (pending.intent) params.set("intent", pending.intent);
+  return params.toString();
+}
+
+/** What a link like `/?signup=1&artifact=…&goal=…` was carrying, or null. */
+export function pendingPathFromQuery(search: string | null | undefined): PendingPath | null {
+  const params = new URLSearchParams(search ?? "");
+  const fromArtifact = params.get("artifact") ?? "";
+  const goal = params.get("goal") ?? "";
+  if (!/^[A-Za-z0-9-]{8,64}$/.test(fromArtifact) || !/^[a-z_]{2,32}$/.test(goal)) return null;
+  const subcategory = params.get("subcategory") ?? "";
+  const intent = params.get("intent");
+  return {
+    goal,
+    fromArtifact,
+    ...(/^[a-z_]{2,32}$/.test(subcategory) ? { subcategory } : {}),
+    ...(intent === "start" || intent === "explore" ? { intent } : {}),
+  };
+}
 
 /** The public URL of an artifact, relative to the site. */
 export const artifactPath = (id: string) => `/a/${id}`;

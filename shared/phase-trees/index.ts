@@ -1,4 +1,4 @@
-import type { ProjectGoal } from "../goals";
+import { normaliseGoal, type ProjectGoal } from "../goals";
 import type { PathTree, BackboneMilestone, BackbonePhase, Actor, VerificationTier, IntakeQuestion } from "./types";
 import type { WorkKind } from "./work";
 import { SHIP_TREE } from "./ship";
@@ -21,7 +21,15 @@ export const PATH_TREES: Record<ProjectGoal, PathTree> = {
   run_company: RUN_TREE,
 };
 
-export const treeFor = (goal: ProjectGoal): PathTree => PATH_TREES[goal];
+/*
+ * The goal is normalised on the way in, because this is where a *stored* goal
+ * arrives. `raise_funding` folded into Systemize, and the alias in
+ * shared/goals.ts exists so that rows written before the fold, and links still
+ * carrying the old id, keep resolving. Read straight out of the table, an old
+ * id returned `undefined` and the caller died on `tree.phases` — a crash on
+ * data we deliberately promised to keep understanding.
+ */
+export const treeFor = (goal: ProjectGoal): PathTree => PATH_TREES[normaliseGoal(goal) ?? goal];
 
 /** One milestone, with the variant for this project type applied. */
 export interface ResolvedMilestone {

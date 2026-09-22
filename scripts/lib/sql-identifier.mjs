@@ -1,99 +1,60 @@
 /**
- * Table and column names that are safe to put in a query, because they are
- * ones this repository wrote down.
+ * Putting a table or column name into SQL, safely.
  *
- * An identifier cannot be a bound parameter: `select * from $1` is not a
- * thing Postgres will do. So any script that works across several tables has
- * to build that part of the statement as text, and every such script is one
- * careless edit away from building it out of something a person typed. This
- * is the piece that makes that edit fail loudly instead of quietly working.
+ * Values go in as parameters — `$1` — and every value in these scripts already
+ * does. Identifiers cannot: Postgres has no parameter for "which table", so a
+ * maintenance script that walks a list of tables has to build that part of the
+ * string itself. That is the one place injection can still get in, and the
+ * usual defence — "the list is a constant in this file, nobody can reach it" —
+ * is a statement about today's code rather than about the query. The next
+ * person to add `--tables` to the command line makes it untrue without ever
+ * looking at the string being built.
  *
- * Two locks, not one:
- *
- *   1. **An allowlist.** The name must be one the caller declared in advance.
- *      Shape checks alone ("no quotes, no semicolons") are a guess at what an
- *      attacker can spell; a list of six table names is not a guess. This is
- *      the lock that matters, and it is why every function here demands one.
- *   2. **The driver's own escaping**, applied after. Belt and braces: if a
- *      name on an allowlist ever contains something strange — a column
- *      genuinely called `order`, say — it is still quoted correctly rather
- *      than changing the statement's meaning.
- *
- * Kept in `scripts/lib` and dependency-free beyond `pg` so any maintenance
- * script can use it without dragging the server's module graph into a
- * one-off task.
+ * So identifiers are checked against what a name in this schema can actually
+ * be, and quoted. A name with a quote, a semicolon, a space, a comment marker
+ * or anything else outside `[a-z_][a-z0-9_]*` is refused outright rather than
+ * escaped: nothing in this database is called that, so a name that looks like
+ * that is a mistake at best.
  */
-import pg from "pg";
 
-/**
- * What a name is allowed to look like at all.
- *
- * Postgres truncates identifiers at 63 bytes, so a longer one is already not
- * the thing the caller thinks it is. Lower case only, because every name in
- * this schema is lower case and accepting mixed case would mean quietly
- * matching `Users` against `users` on the allowlist while Postgres treats
- * them as different tables.
- */
-const SHAPE = /^[a-z_][a-z0-9_]*$/;
-const MAX_BYTES = 63;
+/** What a table or column is called here: lower snake case, as the schema writes them. */
+export const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
+
+/** Postgres allows 63 bytes; longer is silently truncated, which is its own bug. */
+export const MAX_IDENTIFIER_LENGTH = 63;
 
 export class UnsafeIdentifierError extends Error {
-  constructor(message) {
-    super(message);
+  constructor(raw) {
+    super(`Refusing to build SQL with ${JSON.stringify(String(raw))} as a name.`);
     this.name = "UnsafeIdentifierError";
   }
 }
 
-/** The allowlist as a Set, whatever shape it arrived in. */
-const asSet = (allowed) => (allowed instanceof Set ? allowed : new Set(Array.isArray(allowed) ? allowed : Object.keys(allowed ?? {})));
-
 /**
- * One identifier, checked against a list the caller wrote, and quoted.
+ * A table or column name, checked and quoted for interpolation.
  *
- * Throws rather than returning null or a default: a maintenance script that
- * carries on with the wrong table is worse than one that stops, and every
- * caller here is a person at a terminal who can read the reason.
+ * Returns the name wrapped in double quotes, so even a valid name that happens
+ * to be a reserved word ("user", "order") is unambiguous. Throws on anything
+ * else — the caller is a script that should stop, not carry on against a
+ * table it cannot name.
  */
-export function escapeIdentifier(name, allowed) {
-  const list = asSet(allowed);
-  if (list.size === 0) {
-    throw new UnsafeIdentifierError("No allowlist given. An identifier is only safe because something said it was expected.");
-  }
-  if (typeof name !== "string" || name.length === 0) {
-    throw new UnsafeIdentifierError(`Not a name: ${JSON.stringify(name)}`);
-  }
-  if (Buffer.byteLength(name, "utf8") > MAX_BYTES) {
-    throw new UnsafeIdentifierError(`"${name.slice(0, 20)}…" is longer than Postgres will keep (${MAX_BYTES} bytes).`);
-  }
-  if (!SHAPE.test(name)) {
-    throw new UnsafeIdentifierError(`"${name}" is not a plain lower-case identifier — refusing to put it in a statement.`);
-  }
-  if (!list.has(name)) {
-    throw new UnsafeIdentifierError(`"${name}" is not one of the names this script works on (${[...list].sort().join(", ")}).`);
-  }
-  return pg.escapeIdentifier(name);
+export function quoteIdentifier(raw) {
+  if (typeof raw !== "string") throw new UnsafeIdentifierError(raw);
+  const name = raw.trim();
+  if (!name || name.length > MAX_IDENTIFIER_LENGTH || !IDENTIFIER.test(name)) throw new UnsafeIdentifierError(raw);
+  return `"${name}"`;
 }
 
 /**
- * A column of a table, where the allowlist says which columns belong to which
- * table: `{ feed_posts: ["created_at"] }`.
+ * The same check, against a known set as well.
  *
- * Checking the pair rather than each half separately is the point. Two
- * separate checks would happily accept `users` and `body`, a combination no
- * line of the allowlist ever claimed existed.
+ * Belt and braces for a script that already has its list: even a well-formed
+ * name is refused if it is not one this script was written to touch, so
+ * widening what it can reach has to be a deliberate edit to the list rather
+ * than a flag somebody passes.
  */
-export function escapeColumnOf(table, column, targets) {
-  const tables = asSet(targets);
-  const safeTable = escapeIdentifier(table, tables);
-  const columns = new Set(targets?.[table] ?? []);
-  if (columns.size === 0) {
-    throw new UnsafeIdentifierError(`No columns are declared for "${table}".`);
-  }
-  return { table: safeTable, column: escapeIdentifier(column, columns) };
-}
-
-/** Every table/column pair in an allowlist, already checked and quoted. */
-export function eachTarget(targets) {
-  return Object.entries(targets ?? {}).flatMap(([table, columns]) =>
-    (columns ?? []).map((column) => ({ name: { table, column }, ...escapeColumnOf(table, column, targets) })));
+export function quoteKnownIdentifier(raw, allowed) {
+  const name = typeof raw === "string" ? raw.trim() : raw;
+  if (!allowed.includes(name)) throw new UnsafeIdentifierError(raw);
+  return quoteIdentifier(name);
 }

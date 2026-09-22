@@ -44,7 +44,7 @@ import ReactMarkdown from "react-markdown";
 import type { Project } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 import { useUpload } from "@/hooks/use-upload";
-import { PENDING_PATH_KEY, afterPendingCreatePath, parsePendingPath } from "@shared/path-artifacts";
+import { PENDING_PATH_KEY, afterPendingCreatePath, parsePendingPath, pendingPathFromQuery, type PendingPath } from "@shared/path-artifacts";
 import { PROJECT_GOALS, projectGoal, subcategoriesFor, isValidSubcategory, type ProjectGoal } from "@shared/goals";
 import { NEW_PROJECT_STEPS, type NewProjectStep, nextStep, prevStep, stepIndex } from "@shared/new-project-steps";
 import { useAuth } from "@/hooks/use-auth";
@@ -158,11 +158,30 @@ const STEP_LABELS: Record<NewProjectStep, string> = {
  * consumed: it stays through a reload or a detour, and is cleared only once a
  * project exists (see createMutation).
  */
-function pendingPathGoal(): { goal?: ProjectGoal } {
-  let raw: string | null = null;
-  try { raw = localStorage.getItem(PENDING_PATH_KEY); } catch { return {}; }
-  const pending = parsePendingPath(raw);
-  return pending && PROJECT_GOALS.some((g) => g.id === pending.goal) ? { goal: pending.goal as ProjectGoal } : {};
+function pendingChoice(): PendingPath | null {
+  let stored: PendingPath | null = null;
+  try { stored = parsePendingPath(localStorage.getItem(PENDING_PATH_KEY)); } catch { /* the address may still have it */ }
+  /*
+   * The store first, the address second. A private window, or a browser with
+   * site data blocked, keeps nothing — and the visitor who came from a
+   * published page would arrive here with an empty form and their choice lost
+   * between two screens. The link they followed carries the same choice.
+   */
+  return stored ?? (typeof location !== "undefined" ? pendingPathFromQuery(location.search) : null);
+}
+
+/**
+ * What the artifact's page already knew: the goal, and the kind of project it
+ * was. The subcategory used to be dropped on the floor here — so somebody who
+ * arrived from a restaurant's path was asked, two screens later, what kind of
+ * thing they were building, having just read a page that said.
+ */
+function pendingPathGoal(): { goal?: ProjectGoal; subcategory?: string } {
+  const pending = pendingChoice();
+  if (!pending || !PROJECT_GOALS.some((g) => g.id === pending.goal)) return {};
+  const goal = pending.goal as ProjectGoal;
+  const subcategory = pending.subcategory && isValidSubcategory(goal, pending.subcategory) ? pending.subcategory : undefined;
+  return { goal, ...(subcategory ? { subcategory } : {}) };
 }
 
 export default function ProjectCreate() {
@@ -347,6 +366,12 @@ export default function ProjectCreate() {
       const payload = {
         ...data,
         mediaUrls: uploadedImages.map((img) => img.preview),
+        /*
+         * Where this project came from, for the funnel. Not a column on the
+         * project — the server records it as an event and drops it from the
+         * fields it saves (PROJECT_CREATE_FIELDS).
+         */
+        ...(pendingChoice()?.fromArtifact ? { fromArtifact: pendingChoice()!.fromArtifact } : {}),
       };
       const res = await apiRequest("POST", "/api/projects", payload);
       return res.json();
