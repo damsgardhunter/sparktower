@@ -268,7 +268,13 @@ export const CREDIT_COSTS = {
   /** Nova's one-line reasons on generated matches — an optional extra on a free route. */
   matchExplanation: 1,
   /** Recalculating a builder's reputation. No model runs; priced as it always was, charged on success. */
-  reputationEvaluation: 1,
+  /**
+   * Nothing: the builder index is rebuilt for everybody on the hour and Nova's
+   * weekly read is the platform's cost, not the builder's. Kept at zero rather
+   * than deleted so an older client that still sends the old request is quoted
+   * the truth instead of a price that no longer exists.
+   */
+  reputationEvaluation: 0,
   /** Checks pricing against the target customer and comparable products. */
   pricingAnalysis: 5,
   /**

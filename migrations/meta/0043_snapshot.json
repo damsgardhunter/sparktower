@@ -1,6 +1,6 @@
 {
-  "id": "4074bbb5-898d-44d9-964b-bc36f1bba8df",
-  "prevId": "6b273775-1e31-4568-95fa-418aef655abf",
+  "id": "6b273775-1e31-4568-95fa-418aef655abf",
+  "prevId": "825488fc-c342-417d-9fd6-34d36a1e854d",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1928,16 +1928,7 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "contest_participants_contest_user_unique": {
-          "name": "contest_participants_contest_user_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "contest_id",
-            "user_id"
-          ]
-        }
-      },
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -7998,116 +7989,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.project_operation_applications": {
-      "name": "project_operation_applications",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "varchar",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "project_id": {
-          "name": "project_id",
-          "type": "varchar",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "varchar",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "key": {
-          "name": "key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "source": {
-          "name": "source",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "result": {
-          "name": "result",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "'{}'::jsonb"
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "project_operation_applications_made_idx": {
-          "name": "project_operation_applications_made_idx",
-          "columns": [
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "project_operation_applications_project_id_projects_id_fk": {
-          "name": "project_operation_applications_project_id_projects_id_fk",
-          "tableFrom": "project_operation_applications",
-          "tableTo": "projects",
-          "columnsFrom": [
-            "project_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "project_operation_applications_user_id_users_id_fk": {
-          "name": "project_operation_applications_user_id_users_id_fk",
-          "tableFrom": "project_operation_applications",
-          "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "project_operation_applications_key_idx": {
-          "name": "project_operation_applications_key_idx",
-          "nullsNotDistinct": false,
-          "columns": [
-            "project_id",
-            "key"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.project_personas": {
       "name": "project_personas",
       "schema": "",
@@ -9137,24 +9018,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "hidden_at": {
-          "name": "hidden_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "hidden_by_id": {
-          "name": "hidden_by_id",
-          "type": "varchar",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "hidden_reason": {
-          "name": "hidden_reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -9171,19 +9034,6 @@
           "tableTo": "users",
           "columnsFrom": [
             "owner_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "projects_hidden_by_id_users_id_fk": {
-          "name": "projects_hidden_by_id_users_id_fk",
-          "tableFrom": "projects",
-          "tableTo": "users",
-          "columnsFrom": [
-            "hidden_by_id"
           ],
           "columnsTo": [
             "id"
@@ -13620,103 +13470,6 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.user_blocks": {
-      "name": "user_blocks",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "varchar",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "blocker_id": {
-          "name": "blocker_id",
-          "type": "varchar",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "blocked_id": {
-          "name": "blocked_id",
-          "type": "varchar",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "reason": {
-          "name": "reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "user_blocks_blocked_idx": {
-          "name": "user_blocks_blocked_idx",
-          "columns": [
-            {
-              "expression": "blocked_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "user_blocks_blocker_id_users_id_fk": {
-          "name": "user_blocks_blocker_id_users_id_fk",
-          "tableFrom": "user_blocks",
-          "tableTo": "users",
-          "columnsFrom": [
-            "blocker_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "user_blocks_blocked_id_users_id_fk": {
-          "name": "user_blocks_blocked_id_users_id_fk",
-          "tableFrom": "user_blocks",
-          "tableTo": "users",
-          "columnsFrom": [
-            "blocked_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "user_blocks_blocker_id_blocked_id_unique": {
-          "name": "user_blocks_blocker_id_blocked_id_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "blocker_id",
-            "blocked_id"
-          ]
-        }
-      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false

@@ -1,6 +1,6 @@
 {
-  "id": "9851dbba-062f-4140-b33d-424d9a96711b",
-  "prevId": "f7e7a273-9441-4b8a-9944-4988b205c5ff",
+  "id": "f7e7a273-9441-4b8a-9944-4988b205c5ff",
+  "prevId": "fd546a0d-23a2-4585-919b-c9ebacbda6b1",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -10421,13 +10421,6 @@
           "type": "integer",
           "primaryKey": false,
           "notNull": true
-        },
-        "forced": {
-          "name": "forced",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
         },
         "status": {
           "name": "status",

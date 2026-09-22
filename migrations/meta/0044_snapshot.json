@@ -1,6 +1,6 @@
 {
-  "id": "a18e14fb-f5e4-446d-982e-df220cfd87de",
-  "prevId": "4074bbb5-898d-44d9-964b-bc36f1bba8df",
+  "id": "4074bbb5-898d-44d9-964b-bc36f1bba8df",
+  "prevId": "6b273775-1e31-4568-95fa-418aef655abf",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -13589,29 +13589,7 @@
           "default": "now()"
         }
       },
-      "indexes": {
-        "user_badges_user_badge_unique": {
-          "name": "user_badges_user_badge_unique",
-          "columns": [
-            {
-              "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "badge_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
+      "indexes": {},
       "foreignKeys": {
         "user_badges_user_id_users_id_fk": {
           "name": "user_badges_user_id_users_id_fk",

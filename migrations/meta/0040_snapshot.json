@@ -1,6 +1,6 @@
 {
-  "id": "8289ce21-85f7-48d2-936a-ad0628def4bd",
-  "prevId": "e799231d-4e21-4a33-977c-d972d0e7ffce",
+  "id": "e799231d-4e21-4a33-977c-d972d0e7ffce",
+  "prevId": "f11e7d64-c888-48d0-9a3f-205135abccc8",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -7741,16 +7741,7 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "project_members_project_user_unique": {
-          "name": "project_members_project_user_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "project_id",
-            "user_id"
-          ]
-        }
-      },
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false

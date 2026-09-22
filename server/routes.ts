@@ -4114,17 +4114,18 @@ RULES:
     }
   });
 
-  app.post("/api/reputation/calculate", isAuthenticated, async (req: any, res) => {
+  /**
+   * Work my index out now.
+   *
+   * It is no longer how the number stays current — `server/reputation-jobs.ts`
+   * rebuilds it on the hour — so this costs nothing and asks nothing of Nova,
+   * whose weekly read is the expensive part and runs on its own clock. What is
+   * left is "I just finished something and want to see it", which should not
+   * bill anybody, and is rate-limited because it is free.
+   */
+  app.post("/api/reputation/calculate", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
-      const userId = req.user.id;
-      // Checked first, charged once the calculation has succeeded. It used to be
-      // charged before, so a failed calculation still cost a credit. The
-      // strategic-thinking part is Nova's (server/reputation.ts).
-      if (!(await requireCredits(res, userId, CREDIT_COSTS.reputationEvaluation, "a reputation evaluation"))) return;
-      const reputation = await calculateUserReputation(userId, storage);
-      // Only when Nova actually scored it. With no projects to read, or a failed
-      // call, that part is an estimate — and an estimate is free.
-      if (reputation.aiEvaluated) await storage.deductCredits(userId, CREDIT_COSTS.reputationEvaluation);
+      const reputation = await calculateUserReputation(req.user.id);
       res.json(reputation);
     } catch (error: any) {
       console.error("Reputation calculation error:", error);
@@ -5808,6 +5809,19 @@ Respond ONLY with valid JSON (no markdown, no code fences):
           return res.status(400).json({ message: "status must be planned, in-progress, or completed" });
         }
         patch.status = body.status;
+        /*
+         * When and by whom, stamped here rather than inferred later: the
+         * builder index reads the date for punctuality and the person for
+         * whose contribution it was, and neither can be recovered from a
+         * status column that only says "completed".
+         */
+        if (body.status === "completed" && before?.status !== "completed") {
+          patch.completedAt = new Date();
+          patch.completedById = userId;
+        } else if (body.status !== "completed") {
+          patch.completedAt = null;
+          patch.completedById = null;
+        }
       }
       if (body.targetDate !== undefined) {
         if (!body.targetDate) {

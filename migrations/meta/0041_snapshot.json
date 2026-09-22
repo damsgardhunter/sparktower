@@ -1,6 +1,6 @@
 {
-  "id": "825488fc-c342-417d-9fd6-34d36a1e854d",
-  "prevId": "8289ce21-85f7-48d2-936a-ad0628def4bd",
+  "id": "8289ce21-85f7-48d2-936a-ad0628def4bd",
+  "prevId": "e799231d-4e21-4a33-977c-d972d0e7ffce",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -14245,92 +14245,6 @@
           ]
         }
       },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.web_handoff_tokens": {
-      "name": "web_handoff_tokens",
-      "schema": "",
-      "columns": {
-        "token_hash": {
-          "name": "token_hash",
-          "type": "varchar",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "varchar",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "mfa": {
-          "name": "mfa",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "next": {
-          "name": "next",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "used_at": {
-          "name": "used_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "web_handoff_user_idx": {
-          "name": "web_handoff_user_idx",
-          "columns": [
-            {
-              "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "web_handoff_tokens_user_id_users_id_fk": {
-          "name": "web_handoff_tokens_user_id_users_id_fk",
-          "tableFrom": "web_handoff_tokens",
-          "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false

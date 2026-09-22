@@ -1,6 +1,6 @@
 {
-  "id": "e799231d-4e21-4a33-977c-d972d0e7ffce",
-  "prevId": "f11e7d64-c888-48d0-9a3f-205135abccc8",
+  "id": "f11e7d64-c888-48d0-9a3f-205135abccc8",
+  "prevId": "9851dbba-062f-4140-b33d-424d9a96711b",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -5427,12 +5427,6 @@
         },
         "refund_due_at": {
           "name": "refund_due_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "disputed_at": {
-          "name": "disputed_at",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false

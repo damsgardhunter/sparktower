@@ -1,6 +1,6 @@
 {
-  "id": "f7e7a273-9441-4b8a-9944-4988b205c5ff",
-  "prevId": "fd546a0d-23a2-4585-919b-c9ebacbda6b1",
+  "id": "fd546a0d-23a2-4585-919b-c9ebacbda6b1",
+  "prevId": "6d9289da-6507-4a6b-9a80-fa2ec70a7085",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1039,14 +1039,7 @@
           "name": "created_by",
           "type": "varchar",
           "primaryKey": false,
-          "notNull": false
-        },
-        "invite_key_version": {
-          "name": "invite_key_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
+          "notNull": true
         },
         "created_at": {
           "name": "created_at",
@@ -1080,7 +1073,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
@@ -1286,7 +1279,7 @@
           "name": "created_by",
           "type": "varchar",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "created_at": {
           "name": "created_at",
@@ -1342,7 +1335,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
@@ -1378,7 +1371,7 @@
           "name": "created_by",
           "type": "varchar",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "created_at": {
           "name": "created_at",
@@ -1441,7 +1434,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
@@ -9375,7 +9368,7 @@
           "name": "sent_by",
           "type": "varchar",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "role": {
           "name": "role",
@@ -9463,7 +9456,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },

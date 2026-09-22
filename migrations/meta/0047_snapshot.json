@@ -1,6 +1,6 @@
 {
-  "id": "032d69d4-a003-46b8-8294-53f68e27d9d0",
-  "prevId": "e9ebb440-5bb2-4614-bd29-95e7e4bf82ec",
+  "id": "e9ebb440-5bb2-4614-bd29-95e7e4bf82ec",
+  "prevId": "f4b54f55-f2e2-4cb6-a054-1d2899dfdfb4",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -14639,123 +14639,6 @@
             "id"
           ],
           "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.what_would_it_take_roadmaps": {
-      "name": "what_would_it_take_roadmaps",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "varchar",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "project_id": {
-          "name": "project_id",
-          "type": "varchar",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "target": {
-          "name": "target",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "grounding": {
-          "name": "grounding",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "roadmap": {
-          "name": "roadmap",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "annual_revenue": {
-          "name": "annual_revenue",
-          "type": "real",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "generated_by": {
-          "name": "generated_by",
-          "type": "varchar",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "generated_at": {
-          "name": "generated_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "wwit_project_target_idx": {
-          "name": "wwit_project_target_idx",
-          "columns": [
-            {
-              "expression": "project_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "target",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "generated_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "what_would_it_take_roadmaps_project_id_projects_id_fk": {
-          "name": "what_would_it_take_roadmaps_project_id_projects_id_fk",
-          "tableFrom": "what_would_it_take_roadmaps",
-          "tableTo": "projects",
-          "columnsFrom": [
-            "project_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "what_would_it_take_roadmaps_generated_by_users_id_fk": {
-          "name": "what_would_it_take_roadmaps_generated_by_users_id_fk",
-          "tableFrom": "what_would_it_take_roadmaps",
-          "tableTo": "users",
-          "columnsFrom": [
-            "generated_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },

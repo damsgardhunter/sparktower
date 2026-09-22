@@ -1,6 +1,6 @@
 {
-  "id": "f11e7d64-c888-48d0-9a3f-205135abccc8",
-  "prevId": "9851dbba-062f-4140-b33d-424d9a96711b",
+  "id": "9851dbba-062f-4140-b33d-424d9a96711b",
+  "prevId": "f7e7a273-9441-4b8a-9944-4988b205c5ff",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -11197,12 +11197,6 @@
         "state": {
           "name": "state",
           "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "running_since": {
-          "name": "running_since",
-          "type": "timestamp",
           "primaryKey": false,
           "notNull": false
         },

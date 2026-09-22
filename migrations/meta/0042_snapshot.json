@@ -1,6 +1,6 @@
 {
-  "id": "6b273775-1e31-4568-95fa-418aef655abf",
-  "prevId": "825488fc-c342-417d-9fd6-34d36a1e854d",
+  "id": "825488fc-c342-417d-9fd6-34d36a1e854d",
+  "prevId": "8289ce21-85f7-48d2-936a-ad0628def4bd",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -4438,30 +4438,6 @@
           "notNull": true,
           "default": "'private'"
         },
-        "draft_summary": {
-          "name": "draft_summary",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "draft_body": {
-          "name": "draft_body",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "draft_files": {
-          "name": "draft_files",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "draft_at": {
-          "name": "draft_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
         "published_post_id": {
           "name": "published_post_id",
           "type": "varchar",
@@ -6494,20 +6470,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
-        },
-        "pages_history": {
-          "name": "pages_history",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "fill_failures": {
-          "name": "fill_failures",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
         },
         "created_at": {
           "name": "created_at",
