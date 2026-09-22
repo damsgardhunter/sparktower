@@ -166,7 +166,17 @@ describe("sanitizeDeepRead", () => {
   it("keeps quantified coverage and gaps, drops files it wasn't shown, and is null on nothing", () => {
     const allowed = new Set(["server/moderation.ts"]);
     expect(sanitizeDeepRead({ coverage: "14 of 19 writes limited", gaps: [{ item: "Comments not limited", file: "server/moderation.ts", severity: "high" }, { item: "Uploads", file: "server/src/nope.ts", severity: "weird" }, { item: "" }], strengths: ["durable"] }, allowed))
-      .toEqual({ coverage: "14 of 19 writes limited", gaps: [{ item: "Comments not limited", file: "server/moderation.ts", severity: "high" }, { item: "Uploads", file: undefined, severity: "medium" }], strengths: ["durable"] });
+      .toEqual({
+        coverage: "14 of 19 writes limited",
+        gaps: [
+          { item: "Comments not limited", file: "server/moderation.ts", severity: "high" },
+          // The path is dropped, and what it cited is said in the gap: silently
+          // stripping it turned a claim about one file into a claim about the
+          // codebase, with nothing left for a reader to check it against.
+          { item: "Uploads [cited server/src/nope.ts, which was not among the files this read was given]", file: undefined, severity: "medium" },
+        ],
+        strengths: ["durable"],
+      });
     expect(sanitizeDeepRead({ coverage: "", gaps: [] }, allowed)).toBeNull();
     expect(sanitizeDeepRead("nonsense", allowed)).toBeNull();
   });
