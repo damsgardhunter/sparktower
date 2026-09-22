@@ -107,3 +107,23 @@ describe("the close read's own answer, held to the shape", () => {
     expect(sanitizeDeepRead({ coverage: "c" }, allowed)).not.toHaveProperty("present");
   });
 });
+
+describe("a gap that cites a file the read never saw", () => {
+  it("keeps the gap and says what it cited, rather than quietly dropping the path", () => {
+    const detail = sanitizeDeepRead(
+      { coverage: "c", gaps: [{ item: "No signature check on the webhook", file: "server/never-given.ts", severity: "high" }] },
+      new Set(["server/webhookHandlers.ts"]),
+    );
+    expect(detail?.gaps[0].file, "a path a reader can't open is not evidence").toBeUndefined();
+    expect(detail?.gaps[0].item).toContain("server/never-given.ts");
+    expect(detail?.gaps[0].item).toMatch(/not among the files this read was given/);
+  });
+
+  it("leaves a gap that cited a file it was given exactly as written", () => {
+    const detail = sanitizeDeepRead(
+      { coverage: "c", gaps: [{ item: "No signature check", file: "server/webhookHandlers.ts" }] },
+      new Set(["server/webhookHandlers.ts"]),
+    );
+    expect(detail?.gaps[0]).toEqual({ item: "No signature check", file: "server/webhookHandlers.ts", severity: "medium" });
+  });
+});

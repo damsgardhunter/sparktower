@@ -124,9 +124,18 @@ export function sanitizeDeepRead(raw: unknown, allowedFiles: Set<string>): Capab
   const r = raw as any;
   const gaps = (Array.isArray(r.gaps) ? r.gaps : []).slice(0, 12).map((g: any) => {
     const file = g?.file ? String(g.file).trim() : undefined;
+    const kept = file && allowedFiles.has(file) ? file : undefined;
+    const item = String(g?.item ?? "").trim().slice(0, 300);
     return {
-      item: String(g?.item ?? "").trim().slice(0, 300),
-      file: file && allowedFiles.has(file) ? file : undefined,
+      /*
+       * A gap that cited a file this read was never given used to have the
+       * path quietly removed and the sentence kept, which turned a claim about
+       * one file into a claim about the codebase — and the reader had no way
+       * to tell the two apart. The sentence is still kept, because the gap may
+       * be real; what it cited is now said out loud.
+       */
+      item: file && !kept ? `${item} [cited ${file}, which was not among the files this read was given]` : item,
+      file: kept,
       severity: ((["low", "medium", "high"] as string[]).includes(g?.severity) ? g.severity : "medium") as "low" | "medium" | "high",
     };
   }).filter((g: any) => g.item);
