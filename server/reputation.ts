@@ -19,7 +19,7 @@
  * on working. What changed is what goes into them (`shared/reputation.ts` for
  * the arithmetic, `server/reputation-inputs.ts` for the facts).
  */
-import { and, eq, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "./db";
 import { userReputationScores } from "@shared/schema";
 import { REFRESH, reputationFrom, type ReputationFacts } from "@shared/reputation";

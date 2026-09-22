@@ -17,7 +17,7 @@
  */
 import { describe, it, expect, afterAll, vi } from "vitest";
 import request from "supertest";
-import { and, eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
