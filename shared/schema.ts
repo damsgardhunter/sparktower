@@ -2810,6 +2810,15 @@ export const companies = pgTable("companies", {
   description: text("description"),
   /** The project it runs itself through, on the Run a company path, if any. */
   projectId: varchar("project_id").references(() => projects.id, { onDelete: "set null" }),
+  /**
+   * Seats paid for on the simulation, at five dollars each.
+   *
+   * A seat is a person at a table for the life of a season, not a month: a
+   * company buys ten seats, runs a season for ten people, and the seats are
+   * still there for the next one. Held on the company rather than on a season
+   * so an away day that ends early does not burn them.
+   */
+  simSeatsPaid: integer("sim_seats_paid").default(0).notNull(),
   /*
    * Who did it, for the record — and only for the record. Set null, not
    * cascade, when that account goes: one person closing their account must
@@ -3337,6 +3346,29 @@ export type SprintMatchmakingQueueEntry = typeof sprintMatchmakingQueue.$inferSe
  * the whole point of the game is competing against the other teams in your
  * market. Two ventures in different niches never meet.
  */
+/**
+ * Seats bought, one row per payment.
+ *
+ * The ledger exists for one reason: Stripe redelivers. Without a record keyed
+ * on the session, a webhook delivered twice credits the seats twice, and the
+ * company gets what it did not pay for — which is the same bug as charging
+ * twice, pointed the other way. The increment on the company and the row here
+ * are one transaction.
+ */
+export const simSeatPurchases = pgTable("sim_seat_purchases", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  seats: integer("seats").notNull(),
+  /** In cents, as Stripe counts it. */
+  amount: integer("amount").notNull(),
+  stripeSessionId: text("stripe_session_id").notNull(),
+  boughtBy: varchar("bought_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  oncePerSession: unique("sim_seat_purchases_session").on(table.stripeSessionId),
+  byCompany: index("sim_seat_purchases_company_idx").on(table.companyId, table.createdAt),
+}));
+
 export const simSeasons = pgTable("sim_seasons", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   /** Which market — an id from @shared/simulation/niches. */

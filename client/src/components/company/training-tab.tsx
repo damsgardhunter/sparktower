@@ -9,7 +9,7 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Check, Copy, FastForward, FileText, Loader2, Play, Plus, Send } from "lucide-react";
+import { Check, Copy, FastForward, FileText, Loader2, Play, Plus, Send, Sparkles } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
 import { useToast } from "@/hooks/use-toast";
@@ -21,6 +21,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SCOPES } from "@shared/simulation/geography";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { CompanyView } from "@/pages/company";
@@ -81,6 +82,7 @@ export function TrainingTab({ companyId, canManage }: { companyId: string; canMa
   const key = [`/api/companies/${companyId}/seasons`];
   const { data, isLoading } = useQuery<{ seasons: SeasonRow[] }>({ queryKey: key, refetchInterval: 30_000 });
   const [creating, setCreating] = useState(false);
+  const [novaBuilding, setNovaBuilding] = useState(false);
 
   return (
     <div className="space-y-4">
@@ -91,10 +93,18 @@ export function TrainingTab({ companyId, canManage }: { companyId: string; canMa
           a season can fit in an afternoon.
         </p>
         {canManage && !creating && (
-          <Button onClick={() => setCreating(true)} data-testid="button-new-season"><Plus className="h-4 w-4 mr-1.5" /> New season</Button>
+          <div className="flex gap-2 flex-wrap">
+            <Button onClick={() => setNovaBuilding(true)} data-testid="button-nova-build">
+              <Sparkles className="h-4 w-4 mr-1.5" /> Let Nova Build My Simulation
+            </Button>
+            <Button variant="outline" onClick={() => setCreating(true)} data-testid="button-new-season">
+              <Plus className="h-4 w-4 mr-1.5" /> New season
+            </Button>
+          </div>
         )}
       </div>
 
+      {novaBuilding && <NovaBuild companyId={companyId} onDone={() => setNovaBuilding(false)} />}
       {creating && <CreateSeason companyId={companyId} onDone={() => setCreating(false)} />}
 
       {isLoading ? (
@@ -112,17 +122,149 @@ export function TrainingTab({ companyId, canManage }: { companyId: string; canMa
   );
 }
 
+/**
+ * Nova builds it.
+ *
+ * The questions a first-time company cannot answer — which of seven markets is
+ * shaped like ours, how much of the world, how many rivals, how many years —
+ * answered from the project this company is already running here. The brief
+ * comes back before anything is shared, because the mapping is the thing worth
+ * arguing with: a team that disagrees with "your capacity is your delivery
+ * team" has learned something about their business.
+ */
+function NovaBuild({ companyId, onDone }: { companyId: string; onDone: () => void }) {
+  const [, navigate] = useLocation();
+  const { data: seats } = useQuery<{ paid: number; people: number; pricePerSeat: number; shortBy: number }>({
+    queryKey: [`/api/companies/${companyId}/simulation-seats`],
+  });
+  const [built, setBuilt] = useState<NovaBrief | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [needsSeats, setNeedsSeats] = useState(false);
+
+  const build = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/companies/${companyId}/seasons/nova`, {}),
+    onSuccess: async (res: any) => {
+      const body = await res.json();
+      setBuilt(body.brief as NovaBrief);
+      setError(null);
+      queryClient.invalidateQueries({ queryKey: [`/api/companies/${companyId}/seasons`] });
+    },
+    onError: (err: any) => {
+      if (err?.body?.code === "seats_required") { setNeedsSeats(true); setError(err.body.message); return; }
+      setError(err?.body?.message ?? "Nova couldn't build that. Try again.");
+    },
+  });
+
+  const buy = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/companies/${companyId}/simulation-seats/checkout`, {
+      seats: Math.max(1, seats?.shortBy || seats?.people || 5),
+    }),
+    onSuccess: async (res: any) => {
+      const body = await res.json();
+      if (body.url) window.location.href = body.url;
+    },
+    onError: (err: any) => setError(err?.body?.message ?? "Couldn't start that purchase."),
+  });
+
+  return (
+    <Card data-testid="card-nova-build">
+      <CardContent className="p-5 space-y-3">
+        <div className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-primary" />
+          <h3 className="font-semibold">Nova builds your simulation</h3>
+        </div>
+
+        {!built && (
+          <p className="text-sm text-muted-foreground">
+            Nova reads what this company is building — the project, the path, how far it has got — and sets up the
+            market closest in shape to yours, with the rivals and the reach you are really up against. It will say
+            what in the game stands for what in your business, and you can argue with it before anyone plays.
+          </p>
+        )}
+
+        {seats && !built && (
+          <p className="text-xs text-muted-foreground" data-testid="text-seats">
+            {seats.paid > 0
+              ? `${seats.paid} seat${seats.paid === 1 ? "" : "s"} paid for, ${seats.people} people in the company.`
+              : `$${seats.pricePerSeat} a seat, once. A seat is a person at a table for the life of a season, and it stays with the company.`}
+          </p>
+        )}
+
+        {built && (
+          <div className="space-y-3" data-testid="nova-brief">
+            <div>
+              <p className="text-sm font-medium">{built.name}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {built.marketName} · {built.totalYears} years · {built.botTeams} rival{built.botTeams === 1 ? "" : "s"}
+              </p>
+            </div>
+            <p className="text-sm">{built.why}</p>
+            {built.mapping.length > 0 && (
+              <div className="rounded-lg border p-3">
+                <p className="text-xs font-medium mb-1.5">In the game → in your business</p>
+                {built.mapping.map((m) => (
+                  <p key={m.inTheGame} className="text-[11px] text-muted-foreground">
+                    <span className="text-foreground font-medium">{m.inTheGame}</span> — {m.inYourBusiness}
+                  </p>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {error && <p className="text-sm text-destructive" data-testid="text-nova-error">{error}</p>}
+
+        <div className="flex gap-2 flex-wrap">
+          {needsSeats ? (
+            <Button onClick={() => buy.mutate()} disabled={buy.isPending} data-testid="button-buy-seats">
+              {buy.isPending && <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />}
+              Buy seats
+            </Button>
+          ) : built ? (
+            <Button onClick={() => { onDone(); navigate(`/company/${companyId}`); }} data-testid="button-brief-done">
+              Done
+            </Button>
+          ) : (
+            <Button onClick={() => build.mutate()} disabled={build.isPending} data-testid="button-nova-go">
+              {build.isPending && <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />}
+              Build it
+            </Button>
+          )}
+          <Button type="button" variant="ghost" onClick={onDone}>{built ? "Close" : "Cancel"}</Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+interface NovaBrief {
+  name: string;
+  marketName: string;
+  totalYears: number;
+  botTeams: number;
+  why: string;
+  mapping: { inTheGame: string; inYourBusiness: string }[];
+}
+
 function CreateSeason({ companyId, onDone }: { companyId: string; onDone: () => void }) {
   const { data: niches } = useQuery<{ niches: { id: string; name: string; premise: string }[] }>({ queryKey: ["/api/sim/niches"] });
   const [nicheId, setNicheId] = useState("");
   const [name, setName] = useState("");
   const [year, setYear] = useState("30");
   const [totalYears, setTotalYears] = useState("6");
+  /*
+   * How much of the world, and who else is in it. Both open on the game every
+   * public season plays, because a company that just wants a season should get
+   * one without deciding anything about continents.
+   */
+  const [scope, setScope] = useState<string>("home");
+  const [botTeams, setBotTeams] = useState("0");
   const [error, setError] = useState<string | null>(null);
 
   const create = useMutation({
     mutationFn: () => apiRequest("POST", `/api/companies/${companyId}/seasons`, {
       nicheId, name, totalYears: Number(totalYears), yearMinutes: year === "day" ? null : Number(year),
+      scope, botTeams: Number(botTeams),
     }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/companies/${companyId}/seasons`] });
@@ -169,6 +311,37 @@ function CreateSeason({ companyId, onDone }: { companyId: string; onDone: () => 
                   {Array.from({ length: 11 }, (_, i) => i + 4).map((y) => <SelectItem key={y} value={String(y)}>{y} years</SelectItem>)}
                 </SelectContent>
               </Select>
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <Label>Where they compete</Label>
+              <Select value={scope} onValueChange={setScope}>
+                <SelectTrigger data-testid="select-scope"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {SCOPES.map((o) => <SelectItem key={o.id} value={o.id}>{o.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground mt-1" data-testid="text-scope-blurb">
+                {SCOPES.find((o) => o.id === scope)?.blurb}
+              </p>
+            </div>
+            <div>
+              <Label>Rival companies</Label>
+              <Select value={botTeams} onValueChange={setBotTeams}>
+                <SelectTrigger data-testid="select-bot-teams"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="0">Only the teams you invite</SelectItem>
+                  {[1, 2, 3, 5, 8, 12, 20, 35, 50].map((n) => (
+                    <SelectItem key={n} value={String(n)}>{n} run by Nova</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground mt-1">
+                {botTeams === "0"
+                  ? "A season with one table in it is a company with no competition."
+                  : `${botTeams} companies that price, build and bid against yours from year one.`}
+              </p>
             </div>
           </div>
           <p className="text-xs text-muted-foreground">

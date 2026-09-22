@@ -172,6 +172,53 @@ describe("a season a company shapes for itself", () => {
   }, 120_000);
 });
 
+describe("paying for a simulation", () => {
+  /*
+   * Five dollars a seat, once, and a seat is a person at a table for the life
+   * of a season rather than a month — a company that runs one away day a year
+   * should not pay monthly for the eleven months in between.
+   */
+  it("says what a seat costs and how many the company has", async () => {
+    const app = await getTestApp();
+    const { owner, companyId } = await companyWithStaff(app, 2);
+    const seats = await owner.agent.get(`/api/companies/${companyId}/simulation-seats`);
+    expect(seats.status).toBe(200);
+    expect(seats.body.pricePerSeat).toBe(5);
+    expect(seats.body.paid).toBe(0);
+    expect(seats.body.people, "the owner and the two invited").toBe(3);
+    expect(seats.body.shortBy).toBe(3);
+  }, 120_000);
+
+  it("refuses to build one until a seat is paid for, and says the price", async () => {
+    const app = await getTestApp();
+    const { owner, companyId } = await companyWithStaff(app, 1);
+    const refused = await owner.agent.post(`/api/companies/${companyId}/seasons/nova`).send({});
+    expect(refused.status).toBe(402);
+    expect(refused.body.code).toBe("seats_required");
+    expect(refused.body.pricePerSeat).toBe(5);
+    expect(refused.body.message).toContain("$5");
+  }, 120_000);
+
+  it("keeps the seats and the price to the people who run the company", async () => {
+    const app = await getTestApp();
+    const { companyId, people } = await companyWithStaff(app, 1);
+    const member = people[1];
+    expect((await member.agent.get(`/api/companies/${companyId}/simulation-seats`)).status).toBe(403);
+    expect((await member.agent.post(`/api/companies/${companyId}/seasons/nova`).send({})).status).toBe(403);
+    expect((await member.agent.post(`/api/companies/${companyId}/simulation-seats/checkout`).send({ seats: 5 })).status).toBe(403);
+  }, 120_000);
+
+  it("refuses a purchase that isn't a number of seats", async () => {
+    const app = await getTestApp();
+    const { owner, companyId } = await companyWithStaff(app, 1);
+    for (const seats of [0, -3, 1000, "lots"]) {
+      const res = await owner.agent.post(`/api/companies/${companyId}/simulation-seats/checkout`).send({ seats });
+      expect(res.status, `seats=${seats}`).toBe(400);
+      expect(res.body.field).toBe("seats");
+    }
+  }, 120_000);
+});
+
 describe("who can reach a private season", () => {
   it("is never chosen by public matchmaking", async () => {
     const app = await getTestApp();

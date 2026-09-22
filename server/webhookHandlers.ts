@@ -1,6 +1,6 @@
 import { getStripeSync, getUncachableStripeClient } from './stripeClient';
 import { db } from './db';
-import { users, donations, projects, projectBackings, projectMerchOrders, stripeEvents } from '@shared/schema';
+import { users, donations, projects, projectBackings, projectMerchOrders, stripeEvents, simSeatPurchases, companies } from '@shared/schema';
 import { isPaidSubscriptionStatus } from '@shared/subscriptions';
 import { normalizeTier } from '@shared/plans';
 import { and, eq, inArray, or, sql } from 'drizzle-orm';
@@ -206,6 +206,34 @@ export class WebhookHandlers {
     // Errors propagate: a lost pledge is worth a retry.
     if (session.metadata?.type === 'backing') { await recordBacking(session); return; }
     if (settledLater) return;
+
+    /*
+     * Seats on the simulation: a one-off payment, credited to the company that
+     * bought them rather than to the person who clicked. Keyed on the session
+     * so a redelivery inserts nothing and therefore credits nothing — the same
+     * shape as donations below, for the same reason.
+     */
+    if (session.metadata?.kind === 'simulation_seats') {
+      const companyId = session.metadata.companyId;
+      const seats = parseInt(session.metadata.seats ?? '0', 10);
+      if (!companyId || !Number.isInteger(seats) || seats < 1) return;
+      if (session.payment_status && session.payment_status !== 'paid') return;
+      await db.transaction(async (tx) => {
+        const inserted = await tx.insert(simSeatPurchases).values({
+          companyId,
+          seats,
+          amount: Number(session.amount_total ?? 0),
+          stripeSessionId: session.id,
+          boughtBy: session.metadata?.userId ?? null,
+        }).onConflictDoNothing({ target: simSeatPurchases.stripeSessionId }).returning({ id: simSeatPurchases.id });
+        if (!inserted.length) return;
+        await tx.update(companies)
+          .set({ simSeatsPaid: sql`${companies.simSeatsPaid} + ${seats}` })
+          .where(eq(companies.id, companyId));
+      });
+      console.log(`Simulation seats credited: ${seats} to company ${companyId}`);
+      return;
+    }
 
     if (session.metadata?.type === 'donation') {
       const { projectId, donorId, amount } = session.metadata;

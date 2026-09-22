@@ -45,6 +45,15 @@ import { ROLE_TITLES, type Role, type World } from "@shared/simulation/types";
 import type { CompanyReport } from "@shared/simulation/resolve";
 import { isContinent } from "@shared/simulation/geography";
 import { seatBotCompanies } from "./simulation-bots";
+import { buildSimulationPrompt, parseSimulationBrief } from "./nova-simulation";
+import { getOpenAI, openAiConfigured } from "./openai-client";
+import { requireCredits, modelFor } from "./entitlements";
+import { CREDIT_COSTS } from "@shared/plans";
+import { respondToAiError } from "./ai-json";
+import { storage } from "./storage";
+import { pathStatus } from "./phase-trees";
+import { isStripeConfigured, getUncachableStripeClient } from "./stripeClient";
+import { ensureStripeCustomer } from "./stripe-customer";
 
 /** Shortest and longest year a company can choose, in minutes. Ten is about the least a table can argue a price in; a day is what the public game uses. */
 export const YEAR_MINUTES_MIN = 10;
@@ -61,6 +70,10 @@ export const TRAINING_YEARS_MAX = 14;
  * market with fifty companies in it is already a crowd.
  */
 export const BOT_TEAMS_MAX = 50;
+/** What one seat at a simulation costs, in cents. A seat is for the life of a season, not a month. */
+export const SEAT_PRICE_CENTS = 500;
+/** The most seats one checkout can carry, so a typo is not a four-figure charge. */
+export const SEATS_PER_PURCHASE_MAX = 250;
 
 export const joinPathFor = (code: string) => `/join-season/${code}`;
 
@@ -161,6 +174,234 @@ export function registerCompanySeasonRoutes(app: Express): void {
     } catch (error) {
       console.error("Company season create error:", error);
       res.status(500).json({ message: "Couldn't create that season." });
+    }
+  });
+
+  /**
+   * Where the project has actually got to, in the words the app already uses.
+   *
+   * Nova is designing a simulation of a business, and a business that has
+   * shipped nothing is not the same business as one with paying customers.
+   * Taken from the path when there is one, and quietly skipped when there
+   * isn't — a company with no project still gets a season, built from what it
+   * says about itself.
+   */
+  async function whereTheyAre(projectId: string): Promise<string | null> {
+    try {
+      const status = await pathStatus(projectId);
+      if (!status?.adopted) return null;
+      const phases = status.phases ?? [];
+      const done = phases.reduce((sum: number, p: any) => sum + (p.done ?? 0), 0);
+      const total = phases.reduce((sum: number, p: any) => sum + (p.total ?? 0), 0);
+      const current = phases.find((p: any) => (p.done ?? 0) < (p.total ?? 0));
+      return [
+        `Path: ${status.goal ?? "unnamed"} — ${done} of ${total} milestones done.`,
+        current ? `Currently: ${current.title}. Next: ${current.milestones?.find((m: any) => !m.done)?.title ?? "—"}` : "Path complete.",
+      ].join("\n");
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * What a seat costs, and how many this company has.
+   *
+   * A seat is a person at a table for the life of a season rather than a
+   * month: buy ten, run a season for ten people, and they are still there for
+   * the next one. Asked for by the screen before it offers to build anything,
+   * so the price is never a surprise sprung at the end.
+   */
+  app.get("/api/companies/:id/simulation-seats", isAuthenticated, async (req: any, res) => {
+    try {
+      const found = await companyCan(res, String(req.params.id), req.user.id, "run_seasons");
+      if (!found) return;
+      const members = await companyMembersOf(found.company.id);
+      res.json({
+        paid: found.company.simSeatsPaid ?? 0,
+        people: members.length,
+        pricePerSeat: SEAT_PRICE_CENTS / 100,
+        currency: "usd",
+        /** What they would have to buy to seat everyone in the company. */
+        shortBy: Math.max(0, members.length - (found.company.simSeatsPaid ?? 0)),
+      });
+    } catch (error) {
+      console.error("Simulation seats read error:", error);
+      res.status(500).json({ message: "Couldn't read your seats." });
+    }
+  });
+
+  /**
+   * Buy seats.
+   *
+   * A one-off payment rather than a subscription: a seat is a person at a
+   * table for the life of a season, and a company that runs one away day a
+   * year should not be paying monthly for the eleven months in between.
+   *
+   * The seats are credited when Stripe says the money arrived, not here — see
+   * the note on the webhook. A checkout that is abandoned leaves nothing
+   * behind, which is the whole reason for doing it in that order.
+   */
+  app.post("/api/companies/:id/simulation-seats/checkout", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
+    try {
+      const found = await companyCan(res, String(req.params.id), req.user.id, "run_seasons");
+      if (!found) return;
+
+      const seats = Math.round(Number(req.body?.seats));
+      if (!Number.isInteger(seats) || seats < 1 || seats > SEATS_PER_PURCHASE_MAX) {
+        return res.status(400).json({ message: `Buy between 1 and ${SEATS_PER_PURCHASE_MAX} seats at a time.`, code: "invalid_input", field: "seats" });
+      }
+
+      if (!isStripeConfigured()) {
+        return res.status(503).json({ code: "billing_unavailable", message: "Payments aren't configured here." });
+      }
+      const stripe = await getUncachableStripeClient();
+
+      const user = await storage.getUser(req.user.id);
+      const customerId = await ensureStripeCustomer(stripe, { id: req.user.id, email: user?.email, stripeCustomerId: user?.stripeCustomerId });
+
+      const origin = `${req.protocol}://${req.get("host")}`;
+      const session = await stripe.checkout.sessions.create({
+        customer: customerId,
+        payment_method_types: ["card"],
+        mode: "payment",
+        line_items: [{
+          quantity: seats,
+          price_data: {
+            currency: "usd",
+            unit_amount: SEAT_PRICE_CENTS,
+            product_data: {
+              name: "Simulation seat",
+              description: "One person at a table, for the life of a season. Seats stay with the company.",
+            },
+          },
+        }],
+        success_url: `${origin}/company/${found.company.slug ?? found.company.id}?seats=bought`,
+        cancel_url: `${origin}/company/${found.company.slug ?? found.company.id}?seats=cancelled`,
+        /*
+         * What the webhook needs to credit the right company. Read from the
+         * session rather than from anything the browser sends back, because
+         * the browser is not who paid.
+         */
+        metadata: { companyId: found.company.id, seats: String(seats), kind: "simulation_seats", userId: req.user.id },
+      });
+
+      res.json({ url: session.url, seats, total: (seats * SEAT_PRICE_CENTS) / 100 });
+    } catch (error) {
+      console.error("Simulation seat checkout error:", error);
+      res.status(500).json({ message: "Couldn't start that purchase." });
+    }
+  });
+
+  /**
+   * Nova builds the season, from the business the company actually has.
+   *
+   * The questions a first-time company cannot answer — which of seven markets
+   * is shaped like ours, how much of the world, how many rivals, how many
+   * years — answered from the project it is already running here, and answered
+   * *out loud*: the brief says which market, why, and what each thing in the
+   * game stands for in their business. A team that disagrees with the mapping
+   * has learned something about their business, which is the point.
+   *
+   * Behind the seats, because this is the thing worth paying for.
+   */
+  app.post("/api/companies/:id/seasons/nova", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
+    try {
+      const found = await companyCan(res, String(req.params.id), req.user.id, "run_seasons");
+      if (!found) return;
+
+      const members = await companyMembersOf(found.company.id);
+      const seats = found.company.simSeatsPaid ?? 0;
+      if (seats < 1) {
+        return res.status(402).json({
+          code: "seats_required",
+          message: `A simulation is $${SEAT_PRICE_CENTS / 100} a seat. Buy a seat for everyone who will play, and they keep them for every season after this one.`,
+          pricePerSeat: SEAT_PRICE_CENTS / 100,
+          people: members.length,
+          paid: seats,
+        });
+      }
+
+      if (!openAiConfigured()) {
+        return res.status(503).json({ code: "nova_unavailable", message: "Nova can't reach the model right now. You can still set a season up yourself." });
+      }
+
+      /*
+       * Checked before the model runs, charged after its answer is read — the
+       * house rule for every route that spends a model call. The seats pay for
+       * the simulation; the credit pays for Nova's thinking about it.
+       */
+      const ent = await requireCredits(res, req.user.id, CREDIT_COSTS.simulationBuild, "Nova building your simulation");
+      if (!ent) return;
+
+      const project = found.company.projectId
+        ? await storage.getProject(found.company.projectId).catch(() => null)
+        : null;
+
+      const prompt = buildSimulationPrompt({
+        company: {
+          name: found.company.name,
+          industry: found.company.industry,
+          size: found.company.size,
+          description: found.company.description,
+        },
+        project: project ? { title: project.title, description: project.description, goal: (project as any).goal } : null,
+        progress: project ? await whereTheyAre(project.id) : null,
+        people: members.length,
+      });
+
+      const completion = await getOpenAI().chat.completions.create({
+        model: modelFor(ent),
+        messages: [
+          { role: "system", content: prompt.system },
+          { role: "user", content: prompt.user },
+        ],
+        response_format: { type: "json_object" },
+      });
+
+      const brief = parseSimulationBrief(completion.choices?.[0]?.message?.content ?? "", `${found.company.name} — year one`);
+      if (!brief) {
+        return res.status(502).json({ code: "model_unreadable", message: "Nova answered with something I couldn't use. Try again, or set the season up yourself." });
+      }
+      // Charged once the answer is one we can use, and never in an error path.
+      await storage.deductCredits(req.user.id, CREDIT_COSTS.simulationBuild);
+
+      const niche = nicheById(brief.nicheId);
+      if (!niche) {
+        return res.status(502).json({ code: "nova_unreadable", message: "Nova picked a market that doesn't exist." });
+      }
+
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const inviteCode = newSeasonCode();
+        try {
+          const [season] = await db.insert(simSeasons).values({
+            nicheId: niche.id,
+            name: brief.name,
+            status: "forming",
+            totalYears: brief.totalYears,
+            yearMinutes: null,
+            companyId: found.company.id,
+            inviteCode,
+            createdAt: new Date(),
+            scope: brief.scope,
+            botTeams: brief.botTeams,
+          }).returning();
+          await logCompany(found.company.id, req.user.id, "season_created", null, {
+            seasonId: season.id, name: brief.name, nicheId: niche.id, scope: brief.scope, botTeams: brief.botTeams, byNova: true,
+          });
+          return res.status(201).json({
+            seasonId: season.id,
+            inviteCode,
+            joinUrl: joinPathFor(inviteCode),
+            brief: { ...brief, marketName: niche.name },
+          });
+        } catch (err) {
+          if (!isUniqueViolation(err)) throw err;
+        }
+      }
+      res.status(500).json({ message: "Couldn't make a join code. Try again." });
+    } catch (error) {
+      console.error("Nova season build error:", error);
+      respondToAiError(res, error, "Couldn't build that simulation");
     }
   });
 

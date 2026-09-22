@@ -372,6 +372,20 @@
       "when": 1790109943191,
       "tag": "0052_bot_run_companies",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1790111575923,
+      "tag": "0053_simulation_seats",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1790111846714,
+      "tag": "0054_seat_purchases",
+      "breakpoints": true
     }
   ]
 }

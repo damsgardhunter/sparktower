@@ -221,6 +221,14 @@ export const CREDIT_COSTS = {
    */
   novaAssist: 3,
   /**
+   * Nova designs a whole season from the company's project: which market is
+   * shaped like their business, how much of the world, how many rivals, how
+   * many years, and what each thing in the game stands for in their business.
+   * Priced with a surface assist — one reasoned read, one answer — and the
+   * simulation itself is paid for by the seat, not by the credit.
+   */
+  simulationBuild: 3,
+  /**
    * Nova audits the real codebase against the plan. Priced above a health
    * check because it ingests and reasons over an entire repository.
    */
