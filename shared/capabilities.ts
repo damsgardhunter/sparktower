@@ -30,6 +30,17 @@ export interface CapabilityDetail {
   coverage: string;
   gaps: { item: string; file?: string; severity: "low" | "medium" | "high" }[];
   strengths: string[];
+  /**
+   * Only asked when the first pass said the area was missing: with the files
+   * in front of it, is there anything here at all?
+   *
+   * The first pass reads a digest — excerpts of 26 files out of thousands —
+   * and "I was not shown it" and "it is not there" look identical from inside
+   * that read. A wrong "missing" was terminal, because second reads only ran
+   * for areas already called built or partial, and it is the verdict a builder
+   * acts on hardest: it says write this from scratch.
+   */
+  present?: boolean;
 }
 export interface CapabilityEntry {
   area: CapabilityArea;
@@ -124,6 +135,7 @@ export function sanitizeDeepRead(raw: unknown, allowedFiles: Set<string>): Capab
   return {
     coverage,
     gaps,
+    ...(typeof r.present === "boolean" ? { present: r.present } : {}),
     strengths: (Array.isArray(r.strengths) ? r.strengths : []).map((x: any) => String(x).trim().slice(0, 200)).filter(Boolean).slice(0, 6),
   };
 }
