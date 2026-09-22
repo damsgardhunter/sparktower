@@ -10,10 +10,19 @@ import { CheckCircle2, Copy, Loader2, Wrench, ListPlus, AlertTriangle, ShieldChe
 
 export interface WorkRow { id: string; kind: WorkPayload["kind"]; payload: WorkPayload; chosenIndex: number | null; createdAt: string }
 
-/** Every path query on the manage page, so a change anywhere shows everywhere. */
+/**
+ * Every path query on the manage page, so a change anywhere shows everywhere.
+ *
+ * Including the home card's, which this used to leave alone: finishing a step
+ * on the project page moved the path but left "Continue your path" showing the
+ * step you had just finished until its own poll came round. The phone had
+ * always invalidated it (mobile/src/components/manage/shared.ts); the web had
+ * not, so the same action told two different stories depending on the device.
+ */
 export function refreshPath(projectId: string) {
   for (const key of ["path", "kanban", "nova-briefing", "milestones", "roadmap"]) queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, key] });
   queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
+  queryClient.invalidateQueries({ queryKey: ["/api/me/next-steps"] });
 }
 
 export function useFail() {

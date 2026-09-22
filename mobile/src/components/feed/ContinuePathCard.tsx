@@ -17,6 +17,12 @@ import { Sheet, type Notice } from "../Sheet";
 import { MAX_ASKS } from "../feedModel";
 import { Box, ProjectTile, primaryTint } from "./Box";
 
+/*
+ * Restated from @shared/next-step, because Metro can't resolve that alias.
+ * test/unit/next-step-mirror.test.ts reads both and fails when they drift —
+ * which they already had: this copy had lost `projectedAt`, and the sentence
+ * below for a finished path was a different sentence from the web's.
+ */
 export interface NextStepItem {
   project: { id: string; title: string; logoUrl: string | null };
   /** The manager section this item is on (Ship / Systemize / Raise). */
@@ -25,8 +31,11 @@ export interface NextStepItem {
   progress: { done: number; total: number };
   next: { id: string; title: string; actor: string; estimateMinutes: number | null; step: string | null } | null;
   daysSinceActivity: number;
+  projectedAt: string | null;
   lastDone: { taskId: string; title: string; completedAt: string; sharedPostId: string | null } | null;
   weekly?: { due: boolean; steps: { taskId: string; title: string; completedAt: string }[] };
+  /** Set instead of `next` when the project has no path to take a step on. */
+  needsPath?: { kind: "start" | "adopt"; existingTasks: number; existingDone: number };
 }
 
 const ACTOR_SHORT: Record<string, string> = {
@@ -35,9 +44,66 @@ const ACTOR_SHORT: Record<string, string> = {
   "user-decides": "You choose",
   "user-does": "Only you",
 };
+
+const NEXT_STEP_COPY = {
+  mainLineDone: "Main line done — pick what's next.",
+  startTitle: "This project isn't on a path yet",
+  startBody: "A path is the sequence Nova works out with you — one step at a time, each with something to show at the end.",
+  startAction: "Choose a path",
+  adoptTitle: "Put this project on its path",
+  adoptAction: "Start the path",
+  failed: "Couldn't set the path up. Try again in a moment.",
+};
+
+const adoptBody = (done: number, total: number) =>
+  total > 0
+    ? `${done}/${total} tasks already done — Nova reads them and marks what's finished.`
+    : "Nova sets up the steps and marks anything already finished.";
 const estimate = (m: number | null) => (m == null ? null : m < 60 ? `${m}m` : `${Math.round(m / 60)}h`);
 
 export const NEXT_STEPS_KEY = ["next-steps"];
+
+/**
+ * A project with no path, and the way to give it one — the state the list used
+ * to drop in silence, leaving the newest project off the screen that answers
+ * "what now". Mirrors StartPath in client/src/components/continue-path-card.tsx.
+ */
+function StartPath({ item, idSuffix, onNotice }: {
+  item: NextStepItem; idSuffix: string; onNotice?: (n: Notice) => void;
+}) {
+  const qc = useQueryClient();
+  const needs = item.needsPath!;
+  const goal = item.track?.goal ?? "";
+  const start = useMutation({
+    mutationFn: async () => {
+      if (needs.kind === "start") await api(`/api/projects/${item.project.id}/tracks`, { method: "POST", body: { goal } });
+      await api(`/api/projects/${item.project.id}/path/adopt?goal=${goal}`, { method: "POST", body: {} });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: NEXT_STEPS_KEY });
+      qc.invalidateQueries({ queryKey: ["manage", item.project.id] });
+    },
+    onError: (e) => onNotice?.({ text: errText(e, NEXT_STEP_COPY.failed), tone: "error" }),
+  });
+
+  return (
+    <View style={{ gap: 6 }} testID={`continue-path-needs-${idSuffix}`}>
+      <Text style={[s.next, { fontFamily: fontFamily.medium }]}>
+        {needs.kind === "adopt" ? NEXT_STEP_COPY.adoptTitle : NEXT_STEP_COPY.startTitle}
+      </Text>
+      <Text style={s.nextMeta}>
+        {needs.kind === "adopt" ? adoptBody(needs.existingDone, needs.existingTasks) : NEXT_STEP_COPY.startBody}
+      </Text>
+      <Btn
+        small
+        label={needs.kind === "adopt" ? NEXT_STEP_COPY.adoptAction : NEXT_STEP_COPY.startAction}
+        onPress={() => start.mutate()}
+        loading={start.isPending}
+        testID={`button-start-path-${idSuffix}`}
+      />
+    </View>
+  );
+}
 
 export function ContinuePathCard({ onNotice }: { onNotice?: (n: Notice) => void }) {
   const router = useRouter();
@@ -97,8 +163,10 @@ export function ContinuePathCard({ onNotice }: { onNotice?: (n: Notice) => void 
                 <Text style={{ fontFamily: fontFamily.medium }}>{item.next.step ?? item.next.title}</Text>
                 <Text style={s.nextMeta}>  · {ACTOR_SHORT[item.next.actor] ?? item.next.actor}{est ? ` · ${est}` : ""}</Text>
               </Text>
+            ) : item.needsPath ? (
+              <StartPath item={item} idSuffix={idSuffix} onNotice={onNotice} />
             ) : (
-              <Text style={[s.next, { color: colors.textTertiary }]}>The main line is done — pick what's next on the project.</Text>
+              <Text style={[s.next, { color: colors.textTertiary }]}>{NEXT_STEP_COPY.mainLineDone}</Text>
             )}
             {weeklyDue && (
               <Pressable onPress={() => setWeekly(item)} style={s.share} testID={`button-weekly-update-${idSuffix}`}>
