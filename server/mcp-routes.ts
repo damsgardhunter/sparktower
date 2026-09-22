@@ -25,7 +25,7 @@ import { requireMcpToken, mintToken, listTokens, revokeToken } from "./mcp-token
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
 import { requireCredits, requireFeature } from "./entitlements";
-import { CREDIT_COSTS } from "@shared/plans";
+import { CREDIT_COSTS, CHARGEABLE} from "@shared/plans";
 import { NOVA_MCP_TOOLS, NOVA_MCP_INSTRUCTIONS, MCP_SNAPSHOT_LIMITS } from "@shared/mcp";
 import {
   pathStatus, milestoneDetail, pathTaskContext, latestWork, saveWork, collectArtifacts,
@@ -507,7 +507,7 @@ export function registerMcpRoutes(app: Express) {
       );
       const row = await saveWork(projectId, taskCtx.task.id, payload);
       await storage.deductCredits(userId, CREDIT_COSTS.taskAssist);
-      res.json({ id: row.id, kind: row.kind, payload: row.payload, actor: taskCtx.actor, reused: false, creditsCharged: CREDIT_COSTS.taskAssist });
+      res.json({ id: row.id, kind: row.kind, payload: row.payload, actor: taskCtx.actor, reused: false, creditsCharged: CHARGEABLE });
     } catch (error: any) {
       if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
       console.error("MCP work error:", error);
@@ -701,7 +701,7 @@ export function registerMcpRoutes(app: Express) {
 
       const snapshot = snapshotFromFiles(files, `worktree:${str(req.body?.label, 120) || "working tree"}`);
       // Charged once the tree is in hand, as on the web route.
-      if (!(await requireCredits(res, ctx.userId, CREDIT_COSTS.codeAudit, "a codebase audit"))) return;
+      if (!(await requireCredits(res, ctx.userId, CHARGEABLE, "Auditing your codebase", { outcome: "codeAudit", projectId: ctx.projectId }))) return;
 
       await runCodeAudit({
         projectId: ctx.projectId, userId: ctx.userId, project: ctx.project, ent, res,

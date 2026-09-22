@@ -205,6 +205,37 @@ export class WebhookHandlers {
     // session id itself, and records only a session that's actually paid.
     // Errors propagate: a lost pledge is worth a retry.
     if (session.metadata?.type === 'backing') { await recordBacking(session); return; }
+    /*
+     * A top-up: money onto the account's balance, which is the only thing
+     * Checkout sells now (/api/nova/top-up).
+     *
+     * Credited through the ledger's unique session id rather than by adding to
+     * the column directly, so the same session arriving twice adds nothing —
+     * and Stripe really does send one session as two events when a delayed
+     * payment method is used (completed, then async_payment_succeeded). The
+     * event ledger upstream stops the same *event* twice; this stops the same
+     * *session* twice, which is a different thing.
+     *
+     * The amount comes from what Stripe says was paid, never from the metadata
+     * the client's request produced — metadata is a note to ourselves, not a
+     * receipt. It only falls back to the metadata when Stripe sends no total,
+     * which it does not do for a paid session.
+     */
+    if (session.metadata?.type === 'topup') {
+      if (!settledLater && session.payment_status && session.payment_status !== 'paid') {
+        console.log(`[stripe] top-up session ${session.id} completed unpaid (${session.payment_status}); waiting for it to settle`);
+        return;
+      }
+      const userId: string | undefined = session.metadata?.userId;
+      if (!userId) return;
+      const paid = Number(session.amount_total ?? session.metadata?.amountCents);
+      if (!Number.isFinite(paid) || paid <= 0) return;
+      const { creditTopUp } = await import('./wallet');
+      const { credited, balanceCents } = await creditTopUp(userId, Math.round(paid), String(session.id));
+      console.log(`[stripe] top-up ${session.id} for user ${userId}: ${credited ? `+${paid}c, balance ${balanceCents}c` : 'already credited'}`);
+      return;
+    }
+
     if (settledLater) return;
 
     if (session.metadata?.type === 'donation') {

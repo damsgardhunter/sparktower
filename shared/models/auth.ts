@@ -23,8 +23,33 @@ export const users = pgTable("users", {
   stripeCustomerId: varchar("stripe_customer_id"),
   stripeSubscriptionId: varchar("stripe_subscription_id"),
   subscriptionTier: varchar("subscription_tier").default("free"),
+  /**
+   * Small Nova actions used this calendar month, against the free monthly
+   * allowance (MONTHLY_SMALL_ACTIONS). Counted in actions, not credits — one
+   * chat turn, one nudge, one persona is one. Reset by
+   * storage.resetCreditsIfNeeded the first time the month is noticed.
+   *
+   * The column keeps its old name because every row in production already has
+   * a number in it and renaming a live counter buys nothing.
+   */
   creditsUsed: integer("credits_used").default(0).notNull(),
   creditsResetAt: timestamp("credits_reset_at"),
+  /**
+   * Money on the account, in cents, added through Stripe Checkout and spent
+   * instantly on a priced outcome — so buying a roadmap is one tap rather than
+   * a redirect. It never expires: it is the person's money, and an outcome
+   * that fails puts it straight back (server/wallet.ts).
+   *
+   * Every movement is also written to nova_ledger, which is the audit trail;
+   * this column is the running total the app reads on every request.
+   */
+  balanceCents: integer("balance_cents").default(0).notNull(),
+  /**
+   * While this is in the future, small Nova actions are free and don't touch
+   * the monthly allowance — a day pass, bought for a dollar. Null or past
+   * means the allowance is what's covering them.
+   */
+  dayPassUntil: timestamp("day_pass_until"),
   /**
    * The last subscription payment that failed and hasn't been fixed since —
    * set by invoice.payment_failed, cleared by the next paid invoice. What the

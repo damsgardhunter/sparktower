@@ -1,0 +1,224 @@
+/**
+ * The money on an account: what's there, what takes it, and what puts it back.
+ *
+ * There are no credits here and no plans. A person has a dollar balance, a
+ * monthly allowance of small Nova actions, and possibly a day pass — and every
+ * question the rest of the server asks about money is one of:
+ *
+ *   - what is in this wallet right now (`walletOf`),
+ *   - take this much for this outcome, or say you couldn't (`spend`),
+ *   - put it back, the action failed (`refund`),
+ *   - this Checkout session paid, credit it once and only once (`creditTopUp`).
+ *
+ * ## Why the balance is a column and the ledger is a table
+ *
+ * `users.balance_cents` is read on every request that might cost money, so it
+ * has to be one indexed read, not a sum over a person's history. But a running
+ * total with no history is unauditable — when somebody writes in asking why
+ * they have $2 left, "because the column says so" is not an answer. So every
+ * movement also writes a nova_ledger row carrying the balance it produced, and
+ * the two are written in one transaction. If they ever disagree, the ledger is
+ * the truth and the column is the bug.
+ *
+ * ## Why taking money is a conditional UPDATE
+ *
+ * The same lesson the credits learned the hard way (server/storage.ts,
+ * chargeCredits): read-decide-write lets two requests both see $3 and both
+ * spend it. The condition travels with the update — `where balance_cents >=
+ * cents` — so the database decides, once, and the loser is told no. A model
+ * call that got through on a balance that wasn't there is money we never had.
+ */
+import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { db } from "./db";
+import { users, novaLedger, novaBuildPasses } from "@shared/schema";
+import {
+  DAY_PASS_HOURS, MONTHLY_SMALL_ACTIONS, OUTCOME_PRICE_CENTS,
+  formatMoney, type PricedOutcomeId,
+} from "@shared/plans";
+
+/** Everything a dialog needs to say where somebody stands, in one object. */
+export interface Wallet {
+  balanceCents: number;
+  balanceDisplay: string;
+  /** Small actions used this calendar month, and the free allowance they come out of. */
+  allowanceUsed: number;
+  allowanceLimit: number;
+  allowanceRemaining: number;
+  /** When the current day pass runs out, or null. */
+  dayPassUntil: string | null;
+  dayPassActive: boolean;
+}
+
+export function walletFrom(row: { balanceCents: number; creditsUsed: number; dayPassUntil: Date | null }): Wallet {
+  const used = Math.max(0, row.creditsUsed ?? 0);
+  const active = !!row.dayPassUntil && row.dayPassUntil.getTime() > Date.now();
+  return {
+    balanceCents: row.balanceCents ?? 0,
+    balanceDisplay: formatMoney(row.balanceCents ?? 0),
+    allowanceUsed: used,
+    allowanceLimit: MONTHLY_SMALL_ACTIONS,
+    allowanceRemaining: Math.max(0, MONTHLY_SMALL_ACTIONS - used),
+    dayPassUntil: row.dayPassUntil ? row.dayPassUntil.toISOString() : null,
+    dayPassActive: active,
+  };
+}
+
+/**
+ * The wallet as it stands. Rolls the month over first, so "you have 25 left"
+ * is true on the 1st without waiting for the next charge to notice.
+ */
+export async function walletOf(userId: string): Promise<Wallet> {
+  const { storage } = await import("./storage");
+  await storage.resetCreditsIfNeeded(userId);
+  const [row] = await db.select({
+    balanceCents: users.balanceCents, creditsUsed: users.creditsUsed, dayPassUntil: users.dayPassUntil,
+  }).from(users).where(eq(users.id, userId));
+  if (!row) return walletFrom({ balanceCents: 0, creditsUsed: 0, dayPassUntil: null });
+  return walletFrom(row);
+}
+
+/** True while a day pass is running. */
+export async function dayPassActive(userId: string): Promise<boolean> {
+  const [row] = await db.select({ until: users.dayPassUntil }).from(users).where(eq(users.id, userId));
+  return !!row?.until && row.until.getTime() > Date.now();
+}
+
+export interface SpendRecord {
+  id: string;
+  amountCents: number;
+  balanceAfter: number;
+}
+
+/**
+ * Takes `cents` off the balance, or returns null because it wasn't there.
+ *
+ * Both writes are one transaction, and the update carries its own condition,
+ * so two requests spending the last dollar at the same moment end with one
+ * spend and one null rather than a balance of -100.
+ */
+export async function spend(
+  userId: string,
+  cents: number,
+  about: { outcome: PricedOutcomeId; note?: string; projectId?: string | null },
+): Promise<SpendRecord | null> {
+  if (cents <= 0) return { id: "", amountCents: 0, balanceAfter: (await walletOf(userId)).balanceCents };
+  return db.transaction(async (tx) => {
+    const [row] = await tx.update(users)
+      .set({ balanceCents: sql`${users.balanceCents} - ${cents}` })
+      .where(and(eq(users.id, userId), gte(users.balanceCents, cents)))
+      .returning({ balanceAfter: users.balanceCents });
+    if (!row) return null;
+    const [entry] = await tx.insert(novaLedger).values({
+      userId, kind: "spend", outcome: about.outcome,
+      amountCents: -cents, balanceAfter: row.balanceAfter,
+      note: about.note ?? null, projectId: about.projectId ?? null,
+    }).returning({ id: novaLedger.id });
+    return { id: entry.id, amountCents: cents, balanceAfter: row.balanceAfter };
+  });
+}
+
+/**
+ * Money back, for an outcome that didn't happen.
+ *
+ * A refund is its own row rather than an edit to the spend: the spend really
+ * did happen, and a history that rewrites itself can't be read back to
+ * somebody. Never fails — if the account has since been deleted the update
+ * matches nothing and the ledger row is skipped, which is the right amount of
+ * fuss for money going back to a row that no longer exists.
+ */
+export async function refund(
+  userId: string,
+  cents: number,
+  about: { outcome: PricedOutcomeId; note?: string; projectId?: string | null },
+): Promise<void> {
+  if (cents <= 0) return;
+  await db.transaction(async (tx) => {
+    const [row] = await tx.update(users)
+      .set({ balanceCents: sql`${users.balanceCents} + ${cents}` })
+      .where(eq(users.id, userId))
+      .returning({ balanceAfter: users.balanceCents });
+    if (!row) return;
+    await tx.insert(novaLedger).values({
+      userId, kind: "refund", outcome: about.outcome,
+      amountCents: cents, balanceAfter: row.balanceAfter,
+      note: about.note ?? "Refunded — the action didn't finish", projectId: about.projectId ?? null,
+    });
+  });
+}
+
+/**
+ * A paid Checkout session becomes balance. Exactly once, however many times
+ * Stripe sends it.
+ *
+ * The ledger insert goes first and carries the session id, which is unique:
+ * a redelivery inserts nothing, the transaction short-circuits, and the
+ * balance is untouched. The webhook's own event ledger already stops the same
+ * *event* twice; this stops the same *session* arriving as two different
+ * events (completed, then async_payment_succeeded), which is a thing Stripe
+ * really does for delayed payment methods.
+ *
+ * Returns whether this call was the one that credited it.
+ */
+export async function creditTopUp(
+  userId: string,
+  cents: number,
+  stripeSessionId: string,
+  note = "Added to your balance",
+): Promise<{ credited: boolean; balanceCents: number }> {
+  if (cents <= 0) return { credited: false, balanceCents: (await walletOf(userId)).balanceCents };
+  return db.transaction(async (tx) => {
+    const claimed = await tx.insert(novaLedger).values({
+      userId, kind: "topup", outcome: null, amountCents: cents,
+      // Filled in below once the balance has actually moved.
+      balanceAfter: 0, stripeSessionId, note,
+    }).onConflictDoNothing({ target: novaLedger.stripeSessionId }).returning({ id: novaLedger.id });
+    if (!claimed.length) {
+      const [u] = await tx.select({ balanceCents: users.balanceCents }).from(users).where(eq(users.id, userId));
+      return { credited: false, balanceCents: u?.balanceCents ?? 0 };
+    }
+    const [row] = await tx.update(users)
+      .set({ balanceCents: sql`${users.balanceCents} + ${cents}` })
+      .where(eq(users.id, userId))
+      .returning({ balanceAfter: users.balanceCents });
+    await tx.update(novaLedger).set({ balanceAfter: row?.balanceAfter ?? cents }).where(eq(novaLedger.id, claimed[0].id));
+    return { credited: true, balanceCents: row?.balanceAfter ?? cents };
+  });
+}
+
+/**
+ * Buys a day pass out of the balance and extends the window.
+ *
+ * Extends rather than replaces: somebody who buys a second pass with four
+ * hours left on the first has bought 24 more hours, not lost four. Returns
+ * null when the balance couldn't cover it.
+ */
+export async function buyDayPass(userId: string): Promise<{ until: Date; wallet: Wallet } | null> {
+  const cents = OUTCOME_PRICE_CENTS.dayPass;
+  const taken = await spend(userId, cents, { outcome: "dayPass", note: "Day pass — unlimited small Nova actions" });
+  if (!taken) return null;
+  const ms = DAY_PASS_HOURS * 60 * 60 * 1000;
+  const [row] = await db.update(users)
+    .set({ dayPassUntil: sql`greatest(coalesce(${users.dayPassUntil}, now()), now()) + make_interval(hours => ${DAY_PASS_HOURS})` })
+    .where(eq(users.id, userId))
+    .returning({ until: users.dayPassUntil });
+  const until = row?.until ?? new Date(Date.now() + ms);
+  return { until, wallet: await walletOf(userId) };
+}
+
+/** Whether "Nova builds the whole business" has been bought for this project. */
+export async function hasBuildPass(userId: string, projectId: string | null | undefined): Promise<boolean> {
+  if (!projectId) return false;
+  const [row] = await db.select({ id: novaBuildPasses.id }).from(novaBuildPasses)
+    .where(and(eq(novaBuildPasses.userId, userId), eq(novaBuildPasses.projectId, projectId)));
+  return !!row;
+}
+
+/** The last movements on an account, newest first — a statement somebody can read. */
+export async function recentLedger(userId: string, limit = 25) {
+  return db.select({
+    id: novaLedger.id, kind: novaLedger.kind, outcome: novaLedger.outcome,
+    amountCents: novaLedger.amountCents, balanceAfter: novaLedger.balanceAfter,
+    note: novaLedger.note, projectId: novaLedger.projectId, createdAt: novaLedger.createdAt,
+  }).from(novaLedger).where(eq(novaLedger.userId, userId))
+    .orderBy(desc(novaLedger.createdAt)).limit(Math.min(100, Math.max(1, limit)));
+}

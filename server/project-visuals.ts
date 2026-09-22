@@ -21,7 +21,7 @@ import { ObjectStorageService } from "./replit_integrations/object_storage";
 import { IMAGE_MODEL, IMAGE_QUALITY } from "./aiModels";
 import { requireCredits } from "./entitlements";
 import { storage } from "./storage";
-import { CREDIT_COSTS } from "@shared/plans";
+import { CREDIT_COSTS , CHARGEABLE} from "@shared/plans";
 import { rateLimit } from "./moderation";
 import { respondToAiError } from "./ai-json";
 import {
@@ -197,7 +197,7 @@ export function registerProjectVisualRoutes(app: Express) {
       res.json({
         visuals: saved,
         failed: results.filter((r) => !r.path).map((r) => r.slot),
-        creditsCharged: cost,
+        creditsCharged: CHARGEABLE,
       });
     } catch (error: any) {
       console.error("Project visuals error:", error);

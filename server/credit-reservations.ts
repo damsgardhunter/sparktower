@@ -26,6 +26,7 @@ import type { Response } from "express";
 import { eq, sql } from "drizzle-orm";
 import { db } from "./db";
 import { users } from "@shared/schema";
+import type { PricedOutcomeId } from "@shared/plans";
 
 interface Hold { userId: string; amount: number; open: boolean }
 
@@ -91,4 +92,95 @@ export function takeHold(userId: string): { amount: number } | null {
   hold.open = false;
   forget(hold);
   return { amount: hold.amount };
+}
+
+// ---------------------------------------------------------------------------
+// Dollars, held the same way
+// ---------------------------------------------------------------------------
+/**
+ * The same shape again, for the priced outcomes — a roadmap, a document, an
+ * audit — where what was taken up front is real money rather than an action
+ * off the monthly allowance.
+ *
+ * The rule the product owner set is that a failed action's money comes back
+ * automatically, and the only way to make that true without auditing every
+ * route is to make "nothing was charged" the default: requireCredits spends
+ * the money before the model runs, records the hold here, and the money goes
+ * back inside `res.end` unless the route settled it. A route settles by doing
+ * what it already did — calling storage.deductCredits once the answer is in
+ * hand — so no call site had to learn a new verb.
+ *
+ * Held per user and matched oldest-first, exactly as the credit holds are, and
+ * harmless for the same reason: each hold is closed once, either by a
+ * settlement or by its own response.
+ */
+interface MoneyHold {
+  userId: string;
+  cents: number;
+  outcome: PricedOutcomeId;
+  projectId: string | null;
+  open: boolean;
+}
+
+const moneyHolds = new Map<string, MoneyHold[]>();
+
+function forgetMoney(hold: MoneyHold) {
+  const list = moneyHolds.get(hold.userId);
+  if (!list) return;
+  const i = list.indexOf(hold);
+  if (i >= 0) list.splice(i, 1);
+  if (list.length === 0) moneyHolds.delete(hold.userId);
+}
+
+async function releaseMoney(hold: MoneyHold): Promise<void> {
+  if (!hold.open) return;
+  hold.open = false;
+  forgetMoney(hold);
+  try {
+    const { refund } = await import("./wallet");
+    await refund(hold.userId, hold.cents, { outcome: hold.outcome, projectId: hold.projectId });
+  } catch (err) {
+    // Somebody is out real money. Loud, and never worth failing their response over.
+    console.error(`[wallet] couldn't refund ${hold.cents}c (${hold.outcome}) to ${hold.userId}:`, err);
+  }
+}
+
+/**
+ * Records money already taken for this response, to be given back if the route
+ * never settles it. Same mechanics as holdCredits: the refund lands inside
+ * `res.end`, before the bytes go out, so a client that reads its balance
+ * straight after a failure sees it whole.
+ */
+export function holdMoney(
+  res: Response,
+  userId: string,
+  cents: number,
+  outcome: PricedOutcomeId,
+  projectId: string | null = null,
+): void {
+  const hold: MoneyHold = { userId, cents, outcome, projectId, open: true };
+  const list = moneyHolds.get(userId) ?? [];
+  list.push(hold);
+  moneyHolds.set(userId, list);
+
+  const end = res.end;
+  (res as any).end = function (this: Response, ...args: any[]) {
+    (res as any).end = end;
+    if (!hold.open) return (end as any).apply(this, args);
+    void releaseMoney(hold).finally(() => (end as any).apply(this, args));
+    return this;
+  };
+  res.once("close", () => { void releaseMoney(hold); });
+}
+
+/**
+ * Closes the oldest open money hold for this user and reports that it existed.
+ * True means "the outcome was delivered; the money stays spent".
+ */
+export function settleMoney(userId: string): boolean {
+  const hold = moneyHolds.get(userId)?.find((h) => h.open);
+  if (!hold) return false;
+  hold.open = false;
+  forgetMoney(hold);
+  return true;
 }

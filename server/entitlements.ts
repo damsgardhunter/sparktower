@@ -1,13 +1,14 @@
 import type { Response } from "express";
 import { storage } from "./storage";
 import {
-  getEntitlements, normalizeTier, minimumTierFor, PLAN_PRESENTATION,
-  MEMORY_MESSAGE_LIMIT, TASK_GEN_LIMIT, FAIR_USE_MONTHLY_CAP,
-  type BooleanFeature, type Entitlements, type TierId,
+  getEntitlements, normalizeTier, MEMORY_MESSAGE_LIMIT, TASK_GEN_LIMIT,
+  OUTCOME_PRICE_CENTS, DAY_PASS_HOURS, TOP_UP_CENTS, topUpFor, formatMoney,
+  type BooleanFeature, type Entitlements, type TierId, type PricedOutcomeId,
 } from "@shared/plans";
 import { TEXT_MODEL, PRIORITY_TEXT_MODEL } from "./aiModels";
-import { enforceRateLimit, consumeRateLimit, refuseWithRetry } from "./moderation";
-import { holdCredits } from "./credit-reservations";
+import { enforceRateLimit, consumeRateLimit } from "./moderation";
+import { holdCredits, holdMoney } from "./credit-reservations";
+import { spend, walletOf, dayPassActive, hasBuildPass, type Wallet } from "./wallet";
 
 export interface UserEntitlements extends Entitlements {
   tier: TierId;
@@ -20,8 +21,11 @@ export async function getUserEntitlements(userId: string): Promise<UserEntitleme
 }
 
 /**
- * Shape returned to the client on a 402. The frontend uses `requiredTier` to
- * show a targeted upsell ("Builder unlocks this") instead of a generic error.
+ * Shape returned to the client on a 402.
+ *
+ * Nothing is sold any more, so this is only ever "you can already do that" —
+ * kept because thirty call sites still pass through requireFeature and a
+ * botched deletion is a feature quietly disappearing.
  */
 export interface UpgradeRequiredBody {
   message: string;
@@ -33,149 +37,207 @@ export interface UpgradeRequiredBody {
 }
 
 /**
- * Guards a boolean-gated feature. Returns the entitlements when allowed, or
- * null after writing a 402 — callers should `return` immediately on null.
- *
- *   const ent = await requireFeature(res, userId, "aiRoadmap", "AI Roadmap Builder");
- *   if (!ent) return;
+ * Used to guard a boolean-gated feature. Every feature is free for everyone
+ * now, so this always allows and exists to hand the caller its entitlements.
+ * Left in place deliberately: see the compatibility note in shared/plans.ts.
  */
 export async function requireFeature(
   res: Response,
   userId: string,
-  feature: BooleanFeature,
-  label: string
+  _feature: BooleanFeature,
+  _label: string
 ): Promise<UserEntitlements | null> {
-  const ent = await getUserEntitlements(userId);
-  if (ent[feature] === true) return ent;
-
-  const requiredTier = minimumTierFor(feature);
-  const body: UpgradeRequiredBody = {
-    message: requiredTier
-      ? `${label} is available on the ${PLAN_PRESENTATION[requiredTier].name} plan and above.`
-      : `${label} is not available on your plan.`,
-    code: "upgrade_required",
-    feature,
-    currentTier: ent.tier,
-    requiredTier,
-    requiredTierName: requiredTier ? PLAN_PRESENTATION[requiredTier].name : null,
-  };
-  res.status(402).json(body);
-  return null;
+  return getUserEntitlements(userId);
 }
 
-/**
- * Guards a level-gated feature (analytics, task generation, ...) by requiring
- * the tier's level to be one of `allowed`.
- */
+/** Level gates, same story: nothing is gated, everyone gets the deepest level. */
 export async function requireLevel<K extends keyof Entitlements>(
   res: Response,
   userId: string,
-  key: K,
-  allowed: Entitlements[K][],
-  label: string,
-  requiredTier: TierId
+  _key: K,
+  _allowed: Entitlements[K][],
+  _label: string,
+  _requiredTier: TierId
 ): Promise<UserEntitlements | null> {
-  const ent = await getUserEntitlements(userId);
-  if (allowed.includes(ent[key])) return ent;
+  return getUserEntitlements(userId);
+}
 
-  const body: UpgradeRequiredBody = {
-    message: `${label} is available on the ${PLAN_PRESENTATION[requiredTier].name} plan and above.`,
-    code: "upgrade_required",
-    feature: String(key),
-    currentTier: ent.tier,
-    requiredTier,
-    requiredTierName: PLAN_PRESENTATION[requiredTier].name,
+// ---------------------------------------------------------------------------
+// Paying for an outcome
+// ---------------------------------------------------------------------------
+
+/**
+ * The 402 a dialog is built on.
+ *
+ * A refusal has to answer three questions in one round trip, because the whole
+ * point of holding a balance is that saying yes is one tap: **what does this
+ * cost**, **what have I got**, and **what do I do about it**. A bare message
+ * makes the client guess at all three, so it isn't one — `price` is the cost,
+ * `wallet` is what they have, and `remedy` is the single next action, with the
+ * endpoint that performs it already named.
+ *
+ * `remedy` is deliberately one value, not a list of options:
+ *   - "buy_day_pass" — small actions, allowance spent, balance covers $1. One tap.
+ *   - "top_up"       — the balance is short. `topUp.suggestCents` is the
+ *                      smallest offered amount that clears it, so the dialog
+ *                      can lead with one button and offer the rest behind it.
+ *   - "none"         — nothing to buy (a rate limit, or an account problem).
+ */
+export interface PaymentRequiredBody {
+  code: "payment_required";
+  message: string;
+  /** Human name of what they were trying to do ("a codebase audit"). */
+  label: string;
+  /** Which priced outcome, or null for a small action off the allowance. */
+  outcome: PricedOutcomeId | null;
+  price: { cents: number; display: string } | null;
+  wallet: Wallet;
+  remedy: "buy_day_pass" | "top_up" | "none";
+  topUp: { shortfallCents: number; suggestCents: number; optionsCents: readonly number[] } | null;
+  /** So the client never hard-codes a path that moves. */
+  endpoints: { wallet: string; dayPass: string; topUp: string; build: string };
+}
+
+export const PAY_ENDPOINTS = {
+  wallet: "/api/nova/wallet",
+  dayPass: "/api/nova/day-pass",
+  topUp: "/api/nova/top-up",
+  build: "/api/nova/build-my-business",
+} as const;
+
+/** Builds the 402 body without sending it — company seasons need the same shape from a non-Nova route. */
+export function paymentRequired(opts: {
+  message: string;
+  label: string;
+  outcome: PricedOutcomeId | null;
+  cents: number | null;
+  wallet: Wallet;
+}): PaymentRequiredBody {
+  const { cents, wallet, outcome } = opts;
+  const shortfall = cents == null ? 0 : Math.max(0, cents - wallet.balanceCents);
+  const remedy: PaymentRequiredBody["remedy"] =
+    cents == null ? "none" : shortfall > 0 ? "top_up" : outcome === "dayPass" ? "buy_day_pass" : "top_up";
+  return {
+    code: "payment_required",
+    message: opts.message,
+    label: opts.label,
+    outcome,
+    price: cents == null ? null : { cents, display: formatMoney(cents) },
+    wallet,
+    // A shortfall of zero on a non-day-pass outcome means the caller could
+    // afford it and something else refused; there is nothing to suggest buying.
+    remedy: shortfall > 0 ? "top_up" : remedy === "buy_day_pass" ? "buy_day_pass" : "none",
+    topUp: shortfall > 0
+      ? { shortfallCents: shortfall, suggestCents: topUpFor(shortfall), optionsCents: TOP_UP_CENTS }
+      : null,
+    endpoints: PAY_ENDPOINTS,
   };
-  res.status(402).json(body);
-  return null;
 }
 
 /**
- * Credit guard. Handles the Pro fair-use ceiling too: Pro is unlimited for any
- * realistic human use, but a runaway automation hits the cap and gets a clear
- * message rather than silently costing us thousands of dollars.
+ * "Can this person pay for this outcome, and take the money."
+ *
+ * Every Nova route still calls this the way it always did, and the `amount`
+ * argument is still a CREDIT_COSTS number at most call sites — but it is now
+ * only read for one thing: zero means free, so an action that costs nothing
+ * (the reputation rebuild) still says so instead of quietly eating an
+ * allowance. Everything else is decided by `opts.outcome`:
+ *
+ *   - no outcome → a **small action**. The order is the one the product owner
+ *     set: the monthly allowance first, then a day pass. There is no third
+ *     step that silently takes a dollar — a chat turn must never turn into a
+ *     purchase nobody tapped — so when neither covers it the answer is a 402
+ *     offering the $1 pass, which the client buys in one tap and retries.
+ *   - an outcome → a **price in dollars**, taken from the balance before the
+ *     model runs, and given straight back if the route never delivers
+ *     (holdMoney, server/credit-reservations.ts). A project covered by the $30
+ *     whole-business pass is free here, which is what that $30 bought.
+ *
+ * Returns the entitlements when the work may proceed, or null after writing
+ * the response — callers `return` immediately on null, as they always have.
  */
 export async function requireCredits(
   res: Response,
   userId: string,
   amount: number,
-  label: string
+  label: string,
+  opts?: { outcome?: PricedOutcomeId; projectId?: string | null }
 ): Promise<UserEntitlements | null> {
   /*
-   * Every AI endpoint passes through here for its credit check, which makes
-   * this the one place a per-minute limit covers all of them — thirty routes,
-   * none of which has to remember to add it. Credits cap the month; this caps
-   * the burst, which is the shape a script has and a person doesn't.
+   * Every AI endpoint passes through here, which makes this the one place a
+   * per-minute limit covers all of them — thirty routes, none of which has to
+   * remember to add it. The allowance caps the month, a day pass removes that
+   * cap for a day, and this caps the burst, which is the shape a script has
+   * and a person doesn't. It matters more under a pass than it ever did under
+   * credits: "unlimited for 24 hours" is only unlimited for a person.
    */
   if (!(await enforceRateLimit(res, userId, "ai"))) return null;
 
   const ent = await getUserEntitlements(userId);
-  let sub = await storage.getUserSubscription(userId);
+  if (amount <= 0) return ent;
 
-  /*
-   * The credits are taken here, before the model is called, not only checked
-   * (server/credit-reservations.ts). Checking alone let every request in a
-   * burst pass against the same balance and reach the model; the deduction
-   * after it was conditional, but by then the call was paid for. The charge is
-   * the same conditional update, so it can't take the balance past the cap —
-   * the fair-use ceiling for unlimited tiers — and a route that never deducts
-   * gets the credits back before its response goes out.
-   */
-  const unlimited = ent.credits === Infinity;
-  const refused = unlimited ? sub.creditsUsed + amount > FAIR_USE_MONTHLY_CAP : sub.creditsRemaining < amount;
-  if (!refused && (await storage.chargeCredits(userId, amount))) {
-    holdCredits(res, userId, amount);
-    return ent;
-  }
-  // Refused by the check, or by the charge because a request running alongside took the last of them.
-  if (!refused) sub = await storage.getUserSubscription(userId);
+  const outcome = opts?.outcome;
+  const projectId = opts?.projectId ?? null;
 
-  if (unlimited) {
-    /*
-     * A month's ceiling, in the shape every other refusal has. The wait is
-     * until the month turns over, which is the honest answer even when it is a
-     * fortnight: a client that reads Retry-After should not be told to come
-     * back in a minute to the same wall.
-     */
-    const monthTurns = new Date();
-    monthTurns.setUTCMonth(monthTurns.getUTCMonth() + 1, 1);
-    monthTurns.setUTCHours(0, 0, 0, 0);
-    refuseWithRetry(res, {
-      action: "ai",
+  // --- A priced outcome: dollars. ---
+  if (outcome) {
+    if (await hasBuildPass(userId, projectId)) return ent;
+    const cents = OUTCOME_PRICE_CENTS[outcome];
+    const taken = await spend(userId, cents, { outcome, note: label, projectId });
+    if (taken) {
+      holdMoney(res, userId, cents, outcome, projectId);
+      return ent;
+    }
+    const wallet = await walletOf(userId);
+    res.status(402).json(paymentRequired({
       message:
-        `You've reached the fair-use limit of ${FAIR_USE_MONTHLY_CAP.toLocaleString()} AI actions ` +
-        `this month. Get in touch and we'll sort it out.`,
-      retryAfterSeconds: Math.max(60, Math.round((monthTurns.getTime() - Date.now()) / 1000)),
-      // The phone routes this code to the pricing screen (mobile/src/components/SprintKit.tsx).
-      code: "fair_use_limit",
-      extra: { creditsUsed: sub.creditsUsed, fairUseCap: FAIR_USE_MONTHLY_CAP, tier: ent.tier },
-    });
+        `${label} costs ${formatMoney(cents)}, and your balance is ${wallet.balanceDisplay}. ` +
+        `Add money and it happens straight away — nothing you add ever expires.`,
+      label, outcome, cents, wallet,
+    }));
     return null;
   }
 
-  res.status(403).json({
-    message: `Not enough credits for ${label}. This costs ${amount} credit${amount === 1 ? "" : "s"}.`,
-    code: "insufficient_credits",
-    cost: amount,
-    creditsRemaining: sub.creditsRemaining,
-    creditsLimit: sub.creditsLimit,
-    tier: ent.tier,
-    // What the client needs to offer the way on: "Upgrade to keep generating".
-    creditState: "out",
-    upgradeUrl: "/pricing",
-  });
+  // --- A small action: the allowance, then the pass. ---
+  if (await storage.chargeCredits(userId, 1)) {
+    holdCredits(res, userId, 1);
+    return ent;
+  }
+  if (await dayPassActive(userId)) {
+    /*
+     * Free under the pass, and nothing is held: there is no charge to give
+     * back. The fair-use ceiling still applies through the AI burst limit
+     * above, which is what keeps "unlimited" honest.
+     */
+    return ent;
+  }
+
+  const wallet = await walletOf(userId);
+  const pass = OUTCOME_PRICE_CENTS.dayPass;
+  const affordable = wallet.balanceCents >= pass;
+  res.status(402).json(paymentRequired({
+    message: affordable
+      ? `You've used all ${wallet.allowanceLimit} free Nova actions this month. ` +
+        `A ${formatMoney(pass)} day pass gives you unlimited small actions for the next ${DAY_PASS_HOURS} hours, ` +
+        `and you have ${wallet.balanceDisplay} on your account.`
+      : `You've used all ${wallet.allowanceLimit} free Nova actions this month. ` +
+        `A ${formatMoney(pass)} day pass gives you unlimited small actions for the next ${DAY_PASS_HOURS} hours. ` +
+        `Your allowance resets at the start of next month — ${label} is free again then.`,
+    label, outcome: "dayPass", cents: pass, wallet,
+  }));
   return null;
 }
 
 /**
  * The non-refusing form of requireCredits, for AI that's an optional extra on
- * a route that works without it (Nova's match reasons). True means the credits
- * are there and the AI burst limit has room (the use is counted): go ahead,
- * and deduct `amount` once the answer is in. False means skip the AI part.
- * Nothing is written to the response.
+ * a route that works without it (Nova's match reasons). True means it's
+ * covered — by the pass, or by an allowance with room — and the AI burst limit
+ * has space. False means skip the AI part. Nothing is written to the response,
+ * and nothing is charged: the route's own deductCredits does that when the
+ * answer is in.
  */
-export async function reserveOptionalAi(userId: string, amount: number): Promise<boolean> {
-  if (!(await storage.checkCredits(userId, amount))) return false;
+export async function reserveOptionalAi(userId: string, _amount = 1): Promise<boolean> {
+  if (!(await dayPassActive(userId)) && !(await storage.checkCredits(userId, 1))) return false;
   return consumeRateLimit(userId, "ai");
 }
 
@@ -246,33 +308,15 @@ export function coachingDirectiveFor(ent: Pick<Entitlements, "novaCoaching">): s
 
 /**
  * Whether a user may make another project private.
- * Returns null when allowed, or an upgrade body when the cap is reached.
+ *
+ * Always yes. Privacy was a tier gate, and privacy is not Nova doing work for
+ * anybody — it is a person deciding who sees their own project, which is the
+ * definition of what stays free. The function and its shape survive because
+ * two routes read `quota.allowed` and a third reads `quota.body`, and a
+ * privacy check that goes missing is a project made public by accident.
  */
 export async function checkPrivateProjectQuota(
-  userId: string
+  _userId: string
 ): Promise<{ allowed: true } | { allowed: false; body: UpgradeRequiredBody & { limit: number; current: number } }> {
-  const ent = await getUserEntitlements(userId);
-
-  if (ent.privateProjects === Infinity) return { allowed: true };
-
-  const current = await storage.countPrivateProjects(userId);
-  if (current < ent.privateProjects) return { allowed: true };
-
-  const requiredTier: TierId = ent.privateProjects === 0 ? "starter" : "builder";
-  return {
-    allowed: false,
-    body: {
-      message:
-        ent.privateProjects === 0
-          ? "Private projects are available on the Starter plan and above."
-          : `You've used all ${ent.privateProjects} private projects on your plan. Builder includes unlimited.`,
-      code: "upgrade_required",
-      feature: "privateProjects",
-      currentTier: ent.tier,
-      requiredTier,
-      requiredTierName: PLAN_PRESENTATION[requiredTier].name,
-      limit: ent.privateProjects,
-      current,
-    },
-  };
+  return { allowed: true };
 }

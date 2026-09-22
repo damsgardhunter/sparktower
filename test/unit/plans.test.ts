@@ -1,19 +1,20 @@
 /**
- * Tier normalisation, entitlements, and what an AI action costs.
+ * The price list, and what survives of tiers.
  *
- * Every answer here is a permission decision. Wrong one way it gives paid
- * features away; wrong the other it blocks someone who has paid, which they
- * report as "the site is broken" rather than as a billing problem.
- *
- * The legacy aliases are the sharp edge: accounts in the database still carry
- * tier strings that no longer exist, and the mapping from those to a current
- * tier is the only thing standing between a paying customer and the free plan.
+ * Two jobs, and the second one is the sharp edge. The first is that the prices
+ * are what the product owner set and that nothing that is meant to be free has
+ * quietly grown a price. The second is that the tier machinery still normalises
+ * the strings sitting in real rows: entitlements are the same for everyone now,
+ * so a broken mapping can't take a feature away, but the strings are still read
+ * while old subscriptions wind down and they have to keep resolving.
  */
 import { describe, it, expect } from "vitest";
 import {
   normalizeTier, tierRank, isAtLeast, getEntitlements, hasFeature, minimumTierFor,
-  documentFillCost, roadmapRebuildCost,
+  documentFillCost, roadmapRebuildCost, priceOf, formatMoney, topUpFor,
   TIER_IDS, LEGACY_TIER_ALIASES, ENTITLEMENTS, CREDIT_COSTS,
+  CHARGE_FOR, OUTCOME_PRICE_CENTS, MONTHLY_SMALL_ACTIONS, TOP_UP_CENTS,
+  FREE_FOR_EVERYONE, PRICE_LIST, type NovaActionId,
 } from "@shared/plans";
 
 describe("normalizing a stored tier", () => {
@@ -101,19 +102,32 @@ describe("entitlements", () => {
     }
   });
 
-  it("resolves a feature through the same normalisation as everything else", () => {
-    expect(hasFeature("spark_unlimited", "priorityAi")).toBe(ENTITLEMENTS.pro.priorityAi);
-    expect(hasFeature("free", "priorityAi")).toBe(false);
-    expect(hasFeature(null, "aiRoadmap")).toBe(false);
-    expect(getEntitlements("nonsense")).toEqual(ENTITLEMENTS.free);
+  it("gives everybody the same entitlements, whatever string their row carries", () => {
+    /*
+     * The decision, as a test: nothing is sold, so no tier — current, legacy or
+     * nonsense — resolves to anything different. If this ever fails, a gate has
+     * grown back and somebody is being told to pay for a feature.
+     */
+    for (const tier of [...TIER_IDS, "spark_unlimited", "nonsense", null, undefined]) {
+      expect(getEntitlements(tier as any)).toEqual(FREE_FOR_EVERYONE);
+    }
+    expect(hasFeature("free", "aiRoadmap")).toBe(true);
+    expect(hasFeature(null, "projectHealthChecks")).toBe(true);
+    expect(hasFeature("free", "createSprints")).toBe(true);
+    expect(hasFeature("free", "premiumVisibility")).toBe(true);
+    // Private projects were a tier gate; deciding who sees your own work is not
+    // Nova doing work for you, so it is free and unlimited.
+    expect(FREE_FOR_EVERYONE.privateProjects).toBe(Infinity);
+    // The stronger model is a cost decision, not something anybody is sold.
+    expect(FREE_FOR_EVERYONE.priorityAi).toBe(false);
   });
 
-  it("names the cheapest tier that grants a feature, for the upsell", () => {
-    // Pointing someone at Pro for something Builder already includes costs a
-    // sale; pointing them at Builder for something Pro-only costs their trust.
-    expect(minimumTierFor("aiRoadmap")).toBe("builder");
-    expect(minimumTierFor("priorityAi")).toBe("pro");
-    expect(minimumTierFor("createSprints")).toBe("starter");
+  it("names free as the tier that grants everything, because it does", () => {
+    expect(minimumTierFor("aiRoadmap")).toBe("free");
+    expect(minimumTierFor("createSprints")).toBe("free");
+    expect(minimumTierFor("earlyAccess")).toBe("free");
+    // priorityAi is off everywhere, so there is no tier to name.
+    expect(minimumTierFor("priorityAi")).toBe(null);
   });
 
   it("returns the tier the feature is actually on, whatever it is", () => {
@@ -174,6 +188,75 @@ describe("quoting the cost of an AI action", () => {
   it("quotes a whole number of credits for a rebuild", () => {
     for (const counts of [{ phases: 1, milestones: 1, tasks: 1 }, { phases: 3, milestones: 7, tasks: 13 }]) {
       expect(Number.isInteger(roadmapRebuildCost(counts))).toBe(true);
+    }
+  });
+});
+
+describe("the price list", () => {
+  it("prices exactly the outcomes the product owner named, in whole dollars", () => {
+    expect(OUTCOME_PRICE_CENTS).toEqual({
+      dayPass: 100,
+      roadmap: 300,
+      document: 300,
+      codeAudit: 500,
+      business: 3000,
+      seasonSeat: 300,
+    });
+    // Whole dollars, on purpose: the point of leaving credits is that nobody
+    // has to convert a number into money in their head.
+    for (const cents of Object.values(OUTCOME_PRICE_CENTS)) expect(cents % 100).toBe(0);
+    expect(MONTHLY_SMALL_ACTIONS).toBe(25);
+  });
+
+  it("gives every Nova action a charge, and never invents a seventh price", () => {
+    const allowed = new Set<string>(["free", "small", ...Object.keys(OUTCOME_PRICE_CENTS)]);
+    for (const [action, kind] of Object.entries(CHARGE_FOR)) {
+      expect(allowed.has(kind), `${action} is priced as "${kind}", which nothing sells`).toBe(true);
+    }
+  });
+
+  it("keeps the things that are meant to be free, free", () => {
+    // The rebuild costs the platform nothing — it is recomputed for everybody.
+    expect(CHARGE_FOR.reputationEvaluation).toBe("free");
+    // One price for the whole document: taken at the plan, nothing after it.
+    expect(CHARGE_FOR.documentPlan).toBe("document");
+    for (const inside of ["documentFill", "documentReplan", "documentTighten"] as NovaActionId[]) {
+      expect(priceOf(inside).cents, `${inside} is inside a document already paid for`).toBe(null);
+      expect(CHARGE_FOR[inside]).toBe("free");
+    }
+    // Keeping a bought roadmap current is not a second purchase.
+    expect(CHARGE_FOR.roadmapGeneration).toBe("roadmap");
+    expect(CHARGE_FOR.roadmapRebuild).toBe("roadmap");
+    expect(CHARGE_FOR.roadmapUpdate).toBe("small");
+    // A chat turn never has a price attached to it.
+    expect(priceOf("novaChat")).toMatchObject({ kind: "small", cents: null });
+  });
+
+  it("formats money the way a person reads it", () => {
+    expect(formatMoney(100)).toBe("$1");
+    expect(formatMoney(3000)).toBe("$30");
+    expect(formatMoney(250)).toBe("$2.50");
+  });
+
+  it("suggests the smallest top-up that clears a shortfall", () => {
+    expect(topUpFor(1)).toBe(500);
+    expect(topUpFor(500)).toBe(500);
+    expect(topUpFor(2500)).toBe(3000);
+    // Nothing on the list covers it: offer the biggest rather than nothing.
+    expect(topUpFor(999_999)).toBe(TOP_UP_CENTS[TOP_UP_CENTS.length - 1]);
+    // Every offered amount is a round number of dollars, ascending.
+    for (const c of TOP_UP_CENTS) expect(c % 100).toBe(0);
+    expect([...TOP_UP_CENTS]).toEqual([...TOP_UP_CENTS].sort((a, b) => a - b));
+    // And the biggest one covers the dearest thing sold, so "$30 build" is one trip.
+    expect(TOP_UP_CENTS[TOP_UP_CENTS.length - 1]).toBeGreaterThanOrEqual(OUTCOME_PRICE_CENTS.business);
+  });
+
+  it("serves a price list a dialog can render without knowing the prices", () => {
+    expect(PRICE_LIST.outcomes.map((o) => o.id).sort()).toEqual(Object.keys(OUTCOME_PRICE_CENTS).sort());
+    for (const o of PRICE_LIST.outcomes) {
+      expect(o.display).toBe(formatMoney(o.cents));
+      expect(o.name.length).toBeGreaterThan(0);
+      expect(o.blurb.length).toBeGreaterThan(0);
     }
   });
 });

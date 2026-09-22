@@ -45,8 +45,17 @@ const CHARGED_IN_HELPER: Record<string, [file: string, fn: string]> = {
 };
 
 /** Routes that charge a different amount from what they checked, each with why that's safe. */
+/**
+ * Routes that charge a different amount from what they checked, each with why
+ * that's safe.
+ *
+ * Nearly empty now. Under pay-per-use the `amount` argument is no longer a
+ * price — it is CHARGEABLE or NO_CHARGE, and the price lives in the outcome —
+ * so a route checking and charging different numbers is much rarer than it
+ * was. A whole-document fill used to be here because it charged per block; the
+ * document is now one price, taken at its plan, and the fill charges nothing.
+ */
 const AMOUNT_EXCEPTIONS: Record<string, string> = {
-  "POST /api/documents/:docId/fill": "charges the blocks actually filled — documentFillCost(filled) — which can't exceed the estimate checked",
   "POST /api/mock-interviews/:id/answer": "the follow-up question is checked and charged on its own, after it's generated",
 };
 

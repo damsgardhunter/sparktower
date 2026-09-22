@@ -18,7 +18,7 @@ import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { IMAGE_MODEL, IMAGE_QUALITY } from "./aiModels";
 import { requireCredits } from "./entitlements";
 import { storage } from "./storage";
-import { CREDIT_COSTS } from "@shared/plans";
+import { CREDIT_COSTS , CHARGEABLE} from "@shared/plans";
 import { MAX_POST_LENGTH, POST_TYPES_BY_KEY } from "@shared/feed";
 import { readReference } from "./project-visuals";
 
@@ -103,7 +103,7 @@ export function registerPostImageRoutes(app: Express) {
         visibility: "public",
       });
       await storage.deductCredits(userId, CREDIT_COSTS.postImage);
-      res.json({ url, usedLogo: !!logo, creditsCharged: CREDIT_COSTS.postImage });
+      res.json({ url, usedLogo: !!logo, creditsCharged: CHARGEABLE });
     } catch (error: any) {
       console.error("Post image error:", error?.message || error);
       // The image model's refusals carry a message worth passing on; everything else is ours.

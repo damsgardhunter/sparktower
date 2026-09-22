@@ -157,9 +157,10 @@ describe("Nova's operations from a member", () => {
     const member = await person(app, "Member");
     const project = await newProject(owner, "Nova Guard");
     await addMember(project.id, member.id);
-    // The apply route is a plan feature.
-    await db.update(users).set({ subscriptionTier: "pro" }).where(eq(users.id, member.id));
-    await db.update(users).set({ subscriptionTier: "pro" }).where(eq(users.id, owner.id));
+    // The apply route calls Nova, so the account needs money on it — nothing
+    // here is about who can afford what.
+    await db.update(users).set({ balanceCents: 100_000 }).where(eq(users.id, member.id));
+    await db.update(users).set({ balanceCents: 100_000 }).where(eq(users.id, owner.id));
     await db.update(projects).set({ oneLiner: "The owner's pitch" }).where(eq(projects.id, project.id));
 
     const res = await member.agent.post(`/api/projects/${project.id}/nova/apply`).send({ operations: [

@@ -179,7 +179,7 @@ describe("a roadmap built from the company's own numbers", () => {
     expect(roadmap.roadmap.body.marginNote).toMatch(/no profit number in your check-ins/i);
     expect(roadmap.roadmap.body.tightenedByMargin).toBe(false);
     expect(roadmap.roadmap.body.verdictText).toMatch(/Add a number of your own called "Profit"/);
-    expect(await creditsUsed(owner.agent)).toBe(before + CREDIT_COSTS.whatWouldItTake);
+    expect(await creditsUsed(owner.agent)).toBe(before + 1);
 
     /*
      * The model returned eight stages for a shorter ladder. Zipped onto the

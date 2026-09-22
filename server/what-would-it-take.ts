@@ -42,7 +42,7 @@ import { requireCredits, modelFor } from "./entitlements";
 import { getOpenAI, openAiConfigured } from "./openai-client";
 import { parseModelJson, respondToAiError } from "./ai-json";
 import { applyOperationsOnce, idempotencyKeyFor } from "./operation-idempotency";
-import { CREDIT_COSTS } from "@shared/plans";
+import { CREDIT_COSTS , CHARGEABLE} from "@shared/plans";
 import { completeRunMilestone } from "./company-rhythm-jobs";
 import { asRunSubcategory, metricsForProject, quarterOf, todayYmd, type CheckinLike } from "@shared/company-rhythm";
 import {
@@ -398,7 +398,7 @@ export function registerWhatWouldItTakeRoutes(app: Express): void {
        */
       await completeRunMilestone(project.id, "RUN.S4.5", userId).catch((e) => console.error("[wwit] path advance failed:", e));
 
-      res.json({ roadmap: rowForClient(row), creditsCharged: CREDIT_COSTS.whatWouldItTake });
+      res.json({ roadmap: rowForClient(row), creditsCharged: CHARGEABLE });
     } catch (err) {
       console.error("[wwit] couldn't build the roadmap:", err);
       respondToAiError(res, err, "Nova couldn't build that roadmap. Nothing was charged — please try again.");

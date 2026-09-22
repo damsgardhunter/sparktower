@@ -19,7 +19,7 @@ import { codeAuditRuns } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
 import { requireCredits, requireFeature, modelFor, coachingDirectiveFor } from "./entitlements";
-import { CREDIT_COSTS } from "@shared/plans";
+import { CREDIT_COSTS, CHARGEABLE, OUTCOME_PRICE_CENTS} from "@shared/plans";
 import { formatProjectBriefForPrompt } from "@shared/project-sections";
 import {
   applyProjectOperations, buildOperableProjectState, OPERATION_SCHEMA_INSTRUCTIONS,
@@ -635,7 +635,7 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
   const verified = await verifyMilestonesFromAudit(projectId, { id: audit.id, signals: digest.signals, findings, runtime }).catch((e) => { console.error("[audit] verifiers failed:", e); return { verified: [], marked: [] }; });
   if (delta.changed) await refreshPace(projectId, { taskId: audit.id, backboneId: null, title: `Audit: +${delta.routes.added.length} routes, +${delta.tables.added.length} tables since ${delta.daysSince}d ago`, estimateMinutes: null, actualMinutes: null }).catch(() => {});
 
-  await storage.deductCredits(userId, CREDIT_COSTS.codeAudit);
+  await storage.deductCredits(userId, CHARGEABLE);
   await storage.logActivity({
     projectId, userId,
     action: "ran a codebase audit",
@@ -646,7 +646,9 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
   opts.onSaved(audit.id);
   res.json({
     audit: autoApplied ? await storage.getCodeAudit(audit.id) : audit,
-    creditsCharged: CREDIT_COSTS.codeAudit, verifiedMilestones: verified,
+    // Paid in dollars, not credits. Both are reported so an older client that
+    // still draws "credits charged" shows nothing rather than a wrong number.
+    creditsCharged: 0, chargedCents: OUTCOME_PRICE_CENTS.codeAudit, verifiedMilestones: verified,
     autoApplied: autoApplied ? { changes: autoApplied.changes.map((c) => c.description), skipped: autoApplied.skipped } : null,
   });
 }
@@ -931,7 +933,7 @@ export function registerCodeAuditRoutes(app: Express) {
       // Charged only once the code is in hand — a repo that can't be fetched
       // costs nothing. Kept at the route rather than inside the run, so what
       // this endpoint costs and what stops it is readable from the route table.
-      if (!(await requireCredits(res, userId, CREDIT_COSTS.codeAudit, "a codebase audit"))) { await run?.finish({ error: "Not enough credits for an audit." }); return; }
+      if (!(await requireCredits(res, userId, CHARGEABLE, "Auditing your codebase", { outcome: "codeAudit", projectId }))) { await run?.finish({ error: "The audit wasn't paid for." }); return; }
 
       await runCodeAudit({ projectId, userId, project, ent, res, snapshot, sourceKind, repoMeta, githubToken: token?.trim() || undefined, run });
     } catch (error: any) {

@@ -112,7 +112,8 @@ describe("the money path", () => {
     expect(prompts[0]).toMatch(/I don't know — work it out for me/);
     expect(prompts[0]).toMatch(/never use the words "guaranteed"/);
     const { CREDIT_COSTS } = await import("@shared/plans");
-    expect(await creditsUsed(agent)).toBe(before + CREDIT_COSTS.taskAssist);
+    // One small Nova action, whatever size the job was.
+    expect(await creditsUsed(agent)).toBe(before + 1);
 
     // 5. Its actions onto the board — once, however many times it's asked.
     const added = await agent.post(`/api/projects/${projectId}/path/work/${work.body.id}/tasks`).send({});

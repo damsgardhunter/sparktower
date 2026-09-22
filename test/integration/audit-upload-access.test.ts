@@ -57,7 +57,7 @@ async function builder(app: any, name: string) {
   expect(res.status, JSON.stringify(res.body)).toBe(201);
   // The audit is a paid feature; without this the route refuses before it ever
   // looks at the object, and the test would pass for the wrong reason.
-  await db.update(users).set({ subscriptionTier: "pro" }).where(eq(users.email, email));
+  await db.update(users).set({ balanceCents: 100_000 }).where(eq(users.email, email));
   const project = (await agent.post("/api/projects").send({
     title: `Zip ${name}`, description: "A project to hang an audit off.", category: "saas", goal: "ship_mvp", subcategory: "saas",
   })).body;

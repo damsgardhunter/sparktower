@@ -8,7 +8,7 @@ import OpenAI from "openai";
 import { storage } from "./storage";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { requireCredits, modelFor, coachingDirectiveFor } from "./entitlements";
-import { CREDIT_COSTS } from "@shared/plans";
+import { CREDIT_COSTS , CHARGEABLE} from "@shared/plans";
 import {
   LOOKING_FOR_ROLES, LOOKING_FOR_STAGES, LOOKING_FOR_COMMITMENTS,
   type ProfileEducation, type ProfileExperience, type ProfileLookingFor,
@@ -349,7 +349,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       // `apply: false` returns a preview so the user can review before it
       // overwrites what they already have.
       if (apply === false) {
-        return res.json({ draft, applied: false, source, creditsCharged: CREDIT_COSTS.resumeEvaluation });
+        return res.json({ draft, applied: false, source, creditsCharged: CHARGEABLE });
       }
 
       const existing = await storage.getUserProfile(userId);
@@ -369,7 +369,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         resumeParsedAt: new Date(),
       } as any);
 
-      res.json({ draft, profile, applied: true, source, creditsCharged: CREDIT_COSTS.resumeEvaluation });
+      res.json({ draft, profile, applied: true, source, creditsCharged: CHARGEABLE });
     } catch (error) {
       console.error("Resume evaluation error:", error);
       res.status(500).json({ message: "Failed to evaluate the résumé" });

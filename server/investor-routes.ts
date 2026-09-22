@@ -13,7 +13,7 @@ import OpenAI from "openai";
 import { storage } from "./storage";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { requireFeature, requireCredits, modelFor, coachingDirectiveFor } from "./entitlements";
-import { CREDIT_COSTS } from "@shared/plans";
+import { CREDIT_COSTS , CHARGEABLE} from "@shared/plans";
 import { formatProjectBriefForPrompt } from "@shared/project-sections";
 import type { Project } from "@shared/schema";
 import { rateLimit } from "./moderation";
@@ -165,11 +165,11 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         kind: "deck_outline",
         summary: String(parsed.summary || ""),
         content: { slides },
-        creditsCharged: CREDIT_COSTS.pitchDeckOutline,
+        creditsCharged: CHARGEABLE,
       });
 
       await storage.deductCredits(userId, CREDIT_COSTS.pitchDeckOutline);
-      res.json({ artifact, creditsCharged: CREDIT_COSTS.pitchDeckOutline });
+      res.json({ artifact, creditsCharged: CHARGEABLE });
     } catch (error) {
       console.error("Pitch deck error:", error);
       respondToAiError(res, error, "Failed to build a pitch deck outline");
@@ -257,11 +257,11 @@ Respond ONLY with valid JSON (no markdown, no code fences):
           })),
           blockers: (Array.isArray(parsed.blockers) ? parsed.blockers : []).map(String).slice(0, 5),
         },
-        creditsCharged: CREDIT_COSTS.investorReadinessScore,
+        creditsCharged: CHARGEABLE,
       });
 
       await storage.deductCredits(userId, CREDIT_COSTS.investorReadinessScore);
-      res.json({ artifact, creditsCharged: CREDIT_COSTS.investorReadinessScore });
+      res.json({ artifact, creditsCharged: CHARGEABLE });
     } catch (error) {
       console.error("Readiness score error:", error);
       res.status(500).json({ message: "Failed to score investor readiness" });
@@ -340,11 +340,11 @@ Respond ONLY with valid JSON (no markdown, no code fences):
           questionsTheyWillAsk: (Array.isArray(parsed.questionsTheyWillAsk) ? parsed.questionsTheyWillAsk : []).map(String).slice(0, 5),
           rewrittenOpener: String(parsed.rewrittenOpener || "").slice(0, 1000),
         },
-        creditsCharged: CREDIT_COSTS.pitchCritique,
+        creditsCharged: CHARGEABLE,
       });
 
       await storage.deductCredits(userId, CREDIT_COSTS.pitchCritique);
-      res.json({ artifact, creditsCharged: CREDIT_COSTS.pitchCritique });
+      res.json({ artifact, creditsCharged: CHARGEABLE });
     } catch (error) {
       console.error("Pitch critique error:", error);
       respondToAiError(res, error, "Failed to critique the pitch");
@@ -423,11 +423,11 @@ Respond ONLY with valid JSON (no markdown, no code fences):
           risks: (Array.isArray(parsed.risks) ? parsed.risks : []).map(String).slice(0, 5),
           howToValidate: (Array.isArray(parsed.howToValidate) ? parsed.howToValidate : []).map(String).slice(0, 5),
         },
-        creditsCharged: CREDIT_COSTS.pricingAnalysis,
+        creditsCharged: CHARGEABLE,
       });
 
       await storage.deductCredits(userId, CREDIT_COSTS.pricingAnalysis);
-      res.json({ artifact, creditsCharged: CREDIT_COSTS.pricingAnalysis });
+      res.json({ artifact, creditsCharged: CHARGEABLE });
     } catch (error) {
       console.error("Pricing analysis error:", error);
       res.status(500).json({ message: "Failed to analyse pricing" });
@@ -459,7 +459,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         persona: persona.id,
         difficulty: level as any,
         status: "active",
-        creditsCharged: CREDIT_COSTS.mockInterviewQuestion,
+        creditsCharged: CHARGEABLE,
       });
 
       let question;
@@ -477,7 +477,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       res.json({
         interview: { ...interview, turns: [question] },
         persona: { id: persona.id, label: persona.label },
-        creditsCharged: CREDIT_COSTS.mockInterviewQuestion,
+        creditsCharged: CHARGEABLE,
       });
     } catch (error) {
       console.error("Mock interview start error:", error);
@@ -583,7 +583,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       );
       await storage.updateMockInterview(interview.id, {
         averageScore,
-        creditsCharged: interview.creditsCharged + CREDIT_COSTS.mockInterviewGrading,
+        creditsCharged: interview.creditsCharged + CHARGEABLE,
       });
 
       await storage.deductCredits(userId, CREDIT_COSTS.mockInterviewGrading);
@@ -614,7 +614,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         averageScore,
         questionsAnswered: answered.length,
         maxQuestions: MAX_QUESTIONS,
-        creditsCharged: CREDIT_COSTS.mockInterviewGrading + nextCharged,
+        creditsCharged: CHARGEABLE + nextCharged,
       });
     } catch (error) {
       console.error("Mock interview answer error:", error);

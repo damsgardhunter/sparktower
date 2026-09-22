@@ -1669,6 +1669,73 @@ export const stripeEvents = pgTable("stripe_events", {
   claimedAt: timestamp("claimed_at").defaultNow().notNull(),
 });
 
+/**
+ * Every movement of money on an account, in cents. The balance on `users` is
+ * the running total; this is why it is what it is.
+ *
+ * It exists for three jobs, and each one shaped a column:
+ *
+ *   - **Idempotency.** A top-up carries the Stripe Checkout session that paid
+ *     for it, and `stripe_session_id` is unique. The webhook credits a balance
+ *     by inserting here first: a replayed event inserts nothing and therefore
+ *     adds nothing, whatever else it does. This is the same shape donations
+ *     use, for the same reason.
+ *   - **Answering "what did I pay for?"** without reconstructing it from
+ *     Stripe. `outcome` and `project_id` say which purchase each spend was.
+ *   - **Refunds.** A failed action's money goes back as its own `refund` row
+ *     rather than by editing the spend, so the history stays a history.
+ *
+ * `amount_cents` is signed — money in is positive, money out negative — so the
+ * sum of a person's rows is their balance, and a disagreement with the column
+ * is visible rather than theoretical.
+ */
+export const novaLedger = pgTable("nova_ledger", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** "topup" | "spend" | "refund" | "grant" — grant is support putting money on an account by hand. */
+  kind: text("kind", { enum: ["topup", "spend", "refund", "grant"] }).notNull(),
+  /** Which priced outcome, for a spend or its refund. Null on a top-up. */
+  outcome: text("outcome"),
+  /** Signed: positive in, negative out. */
+  amountCents: integer("amount_cents").notNull(),
+  /** The balance after this row was applied, so a statement reads without re-summing. */
+  balanceAfter: integer("balance_after").notNull(),
+  /** Unique: the Checkout session that paid for a top-up. This is what makes a replayed webhook harmless. */
+  stripeSessionId: varchar("stripe_session_id"),
+  /** What it was for, in the person's own terms ("Audit my codebase"). */
+  note: text("note"),
+  /** The project a purchase was for, when it was for one. */
+  projectId: varchar("project_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  byUser: index("nova_ledger_user_idx").on(table.userId, table.createdAt),
+  bySession: unique("nova_ledger_stripe_session").on(table.stripeSessionId),
+}));
+
+/**
+ * "Nova builds the whole business", bought once for one project.
+ *
+ * The purchase is a pass rather than a single long-running job: building out
+ * every section of a path is dozens of model calls that a person watches
+ * arrive over minutes, and charging each one against the $30 they already paid
+ * would mean threading a receipt through every route. Instead the pass sits
+ * here, and any priced outcome on that project is covered by it — see
+ * requireCredits in server/entitlements.ts, which looks for one before it
+ * reaches for the balance.
+ *
+ * One per (person, project): buying it twice for the same project is a mistake
+ * we refuse rather than a second charge, hence the unique index.
+ */
+export const novaBuildPasses = pgTable("nova_build_passes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  projectId: varchar("project_id").notNull(),
+  paidCents: integer("paid_cents").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  once: unique("nova_build_passes_user_project").on(table.userId, table.projectId),
+}));
+
 export const activityEvents = pgTable("activity_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   /**
@@ -3377,6 +3444,17 @@ export const simSeasons = pgTable("sim_seasons", {
    * year early — see server/company-season-routes.ts.
    */
   yearMinutes: integer("year_minutes"),
+  /**
+   * What the company paid for this private season, and for how many seats.
+   *
+   * A company's first season is free — a workshop nobody has run before is the
+   * thing that sells the second one — so these are zero on it, and zero is a
+   * perfectly good record of "this one cost nothing". Every season after it is
+   * charged per seat when it's created, at OUTCOME_PRICE_CENTS.seasonSeat.
+   * Null on public seasons, which are free for everyone, always.
+   */
+  seatsPaid: integer("seats_paid").default(0).notNull(),
+  paidCents: integer("paid_cents").default(0).notNull(),
 }, (table) => ({
   byStatus: index("sim_seasons_status_idx").on(table.status, table.nicheId),
   byInvite: unique("sim_seasons_invite_code").on(table.inviteCode),

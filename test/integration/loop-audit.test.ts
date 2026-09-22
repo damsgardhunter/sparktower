@@ -73,8 +73,9 @@ describe("the competitive loop audit", () => {
     const before = await creditsUsed(agent);
     const res = await agent.post(`/api/projects/${id}/path/loops/audit`).send({});
     expect(res.status, JSON.stringify(res.body).slice(0, 300)).toBe(200);
-    expect(res.body.creditsCharged).toBe(CREDIT_COSTS.loopAudit);
-    expect((await creditsUsed(agent)) - before).toBe(CREDIT_COSTS.loopAudit);
+    // A loop audit is a small Nova action: one off the month's allowance.
+    expect(res.body.creditsCharged).toBe(1);
+    expect((await creditsUsed(agent)) - before).toBe(1);
     // The prompt hands every loop over by key, with its kind and what closing it means.
     expect(prompts[0]).toMatch(/\[L1\] Product loop/);
     expect(prompts[0]).toMatch(/\[L5\] Referral loop[\s\S]*Closes when:/);
@@ -134,7 +135,7 @@ describe("Nova writing the loops for the builder", () => {
     expect(one.status, JSON.stringify(one.body).slice(0, 300)).toBe(200);
     expect(one.body.written).toEqual([product.taskId]);
     expect(one.body.skipped.map((x: any) => x.title)).toEqual(["Sneaky extra"]);
-    expect((await creditsUsed(agent)) - before).toBe(CREDIT_COSTS.taskAssist);
+    expect((await creditsUsed(agent)) - before).toBe(1);
     expect(prompts[0]).toMatch(/the loop at L1/);
     let t = await tree(agent, id);
     // The key wins over whatever kind the model said: L1 is the product loop.

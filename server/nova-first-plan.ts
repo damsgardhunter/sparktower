@@ -15,7 +15,7 @@ import type { Response } from "express";
 import OpenAI from "openai";
 import { storage } from "./storage";
 import { modelFor, coachingDirectiveFor, type UserEntitlements } from "./entitlements";
-import { CREDIT_COSTS } from "@shared/plans";
+import { CREDIT_COSTS , CHARGEABLE} from "@shared/plans";
 import { packFor, NOVA_PACK_VERSION, type NovaPromptPack } from "@shared/nova-prompt-packs";
 import { applyProjectOperations, buildOperableProjectState, stripIdFragments, collectProjectIds } from "./project-operations";
 import { parseModelJson } from "./ai-json";
@@ -121,6 +121,6 @@ export async function firstPlanFor(
     questions: pack.questions,
     plan,
     saved,
-    creditsCharged: CREDIT_COSTS.novaAssist,
+    creditsCharged: CHARGEABLE,
   });
 }

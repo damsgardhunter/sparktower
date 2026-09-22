@@ -109,8 +109,9 @@ describe("the coding model", () => {
     expect(res.status).toBe(200);
     expect(res.body.payload.model).toBe(TEXT_MODEL);
     expect(calls.map((c) => `${c.api}:${c.model}`)).toEqual([`responses:${CODE_MODEL}`, `chat:${TEXT_MODEL}`]);
-    // Two model calls on our side is not two charges on theirs.
-    expect((await creditsUsed(agent)) - before).toBe(CREDIT_COSTS.taskAssist);
+    // Two model calls on our side is not two charges on theirs: one small
+    // Nova action off the month's allowance, as any other.
+    expect((await creditsUsed(agent)) - before).toBe(1);
   });
 
   it("doesn't paper over an unreadable answer with a second model — 502, uncharged", async () => {

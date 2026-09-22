@@ -72,14 +72,22 @@ function aiRoutes() {
 }
 
 let n = 0;
-/** A builder on the top tier (so no feature gate stops a route before the model), exempt from limits for the sweep. */
+/**
+ * A builder with money on the account and a day pass running, so that neither
+ * the month's allowance nor an empty balance stops a route before the model —
+ * what this sweep is about is what a *model* failure costs, and a 402 would
+ * hide it. The balance is asserted whole again at the end.
+ */
 async function builder(app: any) {
   n += 1;
   const email = `sweep-${Date.now()}-${n}@example.test`;
   const agent = request.agent(app);
   const reg = await agent.post("/api/auth/register").set("x-forwarded-for", `203.0.113.${70 + n}`).send({ email, password: "Testpass123!" });
   expect(reg.status).toBe(201);
-  await db.update(users).set({ subscriptionTier: "pro" }).where(eq(users.email, email));
+  await db.update(users).set({
+    balanceCents: SWEEP_BALANCE_CENTS,
+    dayPassUntil: new Date(Date.now() + 6 * 60 * 60 * 1000),
+  }).where(eq(users.email, email));
   process.env.RATE_LIMIT_EXEMPT_EMAILS = [process.env.RATE_LIMIT_EXEMPT_EMAILS, email].filter(Boolean).join(",");
   const project = await agent.post("/api/projects").send({ title: "Sweep", description: "A project every AI route is called against, with a failing model.", category: "saas", goal: "ship_mvp", subcategory: "saas" });
   const path = await agent.get(`/api/projects/${project.body.id}/path`);
@@ -87,6 +95,10 @@ async function builder(app: any) {
   return { agent, userId: reg.body.id as string, projectId: project.body.id as string, taskId: (path.body?.next?.workTaskId ?? "no-such-task") as string, token };
 }
 const creditsUsed = async (agent: any) => (await agent.get("/api/subscription")).body.creditsUsed as number;
+/** Far more than the dearest thing the sweep can buy, so nothing is refused for being short. */
+const SWEEP_BALANCE_CENTS = 100_000;
+const balanceOf = async (userId: string) =>
+  (await db.select({ balanceCents: users.balanceCents }).from(users).where(eq(users.id, userId)))[0].balanceCents;
 
 const BODY = {
   message: "Help me plan the next step.", taskId: undefined as string | undefined, answer: "A thoughtful answer.",
@@ -130,6 +142,14 @@ describe("every AI route, with a model that fails", () => {
     const billedFailures = results.filter((x) => x.charged !== 0 && (x.mode === "throw" || x.mode === "empty" || x.status >= 400));
     expect(billedFailures, "charged for a failed model call or an error answer").toEqual([]);
     expect(reached.length).toBeGreaterThanOrEqual(MIN_ROUTES_REACHING_THE_MODEL);
+
+    /*
+     * And the money. A priced outcome — a roadmap, a document, an audit — takes
+     * its dollars before the model runs, so "nothing was charged" has to be
+     * true of the balance too, not just of the month's allowance. Every one of
+     * those calls failed; every dollar came back.
+     */
+    expect(await balanceOf(b.userId), "a failed priced outcome must refund").toBe(SWEEP_BALANCE_CENTS);
 
     /*
      * What the answer says when the model answered, badly. The route scan

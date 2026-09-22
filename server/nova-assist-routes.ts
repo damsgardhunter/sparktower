@@ -16,7 +16,7 @@ import OpenAI from "openai";
 import { storage } from "./storage";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { requireCredits, requireFeature, modelFor, coachingDirectiveFor, type UserEntitlements } from "./entitlements";
-import { CREDIT_COSTS } from "@shared/plans";
+import { CREDIT_COSTS , CHARGEABLE} from "@shared/plans";
 import { formatProjectBriefForPrompt } from "@shared/project-sections";
 import {
   applyProjectOperations, buildOperableProjectState, renderLatestAudit,
@@ -240,7 +240,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     operations: kept.map((x: any) => x.op),
     /** How many of Nova's proposals couldn't be run and were left out. */
     dropped,
-    creditsCharged: CREDIT_COSTS.novaAssist,
+    creditsCharged: CHARGEABLE,
   });
 }
 

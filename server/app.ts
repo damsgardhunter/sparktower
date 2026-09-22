@@ -87,6 +87,9 @@ const PRIVATE_ACCOUNT_FIELDS = new Set([
    * exactly what someone picking an account to attack would like to know.
    */
   "paymentFailedAt", "paymentFailureMessage", "subscriptionRefundedAt", "subscriptionEventAt",
+  // What's in somebody's wallet, and whether they're paying their way through
+  // the month. Nobody else's business either, and on the same embedded rows.
+  "balanceCents", "dayPassUntil",
   "emailVerifiedAt", "mfaEnabledAt", "accessTokensRevokedAt", "deletedAt",
 ]);
 

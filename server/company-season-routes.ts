@@ -37,6 +37,9 @@ import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
 import { notify } from "./notifications";
 import { companyCan, logCompany } from "./company-access";
+import { OUTCOME_PRICE_CENTS, OUTCOME_COPY, formatMoney } from "@shared/plans";
+import { walletOf, spend, refund } from "./wallet";
+import { paymentRequired } from "./entitlements";
 import { companyMembersOf } from "./company-routes";
 import { SEASON_CODE_ALPHABET } from "./simulation-routes";
 import { startSeason, tickSeason, yearMsOf } from "./simulation-tick";
@@ -50,6 +53,14 @@ export const YEAR_MINUTES_MAX = 1440;
 /** Fewer than four years and nothing a team does has time to come back to them. */
 export const TRAINING_YEARS_MIN = 4;
 export const TRAINING_YEARS_MAX = 14;
+
+/**
+ * Seats a company buys for a private season: five to a table, and nobody has
+ * ever run a workshop for more than a few hundred. The floor of five is the
+ * table itself — a season with three seats is a season nobody can play.
+ */
+export const SEASON_SEATS_MIN = 5;
+export const SEASON_SEATS_MAX = 500;
 
 export const joinPathFor = (code: string) => `/join-season/${code}`;
 
@@ -114,20 +125,84 @@ export function registerCompanySeasonRoutes(app: Express): void {
         return res.status(400).json({ message: `A season runs ${TRAINING_YEARS_MIN} to ${TRAINING_YEARS_MAX} years.`, code: "invalid_input", field: "totalYears" });
       }
 
+      /*
+       * What a private season costs.
+       *
+       * The public market is free for everyone and always will be — this is
+       * only the private version, run by a company for its own people, and it
+       * is priced per seat. The company's **first** one is free, deliberately:
+       * a workshop nobody has run before is the thing that sells the second
+       * one, and charging for the trial is how a training product never gets
+       * tried. "First" means the first season this company ever created, not
+       * the first this month and not the first that was played — a season
+       * abandoned halfway was still the free one.
+       *
+       * The charge lands on the person pressing the button, from their
+       * balance, because that is where money lives on this platform; the
+       * company audit log records who paid and how much.
+       */
+      const priorSeasons = await db.select({ id: simSeasons.id }).from(simSeasons)
+        .where(eq(simSeasons.companyId, found.company.id)).limit(1);
+      const isFirst = priorSeasons.length === 0;
+
+      let seats = 0;
+      let cents = 0;
+      if (!isFirst) {
+        seats = body.seats == null || body.seats === "" ? SEASON_SEATS_MIN : Number(body.seats);
+        if (!Number.isInteger(seats) || seats < SEASON_SEATS_MIN || seats > SEASON_SEATS_MAX) {
+          return res.status(400).json({
+            message: `A season is bought ${SEASON_SEATS_MIN} to ${SEASON_SEATS_MAX} seats at a time, at ${formatMoney(OUTCOME_PRICE_CENTS.seasonSeat)} a seat.`,
+            code: "invalid_input", field: "seats",
+          });
+        }
+        cents = seats * OUTCOME_PRICE_CENTS.seasonSeat;
+      }
+
+      let paid: Awaited<ReturnType<typeof spend>> = null;
+      if (cents > 0) {
+        paid = await spend(req.user.id, cents, {
+          outcome: "seasonSeat",
+          note: `${OUTCOME_COPY.seasonSeat.name} — ${seats} seats for ${found.company.name}`,
+        });
+        if (!paid) {
+          const wallet = await walletOf(req.user.id);
+          return res.status(402).json(paymentRequired({
+            message:
+              `${seats} seats is ${formatMoney(cents)} at ${formatMoney(OUTCOME_PRICE_CENTS.seasonSeat)} a seat, ` +
+              `and your balance is ${wallet.balanceDisplay}. Your company's first season was free; this one isn't. ` +
+              `The public market stays free for everyone.`,
+            label: OUTCOME_COPY.seasonSeat.name, outcome: "seasonSeat", cents, wallet,
+          }));
+        }
+      }
+
       // A code clash is one in a trillion, but the unique index would turn it into a 500; try again instead.
+      try {
       for (let attempt = 0; attempt < 5; attempt++) {
         const inviteCode = newSeasonCode();
         try {
           const [season] = await db.insert(simSeasons).values({
             nicheId: niche.id, name, status: "forming", totalYears, yearMinutes,
             companyId: found.company.id, inviteCode, createdAt: new Date(),
+            seatsPaid: seats, paidCents: cents,
           }).returning();
-          await logCompany(found.company.id, req.user.id, "season_created", null, { seasonId: season.id, name, nicheId: niche.id });
-          return res.status(201).json({ seasonId: season.id, inviteCode, joinUrl: joinPathFor(inviteCode) });
+          await logCompany(found.company.id, req.user.id, "season_created", null, { seasonId: season.id, name, nicheId: niche.id, seats, paidCents: cents });
+          return res.status(201).json({
+            seasonId: season.id, inviteCode, joinUrl: joinPathFor(inviteCode),
+            seats, paidCents: cents, firstSeasonFree: isFirst,
+          });
         } catch (err) {
           if (!isUniqueViolation(err)) throw err;
         }
       }
+      } catch (err) {
+        // Anything that stops the season existing — a clash five times over, or
+        // the insert itself failing — gives the seats back. Money for a season
+        // that was never created is money taken for nothing.
+        if (paid) await refund(req.user.id, cents, { outcome: "seasonSeat", note: "Refunded — the season couldn't be created" });
+        throw err;
+      }
+      if (paid) await refund(req.user.id, cents, { outcome: "seasonSeat", note: "Refunded — the season couldn't be created" });
       res.status(500).json({ message: "Couldn't make a join code. Try again." });
     } catch (error) {
       console.error("Company season create error:", error);

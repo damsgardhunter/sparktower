@@ -43,7 +43,7 @@ describe("post images", () => {
     const app = await getTestApp();
     const me = await person(app, "Poster", "203.0.113.201");
     const other = await person(app, "Other", "203.0.113.202");
-    await db.update(users).set({ subscriptionTier: "pro" }).where(eq(users.id, me.id));
+    await db.update(users).set({ balanceCents: 100_000 }).where(eq(users.id, me.id));
 
     // Too short to draw.
     expect((await me.agent.post("/api/feed/image").send({ content: "hi" })).status).toBe(400);
@@ -53,9 +53,10 @@ describe("post images", () => {
     calls.length = 0;
     const plain = await me.agent.post("/api/feed/image").send({ content: "We just crossed 1,000 people on the waitlist this morning.", postType: "milestone" });
     expect(plain.status, JSON.stringify(plain.body)).toBe(200);
-    expect(plain.body).toMatchObject({ usedLogo: false, creditsCharged: 2 });
+    // One small Nova action, like every other image Nova draws.
+    expect(plain.body).toMatchObject({ usedLogo: false, creditsCharged: 1 });
     expect(plain.body.url).toMatch(/^\/objects\//);
-    expect(await credits(me.agent)).toBe(start + 2);
+    expect(await credits(me.agent)).toBe(start + 1);
     expect(calls).toHaveLength(1);
     expect(calls[0].kind).toBe("generate");
     expect(calls[0].prompt).toMatch(/THE POST IS THE MAIN SUBJECT/);
@@ -78,7 +79,7 @@ describe("post images", () => {
 
     // Someone else's project: refused before any model call.
     calls.length = 0;
-    await db.update(users).set({ subscriptionTier: "pro" }).where(eq(users.id, other.id));
+    await db.update(users).set({ balanceCents: 100_000 }).where(eq(users.id, other.id));
     expect((await other.agent.post("/api/feed/image").send({ content: "Borrowing a logo that isn't mine for this.", projectId: project.id })).status).toBe(403);
     expect(calls).toHaveLength(0);
 

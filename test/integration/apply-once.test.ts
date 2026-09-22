@@ -43,7 +43,7 @@ async function builder(app: any, name: string) {
     .send({ email, password: "Testpass123!", firstName: name });
   expect(res.status).toBe(201);
   await verifyEmail(app, email, `203.0.114.${20 + (n % 200)}`);
-  await db.update(users).set({ subscriptionTier: "pro" }).where(eq(users.id, res.body.id));
+  await db.update(users).set({ balanceCents: 100_000 }).where(eq(users.id, res.body.id));
   return { agent, id: res.body.id as string, email };
 }
 

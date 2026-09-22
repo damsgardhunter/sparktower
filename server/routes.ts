@@ -86,10 +86,15 @@ import { TEXT_MODEL, IMAGE_MODEL, IMAGE_SIZE, IMAGE_QUALITY } from "./aiModels";
 import {
   TIER_IDS, PLAN_PRESENTATION, ENTITLEMENTS, COMPARISON_ROWS, CREDIT_COSTS,
   FAIR_USE_NOTICE, FAIR_USE_MONTHLY_CAP, normalizeTier, roadmapRebuildCost,
+  PRICE_LIST, PRICING_ROWS, PRICING_NOTICE, TOP_UP_CENTS, OUTCOME_PRICE_CENTS,
+  CHARGEABLE, NO_CHARGE,
+  OUTCOME_COPY, formatMoney,
   type TierId,
 } from "@shared/plans";
+import { walletOf, buyDayPass, spend, recentLedger, hasBuildPass } from "./wallet";
+import { novaBuildPasses } from "@shared/schema";
 import {
-  getUserEntitlements, requireFeature, requireLevel, requireCredits,
+  getUserEntitlements, requireFeature, requireLevel, requireCredits, paymentRequired, PAY_ENDPOINTS,
   checkPrivateProjectQuota, modelFor, memoryLimitFor, taskLimitFor,
   coachingDirectiveFor, reserveOptionalAi,
 } from "./entitlements";
@@ -1401,7 +1406,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         })),
         cyclesBroken,
         startHere: sequenced[0] || null,
-        creditsCharged: CREDIT_COSTS.taskSequencing,
+        creditsCharged: CHARGEABLE,
       });
     } catch (error) {
       console.error("Task sequence error:", error);
@@ -1562,7 +1567,7 @@ If the ask has nothing to do with planning tasks, say so in "summary", return an
             }
           : null,
         operations,
-        creditsCharged: CREDIT_COSTS.taskAssist,
+        creditsCharged: CHARGEABLE,
       });
     } catch (error) {
       console.error("Task assist error:", error);
@@ -3452,7 +3457,7 @@ RULES:
         return answerUnreadable(res, new ModelResponseError("loops"), "loops");
       }
       await storage.deductCredits(userId, CREDIT_COSTS.taskAssist);
-      res.json({ ...result, creditsCharged: CREDIT_COSTS.taskAssist });
+      res.json({ ...result, creditsCharged: CHARGEABLE });
     } catch (error: any) {
       if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
       console.error("Loop write error:", error);
@@ -3506,7 +3511,7 @@ RULES:
       if (!audit.loops.length) return answerUnreadable(res, new ModelResponseError("loop audit"), "loop audit");
       const saved = await saveLoopAudit(projectId, read.sourceTask.id, { ...audit, model: result.model });
       await storage.deductCredits(userId, CREDIT_COSTS.loopAudit);
-      res.json({ ...saved, creditsCharged: CREDIT_COSTS.loopAudit });
+      res.json({ ...saved, creditsCharged: CHARGEABLE });
     } catch (error: any) {
       if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
       console.error("Loop audit error:", error);
@@ -4584,7 +4589,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences),
 
       res.json({
         storyboardId: saved.id,
-        creditsCharged: scenesFromModel ? CREDIT_COSTS.videoGeneration : 0,
+        creditsCharged: scenesFromModel ? CHARGEABLE : 0,
         storyboard,
         // Scene images are served from an owner-checked route, never inlined
         // as data URIs and never added to the project's media gallery.
@@ -4947,7 +4952,8 @@ Respond ONLY with the JSON, in the same shape as before.`,
 
       const ent = await requireFeature(res, userId, "aiRoadmap", "The Nova AI Roadmap Builder");
       if (!ent) return;
-      if (!(await requireCredits(res, userId, CREDIT_COSTS.roadmapGeneration, "roadmap generation"))) return;
+      // "Build my path and roadmap" — a priced outcome, paid from the balance.
+      if (!(await requireCredits(res, userId, CHARGEABLE, "Building your path and roadmap", { outcome: "roadmap", projectId }))) return;
 
       const { goal, startingPoint, targetDate } = req.body as {
         goal?: string; startingPoint?: string; targetDate?: string;
@@ -5001,7 +5007,7 @@ Respond ONLY with the JSON, in the same shape as before.`,
         parsed.phases
       );
 
-      await storage.deductCredits(userId, CREDIT_COSTS.roadmapGeneration);
+      await storage.deductCredits(userId, CHARGEABLE);
       await storage.logActivity({
         projectId, userId, action: "generated an AI roadmap",
         entityType: "roadmap", entityId: created.id, metadata: { goal: goal.trim(), phases: created.phases.length },
@@ -5018,7 +5024,7 @@ Respond ONLY with the JSON, in the same shape as before.`,
         });
       }
 
-      res.json({ roadmap: created, creditsCharged: CREDIT_COSTS.roadmapGeneration });
+      res.json({ roadmap: created, creditsCharged: 0, chargedCents: OUTCOME_PRICE_CENTS.roadmap });
     } catch (error) {
       console.error("Roadmap generation error:", error);
       respondToAiError(res, error, "Failed to generate roadmap");
@@ -5113,7 +5119,7 @@ Additionally, each phase may include "status": one of "upcoming", "in-progress",
       });
 
       const fresh = await storage.getProjectRoadmap(projectId);
-      res.json({ roadmap: fresh, creditsCharged: CREDIT_COSTS.roadmapUpdate });
+      res.json({ roadmap: fresh, creditsCharged: CHARGEABLE });
     } catch (error) {
       console.error("Roadmap update error:", error);
       respondToAiError(res, error, "Failed to update roadmap");
@@ -5210,7 +5216,7 @@ ${PLAIN_LANGUAGE_RULES}`,
       res.json({
         reasoning: String(parsed.reasoning || ""),
         actions,
-        creditsCharged: CREDIT_COSTS.nextActions,
+        creditsCharged: CHARGEABLE,
       });
     } catch (error) {
       console.error("Next actions error:", error);
@@ -5282,7 +5288,9 @@ ${PLAIN_LANGUAGE_RULES}`,
         milestones: milestones.length,
         tasks: tasks.length,
       });
-      if (!(await requireCredits(res, userId, cost, "a roadmap rebuild"))) return;
+      // A rebuild re-plans everything, so it is the roadmap purchase again — `cost` is now only a size hint.
+      void cost;
+      if (!(await requireCredits(res, userId, CHARGEABLE, "Rebuilding your roadmap", { outcome: "roadmap", projectId }))) return;
 
       const { whatChanged, newGoal, startingPoint: newStartingPoint } = req.body as {
         whatChanged?: string; newGoal?: string; startingPoint?: string;
@@ -5374,7 +5382,7 @@ Additionally include:
         tasksUpdated++;
       }
 
-      await storage.deductCredits(userId, cost);
+      await storage.deductCredits(userId, CHARGEABLE);
       await storage.logActivity({
         projectId, userId, action: "rebuilt the AI roadmap",
         entityType: "roadmap", entityId: existing.id,
@@ -5387,7 +5395,7 @@ Additionally include:
         changeSummary: String(parsed.changeSummary || ""),
         milestonesUpdated,
         tasksUpdated,
-        creditsCharged: cost,
+        creditsCharged: 0, chargedCents: OUTCOME_PRICE_CENTS.roadmap,
       });
     } catch (error) {
       console.error("Roadmap rebuild error:", error);
@@ -5685,7 +5693,7 @@ Produce 3-6 findings.`,
       });
 
       await storage.deductCredits(userId, CREDIT_COSTS.healthCheck);
-      res.json({ check, creditsCharged: CREDIT_COSTS.healthCheck });
+      res.json({ check, creditsCharged: CHARGEABLE });
     } catch (error) {
       console.error("Health check error:", error);
       res.status(500).json({ message: "Failed to run health check" });
@@ -5786,7 +5794,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         changes,
         skipped,
         note: String(parsed.note || "").slice(0, 800),
-        creditsCharged: CREDIT_COSTS.healthFix,
+        creditsCharged: CHARGEABLE,
       });
     } catch (error) {
       console.error("Health fix error:", error);
@@ -6717,6 +6725,13 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         lowCreditsAt: sub.creditsLimit === Infinity ? null : lowCreditsAt(sub.creditsLimit),
         // A subscription payment that failed (until one goes through), or was refunded in full.
         billingIssue: await billingIssueFor(userId),
+        /*
+         * The money, alongside the legacy credit shape above. Both are served
+         * for now: this is what the new dialogs read, and the fields above are
+         * what the current client still draws while it is rebuilt.
+         */
+        wallet: await walletOf(userId),
+        prices: PRICE_LIST,
       });
     } catch (error) {
       console.error("Error fetching subscription:", error);
@@ -6761,9 +6776,166 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       comparison: COMPARISON_ROWS,
       fairUseNotice: FAIR_USE_NOTICE,
       creditCosts: CREDIT_COSTS,
+      // The pricing page proper: one free column and a short list of prices.
+      pricing: PRICE_LIST,
+      pricingRows: PRICING_ROWS,
+      pricingNotice: PRICING_NOTICE,
       // Signals to the pricing page that paid plans can't be purchased yet.
       stripeConfigured: priceIdByTier.size > 0,
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // The wallet: money in, money out, and what it buys
+  // -------------------------------------------------------------------------
+
+  /**
+   * Everything a paywall dialog needs before it is shown, so it never has to
+   * guess: the balance, the month's allowance, the day pass, and the whole
+   * price list. The same `wallet` object appears inside every 402, so a dialog
+   * opened cold and a dialog opened by a refusal render from the same shape.
+   */
+  app.get("/api/nova/wallet", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      res.json({
+        wallet: await walletOf(userId),
+        prices: PRICE_LIST,
+        notice: PRICING_NOTICE,
+        recent: await recentLedger(userId, 20),
+      });
+    } catch (error) {
+      console.error("Wallet read error:", error);
+      res.status(500).json({ message: "Couldn't read your balance." });
+    }
+  });
+
+  /**
+   * The $1 day pass, bought from the balance in one tap — which is the whole
+   * reason a balance exists rather than a redirect to Stripe every time
+   * somebody runs out mid-sentence.
+   */
+  app.post("/api/nova/day-pass", isAuthenticated, rateLimit("checkout"), async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const bought = await buyDayPass(userId);
+      if (!bought) {
+        const wallet = await walletOf(userId);
+        return res.status(402).json(paymentRequired({
+          message: `A day pass is ${formatMoney(OUTCOME_PRICE_CENTS.dayPass)} and your balance is ${wallet.balanceDisplay}. Add a few dollars and it's yours straight away.`,
+          label: OUTCOME_COPY.dayPass.name, outcome: "dayPass", cents: OUTCOME_PRICE_CENTS.dayPass, wallet,
+        }));
+      }
+      res.json({ dayPassUntil: bought.until.toISOString(), wallet: bought.wallet });
+    } catch (error) {
+      console.error("Day pass error:", error);
+      res.status(500).json({ message: "Couldn't start your day pass." });
+    }
+  });
+
+  /**
+   * Top up the balance through Stripe Checkout.
+   *
+   * The only thing Checkout sells now. Amounts come from TOP_UP_CENTS and are
+   * checked against it here, so a client can't name its own price — the same
+   * reason the old subscription checkout only accepted our own price IDs. The
+   * balance moves when the webhook confirms payment, never on the way out.
+   *
+   * `price_data` inline rather than a seeded price: six round amounts that
+   * never change are not worth a product catalog to keep in sync, and this way
+   * a fresh deployment can take money without a seed step.
+   */
+  app.post("/api/nova/top-up", isAuthenticated, rateLimit("checkout"), async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const amountCents = Number(req.body?.amountCents);
+      if (!TOP_UP_CENTS.includes(amountCents)) {
+        return res.status(400).json({
+          message: "Pick one of the top-up amounts.",
+          code: "invalid_amount", optionsCents: TOP_UP_CENTS,
+        });
+      }
+      const stripe = await getUncachableStripeClient();
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ message: "User not found" });
+      const customerId = await ensureStripeCustomer(stripe, user);
+
+      const urls = checkoutReturnUrls(`${req.protocol}://${req.get("host")}`, req.body?.returnTo);
+      const session = await stripe.checkout.sessions.create({
+        customer: customerId,
+        payment_method_types: ["card"],
+        mode: "payment",
+        line_items: [{
+          quantity: 1,
+          price_data: {
+            currency: "usd",
+            unit_amount: amountCents,
+            product_data: { name: `SparkTower balance — ${formatMoney(amountCents)}` },
+          },
+        }],
+        success_url: urls.success,
+        cancel_url: urls.cancel,
+        // Read back by the webhook. `userId` is what ties the payment to an
+        // account; the customer id would do it too, but metadata survives a
+        // customer being merged or replaced.
+        metadata: { type: "topup", userId, amountCents: String(amountCents) },
+      });
+      res.json({ url: session.url, amountCents });
+    } catch (error) {
+      console.error("Top-up checkout error:", error);
+      res.status(500).json({ message: "Couldn't start that top-up." });
+    }
+  });
+
+  /**
+   * "Nova builds the whole business" — $30, once, for one project.
+   *
+   * What the money buys is a pass on that project (nova_build_passes): from
+   * here on every priced outcome on it — the roadmap, the documents, the audit
+   * — is already paid for, because building out every section *is* those
+   * things, dozens of model calls arriving over minutes. Charging per call
+   * against a purchase already made would mean threading a receipt through
+   * every route and getting it wrong somewhere.
+   *
+   * Buying it twice for one project is refused rather than charged again.
+   */
+  app.post("/api/nova/build-my-business", isAuthenticated, rateLimit("checkout"), async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = String(req.body?.projectId ?? "");
+      const project = projectId ? await storage.getProject(projectId) : null;
+      if (!project) return res.status(404).json({ message: "Project not found" });
+      if (project.ownerId !== userId) return res.status(403).json({ message: "Only the project's owner can buy this." });
+
+      if (await hasBuildPass(userId, projectId)) {
+        return res.status(409).json({
+          message: "Nova is already building this one out — you've paid for it.",
+          code: "already_bought", projectId,
+        });
+      }
+
+      const cents = OUTCOME_PRICE_CENTS.business;
+      const taken = await spend(userId, cents, { outcome: "business", note: OUTCOME_COPY.business.name, projectId });
+      if (!taken) {
+        const wallet = await walletOf(userId);
+        return res.status(402).json(paymentRequired({
+          message: `Nova building the whole business is ${formatMoney(cents)}, and your balance is ${wallet.balanceDisplay}.`,
+          label: OUTCOME_COPY.business.name, outcome: "business", cents, wallet,
+        }));
+      }
+      try {
+        await db.insert(novaBuildPasses).values({ userId, projectId, paidCents: cents });
+      } catch (err) {
+        // The pass didn't stick, so the money doesn't either.
+        const { refund } = await import("./wallet");
+        await refund(userId, cents, { outcome: "business", projectId, note: "Refunded — the build pass couldn't be recorded" });
+        throw err;
+      }
+      res.status(201).json({ projectId, paidCents: cents, wallet: await walletOf(userId) });
+    } catch (error) {
+      console.error("Build-my-business error:", error);
+      res.status(500).json({ message: "Couldn't start that build." });
+    }
   });
 
   app.post("/api/checkout", isAuthenticated, rateLimit("checkout"), async (req: any, res) => {
@@ -6772,11 +6944,24 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       const { priceId, returnTo } = req.body;
       if (!priceId) return res.status(400).json({ message: "priceId is required" });
 
-      // Only allow prices belonging to one of our own tiers, so an arbitrary
-      // price ID can't be substituted by the client.
+      /*
+       * Nothing is sold as a subscription any more. This route stays because
+       * people already on one reach it from the billing screen to change or
+       * settle what they have, and because a 404 here would read as a bug
+       * rather than as a decision — but it will not start a new subscription
+       * for anybody, and it says where the money goes instead.
+       *
+       * Only prices belonging to one of our own tiers get this far, so an
+       * arbitrary price id can't be substituted by the client. With the
+       * catalog empty (STRIPE_PLANS), in practice nothing does.
+       */
       const allowedPriceIds = new Set((await getPriceIdsByTier()).values());
       if (!allowedPriceIds.has(priceId)) {
-        return res.status(400).json({ message: "Invalid price" });
+        return res.status(400).json({
+          message: "There are no plans to buy. Everything is free; Nova's bigger jobs are paid for one at a time.",
+          code: "no_subscriptions",
+          endpoints: PAY_ENDPOINTS,
+        });
       }
 
       const stripe = await getUncachableStripeClient();

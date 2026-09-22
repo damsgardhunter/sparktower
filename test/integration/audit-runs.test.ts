@@ -46,7 +46,7 @@ describe("audit runs", () => {
     const agent = request.agent(app);
     const email = `runs-${Date.now()}@example.test`;
     await agent.post("/api/auth/register").set("x-forwarded-for", "203.0.113.231").send({ email, password: "Testpass123!", firstName: "Runner" });
-    await db.update(users).set({ subscriptionTier: "pro" }).where(eq(users.email, email));
+    await db.update(users).set({ balanceCents: 100_000 }).where(eq(users.email, email));
     const project = (await agent.post("/api/projects").send({ title: "Run Status", description: "A project whose audits should show while they run.", category: "saas", goal: "ship_mvp", subcategory: "saas" })).body;
     const token = (await agent.post("/api/mcp-tokens").send({ label: "editor" })).body.token;
     const status = async () => (await agent.get(`/api/projects/${project.id}/code-audit/status`)).body;
@@ -119,7 +119,7 @@ describe("what the audit read", () => {
     const agent = request.agent(app);
     const email = `prov-${Date.now()}@example.test`;
     await agent.post("/api/auth/register").set("x-forwarded-for", "203.0.113.233").send({ email, password: "Testpass123!", firstName: "Prov" });
-    await db.update(users).set({ subscriptionTier: "pro" }).where(eq(users.email, email));
+    await db.update(users).set({ balanceCents: 100_000 }).where(eq(users.email, email));
     const project = (await agent.post("/api/projects").send({ title: "Provenance", description: "A project whose audits should say what they read.", category: "saas", goal: "ship_mvp", subcategory: "saas" })).body;
     const token = (await agent.post("/api/mcp-tokens").send({ label: "editor" })).body.token;
 
@@ -177,7 +177,7 @@ describe("what the audit read", () => {
     const agent = request.agent(app);
     const email = `whole-${Date.now()}@example.test`;
     await agent.post("/api/auth/register").set("x-forwarded-for", "203.0.113.234").send({ email, password: "Testpass123!", firstName: "Whole" });
-    await db.update(users).set({ subscriptionTier: "pro" }).where(eq(users.email, email));
+    await db.update(users).set({ balanceCents: 100_000 }).where(eq(users.email, email));
     const project = (await agent.post("/api/projects").send({ title: "Whole read", description: "A project whose audit saw all of its source.", category: "saas", goal: "ship_mvp", subcategory: "saas" })).body;
     const token = (await agent.post("/api/mcp-tokens").send({ label: "editor" })).body.token;
 

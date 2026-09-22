@@ -174,8 +174,8 @@ import { ago } from "./sql-interval";
 import { notBlockedSql } from "./block-sql";
 import { feedCommentVisibleTo, feedPostVisibleTo, projectCommentVisibleTo, publiclyVisible } from "./visibility";
 import { publicProject, type TeamOnlyProjectField } from "./project-visibility";
-import { getEntitlements, normalizeTier, FAIR_USE_MONTHLY_CAP } from "@shared/plans";
-import { takeHold, returnCredits } from "./credit-reservations";
+import { normalizeTier, MONTHLY_SMALL_ACTIONS } from "@shared/plans";
+import { takeHold, settleMoney } from "./credit-reservations";
 
 /**
  * Was a finished task finished by its due date?
@@ -1647,8 +1647,13 @@ export class DatabaseStorage implements IStorage {
     return !!p;
   }
 
-  private getCreditLimit(tier: string): number {
-    return getEntitlements(tier).credits;
+  /**
+   * The month's free allowance of small Nova actions — the same number for
+   * everyone, because nothing about it is sold. The tier argument is kept so
+   * the call sites read unchanged while old subscriptions wind down.
+   */
+  private getCreditLimit(_tier?: string): number {
+    return MONTHLY_SMALL_ACTIONS;
   }
 
   async resetCreditsIfNeeded(userId: string): Promise<void> {
@@ -1667,7 +1672,7 @@ export class DatabaseStorage implements IStorage {
     await this.resetCreditsIfNeeded(userId);
     const user = await this.getUser(userId);
     if (!user) {
-      return { tier: "free", creditsUsed: 0, creditsLimit: 20, creditsRemaining: 20, stripeCustomerId: null, stripeSubscriptionId: null };
+      return { tier: "free", creditsUsed: 0, creditsLimit: MONTHLY_SMALL_ACTIONS, creditsRemaining: MONTHLY_SMALL_ACTIONS, stripeCustomerId: null, stripeSubscriptionId: null };
     }
     // Legacy spark_* tiers are mapped forward so existing subscribers keep access.
     const tier = normalizeTier(user.subscriptionTier);
@@ -1684,42 +1689,35 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
+  /** Whether the month's allowance still has room. A day pass is checked separately (server/wallet.ts). */
   async checkCredits(userId: string, amount: number): Promise<boolean> {
     const sub = await this.getUserSubscription(userId);
-    // Unlimited tiers are still bounded by the fair-use ceiling.
-    if (sub.creditsLimit === Infinity) {
-      return sub.creditsUsed + amount <= FAIR_USE_MONTHLY_CAP;
-    }
     return sub.creditsRemaining >= amount;
   }
 
   /**
-   * Spends credits, or doesn't — decided by the database, in one statement.
+   * What a route calls once the answer is in hand: "that worked, keep what you
+   * took". It almost never charges anything any more.
    *
-   * This used to read the balance, decide, and then write. Two requests that
-   * read before either wrote both saw enough credits and both spent them, and
-   * the same is true of ten: the allowance held only because the timing
-   * usually cooperated. Every one of those calls costs real money at the model.
+   * requireCredits takes the money — a dollar price, or one action off the
+   * month's allowance — *before* the model runs, and holds it
+   * (server/credit-reservations.ts), because a check alone let twenty
+   * simultaneous requests all pass against the same balance and all reach the
+   * model. So by the time a route gets here the charge already happened, and
+   * this is the settlement that stops it being given back:
    *
-   * The condition now travels with the update, so the row can only go over the
-   * cap if the database lets it, and it doesn't. Unlimited tiers still
-   * increment — usage has to be counted for the fair-use ceiling to mean
-   * anything — they just have a much higher ceiling.
+   *   - an open money hold means a priced outcome was delivered: the dollars
+   *     stay spent, and the `amount` argument (still a legacy credit number at
+   *     most call sites) is ignored, because it was never the price;
+   *   - an open allowance hold means the same for the one small action;
+   *   - no hold at all is the optional-extra path (reserveOptionalAi), which
+   *     deliberately checks without taking. That one charges: one action.
    */
   async deductCredits(userId: string, amount: number): Promise<boolean> {
-    /*
-     * requireCredits usually took these already, before the model was called
-     * (server/credit-reservations.ts). Settle against that hold instead of
-     * charging twice: the same amount is done, less gives the rest back, more
-     * charges the difference under the same cap.
-     */
-    const held = takeHold(userId);
-    if (held) {
-      if (amount === held.amount) return true;
-      if (amount < held.amount) { await returnCredits(userId, held.amount - amount); return true; }
-      return this.chargeCredits(userId, amount - held.amount);
-    }
-    return this.chargeCredits(userId, amount);
+    if (settleMoney(userId)) return true;
+    if (takeHold(userId)) return true;
+    if (amount <= 0) return true;
+    return this.chargeCredits(userId, 1);
   }
 
   /** The conditional charge itself, with no hold to settle against. requireCredits takes its hold with this. */
@@ -1727,8 +1725,7 @@ export class DatabaseStorage implements IStorage {
     await this.resetCreditsIfNeeded(userId);
     const user = await this.getUser(userId);
     if (!user) return false;
-    const limit = this.getCreditLimit(normalizeTier(user.subscriptionTier));
-    const cap = limit === Infinity ? FAIR_USE_MONTHLY_CAP : limit;
+    const cap = this.getCreditLimit();
     const [row] = await db.update(users)
       .set({ creditsUsed: sql`${users.creditsUsed} + ${amount}` })
       .where(and(eq(users.id, userId), sql`${users.creditsUsed} + ${amount} <= ${cap}`))
