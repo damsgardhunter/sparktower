@@ -700,7 +700,10 @@ export const projectMilestones = pgTable("project_milestones", {
   completedById: varchar("completed_by_id").references(() => users.id, { onDelete: "set null" }),
   order: integer("order").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  /** "What has this project finished, and when" — the execution pillar's question. */
+  byCompleted: index("project_milestones_completed_idx").on(table.projectId, table.completedAt),
+}));
 
 /**
  * Nova AI Roadmap Builder (Builder tier and above). A roadmap is the plan from
@@ -2222,7 +2225,10 @@ export const userReputationScores = pgTable("user_reputation_scores", {
   /** One line from Nova on what it saw, shown under the strategy pillar. */
   aiSummary: text("ai_summary"),
   lastCalculatedAt: timestamp("last_calculated_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  /** The hourly sweep takes the stalest rows first, so it reads this in order. */
+  byCalculated: index("user_reputation_last_calculated_idx").on(table.lastCalculatedAt),
+}));
 
 export const insertUserReputationSchema = createInsertSchema(userReputationScores).omit({ id: true, lastCalculatedAt: true });
 
