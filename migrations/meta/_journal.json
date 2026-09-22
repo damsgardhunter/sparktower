@@ -232,6 +232,13 @@
       "when": 1789826048383,
       "tag": "0032_startup_game_drafts",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1790087803027,
+      "tag": "0033_reputation_inputs",
+      "breakpoints": true
     }
   ]
 }

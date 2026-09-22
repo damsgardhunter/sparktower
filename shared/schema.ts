@@ -689,6 +689,15 @@ export const projectMilestones = pgTable("project_milestones", {
   description: text("description"),
   status: text("status", { enum: ["planned", "in-progress", "completed"] }).default("planned").notNull(),
   targetDate: timestamp("target_date"),
+  /**
+   * When it was actually finished. Null while it is open, and null for
+   * milestones completed before this column existed — the builder index reads
+   * it for punctuality and recency, and treats "finished, date unknown" as
+   * finished rather than as late.
+   */
+  completedAt: timestamp("completed_at"),
+  /** Who finished it, so contribution can tell your work from your team's. Null for older rows. */
+  completedById: varchar("completed_by_id").references(() => users.id, { onDelete: "set null" }),
   order: integer("order").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -2200,6 +2209,18 @@ export const userReputationScores = pgTable("user_reputation_scores", {
   strategicThinkingScore: integer("strategic_thinking_score").default(0).notNull(),
   builderIndex: integer("builder_index").default(0).notNull(),
   details: jsonb("details"),
+  /**
+   * The two parts that are worked out on their own clocks, kept here so the
+   * hourly pass can fold them in without paying for them again: how the
+   * builder's companies did in the simulation (daily), and Nova's reading of
+   * how they are going about it (weekly). Null until each has first run.
+   */
+  simScore: integer("sim_score"),
+  simScoredAt: timestamp("sim_scored_at"),
+  aiScore: integer("ai_score"),
+  aiScoredAt: timestamp("ai_scored_at"),
+  /** One line from Nova on what it saw, shown under the strategy pillar. */
+  aiSummary: text("ai_summary"),
   lastCalculatedAt: timestamp("last_calculated_at").defaultNow().notNull(),
 });
 
