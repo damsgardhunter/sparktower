@@ -351,6 +351,13 @@
       "when": 1790092046201,
       "tag": "0049_reconcile_reputation_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1790099621639,
+      "tag": "0050_path_artifact_takedown",
+      "breakpoints": true
     }
   ]
 }

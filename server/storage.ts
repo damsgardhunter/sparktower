@@ -172,6 +172,7 @@ import { ago } from "./sql-interval";
 // One helper, used by every read path that can put one person in front of
 // another. See server/blocks.ts for why it's a SQL fragment and not a set.
 import { notBlockedSql } from "./block-sql";
+import { feedCommentVisibleTo, feedPostVisibleTo, projectCommentVisibleTo, publiclyVisible } from "./visibility";
 import { publicProject, type TeamOnlyProjectField } from "./project-visibility";
 import { getEntitlements, normalizeTier, FAIR_USE_MONTHLY_CAP } from "@shared/plans";
 import { takeHold, returnCredits } from "./credit-reservations";
@@ -635,17 +636,16 @@ export interface IStorage {
 }
 
 /**
- * Which comments a viewer sees. Hidden ones are gone — except a shadow-hidden
- * comment, to its own author, who sees it as posted. That's what makes a
- * shadow-hide different from a removal.
+ * Which comments a viewer sees.
+ *
+ * The rules themselves moved to server/visibility.ts, where every content
+ * table's are written once: hidden is gone, a suspended or closed author's
+ * writing is gone, and a shadow-hidden comment still reads as posted to the
+ * person who wrote it. This stays as the name the rest of the file already
+ * calls, because the interesting thing about it is no longer what it says —
+ * it's that nothing here gets to say it.
  */
-function commentVisibleTo(viewerId?: string) {
-  if (!viewerId) return isNull(projectComments.hiddenAt);
-  return or(
-    isNull(projectComments.hiddenAt),
-    and(eq(projectComments.hiddenMode, "shadow"), eq(projectComments.authorId, viewerId)),
-  )!;
-}
+const commentVisibleTo = (viewerId?: string) => projectCommentVisibleTo(viewerId);
 
 export class DatabaseStorage implements IStorage {
   async getUser(id: string): Promise<User | undefined> {
@@ -772,11 +772,10 @@ export class DatabaseStorage implements IStorage {
      * work — the suspension is about what they can do to other people, not
      * about hiding their own projects from them.
      */
-    conditions.push(isNull(projects.hiddenAt));
     conditions.push(
       filters?.includePrivateOwnedBy
-        ? or(isNull(users.suspendedAt), eq(projects.ownerId, filters.includePrivateOwnedBy))!
-        : isNull(users.suspendedAt)
+        ? or(publiclyVisible.project(), and(isNull(projects.hiddenAt), eq(projects.ownerId, filters.includePrivateOwnedBy)))!
+        : publiclyVisible.project()
     );
 
     const limit = Math.max(1, Math.min(filters?.limit ?? PROJECT_LISTING_CAP, PROJECT_LISTING_CAP));
@@ -1145,8 +1144,7 @@ export class DatabaseStorage implements IStorage {
      * which is the failure `projects.hiddenAt` exists to end. See the same pair
      * of conditions in `getProjects`.
      */
-    conditions.push(isNull(projects.hiddenAt));
-    conditions.push(isNull(users.suspendedAt));
+    conditions.push(publiclyVisible.project());
 
     // One join rather than a query per row: the owner is needed for every
     // entry, and reading them one at a time made the ranking cost a round
@@ -1927,8 +1925,10 @@ export class DatabaseStorage implements IStorage {
         count: sql<number>`count(*)::int`,
       })
       .from(projectComments)
-      // Counts only what everyone can see; a hidden comment isn't part of the conversation.
-      .where(and(eq(projectComments.projectId, projectId), isNull(projectComments.hiddenAt)))
+      // Counts only what everyone can see; a hidden comment, or one by a
+      // suspended account, isn't part of the conversation. A badge that counts
+      // comments nobody can open is a promise of content that isn't there.
+      .where(and(eq(projectComments.projectId, projectId), publiclyVisible.projectComment()))
       .groupBy(projectComments.targetType, projectComments.targetId);
 
     return Object.fromEntries(rows.map((r) => [`${r.targetType}:${r.targetId}`, r.count]));
@@ -1995,7 +1995,15 @@ export class DatabaseStorage implements IStorage {
     /** Only posts by builders, or on projects, this user follows. */
     followedBy?: string;
   }): Promise<FeedPostWithDetails[]> {
-    const conditions = [isNull(feedPosts.hiddenAt), isNull(feedPosts.deletedAt)];
+    /*
+     * The public policy, not a local copy of half of it: taken down is gone,
+     * and so is everything by an account that has been suspended or closed.
+     * No author exception here even for one's own post — a list is what other
+     * people see, and a hidden post reappearing on the feed because its author
+     * happens to be the viewer is the failure this is written to prevent. The
+     * author's own view of it is `getFeedPost`, one post at a time.
+     */
+    const conditions = [publiclyVisible.feedPost(), isNull(feedPosts.deletedAt)];
     if (options.authorId) conditions.push(eq(feedPosts.authorId, options.authorId));
     if (options.projectId) conditions.push(eq(feedPosts.projectId, options.projectId));
     if (options.postType) conditions.push(eq(feedPosts.postType, options.postType as any));
@@ -2051,9 +2059,14 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getFeedPost(id: string, viewerId?: string): Promise<FeedPostWithDetails | undefined> {
-    const [post] = await db.select().from(feedPosts).where(eq(feedPosts.id, id));
-    // Taken down: not there, except to its author.
-    if (post?.hiddenAt && post.authorId !== viewerId) return undefined;
+    /*
+     * Taken down: not there, except to its author — who also still sees their
+     * own posts while suspended, since a suspension is about what they can do
+     * to other people, not about hiding their words from themselves. Asked of
+     * the database rather than by reading the row and deciding afterwards, so
+     * this page and the feed list are answering the same question.
+     */
+    const [post] = await db.select().from(feedPosts).where(and(eq(feedPosts.id, id), feedPostVisibleTo(viewerId)));
     if (!post) return undefined;
     return this.hydrateFeedPost(post, viewerId);
   }
@@ -2182,12 +2195,20 @@ export class DatabaseStorage implements IStorage {
    * placeholder so the replies keep their place.
    */
   async getFeedComments(postId: string, viewerId?: string): Promise<FeedCommentWithDetails[]> {
-    const rows = await db
+    const visible = await db
       .select()
       .from(feedComments)
-      .where(eq(feedComments.postId, postId))
+      /*
+       * Filtered in the database, not afterwards in JavaScript. The old
+       * version read every comment on the post and then dropped the hidden
+       * ones in a `.filter` — which worked, and which also meant the only
+       * thing standing between a taken-down comment and the response was one
+       * line of application code that a refactor could quietly lose. It also
+       * had no test for the author's account at all, so a suspended spammer's
+       * replies stayed under every post they had ever commented on.
+       */
+      .where(and(eq(feedComments.postId, postId), feedCommentVisibleTo(viewerId)))
       .orderBy(asc(feedComments.createdAt));
-    const visible = rows.filter((c) => !c.hiddenAt || c.authorId === viewerId);
     const ids = visible.map((c) => c.id);
 
     const breakdown = ids.length
@@ -3307,7 +3328,8 @@ export class DatabaseStorage implements IStorage {
         eq(feedPosts.isSystemGenerated, false),
         sql`${feedPosts.projectId} is not null`,
         inArray(feedPosts.postType, ["project_update", "milestone"]),
-        isNull(feedPosts.hiddenAt),
+        // Reputation is earned in public: a post nobody can read isn't credit.
+        publiclyVisible.feedPost(),
         isNull(feedPosts.deletedAt),
       ));
 

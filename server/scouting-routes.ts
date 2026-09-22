@@ -11,6 +11,7 @@
 import type { Express } from "express";
 import { and, desc, eq, inArray, isNull, max, notInArray, sql } from "drizzle-orm";
 import { db } from "./db";
+import { publiclyVisible } from "./visibility";
 import {
   projects, companyFollows, companyWatches, users, userProfiles, projectActivityLog, feedPosts, projectKanbanTasks,
 } from "@shared/schema";
@@ -56,7 +57,7 @@ async function lastActivity(ids: string[]): Promise<Map<string, Date>> {
   const logs = await db.select({ id: projectActivityLog.projectId, at: max(projectActivityLog.createdAt) })
     .from(projectActivityLog).where(inArray(projectActivityLog.projectId, ids)).groupBy(projectActivityLog.projectId);
   const posts = await db.select({ id: feedPosts.projectId, at: max(feedPosts.createdAt) })
-    .from(feedPosts).where(and(inArray(feedPosts.projectId, ids), isNull(feedPosts.hiddenAt))).groupBy(feedPosts.projectId);
+    .from(feedPosts).where(and(inArray(feedPosts.projectId, ids), publiclyVisible.feedPost())).groupBy(feedPosts.projectId);
   const tasks = await db.select({ id: projectKanbanTasks.projectId, at: max(projectKanbanTasks.completedAt) })
     .from(projectKanbanTasks).where(inArray(projectKanbanTasks.projectId, ids)).groupBy(projectKanbanTasks.projectId);
   for (const r of [...logs, ...posts, ...tasks]) if (r.id) bump(r.id, r.at);
@@ -112,7 +113,15 @@ export function registerScoutingRoutes(app: Express): void {
           .innerJoin(users, eq(users.id, projects.ownerId))
           .leftJoin(userProfiles, eq(userProfiles.userId, projects.ownerId))
           .where(and(
-            inArray(projects.category, watches), eq(projects.isPrivate, false), isNull(users.suspendedAt),
+            inArray(projects.category, watches), eq(projects.isPrivate, false),
+            /*
+             * Scouting suggests projects to a company by name and description,
+             * which is a public listing by another route: it tested the
+             * owner's suspension but never `projects.hiddenAt`, so a project a
+             * reviewer had taken down went on being recommended to companies
+             * as somebody worth backing.
+             */
+            publiclyVisible.project(),
             exclude.length ? notInArray(projects.id, exclude) : undefined,
           ))
           .orderBy(desc(projects.createdAt))

@@ -22,6 +22,7 @@ import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { recordActivity } from "./analytics";
 import { SAFETY_EVENTS } from "@shared/safety";
 import { requireReviewer } from "./platform-roles";
+import { publicArtifactVisible } from "./visibility";
 import {
   RATE_LIMITS, DUPLICATE_RULES, REPORT_TARGETS, RETIRED_REPORT_TARGETS, REPORT_REASON_IDS, reportDetailLabel, REPORT_NOTE_MAX,
   REPORT_STATUSES, RATE_LIMITED, DUPLICATE_CONTENT, type DuplicateContentBody, MODERATION_ACTION_IDS, isActionableTarget, isReasonCode, SHADOW_HIDEABLE,
@@ -824,6 +825,16 @@ async function snapshotOf(targetType: ReportTarget, targetId: string): Promise<{
       return r ? { text: trim(r.content), ownerId: r.senderId, projectId: null }
                : { text: null, ownerId: null, projectId: null };
     }
+    if (targetType === "path_artifact") {
+      /*
+       * The snapshot is the page as it was published — title, summary, body —
+       * because that is what a reviewer is being asked about and the builder
+       * can edit or unpublish it the moment the report lands.
+       */
+      const [r] = await db.select().from(pathArtifacts).where(eq(pathArtifacts.id, targetId));
+      return r ? { text: trim([r.title, r.summary, r.body].filter(Boolean).join("\n\n")), ownerId: r.authorId, projectId: r.projectId }
+               : { text: null, ownerId: null, projectId: null };
+    }
     if (targetType === "project") {
       const [r] = await db.select().from(projects).where(eq(projects.id, targetId));
       return r ? { text: trim(`${r.title}\n\n${r.description}`), ownerId: r.ownerId, projectId: r.id }
@@ -942,11 +953,13 @@ export function registerModerationRoutes(app: Express) {
    * never arrive are exactly the ones about content reaching people who are
    * not here yet.
    *
-   * What it files is a report against the artifact's *published post*, not a
-   * new kind of target: the post is what the queue already knows how to
-   * remove, and hiding it takes the public page down with it
-   * (`publicArtifact` returns null once the post is hidden). So a reviewer
-   * needs no new button and there is one takedown path rather than two.
+   * What it files is a report against the artifact itself, now that a
+   * published page is a takedown target of its own. It used to be filed
+   * against the artifact's *published post*, on the reasoning that hiding the
+   * post took the page down with it — which was true only for artifacts that
+   * had a post. An artifact published without one, or whose post a reviewer
+   * had already restored, could not be reported at all and could not be taken
+   * down at all: the reader saw a page, and the queue saw nothing.
    *
    * Guards: only a genuinely public artifact can be reported, so this can't be
    * used to probe for private ones; the reason must be one of the listed
@@ -970,10 +983,13 @@ export function registerModerationRoutes(app: Express) {
       if (detail && !detailLabel) return res.status(400).json({ message: "Pick one of the options for that reason", code: "invalid_input", field: "detail" });
 
       /*
-       * The page's own visibility rules, repeated rather than imported:
-       * server/artifact-routes.ts imports this file, so reaching back into it
-       * for `publicArtifact` would be a cycle. Public artifact, public project,
-       * and a published post that has not already been taken down.
+       * The page's own visibility rules, from the same helper the page uses
+       * (server/visibility.ts). It has to be the helper and not a fourth copy
+       * of the conditions: this route answers "is there a page here?" to
+       * anybody on the internet, so a copy that drifted would either refuse
+       * reports on pages that are live or confirm the existence of ones that
+       * aren't. The builder's own choices — published, project not private —
+       * are still checked here, because they aren't moderation's business.
        */
       const [row] = await db.select({
         postId: pathArtifacts.publishedPostId,
@@ -987,9 +1003,9 @@ export function registerModerationRoutes(app: Express) {
       }).from(pathArtifacts)
         .innerJoin(projects, eq(projects.id, pathArtifacts.projectId))
         .leftJoin(feedPosts, eq(feedPosts.id, pathArtifacts.publishedPostId))
-        .where(eq(pathArtifacts.id, String(req.params.id)));
+        .where(and(eq(pathArtifacts.id, String(req.params.id)), publicArtifactVisible()));
 
-      if (!row || row.visibility !== "public" || row.projectPrivate || !row.postId || row.postHiddenAt) {
+      if (!row || row.visibility !== "public" || row.projectPrivate || row.postHiddenAt) {
         return res.status(404).json({ message: "This artifact isn't published." });
       }
 
@@ -997,7 +1013,7 @@ export function registerModerationRoutes(app: Express) {
       await db.insert(contentReports).values({
         reporterId: null,
         reporterAddressHash: addressHash,
-        targetType: "feed_post", targetId: row.postId,
+        targetType: "path_artifact", targetId: String(req.params.id),
         targetOwnerId: row.authorId, projectId: row.projectId,
         reason,
         note: [detailLabel, "Reported from the public artifact page by a reader with no account."].filter(Boolean).join(" — "),
@@ -1028,6 +1044,13 @@ export function registerModerationRoutes(app: Express) {
     feed_post: { table: feedPosts, author: feedPosts.authorId, authorField: "authorId" },
     feed_comment: { table: feedComments, author: feedComments.authorId, authorField: "authorId" },
     project: { table: projects, author: projects.ownerId, authorField: "ownerId" },
+    /*
+     * A published page. Its author is the person who finished the step, not
+     * the project owner, so `authorField` is `authorId` like a post's — but
+     * `publicArtifactVisible` also refuses a page whose project owner is
+     * suspended, because the page is published in the project's name.
+     */
+    path_artifact: { table: pathArtifacts, author: pathArtifacts.authorId, authorField: "authorId" },
   };
 
   app.get("/api/admin/reports", isAuthenticated, requireReviewer, async (req: any, res) => {

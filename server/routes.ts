@@ -9,6 +9,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage, isTaskOnTime } from "./storage";
 import { db } from "./db";
+import { notTakenDown } from "./visibility";
 import { users, projectMembers, projects, userProfiles, projectDataShapes, pathWork, projectDecisions, projectFiles, projectLinks, projectKanbanTasks, feedPosts, projectApplications, projectInvites } from "@shared/schema";
 import { setupAuth, isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { registerAuthRoutes } from "./replit_integrations/auth/routes";
@@ -6075,7 +6076,7 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       // The project's own update posts are its written record of progress.
       const updates = await db.select({ postType: feedPosts.postType, content: feedPosts.content, createdAt: feedPosts.createdAt })
         .from(feedPosts)
-        .where(and(eq(feedPosts.projectId, req.params.id), eq(feedPosts.isSystemGenerated, false), isNull(feedPosts.hiddenAt)))
+        .where(and(eq(feedPosts.projectId, req.params.id), eq(feedPosts.isSystemGenerated, false), notTakenDown.feedPost()))
         .orderBy(desc(feedPosts.createdAt))
         .limit(5);
       const activity = await storage.getProjectActivity(req.params.id, 30);

@@ -9,6 +9,7 @@
 import type { Express } from "express";
 import { storage } from "./storage";
 import { db } from "./db";
+import { publiclyVisible } from "./visibility";
 import { users, userProfiles, projects, projectMembers, feedPosts, feedReactions, feedComments, feedCommentReactions, userFollows, projectFollows, connections, companies, companyMembers } from "@shared/schema";
 import { eq, and, or, ilike, ne, desc, inArray, isNull, lt } from "drizzle-orm";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
@@ -669,7 +670,7 @@ export function registerFeedRoutes(app: Express) {
         .where(and(
           eq(feedPosts.companyId, found.company.id),
           isNull(feedPosts.deletedAt),
-          isNull(feedPosts.hiddenAt),
+          publiclyVisible.feedPost(),
           ...(before && !isNaN(before.getTime()) ? [lt(feedPosts.createdAt, before)] : []),
         ))
         .orderBy(desc(feedPosts.createdAt))
