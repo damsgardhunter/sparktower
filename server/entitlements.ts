@@ -6,7 +6,7 @@ import {
   type BooleanFeature, type Entitlements, type TierId,
 } from "@shared/plans";
 import { TEXT_MODEL, PRIORITY_TEXT_MODEL } from "./aiModels";
-import { enforceRateLimit, consumeRateLimit } from "./moderation";
+import { enforceRateLimit, consumeRateLimit , refuseWithRetry } from "./moderation";
 
 export interface UserEntitlements extends Entitlements {
   tier: TierId;
@@ -113,14 +113,24 @@ export async function requireCredits(
 
   if (ent.credits === Infinity) {
     if (sub.creditsUsed + amount > FAIR_USE_MONTHLY_CAP) {
-      res.status(429).json({
+      /*
+       * A month's ceiling, in the shape every other refusal has. The wait is
+       * until the month turns over, which is the honest answer even when it is
+       * a fortnight: a client that reads Retry-After should not be told to
+       * come back in a minute to the same wall.
+       */
+      const monthTurns = new Date();
+      monthTurns.setUTCMonth(monthTurns.getUTCMonth() + 1, 1);
+      monthTurns.setUTCHours(0, 0, 0, 0);
+      refuseWithRetry(res, {
+        action: "ai",
         message:
           `You've reached the fair-use limit of ${FAIR_USE_MONTHLY_CAP.toLocaleString()} AI actions ` +
           `this month. Get in touch and we'll sort it out.`,
+        retryAfterSeconds: Math.max(60, Math.round((monthTurns.getTime() - Date.now()) / 1000)),
+        // The phone routes this code to the pricing screen (mobile/src/components/SprintKit.tsx).
         code: "fair_use_limit",
-        creditsUsed: sub.creditsUsed,
-        fairUseCap: FAIR_USE_MONTHLY_CAP,
-        tier: ent.tier,
+        extra: { creditsUsed: sub.creditsUsed, fairUseCap: FAIR_USE_MONTHLY_CAP, tier: ent.tier },
       });
       return null;
     }
