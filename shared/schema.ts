@@ -1736,6 +1736,40 @@ export const novaBuildPasses = pgTable("nova_build_passes", {
   once: unique("nova_build_passes_user_project").on(table.userId, table.projectId),
 }));
 
+/**
+ * One run of "Nova builds the whole business" — the $30 outcome.
+ *
+ * Shaped like code_audit_runs, and for the same reason: the work happens
+ * outside the request that started it, so the only way anybody can see it is
+ * a row it keeps up to date. A run the server restarted through is stamped
+ * closed when the status is next read, because an unfinished row and a
+ * running build look identical from the outside otherwise.
+ *
+ * The pass (nova_build_passes) is the receipt and is permanent; this is the
+ * work, and there can be several — a build that stopped because the path grew
+ * is run again, and the pass means it costs nothing the second time.
+ */
+export const novaBuildRuns = pgTable("nova_build_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  startedById: varchar("started_by_id").notNull().references(() => users.id),
+  /** See BUILD_STAGES in shared/nova-build.ts. */
+  stage: text("stage", { enum: ["starting", "reading", "building", "finishing"] }).default("starting").notNull(),
+  /** Steps Nova has finished, and how many it set out to do. */
+  stepsDone: integer("steps_done").default(0).notNull(),
+  stepsTotal: integer("steps_total").default(0).notNull(),
+  /** Steps left open on purpose, because they are the builder's to answer. */
+  stepsForYou: integer("steps_for_you").default(0).notNull(),
+  /** What it is on right now, for the line under the progress bar. */
+  currentTitle: text("current_title"),
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  finishedAt: timestamp("finished_at"),
+  error: text("error"),
+}, (t) => [
+  index("nova_build_runs_project_idx").on(t.projectId, t.startedAt),
+]);
+export type NovaBuildRun = typeof novaBuildRuns.$inferSelect;
+
 export const activityEvents = pgTable("activity_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   /**

@@ -197,7 +197,8 @@ export type NovaActionId =
   | "novaPartnerAnswers" | "sprintReport"
   | "roadmapGeneration" | "roadmapUpdate" | "roadmapRebuild"
   | "documentPlan" | "documentFill" | "documentReplan" | "documentTighten"
-  | "codeAudit";
+  | "codeAudit"
+  | "buildMyBusiness";
 
 export const CHARGE_FOR: Record<NovaActionId, NovaChargeKind> = {
   // --- Nova at your elbow. The allowance, and the day pass. ---
@@ -254,6 +255,9 @@ export const CHARGE_FOR: Record<NovaActionId, NovaChargeKind> = {
   documentTighten: "free",
 
   codeAudit: "codeAudit",
+
+  /** The whole path, once, for one project. Everything on it is free afterwards. */
+  buildMyBusiness: "business",
 };
 
 /** What one action costs and how, ready to put in front of a person. */

@@ -17,6 +17,7 @@ import type { ProjectGoal } from "@shared/goals";
 import { Block, Blocks } from "@/components/section/block";
 import { useLivePath, useOpenMilestoneRequests, SyncDot } from "@/components/section/live";
 import { NextStep } from "@/components/section/next-step";
+import { NovaBuildsBusiness } from "@/components/section/nova-builds-business";
 import { ProgressStats, NovaRead } from "@/components/section/progress";
 import { CodebaseSync } from "@/components/section/codebase";
 import { RecentActivity } from "@/components/section/activity";
@@ -99,6 +100,9 @@ export function PathPanel({ projectId, goal, onNavigate, onStartSection, isPrima
     <Blocks className="" >
       <Block title="Next step" icon={Compass} testid="path-panel">
         <NextStep projectId={projectId} data={data} onNavigate={onNavigate} />
+
+        {/* Nova doing the whole path at once, and what it's doing while it does. */}
+        <NovaBuildsBusiness projectId={projectId} />
 
         {/* The fork: keep building, or go to users. Chosen, never drifted into. */}
         {data.offer && (

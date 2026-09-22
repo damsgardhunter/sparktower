@@ -365,6 +365,13 @@
       "when": 1790099681639,
       "tag": "0051_pay_per_use",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1790099741639,
+      "tag": "0052_nova_build_runs",
+      "breakpoints": true
     }
   ]
 }

@@ -93,6 +93,7 @@ import {
   PAY_ENDPOINTS,
 } from "@shared/plans";
 import { walletOf, buyDayPass, spend, recentLedger, hasBuildPass } from "./wallet";
+import { startBusinessBuild, buildInFlight, buildRunStatus } from "./nova-build";
 import { novaBuildPasses } from "@shared/schema";
 import {
   getUserEntitlements, requireFeature, requireLevel, requireCredits, paymentRequired,
@@ -6909,10 +6910,21 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       if (project.ownerId !== userId) return res.status(403).json({ message: "Only the project's owner can buy this." });
 
       if (await hasBuildPass(userId, projectId)) {
-        return res.status(409).json({
-          message: "Nova is already building this one out — you've paid for it.",
-          code: "already_bought", projectId,
-        });
+        /*
+         * Already paid for. Not an error to be shown as one: a build that was
+         * interrupted — a restart, a step that threw — has to be startable
+         * again, and the pass is the receipt that makes the second run free.
+         * Refusing outright would leave someone who paid $30 with a half-built
+         * path and no button.
+         */
+        if (await buildInFlight(projectId)) {
+          return res.status(409).json({
+            message: "Nova is building this one right now.",
+            code: "build_running", projectId,
+          });
+        }
+        startBusinessBuild(projectId, userId);
+        return res.status(200).json({ projectId, paidCents: 0, started: true, alreadyPaid: true, wallet: await walletOf(userId) });
       }
 
       const cents = OUTCOME_PRICE_CENTS.business;
@@ -6932,10 +6944,33 @@ Respond ONLY with valid JSON (no markdown, no code fences):
         await refund(userId, cents, { outcome: "business", projectId, note: "Refunded — the build pass couldn't be recorded" });
         throw err;
       }
-      res.status(201).json({ projectId, paidCents: cents, wallet: await walletOf(userId) });
+      /*
+       * Paid, so the build starts now — and is not awaited. It is forty model
+       * calls; a purchase request that hangs for four minutes is a purchase
+       * people abandon and then dispute. They watch the run instead
+       * (GET /api/projects/:id/nova-build).
+       */
+      startBusinessBuild(projectId, userId);
+      res.status(201).json({ projectId, paidCents: cents, started: true, wallet: await walletOf(userId) });
     } catch (error) {
       console.error("Build-my-business error:", error);
       res.status(500).json({ message: "Couldn't start that build." });
+    }
+  });
+
+  /**
+   * Where a build has got to. Cheap enough to poll every few seconds, and it
+   * is the only place the work is visible — the build outlives the request
+   * that started it and any tab that was open at the time.
+   */
+  app.get("/api/projects/:id/nova-build", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      res.json(await buildRunStatus(req.params.id, userId));
+    } catch (error) {
+      console.error("Nova build status error:", error);
+      res.status(500).json({ message: "Couldn't read the build status." });
     }
   });
 

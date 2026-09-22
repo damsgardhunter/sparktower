@@ -265,18 +265,44 @@ describe("a priced outcome", () => {
     const bought = await b.agent.post("/api/nova/build-my-business").send({ projectId: b.projectId });
     expect(bought.status, JSON.stringify(bought.body)).toBe(201);
     expect(bought.body.wallet.balanceCents).toBe(0);
+    expect(bought.body.started, "paying starts the build").toBe(true);
 
-    // Buying it twice is a mistake, not a second charge.
+    /*
+     * Pressing it again is never a second charge. While the build is running
+     * it is refused as already running; once it has stopped it starts again
+     * for nothing, because the pass is the receipt and a build interrupted by
+     * a restart must not leave somebody who paid $30 with half a path and no
+     * button.
+     */
+    await settled(b);
     const again = await b.agent.post("/api/nova/build-my-business").send({ projectId: b.projectId });
-    expect(again.status).toBe(409);
-    expect(again.body.code).toBe("already_bought");
+    expect(again.status, JSON.stringify(again.body)).toBe(200);
+    expect(again.body.alreadyPaid).toBe(true);
+    expect(again.body.paidCents).toBe(0);
     expect(await balanceOf(b.userId)).toBe(0);
+    await settled(b);
 
     // With nothing left on the balance, a roadmap on that project still runs.
     const roadmap = await b.agent.post(`/api/projects/${b.projectId}/roadmap/generate`).send({ goal: "Launch by spring" });
     expect(roadmap.status, JSON.stringify(roadmap.body)).not.toBe(402);
   });
 });
+
+/**
+ * Wait for the background build to stop.
+ *
+ * The purchase route starts it and does not await it — which is the point, a
+ * checkout must not hang for minutes — so a test that then asserts on the run
+ * has to wait for it the same way the page does.
+ */
+async function settled(b: { agent: any; projectId: string }) {
+  for (let i = 0; i < 100; i++) {
+    const status = await b.agent.get(`/api/projects/${b.projectId}/nova-build`);
+    if (!status.body?.running) return status.body;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error("the build never finished");
+}
 
 describe("topping up", () => {
   it("credits the balance once, however many times Stripe delivers the same session", async () => {
