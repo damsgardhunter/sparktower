@@ -22,7 +22,7 @@ const SCORE_CONFIG = [
     icon: Zap,
     color: "text-amber-500",
     bgColor: "bg-amber-500",
-    tooltip: "Based on milestones completed, deadlines met, sprint consistency, and project completion rate",
+    tooltip: "Milestones and tasks you have actually finished, whether they landed by their date, how many weeks running you have shipped something, and how far your projects have got.",
   },
   {
     key: "contributionScore" as const,
@@ -30,7 +30,7 @@ const SCORE_CONFIG = [
     icon: Users,
     color: "text-blue-500",
     bgColor: "bg-blue-500",
-    tooltip: "Based on projects involved in, tasks completed, projects followed, and solo build completions",
+    tooltip: "Work you have finished on other people's projects, how many of them, feedback you have given and whether people found it useful, and the updates you post about your own.",
   },
   {
     key: "marketSignalScore" as const,
@@ -38,15 +38,15 @@ const SCORE_CONFIG = [
     icon: TrendingUp,
     color: "text-emerald-500",
     bgColor: "bg-emerald-500",
-    tooltip: "Based on donations received, project applications, build log engagement, and external traction",
+    tooltip: "Money pledged to your projects, the people backing and following them, and traction you can point at outside the platform.",
   },
   {
     key: "strategicThinkingScore" as const,
-    label: "Strategic Thinking",
+    label: "Strategy",
     icon: Brain,
     color: "text-purple-500",
     bgColor: "bg-purple-500",
-    tooltip: "Based on contest wins and AI evaluation of project strategies",
+    tooltip: "How your companies do in the market simulation, and Nova's weekly read of the decisions you are making. Contests count too.",
   },
 ];
 
@@ -56,6 +56,24 @@ function getIndexTier(score: number): { label: string; color: string } {
   if (score >= 40) return { label: "Rising", color: "text-blue-400 border-blue-400" };
   if (score >= 20) return { label: "Emerging", color: "text-emerald-400 border-emerald-400" };
   return { label: "New Builder", color: "text-muted-foreground border-muted-foreground" };
+}
+
+/** "3rd", for a finishing position. */
+function ordinal(n: number): string {
+  const rest = n % 100;
+  if (rest >= 11 && rest <= 13) return `${n}th`;
+  return `${n}${["th", "st", "nd", "rd"][n % 10] ?? "th"}`;
+}
+
+/** Roughly how long ago, which is all this line needs to say. */
+function timeAgo(at: string | Date): string {
+  const mins = Math.max(0, Math.round((Date.now() - new Date(at).getTime()) / 60_000));
+  if (mins < 2) return "just now";
+  if (mins < 60) return `${mins} minutes ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return hours === 1 ? "an hour ago" : `${hours} hours ago`;
+  const days = Math.round(hours / 24);
+  return days === 1 ? "yesterday" : `${days} days ago`;
 }
 
 export function ReputationCard({ userId, isOwnProfile }: ReputationCardProps) {
@@ -78,7 +96,7 @@ export function ReputationCard({ userId, isOwnProfile }: ReputationCardProps) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/reputation", userId] });
       queryClient.invalidateQueries({ queryKey: ["/api/leaderboard/reputation"] });
-      toast({ title: "Reputation Updated", description: "Your Builder Index has been recalculated" });
+      toast({ title: "Up to date", description: "Your Builder Index has been worked out again." });
     },
     onError: (error: any) => {
       toast({ title: "Calculation Failed", description: errorText(error, "Could not calculate reputation"), variant: "destructive" });
@@ -97,6 +115,7 @@ export function ReputationCard({ userId, isOwnProfile }: ReputationCardProps) {
 
   const builderIndex = reputation?.builderIndex ?? 0;
   const tier = getIndexTier(builderIndex);
+  const strategy = (reputation?.details?.strategy ?? {}) as any;
 
   return (
     <Card data-testid="reputation-card">
@@ -106,20 +125,28 @@ export function ReputationCard({ userId, isOwnProfile }: ReputationCardProps) {
             <Trophy className="h-5 w-5 text-primary" />
             Builder Reputation Index
           </CardTitle>
+          {/*
+            * No "Recalculate" any more: the index is rebuilt on the hour for
+            * everybody, so a button that asked people to keep their own score
+            * current was asking them to do the server's job — and until they
+            * did, their profile, the leaderboard and co-founder matching all
+            * read a number that had quietly stopped being true. What's left is
+            * a nudge for "I just finished something", and it costs nothing.
+            */}
           {isOwnProfile && (
             <Button
-              size="sm"
-              variant="outline"
+              size="icon"
+              variant="ghost"
+              className="h-7 w-7"
+              title="Bring it up to date now"
+              aria-label="Bring it up to date now"
               onClick={() => calculateMutation.mutate()}
               disabled={calculateMutation.isPending}
               data-testid="btn-calculate-reputation"
             >
-              {calculateMutation.isPending ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
-              ) : (
-                <RefreshCw className="h-3.5 w-3.5 mr-1" />
-              )}
-              {calculateMutation.isPending ? "Calculating..." : "Recalculate"}
+              {calculateMutation.isPending
+                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                : <RefreshCw className="h-3.5 w-3.5" />}
             </Button>
           )}
         </div>
@@ -166,30 +193,32 @@ export function ReputationCard({ userId, isOwnProfile }: ReputationCardProps) {
           </div>
         </TooltipProvider>
 
-        {reputation?.details && (
-          <div className="pt-2 border-t">
-            <p className="text-xs text-muted-foreground">
-              {reputation.lastCalculatedAt
-                ? `Last updated: ${new Date(reputation.lastCalculatedAt).toLocaleDateString()}`
-                : "Not yet calculated"}
-            </p>
+        {/* What the simulation and Nova made of them, under the pillar they feed. */}
+        {(strategy?.seasonsPlayed > 0 || strategy?.aiSummary) && (
+          <div className="rounded-lg border border-border/60 p-3 space-y-1.5" data-testid="strategy-detail">
+            {strategy?.seasonsPlayed > 0 && (
+              <p className="text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">Simulation:</span>{" "}
+                {strategy.seasonsPlayed} season{strategy.seasonsPlayed === 1 ? "" : "s"} played
+                {typeof strategy.bestFinish === "number" && `, best finish ${ordinal(strategy.bestFinish)}`}
+                {typeof strategy.simScore === "number" && ` · ${strategy.simScore}/100`}
+              </p>
+            )}
+            {strategy?.aiSummary && (
+              <p className="text-xs text-muted-foreground" data-testid="text-ai-summary">
+                <span className="font-medium text-foreground">Nova:</span> {strategy.aiSummary}
+              </p>
+            )}
           </div>
         )}
 
-        {!reputation?.builderIndex && isOwnProfile && (
-          <div className="text-center py-2">
-            <p className="text-sm text-muted-foreground mb-2">Calculate your Builder Reputation Index to see your scores</p>
-            <Button
-              size="sm"
-              onClick={() => calculateMutation.mutate()}
-              disabled={calculateMutation.isPending}
-              data-testid="btn-calculate-first"
-            >
-              {calculateMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Zap className="h-3.5 w-3.5 mr-1" />}
-              Calculate Now (1 credit)
-            </Button>
-          </div>
-        )}
+        <div className="pt-2 border-t">
+          <p className="text-xs text-muted-foreground" data-testid="text-last-calculated">
+            {reputation?.lastCalculatedAt
+              ? `Updated ${timeAgo(reputation.lastCalculatedAt)} · rebuilt every hour`
+              : "Worked out on the hour — nothing to show yet"}
+          </p>
+        </div>
       </CardContent>
     </Card>
   );

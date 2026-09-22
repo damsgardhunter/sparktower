@@ -54,3 +54,5 @@ packages/*/*.vsix
 # shared configuration and has been one `git add -A` away from the repository
 # for months.
 .vscode/
+# Vite's dependency pre-bundle, per checkout (see cacheDir in vite.config.ts).
+.vite-cache/
