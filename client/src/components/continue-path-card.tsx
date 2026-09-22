@@ -20,26 +20,14 @@ import { MAX_ASKS } from "@shared/feedback-loop";
 import { ArrowRight, ChevronDown, Compass, EyeOff, Globe, Loader2, Share2, Sparkles, User } from "lucide-react";
 import { ARTIFACT_MAX_TAGS, ARTIFACT_TITLE_MAX, artifactPath } from "@shared/path-artifacts";
 import { InviteCollaboratorDialog } from "@/components/invite-collaborator-dialog";
+import { ACTOR_SHORT, NEXT_STEP_COPY, type NextStepItem } from "@shared/next-step";
 
-export interface NextStepItem {
-  project: { id: string; title: string; logoUrl: string | null };
-  phase: string;
-  progress: { done: number; total: number };
-  next: { id: string; title: string; actor: string; estimateMinutes: number | null; step: string | null } | null;
-  daysSinceActivity: number;
-  projectedAt: string | null;
-  lastDone: { taskId: string; title: string; completedAt: string; sharedPostId: string | null } | null;
-  weekly?: { due: boolean; steps: { taskId: string; title: string; completedAt: string }[] };
-  /** The section this item is for — one item per started section. Absent from an older server. */
-  track?: { goal: string; label: string; short: string; primary: boolean };
-}
-
-const ACTOR_SHORT: Record<string, string> = {
-  "nova-builds": "Nova builds it",
-  "nova-drafts": "Nova drafts it",
-  "user-decides": "You choose",
-  "user-does": "Only you",
-};
+/*
+ * The shape and the shared wording come from @shared/next-step, which the
+ * server builds and the phone renders too. This file used to declare its own
+ * copy of both, and they had drifted from the server's.
+ */
+export type { NextStepItem } from "@shared/next-step";
 
 const estimate = (m: number | null) => (m == null ? null : m < 60 ? `${m}m` : `${Math.round(m / 60)}h`);
 
@@ -315,6 +303,58 @@ export function WeeklyUpdateDialog({ projectId, projectTitle, steps, open, onClo
  * because two renderings of "what should I do next" would disagree within a
  * week — and this is the sentence the whole retention loop turns on.
  */
+/**
+ * A project with no path, and the way to give it one.
+ *
+ * This is the state the home card used to skip in silence, which left the
+ * newest project — the one somebody had just made — missing from the only
+ * screen that answers "what now". Starting a section builds the tree;
+ * adopting reads the work that is already there and marks what is finished,
+ * which is why the two say different things before you press them.
+ */
+function StartPath({ item, idSuffix }: { item: NextStepItem; idSuffix: string }) {
+  const { toast } = useToast();
+  const needs = item.needsPath!;
+  const start = useMutation({
+    mutationFn: async () => {
+      if (needs.kind === "start") {
+        await apiRequest("POST", `/api/projects/${item.project.id}/tracks`, { goal: item.track.goal });
+      }
+      /*
+       * Adoption follows in both cases: starting a section builds the tree,
+       * and a project that predates paths has work to read. It is idempotent,
+       * so running it on a tree that needs nothing is a no-op.
+       */
+      await apiRequest("POST", `/api/projects/${item.project.id}/path/adopt?goal=${item.track.goal}`, {});
+    },
+    onSuccess: () => refreshNextSteps(item.project.id),
+    onError: (error) => toast({
+      title: NEXT_STEP_COPY.failed,
+      description: errorText(error, ""),
+      variant: "destructive",
+    }),
+  });
+
+  return (
+    <div className="space-y-1.5" data-testid={`continue-path-needs-${idSuffix}`}>
+      <p className="font-medium">{needs.kind === "adopt" ? NEXT_STEP_COPY.adoptTitle : NEXT_STEP_COPY.startTitle}</p>
+      <p className="text-[11px] text-muted-foreground">
+        {needs.kind === "adopt" ? NEXT_STEP_COPY.adoptBody(needs.existingDone, needs.existingTasks) : NEXT_STEP_COPY.startBody}
+      </p>
+      <Button
+        size="sm"
+        className="h-7 gap-1"
+        onClick={() => start.mutate()}
+        disabled={start.isPending}
+        data-testid={`button-start-path-${idSuffix}`}
+      >
+        {start.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+        {needs.kind === "adopt" ? NEXT_STEP_COPY.adoptAction : NEXT_STEP_COPY.startAction}
+      </Button>
+    </div>
+  );
+}
+
 export function NextStepRow({ item, onShare, onWeekly }: {
   item: NextStepItem;
   onShare: (item: NextStepItem) => void;
@@ -349,10 +389,12 @@ export function NextStepRow({ item, onShare, onWeekly }: {
           {novaActs ? <Sparkles className="h-3.5 w-3.5 text-primary shrink-0" /> : <User className="h-3.5 w-3.5 shrink-0" />}
           <span className="text-muted-foreground">Next:</span>
           <span className="font-medium">{item.next.step ?? item.next.title}</span>
-          <span className="text-[11px] text-muted-foreground">· {ACTOR_SHORT[item.next.actor] ?? item.next.actor}{estimate(item.next.estimateMinutes) ? ` · ${estimate(item.next.estimateMinutes)}` : ""}</span>
+          <span className="text-[11px] text-muted-foreground">· {ACTOR_SHORT[item.next.actor as keyof typeof ACTOR_SHORT] ?? item.next.actor}{estimate(item.next.estimateMinutes) ? ` · ${estimate(item.next.estimateMinutes)}` : ""}</span>
         </p>
+      ) : item.needsPath ? (
+        <StartPath item={item} idSuffix={idSuffix} />
       ) : (
-        <p className="text-muted-foreground">Main line done — pick what's next.</p>
+        <p className="text-muted-foreground">{NEXT_STEP_COPY.mainLineDone}</p>
       )}
       {/* Several steps this week: the weekly update. One: share that step. */}
       {item.weekly?.due && item.weekly.steps.length > 1 && (
