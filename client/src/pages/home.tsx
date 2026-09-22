@@ -2,6 +2,7 @@ import { PinnedBadges } from "@/components/pinned-badges";
 import { useQuery } from "@tanstack/react-query";
 import { PrivateBadge } from "@/components/private-badge";
 import { FounderFeed } from "@/components/founder-feed";
+import { ContinuePathCard } from "@/components/continue-path-card";
 import { useSurfaces } from "@/hooks/use-surfaces";
 import { ProfileRailCard } from "@/components/profile-rail-card";
 import { MyProjectsCard } from "@/components/my-projects-card";
@@ -9,7 +10,7 @@ import { RailCard, RailHeader, RailDivider } from "@/components/rail-card";
 import { UserAvatar } from "@/components/user-avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { Eye, Plus, Trophy, UserPlus, Sparkles } from "lucide-react";
+import { Eye, Plus, Trophy, UserPlus, Sparkles, Users2 } from "lucide-react";
 import { Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import type { Project, UserProfile, User, UserMatch } from "@shared/schema";
@@ -77,7 +78,7 @@ export default function Home() {
                   {firstName ? `Welcome back, ${firstName}` : "Welcome back"}
                 </h1>
                 <p className="text-xs text-muted-foreground truncate">
-                  Here's what people are building today.
+                  Pick up where you left off.
                 </p>
               </div>
               <Button
@@ -94,6 +95,21 @@ export default function Home() {
               </Button>
             </div>
 
+            {/*
+              * The path first, then everybody else's.
+              *
+              * This screen used to open on the feed with the paths folded into
+              * a dropdown below "Create" — so somebody with a project in
+              * flight was shown other people's work and left to go looking for
+              * their own. The product's loop is come back, take the next step;
+              * the page now opens on it, and the feed is what you read after.
+              */}
+            <ContinuePathCard lead />
+
+            <div className="flex items-center gap-2 px-0.5 pt-1" data-testid="home-feed-heading">
+              <Users2 className="h-4 w-4 text-muted-foreground" />
+              <h2 className="text-[15px] font-semibold">What people are building</h2>
+            </div>
             <FounderFeed />
           </div>
 

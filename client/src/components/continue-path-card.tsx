@@ -17,7 +17,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { errorText } from "@/lib/api-error";
 import { MAX_ASKS } from "@shared/feedback-loop";
-import { ArrowRight, ChevronDown, Compass, EyeOff, Globe, Loader2, Share2, Sparkles, User } from "lucide-react";
+import { ArrowRight, ChevronDown, Compass, EyeOff, Globe, Loader2, Plus, Share2, Sparkles, User } from "lucide-react";
 import { ARTIFACT_MAX_TAGS, ARTIFACT_TITLE_MAX, artifactPath } from "@shared/path-artifacts";
 import { InviteCollaboratorDialog } from "@/components/invite-collaborator-dialog";
 import { ACTOR_SHORT, NEXT_STEP_COPY, type NextStepItem } from "@shared/next-step";
@@ -411,17 +411,57 @@ export function NextStepRow({ item, onShare, onWeekly }: {
   );
 }
 
-export function ContinuePathCard() {
-  const { data } = useQuery<{ items: NextStepItem[] }>({ queryKey: ["/api/me/next-steps"] });
+/**
+ * "Continue your path", in two shapes.
+ *
+ * `lead` is the home screen: the path is the first thing on the page, open,
+ * with the project being worked on at the top of it. It used to be a closed
+ * dropdown under "Create", which put the product's own loop — come back, take
+ * the next step — one click behind a button for starting something else. A
+ * builder with a project in flight was shown a feed of other people's work and
+ * asked to go looking for their own.
+ *
+ * Without `lead` it is the old toggle, for anywhere the path is a secondary
+ * thing on the page.
+ */
+export function ContinuePathCard({ lead = false }: { lead?: boolean }) {
+  const { data, isLoading } = useQuery<{ items: NextStepItem[] }>({ queryKey: ["/api/me/next-steps"] });
   const [sharing, setSharing] = useState<NextStepItem | null>(null);
   const [weekly, setWeekly] = useState<NextStepItem | null>(null);
-  // Closed until asked for: the home screen leads with Create Project, and the paths are one click away.
-  const [open, setOpen] = useState(false);
+  // Closed until asked for, unless it is what the page is for.
+  const [open, setOpen] = useState(lead);
   const items = data?.items ?? [];
-  if (!items.length) return null;
+
+  if (!items.length) {
+    /*
+     * On the home screen an empty path still says something — there is no
+     * project yet, or every path is finished — and both answers are the same
+     * one. Elsewhere it stays out of the way.
+     */
+    if (!lead || isLoading) return null;
+    return (
+      <Card className="rounded-lg border-primary/30 bg-background dark:bg-card" data-testid="continue-path-empty">
+        <CardContent className="p-5 text-center space-y-2">
+          <p className="font-medium">{NEXT_STEP_COPY.nothingWaiting}</p>
+          <p className="text-sm text-muted-foreground">{NEXT_STEP_COPY.startBody}</p>
+          <Button asChild size="sm" data-testid="button-path-empty-new-project">
+            <Link href="/projects/new"><Plus className="h-4 w-4 mr-1" /> Start a project</Link>
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <>
+      {lead ? (
+        <div className="flex items-center gap-2 px-0.5" data-testid="continue-path-heading">
+          <Compass className="h-4 w-4 text-primary" />
+          <h2 className="text-[15px] font-semibold">Continue your path</h2>
+          <span className="rounded-full bg-primary/10 text-primary px-2 py-px text-[11px] font-medium" data-testid="continue-path-count">{items.length}</span>
+          <Link href="/path" className="ml-auto text-xs text-primary hover:underline" data-testid="link-path-home">All of them</Link>
+        </div>
+      ) : (
       <Button
         variant="outline"
         className="w-full h-11 gap-2 text-[15px] font-semibold border-primary/30 bg-background dark:bg-card"
@@ -435,6 +475,7 @@ export function ContinuePathCard() {
         <span className="rounded-full bg-primary/10 text-primary px-2 py-px text-[11px] font-medium" data-testid="continue-path-count">{items.length}</span>
         <ChevronDown className={`h-4 w-4 ml-auto transition-transform ${open ? "rotate-180" : ""}`} />
       </Button>
+      )}
       {open && (
       <Card id="continue-path-list" className="rounded-lg shadow-none border-primary/30 bg-background dark:bg-card" data-testid="continue-path-card">
         <CardContent className="p-0 text-[13px]">

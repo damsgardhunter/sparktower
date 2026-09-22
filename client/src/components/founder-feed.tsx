@@ -6,7 +6,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { FeedComposer } from "@/components/feed-composer";
 import { FeedbackUsedCard } from "@/components/feedback-inbox";
-import { ContinuePathCard } from "@/components/continue-path-card";
 import { DiscoverNewsLink } from "@/components/discover-news";
 import { useSurfaces } from "@/hooks/use-surfaces";
 import { PromotionCard } from "@/components/promotion-card";
@@ -98,8 +97,10 @@ export function FounderFeed({ projectId }: { projectId?: string }) {
 
   return (
     <div className="space-y-2">
-      {/* Your paths first; what's new on Discover after them, and only while Discover is on. */}
-      {!projectId && <ContinuePathCard />}
+      {/*
+        * The path is not here any more: on the home screen it leads the page
+        * (client/src/pages/home.tsx), above the feed rather than inside it.
+        */}
       {!projectId && surfaceOn("discover") && <DiscoverNewsLink />}
       {!projectId && <FeedbackUsedCard />}
       <FeedComposer defaultProjectId={projectId} />
