@@ -164,8 +164,12 @@ describe("every AI route, with a model that fails", () => {
 const UNBILLED_FALLBACKS = [
   // The storyboard falls back to generic scenes; only Nova's scenes are billed (server/routes.ts).
   "POST /api/projects/:id/generate-video",
-  // Reputation is computed from the person's own activity; the model only adds colour.
-  "POST /api/reputation/calculate",
+  /*
+   * Reputation used to be here: the route asked Nova for the strategic pillar
+   * and answered anyway when the model said nothing. It no longer reaches a
+   * model at all — the weekly job does that (server/reputation-jobs.ts) — so
+   * it is not an unbilled fallback, it is an ordinary route.
+   */
 ];
 
 /** Routes the sweep drives all the way to the model; raise it when fixtures reach more, never lower it. */
