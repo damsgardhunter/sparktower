@@ -58,6 +58,9 @@ export interface LeverField {
 export interface UnitPrices {
   build: number;
   lease: number;
+  shift?: number;
+  stock?: number;
+  automation?: number;
   featureBuild?: number;
   featureCopy?: number;
   research?: number;
@@ -98,6 +101,8 @@ export interface DraftPreview {
 
 /** The subset of Company the desk sends. Mirrors Company in shared/simulation/types.ts. */
 export interface DeskCompany {
+  /** How automated the plant is, 0–100: what a point of automation is charged against. */
+  automation?: number;
   cash: number;
   debt: number;
   creditLimit: number;
@@ -495,7 +500,17 @@ export function commitment(input: {
      * it is used.
      */
     { role: "coo", spend: num(coo.supportSpend) + num(coo.efficiencySpend) + num(coo.recruitingSpend) + num(coo.trainingSpend)
-      + (coo.programme ? num(prices?.programme) : 0) + (coo.expand ? num(prices?.expansion) : 0) + (prices && decisions.coo
+      + (coo.programme ? num(prices?.programme) : 0) + (coo.expand ? num(prices?.expansion) : 0)
+      /*
+       * The plant: automating it, a second shift on it, stock for next year.
+       * Mirrors plantSpend() in shared/simulation/levers.ts.
+       */
+      + (prices?.automation !== undefined
+        ? Math.max(0, num(coo.automationTarget ?? (company as any).automation) - num((company as any).automation)) * num((company as any).capacity) * num(prices.automation)
+          + Math.max(0, Math.min(num((company as any).capacity) * 0.5, num(coo.shiftCapacity))) * num(prices.shift)
+          + Math.max(0, num(coo.stockTarget)) * num(prices.stock)
+        : 0)
+      + (prices && decisions.coo
       ? Math.max(0, num(coo.capacityTarget ?? (company as any).capacity) - num((company as any).capacity)) * prices.build
         + Math.max(0, num(coo.leaseCapacity)) * prices.lease
       : 0) },

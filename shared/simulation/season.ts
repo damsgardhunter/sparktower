@@ -197,14 +197,23 @@ export function startingCompany(input: {
     assets: [],
     seats,
     /*
-     * One city to begin with, and the cheapest one.
+     * One region to begin with: the cheapest that is still somewhere.
      *
      * Starting everywhere would remove the most interesting early decision in
      * the game — go deep somewhere small, or spend what little you have buying
      * reach you cannot yet serve. Starting nowhere would be a puzzle rather
      * than a company.
+     *
+     * "Cheapest" alone was that home while every market had six regions and
+     * the cheapest held a tenth of it. With a long tail of small, cheap places
+     * it became a region worth a fiftieth of the market: a company nobody
+     * could find, in a game where being found is the first problem. So the
+     * home is the cheapest region that is still a real place to sell.
      */
-    cities: [[...niche.cities].sort((a, b) => a.entryCost - b.entryCost)[0]?.id].filter(Boolean) as string[],
+    cities: [(
+      [...niche.cities].sort((a, b) => a.entryCost - b.entryCost).find((c) => c.weight >= 0.08)
+      ?? [...niche.cities].sort((a, b) => b.weight - a.weight)[0]
+    )?.id].filter(Boolean) as string[],
     founderShare: 1,
   };
 }

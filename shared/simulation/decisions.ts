@@ -64,6 +64,10 @@ export interface MarketingDecision {
   winbackSpend?: number;
   /** A research report: next year's expectations, or what the incumbents will charge. From year six. */
   research?: "none" | "expectations" | "rivals";
+  /** How the year's marketing attention is split across the regions you sell in. From year seven. */
+  regionFocus?: Record<string, number>;
+  /** And across the segments you sell to. From year eight. */
+  segmentFocus?: Record<string, number>;
   /** A vote on each deal the chief executive sent to the table. From year five. */
   dealVotes?: Record<string, "yes" | "no">;
 }
@@ -102,6 +106,14 @@ export interface FinanceDecision {
   insurance?: "none" | "breach" | "lawsuit" | "poaching" | "all";
   /** Share of profit paid out, 0–100. From year six. */
   dividendPct?: number;
+  /** Days customers get to pay: 0, 30, 60 or 90. From year seven. */
+  terms?: number;
+  /** Share of what customers owe, sold to a factor for cash now, 0–100. From year eight. */
+  factorPct?: number;
+  /** Credit-line debt to move onto fixed terms this year. From year eight. */
+  refinance?: number;
+  /** Cash spent buying a stake back from investors. From year nine. */
+  buyback?: number;
   /** A vote on each deal the chief executive sent to the table. From year five. */
   dealVotes?: Record<string, "yes" | "no">;
 }
@@ -157,6 +169,14 @@ export interface OpsDecision {
   programme?: "" | "process" | "vendor" | "quality" | "green" | "benchmarking";
   /** Open the region announced for next year: its city id, or "". From year five. */
   expand?: string;
+  /** How automated the plant should be next year, 0–100. From year seven. */
+  automationTarget?: number;
+  /** Units of a second shift to run this year, capped at half the room built. From year seven. */
+  shiftCapacity?: number;
+  /** Units of stock to hold for next year. From year eight. */
+  stockTarget?: number;
+  /** Do the work in house, or buy it in. From year eight. */
+  sourcing?: "in_house" | "outsourced";
   /** A vote on each deal the chief executive sent to the table. From year five. */
   dealVotes?: Record<string, "yes" | "no">;
 }
@@ -384,6 +404,8 @@ export function sanitiseDecisions(d: TeamDecisions): TeamDecisions {
     promo: d.cmo.promo === "free_month" || d.cmo.promo === "january" ? d.cmo.promo : "none",
     winbackSpend: Math.max(0, clean(d.cmo.winbackSpend)),
     research: d.cmo.research === "expectations" || d.cmo.research === "rivals" ? d.cmo.research : "none",
+    regionFocus: cleanNumbers(d.cmo.regionFocus, 0, 100),
+    segmentFocus: cleanNumbers(d.cmo.segmentFocus, 0, 100),
     dealVotes: cleanVotes(d.cmo.dealVotes),
   };
 
@@ -411,6 +433,10 @@ export function sanitiseDecisions(d: TeamDecisions): TeamDecisions {
     trainingSpend: Math.max(0, clean(d.coo.trainingSpend)),
     programme: (["process", "vendor", "quality", "green", "benchmarking"] as const).includes(d.coo.programme as any) ? d.coo.programme : "",
     expand: typeof d.coo.expand === "string" ? d.coo.expand.slice(0, 64) : "",
+    automationTarget: d.coo.automationTarget === undefined ? undefined : Math.max(0, Math.min(100, clean(d.coo.automationTarget))),
+    shiftCapacity: Math.max(0, Math.round(clean(d.coo.shiftCapacity))),
+    stockTarget: Math.max(0, Math.round(clean(d.coo.stockTarget))),
+    sourcing: d.coo.sourcing === "outsourced" ? "outsourced" : "in_house",
     dealVotes: cleanVotes(d.coo.dealVotes),
   };
 
@@ -427,6 +453,10 @@ export function sanitiseDecisions(d: TeamDecisions): TeamDecisions {
     costReview: Math.max(0, Math.min(20, clean(d.cfo.costReview))),
     insurance: (["breach", "lawsuit", "poaching", "all"] as const).includes(d.cfo.insurance as any) ? d.cfo.insurance : "none",
     dividendPct: Math.max(0, Math.min(100, clean(d.cfo.dividendPct))),
+    terms: d.cfo.terms === undefined || (d.cfo.terms as unknown) === "" ? undefined : Math.max(0, Math.min(90, Math.round(clean(d.cfo.terms, 30)))),
+    factorPct: Math.max(0, Math.min(100, clean(d.cfo.factorPct))),
+    refinance: Math.max(0, clean(d.cfo.refinance)),
+    buyback: Math.max(0, clean(d.cfo.buyback)),
     dealVotes: cleanVotes(d.cfo.dealVotes),
   };
 

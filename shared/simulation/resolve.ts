@@ -43,6 +43,8 @@ import {
   referralBrand, securityNext, swingOf,
 } from "./product";
 import { rng } from "./random";
+import { automationCost, automationEffect, automationNext, shiftCapacity, sourcingOf, stockCost } from "./factory";
+import { REFINANCE_TERM_YEARS, buyback, factoring, refinance, termsOf } from "./treasury";
 import {
   DEAL_YEARS, EXPANSION_DISCOUNT, PAYOUT, PATIENT_INVESTORS, PREMIUM, PROGRAMMES, announcedRegion, answerShock, covers,
   dealOutcome, dealsFor, dividend, firstYearReach, lawsuitOf, programmeCost, programmeYield, promoOf, researchCost,
@@ -509,11 +511,27 @@ export function resolveYear(
     }
 
     /*
+     * The plant itself (see `factory.ts`): how automated it is, where the work
+     * is done, and the stock bought last year that arrives to serve people
+     * this year's room could not.
+     */
+    const automation = automationNext(company.automation, d.coo?.automationTarget);
+    const auto = automationEffect(automation.now);
+    const sourcing = sourcingOf(d.coo?.sourcing);
+    const stockHeld = Math.max(0, Math.round(company.stock ?? 0));
+    if (automation.building > 0) {
+      notesFor[company.id].push(`The plant is being automated to ${Math.round(automation.next)}. It runs that way from next year: cheaper to make each one, dearer to build more, and slower to change what it makes.`);
+    }
+    if (stockHeld > 0) {
+      notesFor[company.id].push(`${stockHeld.toLocaleString()} ${niche.voice.capacityShort} of stock held from last year served people the room alone would have turned away.`);
+    }
+    /*
      * Quality is felt a year after it is built. This year's shipping goes into
      * the pipeline; what arrives now is last year's shipping and research that
      * started two years ago. See `lag.ts`.
      */
-    const shipped = (lift((d.cto?.featureSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 1.2, 200_000, 14) * niche.innovationPace * focus.quality) * drag.product * eff.cto * pay.output;
+    // An automated line is a line set up for what it already makes: product work buys less.
+    const shipped = (lift((d.cto?.featureSpend ?? 0) + (d.cto?.reliabilitySpend ?? 0) * 1.2, 200_000, 14) * niche.innovationPace * focus.quality) * drag.product * eff.cto * pay.output * auto.product;
     /*
      * The pace again: shipping swings the year's result either way, and puts
      * part of it in front of customers now rather than next year.
@@ -598,11 +616,15 @@ export function resolveYear(
      * Leased room is here this year and gone at the end of it — dearer than
      * building, and the only way to have more room *now*.
      */
+    const shift = shiftCapacity({ capacity: build.now, requested: d.coo?.shiftCapacity, niche });
+    if (shift.units > 0) {
+      notesFor[company.id].push(`A second shift added room for ${shift.units.toLocaleString()} more ${niche.voice.capacityShort} this year, at a premium, and the operation answered the phone worse for it.`);
+    }
     const leased = Math.max(0, Math.round(d.coo?.leaseCapacity ?? 0));
     if (leased > 0) {
       notesFor[company.id].push(`Leased room for ${leased.toLocaleString()} more ${niche.voice.capacityShort} this year. It costs 40% more than building it, and it goes back at the end of the year.`);
     }
-    const capacity = build.now + leased;
+    const capacity = build.now + leased + shift.units + stockHeld;
     const price = Math.max(1, d.cmo?.price ?? company.price);
 
     /*
@@ -759,12 +781,16 @@ export function resolveYear(
       expanding,
       ramp: Object.keys(ramp).length ? ramp : undefined,
       promo: d.cmo?.promo && d.cmo.promo !== "none" ? d.cmo.promo : undefined,
+      regionFocus: d.cmo?.regionFocus,
+      segmentFocus: d.cmo?.segmentFocus,
       shock: undefined,
       /** Leased room, kept apart so it is never charged as idle and never carried into next year. */
       leased,
       // A marketing seat that filed sets the tiers; one that did not leaves them as they were.
       tiers: d.cmo ? d.cmo.tiers : company.tiers,
       retention: annualPlans(d.cfo?.annualDiscount).retention,
+      // What customers are given to pay, which is part of the offer (see `treasury.ts`).
+      terms: d.cfo?.terms,
       pipeline: quality.pipeline,
       pipelineLater: quality.pipelineLater,
       brandPipeline: brand.next,
@@ -783,15 +809,20 @@ export function resolveYear(
       price,
       capacity,
       brand: clamp(company.brand + brand.now + perfGain + pr.brand + referral + comarketingBrand + yielded.brand - decay.brand),
-      quality: clamp(company.quality + quality.landed + shippedNow + yielded.quality - decay.quality),
+      quality: clamp(company.quality + quality.landed + shippedNow + yielded.quality + sourcing.quality - decay.quality),
       reputation: clamp(company.reputation + reputationNow + yielded.reputation),
       security: securityNext(company.security, d.cto?.securitySpend),
       data: dataNext(company.data, d.cto?.dataSpend),
       features,
       /** This year's PR backfire, if any, for reputation at settlement. Never stored. */
       prReputation: pr.reputation,
-      service: clamp(company.service + serviceGain + yielded.service - decay.service - scar * REVIEW_SERVICE),
+      service: clamp(company.service + serviceGain + yielded.service - decay.service - scar * REVIEW_SERVICE - shift.service),
       staffQuality,
+      automation: automation.now,
+      /** Next year's automation, applied once the year is settled, like capacity. */
+      automationNext: automation.next,
+      stock: Math.max(0, Math.round(d.coo?.stockTarget ?? 0)),
+      sourcing: d.coo?.sourcing === "outsourced" ? "outsourced" : "in_house",
       /*
        * Costs move by how much the index moved, not by the whole index.
        *
@@ -808,7 +839,8 @@ export function resolveYear(
        */
       unitCost: Math.max(
         niche.baseUnitCost * 0.45,
-        company.unitCost * (1 - costCut) * yielded.unitCost * (nextEconomy.costIndex / (world.economy?.costIndex || 1)) * focus.cost,
+        company.unitCost * (1 - costCut) * yielded.unitCost * auto.unitCost * sourcing.unitCost
+          * (nextEconomy.costIndex / (world.economy?.costIndex || 1)) * focus.cost,
       ),
     };
   });
@@ -964,12 +996,23 @@ export function resolveYear(
     const product = ((d?.cto?.featureSpend ?? 0) + (d?.cto?.reliabilitySpend ?? 0)
       + (d?.cto?.techDebtPaydown ?? 0) + (d?.cto?.researchSpend ?? 0)
       + (d?.cto?.securitySpend ?? 0) + (d?.cto?.dataSpend ?? 0) + betCost) * payEffect(d?.cto?.engineerPay).cost;
+    /*
+     * The plant's money: automating it, running a second shift on it, and the
+     * stock bought now for next year (see `factory.ts`). Building costs more
+     * on an automated line, which is the other half of that trade.
+     */
+    const plant = company.kind === "player"
+      ? automationCost({ from: before?.automation ?? 0, to: d?.coo?.automationTarget ?? before?.automation ?? 0, capacity: company.capacity, niche })
+        + shiftCapacity({ capacity: company.capacity, requested: d?.coo?.shiftCapacity, niche }).cost
+        + stockCost(d?.coo?.stockTarget, niche)
+      : 0;
     const ops = (d?.coo?.supportSpend ?? 0) + (d?.coo?.efficiencySpend ?? 0)
-      + (d?.coo?.recruitingSpend ?? 0) + (d?.coo?.trainingSpend ?? 0) + extra.operations;
+      + (d?.coo?.recruitingSpend ?? 0) + (d?.coo?.trainingSpend ?? 0) + extra.operations + plant;
     // The finance seat's cost review comes off the overhead this year; the bill for it arrives next year.
     const review = company.kind === "player" ? reviewSaving(d?.cfo?.costReview) : 0;
     const fixed = company.kind === "player"
-      ? fixedCosts(company, d?.coo?.headcount ?? 0, nextEconomy, reachOf(company, niche)) * focusEffects(d?.ceo?.focus).fixed * (1 - review)
+      ? fixedCosts(company, d?.coo?.headcount ?? 0, nextEconomy, reachOf(company, niche))
+        * focusEffects(d?.ceo?.focus).fixed * (1 - review) * sourcingOf(d?.coo?.sourcing).fixed
       : 0;
     if (review > 0) {
       notesFor[company.id] = [
@@ -1005,6 +1048,7 @@ export function resolveYear(
      * given up is sold back at a loss.
      */
     const base0 = baseById.get(company.id);
+    const automated = automationEffect(before?.automation ?? 0).buildCost;
     const room = company.kind === "player"
       ? capacityMoney({
           current: world.companies.find((c) => c.id === company.id)?.capacity ?? 0,
@@ -1013,6 +1057,7 @@ export function resolveYear(
           niche,
         })
       : { build: 0, lease: 0, sold: 0 };
+    room.build *= automated;
 
     const discretionary = company.kind === "player"
       ? (marketing + product + ops) * allowed + fixed + room.build + room.lease
@@ -1160,7 +1205,36 @@ export function resolveYear(
     if (payout.paid > 0) {
       notesFor[company.id] = [...(notesFor[company.id] ?? []), `Paid out ${money(payout.paid)} of the year's profit${payout.investors > 0 ? `: ${money(payout.founders)} to the founders and ${money(payout.investors)} to the investors` : " to the founders, banked for good"}.`];
     }
-    let cash = company.cash + profit + borrowed + raised - repaid + room.sold + prepaidIn - prepaidOut - maturing - extra.cash - payout.paid;
+    /*
+     * What customers were given to pay, and what that does to the money: a
+     * share of this year's takings is still owed at the year's end, and last
+     * year's is collected now. A factor will buy what is owed for cash today,
+     * at a price (see `treasury.ts`).
+     */
+    const terms = company.kind === "player" ? termsOf(d?.cfo?.terms) : termsOf(0);
+    const owedNow = revenue * terms.deferred;
+    const collected = company.kind === "player" ? Math.max(0, company.receivables ?? 0) : 0;
+    const sold = company.kind === "player" ? factoring({ receivables: owedNow, share: d?.cfo?.factorPct }) : { sold: 0, cash: 0, cost: 0 };
+    const receivables = Math.max(0, owedNow - sold.sold);
+    if (sold.sold > 0) {
+      notesFor[company.id] = [...(notesFor[company.id] ?? []), `Sold ${money(sold.sold)} of what customers owed to a factor for ${money(sold.cash)} today. The difference, ${money(sold.cost)}, is what speed costs.`];
+    }
+
+    /*
+     * Refinancing: what is on the credit line moved onto fixed terms at the
+     * rate this year's rating earns, for a fee.
+     */
+    const onLine = Math.max(0, company.debt - bondTotal(company) - (company.emergencyDebt ?? 0));
+    const moved = company.kind === "player"
+      ? refinance({ onLine, amount: d?.cfo?.refinance, rate: rates.bondRate ?? rates.rate, year: world.year, term: REFINANCE_TERM_YEARS })
+      : { moved: 0, fee: 0, bond: null };
+    if (moved.bond) {
+      bonds.push(moved.bond);
+      notesFor[company.id] = [...(notesFor[company.id] ?? []), `Moved ${money(moved.moved)} off the credit line and onto a ${REFINANCE_TERM_YEARS}-year loan at ${Math.round(moved.bond.rate * 1000) / 10}%, for a ${money(moved.fee)} fee. The line can be pulled; this cannot.`];
+    }
+
+    let cash = company.cash + profit + borrowed + raised - repaid + room.sold + prepaidIn - prepaidOut - maturing - extra.cash - payout.paid
+      - owedNow + collected + sold.cash - moved.fee;
     let debt = Math.max(0, company.debt + borrowed - repaid - maturing);
 
     /*
@@ -1340,6 +1414,20 @@ export function resolveYear(
     }
 
     /*
+     * Buying the company back, which is the only way a founder's share goes
+     * up — and money not spent on the year to do it.
+     */
+    const bought = company.kind === "player"
+      // Never with money the company does not have: a buyback is not a way to go insolvent.
+      ? buyback({ spend: Math.min(Math.max(0, cash), d?.cfo?.buyback ?? 0), worth: Math.max(0, revenue * 1.2 + assetValue - debt), founderShare })
+      : { paid: 0, bought: 0, share: founderShare };
+    if (bought.paid > 0) {
+      founderShare = bought.share;
+      cash -= bought.paid;
+      notesFor[company.id] = [...(notesFor[company.id] ?? []), `Bought back ${(bought.bought * 100).toFixed(1)}% of the company for ${money(bought.paid)}. The founders now hold ${Math.round(founderShare * 100)}%.`];
+    }
+
+    /*
      * The investors. Reviewed first, against the target that fell due this
      * year; then, if a stake was sold, the terms that came with it. Selling
      * a stake used to cost ownership and nothing else. See `finance.ts`.
@@ -1379,6 +1467,11 @@ export function resolveYear(
       if (premium > 0) lines.push({ label: "Insurance", amount: -premium });
       if (extra.cash > 0) lines.push({ label: "Committing to a new region", amount: -extra.cash });
       if (payout.paid > 0) lines.push({ label: "Dividends", amount: -payout.paid });
+      if (owedNow > 0) lines.push({ label: "Still owed by customers", amount: -owedNow });
+      if (collected > 0) lines.push({ label: "Collected from last year", amount: collected });
+      if (sold.cash > 0) lines.push({ label: "Sold to a factor", amount: sold.cash });
+      if (moved.fee > 0) lines.push({ label: "Refinancing fee", amount: -moved.fee });
+      if (bought.paid > 0) lines.push({ label: "Bought the company back", amount: -bought.paid });
       if (room.build > 0) lines.push({ label: "Building capacity", amount: -room.build });
       if (room.lease > 0) lines.push({ label: "Leased capacity", amount: -room.lease });
       if (room.sold > 0) lines.push({ label: "Capacity sold back", amount: room.sold });
@@ -1402,7 +1495,7 @@ export function resolveYear(
           marketing: allowedShare(marketing),
           product: allowedShare(product),
           operations: allowedShare(ops),
-          capacity: room.build + room.lease,
+          capacity: room.build + room.lease + plant,
           planning,
           incidents: incidentCost,
           partners: partnerShare,
@@ -1451,7 +1544,7 @@ export function resolveYear(
     }
 
     // Capacity ordered this year opens now that the year is over.
-    const { capacityNext, leased: _leased, retention: _retention, prReputation: _pr, ramp: _ramp, promo: _promo, ...rest } = company as Company & { capacityNext?: number };
+    const { capacityNext, automationNext: _autoNext, leased: _leased, retention: _retention, prReputation: _pr, ramp: _ramp, promo: _promo, regionFocus: _focus, segmentFocus: _segFocus, terms: _terms, ...rest } = company as Company & { capacityNext?: number; automationNext?: number };
     return {
       ...rest,
       ...(company.kind === "player"
@@ -1459,6 +1552,8 @@ export function resolveYear(
             tiers: (base0 ?? company).tiers, bonds: bonds.length ? bonds : undefined, prepaid: prepaidIn,
             people, staffQuality: (base0 ?? company).staffQuality, reviewScar: Math.round(review * 100),
             banked: (company.banked ?? 0) + payout.founders,
+            receivables,
+            terms: terms.days,
             revenueShares: (company.revenueShares ?? []).filter((r) => r.until > world.year),
             // Who the promotion brought in, for next year's churn; who left, and where the company stood, for win-back.
             dealChasers: company.promo
@@ -1483,6 +1578,8 @@ export function resolveYear(
       quality: base.quality,
       service: clamp(base.service - incidentService),
       capacity: (base as Company & { capacityNext?: number }).capacityNext ?? base.capacity,
+      // Automation ordered this year runs from now, like the room built this year.
+      ...(company.kind === "player" ? { automation: (base as Company & { automationNext?: number }).automationNext ?? base.automation } : {}),
       unitCost: base.unitCost,
       customers,
       cash,

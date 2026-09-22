@@ -31,6 +31,7 @@ import { ROLE_TITLES } from "./types";
 import { fixedCosts, focusEffects, marketPriceOf, type TeamDecisions } from "./decisions";
 import { reachOf, saturate } from "./market";
 import { featureCost } from "./product";
+import { automationCost, shiftCapacity, stockCost } from "./factory";
 import { programmeCost, researchCost, statementCost } from "./world";
 
 // ─── The schedule ────────────────────────────────────────────────────────────
@@ -95,6 +96,22 @@ export const UNLOCKS: Unlock[] = [
   { role: "cmo", field: "research", year: 6 },
   { role: "cfo", field: "insurance", year: 6 },
   { role: "cfo", field: "dividendPct", year: 6 },
+  /*
+   * Phase five, depth: the plant, the balance sheet, and aiming the marketing
+   * rather than spraying it. These arrive after the first six years because
+   * they are refinements of decisions the table has already been making —
+   * there is no point automating a plant before anybody has built one.
+   */
+  { role: "cmo", field: "regionFocus", year: 7 },
+  { role: "coo", field: "automationTarget", year: 7 },
+  { role: "coo", field: "shiftCapacity", year: 7 },
+  { role: "cfo", field: "terms", year: 7 },
+  { role: "cmo", field: "segmentFocus", year: 8 },
+  { role: "coo", field: "stockTarget", year: 8 },
+  { role: "coo", field: "sourcing", year: 8 },
+  { role: "cfo", field: "factorPct", year: 8 },
+  { role: "cfo", field: "refinance", year: 8 },
+  { role: "cfo", field: "buyback", year: 9 },
   // Year six: firing someone.
   { role: "ceo", field: "replaceSeat", year: 6 },
   { role: "ceo", field: "replaceBid", year: 6 },
@@ -475,9 +492,12 @@ export function fundYear(company: Company, d: TeamDecisions, niche: Niche, econo
     lease: d.coo?.leaseCapacity ?? 0,
     niche,
   });
+  const plant = automationCost({ from: company.automation ?? 0, to: d.coo?.automationTarget ?? company.automation ?? 0, capacity: company.capacity, niche })
+    + shiftCapacity({ capacity: company.capacity, requested: d.coo?.shiftCapacity, niche }).cost
+    + stockCost(d.coo?.stockTarget, niche);
   const ops = (d.coo?.supportSpend ?? 0) + (d.coo?.efficiencySpend ?? 0) + (d.coo?.recruitingSpend ?? 0) + (d.coo?.trainingSpend ?? 0)
     + (d.coo?.programme && !(company.programmes ?? []).some((p) => p.id === d.coo!.programme) ? programmeCost(niche) : 0)
-    + room.build + room.lease;
+    + plant + room.build + room.lease;
   const wanted = marketing + product + ops;
   if (wanted <= 0) return { decisions: d, notes: [] };
 

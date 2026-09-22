@@ -24,6 +24,7 @@
 import { buildCostPerUnit, leaseCostPerUnit } from "@shared/simulation/responsibilities";
 import { featureCost } from "@shared/simulation/product";
 import { programmeCost, researchCost, statementCost } from "@shared/simulation/world";
+import { AUTOMATION_RATE, SHIFT_RATE, STOCK_RATE } from "@shared/simulation/factory";
 import { SEVERANCE, payEffect } from "@shared/simulation/people";
 import { describe, it, expect } from "vitest";
 import { readFileSync, existsSync, statSync } from "node:fs";
@@ -122,6 +123,13 @@ describe("what the table has committed", () => {
       },
     },
     {
+      name: "the plant: automating it, a second shift, and stock for next year",
+      cities: ["leeds"],
+      decisions: {
+        coo: { capacityTarget: 1_000, supportSpend: 0, efficiencySpend: 0, headcount: 4, automationTarget: 40, shiftCapacity: 50_000, stockTarget: 30_000 },
+      },
+    },
+    {
       name: "the world: a report, a win-back, a programme and a statement",
       cities: ["leeds"],
       decisions: {
@@ -163,6 +171,8 @@ describe("what the table has committed", () => {
           build: buildCostPerUnit(niche), lease: leaseCostPerUnit(niche),
           featureBuild: featureCost(niche, "build"), featureCopy: featureCost(niche, "copy"),
           research: researchCost(niche), programme: programmeCost(niche), statement: statementCost(niche), expansion: 0,
+          shift: buildCostPerUnit(niche) * SHIFT_RATE, stock: buildCostPerUnit(niche) * STOCK_RATE,
+          automation: buildCostPerUnit(niche) * AUTOMATION_RATE,
         },
       });
 
@@ -232,6 +242,12 @@ describe("what a seat may file", () => {
       { role: "cfo", draft: { borrow: 0, repay: 0, cashBuffer: 0, costReview: 10 } },
       // Borrowing past the line.
       { role: "cfo", draft: { borrow: 900_000_000, repay: 0, cashBuffer: 0 } },
+      // The depth: regions and segments aimed at, the plant, the balance sheet.
+      { role: "cmo", draft: { price: 22, brandSpend: 0, performanceSpend: 0, celebritySpend: 0, targetCities: [], regionFocus: { leeds: 60, london: 40 }, segmentFocus: { swipers: 50 } } },
+      { role: "cmo", draft: { price: 22, brandSpend: 0, performanceSpend: 0, celebritySpend: 0, targetCities: [], regionFocus: { leeds: 80, london: 80 } } },
+      { role: "coo", draft: { capacityTarget: 1000, supportSpend: 0, efficiencySpend: 0, headcount: 0, automationTarget: 60, shiftCapacity: 10_000, stockTarget: 5_000, sourcing: "outsourced" } },
+      { role: "coo", draft: { capacityTarget: 1000, supportSpend: 0, efficiencySpend: 0, headcount: 0, automationTarget: 140 } },
+      { role: "cfo", draft: { borrow: 0, repay: 0, cashBuffer: 0, terms: 90, factorPct: 50, refinance: 500_000, buyback: 1_000_000 } },
       // The world's levers.
       { role: "cmo", draft: { price: 22, brandSpend: 0, performanceSpend: 0, celebritySpend: 0, targetCities: [], promo: "free_month", winbackSpend: 50_000, research: "expectations" } },
       { role: "cfo", draft: { borrow: 0, repay: 0, cashBuffer: 0, insurance: "all", dividendPct: 40 } },

@@ -201,6 +201,8 @@ export function botDecision(input: {
       draft[field.id] = room > 0 && held >= room * 0.98 ? snap(held * 0.1, field.step, 0) : 0;
       continue;
     }
+    // A bot spreads its marketing evenly: concentration is a call, not a default.
+    if (field.id === "regionFocus") { delete draft[field.id]; continue; }
     if (field.id === "budget" || field.id === "tiers") {
       delete draft[field.id];
       continue;
@@ -243,6 +245,19 @@ export function botDecision(input: {
     if (field.id === "research") { draft[field.id] = "none"; continue; }
     if (field.id === "insurance") { draft[field.id] = "breach"; continue; }
     if (field.id === "programme" || field.id === "expand") { draft[field.id] = ""; continue; }
+    /*
+     * The plant and the balance sheet: a bot keeps what it has. Automating,
+     * running a second shift, holding stock, selling what it is owed and
+     * buying the company back are all calls with a shape a person should
+     * choose — and a bot that made them would be spending a human table's
+     * money on a hunch.
+     */
+    if (field.id === "automationTarget") { draft[field.id] = Math.round(company.automation ?? 0); continue; }
+    if (field.id === "shiftCapacity" || field.id === "stockTarget" || field.id === "factorPct"
+      || field.id === "refinance" || field.id === "buyback") { draft[field.id] = 0; continue; }
+    if (field.id === "sourcing") { draft[field.id] = company.sourcing ?? "in_house"; continue; }
+    if (field.id === "terms") { draft[field.id] = company.terms ?? 30; continue; }
+    if (field.id === "segmentFocus") { delete draft[field.id]; continue; }
     if (field.id === "featureBet") { draft[field.id] = ""; continue; }
     if (field.id === "featureMode") { draft[field.id] = "build"; continue; }
     if (field.id === "borrowTerm" || field.id === "holdBackSeat") {

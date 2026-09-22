@@ -117,6 +117,15 @@ export interface City {
   entryCost: number;
   /** What it is like to sell here, in one line. */
   note: string;
+  /**
+   * Who lives here, by segment, as a multiplier on how many of them there are
+   * relative to the market as a whole: 1.3 means this region over-indexes on
+   * that segment by a third, 0.8 means it under-indexes. A company selling
+   * everywhere gets exactly the market average, whatever these say (see
+   * `regionalFit`), so this is about *where* you sell, never about the size of
+   * the market.
+   */
+  mix?: Record<string, number>;
 }
 
 export interface Niche {
@@ -400,6 +409,16 @@ export interface Company {
   people?: Partial<Record<Role, import("./people").Person>>;
   /** How good the staff are, 0–100; what their support is worth. Set a year ahead by recruiting and training. */
   staffQuality?: number;
+  /** How automated the plant is, 0–100: cheaper units, a dearer and slower plant to change. See `factory.ts`. */
+  automation?: number;
+  /** Stock bought last year, waiting to serve customers this year's room cannot. */
+  stock?: number;
+  /** Whether the work is done in house or bought in. */
+  sourcing?: "in_house" | "outsourced";
+  /** Days customers get to pay. Longer wins business and delays the money. See `treasury.ts`. */
+  terms?: number;
+  /** Money earned but not yet collected, arriving next year. */
+  receivables?: number;
   /** Last year's cost review, as a percentage: felt this year in service and morale. */
   reviewScar?: number;
   /** Features built or copied, and whether they worked. See `product.ts`. */
@@ -430,6 +449,10 @@ export interface Company {
   revenueShares?: { rate: number; until: number; from: string }[];
   /** This year's promotion. Set on the way into the market; never stored. */
   promo?: string;
+  /** How the marketing seat split its attention across regions this year. Set on the way in; never stored. */
+  regionFocus?: Record<string, number>;
+  /** And across segments. Set on the way in; never stored. */
+  segmentFocus?: Record<string, number>;
   /**
    * What the founders still own, 0–1.
    *

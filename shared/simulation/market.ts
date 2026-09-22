@@ -32,6 +32,7 @@ import { expectationPenalty, expectationsFor } from "./criteria";
 import { hasTier, priceFor } from "./responsibilities";
 import { featureAppeal } from "./product";
 import { DEAL_CHASERS_LEAVE, promoAppeal } from "./world";
+import { termsAppeal } from "./treasury";
 import type { Company, Economy, Niche, Segment } from "./types";
 
 /** What a company is offering a particular segment this year, after everything interacts. */
@@ -186,6 +187,101 @@ export interface AllocationResult {
  * what makes "where do we sell" a decision rather than a detail, and what
  * makes the incumbents hard: they are already everywhere.
  */
+/**
+ * How hard the company is pushing in each region it sells in.
+ *
+ * The marketing seat splits its attention across the open regions; a region
+ * given more than its natural share is worth up to 40% more there, one given
+ * less is worth up to 40% less. Regions left out of the split share what is
+ * left in proportion to their size, so a seat that says nothing is spread
+ * evenly and nothing changes — the lever is concentration, not free reach.
+ */
+export function regionWeights(company: Company, niche: Niche): Map<string, number> {
+  const open = new Set(Array.isArray(company.cities) ? company.cities : niche.cities.map((c) => c.id));
+  const here = niche.cities.filter((c) => open.has(c.id));
+  const base = new Map(here.map((c) => [c.id, c.weight * (company.ramp?.[c.id] ?? 1)]));
+  const total = [...base.values()].reduce((sum, w) => sum + w, 0);
+  const focus = company.regionFocus;
+  if (!focus || total <= 0) return base;
+
+  const named = here.filter((c) => Number(focus[c.id]) > 0);
+  const namedShare = named.reduce((sum, c) => sum + Math.max(0, Math.min(100, Number(focus[c.id]) || 0)), 0) / 100;
+  const restWeight = here.filter((c) => !named.includes(c)).reduce((sum, c) => sum + (base.get(c.id) ?? 0), 0);
+  const rest = Math.max(0, 1 - Math.min(1, namedShare));
+
+  const out = new Map<string, number>();
+  for (const c of here) {
+    const w = base.get(c.id) ?? 0;
+    const fair = w / total;
+    const attention = named.includes(c)
+      ? Math.max(0, Math.min(100, Number(focus[c.id]) || 0)) / 100
+      : restWeight > 0 ? rest * (w / restWeight) : 0;
+    const pushed = fair > 0 ? Math.max(0.6, Math.min(1.4, 0.6 + 0.8 * (attention / fair))) : 1;
+    out.set(c.id, w * pushed);
+  }
+  return out;
+}
+
+/**
+ * How hard the company is pushing at each segment.
+ *
+ * The same shape as the regional split, and the same rule: a segment given
+ * more than its share of the marketing is worth up to 25% more, one given
+ * less up to 25% less, and a seat that says nothing is spread evenly and
+ * nothing changes. Concentration, not free reach — a campaign aimed at
+ * everybody is aimed at nobody.
+ */
+export function segmentPush(company: Company, niche: Niche, segmentId: string): number {
+  const focus = company.segmentFocus;
+  if (!focus) return 1;
+  const total = niche.segments.reduce((sum, s) => sum + s.size, 0) || 1;
+  const sizes = new Map(niche.segments.map((s) => [s.id, s.size]));
+  const named = niche.segments.filter((s) => Number(focus[s.id]) > 0);
+  const namedShare = named.reduce((sum, s) => sum + Math.max(0, Math.min(100, Number(focus[s.id]) || 0)), 0) / 100;
+  const restSize = niche.segments.filter((s) => !named.includes(s)).reduce((sum, s) => sum + s.size, 0);
+  const rest = Math.max(0, 1 - Math.min(1, namedShare));
+  const fair = (sizes.get(segmentId) ?? 0) / total;
+  if (fair <= 0) return 1;
+  const attention = Number(focus[segmentId]) > 0
+    ? Math.max(0, Math.min(100, Number(focus[segmentId]) || 0)) / 100
+    : restSize > 0 ? rest * ((sizes.get(segmentId) ?? 0) / restSize) : 0;
+  return Math.max(0.75, Math.min(1.25, 0.75 + 0.5 * (attention / fair)));
+}
+
+/** The share of the market a company can be considered by, once its regional push is counted. */
+export function regionalReach(company: Company, niche: Niche): number {
+  if (company.kind === "incumbent") return 1;
+  const total = [...regionWeights(company, niche).values()].reduce((sum, w) => sum + w, 0);
+  return Math.max(0, Math.min(1, total));
+}
+
+/**
+ * How well the regions a company sells in suit one segment.
+ *
+ * Regions differ in who lives there (see `City.mix`): a university city is
+ * full of people who swipe, a rural one of people who will never leave their
+ * supplier. Selling in the places your customers actually are is worth
+ * something, and selling nationally is worth exactly the market average —
+ * which is what the baseline divides out, so a company everywhere is
+ * unaffected however the mixes are written.
+ */
+export function regionalFit(company: Company, niche: Niche, segmentId: string): number {
+  if (company.kind === "incumbent") return 1;
+  const weights = regionWeights(company, niche);
+  let mine = 0;
+  let total = 0;
+  for (const c of niche.cities) {
+    const w = weights.get(c.id);
+    if (!w) continue;
+    mine += w * (c.mix?.[segmentId] ?? 1);
+    total += w;
+  }
+  if (total <= 0) return 1;
+  const baseline = niche.cities.reduce((sum, c) => sum + c.weight * (c.mix?.[segmentId] ?? 1), 0)
+    / (niche.cities.reduce((sum, c) => sum + c.weight, 0) || 1);
+  return baseline > 0 ? (mine / total) / baseline : 1;
+}
+
 export function reachOf(company: Company, niche: Niche): number {
   if (company.kind === "incumbent") return 1;
   /*
@@ -237,7 +333,7 @@ export function allocate(
     const demand = segmentDemand(segment, year, economy);
     const appeal: Record<string, number> = {};
     // Features built for this segment count too (see `product.ts`), and a promotion to the people who watch the price (see `world.ts`).
-    for (const c of companies) appeal[c.id] = appealFor(c, segment, year) * positioningFor(c, segment.id) * featureAppeal(c, segment.id, year) * promoAppeal(c.promo, segment);
+    for (const c of companies) appeal[c.id] = appealFor(c, segment, year) * positioningFor(c, segment.id) * featureAppeal(c, segment.id, year) * promoAppeal(c.promo, segment) * termsAppeal(c) * segmentPush(c, niche, segment.id);
     appealBySegment[segment.id] = appeal;
 
     const bestAppeal = Math.max(...companies.map((c) => appeal[c.id]), 0.0001);
@@ -322,7 +418,8 @@ export function allocate(
      */
     const weights = companies.map((c) => ({
       id: c.id,
-      weight: Math.pow(appeal[c.id], 2) * reachOf(c, niche),
+      // Where a company sells, how hard it is pushing there, and who lives there.
+      weight: Math.pow(appeal[c.id], 2) * regionalReach(c, niche) * regionalFit(c, niche, segment.id),
     }));
     const totalWeight = weights.reduce((sum, w) => sum + w.weight, 0);
     if (totalWeight <= 0) continue;
@@ -404,7 +501,7 @@ export function allocate(
       if (count <= 0) continue;
       const takers = companies
         .filter((c) => c.id !== from && room[c.id] > 0)
-        .map((c) => ({ id: c.id, weight: Math.pow(appeal[c.id] ?? 0, 2) * reachOf(c, niche) }))
+        .map((c) => ({ id: c.id, weight: Math.pow(appeal[c.id] ?? 0, 2) * regionalReach(c, niche) * regionalFit(c, niche, segment.id) }))
         .filter((t) => t.weight > 0);
       const total = takers.reduce((sum, t) => sum + t.weight, 0);
       if (total <= 0) continue;

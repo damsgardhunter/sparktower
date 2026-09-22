@@ -39,6 +39,7 @@ import { mfaGate, mfaRequiredFor, mfaSatisfied } from "./mfa";
 import { SPENDING_SEATS, arrivingIn, buildCostPerUnit, isUnlocked, leaseCostPerUnit, unlockYear } from "@shared/simulation/responsibilities";
 import { STAFF_QUALITY_START, WARN_AT, overrulable, personOf } from "@shared/simulation/people";
 import { breachChance, featureCost, featureMenu, outageChance } from "@shared/simulation/product";
+import { AUTOMATION_RATE, SHIFT_MAX, SHIFT_RATE, STOCK_RATE } from "@shared/simulation/factory";
 import {
   EXPANSION_DISCOUNT, PROGRAMMES, announcedRegion, dealsFor, programmeCost, researchCost, statementCost,
   type ProgrammeId,
@@ -373,6 +374,40 @@ export function registerSimulationDeskRoutes(app: Express): void {
             ],
           };
         }
+        /*
+         * Where the marketing goes: the regions this company actually sells
+         * in, each saying how big it is and who over-indexes there, because
+         * that is the whole basis of the decision.
+         */
+        if (field.id === "regionFocus") {
+          const open = new Set(company.cities ?? niche.cities.map((c) => c.id));
+          const segName = (id: string) => niche.segments.find((s) => s.id === id)?.name ?? id;
+          return {
+            ...field,
+            options: niche.cities.filter((c) => open.has(c.id)).map((c) => {
+              const leans = Object.entries(c.mix ?? {}).sort((a, b) => b[1] - a[1])[0];
+              const character = leans && leans[1] > 1.02 ? ` Leans ${segName(leans[0]).toLowerCase()}.`
+                : leans && leans[1] < 0.98 ? "" : "";
+              return { value: c.id, label: c.name, help: `${Math.round(c.weight * 100)}% of the market.${character} ${c.note}` };
+            }),
+          };
+        }
+        // And who it is for: the segments, with what each is worth.
+        if (field.id === "segmentFocus") {
+          const market = niche.segments.reduce((sum, s) => sum + s.size, 0) || 1;
+          return {
+            ...field,
+            options: niche.segments.map((s) => ({
+              value: s.id,
+              label: s.name,
+              help: `${Math.round((s.size / market) * 100)}% of the market, paying around ${s.referencePrice}. ${describeWeights(s)}`,
+            })),
+          };
+        }
+        // A second shift can only run the plant you have: half as much again, at most.
+        if (field.id === "shiftCapacity") {
+          return { ...field, max: Math.round(company.capacity * SHIFT_MAX) };
+        }
         // The other four chairs, for the chief executive's people levers.
         if (field.id === "targets" || field.id === "overrule" || field.id === "replaceSeat") {
           const others = overrulable(company.seats).map((r) => {
@@ -421,6 +456,8 @@ export function registerSimulationDeskRoutes(app: Express): void {
         build: buildCostPerUnit(niche), lease: leaseCostPerUnit(niche),
         featureBuild: featureCost(niche, "build"), featureCopy: featureCost(niche, "copy"),
         research: researchCost(niche), programme: programmeCost(niche), statement: statementCost(niche),
+        shift: buildCostPerUnit(niche) * SHIFT_RATE, stock: buildCostPerUnit(niche) * STOCK_RATE,
+        automation: buildCostPerUnit(niche) * AUTOMATION_RATE,
         expansion: Math.round((announcedRegion({ niche, seasonId: season.id, year, open: company.cities ?? [] })?.entryCost ?? 0) * EXPANSION_DISCOUNT),
       },
       /** The levers this seat gets next year, by label, so nobody is surprised by them. */
@@ -443,6 +480,8 @@ export function registerSimulationDeskRoutes(app: Express): void {
         service: Math.round(company.service),
         /** What the company built. The operations lever sets this; it is not all the room there is. */
         capacity: company.capacity,
+        /** How automated the plant is, 0–100 — what a point of automation is charged against. */
+        automation: Math.round(company.automation ?? 0),
         /** What the company's assets add on top — a distribution deal, a second site. Served from all the same. */
         assetCapacity: assetEffects(company.assets ?? []).capacity,
         unitCost: Math.round(company.unitCost * 100) / 100,

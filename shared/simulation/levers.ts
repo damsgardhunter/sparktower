@@ -32,6 +32,7 @@ import { SPENDING_SEATS, capacityMoney, drawdown, fundYear, isUnlocked } from ".
 import { SEVERANCE, payEffect } from "./people";
 import { featureCost } from "./product";
 import { programmeCost, researchCost, statementCost } from "./world";
+import { SHIFT_MAX, automationCost, shiftCapacity, stockCost } from "./factory";
 
 /** How a lever is presented and bounded. */
 export interface LeverField {
@@ -99,6 +100,10 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
       { value: "expectations", label: "Next year's expectations", help: "What each segment will demand of a company next year, before you have to meet it." },
       { value: "rivals", label: "What the incumbents will charge", help: "Their likely prices next year, which is what your price will be judged against." },
     ], help: "A report, paid for once and read by the whole table." },
+    { id: "regionFocus", label: "Where the marketing goes", kind: "allocation", min: 0, max: 100, step: 5,
+      help: "The share of this year's marketing aimed at each region you sell in. A region pushed harder than its size is worth up to 40% more there, and one left short is worth up to 40% less — so this is concentration, not extra reach. Regions you leave out share what is left, evenly by size. Who lives where differs: pushing into a region full of the people you are for is worth more than pushing into the biggest one." },
+    { id: "segmentFocus", label: "Who the marketing is for", kind: "allocation", min: 0, max: 100, step: 5,
+      help: "The share of the year's marketing aimed at each kind of customer. A segment pushed harder than its size is worth up to 25% more, one left short up to 25% less. A campaign aimed at everybody is aimed at nobody — and one aimed at a segment you have priced out of reach is money spent twice on the same mistake." },
     { id: "tiers", label: "Price tiers", kind: "tiers", min: 0, step: 1,
       help: "A price for each segment instead of one for everybody. Nought is a free tier: advertising money and word of mouth, and every paying tier leaks towards it. The wider the gap between a tier and the cheapest one, the more of that segment works out how to pay less." },
   ],
@@ -147,6 +152,16 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
       help: "One a year, paying out a third of its effect in each of the next three years. Slow, cumulative and permanent — and the year you start one, it does nothing at all." },
     { id: "expand", label: "Open the announced region", kind: "choice", options: [],
       help: "The region announced for next year, opened at 70% of the usual cost. It opens next year, and in its first year you reach only as far as the brand does." },
+    { id: "automationTarget", label: "Automate the plant", kind: "percent", min: 0, max: 100, step: 5,
+      help: "How automated it should be next year. Every point takes a little off what each one costs to make — a quarter off at the top — and puts it onto what building more room costs, and onto how slowly the product can change. Paid for when ordered; it runs from next year. Taking it out again is immediate." },
+    { id: "shiftCapacity", label: "Second shift", kind: "count", min: 0, step: 10_000,
+      help: "Run the plant you have for longer: room this year, up to half as much again, cheaper than leasing and dearer than building. The operation answers the phone worse while it runs." },
+    { id: "stockTarget", label: "Stock for next year", kind: "count", min: 0, step: 10_000,
+      help: "Made now, sold next year, to the people your room would otherwise turn away. It costs to hold and it is worth nothing in a quiet year: insurance against a forecast that comes in high." },
+    { id: "sourcing", label: "Make it or buy it", kind: "choice", options: [
+      { value: "in_house", label: "In house", help: "Your people, your fixed cost, and the quality of doing it yourself." },
+      { value: "outsourced", label: "Buy it in", help: "About a fifth off the overhead, 9% more on every unit, and three points of quality: the people doing it work for somebody else." },
+    ], help: "Where the work is actually done. A fixed cost traded for a variable one." },
     { id: "recruitingSpend", label: "Recruiting", kind: "money", min: 0, step: 25_000,
       help: "Who this year's hires are. Spend nothing and you get whoever turned up; spend well and they arrive good. They arrive next year either way." },
     { id: "trainingSpend", label: "Training", kind: "money", min: 0, step: 25_000,
@@ -188,6 +203,18 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
     ], help: "A premium against the year going wrong, charged on revenue. Wasted money most years, and the only thing that mattered in one." },
     { id: "dividendPct", label: "Pay out", kind: "percent", min: 0, max: 100, step: 5,
       help: "The share of this year's profit paid to the owners. The founders' share is banked for good — safe from whatever happens next — and investors who have been paid do not hold a missed target against you. It is money that leaves the company." },
+    { id: "terms", label: "Payment terms", kind: "choice", options: [
+      { value: "0", label: "On delivery", help: "Every pound the day it is earned. How the company has always billed." },
+      { value: "30", label: "30 days", help: "Easier to buy from, and a twelfth of the year's takings still owed at the end of it." },
+      { value: "60", label: "60 days", help: "Easier to buy from. A sixth of the year's takings is still owed at the end of it." },
+      { value: "90", label: "90 days", help: "The easiest company in the market to buy from, and a quarter of a year's takings outstanding." },
+    ], help: "How long customers get to pay. Longer wins business and delays the money; the marketing seat gets the credit and this seat carries it." },
+    { id: "factorPct", label: "Sell what you are owed", kind: "percent", min: 0, max: 100, step: 5,
+      help: "A factor buys what customers owe you and pays 92p in the pound today. Expensive money, and faster than anything except an emergency loan." },
+    { id: "refinance", label: "Refinance the line", kind: "money", min: 0, step: 100_000,
+      help: "Move what is on the credit line onto a three-year fixed loan at today's rate, for a 1% fee. The line moves with the rating and can be pulled; a fixed loan cannot — which cuts both ways, because a poor rating locks in a poor rate." },
+    { id: "buyback", label: "Buy the company back", kind: "money", min: 0, step: 250_000,
+      help: "Buy a stake back from the investors, at what the company is worth plus 15%. The only way the founders' share goes up, and money not spent on the year to do it." },
     { id: "costReview", label: "Cost review", kind: "percent", min: 0, max: 20, step: 1,
       help: "Cut overhead by a percentage. The salaries bill falls this year; next year service slips and every seat's loyalty drops, by about half a point for each point cut." },
   ],
@@ -233,6 +260,39 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
 };
 
 /** A sensible starting position for a seat, from last year rather than from zero. */
+/**
+ * The levers whose "no answer" is *as you were*, rather than nought.
+ *
+ * Everything else on a desk starts at zero because zero is a real decision:
+ * spend nothing, build nothing. These are different. A missing automation
+ * target reads as "take the automation out", a missing pay level as "cut
+ * every engineer to the floor", missing terms as "cash on delivery" — none of
+ * which anybody chose, and each of which arrives the year the lever does,
+ * when the seat has never seen it before.
+ */
+function standing(role: Role, company: Company, draft: Record<string, any>): Record<string, any> {
+  const fill = (id: string, value: unknown) => {
+    if (draft[id] === undefined || draft[id] === null || draft[id] === "") draft[id] = value;
+  };
+  if (role === "cto") fill("engineerPay", 100);
+  if (role === "coo") {
+    fill("automationTarget", Math.round(company.automation ?? 0));
+    fill("sourcing", company.sourcing ?? "in_house");
+  }
+  if (role === "cfo") {
+    fill("terms", company.terms ?? 0);
+    fill("borrowTerm", "short");
+    fill("insurance", "none");
+  }
+  if (role === "cmo") {
+    fill("price", company.price);
+    fill("promo", "none");
+    fill("research", "none");
+  }
+  if (role === "ceo") fill("pace", "balanced");
+  return draft;
+}
+
 export function defaultDraft(role: Role, company: Company, previous?: any): Record<string, any> {
   if (previous) {
     // What they did last year, minus the moves that should never repeat by default.
@@ -256,16 +316,18 @@ export function defaultDraft(role: Role, company: Company, previous?: any): Reco
     // A feature bet is placed once; next year has its own menu.
     if (role === "cto") { carried.featureBet = ""; carried.featureMode = "build"; }
     // Rented room goes back at the end of the year; renting it again is a new decision.
-    if (role === "coo") carried.leaseCapacity = 0;
-    return carried;
+    if (role === "coo") { carried.leaseCapacity = 0; carried.shiftCapacity = 0; }
+    // A factoring run, a refinancing and a buyback are each this year's call.
+    if (role === "cfo") { carried.factorPct = 0; carried.refinance = 0; carried.buyback = 0; }
+    return standing(role, company, carried);
   }
 
   switch (role) {
-    case "cmo": return { price: company.price, brandSpend: 0, performanceSpend: 0, celebritySpend: 0, targetCities: company.cities ?? [] };
-    case "cto": return { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0, researchSpend: 0 };
-    case "coo": return { capacityTarget: company.capacity, supportSpend: 0, efficiencySpend: 0, headcount: 0 };
-    case "cfo": return { borrow: 0, repay: 0, cashBuffer: 0, raiseAmount: 0 };
-    case "ceo": return { focus: "growth", positioning: company.positioning ?? "", rehire: "" };
+    case "cmo": return standing(role, company, { price: company.price, brandSpend: 0, performanceSpend: 0, celebritySpend: 0, targetCities: company.cities ?? [] });
+    case "cto": return standing(role, company, { featureSpend: 0, reliabilitySpend: 0, techDebtPaydown: 0, researchSpend: 0 });
+    case "coo": return standing(role, company, { capacityTarget: company.capacity, supportSpend: 0, efficiencySpend: 0, headcount: 0 });
+    case "cfo": return standing(role, company, { borrow: 0, repay: 0, cashBuffer: 0, raiseAmount: 0 });
+    case "ceo": return standing(role, company, { focus: "growth", positioning: company.positioning ?? "", rehire: "" });
   }
 }
 
@@ -457,7 +519,16 @@ export function cleanDecision(
       case "allocation": {
         // A map of numbers keyed by segment or by seat, and nothing else.
         const out: Record<string, number> = {};
-        const allowed = field.kind === "allocation" ? (SPENDING_SEATS as readonly string[]) : context.segmentIds;
+        /*
+         * What the keys of this particular map are allowed to be. They are
+         * not all the same shape: the budget is split between seats, the
+         * marketing between the regions the company sells in and the segments
+         * it sells to, and a price tier is per segment. A single rule for all
+         * of them silently threw away every regional split that was filed.
+         */
+        const allowed = field.id === "budget" ? (SPENDING_SEATS as readonly string[])
+          : field.id === "regionFocus" ? cityIds
+            : context.segmentIds;
         if (raw && typeof raw === "object" && !Array.isArray(raw)) {
           for (const [k, v] of Object.entries(raw)) {
             if (v === "" || v === null || v === undefined) continue;
@@ -492,6 +563,10 @@ export function cleanDecision(
 export interface UnitPrices {
   build: number;
   lease: number;
+  /** A unit of second-shift room, a unit of stock held for a year, and a point of automation per unit of plant. */
+  shift?: number;
+  stock?: number;
+  automation?: number;
   featureBuild?: number;
   featureCopy?: number;
   /** A research report, an improvement programme, a statement, and opening the announced region. */
@@ -518,6 +593,28 @@ function oneOff(
   if (!niche) return 0;
   const cost = fallback(niche);
   return Number.isFinite(cost) ? cost : 0;
+}
+
+/**
+ * What the plant costs this year: automating it, a second shift on it, and
+ * stock held for next year. Priced by the desk where it can be, and from the
+ * market where the screen has its sizes (see `factory.ts`).
+ */
+export function plantSpend(company: Company, decisions: TeamDecisions, niche?: Niche, prices?: UnitPrices | null): number {
+  const d = decisions.coo;
+  if (!d) return 0;
+  const from = company.automation ?? 0;
+  const points = Math.max(0, Math.min(100, Number(d.automationTarget ?? from) || 0) - from);
+  const shift = Math.max(0, Math.min(company.capacity * SHIFT_MAX, Math.round(Number(d.shiftCapacity) || 0)));
+  const stock = Math.max(0, Math.round(Number(d.stockTarget) || 0));
+  if (prices?.automation !== undefined) {
+    return points * company.capacity * (prices.automation ?? 0) + shift * (prices.shift ?? 0) + stock * (prices.stock ?? 0);
+  }
+  if (!niche) return 0;
+  const total = automationCost({ from, to: d.automationTarget ?? from, capacity: company.capacity, niche })
+    + shiftCapacity({ capacity: company.capacity, requested: d.shiftCapacity, niche }).cost
+    + stockCost(d.stockTarget, niche);
+  return Number.isFinite(total) ? total : 0;
 }
 
 /** What this year's feature bet costs, if one is placed. */
@@ -588,6 +685,7 @@ export function commitment(
     { role: "coo", spend: (decisions.coo?.supportSpend ?? 0) + (decisions.coo?.efficiencySpend ?? 0) + (decisions.coo?.recruitingSpend ?? 0) + (decisions.coo?.trainingSpend ?? 0)
       + oneOff(!!decisions.coo?.programme && !(company.programmes ?? []).some((p) => p.id === decisions.coo!.programme), niche, prices, "programme", programmeCost)
       + oneOff(!!decisions.coo?.expand, niche, prices, "expansion", () => 0)
+      + plantSpend(company, decisions, niche, prices)
       + capacitySpend(company, decisions, niche, prices) },
     { role: "cfo", spend: Math.max(0, decisions.cfo?.repay ?? 0) },
     /*

@@ -269,4 +269,33 @@ describe("responsibilities arriving over the season", () => {
     expect(after.body.research.rivals.length).toBeGreaterThan(0);
     expect(after.body.research.rivals[0]).toMatchObject({ name: expect.any(String), priceNext: expect.any(Number) });
   }, 300_000);
+
+  it("offers the regions it sells in, the segments, and the plant, once the depth arrives", async () => {
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+    for (let i = 0; i < 7; i++) await nextYear(seasonId);
+
+    const cmo = await seat("cmo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    expect(cmo.body.year).toBe(8);
+    const regions = cmo.body.fields.find((f: any) => f.id === "regionFocus");
+    const open: string[] = cmo.body.cities.filter((c: any) => c.open).map((c: any) => c.id);
+    expect(regions.options.map((o: any) => o.value).sort(), "the regions it actually sells in").toEqual([...open].sort());
+    const segments = cmo.body.fields.find((f: any) => f.id === "segmentFocus");
+    expect(segments.options).toHaveLength(cmo.body.segments.length);
+
+    const coo = await seat("coo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
+    const shift = coo.body.fields.find((f: any) => f.id === "shiftCapacity");
+    expect(shift.max, "a second shift runs the plant you have").toBe(Math.round(coo.body.company.capacity * 0.5));
+    expect(coo.body.prices.automation).toBeGreaterThan(0);
+
+    // Filed, cleaned, and read by the year.
+    const filed = await seat("cmo").agent.post(`/api/sim/ventures/${ventureId}/decisions`).send({
+      decision: {
+        price: cmo.body.company.price, brandSpend: 0, performanceSpend: 0, celebritySpend: 0, targetCities: [],
+        regionFocus: { [open[0]]: 70, nowhere: 30 },
+      },
+    });
+    expect(filed.status, JSON.stringify(filed.body)).toBe(200);
+    expect(filed.body.draft.regionFocus, "only regions this market has").toEqual({ [open[0]]: 70 });
+  }, 300_000);
 });
