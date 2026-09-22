@@ -49,6 +49,7 @@ import {
   tierNeedsShipping, type MerchConfig,
 } from "@shared/backing";
 import { rateLimit } from "./moderation";
+import { campaignDecided, pledgeReceived, pledgesReleased } from "./backing-notices";
 import { openPii, sealPii } from "./pii";
 import { ensureStripeCustomer } from "./stripe-customer";
 
@@ -526,7 +527,14 @@ export function registerBackingRoutes(app: Express) {
       const logo = await projectLogoBuffer(badgeLogoUrl(project.logoUrl, campaign.merchConfig));
 
       const png = await renderBadgeImage(level, project.title, logo);
-      const objectPath = await new ObjectStorageService().writeObjectBuffer(png, "image/png");
+      // Same picture a real badge gets and shown on the same public surfaces,
+      // so the same explicit public policy. Stated rather than left unset:
+      // an object with no policy is readable by anyone too, but only by
+      // accident, and this call site is the one people copy.
+      const objectPath = await new ObjectStorageService().writeObjectBuffer(png, "image/png", {
+        owner: project.ownerId,
+        visibility: "public",
+      });
 
       const previews = { ...((campaign.badgePreviews as Record<string, string>) || {}), [level]: objectPath };
       await db.update(projectBackingCampaigns).set({ badgePreviews: previews })
@@ -962,6 +970,10 @@ export function registerBackingRoutes(app: Express) {
           eq(projectMerchOrders.status, "queued"),
         ));
 
+      // The creator either way, and every backer of a rejected campaign, whose money is on its way back.
+      void campaignDecided({ projectId, decision, reviewerId: req.user.id, notes: updated.reviewNotes })
+        .catch((err) => console.error("[backing] decision notice failed:", err));
+
       res.json({ campaign: updated, merchWaiting: waiting?.n ?? 0, refundsQueued });
     } catch (error) {
       console.error("Backing decision error:", error);
@@ -1002,6 +1014,8 @@ export function registerBackingRoutes(app: Express) {
 
       const stripe = await getUncachableStripeClient();
       const released: string[] = [];
+      /** Who to tell, once the money is actually gone. */
+      const releasedBackers: { backerId: string; amountCents: number }[] = [];
       const failed: { id: string; error: string }[] = [];
       let totalCents = 0;
 
@@ -1054,10 +1068,17 @@ export function registerBackingRoutes(app: Express) {
           if (outcome === "gone") continue;
 
           released.push(backing.id);
+          releasedBackers.push({ backerId: backing.backerId, amountCents: amount });
           totalCents += amount;
         } catch (err: any) {
           failed.push({ id: backing.id, error: err?.message || "transfer failed" });
         }
+      }
+
+      // Each backer hears that theirs went through, and to whom.
+      if (releasedBackers.length > 0) {
+        void pledgesReleased({ projectId, releasedBy: req.user.id, backings: releasedBackers })
+          .catch((err) => console.error("[backing] release notice failed:", err));
       }
 
       res.json({ released: released.length, totalCents, failed });
@@ -1492,6 +1513,10 @@ export async function recordBacking(session: any): Promise<void> {
   } catch (err) {
     console.error("Badge upsert failed (pledge is unaffected):", err);
   }
+
+  // The creator hears that somebody backed them — the whole point of the thing.
+  void pledgeReceived({ projectId: m.projectId, backerId: m.backerId, amountCents, tierName: m.tierName || null })
+    .catch((err) => console.error("[backing] pledge notice failed:", err));
 
   console.log(`Backing recorded: $${amountCents / 100} to project ${m.projectId} (held)`);
 }

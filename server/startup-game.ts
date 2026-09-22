@@ -68,6 +68,58 @@ export async function createGame(input: {
   return game.id;
 }
 
+/** The rounds a game can still be played in. `verdict` and `abandoned` are endings. */
+export const OPEN_ROUNDS = ["idea", "customer", "model", "product", "spend"] as const;
+
+/**
+ * Start a game for somebody who must not already be in one — atomically.
+ *
+ * The route used to ask `activeGamesFor` and then insert, which is
+ * check-then-act across two round trips with nothing between them. Tapping
+ * "Play now" on a phone and a laptop in the same second is enough: both reads
+ * come back empty, both insert, and the player now has two games. Only one of
+ * them is reachable (every screen shows `games[0]`), but the other still
+ * counts as an open game, so they cannot start another one either — the
+ * player is locked out of the feature by having pressed its button twice.
+ *
+ * A transaction alone would not fix it: with no row to lock there is nothing
+ * for two concurrent snapshots to serialise on, and under READ COMMITTED both
+ * still see no game. So the pair takes a transaction-scoped advisory lock
+ * keyed on the player, which is released when the transaction ends however it
+ * ends. A second caller waits, then reads the first caller's game and is sent
+ * to it rather than given a new one.
+ */
+export async function startGameFor(input: {
+  playerId: string;
+  partnerId: string;
+  era?: "past" | "modern" | "futuristic";
+}): Promise<{ ok: true; id: string } | { ok: false; existingId: string }> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`startup-game:${input.playerId}`}))`);
+
+    const [open] = await tx.select({ id: startupGames.id }).from(startupGames)
+      .where(and(
+        sql`(${startupGames.player1Id} = ${input.playerId} or ${startupGames.player2Id} = ${input.playerId})`,
+        inArray(startupGames.round, [...OPEN_ROUNDS]),
+      ))
+      .limit(1);
+    if (open) return { ok: false as const, existingId: open.id };
+
+    const [game] = await tx.insert(startupGames).values({
+      player1Id: input.playerId,
+      player2Id: input.partnerId,
+      era: input.era ?? null,
+      round: "idea",
+      roundEndsAt: deadlineFor("idea"),
+      // See `createGame`: written rather than defaulted, because `started_at`
+      // is zoneless and `now()` lands hours away from what Drizzle writes.
+      startedAt: new Date(),
+    } as any).returning({ id: startupGames.id });
+
+    return { ok: true as const, id: game.id };
+  });
+}
+
 // ─── Submissions ─────────────────────────────────────────────────────────────
 
 /**
@@ -623,8 +675,57 @@ export async function activeGamesFor(userId: string) {
   return db.select().from(startupGames)
     .where(and(
       sql`(${startupGames.player1Id} = ${userId} or ${startupGames.player2Id} = ${userId})`,
-      inArray(startupGames.round, ["idea", "customer", "model", "product", "spend"]),
+      inArray(startupGames.round, [...OPEN_ROUNDS]),
     ));
+}
+
+/**
+ * Games this person has finished or walked away from, newest first, with the
+ * verdict if one was reached.
+ *
+ * `activeGamesFor` deliberately returns only playable rounds, which left the
+ * result screen — the entire payoff of a half-hour game — reachable only from
+ * the URL you happened to still have open. Navigating away lost it.
+ */
+export async function pastGamesFor(userId: string, limit = 20) {
+  const rows = await db.select({
+    id: startupGames.id,
+    round: startupGames.round,
+    idea: startupGames.idea,
+    era: startupGames.era,
+    startedAt: startupGames.startedAt,
+    completedAt: startupGames.completedAt,
+    abandonedAt: startupGames.abandonedAt,
+    abandonedById: startupGames.abandonedById,
+    overall: startupGameVerdicts.overall,
+    tenYear: startupGameVerdicts.tenYear,
+    peak: startupGameVerdicts.peak,
+    fromModel: startupGameVerdicts.fromModel,
+  })
+    .from(startupGames)
+    .leftJoin(startupGameVerdicts, eq(startupGameVerdicts.gameId, startupGames.id))
+    .where(and(
+      sql`(${startupGames.player1Id} = ${userId} or ${startupGames.player2Id} = ${userId})`,
+      inArray(startupGames.round, ["verdict", "abandoned"]),
+    ))
+    .orderBy(sql`coalesce(${startupGames.completedAt}, ${startupGames.abandonedAt}, ${startupGames.startedAt}) desc`)
+    .limit(Math.min(50, Math.max(1, Math.floor(limit))));
+
+  return rows.map((r) => ({
+    id: r.id,
+    name: (r.idea as any)?.name ?? null,
+    era: r.era,
+    /** "verdict" means it was played to the end; "abandoned" means somebody left. */
+    outcome: r.round,
+    /** Who walked, so the card can say "you left" rather than accusing the partner. */
+    youLeft: r.abandonedById === userId,
+    endedAt: r.completedAt ?? r.abandonedAt ?? r.startedAt,
+    // Null while the model has not scored it yet, and null forever for an
+    // abandoned game. The card has to be able to tell those apart from a zero.
+    verdict: r.overall === null || r.overall === undefined
+      ? null
+      : { overall: r.overall, tenYear: r.tenYear, peak: r.peak, fromModel: !!r.fromModel },
+  }));
 }
 
 // ─── Chat ────────────────────────────────────────────────────────────────────

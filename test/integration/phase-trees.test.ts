@@ -325,7 +325,7 @@ describe("a project that predates paths", () => {
     expect(roadmaps.status).toBe(200);
 
     // The builder catches up by hand from the map.
-    const marked = await agent.post(`/api/projects/${id}/path/mark`).send({ ids: ["SHIP.M1.1", "SHIP.M1.5", "SHIP.M1.8"] });
+    const marked = await agent.post(`/api/projects/${id}/path/mark`).send({ ids: ["SHIP.M1.1", "SHIP.M1.5", "SHIP.M1.8"], evidence: "This was finished before the path existed." });
     expect(marked.body.marked).toEqual(["SHIP.M1.1", "SHIP.M1.5", "SHIP.M1.8"]);
     const after = (await agent.get(`/api/projects/${id}/path`)).body;
     expect(after.adopted).toBe(true);
@@ -384,7 +384,7 @@ describe("Nova works the milestone", () => {
     expect((await agent.get(`/api/projects/${id}/path`)).body.next.id).toBe("SHIP.M1.2");
     await writeLoops(agent, id);
     for (const m of ["SHIP.M1.3", "SHIP.M1.4", "SHIP.M1.5", "SHIP.M1.6", "SHIP.M1.7", "SHIP.M1.8"]) {
-      const marked = await agent.post(`/api/projects/${id}/path/mark`).send({ ids: [m] });
+      const marked = await agent.post(`/api/projects/${id}/path/mark`).send({ ids: [m], evidence: "This was finished before the path existed." });
       expect(marked.status, `${m}: ${JSON.stringify(marked.body).slice(0, 200)}`).toBe(200);
     }
     const week2 = (await agent.get(`/api/projects/${id}/path`)).body;
@@ -421,7 +421,7 @@ describe("clicking into a step", () => {
     expect(done.task).toMatchObject({ status: "done", how: "done", answer: "Players stack towers under pressure." });
     expect(done.task.work.chosenIndex).toBe(0);
 
-    await agent.post(`/api/projects/${id}/path/mark`).send({ ids: ["SHIP.M1.4"] });
+    await agent.post(`/api/projects/${id}/path/mark`).send({ ids: ["SHIP.M1.4"], evidence: "This was finished before the path existed." });
     expect((await agent.get(`/api/projects/${id}/path/milestones/SHIP.M1.4`)).body.task.how).toBe("you-marked");
 
     const { created } = await createExpansion(id, "SHIP.M2.1", [{ title: "Move", description: "" }, { title: "Stack", description: "" }]);
@@ -497,7 +497,7 @@ describe("more than one loop", () => {
     const core = (await agent.get(`/api/projects/${id}/path/milestones/SHIP.M1.2`)).body;
     expect(core.isSource).toBe(true);
     expect(core.loops.map((l: any) => l.title)).toEqual(["Product loop", "Growth loop", "Retention loop", "Revenue loop", "Referral loop", "Build", "The feed"]);
-    for (const m of ["SHIP.M1.1"]) await agent.post(`/api/projects/${id}/path/mark`).send({ ids: [m] });
+    for (const m of ["SHIP.M1.1"]) await agent.post(`/api/projects/${id}/path/mark`).send({ ids: [m], evidence: "This was finished before the path existed." });
     let status = (await agent.get(`/api/projects/${id}/path`)).body;
     expect(status.next.id).toBe("SHIP.M1.2");
     expect(status.next.loops.map((l: any) => l.title)).toEqual(["Product loop", "Build", "The feed", "Growth loop", "Retention loop", "Revenue loop", "Referral loop"]);
@@ -554,10 +554,10 @@ describe("keep building", () => {
     const week = (n: number) => (async () => (await agent.get(`/api/projects/${id}/path`)).body.phases.find((p: any) => p.id === `week-${n}`).milestones.map((m: any) => m.id))();
     await writeLoops(agent, id);
 
-    await agent.post(`/api/projects/${id}/path/mark`).send({ ids: await week(1) });
+    await agent.post(`/api/projects/${id}/path/mark`).send({ ids: await week(1), evidence: "This was finished before the path existed." });
     let s = (await agent.get(`/api/projects/${id}/path`)).body;
     expect(s.offer).toBeNull();
-    await agent.post(`/api/projects/${id}/path/mark`).send({ ids: await week(2) });
+    await agent.post(`/api/projects/${id}/path/mark`).send({ ids: await week(2), evidence: "This was finished before the path existed." });
     s = (await agent.get(`/api/projects/${id}/path`)).body;
     // Week 2 done: week 3 would be next, and the extension is offered instead of skipped.
     expect(s.current.id).toBe("week-3");
@@ -574,15 +574,20 @@ describe("keep building", () => {
     expect(s.branch).toMatchObject({ phaseId: "branch-build", open: true, round: 1 });
 
     // Work through the round; branch work is pace.
-    const beforeEvents = s.events.length;
     const kanban = await agent.get(`/api/projects/${id}/kanban`);
     expect(kanban.status, JSON.stringify(kanban.body).slice(0, 300)).toBe(200);
     const tasks = kanban.body;
     for (const b of ["SHIP.B.1", "SHIP.B.2", "SHIP.B.3"]) await agent.patch(`/api/kanban/${tasks.find((t: any) => t.tags?.includes(`backbone:${b}`)).id}`).send({ status: "done" });
     s = (await agent.get(`/api/projects/${id}/path`)).body;
     expect(s.next.id).toBe("SHIP.B.4");
-    // Writing the loops was already effort; the branch's own work adds to it.
-    expect(s.events.length).toBeGreaterThan(beforeEvents);
+    /*
+     * Writing the loops was already effort; the branch's own work adds to it.
+     * Checked by what's in the log rather than by its length: the log shows
+     * the last ten events, and a catch-up that marks a whole week done now
+     * writes one per milestone (every completion reaches the pace log, however
+     * the work was closed), so it is routinely already full by here.
+     */
+    expect(s.events.map((e: any) => e.backboneId)).toEqual(expect.arrayContaining(["SHIP.B.1", "SHIP.B.2", "SHIP.B.3"]));
     expect(s.pace.multiplier).not.toBeNull();
 
     // Extend again: the branch reopens as round 2.
@@ -764,7 +769,7 @@ describe("verified by the audit", () => {
     const agent = await owner(app);
     const id = (await create(agent, "ship_mvp", "saas", "Verify Test")).body.id;
     const { verifyMilestonesFromAudit } = await import("../../server/phase-tree-verifiers");
-    await agent.post(`/api/projects/${id}/path/mark`).send({ ids: ["SHIP.M3.5"] });
+    await agent.post(`/api/projects/${id}/path/mark`).send({ ids: ["SHIP.M3.5"], evidence: "This was finished before the path existed." });
 
     const proof = {
       id: "audit-1",

@@ -118,7 +118,12 @@ export function ProfileResumePanel({ hasProfileContent }: { hasProfileContent: b
       setOpen(false);
       setDraft(null);
       queryClient.invalidateQueries({ queryKey: ["/api/profile"] });
+      // A prefix that reaches the profile page's ["/api/users", id] and the
+      // badges under it. It matched nothing while that key was a single
+      // string, so Nova filled in the experience and the page kept showing
+      // the empty one.
       queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profile/summary"] });
     },
     onError: (err) => surface(err, "Couldn't save your profile."),
   });

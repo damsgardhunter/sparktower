@@ -45,6 +45,7 @@ const PROJECTS = new Set([
   "job_due", "checkin_due", "scout_update", "scout_new_project", "challenge_entry", "challenge_result",
   "sim_nudge", "season_invite", "sprint_left",
   "project_application", "application_accepted", "application_rejected", "project_removed",
+  "pledge_received", "campaign_decision", "pledge_refunding", "pledge_released", "pledge_refunded",
 ]);
 
 /** The small icon on the avatar's corner: what kind of thing happened. */
@@ -82,6 +83,11 @@ const KIND_ICON: Record<string, { icon: IconName; color: string }> = {
   application_accepted: { icon: "checkmark-circle", color: "#16A34A" },
   application_rejected: { icon: "close-circle", color: colors.textSecondary },
   project_removed: { icon: "remove-circle", color: colors.textSecondary },
+  pledge_received: { icon: "cash", color: "#16A34A" },
+  campaign_decision: { icon: "shield-checkmark", color: "#2563EB" },
+  pledge_refunding: { icon: "card", color: "#D97706" },
+  pledge_released: { icon: "cash", color: "#16A34A" },
+  pledge_refunded: { icon: "card", color: colors.textSecondary },
 };
 
 /**

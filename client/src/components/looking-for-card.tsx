@@ -66,8 +66,16 @@ export function LookingForCard({
       toast({ title: "Saved" });
       setOpen(false);
       queryClient.invalidateQueries({ queryKey: ["/api/profile"] });
+      /*
+       * ["/api/users"] is a prefix, and it only started matching anything once
+       * the profile page's key became ["/api/users", id] rather than the one
+       * string "/api/users/<id>". Before that this pair of lines refreshed
+       * nothing: the saved answer was in the database and the page kept
+       * showing the old one until a reload. ["/api/looking-for"] went with
+       * them — no query has ever used that key.
+       */
       queryClient.invalidateQueries({ queryKey: ["/api/users"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/looking-for"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profile/summary"] });
     },
     onError: (err: any) => {
       const raw = err?.message || "";

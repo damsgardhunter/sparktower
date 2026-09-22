@@ -100,7 +100,21 @@ async function drawSlot(
   } as any);
   const b64 = response.data?.[0]?.b64_json;
   if (!b64) throw new Error("The image model returned nothing");
-  return new ObjectStorageService().writeObjectBuffer(Buffer.from(b64, "base64"), "image/png");
+  /*
+   * Explicitly public, and explicitly owned.
+   *
+   * These are the pictures on the project's own page and in the feed, loaded
+   * by <img> with no credentials at all — on mobile, by a native image view
+   * that sends neither cookie nor bearer token. Marking them private would
+   * blank them for everyone including the team. Saying "public" out loud is
+   * still the fix: an object with no policy is public by accident, and the
+   * next person reading this call site can't tell that from public by
+   * decision. The owner is recorded so the object can be traced back.
+   */
+  return new ObjectStorageService().writeObjectBuffer(Buffer.from(b64, "base64"), "image/png", {
+    owner: project.ownerId,
+    visibility: "public",
+  });
 }
 
 /** The project, when the caller owns it; otherwise the response is sent. */

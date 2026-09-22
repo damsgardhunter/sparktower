@@ -120,8 +120,17 @@ export const SURFACE_CLASS_LABEL: Record<SurfaceClass, string> = {
  * it belongs to.
  */
 export const SURFACE_ROUTES: Record<string, string[]> = {
-  contests: ["/contests"],
-  sprints: ["/sprints"],
+  // `/admin/contests` too: the page that makes them is part of the surface,
+  // the same way `/admin/backing` belongs to backing.
+  contests: ["/contests", "/admin/contests"],
+  /*
+   * `/simulation` as well as `/sprints`. The surface is labelled "Sprints &
+   * simulations" and its note names the market simulation, but the simulation's
+   * pages live at `/simulation/*` and nothing here claimed them — so an admin
+   * who turned the surface off hid the sprint pages and left the whole
+   * simulation reachable, which is the opposite of what the switch says it does.
+   */
+  sprints: ["/sprints", "/simulation"],
   messages: ["/messages"],
   discover: ["/discover"],
   /*
@@ -169,11 +178,25 @@ export const SURFACE_API_PREFIXES: Record<string, string[]> = {
   discover: ["/api/discover"],
   feed: ["/api/feed", "/api/projects/:id/comments", "/api/project-comments", "/api/artifacts", "/api/public/artifacts", "/api/promotions"],
   matches: ["/api/matches", "/api/projects/:id/recommend-people"],
-  sprints: ["/api/games"],
+  /*
+   * `/api/sim` as well as `/api/games`. This surface said "Sprints &
+   * simulations" and covered only the sprint games: every simulation
+   * endpoint — the desk, the market, offers, standings, advancing a season —
+   * is under `/api/sim`, and none of it was behind the switch. Turning the
+   * surface off closed the sprints and left the entire simulation serving,
+   * writes included, which made the kill switch a claim rather than a control.
+   *
+   * It sits before `companies` on purpose. `/api/sim/join-code` is also listed
+   * under `companies` (a company season's join code), and both guards mount, so
+   * either surface being off closes it. That is the right answer: a join code
+   * whose only destination is the simulation is worth nothing while the
+   * simulation is off.
+   */
+  sprints: ["/api/games", "/api/sim"],
   connections: ["/api/connections"],
   messages: ["/api/messages"],
   leaderboard: ["/api/leaderboard", "/api/reputation"],
-  contests: ["/api/contests"],
+  contests: ["/api/contests", "/api/admin/contests"],
   communities: ["/api/communities"],
   liveChat: ["/api/projects/:id/live-chat"],
   companies: ["/api/companies", "/api/company-invites", "/api/challenges", "/api/talent", "/api/sim/join-code", "/api/projects/:id/rhythm"],

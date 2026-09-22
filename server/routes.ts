@@ -21,15 +21,19 @@ import { registerInvestorRoutes } from "./investor-routes";
 import { registerNovaBriefingRoutes } from "./nova-briefing";
 import { registerFeedbackLoopRoutes } from "./feedback-loop-routes";
 import { registerNotificationRoutes, notify, unnotify } from "./notifications";
+import { registerBlockRoutes, blockedIdsFor, isBlockedBetween } from "./blocks";
 import { registerPathReturnRoutes, lastDoneStep, weeklyUpdateFor } from "./path-return";
 import { registerArtifactRoutes } from "./artifact-routes";
 import { registerPromotionRoutes } from "./promotion-routes";
+import { registerAdminContestRoutes } from "./admin-contest-routes";
 import { registerInviteRoutes } from "./invite-routes";
 import { registerMfaRoutes } from "./mfa";
 import { registerAccountRoutes } from "./account-routes";
 import { registerSitemapRoutes } from "./sitemap";
 import { registerDiscoverSearchRoutes } from "./discover-search";
 import { ensureCreatorBadges } from "./backer-badges";
+import { award } from "./badges";
+import { BADGE, BADGE_CATALOG } from "@shared/badges";
 import { registerFeedRoutes, registerProjectDiscussionRoutes, publishSystemPost, SYSTEM_POST_COPY, SYSTEM_POST_TYPES } from "./feed-routes";
 import { scoreMatch, isMatchable, defaultMatchReasons, MATCH_FLOOR, type MatchContext } from "@shared/matching";
 import { registerProfileRoutes } from "./profile-routes";
@@ -56,6 +60,7 @@ import {
   applyProjectOperations, buildOperableProjectState, renderLatestAudit,
   stripIdFragments, collectProjectIds, OPERATION_SCHEMA_INSTRUCTIONS,
 } from "./project-operations";
+import { applyOperationsOnce, idempotencyKeyFor } from "./operation-idempotency";
 import { insertUserProfileSchema, insertProjectSchema, insertProjectBase, insertContestSchema, insertProjectLiveChatMessageSchema, insertWaitlistEntrySchema, insertInterviewSchema, insertExperimentSchema, insertPricingTierSchema, insertAnalyticsEventSchema, insertLegalDocSchema, insertDeployChecklistItemSchema, insertSupportTicketSchema, insertLaunchTaskSchema, insertProjectDecisionSchema, insertProjectFileSchema, insertProjectLinkSchema, type StoryboardScene } from "@shared/schema";
 import { pickFields, WRITABLE } from "./body-fields";
 import { registerEmailVerificationRoutes, requireVerifiedEmail } from "./email-verification";
@@ -94,7 +99,7 @@ import { safeDbUrl, refreshDataShape, getDataShape } from "./data-shape";
 import { isOwner as isPlatformOwner } from "./platform-roles";
 import {
   instantiatePathTree, pathStatus, onPathTaskDone, createExpansion, createInjections,
-  collectArtifacts, saveIntake, prefillFor, switchPath, backboneIdOf, reconcileMilestones, pathTaskContext, saveWork, chooseWork, milestoneDetail, createLoop, setBranch, extendBranch, reconcileLoops, latestWork, deleteLoop, expansionSource,
+  collectArtifacts, saveIntake, prefillFor, switchPath, backboneIdOf, reconcileMilestones, unmarkMilestones, PATH_MARK_LIMIT, pathTaskContext, saveWork, chooseWork, milestoneDetail, createLoop, setBranch, extendBranch, reconcileLoops, latestWork, deleteLoop, expansionSource,
   setLoopType, loopsForAudit, renderLoopsForPrompt, saveLoopAudit, applyLoopDrafts, listTracks, startTrack, trackState, renderPathForAudit,
 } from "./phase-trees";
 import { draftExpansionSteps, proposeInjections, readExistingProgress, draftArtifact, produceWork, auditLoopsAgainstCompetition, draftLoops } from "./phase-trees-nova";
@@ -394,6 +399,7 @@ export async function registerRoutes(
   registerProjectDiscussionRoutes(app);
   registerFeedbackLoopRoutes(app);
   registerNotificationRoutes(app);
+  registerBlockRoutes(app);
   registerPathReturnRoutes(app);
   registerCommunityRoutes(app);
   // The starter communities exist before anyone can open the page. Non-fatal: the list is just shorter without them.
@@ -401,6 +407,7 @@ export async function registerRoutes(
   registerArtifactRoutes(app);
   registerAdminSecurityRoutes(app);
   registerPromotionRoutes(app);
+  registerAdminContestRoutes(app);
   registerInviteRoutes(app);
   // Your data: export it, or close the account (server/account-data.ts).
   registerAccountRoutes(app);
@@ -540,6 +547,12 @@ export async function registerRoutes(
 
   app.post("/api/profile/complete-onboarding", isAuthenticated, async (req: any, res) => {
     await storage.completeOnboarding((req.user as any).id);
+    // Finishing the profile is what makes someone matchable at all, so it is
+    // worth marking. Awarded, not checked-then-awarded: the unique index on
+    // user_badges makes a repeat a no-op. Awaited — it is one insert, and a
+    // fire-and-forget award is a badge that may or may not exist by the time
+    // the screen that asked for it re-reads the profile.
+    await award((req.user as any).id, BADGE.profileComplete);
     res.json({ success: true });
   });
 
@@ -740,6 +753,17 @@ Only include fields you have enough info to fill. Start empty if needed.`;
     await instantiatePathTree(project.id, validated.goal, validated.subcategory)
       .catch((err) => console.error("[phase-trees] Failed to instantiate path:", err));
 
+    /*
+     * The catalog badge for shipping something, as opposed to the per-project
+     * founder badge below. Awarded on every project and deduplicated by the
+     * unique index on `user_badges`, so there is nothing here that has to know
+     * whether this was their first — a "have you got it already" read would be
+     * a check-then-act race between two projects created at once.
+     *
+     * Private projects count: you built the thing either way.
+     */
+    await award(ownerId, BADGE.firstProject);
+
     // Announce it on the founder feed. Private projects stay off the feed.
     if (!project.isPrivate) {
       void notifyWatchersOfNewProject(project.id);
@@ -801,6 +825,8 @@ Only include fields you have enough info to fill. Start empty if needed.`;
         userAgent: req.headers["user-agent"] ?? null,
         path: req.originalUrl,
         referrer: req.headers.referer ?? null,
+        // The per-address cap on recording views: a GET carries no write-floor limit.
+        address: req.ip ?? null,
       },
     });
     if (outcome === "counted") await storage.incrementProjectViews(req.params.id);
@@ -1544,16 +1570,24 @@ If the ask has nothing to do with planning tasks, say so in "summary", return an
         return res.status(400).json({ message: "There's no plan to apply." });
       }
 
-      const { changes, skipped } = await applyProjectOperations(projectId, userId, operations, {
-        canEditMilestones: ent.aiMilestones,
-        canEditRoadmap: ent.roadmapUpdates,
+      /*
+       * Applied once. The same plan arriving twice — a double click, a retry
+       * after a slow apply — used to write every task and milestone in it
+       * again, which is exactly the mess the plan was meant to avoid.
+       */
+      const result = await applyOperationsOnce({
+        projectId, userId, operations, source: "task-planner",
+        key: idempotencyKeyFor(req, operations),
         // A milestone-by-milestone plan is legitimately dozens of operations.
-        maxOperations: 120,
+        apply: { canEditMilestones: ent.aiMilestones, canEditRoadmap: ent.roadmapUpdates, maxOperations: 120 },
       });
-      if (!changes.length) {
-        return res.status(422).json({ message: "None of that plan could be applied.", skipped });
+      if (result.replayed) {
+        return res.status(409).json({ message: "That plan was already applied.", changes: result.changes, skipped: result.skipped, replayed: true });
       }
-      res.json({ changes, skipped });
+      if (!result.changes.length) {
+        return res.status(422).json({ message: "None of that plan could be applied.", skipped: result.skipped });
+      }
+      res.json({ changes: result.changes, skipped: result.skipped });
     } catch (error) {
       console.error("Task assist apply error:", error);
       res.status(500).json({ message: "Couldn't apply that plan" });
@@ -3061,18 +3095,50 @@ RULES:
     }
   });
 
-  /** The builder marking a milestone done from the map — quick catch-up, no AI. */
+  /**
+   * The builder marking a milestone done from the map — quick catch-up, no AI.
+   *
+   * Capped and evidenced, like its twin on the MCP bridge. Unbounded, one call
+   * could tick a whole path done in a single request; with the canned default
+   * evidence it also filled the map with "already done before this path
+   * existed" against milestones nobody could afterwards account for. A line
+   * saying what makes it done is the least that keeps the map honest — and
+   * whatever is marked here can be taken back, through /path/unmark.
+   */
   app.post("/api/projects/:id/path/mark", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
       if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
+      const ids: string[] = [...new Set<string>((Array.isArray(req.body?.ids) ? req.body.ids : []).map((x: unknown) => String(x)).filter(Boolean))].slice(0, PATH_MARK_LIMIT);
       if (!ids.length) return res.status(400).json({ message: "Say which milestones.", code: "invalid_input", field: "ids" });
-      const { marked } = await reconcileMilestones(req.params.id, ids.map((id) => ({ id, evidence: String(req.body?.evidence ?? "already done before this path existed") })), "builder");
-      res.json({ marked });
+      if ((Array.isArray(req.body?.ids) ? req.body.ids.length : 0) > PATH_MARK_LIMIT) {
+        return res.status(400).json({ message: `Mark at most ${PATH_MARK_LIMIT} milestones at a time.`, code: "invalid_input", field: "ids" });
+      }
+      const evidence = String(req.body?.evidence ?? "").trim().slice(0, 600);
+      if (evidence.length < 10) {
+        return res.status(400).json({ message: "Say in a line what shows these are done.", code: "invalid_input", field: "evidence" });
+      }
+      const { marked } = await reconcileMilestones(req.params.id, ids.map((id) => ({ id, evidence })), "builder");
+      res.json({ marked, ignored: ids.filter((id) => !marked.includes(id)) });
     } catch (error) {
       console.error("Path mark error:", error);
       res.status(500).json({ message: "Couldn't mark that" });
+    }
+  });
+
+  /** Taking a mark back: the counterpart to /path/mark, for the one ticked by mistake. */
+  app.post("/api/projects/:id/path/unmark", isAuthenticated, rateLimit("workspace"), async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const ids: string[] = [...new Set<string>((Array.isArray(req.body?.ids) ? req.body.ids : []).map((x: unknown) => String(x)).filter(Boolean))].slice(0, PATH_MARK_LIMIT);
+      if (!ids.length) return res.status(400).json({ message: "Say which milestones.", code: "invalid_input", field: "ids" });
+      const { unmarked } = await unmarkMilestones(req.params.id, ids);
+      // Anything not in `unmarked` was really finished, not merely claimed, and stays done.
+      res.json({ unmarked, ignored: ids.filter((id) => !unmarked.includes(id)) });
+    } catch (error) {
+      console.error("Path unmark error:", error);
+      res.status(500).json({ message: "Couldn't undo that" });
     }
   });
 
@@ -3851,10 +3917,31 @@ RULES:
        * recommending people you'd already connected with: the old code read
        * your connections into a set and then never consulted it.
        */
+      /*
+       * The pool is cut in SQL, by shared skills and interests.
+       *
+       * This used to be `storage.searchUsers("")`, whose limit is a hard 500
+       * ordered by join date. That is fine on a small site and quietly wrong
+       * on a large one: member 501 onwards is invisible to matching forever,
+       * and — since the same 500 rows are everyone's pool — the oldest members
+       * are matchable by nobody at all. `matchCandidates` ranks by overlap
+       * first and join date only as a tiebreaker, so who you can be matched
+       * with stops depending on when you signed up.
+       */
       const related = await relatedUserIds(userId);
-      const allProfiles = await storage.searchUsers("");
-      const eligible = allProfiles.filter((p) =>
-        isMatchable(p.id, { viewerId: userId, isOnboarded: !!p.profile?.isOnboarded, relatedUserIds: related })
+      const candidates = await storage.matchCandidates(userId, {
+        skills: userProfile.skills,
+        interests: userProfile.interests,
+      });
+      /*
+       * Blocks, in both directions. Matching is the one surface that puts a
+       * stranger's face in front of you unasked, so it's the one that most
+       * needs to know: a match is how a blocked account would otherwise walk
+       * straight back into view, with a "Connect" button attached.
+       */
+      const blocked = await blockedIdsFor(userId);
+      const eligible = candidates.filter((p) =>
+        isMatchable(p.id, { viewerId: userId, isOnboarded: !!p.profile?.isOnboarded, relatedUserIds: related, blockedIds: blocked })
       );
 
       /*
@@ -3887,19 +3974,36 @@ RULES:
 
       const scoredMatches: { id: string; score: number; factors: ReturnType<typeof scoreMatch>["factors"] }[] = [];
 
+      /*
+       * Read once for the whole pool, not three queries per candidate.
+       *
+       * The loop below used to run `getUserProjects`, `getMutualConnections`
+       * (itself four queries and two profile fan-outs) and `getUserReputation`
+       * for every single candidate — on the order of fifteen hundred queries
+       * for one press of "generate matches", with nothing rate-limiting the
+       * press. Three bulk reads answer exactly the same questions.
+       */
+      const candidateIds = otherProfiles.map((p) => p.id);
+      const [projectsByUser, reputationByUser, connectionsByUser] = await Promise.all([
+        storage.getProjectsForUsers(candidateIds),
+        storage.getReputationsForUsers(candidateIds),
+        storage.getAcceptedConnectionIds([userId, ...candidateIds]),
+      ]);
+      const myConnections = connectionsByUser.get(userId) ?? new Set<string>();
+
       for (const other of otherProfiles) {
-        const [otherProjects, mutualConns, otherReputation] = await Promise.all([
-          storage.getUserProjects(other.id),
-          storage.getMutualConnections(userId, other.id),
-          storage.getUserReputation(other.id),
-        ]);
+        const otherProjects = projectsByUser.get(other.id) ?? [];
+        const otherReputation = reputationByUser.get(other.id);
+        const theirConnections = connectionsByUser.get(other.id) ?? new Set<string>();
+        let mutualCount = 0;
+        for (const id of theirConnections) if (myConnections.has(id)) mutualCount += 1;
 
         const { score, factors } = scoreMatch(me, {
           profile: other.profile!,
           context: {
             categories: otherProjects.map((p) => p.category),
             rolesNeeded: otherProjects.flatMap((p) => p.rolesNeeded || []),
-            mutualConnections: mutualConns.length,
+            mutualConnections: mutualCount,
             builderIndex: otherReputation?.builderIndex || 0,
           },
         });
@@ -3973,7 +4077,15 @@ RULES:
       return savedMatches;
   }
 
-  app.post("/api/matches/generate", isAuthenticated, async (req: any, res) => {
+  /*
+   * Limited, because this is the most expensive button on the site.
+   *
+   * One press scores the whole candidate pool and may call the model for the
+   * reasons. Unlimited, it was a scan per click as fast as a finger can move —
+   * so the limit is the shared AI budget rather than a write floor, which is
+   * what the cost of this actually resembles.
+   */
+  app.post("/api/matches/generate", isAuthenticated, rateLimit("ai"), async (req: any, res) => {
     try {
       res.json(await runMatchGeneration((req.user as any).id));
     } catch (error: any) {
@@ -4032,13 +4144,46 @@ RULES:
   });
 
   // Users
-  app.get("/api/users/search", async (req, res) => {
+  /*
+   * Finding people, for people who are here.
+   *
+   * This was open to anyone, with an offset and a page size of five hundred,
+   * and it answered an empty query with "everybody" — so the whole member
+   * directory could be walked from a shell, and each row carried the full
+   * profile: résumé link, work history, education. Discover's equivalent has
+   * always been behind a sign-in; this was the back door around it.
+   *
+   * Now: signed in, rate limited, a page at a time, and only the fields a
+   * card shows. A person's history is on their profile, where the person
+   * reading it is at least accountable for having asked.
+   */
+  app.get("/api/users/search", isAuthenticated, rateLimit("track"), async (req, res) => {
     try {
       const query = String(req.query.q ?? "").slice(0, 100);
-      const limit = req.query.limit !== undefined ? Number(req.query.limit) || undefined : undefined;
-      const offset = req.query.offset !== undefined ? Number(req.query.offset) || 0 : undefined;
-      const users = await storage.searchUsers(query, { limit, offset });
-      res.json(users);
+      const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 50));
+      const offset = Math.min(500, Math.max(0, Number(req.query.offset) || 0));
+      // Searching by name is the simplest way back to somebody you blocked, so
+      // the viewer goes down with the query and the blocked rows never make the
+      // page. Cut in SQL, not after: filtering a page in memory silently
+      // shortens it and, worse, would end the results early on a paged search.
+      const users = await storage.searchUsers(query, { limit, offset, viewerId: (req as any).user?.id });
+      res.json(users.map((u) => ({
+        id: u.id,
+        firstName: u.firstName,
+        lastName: u.lastName,
+        profileImageUrl: u.profileImageUrl,
+        profile: u.profile ? {
+          userId: u.profile.userId,
+          displayName: u.profile.displayName,
+          username: u.profile.username,
+          headline: u.profile.headline,
+          bio: u.profile.bio,
+          avatarUrl: u.profile.avatarUrl,
+          location: u.profile.location,
+          skills: u.profile.skills,
+          interests: u.profile.interests,
+        } : undefined,
+      })));
     } catch (error) {
       console.error("User search error:", error);
       res.status(500).json({ message: "Search failed" });
@@ -4056,6 +4201,32 @@ RULES:
     if (!user) return res.status(404).json({ message: "User not found" });
     const profile = await storage.getUserProfile(req.params.id);
     const viewerId = req.user?.id as string | undefined;
+    /*
+     * A block hides each from the other's profile — and it has to be the same
+     * 404 that a missing account gets. A distinct status or message here is
+     * the leak that undoes the whole design: it's the one endpoint anybody can
+     * poll with a known id, so a special answer turns "did they block me?"
+     * into a question with a reliable answer.
+     */
+    if (viewerId && viewerId !== user.id && await isBlockedBetween(viewerId, user.id)) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    /*
+     * A suspended or closed account has no public profile.
+     *
+     * The profile is the page every other surface links to, so leaving it up
+     * undid the rest of a suspension: the account still had a face, a
+     * headline, a project list and a Connect button, and anyone who had its
+     * link could still read it. A closed account is the same page with nobody
+     * behind it. Their own view is untouched — somebody suspended still needs
+     * to see their account to appeal — and so is a reviewer's, who has to be
+     * able to look at what they're deciding about.
+     */
+    const viewerRole = (req.user as any)?.platformRole;
+    const isStaff = viewerRole === "admin" || viewerRole === "reviewer";
+    if ((user.suspendedAt || user.deletedAt) && viewerId !== user.id && !isStaff) {
+      return res.status(404).json({ message: "User not found" });
+    }
     /*
      * Their projects, asked for by owner: the listing is capped now, and
      * filtering the newest 200 of everyone's would drop an older builder's
@@ -4081,6 +4252,8 @@ RULES:
         userAgent: req.headers["user-agent"] ?? null,
         path: req.originalUrl,
         referrer: req.headers.referer ?? null,
+        // The per-address cap on recording views: a GET carries no write-floor limit.
+        address: req.ip ?? null,
       },
     });
 
@@ -4287,19 +4460,15 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences),
         }
       }
 
-      try {
-        const allBadges = await storage.getBadges();
-        const aiExplorerBadge = allBadges.find(b => b.name === "AI Explorer");
-        if (aiExplorerBadge) {
-          const userId = (req.user as any).id;
-          const existingBadges = await storage.getUserBadges(userId);
-          if (!existingBadges.some(ub => ub.badgeId === aiExplorerBadge.id)) {
-            await storage.awardBadge(userId, aiExplorerBadge.id);
-          }
-        }
-      } catch (badgeErr) {
-        console.error("Badge awarding failed (non-fatal):", badgeErr);
-      }
+      /*
+       * By stable id, not by name.
+       *
+       * This site used to read every badge, look for one called "AI Explorer",
+       * find nothing — because nothing had ever inserted a badge — and return
+       * without a word. `award` names a catalog entry, so the same mistake is
+       * now a boot-time error outside production rather than a silence.
+       */
+      await award((req.user as any).id, BADGE.aiExplorer);
 
       /*
        * Persist scenes privately.
@@ -5971,6 +6140,23 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     res.json(allBadges);
   });
 
+  /*
+   * The badges there are to earn, and how.
+   *
+   * From the catalog in code rather than from the table, on purpose: the table
+   * also holds rows left over from features that no longer exist (a typing
+   * race, a signal game), and offering somebody a badge nothing can award is
+   * worse than offering none. The panel shows this list with the earned ones
+   * lit, so a profile with no badges says what to do instead of saying
+   * nothing — which is what it did on the day badges started working.
+   */
+  app.get("/api/badges/catalog", async (_req, res) => {
+    res.json(BADGE_CATALOG.map((b) => ({
+      id: b.id, name: b.name, description: b.description,
+      icon: b.icon, rarity: b.rarity, category: b.category, howTo: b.howTo,
+    })));
+  });
+
   app.get("/api/users/:userId/badges", async (req, res) => {
     const userBadges = await storage.getUserBadges(req.params.userId);
     res.json(userBadges);
@@ -6002,7 +6188,15 @@ Respond ONLY with valid JSON (no markdown, no code fences):
   });
 
   app.get("/api/contests/:id/participants", async (req, res) => {
-    const participants = await storage.getContestParticipants(req.params.id);
+    // Paged and capped: the list is readable signed out, and an uncapped one
+    // let a single request pull every entrant plus their account and profile.
+    const limit = Number.parseInt(String(req.query.limit ?? ""), 10);
+    const offset = Number.parseInt(String(req.query.offset ?? ""), 10);
+    const participants = await storage.getContestParticipants(
+      req.params.id,
+      Number.isFinite(limit) ? limit : undefined,
+      Number.isFinite(offset) ? offset : 0,
+    );
     res.json(participants);
   });
 
@@ -6015,13 +6209,19 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       if (contest.status !== "active" && contest.status !== "upcoming") {
         return res.status(400).json({ message: "Contest is not accepting participants" });
       }
-      const already = await storage.isContestParticipant(contestId, userId);
-      if (already) return res.status(400).json({ message: "Already joined" });
-      if (contest.maxParticipants && contest.participantCount >= contest.maxParticipants) {
-        return res.status(400).json({ message: "Contest is full" });
-      }
-      const participant = await storage.joinContest(contestId, userId);
-      res.json(participant);
+      /*
+       * No read-then-write. "Already in?" and "is it full?" used to be two
+       * queries before the insert, so a double-clicked button ran both checks
+       * twice before either row was written: one person entered twice, the
+       * entrant count was wrong from then on, and a contest could pass its own
+       * maximum by however many requests were in flight. Both are now decided
+       * inside the insert — the unique index for the first, a count in the
+       * insert's own WHERE for the second.
+       */
+      const entry = await storage.joinContest(contestId, userId, contest.maxParticipants);
+      if (!entry) return res.status(400).json({ message: "Contest is full", code: "contest_full" });
+      if (!entry.created) return res.status(400).json({ message: "Already joined", code: "already_joined" });
+      res.json(entry.participant);
     } catch (error) {
       console.error("Error joining contest:", error);
       res.status(500).json({ message: "Failed to join contest" });
@@ -6058,8 +6258,29 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       if (requesterId === receiverId) return res.status(400).json({ message: "Cannot connect with yourself" });
       // An optional hello, capped: it's text going to someone who hasn't agreed to hear from you yet.
       const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, CONNECTION_NOTE_MAX) || null : null;
+      /*
+       * A block stops the request, in both directions, and says nothing.
+       *
+       * The connection request is the sharpest tool a harasser has here: it
+       * carries a 280-character note to somebody who has not agreed to hear
+       * from them, and it arrives as a notification. So it is the first thing
+       * a block has to close.
+       *
+       * It answers as though the request went through — a pending-shaped row
+       * with no id, which notifies nobody and writes nothing. That is
+       * deliberate. A 403 here, or a different message, tells the blocked
+       * person exactly what happened, and "you have been blocked" is the
+       * sentence that makes somebody open a second account. Nothing is lost by
+       * the silence: nobody is owed delivery confirmation for a message to
+       * someone who doesn't want it.
+       */
+      if (await isBlockedBetween(requesterId, String(receiverId))) {
+        recordExploreAction(req, EXPLORE_EVENTS.connectRequest, { matchType: "builder", targetId: String(receiverId) });
+        return res.json({ id: null, requesterId, receiverId, status: "pending", note, createdAt: new Date() });
+      }
       const conn = await storage.sendConnectionRequest(requesterId, receiverId, note);
-      recordExploreAction(req, EXPLORE_EVENTS.connectRequest, { matchType: "builder", targetId: String(receiverId) });
+      // Not for a repeat of a request already sent: one intent, one event, however many times the button is pressed.
+      if (!conn.alreadySent) recordExploreAction(req, EXPLORE_EVENTS.connectRequest, { matchType: "builder", targetId: String(receiverId) });
       if (conn?.id && conn.status === "pending") void notify({ recipients: [String(receiverId)], actorId: requesterId, kind: "connection_request", targetId: conn.id, excerpt: note });
       res.json(conn);
     } catch (error: any) {
@@ -6228,6 +6449,15 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     try {
       const currentUserId = (req.user as any).id;
       const otherUserId = req.params.userId;
+      /*
+       * A block ends the thread for both of them. Checked before the
+       * connection so the answer is the same whichever side blocked, and
+       * phrased as the ordinary refusal: the blocked person must not be able
+       * to tell "they blocked me" from "we were never connected".
+       */
+      if (await isBlockedBetween(currentUserId, otherUserId)) {
+        return res.status(403).json({ message: "You can only view messages with connected users" });
+      }
       const conn = await storage.getConnectionStatus(currentUserId, otherUserId);
       if (!conn || conn.status !== "accepted") {
         return res.status(403).json({ message: "You can only view messages with connected users" });
@@ -6246,6 +6476,15 @@ Respond ONLY with valid JSON (no markdown, no code fences):
       const receiverId = req.params.userId;
       const { content } = req.body;
       if (!content || !content.trim()) return res.status(400).json({ message: "content is required" });
+
+      // The same test as the read side, for the same reason. A block also
+      // deletes the connection, so this is belt and braces — but the belt is
+      // what stops a connection created in the same second from reopening the
+      // channel, and the braces are what keeps the rule true if a future
+      // caller stops deleting connections on block.
+      if (await isBlockedBetween(senderId, receiverId)) {
+        return res.status(403).json({ message: "You can only message connected users" });
+      }
 
       const conn = await storage.getConnectionStatus(senderId, receiverId);
       if (!conn || conn.status !== "accepted") {

@@ -87,6 +87,11 @@ export function notificationText(n: NotificationShape): string {
     case "company_powers": return `${who} changed what you can do for the company`;
     case "job_due": return "A recurring job of yours is due";
     case "checkin_due": return "It's check-in day";
+    case "pledge_received": return n.projectTitle ? `${who} backed ${n.projectTitle}` : `${who} backed your project`;
+    case "campaign_decision": return n.projectTitle ? `There's a decision on backing for ${n.projectTitle}` : "There's a decision on your backing campaign";
+    case "pledge_refunding": return n.projectTitle ? `${n.projectTitle} wasn't approved — your pledge is being refunded` : "Your pledge is being refunded";
+    case "pledge_released": return n.projectTitle ? `Your pledge went to ${n.projectTitle}` : "Your pledge went to the project";
+    case "pledge_refunded": return "Your pledge was refunded";
     case "project_application": return n.projectTitle ? `${who} applied to join ${n.projectTitle}` : `${who} applied to join your project`;
     case "application_accepted": return n.projectTitle ? `You're on the team: ${who} accepted your application to ${n.projectTitle}` : `${who} accepted your application`;
     // Plain, and not dressed up: they asked, and this is the answer.
@@ -132,6 +137,9 @@ export function notificationHref(n: Pick<NotificationShape, "kind" | "actorId" |
   // `companyId:…` targets: the company's page, on the tab the change was about.
   if (n.kind === "company_added" || n.kind === "company_powers") return n.targetId ? `/companies/${n.targetId.split(":")[0]}` : "/companies";
   // The Run section of the project, where the jobs and the check-in live.
+  // Money: the project it was about, where the backing panel and its updates are.
+  if (n.kind === "pledge_received" || n.kind === "campaign_decision") return n.projectId ? `/projects/${n.projectId}/manage?tab=setup` : "/";
+  if (n.kind === "pledge_refunding" || n.kind === "pledge_released" || n.kind === "pledge_refunded") return n.projectId ? `/projects/${n.projectId}` : "/";
   if (n.kind === "job_due" || n.kind === "checkin_due") return n.projectId ? `/projects/${n.projectId}/manage?section=run_company` : "/";
   if (n.kind === "connection_request") return "/profile";
   return `/profile/${n.actorId}`;

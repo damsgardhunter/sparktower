@@ -124,7 +124,11 @@ export function PublishArtifactDialog({ projectId, projectTitle, step, open, onC
   const [ask, setAsk] = useState("");
   const [published, setPublished] = useState<string | null>(null);
   const [takingDown, setTakingDown] = useState(false);
-  const draft = useQuery<{ id: string; title: string; summary: string; body: string; files: { path: string }[]; tags: string[]; visibility: string }>({
+  const draft = useQuery<{
+    id: string; title: string; summary: string; body: string; files: { path: string }[]; tags: string[]; visibility: string;
+    /** The step has changed since this page went live, and the change is being held back. */
+    hasDraft?: boolean; draftBody?: string | null; draftSummary?: string | null;
+  }>({
     queryKey: ["/api/projects", projectId, "path", "artifact", step.taskId],
     queryFn: async () => {
       const a = await (await apiRequest("POST", `/api/projects/${projectId}/path/tasks/${step.taskId}/artifact`)).json();
@@ -142,16 +146,27 @@ export function PublishArtifactDialog({ projectId, projectTitle, step, open, onC
     })).json() as Promise<{ url: string; postId: string }>,
     onSuccess: (r) => {
       setPublished(`${window.location.origin}${r.url}`);
+      // The held-back draft has just been promoted, so the "there's a newer
+      // version" notice has to go with it rather than linger over live text.
+      void draft.refetch();
       refreshNextSteps(projectId);
     },
     onError: (e) => toast({ title: "Couldn't publish that", description: errorText(e), variant: "destructive" }),
   });
   // The other direction. The feed post is a separate thing the author deletes from the feed.
   const unpublish = useMutation({
-    mutationFn: async () => (await apiRequest("POST", `/api/artifacts/${draft.data!.id}/unpublish`)).json(),
-    onSuccess: () => {
+    mutationFn: async (removePost: boolean) =>
+      (await apiRequest("POST", `/api/artifacts/${draft.data!.id}/unpublish`, { removePost })).json() as Promise<{ postId: string | null; post: string }>,
+    onSuccess: (r) => {
       setTakingDown(false);
-      toast({ title: "The page is down", description: "The link leads nowhere now. Your post about it is still on the feed until you delete it." });
+      toast({
+        title: "The page is down",
+        description: r.post === "deleted" || r.post === "kept"
+          ? "The link leads nowhere now, and the post announcing it is gone from the feed."
+          : r.post === "not_yours"
+            ? "The link leads nowhere now. The post announcing it was written by someone else on the team, so it's theirs to delete."
+            : "The link leads nowhere now. Your post about it is still on the feed until you delete it.",
+      });
       refreshNextSteps(projectId);
       onClose();
     },
@@ -171,6 +186,26 @@ export function PublishArtifactDialog({ projectId, projectTitle, step, open, onC
         {liveUrl ? (
           <div className="space-y-2">
             <input readOnly value={liveUrl} className="w-full rounded-md border border-border bg-muted px-2 py-1.5 text-sm" onFocus={(e) => e.target.select()} data-testid="text-artifact-url" />
+            {/*
+              * The step has moved on since the page went out, and that change
+              * is deliberately NOT live yet. Regenerating used to overwrite the
+              * public page the instant this dialog opened, which put working
+              * notes on the open internet with nobody's say-so. Now it waits
+              * here until somebody presses this.
+              */}
+            {draft.data?.hasDraft && (
+              <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 space-y-2" data-testid="artifact-draft-notice">
+                <p className="text-xs">
+                  This step has changed since the page went up. The public page still shows what you published.
+                </p>
+                <div className="rounded border border-border bg-background/60 p-2 text-xs max-h-28 overflow-y-auto whitespace-pre-wrap" data-testid="artifact-draft-preview">
+                  {draft.data.draftBody || draft.data.draftSummary}
+                </div>
+                <Button size="sm" disabled={publish.isPending} onClick={() => publish.mutate()} data-testid="button-publish-artifact-update">
+                  {publish.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe className="h-4 w-4 mr-1.5" />}Publish this update
+                </Button>
+              </div>
+            )}
             <div className="flex gap-3 text-sm">
               <button className="text-primary hover:underline" onClick={() => navigator.clipboard?.writeText(liveUrl)}>Copy link</button>
               <a href={liveUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline" data-testid="link-open-artifact">Open the page</a>
@@ -220,20 +255,35 @@ export function PublishArtifactDialog({ projectId, projectTitle, step, open, onC
             <AlertDialogHeader>
               <AlertDialogTitle>Take this page down?</AlertDialogTitle>
               <AlertDialogDescription>
-                The page stops being reachable. Anyone who opens the link — including people who already have it — gets nothing.
-                Your post about it stays on the feed until you delete it, and you can publish the page again later.
+                The page stops being reachable. Anyone who opens the link — including people who already have it — gets nothing,
+                and you can publish the page again later.
               </AlertDialogDescription>
             </AlertDialogHeader>
-            <AlertDialogFooter>
+            {/*
+              * The post is the other half of publishing, and leaving it up
+              * leaves a post at the top of the feed whose link now goes
+              * nowhere. Offered here rather than as a second errand.
+              */}
+            <AlertDialogFooter className="sm:justify-between">
               <AlertDialogCancel data-testid="button-unpublish-cancel">Leave it up</AlertDialogCancel>
-              <AlertDialogAction
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                disabled={unpublish.isPending}
-                onClick={(e) => { e.preventDefault(); unpublish.mutate(); }}
-                data-testid="button-unpublish-confirm"
-              >
-                {unpublish.isPending && <Loader2 className="h-4 w-4 animate-spin mr-1.5" />}Take it down
-              </AlertDialogAction>
+              <div className="flex gap-2">
+                <AlertDialogAction
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  disabled={unpublish.isPending}
+                  onClick={(e) => { e.preventDefault(); unpublish.mutate(true); }}
+                  data-testid="button-unpublish-with-post"
+                >
+                  {unpublish.isPending && <Loader2 className="h-4 w-4 animate-spin mr-1.5" />}Take it down and delete the post
+                </AlertDialogAction>
+                <AlertDialogAction
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  disabled={unpublish.isPending}
+                  onClick={(e) => { e.preventDefault(); unpublish.mutate(false); }}
+                  data-testid="button-unpublish-confirm"
+                >
+                  Page only
+                </AlertDialogAction>
+              </div>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>

@@ -56,7 +56,8 @@ vi.mock("../../server/stripeClient", () => ({
 const { getTestApp, closeTestApp } = await import("../helpers/app");
 const { passMfa } = await import("../helpers/mfa");
 const { db } = await import("../../server/db");
-const { users, projects, projectBackings, projectBackingCampaigns, projectMembers } = await import("@shared/schema");
+const { users, projects, projectBackings, projectBackingCampaigns, projectMembers, notifications } = await import("@shared/schema");
+const { devOutbox } = await import("../../server/email");
 const { eq } = await import("drizzle-orm");
 const { runRefundSweep } = await import("../../server/backing-jobs");
 
@@ -233,6 +234,51 @@ describe("a campaign a reviewer rejected", () => {
 
     await expect.poll(() => S.refunds.length, { timeout: 10_000 }).toBe(2);
     for (const p of pledges) expect((await status(p.id)).status).toBe("refunded");
+  });
+});
+
+describe("telling people what happened to their money", () => {
+  /*
+   * Backing ran end to end in silence: a backer heard nothing when a project
+   * was rejected and nothing when the refund went through, and a creator
+   * heard nothing about a pledge or a decision. A refund appearing in a bank
+   * statement weeks later, unexplained, is how a person decides a product
+   * took their money.
+   */
+  const notices = async (userId: string) => {
+    const rows = await db.select().from(notifications).where(eq(notifications.recipientId, userId));
+    return rows.map((r) => r.kind);
+  };
+  const posted = (to: string | null, tag: string) => devOutbox().some((m) => m.tag === tag && (!to || m.to === to));
+
+  it("tells the backers and the creator when a campaign is turned down and the money goes back", async () => {
+    const reviewer = await account("reviewer");
+    await passMfa(reviewer.agent);
+    const { projectId, pledges } = await campaign("pending", 1, new Date(Date.now() + 90 * 86_400_000));
+    const [pledge] = pledges;
+    const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
+
+    const res = await reviewer.agent.post(`/api/admin/backing/${projectId}/decision`).send({ decision: "rejected", notes: "Not a real product." });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+    await expect.poll(() => notices(pledge.backerId), { timeout: 10_000 }).toContain("pledge_refunding");
+    expect(await notices(project.ownerId), "the creator hears the decision").toContain("campaign_decision");
+    expect(posted(null, "pledge_refunding"), "and by email, for whoever isn't coming back today").toBe(true);
+
+    // And again when the refund actually lands, so the statement entry has a name.
+    await expect.poll(() => notices(pledge.backerId), { timeout: 10_000 }).toContain("pledge_refunded");
+  });
+
+  it("tells each backer when their money goes to the project, and the creator when a pledge arrives", async () => {
+    const reviewer = await account("reviewer");
+    await passMfa(reviewer.agent);
+    const { projectId, pledges } = await campaign("approved", 1);
+    const [pledge] = pledges;
+
+    const res = await reviewer.agent.post(`/api/admin/backing/${projectId}/release`).send({});
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    await expect.poll(() => notices(pledge.backerId), { timeout: 10_000 }).toContain("pledge_released");
+    expect(posted(null, "pledge_released")).toBe(true);
   });
 });
 

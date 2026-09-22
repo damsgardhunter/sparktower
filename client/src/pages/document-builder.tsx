@@ -29,6 +29,24 @@ import type { ProjectDocument } from "@shared/schema";
 
 const FOLDER_SUGGESTIONS = ["docs", "specs", "plans", "legal", "design", "research", "general"];
 
+/** What one fill request answers with, and what the client's page loop sums up. */
+interface FillResult {
+  document: ProjectDocument;
+  blocksFilled: number;
+  blocksRequested: number;
+  blocksTightened: number;
+  stillOverflowing: number;
+  failedPages: string[];
+  /** Everything still waiting on a retry, as the server now has it. */
+  failedBlockIds: string[];
+  /** Written by Nova into a block the builder deleted meanwhile. */
+  droppedBlocks: number;
+  pagesRemaining: number;
+  nextPageIndex: number | null;
+  unmatchedIds: number;
+  creditsCharged: number;
+}
+
 const newBlockId = () =>
   (globalThis.crypto?.randomUUID?.() ?? `b-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
@@ -53,7 +71,13 @@ export default function DocumentBuilder() {
   const [publishFolder, setPublishFolder] = useState("docs");
   const [replanOpen, setReplanOpen] = useState(false);
   const [replanFeedback, setReplanFeedback] = useState("");
+  /** What a refused restructure said it would throw away, pending the builder's answer. */
+  const [discardWarning, setDiscardWarning] = useState<{ lostWords: number; totalWords: number; lostBlocks: { headline: string; page: string; words: number }[] } | null>(null);
+  /** There is a previous structure to go back to, because this session made one. */
+  const [canUndo, setCanUndo] = useState(false);
   const [fillingBlockId, setFillingBlockId] = useState<string | null>(null);
+  /** Which page of a whole-document fill is being written, so a long run shows progress. */
+  const [fillProgress, setFillProgress] = useState<{ done: number; total: number } | null>(null);
   const [approach, setApproach] = useState<string | null>(null);
   /** Count of AI writes in flight. Autosave stands down while any are running. */
   const [aiBusy, setAiBusy] = useState(0);
@@ -105,6 +129,9 @@ export default function DocumentBuilder() {
     setTitle(doc.title);
     setPages(((doc.pages as DocumentPage[]) || []).map(normalizePage));
     setSettings({ ...DEFAULT_SETTINGS, ...(doc.settings as DocumentSettings) });
+    // A restructure from a previous session is still undoable: the versions
+    // live on the document, not in this tab.
+    setCanUndo((((doc as any).pagesHistory as unknown[]) ?? []).length > 0);
     setDirty(false);
   }, [doc]);
 
@@ -206,27 +233,80 @@ export default function DocumentBuilder() {
     enabled: !!docId,
   });
 
-  const describeError = (err: any, fallback: string) => {
+  /** The server's JSON body out of a thrown fetch error, when there is one. */
+  const parseErrorBody = (err: any): any | null => {
     const raw = err?.message || "";
     const jsonStart = raw.indexOf("{");
-    if (jsonStart >= 0) {
-      try { return JSON.parse(raw.slice(jsonStart)).message || fallback; } catch { /* keep */ }
-    }
-    return fallback;
+    if (jsonStart < 0) return null;
+    try { return JSON.parse(raw.slice(jsonStart)); } catch { return null; }
   };
 
-  /** Fills the whole document, or one block when an id is given. */
+  const describeError = (err: any, fallback: string) => parseErrorBody(err)?.message || fallback;
+
+  /**
+   * Fills the whole document, or one block when an id is given.
+   *
+   * A whole-document fill is a loop of one-page requests made from here, not
+   * one long request made of the server. Each page is a model call; twenty of
+   * them in one request runs for minutes, dies to a proxy's idle timeout with
+   * nothing saved, and blocks autosave the entire time. Page by page, every
+   * page that lands is written before the next one starts, and a failure
+   * halfway costs the pages after it rather than all of them. The server caps
+   * what one request will attempt regardless, so an older client can't ask for
+   * the long version.
+   */
   const fillMutation = useMutation({
-    mutationFn: async (opts: { blockId?: string; refill?: boolean; pageIndex?: number }) => {
+    mutationFn: async (opts: { blockId?: string; refill?: boolean; pageIndex?: number; retryFailed?: boolean }) => {
       // Save first: the server fills against its own copy, so an unsaved
       // layout change would be filled into the wrong shape.
       if (dirty) await apiRequest("PATCH", `/api/documents/${docId}`, { title, pages, settings });
-      const res = await apiRequest("POST", `/api/documents/${docId}/fill`, opts);
-      return res.json() as Promise<{
-        document: ProjectDocument; blocksFilled: number; blocksRequested: number;
-        blocksTightened: number; stillOverflowing: number;
-        failedPages: string[]; unmatchedIds: number; creditsCharged: number;
-      }>;
+      const post = async (body: Record<string, unknown>) =>
+        (await apiRequest("POST", `/api/documents/${docId}/fill`, body)).json() as Promise<FillResult>;
+
+      // One block, one named page, or a retry: a single request either way.
+      const targeted = opts.blockId !== undefined || opts.pageIndex !== undefined || opts.retryFailed;
+      if (targeted) return post(opts);
+
+      const wanted = pages
+        .map((p, i) => ({ p, i }))
+        .filter(({ p }) => !p.isChapterPage && p.blocks.some((b) => b.kind !== "spacer" && (opts.refill || !b.content.trim())))
+        .map(({ i }) => i);
+      // Nothing to do: let the server answer, so the message is the same one.
+      if (!wanted.length) return post(opts);
+
+      const total: FillResult = {
+        document: doc!, blocksFilled: 0, blocksRequested: 0, blocksTightened: 0, stillOverflowing: 0,
+        failedPages: [], failedBlockIds: [], droppedBlocks: 0, pagesRemaining: 0, nextPageIndex: null,
+        unmatchedIds: 0, creditsCharged: 0,
+      };
+      for (const [done, index] of wanted.entries()) {
+        setFillProgress({ done, total: wanted.length });
+        try {
+          const r = await post({ ...opts, pageIndex: index });
+          total.document = r.document;
+          total.blocksFilled += r.blocksFilled;
+          total.blocksRequested += r.blocksRequested;
+          total.blocksTightened += r.blocksTightened;
+          total.stillOverflowing = r.stillOverflowing;
+          total.droppedBlocks += r.droppedBlocks;
+          total.unmatchedIds += r.unmatchedIds;
+          total.creditsCharged += r.creditsCharged;
+          total.failedPages.push(...r.failedPages);
+          total.failedBlockIds = r.failedBlockIds;
+          // Show each page as it lands rather than twenty pages at the end.
+          setPages(((r.document.pages as DocumentPage[]) || []).map(normalizePage));
+        } catch (err) {
+          // One page failing is not the run failing: the pages already written
+          // are saved, and the rest are still worth attempting.
+          console.error(`Fill failed on page ${index}:`, err);
+          total.failedPages.push(pages[index]?.title || `Page ${index + 1}`);
+        }
+      }
+      setFillProgress(null);
+      if (!total.blocksFilled && total.failedPages.length) {
+        throw new Error(JSON.stringify({ message: `Nothing came back for: ${total.failedPages.join(", ")}.` }));
+      }
+      return total;
     },
     onSuccess: (result) => {
       setPages(((result.document.pages as DocumentPage[]) || []).map(normalizePage));
@@ -242,12 +322,16 @@ export default function DocumentBuilder() {
         description: result.failedPages.length
           // Name the pages that produced nothing, so a partial run points at
           // what to retry instead of reporting a success that didn't happen.
-          ? `Nothing came back for: ${result.failedPages.join(", ")}. Use "Fill this page" on those.`
-          : result.blocksTightened
-            // The fill shortens its own overrun, at no extra cost — say so, or
-            // it looks like Nova quietly rewrote things behind their back.
-            ? `${result.creditsCharged} credits used. Shortened ${result.blocksTightened} block${result.blocksTightened === 1 ? "" : "s"} to keep the page count you planned.`
-            : `${result.creditsCharged} credits used.`,
+          ? `Nothing came back for: ${result.failedPages.join(", ")}. Use "Retry what failed".`
+          : result.droppedBlocks
+            // Deleting a block while Nova was writing it isn't an error, but it
+            // is why the numbers don't add up. Say so rather than look wrong.
+            ? `${result.creditsCharged} credits used. ${result.droppedBlocks} block${result.droppedBlocks === 1 ? " was" : "s were"} deleted while Nova wrote, so that writing had nowhere to go.`
+            : result.blocksTightened
+              // The fill shortens its own overrun, at no extra cost — say so, or
+              // it looks like Nova quietly rewrote things behind their back.
+              ? `${result.creditsCharged} credits used. Shortened ${result.blocksTightened} block${result.blocksTightened === 1 ? "" : "s"} to keep the page count you planned.`
+              : `${result.creditsCharged} credits used.`,
         variant: result.failedPages.length || partial ? "destructive" : "default",
       });
     },
@@ -257,14 +341,29 @@ export default function DocumentBuilder() {
       variant: "destructive",
     }),
     onMutate: () => { actionStartedAt.current = editsRef.current; setAiBusy((n) => n + 1); },
-    onSettled: () => { setFillingBlockId(null); setAiBusy((n) => Math.max(0, n - 1)); },
+    onSettled: () => { setFillingBlockId(null); setFillProgress(null); setAiBusy((n) => Math.max(0, n - 1)); },
   });
 
+  /**
+   * Blocks a previous fill was asked for and couldn't write, remembered on the
+   * document. Without this they are indistinguishable from blocks nobody has
+   * got to, and the only recovery is re-filling — and re-paying for — the
+   * pages that already worked.
+   */
+  const failedBlockIds: string[] = useMemo(
+    () => ((doc as any)?.fillFailures as string[] | undefined) ?? [],
+    [doc],
+  );
+  const failedPageTitles = useMemo(() => {
+    const ids = new Set(failedBlockIds);
+    return pages.filter((p) => p.blocks.some((b) => ids.has(b.id))).map((p) => p.title || "Untitled page");
+  }, [failedBlockIds, pages]);
+
   const replanMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (confirmDiscard?: boolean) => {
       if (dirty) await apiRequest("PATCH", `/api/documents/${docId}`, { title, pages, settings });
-      const res = await apiRequest("POST", `/api/documents/${docId}/replan`, { feedback: replanFeedback });
-      return res.json() as Promise<{ document: ProjectDocument; approach: string }>;
+      const res = await apiRequest("POST", `/api/documents/${docId}/replan`, { feedback: replanFeedback, confirmDiscard: !!confirmDiscard });
+      return res.json() as Promise<{ document: ProjectDocument; approach: string; carriedBlocks: number; lostWords: number; totalWords: number }>;
     },
     onSuccess: (result) => {
       setPages(((result.document.pages as DocumentPage[]) || []).map(normalizePage));
@@ -273,13 +372,47 @@ export default function DocumentBuilder() {
       setApproach(result.approach);
       setReplanOpen(false);
       setReplanFeedback("");
+      setDiscardWarning(null);
+      setCanUndo(true);
       queryClient.setQueryData(["/api/documents", docId], result.document);
       queryClient.invalidateQueries({ queryKey: ["/api/subscription"] });
-      toast({ title: "Restructured", description: "Your written content was carried across." });
+      toast({
+        title: "Restructured",
+        description: result.lostWords
+          ? `${result.lostWords} of ${result.totalWords} written words didn't find a home in the new shape. Undo puts it back.`
+          : "Your written content was carried across. Undo puts the old shape back.",
+      });
     },
-    onError: (err: any) => toast({ title: "Couldn't restructure", description: describeError(err, "Try again."), variant: "destructive" }),
+    /*
+     * A restructure that would throw most of the writing away comes back as a
+     * 422 rather than doing it, and the builder is shown what would go before
+     * they decide. Nothing has been written or charged at this point.
+     */
+    onError: (err: any) => {
+      const body = parseErrorBody(err);
+      if (body?.code === "replan_discards_content") {
+        setDiscardWarning({ lostWords: body.lostWords, totalWords: body.totalWords, lostBlocks: body.lostBlocks ?? [] });
+        return;
+      }
+      toast({ title: "Couldn't restructure", description: describeError(err, "Try again."), variant: "destructive" });
+    },
     onMutate: () => { actionStartedAt.current = editsRef.current; setAiBusy((n) => n + 1); },
     onSettled: () => setAiBusy((n) => Math.max(0, n - 1)),
+  });
+
+  /** Puts the structure back the way it was before the last restructure. */
+  const undoMutation = useMutation({
+    mutationFn: async () => (await apiRequest("POST", `/api/documents/${docId}/undo`)).json() as Promise<{ document: ProjectDocument }>,
+    onMutate: () => { actionStartedAt.current = editsRef.current; },
+    onSuccess: (result) => {
+      setPages(((result.document.pages as DocumentPage[]) || []).map(normalizePage));
+      setPageIndex(0);
+      settleDirty();
+      queryClient.setQueryData(["/api/documents", docId], result.document);
+      queryClient.invalidateQueries({ queryKey: ["/api/documents", docId, "layout-report"] });
+      toast({ title: "Put back", description: "The structure before the last restructure. Undo again to return." });
+    },
+    onError: (err: any) => toast({ title: "Couldn't undo", description: describeError(err, "There's nothing to go back to."), variant: "destructive" }),
   });
 
   const tightenMutation = useMutation({
@@ -457,6 +590,21 @@ export default function DocumentBuilder() {
               <LayoutTemplate className="h-3.5 w-3.5" /> Restructure ({CREDIT_COSTS.documentPlan})
             </Button>
 
+            {/* Only offered when there is something to go back to. A restructure
+                is a model call that can drop a section the builder wrote, and
+                before this the only way back was to retype it. */}
+            {canUndo && (
+              <Button
+                variant="ghost" size="sm" className="gap-1.5"
+                disabled={undoMutation.isPending || aiBusy > 0}
+                onClick={() => undoMutation.mutate()}
+                title="Put the structure back the way it was before the last restructure"
+                data-testid="button-doc-undo-replan"
+              >
+                {undoMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Undo restructure
+              </Button>
+            )}
+
             {/* When nothing is empty the action becomes a rewrite rather than a
                 disabled dead end — "All blocks filled" with nothing to click
                 left builders stuck if a page hadn't really been written. */}
@@ -468,7 +616,7 @@ export default function DocumentBuilder() {
                 data-testid="button-doc-fill"
               >
                 {fillMutation.isPending && !fillingBlockId
-                  ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Nova is writing…</>
+                  ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> {fillProgress ? `Writing page ${fillProgress.done + 1} of ${fillProgress.total}…` : "Nova is writing…"}</>
                   : <><Wand2 className="h-3.5 w-3.5" /> Fill {pending} empty block{pending === 1 ? "" : "s"} ({quote?.cost ?? pending})</>}
               </Button>
             ) : (
@@ -480,7 +628,7 @@ export default function DocumentBuilder() {
                 data-testid="button-doc-refill"
               >
                 {fillMutation.isPending && !fillingBlockId
-                  ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Nova is rewriting…</>
+                  ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> {fillProgress ? `Rewriting page ${fillProgress.done + 1} of ${fillProgress.total}…` : "Nova is rewriting…"}</>
                   : <><RotateCcw className="h-3.5 w-3.5" /> Rewrite all ({quote?.totalBlocks ?? 0})</>}
               </Button>
             )}
@@ -592,6 +740,34 @@ export default function DocumentBuilder() {
             {tightenMutation.isPending
               ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Cutting…</>
               : <><Scissors className="h-3.5 w-3.5" /> Tighten to fit</>}
+          </Button>
+        </div>
+      )}
+
+      {/*
+        * What the last fill couldn't write, still here after a reload.
+        *
+        * A failed page used to be one line in one toast. Reload the editor and
+        * those blocks were indistinguishable from blocks nobody had written
+        * yet, so the honest options were to re-fill the whole document and pay
+        * for the pages that worked, or to ship with holes in it.
+        */}
+      {failedBlockIds.length > 0 && (
+        <div className="flex items-start justify-between gap-3 border-b border-border/60 bg-destructive/5 p-3" data-testid="banner-fill-failures">
+          <div className="flex items-start gap-2 min-w-0">
+            <AlertTriangle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
+            <p className="text-sm text-secondary leading-relaxed">
+              Nova couldn't write {failedBlockIds.length} block{failedBlockIds.length === 1 ? "" : "s"}
+              {failedPageTitles.length ? ` on ${failedPageTitles.join(", ")}` : ""}. Nothing was charged for those.
+            </p>
+          </div>
+          <Button
+            size="sm" variant="outline" className="h-7 shrink-0 gap-1.5"
+            disabled={fillMutation.isPending}
+            onClick={() => fillMutation.mutate({ retryFailed: true })}
+            data-testid="button-retry-failed-blocks"
+          >
+            {fillMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Retry what failed
           </Button>
         </div>
       )}
@@ -901,8 +1077,8 @@ export default function DocumentBuilder() {
             {wordCount > 0 && (
               <p className="text-xs text-muted-foreground flex items-start gap-1.5">
                 <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-amber-500" />
-                You have {wordCount} words written. Content moves with its block, but a block
-                Nova drops takes its text with it.
+                You have {wordCount} words written. Content moves with its block, and anything
+                Nova drops can be put back with Undo.
               </p>
             )}
           </div>
@@ -910,12 +1086,56 @@ export default function DocumentBuilder() {
             <Button variant="outline" onClick={() => setReplanOpen(false)}>Cancel</Button>
             <Button
               disabled={replanMutation.isPending}
-              onClick={() => replanMutation.mutate()}
+              onClick={() => replanMutation.mutate(false)}
               data-testid="button-confirm-replan"
             >
               {replanMutation.isPending
                 ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Restructuring…</>
                 : `Restructure (${CREDIT_COSTS.documentPlan})`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/*
+        * The restructure that would throw most of the writing away.
+        *
+        * Refused by the server and shown here instead of happening, with the
+        * actual sections named. Nothing has been written or charged yet — the
+        * second attempt carries the confirmation.
+        */}
+      <Dialog open={!!discardWarning} onOpenChange={(o) => !o && setDiscardWarning(null)}>
+        <DialogContent className="max-w-lg" data-testid="dialog-replan-discard">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-destructive" /> That restructure drops most of your writing
+            </DialogTitle>
+            <DialogDescription>
+              Nova's new shape has no home for {discardWarning?.lostWords} of your {discardWarning?.totalWords} written
+              words. Nothing has changed and nothing has been charged.
+            </DialogDescription>
+          </DialogHeader>
+          {!!discardWarning?.lostBlocks.length && (
+            <ul className="max-h-48 overflow-y-auto rounded-md border border-border bg-muted/40 p-2 text-xs space-y-1">
+              {discardWarning.lostBlocks.map((b, i) => (
+                <li key={i} className="flex items-baseline justify-between gap-2">
+                  <span className="truncate">{b.headline || "Untitled block"} <span className="text-muted-foreground">· {b.page}</span></span>
+                  <span className="tabular-nums text-muted-foreground shrink-0">{b.words} words</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDiscardWarning(null)} data-testid="button-discard-cancel">Keep what I have</Button>
+            <Button
+              variant="destructive"
+              disabled={replanMutation.isPending}
+              onClick={() => replanMutation.mutate(true)}
+              data-testid="button-discard-confirm"
+            >
+              {replanMutation.isPending
+                ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Restructuring…</>
+                : "Restructure anyway"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -28,6 +28,7 @@ import BackingReview from "@/pages/backing-review";
 import PublicArtifactPage from "@/pages/public-artifact";
 import InviteAcceptPage from "@/pages/invite-accept";
 import AdminPromotions from "@/pages/admin-promotions";
+import AdminContests from "@/pages/admin-contests";
 import MfaVerifyPage from "@/pages/mfa-verify";
 import SecuritySettings from "@/pages/security-settings";
 import ForgotPasswordPage from "@/pages/forgot-password";
@@ -338,6 +339,7 @@ function Router() {
             <Route path="/admin/security" component={AdminSecurity} />
             <Route path="/admin/analytics" component={AdminAnalytics} />
             <Route path="/admin/promotions" component={AdminPromotions} />
+            <Route path="/admin/contests" component={AdminContests} />
             <Route component={NotFound} />
           </Switch>
         </main>

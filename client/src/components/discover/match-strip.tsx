@@ -11,7 +11,7 @@ import { useLocation } from "wouter";
 import { UserCard } from "@/components/user-card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Loader2, RefreshCw, Sparkles, UserPlus, Users } from "lucide-react";
+import { Loader2, RefreshCw, Sparkles, UserPlus } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { errorText } from "@/lib/api-error";
@@ -113,6 +113,21 @@ export function MatchStrip({ updateFor }: { updateFor: (userId: string) => Explo
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {shown.map((match, i) => (
+            /*
+             * Just the card.
+             *
+             * Under it there used to be a "Start trial sprint" button pointing
+             * at /sprints/new?partnerId=… — a route App.tsx redirects straight
+             * to /sprints, dropping the partner on the floor. Co-founder
+             * sprints are retired (see the note at the top of pages/sprints.tsx)
+             * and nothing replaced them that takes a partner: Ten Years From
+             * Now has no "play with this person" entry, on purpose, because
+             * conscripting somebody into a running clock was exactly the
+             * mistake that route made. So the honest set of things you can do
+             * with a match is the one the card already offers — open their
+             * profile, connect, message — and a fourth button promising a
+             * feature that redirects away is worse than no button.
+             */
             <div key={match.id} className="flex flex-col">
               <UserCard
                 profile={match.matchedProfile}
@@ -123,15 +138,6 @@ export function MatchStrip({ updateFor }: { updateFor: (userId: string) => Explo
                 connection={connections?.[match.matchedUserId]}
                 update={updateFor(match.matchedUserId)}
               />
-              <Button
-                variant="outline"
-                size="sm"
-                className="mt-2"
-                onClick={() => setLocation(`/sprints/new?partnerId=${match.matchedUserId}`)}
-                data-testid={`button-start-sprint-${match.matchedUserId}`}
-              >
-                <Users className="h-3.5 w-3.5 mr-1.5" /> Start trial sprint
-              </Button>
             </div>
           ))}
         </div>

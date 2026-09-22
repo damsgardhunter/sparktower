@@ -29,11 +29,12 @@ import { CREDIT_COSTS } from "@shared/plans";
 import { NOVA_MCP_TOOLS, NOVA_MCP_INSTRUCTIONS, MCP_SNAPSHOT_LIMITS } from "@shared/mcp";
 import {
   pathStatus, milestoneDetail, pathTaskContext, latestWork, saveWork, collectArtifacts,
-  reconcileMilestones, refreshPace, chooseWork, createLoop, deleteLoop, createExpansion, expansionSource,
+  reconcileMilestones, PATH_MARK_LIMIT, refreshPace, chooseWork, createLoop, deleteLoop, createExpansion, expansionSource,
 } from "./phase-trees";
 import { workKindFor, resolveTree, loopTypeOf, LOOP_CAP } from "@shared/phase-trees";
 import { produceWork, draftExpansionSteps, draftArtifact } from "./phase-trees-nova";
 import { buildOperableProjectState, applyProjectOperations } from "./project-operations";
+import { applyOperationsOnce, idempotencyKeyFor } from "./operation-idempotency";
 import { snapshotFromFiles } from "./code-ingest";
 import { buildCodeDigest } from "./code-digest";
 import { probeRuntime } from "./runtime-probe";
@@ -746,13 +747,17 @@ export function registerMcpRoutes(app: Express) {
       if (!Array.isArray(operations) || !operations.length) {
         return res.status(400).json({ message: "There's nothing to apply.", code: "invalid_input", field: "operations" });
       }
-      const { changes, skipped } = await applyProjectOperations(ctx.projectId, ctx.userId, operations, {
-        canEditMilestones: ent.aiMilestones,
-        canEditRoadmap: ent.roadmapUpdates,
-        maxOperations: 80,
+      // Applied once: an agent that retries a timed-out call must not double the board.
+      const result = await applyOperationsOnce({
+        projectId: ctx.projectId, userId: ctx.userId, operations, source: "mcp",
+        key: idempotencyKeyFor(req, operations),
+        apply: { canEditMilestones: ent.aiMilestones, canEditRoadmap: ent.roadmapUpdates, maxOperations: 80 },
       });
-      if (!changes.length) return res.status(422).json({ message: "None of that could be applied.", skipped });
-      res.json({ changes, skipped });
+      if (result.replayed) {
+        return res.status(409).json({ message: "That was already applied.", changes: result.changes, skipped: result.skipped, replayed: true });
+      }
+      if (!result.changes.length) return res.status(422).json({ message: "None of that could be applied.", skipped: result.skipped });
+      res.json({ changes: result.changes, skipped: result.skipped });
     } catch (error) {
       console.error("MCP apply error:", error);
       res.status(500).json({ message: "Couldn't apply that" });
@@ -770,7 +775,7 @@ export function registerMcpRoutes(app: Express) {
   app.post("/api/mcp/projects/:projectId/mark", rateLimit("post"), async (req: any, res) => {
     try {
       const ctx = await member(req, res); if (!ctx) return;
-      const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.map((i: unknown) => str(i, 40)).filter(Boolean).slice(0, 40) : [];
+      const ids: string[] = Array.isArray(req.body?.ids) ? req.body.ids.map((i: unknown) => str(i, 40)).filter(Boolean).slice(0, PATH_MARK_LIMIT) : [];
       if (!ids.length) return res.status(400).json({ message: "Say which milestones.", code: "invalid_input", field: "ids" });
 
       const evidence = str(req.body?.evidence, 600) || "marked done from the editor";

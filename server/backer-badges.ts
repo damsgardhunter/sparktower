@@ -202,7 +202,14 @@ export async function generateBadgeArt(badgeId: string): Promise<string> {
 
   try {
     const png = await renderBadgeImage(row.badge.level, row.projectTitle, logo);
-    const objectPath = await storage.writeObjectBuffer(png, "image/png");
+    // A badge is a thing backers show off — it hangs on public profiles and
+    // goes out in shared links, fetched by <img> with no credentials. Public
+    // on purpose, with the badge's holder recorded as its owner, rather than
+    // public because nobody set a policy.
+    const objectPath = await storage.writeObjectBuffer(png, "image/png", {
+      owner: row.badge.userId,
+      visibility: "public",
+    });
 
     await db.update(backerBadges).set({
       imageUrl: objectPath,

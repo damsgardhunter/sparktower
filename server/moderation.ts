@@ -15,8 +15,9 @@ import type { PgTable, PgColumn } from "drizzle-orm/pg-core";
 import { db } from "./db";
 import {
   contentReports, users, userProfiles, projectComments,
-  feedPosts, feedComments, directMessages, projects, rateLimitHits, moderationLog,
+  feedPosts, feedComments, directMessages, projects, pathArtifacts, rateLimitHits, moderationLog,
 } from "@shared/schema";
+import { createHash } from "node:crypto";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { recordActivity } from "./analytics";
 import { SAFETY_EVENTS } from "@shared/safety";
@@ -53,7 +54,7 @@ interface CountSource {
  * un-reacting deletes the row; a presign writes nothing; an AI call writes to
  * a dozen places.
  */
-const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai", "login", "loginAccount", "passwordReset", "write", "track", "post", "connect", "review", "payout", "webhookReject", "mfaCode", "session", "workspace", "follow", "apply", "sprint", "checkout", "external", "invite", "inviteLookup"]);
+const HIT_COUNTED = new Set<RateLimitAction>(["react", "upload", "ai", "login", "loginAccount", "passwordReset", "write", "track", "post", "connect", "review", "payout", "webhookReject", "mfaCode", "session", "workspace", "follow", "apply", "sprint", "checkout", "external", "invite", "inviteLookup", "reportAnon"]);
 
 const hitSource = (action: RateLimitAction): CountSource => ({
   table: rateLimitHits, author: rateLimitHits.userId, created: rateLimitHits.createdAt,
@@ -99,6 +100,10 @@ const COUNTED: Record<RateLimitAction, CountSource[]> = {
   reportDaily: [{
     table: contentReports, author: contentReports.reporterId, created: contentReports.createdAt,
   }],
+  // Counted per address, not from content_reports: a signed-out reporter has
+  // no account for the reporter column to match, so a content count would
+  // come back zero and allow everything.
+  reportAnon: [hitSource("reportAnon")],
   react:  [hitSource("react")],
   upload: [hitSource("upload")],
   ai:     [hitSource("ai")],
@@ -110,6 +115,10 @@ const COUNTED: Record<RateLimitAction, CountSource[]> = {
   post:   [hitSource("post")],
   // Every attempt counts, refused ones included: that's what stops hammering someone with requests.
   connect: [hitSource("connect")],
+  // Counted as hits, not from `user_blocks`: an unblock deletes its row, so
+  // counting rows would let block/unblock/block run forever without ever
+  // registering. Hits are what actually happened.
+  block: [hitSource("block")],
   // Reviewer actions change state elsewhere (a hidden flag, a suspension), so they're counted as hits.
   review: [hitSource("review")],
   payout: [hitSource("payout")],
@@ -707,11 +716,33 @@ export const limitWrites: RequestHandler = async (req: any, res, next) => {
   next();
 };
 
+/**
+ * Reads a suspended account must not have either.
+ *
+ * Suspension blocks writes, and reading is deliberately left open: somebody
+ * suspended for a spammy post should still be able to see their own work, read
+ * the appeal page and export their data. But a suspension is very often *for
+ * harassment*, and the reads that matter then are the ones that reach into the
+ * relationship with the person who was harassed. A suspended account could
+ * still open every direct-message thread with its target, re-read them, and
+ * watch the unread counter — the person who reported them got a "we've
+ * suspended them" and the suspended account kept reading their messages.
+ *
+ * So these particular GETs are closed as well. Not the whole site: a general
+ * read ban would break the appeal and the data export, which are the two
+ * things a suspended person is legitimately here to do.
+ */
+const SUSPENDED_READS_BLOCKED = [
+  /^\/api\/messages(\/|$)/,
+  /^\/api\/conversations(\/|$)/,
+];
+
 export const blockSuspended: RequestHandler = async (req: any, _res, next) => {
   const res = _res;
   try {
     if (!req.user?.id) return next();
-    if (req.method === "GET" || req.method === "HEAD") return next();
+    const readIsBlocked = SUSPENDED_READS_BLOCKED.some((p) => p.test(req.path));
+    if ((req.method === "GET" || req.method === "HEAD") && !readIsBlocked) return next();
     if (req.path.startsWith("/api/logout") || req.path.startsWith("/api/auth/logout")) return next();
 
     // `req.user` is loaded per request, so this reflects a suspension applied
@@ -731,8 +762,28 @@ export const blockSuspended: RequestHandler = async (req: any, _res, next) => {
       code: "account_suspended",
     });
   } catch (err) {
-    console.error("[moderation] Suspension check failed, allowing:", err);
-    next();
+    /*
+     * Closed, not open.
+     *
+     * This used to `next()` on a database error, on the same reasoning as the
+     * rate limiter: a check that can't run shouldn't take the site down with
+     * it. But the two aren't alike. A failed rate-limit count lets through a
+     * few extra comments; a failed suspension check hands every suspended
+     * account — including the ones suspended minutes ago for harassing
+     * somebody — the full run of the site for as long as the error lasts, and
+     * it is precisely during an incident that the database is unhappy. The
+     * damage from failing open is done to the person who was harassed and
+     * can't be taken back; the damage from failing closed is that some writes
+     * get a 503 for a few seconds.
+     *
+     * Only the suspension check fails closed. Everyone not suspended is
+     * unaffected on a healthy day, which is every day.
+     */
+    console.error("[moderation] Suspension check failed, refusing:", err);
+    return res.status(503).json({
+      message: "We couldn't verify your account just now. Try again in a moment.",
+      code: "suspension_check_unavailable",
+    });
   }
 };
 
@@ -756,6 +807,21 @@ async function snapshotOf(targetType: ReportTarget, targetId: string): Promise<{
       const [r] = await db.select({ content: feedComments.content, authorId: feedComments.authorId, projectId: feedPosts.projectId })
         .from(feedComments).innerJoin(feedPosts, eq(feedPosts.id, feedComments.postId)).where(eq(feedComments.id, targetId));
       return r ? { text: trim(r.content), ownerId: r.authorId, projectId: r.projectId ?? null }
+               : { text: null, ownerId: null, projectId: null };
+    }
+    if (targetType === "message") {
+      /*
+       * A direct message. The snapshot matters more here than anywhere else:
+       * this is the one reportable thing a reviewer cannot go and look at, so
+       * if the words aren't captured now there is nothing to review but two
+       * people's accounts of a private conversation.
+       *
+       * `ownerId` is the sender, which is what makes the route's "that's
+       * yours" check refuse a report on your own message and what the queue
+       * suspends if it comes to that.
+       */
+      const [r] = await db.select().from(directMessages).where(eq(directMessages.id, targetId));
+      return r ? { text: trim(r.content), ownerId: r.senderId, projectId: null }
                : { text: null, ownerId: null, projectId: null };
     }
     if (targetType === "project") {
@@ -823,6 +889,22 @@ export function registerModerationRoutes(app: Express) {
       const detailLabel = detail ? reportDetailLabel(reason, detail) : null;
       if (detail && !detailLabel) return res.status(400).json({ message: "Pick one of the options for that reason" });
 
+      /*
+       * A direct message is the one target nobody else can see, so the
+       * reporter has to be the person it was sent to. Without this check the
+       * endpoint would be a private-message oracle: guess an id, file a
+       * report, and the snapshot of somebody else's conversation lands in a
+       * queue. A message that isn't theirs is "not found", not "not allowed" —
+       * the answer must not confirm that the id exists.
+       */
+      if (targetType === "message") {
+        const [dm] = await db.select({ receiverId: directMessages.receiverId })
+          .from(directMessages).where(eq(directMessages.id, targetId));
+        if (!dm || dm.receiverId !== req.user.id) {
+          return res.status(404).json({ message: "Nothing to report there" });
+        }
+      }
+
       const snap = await snapshotOf(targetType, targetId);
       if (snap.ownerId === req.user.id) {
         return res.status(400).json({ message: "That's yours — delete it instead." });
@@ -849,11 +931,103 @@ export function registerModerationRoutes(app: Express) {
     }
   });
 
-  /** The moderation queue. */
-  const TAKEDOWN_TABLES: Record<string, { table: any; author: any }> = {
-    comment: { table: projectComments, author: projectComments.authorId },
-    feed_post: { table: feedPosts, author: feedPosts.authorId },
-    feed_comment: { table: feedComments, author: feedComments.authorId },
+  /**
+   * Reporting a published artifact page with no account.
+   *
+   * `/a/:id` is the one page on the site built for people who have never
+   * signed in — it is the whole point of it — and it offered a stranger who
+   * landed on something abusive no way to say so. `POST /api/reports` needs an
+   * account, so the honest options were "sign up to tell us about this" or
+   * "close the tab", and almost everyone picks the second. The reports that
+   * never arrive are exactly the ones about content reaching people who are
+   * not here yet.
+   *
+   * What it files is a report against the artifact's *published post*, not a
+   * new kind of target: the post is what the queue already knows how to
+   * remove, and hiding it takes the public page down with it
+   * (`publicArtifact` returns null once the post is hidden). So a reviewer
+   * needs no new button and there is one takedown path rather than two.
+   *
+   * Guards: only a genuinely public artifact can be reported, so this can't be
+   * used to probe for private ones; the reason must be one of the listed
+   * codes; there is no free-text field at all, because an anonymous one is a
+   * way to write abuse straight onto a reviewer's screen; five an hour per
+   * address; and the reporter is recorded as a hash of their address, so a
+   * second press is the same report rather than a second row in the queue.
+   */
+  app.post("/api/public/artifacts/:id/report", rateLimit("reportAnon"), async (req: any, res) => {
+    // public-write: nothing at all. Filing a report costs a reviewer a glance
+    // and nothing else; it takes no free text, reveals nothing about the target
+    // (a first report and a repeat get the identical answer), only names an
+    // already-public artifact, and is capped per address.
+    try {
+      const reason = String(req.body?.reason || "");
+      if (!(REPORT_REASON_IDS as readonly string[]).includes(reason)) {
+        return res.status(400).json({ message: "Pick a reason", code: "invalid_input", field: "reason" });
+      }
+      const detail = req.body?.detail == null || req.body.detail === "" ? null : String(req.body.detail);
+      const detailLabel = detail ? reportDetailLabel(reason, detail) : null;
+      if (detail && !detailLabel) return res.status(400).json({ message: "Pick one of the options for that reason", code: "invalid_input", field: "detail" });
+
+      /*
+       * The page's own visibility rules, repeated rather than imported:
+       * server/artifact-routes.ts imports this file, so reaching back into it
+       * for `publicArtifact` would be a cycle. Public artifact, public project,
+       * and a published post that has not already been taken down.
+       */
+      const [row] = await db.select({
+        postId: pathArtifacts.publishedPostId,
+        projectId: pathArtifacts.projectId,
+        authorId: pathArtifacts.authorId,
+        title: pathArtifacts.title,
+        summary: pathArtifacts.summary,
+        visibility: pathArtifacts.visibility,
+        projectPrivate: projects.isPrivate,
+        postHiddenAt: feedPosts.hiddenAt,
+      }).from(pathArtifacts)
+        .innerJoin(projects, eq(projects.id, pathArtifacts.projectId))
+        .leftJoin(feedPosts, eq(feedPosts.id, pathArtifacts.publishedPostId))
+        .where(eq(pathArtifacts.id, String(req.params.id)));
+
+      if (!row || row.visibility !== "public" || row.projectPrivate || !row.postId || row.postHiddenAt) {
+        return res.status(404).json({ message: "This artifact isn't published." });
+      }
+
+      const addressHash = createHash("sha256").update(ipKey(req)).digest("hex");
+      await db.insert(contentReports).values({
+        reporterId: null,
+        reporterAddressHash: addressHash,
+        targetType: "feed_post", targetId: row.postId,
+        targetOwnerId: row.authorId, projectId: row.projectId,
+        reason,
+        note: [detailLabel, "Reported from the public artifact page by a reader with no account."].filter(Boolean).join(" — "),
+        snapshot: `${row.title ?? ""}\n\n${row.summary ?? ""}`.trim().slice(0, 1000) || null,
+      }).onConflictDoNothing();
+
+      // The same answer whether or not it was already reported: a different one
+      // would tell a stranger what is and isn't in the queue.
+      res.json({ received: true });
+    } catch (error) {
+      console.error("Anonymous report error:", error);
+      res.status(500).json({ message: "Couldn't file that report" });
+    }
+  });
+
+  /**
+   * The moderation queue.
+   *
+   * `authorField` is the name of the column that says whose it is, because it
+   * isn't the same everywhere: content has an `authorId`, a project has an
+   * `ownerId`. The decision route reads the loaded row by this name rather
+   * than hard-coding `authorId`, which is what let projects join the table at
+   * all — and a report against a project previously had no outcome but
+   * suspending its owner, which blocks writes and unpublishes nothing.
+   */
+  const TAKEDOWN_TABLES: Record<string, { table: any; author: any; authorField: string }> = {
+    comment: { table: projectComments, author: projectComments.authorId, authorField: "authorId" },
+    feed_post: { table: feedPosts, author: feedPosts.authorId, authorField: "authorId" },
+    feed_comment: { table: feedComments, author: feedComments.authorId, authorField: "authorId" },
+    project: { table: projects, author: projects.ownerId, authorField: "ownerId" },
   };
 
   app.get("/api/admin/reports", isAuthenticated, requireReviewer, async (req: any, res) => {
@@ -878,35 +1052,79 @@ export function registerModerationRoutes(app: Express) {
         .orderBy(desc(contentReports.createdAt))
         .limit(100);
 
-      const hiddenOf = async (type: string, id: string): Promise<boolean | null> => {
+      /*
+       * Everything the queue needs about the reported things, in one query per
+       * kind rather than one per report.
+       *
+       * Opening the queue used to cost up to three hundred point queries: for
+       * each of a hundred rows, "is it hidden?", then "what mode is it hidden
+       * in?" for comments, then "which post is this comment on?" for post
+       * comments — each a separate round trip, all of them awaited inside a
+       * `.map`. That is the page a reviewer opens first thing when something is
+       * going wrong, which is exactly when it must not take seconds. Grouped by
+       * target kind, it is at most one `in (...)` per table plus one for the
+       * comment→post lookup, merged in memory.
+       */
+      const idsByType = new Map<string, string[]>();
+      for (const r of rows) {
+        const list = idsByType.get(r.report.targetType) ?? [];
+        list.push(r.report.targetId);
+        idsByType.set(r.report.targetType, list);
+      }
+
+      /** targetType|targetId → whether it's hidden, and (comments only) how. */
+      const hiddenState = new Map<string, { hidden: boolean; mode: string | null }>();
+      await Promise.all([...idsByType].map(async ([type, ids]) => {
         const t = TAKEDOWN_TABLES[type];
-        if (!t) return null;
-        const [x] = await db.select({ h: t.table.hiddenAt }).from(t.table).where(eq(t.table.id, id));
-        return x ? !!x.h : null;
-      };
-      const commentMode = async (id: string): Promise<string | null> => {
-        const [c] = await db.select({ h: projectComments.hiddenAt, m: projectComments.hiddenMode }).from(projectComments).where(eq(projectComments.id, id));
-        return c?.h ? (c.m ?? "removed") : null;
-      };
-      res.json(await Promise.all(rows.map(async (r) => ({
-        ...r.report,
-        reporterName: r.reporterName || "Someone",
-        ownerName: r.ownerName || null,
-        ownerId: r.ownerId,
-        ownerSuspended: !!r.ownerSuspendedAt,
-        /** Null when this kind of target can't be taken down. */
-        targetHidden: await hiddenOf(r.report.targetType, r.report.targetId),
-        /** "removed" or "shadow" when a comment is hidden; null otherwise. */
-        targetHiddenMode: r.report.targetType === "comment" ? await commentMode(r.report.targetId) : null,
-        /** Decided through `/act` (action + reason code) rather than the older buttons. */
-        actionable: isActionableTarget(r.report.targetType),
-        /** Where a reported post or post comment can be read: the post's own page. */
-        targetPostId: r.report.targetType === "feed_post"
-          ? r.report.targetId
-          : r.report.targetType === "feed_comment"
-            ? (await db.select({ postId: feedComments.postId }).from(feedComments).where(eq(feedComments.id, r.report.targetId)))[0]?.postId ?? null
-            : null,
-      }))));
+        // A kind with no takedown table can't be hidden; it stays absent, and
+        // an absent entry is reported as null rather than as "not hidden".
+        if (!t || !ids.length) return;
+        const wantsMode = SHADOW_HIDEABLE.includes(type);
+        const found = await db
+          .select({ id: t.table.id, h: t.table.hiddenAt, ...(wantsMode ? { m: t.table.hiddenMode } : {}) })
+          .from(t.table)
+          .where(inArray(t.table.id, Array.from(new Set(ids))));
+        for (const row of found as { id: string; h: Date | null; m?: string | null }[]) {
+          hiddenState.set(`${type}|${row.id}`, {
+            hidden: !!row.h,
+            mode: wantsMode && row.h ? (row.m ?? "removed") : null,
+          });
+        }
+      }));
+
+      // Which post each reported post comment lives on, so the queue can link
+      // to somewhere the comment is readable.
+      const commentIds = Array.from(new Set(idsByType.get("feed_comment") ?? []));
+      const postOfComment = new Map<string, string>();
+      if (commentIds.length) {
+        for (const c of await db.select({ id: feedComments.id, postId: feedComments.postId })
+          .from(feedComments).where(inArray(feedComments.id, commentIds))) {
+          if (c.postId) postOfComment.set(c.id, c.postId);
+        }
+      }
+
+      res.json(rows.map((r) => {
+        const state = hiddenState.get(`${r.report.targetType}|${r.report.targetId}`);
+        return {
+          ...r.report,
+          reporterName: r.reporterName || "Someone",
+          ownerName: r.ownerName || null,
+          ownerId: r.ownerId,
+          ownerSuspended: !!r.ownerSuspendedAt,
+          /** Null when this kind of target can't be taken down, or the row is gone. */
+          targetHidden: state ? state.hidden : null,
+          /** "removed" or "shadow" when a comment is hidden; null otherwise. */
+          targetHiddenMode: r.report.targetType === "comment" ? state?.mode ?? null : null,
+          /** Decided through `/act` (action + reason code) rather than the older buttons. */
+          actionable: isActionableTarget(r.report.targetType),
+          /** Where a reported post or post comment can be read: the post's own page. */
+          targetPostId: r.report.targetType === "feed_post"
+            ? r.report.targetId
+            : r.report.targetType === "feed_comment"
+              ? postOfComment.get(r.report.targetId) ?? null
+              : null,
+        };
+      }));
     } catch (error) {
       console.error("Report queue error:", error);
       res.status(500).json({ message: "Couldn't load the queue" });
@@ -1058,7 +1276,7 @@ export function registerModerationRoutes(app: Express) {
         }
         const [author] = target
           ? await tx.select({ id: users.id, platformRole: users.platformRole, suspendedAt: users.suspendedAt, suspendedReason: users.suspendedReason })
-            .from(users).where(eq(users.id, target.authorId))
+            .from(users).where(eq(users.id, target[t.authorField]))
           : [];
         if (action === "ban") {
           if (!author) return { status: 404, body: { message: "The author's account no longer exists.", code: "target_gone" } };
@@ -1098,7 +1316,7 @@ export function registerModerationRoutes(app: Express) {
           // comment_remove, feed_post_remove, … — the type it was, and what was done.
           action: `${report.targetType}_${action}`,
           actorId: req.user.id,
-          targetUserId: target?.authorId ?? report.targetOwnerId,
+          targetUserId: target?.[t.authorField] ?? report.targetOwnerId,
           targetType: report.targetType,
           targetId: report.targetId,
           reason: note,

@@ -28,6 +28,16 @@ import { notifyScouts } from "./scouting-alerts";
 export const NUDGE_AFTER_DAYS = 2;
 /** The home card shows at most this many sections, across projects. */
 const MAX_ITEMS = 5;
+/**
+ * How many projects one request will walk.
+ *
+ * This runs on every home-screen load and does a handful of queries per
+ * section of every project someone belongs to. Someone on thirty projects
+ * turned the home feed into a hundred-odd round trips for a card that shows
+ * five rows. Newest projects first, since that is the one a builder is most
+ * likely to be working, and the card itself only shows five sections anyway.
+ */
+const MAX_PROJECTS = 8;
 
 export interface NextStepItem {
   project: { id: string; title: string; logoUrl: string | null };
@@ -205,14 +215,16 @@ export async function pathProgress(projectId: string): Promise<{ done: number; t
 
 /** Each of someone's projects with a path, what's next on it, and how long since they worked it. */
 export async function nextStepsFor(userId: string): Promise<NextStepItem[]> {
-  const owned = await db.select({ id: projects.id, title: projects.title, logoUrl: projects.logoUrl, status: projects.status })
+  const owned = await db.select({ id: projects.id, title: projects.title, logoUrl: projects.logoUrl, status: projects.status, createdAt: projects.createdAt })
     .from(projects).where(eq(projects.ownerId, userId));
   const memberOf = await db.select({ id: projectMembers.projectId }).from(projectMembers).where(eq(projectMembers.userId, userId));
   const joined = memberOf.length
-    ? await db.select({ id: projects.id, title: projects.title, logoUrl: projects.logoUrl, status: projects.status })
+    ? await db.select({ id: projects.id, title: projects.title, logoUrl: projects.logoUrl, status: projects.status, createdAt: projects.createdAt })
       .from(projects).where(inArray(projects.id, memberOf.map((m) => m.id).filter((id) => !owned.some((o) => o.id === id))))
     : [];
-  const candidates = [...owned, ...joined].filter((p) => p.status !== "completed");
+  const candidates = [...owned, ...joined].filter((p) => p.status !== "completed")
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, MAX_PROJECTS);
 
   const items: NextStepItem[] = [];
   for (const p of candidates) {
@@ -221,7 +233,8 @@ export async function nextStepsFor(userId: string): Promise<NextStepItem[]> {
     const weekly = await weeklyUpdateFor(p.id);
     let first = true;
     for (const section of sections) {
-    const status = await pathStatus(p.id, section.goal).catch(() => null);
+    // Read-only: a GET of the home screen must never create path tasks. See pathStatus.
+    const status = await pathStatus(p.id, section.goal, { sync: false }).catch(() => null);
     if (!status?.adopted) continue;
     const lastDone = await lastDoneStep(p.id, status.events);
     items.push({

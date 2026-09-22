@@ -117,6 +117,18 @@ export const MINE: Owned[] = [
   { table: "email_verification_tokens", column: "user_id" },
   { table: "password_reset_tokens", column: "user_id" },
   { table: "web_handoff_tokens", column: "user_id" },
+  /*
+   * Blocks, both ways round.
+   *
+   * A block the person made is plainly theirs — including the private reason
+   * they wrote for themselves, which is why it's in the export as well as the
+   * deletion. A block held *against* them goes too, and that is not a gap in
+   * anyone's protection: an account that no longer exists cannot reach
+   * anybody, and keeping the row would leave the blocker a list entry naming a
+   * tombstone they can't do anything about.
+   */
+  { table: "user_blocks", column: "blocker_id" },
+  { table: "user_blocks", column: "blocked_id" },
 ];
 
 export const CHOICE: Owned[] = [
@@ -184,6 +196,9 @@ export const KEPT: Owned[] = [
   { table: "content_reports", column: "reviewed_by_id" },
   { table: "surface_flags", column: "updated_by_id" },
   { table: "promotion_settings", column: "updated_by_id" },
+  // A reviewer's decision to hide a project, and which account applied a batch of operations to one.
+  { table: "projects", column: "hidden_by_id" },
+  { table: "project_operation_applications", column: "user_id" },
 ];
 
 /**

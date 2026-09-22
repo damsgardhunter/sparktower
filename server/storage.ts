@@ -169,6 +169,9 @@ import {
 import { db } from "./db";
 import { eq, desc, or, ilike, sql, and, gte, lte, asc, ne, inArray, isNull, notInArray } from "drizzle-orm";
 import { ago } from "./sql-interval";
+// One helper, used by every read path that can put one person in front of
+// another. See server/blocks.ts for why it's a SQL fragment and not a set.
+import { notBlockedSql } from "./block-sql";
 import { publicProject, type TeamOnlyProjectField } from "./project-visibility";
 import { getEntitlements, normalizeTier, FAIR_USE_MONTHLY_CAP } from "@shared/plans";
 import { takeHold, returnCredits } from "./credit-reservations";
@@ -189,6 +192,18 @@ export function isTaskOnTime(task: { status: string; dueDate: Date | null; compl
 /** A project comment with its author, ready to render. */
 /** The most a project listing returns, whoever asks. See getProjects. */
 export const PROJECT_LISTING_CAP = 200;
+
+/**
+ * Caps on the contest reads, which are both reachable with no account.
+ *
+ * Neither had one: the list walked every contest in the table and, per
+ * contest, read every participant row in full just to count them; the
+ * participants endpoint read every entrant and then two more queries each for
+ * their account and profile. Both grow without limit as the site does, on the
+ * cheapest request there is to send.
+ */
+export const CONTEST_LISTING_CAP = 100;
+export const CONTEST_PARTICIPANT_CAP = 100;
 
 export interface ProjectListingFilters {
   category?: string;
@@ -256,7 +271,7 @@ export interface IStorage {
   // User Profile
   getUserProfile(userId: string): Promise<UserProfile | undefined>;
   upsertUserProfile(data: InsertUserProfile): Promise<UserProfile>;
-  getProfilesLookingFor(): Promise<(UserProfile & { user: User })[]>;
+  getProfilesLookingFor(viewerId?: string | null): Promise<(UserProfile & { user: User })[]>;
   completeOnboarding(userId: string): Promise<void>;
   
   // Projects
@@ -351,8 +366,19 @@ export interface IStorage {
   removeProjectMedia(projectId: string, index: number): Promise<Project>;
 
   // User Search
-  searchUsers(query: string, opts?: { limit?: number; offset?: number }): Promise<(User & { profile?: UserProfile })[]>;
+  searchUsers(query: string, opts?: { limit?: number; offset?: number; viewerId?: string | null }): Promise<(User & { profile?: UserProfile })[]>;
   getUser(id: string): Promise<User | undefined>;
+
+  /** The matching pool, cut in SQL by shared skills and interests. */
+  matchCandidates(
+    viewerId: string,
+    seed: { skills?: string[] | null; interests?: string[] | null },
+    limit?: number,
+  ): Promise<(User & { profile?: UserProfile })[]>;
+  /** Bulk reads matching needs per candidate; one query each instead of one per person. */
+  getProjectsForUsers(userIds: string[]): Promise<Map<string, Project[]>>;
+  getReputationsForUsers(userIds: string[]): Promise<Map<string, UserReputation>>;
+  getAcceptedConnectionIds(userIds: string[]): Promise<Map<string, Set<string>>>;
 
   // Badges
   getBadges(): Promise<Badge[]>;
@@ -363,11 +389,12 @@ export interface IStorage {
   awardBadge(userId: string, badgeId: string): Promise<UserBadge | null>;
 
   // Contests
-  getContests(filters?: { status?: string }): Promise<(Contest & { badge?: Badge; participantCount: number })[]>;
+  getContests(filters?: { status?: string; limit?: number }): Promise<(Contest & { badge?: Badge; participantCount: number })[]>;
   getContest(id: string): Promise<(Contest & { badge?: Badge; participantCount: number }) | undefined>;
   createContest(data: InsertContest): Promise<Contest>;
-  joinContest(contestId: string, userId: string): Promise<ContestParticipant>;
-  getContestParticipants(contestId: string): Promise<(ContestParticipant & { user: User; profile?: UserProfile })[]>;
+  /** Null when the contest is full; `created` false when they had already joined. The cap is enforced by the insert, not by a read before it. */
+  joinContest(contestId: string, userId: string, maxParticipants?: number | null): Promise<{ participant: ContestParticipant; created: boolean } | null>;
+  getContestParticipants(contestId: string, limit?: number, offset?: number): Promise<(ContestParticipant & { user: User; profile?: UserProfile })[]>;
   submitToContest(contestId: string, userId: string, submissionUrl: string, submissionNote?: string): Promise<ContestParticipant>;
   isContestParticipant(contestId: string, userId: string): Promise<boolean>;
 
@@ -643,17 +670,34 @@ export class DatabaseStorage implements IStorage {
     return profile;
   }
 
-  /** Profiles with an active "looking for" call, newest first. */
-  async getProfilesLookingFor(): Promise<(UserProfile & { user: User })[]> {
+  /**
+   * Profiles with an active "looking for" call.
+   *
+   * This is the one people-listing anyone can read signed out, and it filtered
+   * nothing at all: a suspended account, a closed one and a simulation bot all
+   * appeared on it, each with an open invitation to get in touch. A suspension
+   * that leaves the account advertising for collaborators on a public page is
+   * not a suspension. Same three conditions as `searchUsers`, for the same
+   * reasons, and one join instead of a query per row.
+   *
+   * `viewerId` is optional because the page is public. When somebody is signed
+   * in, their blocks apply here too.
+   */
+  async getProfilesLookingFor(viewerId?: string | null): Promise<(UserProfile & { user: User })[]> {
     const rows = await db
-      .select()
+      .select({ profile: userProfiles, user: users })
       .from(userProfiles)
-      .where(sql`${userProfiles.lookingFor} IS NOT NULL AND ${userProfiles.lookingFor}->>'isActive' = 'true'`);
+      .innerJoin(users, eq(users.id, userProfiles.userId))
+      .where(and(
+        sql`${userProfiles.lookingFor} IS NOT NULL AND ${userProfiles.lookingFor}->>'isActive' = 'true'`,
+        isNull(users.suspendedAt),
+        isNull(users.deletedAt),
+        eq(users.isBot, false),
+        viewerId ? notBlockedSql(viewerId, userProfiles.userId) : undefined,
+      ))
+      .limit(500);
 
-    return Promise.all(rows.map(async (profile) => {
-      const [user] = await db.select().from(users).where(eq(users.id, profile.userId));
-      return { ...profile, user };
-    }));
+    return rows.map((r) => ({ ...r.profile, user: r.user }));
   }
 
   async completeOnboarding(userId: string): Promise<void> {
@@ -707,6 +751,32 @@ export class DatabaseStorage implements IStorage {
       filters?.includePrivateOwnedBy
         ? or(eq(projects.isPrivate, false), eq(projects.ownerId, filters.includePrivateOwnedBy))!
         : eq(projects.isPrivate, false)
+    );
+    /*
+     * And a project a reviewer took down, or one whose owner is suspended, is
+     * not on any list — for its owner either.
+     *
+     * A takedown that left the project on Discover and the leaderboard would
+     * be a takedown in name only, which is exactly the hole this closes: until
+     * `projects.hiddenAt` existed the queue could mark a doxxing project
+     * "actioned" and it stayed on every public surface. The suspension test is
+     * the same argument one step up: suspending an account blocks its writes
+     * and nothing else, so a spammer's projects went on being advertised by
+     * the site that had just banned them.
+     *
+     * The takedown is not narrowed by `includePrivateOwnedBy`: a person is
+     * allowed to see their own private project, and is not allowed to put a
+     * removed one back in front of strangers. Their own workspace reads it by
+     * id, which is a different path. The suspension is narrowed, because a
+     * suspended person looking at their own profile should still find their
+     * work — the suspension is about what they can do to other people, not
+     * about hiding their own projects from them.
+     */
+    conditions.push(isNull(projects.hiddenAt));
+    conditions.push(
+      filters?.includePrivateOwnedBy
+        ? or(isNull(users.suspendedAt), eq(projects.ownerId, filters.includePrivateOwnedBy))!
+        : isNull(users.suspendedAt)
     );
 
     const limit = Math.max(1, Math.min(filters?.limit ?? PROJECT_LISTING_CAP, PROJECT_LISTING_CAP));
@@ -974,20 +1044,35 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(donations.createdAt));
   }
 
+  /**
+   * The stored matches, read back.
+   *
+   * Filtered on the way out, not just on the way in. A match row is a snapshot
+   * of who was suggested when the batch ran, and the world moves underneath
+   * it: the person can be suspended for harassment an hour later, can close
+   * their account, or can be the person the viewer has since blocked. Every
+   * one of those used to keep appearing on Discover — a suspended account, in
+   * particular, kept being introduced to new people by the product that
+   * suspended it. The generator excludes them too; this is the read path
+   * saying so as well, because the rows outlive the run that made them.
+   *
+   * Also one query instead of two per match.
+   */
   async getUserMatches(userId: string): Promise<(UserMatch & { matchedUser: User; matchedProfile?: UserProfile })[]> {
-    const matches = await db
-      .select()
+    const rows = await db
+      .select({ match: userMatches, matchedUser: users, matchedProfile: userProfiles })
       .from(userMatches)
-      .where(eq(userMatches.userId, userId))
+      .innerJoin(users, eq(users.id, userMatches.matchedUserId))
+      .leftJoin(userProfiles, eq(userProfiles.userId, userMatches.matchedUserId))
+      .where(and(
+        eq(userMatches.userId, userId),
+        isNull(users.suspendedAt),
+        isNull(users.deletedAt),
+        notBlockedSql(userId, userMatches.matchedUserId),
+      ))
       .orderBy(desc(userMatches.score));
 
-    return await Promise.all(
-      matches.map(async (match) => {
-        const [matchedUser] = await db.select().from(users).where(eq(users.id, match.matchedUserId));
-        const [matchedProfile] = await db.select().from(userProfiles).where(eq(userProfiles.userId, match.matchedUserId));
-        return { ...match, matchedUser, matchedProfile };
-      })
-    );
+    return rows.map((r) => ({ ...r.match, matchedUser: r.matchedUser, matchedProfile: r.matchedProfile ?? undefined }));
   }
 
   /**
@@ -1053,20 +1138,28 @@ export class DatabaseStorage implements IStorage {
         ? or(eq(projects.isPrivate, false), eq(projects.ownerId, includePrivateOwnedBy))!
         : eq(projects.isPrivate, false)
     );
+    /*
+     * A project a reviewer took down is not ranked, and neither is one whose
+     * owner is suspended. The leaderboard is the most prominent public listing
+     * on the site — a removed project left on it is still being advertised,
+     * which is the failure `projects.hiddenAt` exists to end. See the same pair
+     * of conditions in `getProjects`.
+     */
+    conditions.push(isNull(projects.hiddenAt));
+    conditions.push(isNull(users.suspendedAt));
 
-    const result = await db
-      .select()
+    // One join rather than a query per row: the owner is needed for every
+    // entry, and reading them one at a time made the ranking cost a round
+    // trip per rank on a page anyone can open signed out.
+    const rows = await db
+      .select({ project: projects, owner: users })
       .from(projects)
+      .innerJoin(users, eq(users.id, projects.ownerId))
       .where(and(...conditions))
       .orderBy(desc(orderCol))
       .limit(limit);
 
-    return await Promise.all(
-      result.map(async (project) => {
-        const [owner] = await db.select().from(users).where(eq(users.id, project.ownerId));
-        return { ...project, owner };
-      })
-    );
+    return rows.map((r) => ({ ...r.project, owner: r.owner }));
   }
 
   async addProjectMedia(projectId: string, objectPath: string): Promise<Project> {
@@ -1100,8 +1193,20 @@ export class DatabaseStorage implements IStorage {
    * what the search boxes promise. Never by email: a search that matches
    * emails tells a stranger whose address is whose. Suspended accounts aren't
    * found. An empty query lists everyone, newest first, a page at a time.
+   *
+   * `viewerId` is who is asking, and passing it is what keeps a block real.
+   * Typing a name is the shortest route back to somebody you blocked — and,
+   * the other way round, the shortest route for them back to you — so when the
+   * viewer is known, anyone blocked in either direction is cut here, in SQL.
+   * In SQL rather than after the fetch because this is paged: filtering a page
+   * in memory returns a short page, and a caller that pages until it gets a
+   * short one would stop early.
+   *
+   * It's optional because one caller genuinely has no viewer (the bot-pool
+   * check in test/integration/sim-bots.test.ts wants the unfiltered truth).
+   * Every caller with a signed-in person must pass it.
    */
-  async searchUsers(query: string, opts: { limit?: number; offset?: number } = {}): Promise<(User & { profile?: UserProfile })[]> {
+  async searchUsers(query: string, opts: { limit?: number; offset?: number; viewerId?: string | null } = {}): Promise<(User & { profile?: UserProfile })[]> {
     const q = query.trim();
     const pattern = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
     const limit = Math.min(Math.max(1, Math.floor(opts.limit ?? 500)), 500);
@@ -1122,6 +1227,14 @@ export class DatabaseStorage implements IStorage {
          * the chokepoint — matching draws its whole candidate pool from here.
          */
         eq(users.isBot, false),
+        /*
+         * A closed account is not a person to find. Deletion anonymises the
+         * row rather than removing it (other people's projects and messages
+         * reference it), so without this the tombstone keeps turning up in
+         * search results and in the match pool drawn from here.
+         */
+        isNull(users.deletedAt),
+        opts.viewerId ? notBlockedSql(opts.viewerId, users.id) : undefined,
         q ? or(
           ilike(users.firstName, pattern),
           ilike(users.lastName, pattern),
@@ -1137,6 +1250,162 @@ export class DatabaseStorage implements IStorage {
       .limit(limit)
       .offset(offset);
     return rows.map((r) => ({ ...r.user, profile: r.profile ?? undefined }));
+  }
+
+  /**
+   * The pool matching scores against.
+   *
+   * Matching used to draw its candidates from `searchUsers("")`, which is
+   * capped at 500 rows ordered by `created_at desc`. On a site with two
+   * thousand members that cap is not a performance detail, it is the product:
+   * everybody who joined before the newest five hundred is invisible to
+   * matching *and* only ever gets shown the newest five hundred, so the
+   * earliest members — the ones with the most to offer — are matchable by
+   * nobody. Worse, it fails silently and gets worse as the site grows.
+   *
+   * So the cut is made in SQL on the thing matching actually cares about:
+   * shared skills and interests, weighted skills-first, with join date only as
+   * the tiebreaker. Somebody who joined on day one and writes Postgres now
+   * outranks five hundred strangers who signed up yesterday. A viewer with an
+   * empty profile still gets a pool (affinity is 0 for everyone and the order
+   * falls back to recency), because an empty Discover teaches less than a
+   * rough one.
+   *
+   * Bots, suspended accounts, un-onboarded profiles and the viewer are
+   * excluded here rather than after the fetch, so the limit is spent entirely
+   * on people who could actually be shown.
+   */
+  async matchCandidates(
+    viewerId: string,
+    seed: { skills?: string[] | null; interests?: string[] | null },
+    limit = 400,
+  ): Promise<(User & { profile?: UserProfile })[]> {
+    const words = (xs?: string[] | null) =>
+      [...new Set((xs ?? []).map((s) => String(s ?? "").trim().toLowerCase()).filter(Boolean))].slice(0, 40);
+    const skills = words(seed.skills);
+    const interests = words(seed.interests);
+
+    /*
+     * How many of `vals` this profile's array contains, case-insensitively.
+     * `coalesce(col, '{}')` matters: `unnest(null)` yields no rows, which is
+     * fine, but a null column reaching `cardinality` is not.
+     */
+    const shared = (col: any, vals: string[]) =>
+      /*
+       * `sql.param`, not a bare interpolation: drizzle spreads an interpolated
+       * array into one placeholder per element, which turns `$1::text[]` into
+       * a single word and Postgres answers "malformed array literal". Wrapped,
+       * it goes over as one array parameter.
+       */
+      sql<number>`cardinality(ARRAY(
+        SELECT lower(c) FROM unnest(coalesce(${col}, '{}'::text[])) AS c
+        INTERSECT
+        SELECT unnest(${sql.param(vals)}::text[])
+      ))`;
+
+    const affinity =
+      skills.length || interests.length
+        ? sql<number>`(${skills.length ? shared(userProfiles.skills, skills) : sql`0`}::int * 2
+            + ${interests.length ? shared(userProfiles.interests, interests) : sql`0`}::int)`
+        /*
+         * `0::int`, not a bare `0`. A bare zero reaches `ORDER BY` as the
+         * literal `0`, which Postgres reads as an ordinal — "ORDER BY position
+         * 0 is not in select list", and the whole query fails. That is exactly
+         * the branch a viewer with an empty profile takes, so match generation
+         * threw for precisely the people who most needed a pool. A cast makes
+         * it an expression, which sorts as the constant it is.
+         */
+        : sql<number>`0::int`;
+
+    const capped = Math.min(Math.max(1, Math.floor(limit)), 1000);
+    const rows = await db
+      .select({ user: users, profile: userProfiles, affinity })
+      .from(users)
+      .innerJoin(userProfiles, eq(userProfiles.userId, users.id))
+      .where(and(
+        isNull(users.suspendedAt),
+        isNull(users.deletedAt),
+        eq(users.isBot, false),
+        eq(userProfiles.isOnboarded, true),
+        ne(users.id, viewerId),
+        /*
+         * Blocks are cut here as well as in `isMatchable`, and the repetition
+         * is deliberate: this query spends a fixed budget of rows, and a
+         * blocked account sitting near the top of the affinity order (a block
+         * usually follows an interaction, and an interaction usually follows
+         * shared skills) would otherwise eat a candidate slot on every run.
+         */
+        notBlockedSql(viewerId, users.id),
+      ))
+      .orderBy(desc(affinity), desc(users.createdAt))
+      .limit(capped);
+
+    return rows.map((r) => ({ ...r.user, profile: r.profile ?? undefined }));
+  }
+
+  /**
+   * Projects for many people in two queries instead of two per person.
+   *
+   * Matching reads this for every candidate it scores. Done one at a time
+   * that is a query per candidate per click; done here it is a query per
+   * click. Same answer as `getUserProjects`, in bulk.
+   */
+  async getProjectsForUsers(userIds: string[]): Promise<Map<string, Project[]>> {
+    const ids = [...new Set(userIds)].filter(Boolean);
+    const out = new Map<string, Project[]>(ids.map((id) => [id, []]));
+    if (ids.length === 0) return out;
+
+    const owned = await db.select().from(projects).where(inArray(projects.ownerId, ids));
+    for (const p of owned) out.get(p.ownerId)?.push(p);
+
+    const memberships = await db.select().from(projectMembers).where(inArray(projectMembers.userId, ids));
+    const extraIds = [...new Set(memberships.map((m) => m.projectId))];
+    if (extraIds.length === 0) return out;
+
+    const extra = await db.select().from(projects).where(inArray(projects.id, extraIds));
+    const byId = new Map(extra.map((p) => [p.id, p]));
+    for (const m of memberships) {
+      const project = byId.get(m.projectId);
+      const list = out.get(m.userId);
+      if (project && list && !list.some((p) => p.id === project.id)) list.push(project);
+    }
+    return out;
+  }
+
+  /** Reputation rows for many people at once — see `getProjectsForUsers`. */
+  async getReputationsForUsers(userIds: string[]): Promise<Map<string, UserReputation>> {
+    const ids = [...new Set(userIds)].filter(Boolean);
+    if (ids.length === 0) return new Map();
+    const rows = await db.select().from(userReputationScores).where(inArray(userReputationScores.userId, ids));
+    return new Map(rows.map((r) => [r.userId, r]));
+  }
+
+  /**
+   * Who each of these people is connected to, in one query.
+   *
+   * `getMutualConnections` runs four queries and two profile fan-outs per
+   * pair; matching needs the count for every candidate, which is where most
+   * of the old per-candidate cost lived. Ids only — a mutual count never
+   * needed the profiles it was loading.
+   */
+  async getAcceptedConnectionIds(userIds: string[]): Promise<Map<string, Set<string>>> {
+    const ids = [...new Set(userIds)].filter(Boolean);
+    const out = new Map<string, Set<string>>(ids.map((id) => [id, new Set<string>()]));
+    if (ids.length === 0) return out;
+
+    const rows = await db.select({
+      requesterId: connections.requesterId,
+      receiverId: connections.receiverId,
+    }).from(connections).where(and(
+      eq(connections.status, "accepted"),
+      or(inArray(connections.requesterId, ids), inArray(connections.receiverId, ids)),
+    ));
+
+    for (const r of rows) {
+      out.get(r.requesterId)?.add(r.receiverId);
+      out.get(r.receiverId)?.add(r.requesterId);
+    }
+    return out;
   }
 
   async getBadges(): Promise<Badge[]> {
@@ -1180,38 +1449,87 @@ export class DatabaseStorage implements IStorage {
       return null;
     }
 
+    /*
+     * Insert first, let the database decide.
+     *
+     * This used to select-then-insert, which is a check-then-act across two
+     * round trips: two milestones landing in the same moment — and they do,
+     * because one request can trip several — both read "not awarded" and both
+     * insert, so a profile shows the same badge twice and the count is wrong
+     * forever. `user_badges` now has a unique index on (user_id, badge_id)
+     * (migration 0044), so the second insert is a no-op rather than a
+     * duplicate row, and the existing award is read back for the caller.
+     */
+    const [inserted] = await db
+      .insert(userBadges)
+      .values({ userId, badgeId })
+      .onConflictDoNothing({ target: [userBadges.userId, userBadges.badgeId] })
+      .returning();
+    if (inserted) return inserted;
+
     const [already] = await db
       .select()
       .from(userBadges)
       .where(and(eq(userBadges.userId, userId), eq(userBadges.badgeId, badgeId)));
-    if (already) return already;
-
-    const [ub] = await db.insert(userBadges).values({ userId, badgeId }).returning();
-    return ub;
+    return already ?? null;
   }
 
-  async getContests(filters?: { status?: string }): Promise<(Contest & { badge?: Badge; participantCount: number })[]> {
-    let query = db.select().from(contests);
-    if (filters?.status) {
-      query = query.where(eq(contests.status, filters.status as any)) as any;
-    }
-    const result = await (query as any).orderBy(desc(contests.promoted), desc(contests.createdAt));
+  /**
+   * The contest list, signed out included.
+   *
+   * It used to be three queries per contest — the badge, then *every
+   * participant row* read in full only to call `.length` on the array — inside
+   * an unbounded `Promise.all` over every contest in the table. On an endpoint
+   * anyone can call with no account, that is a read amplifier: one request,
+   * 2N round trips and the whole participant table in memory, where N is
+   * whatever the table happens to hold.
+   *
+   * Now it is three queries in total, whatever N is: the contests (capped),
+   * their badges by id, and one grouped `count(*)` for the entrants. The
+   * counts and badges are joined in memory, which costs nothing next to a
+   * round trip each.
+   */
+  async getContests(filters?: { status?: string; limit?: number }): Promise<(Contest & { badge?: Badge; participantCount: number })[]> {
+    const limit = Math.max(1, Math.min(filters?.limit ?? CONTEST_LISTING_CAP, CONTEST_LISTING_CAP));
+    const rows = await db.select().from(contests)
+      .where(filters?.status ? eq(contests.status, filters.status as any) : undefined)
+      .orderBy(desc(contests.promoted), desc(contests.createdAt))
+      .limit(limit);
+    if (!rows.length) return [];
+    return this.withBadgesAndCounts(rows);
+  }
 
-    return await Promise.all(
-      result.map(async (contest: Contest) => {
-        const badge = contest.badgeId ? await this.getBadge(contest.badgeId) : undefined;
-        const participants = await db.select().from(contestParticipants).where(eq(contestParticipants.contestId, contest.id));
-        return { ...contest, badge, participantCount: participants.length };
-      })
-    );
+  /** The badge and entrant count for a page of contests, in two queries rather than 2N. */
+  private async withBadgesAndCounts(rows: Contest[]): Promise<(Contest & { badge?: Badge; participantCount: number })[]> {
+    const ids = rows.map((c) => c.id);
+    const badgeIds = Array.from(new Set(rows.map((c) => c.badgeId).filter((b): b is string => !!b)));
+
+    const [counts, badgeRows] = await Promise.all([
+      db.select({ contestId: contestParticipants.contestId, n: sql<number>`count(*)::int` })
+        .from(contestParticipants)
+        .where(inArray(contestParticipants.contestId, ids))
+        .groupBy(contestParticipants.contestId),
+      badgeIds.length ? db.select().from(badges).where(inArray(badges.id, badgeIds)) : Promise.resolve([] as Badge[]),
+    ]);
+
+    const countBy = new Map(counts.map((c) => [c.contestId, Number(c.n)]));
+    const badgeBy = new Map(badgeRows.map((b) => [b.id, b]));
+    return rows.map((c) => ({
+      ...c,
+      badge: c.badgeId ? badgeBy.get(c.badgeId) : undefined,
+      participantCount: countBy.get(c.id) ?? 0,
+    }));
   }
 
   async getContest(id: string): Promise<(Contest & { badge?: Badge; participantCount: number }) | undefined> {
     const [contest] = await db.select().from(contests).where(eq(contests.id, id));
     if (!contest) return undefined;
+    // Counted, not listed: reading every entrant row to take its length was
+    // the same unbounded read as the listing, one contest at a time.
+    const [row] = await db.select({ n: sql<number>`count(*)::int` })
+      .from(contestParticipants).where(eq(contestParticipants.contestId, id));
     const badge = contest.badgeId ? await this.getBadge(contest.badgeId) : undefined;
-    const participants = await db.select().from(contestParticipants).where(eq(contestParticipants.contestId, id));
-    return { ...contest, badge, participantCount: participants.length };
+    return { ...contest, badge, participantCount: Number(row?.n ?? 0) };
   }
 
   async createContest(data: InsertContest): Promise<Contest> {
@@ -1219,20 +1537,102 @@ export class DatabaseStorage implements IStorage {
     return contest;
   }
 
-  async joinContest(contestId: string, userId: string): Promise<ContestParticipant> {
-    const [participant] = await db.insert(contestParticipants).values({ contestId, userId }).returning();
-    return participant;
+  /**
+   * Entering a contest, decided by the database rather than by a read the
+   * caller did a moment ago.
+   *
+   * The route used to ask "already in?" and "is it full?" and then insert. Two
+   * requests from one double-clicked button both got their answers before
+   * either wrote, so the same person could be entered twice — two places in
+   * the judging, an entrant count that was wrong, and a contest that could
+   * slide past its own `maxParticipants` by however many requests were in
+   * flight. Both questions are now settled inside the one statement:
+   *
+   *   - "already in?" by the unique index on (contest_id, user_id), with
+   *     `onConflictDoNothing`, so the second insert is a no-op rather than a
+   *     duplicate row;
+   *   - "is it full?" by a `where` on the insert itself that re-counts the
+   *     entrants as it writes, so the count can't go stale between the check
+   *     and the write.
+   *
+   * Returns null when the contest is full, and otherwise the entry with
+   * `created` saying whether this call is what put it there — so the route can
+   * still answer "already joined" without having asked a question whose answer
+   * could go stale before the write.
+   */
+  async joinContest(contestId: string, userId: string, maxParticipants?: number | null): Promise<{ participant: ContestParticipant; created: boolean } | null> {
+    const room = maxParticipants == null
+      ? sql`true`
+      : sql`(select count(*) from ${contestParticipants} where ${contestParticipants.contestId} = ${contestId}) < ${maxParticipants}`;
+
+    return db.transaction(async (tx) => {
+      /*
+       * One join at a time per contest, and no coordination at all between
+       * different contests.
+       *
+       * The unique index alone settles "already in": the second insert
+       * conflicts and does nothing, whoever wins. It cannot settle "is it
+       * full", because a count is a read, and under Postgres's default
+       * isolation every concurrent transaction counts the rows that existed
+       * before any of them started. Five people racing for the last two places
+       * each saw two free seats and each was written — the exact bug the cap
+       * exists to prevent, just moved inside one statement. A lock keyed on the
+       * contest makes those five queue up, so the fifth counts four.
+       *
+       * Advisory rather than a row lock: there is no row to lock (nobody has
+       * joined yet, and the contest row itself is read by everything). It is
+       * held for the transaction and released with it, so a crash cannot leave
+       * a contest unjoinable.
+       */
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`contest-join:${contestId}`}))`);
+
+      /*
+       * Written as one statement rather than through the query builder because
+       * the cap has to be a condition *on the insert*, evaluated as the row is
+       * written. Every value is a bound parameter; nothing here is built by
+       * string concatenation (test/unit/sql-parameterized.test.ts).
+       */
+      const written = await tx.execute(sql`
+        insert into ${contestParticipants} (contest_id, user_id)
+        select ${contestId}, ${userId} where ${room}
+        on conflict (contest_id, user_id) do nothing
+        returning id`);
+      const created = (Array.isArray(written) ? written.length : Number((written as any).rowCount ?? 0)) > 0;
+
+      /*
+       * Read the row back through the query builder rather than from
+       * `returning`, so the caller gets camel-cased columns like every other
+       * method here. It also separates the two ways nothing was written: a row
+       * that is already there means they had joined before, and no row at all
+       * means the insert found no room.
+       */
+      const [row] = await tx.select().from(contestParticipants)
+        .where(and(eq(contestParticipants.contestId, contestId), eq(contestParticipants.userId, userId)));
+      return row ? { participant: row, created } : null;
+    });
   }
 
-  async getContestParticipants(contestId: string): Promise<(ContestParticipant & { user: User; profile?: UserProfile })[]> {
-    const parts = await db.select().from(contestParticipants).where(eq(contestParticipants.contestId, contestId));
-    return await Promise.all(
-      parts.map(async (p) => {
-        const [user] = await db.select().from(users).where(eq(users.id, p.userId));
-        const profile = await this.getUserProfile(p.userId);
-        return { ...p, user, profile };
-      })
-    );
+  /**
+   * A contest's entrants, with who they are.
+   *
+   * Was a query per entrant for the account and another for their profile —
+   * three round trips a row, unbounded, on an endpoint reachable signed out.
+   * One left-joined query with a cap instead: the page shows a list of people,
+   * and a list nobody scrolls to the end of should not be able to read the
+   * whole users table.
+   */
+  async getContestParticipants(contestId: string, limit = CONTEST_PARTICIPANT_CAP, offset = 0): Promise<(ContestParticipant & { user: User; profile?: UserProfile })[]> {
+    const rows = await db
+      .select({ participant: contestParticipants, user: users, profile: userProfiles })
+      .from(contestParticipants)
+      .innerJoin(users, eq(users.id, contestParticipants.userId))
+      .leftJoin(userProfiles, eq(userProfiles.userId, contestParticipants.userId))
+      .where(eq(contestParticipants.contestId, contestId))
+      // The id breaks ties so paging can't repeat or skip a row.
+      .orderBy(asc(contestParticipants.joinedAt), asc(contestParticipants.id))
+      .limit(Math.max(1, Math.min(limit, CONTEST_PARTICIPANT_CAP)))
+      .offset(Math.max(0, offset));
+    return rows.map((r) => ({ ...r.participant, user: r.user, profile: r.profile ?? undefined }));
   }
 
   async submitToContest(contestId: string, userId: string, submissionUrl: string, submissionNote?: string): Promise<ContestParticipant> {
@@ -1954,11 +2354,46 @@ export class DatabaseStorage implements IStorage {
   }
 
   // --- Connections ---
-  async sendConnectionRequest(requesterId: string, receiverId: string, note?: string | null): Promise<Connection> {
+  /**
+   * Asks to connect, once per pair, whatever the timing.
+   *
+   * This used to be a check-then-insert with nothing underneath it: read the
+   * pair, and if nothing came back, insert. Two ways through that gap, both
+   * reachable by accident:
+   *
+   *   - a double-submitted button (the second request arrives before the first
+   *     commits, so both read "nothing" and both insert);
+   *   - A and B pressing "connect" on each other inside the same second, which
+   *     reads as two different pairs to a check that looks up one direction at
+   *     a time and inserts two rows for the same two people.
+   *
+   * From then on the pair had two rows, `getConnectionStatus` returned
+   * whichever the planner happened to hand back first, and messaging between
+   * the two 403'd on some requests and worked on others — a bug that looks
+   * like the network and can't be reproduced by the person reporting it.
+   *
+   * The fix is the unique index on the unordered pair (migration 0042) plus
+   * `onConflictDoNothing`: the database decides, not a read. A losing insert
+   * returns no row, which is not an error — it means somebody got there first,
+   * so we read back what won and return that. The caller sees the same shape
+   * either way and the pair still has exactly one connection.
+   */
+  async sendConnectionRequest(requesterId: string, receiverId: string, note?: string | null): Promise<Connection & { alreadySent?: boolean }> {
+    const [conn] = await db.insert(connections)
+      .values({ requesterId, receiverId, status: "pending", note: note ?? null })
+      .onConflictDoNothing()
+      .returning();
+    if (conn) return conn;
+
+    // Lost the race, or there was already a connection. Either way the pair's
+    // one row is the answer — and if it's ours and still pending, the person
+    // pressing the button twice should see their own request, not an error.
     const existing = await this.getConnectionStatus(requesterId, receiverId);
-    if (existing) throw new Error("Connection already exists");
-    const [conn] = await db.insert(connections).values({ requesterId, receiverId, status: "pending", note: note ?? null }).returning();
-    return conn;
+    if (!existing) throw new Error("Connection already exists");
+    // Flagged, because pressing the button twice is one request as far as the
+    // funnel is concerned: the caller records the action only for a new one.
+    if (existing.requesterId === requesterId && existing.status === "pending") return { ...existing, alreadySent: true };
+    throw new Error("Connection already exists");
   }
 
   /** Every connection between one person and a list of others, in either direction. One query for a grid of cards. */
@@ -1980,9 +2415,31 @@ export class DatabaseStorage implements IStorage {
     return conn;
   }
 
+  /**
+   * Declines a request — by deleting it, not by marking it.
+   *
+   * A `rejected` row used to be permanent and invisible, and the combination
+   * was the worst of both. `sendConnectionRequest` refused while *any* row
+   * existed in either direction, so one mis-tapped decline sealed the pair
+   * forever: the person who asked saw "Requested", greyed out, for the rest of
+   * time and was never told why, and the person who declined saw no button at
+   * all because the connection already "existed". Neither of them could undo
+   * it, and nothing in the product said what had happened.
+   *
+   * Nobody needs the row. It isn't shown anywhere, it isn't moderation
+   * evidence (a report is), and keeping it costs the pair every future chance
+   * to meet. Deleting it puts them back where they started: the decliner hears
+   * nothing more, and the other person may ask again — which is what "declined"
+   * means everywhere else and what the rate limit on `connect` is for.
+   *
+   * Returns the row as it was, with `rejected` on it, so the caller can answer
+   * the client in the shape it expects.
+   */
   async rejectConnection(connectionId: string): Promise<Connection> {
-    const [conn] = await db.update(connections).set({ status: "rejected" }).where(and(eq(connections.id, connectionId), eq(connections.status, "pending"))).returning();
-    return conn;
+    const [conn] = await db.delete(connections)
+      .where(and(eq(connections.id, connectionId), eq(connections.status, "pending")))
+      .returning();
+    return conn ? { ...conn, status: "rejected" as const } : conn;
   }
 
   async removeConnection(connectionId: string): Promise<void> {
@@ -2030,13 +2487,33 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
+  /**
+   * Where two people stand, answered the same way every time.
+   *
+   * This is the function messaging authorises against, so "whichever row the
+   * planner returned first" was not a tidiness problem: with two rows for one
+   * pair (see `sendConnectionRequest`) an unordered `select` could hand back
+   * the accepted row on one request and the pending one on the next, and the
+   * same conversation would 403 intermittently.
+   *
+   * The unique index means there is normally one row now. The order is kept
+   * anyway, for the rows written before it existed and for the general
+   * principle that an authorisation check must not depend on the plan:
+   * accepted beats pending beats rejected, oldest first as the tiebreak. It
+   * resolves the way a person would — if these two are connected, they are
+   * connected, whatever else is lying around.
+   */
   async getConnectionStatus(userId1: string, userId2: string): Promise<Connection | undefined> {
     const [conn] = await db.select().from(connections).where(
       or(
         and(eq(connections.requesterId, userId1), eq(connections.receiverId, userId2)),
         and(eq(connections.requesterId, userId2), eq(connections.receiverId, userId1))
       )
-    );
+    ).orderBy(
+      sql`case ${connections.status} when 'accepted' then 0 when 'pending' then 1 else 2 end`,
+      asc(connections.createdAt),
+      asc(connections.id),
+    ).limit(1);
     return conn;
   }
 
@@ -2068,32 +2545,102 @@ export class DatabaseStorage implements IStorage {
     return msgs.reverse();
   }
 
+  /**
+   * The inbox: one row per person, newest first.
+   *
+   * Two things were wrong with the list this replaces, and they compounded.
+   *
+   * It never looked at `connections`, while both message routes require an
+   * accepted one. So the list happily showed threads that answered 403 the
+   * moment they were opened — and after a connection was removed (or a block
+   * was made) the thread stayed put with an unread badge that could never be
+   * cleared, because clearing it meant opening it and opening it was refused.
+   * A permanent "1" on the tab bar, with nothing behind it. The join is now
+   * part of the query, and a thread whose connection has gone is left out
+   * rather than left there lying. The messages aren't deleted — reconnecting
+   * brings the history back — they simply stop being offered as something the
+   * person can open. `getUnreadCount` filters identically, so the badge and
+   * the list can never disagree.
+   *
+   * And it read *every message the person had ever exchanged*, in full, to
+   * work out who the last one was from: a text-column table scan on every
+   * visit to the messages tab, growing forever, before N more queries for the
+   * names. It's one query now — `distinct on` for each partner's latest
+   * message, a grouped count for the unread, and the names joined in.
+   */
   async getConversationList(userId: string): Promise<{ userId: string; user: User; profile?: UserProfile; lastMessage: DirectMessage; unreadCount: number }[]> {
-    const allMsgs = await db.select().from(directMessages).where(
-      or(eq(directMessages.senderId, userId), eq(directMessages.receiverId, userId))
-    ).orderBy(desc(directMessages.createdAt));
+    const rows = await db.execute<any>(sql`
+      WITH partners AS (
+        SELECT DISTINCT ON (other_id) other_id, msg_id
+        FROM (
+          SELECT CASE WHEN dm.sender_id = ${userId} THEN dm.receiver_id ELSE dm.sender_id END AS other_id,
+                 dm.id AS msg_id, dm.created_at
+          FROM direct_messages dm
+          WHERE dm.sender_id = ${userId} OR dm.receiver_id = ${userId}
+        ) x
+        ORDER BY other_id, created_at DESC, msg_id DESC
+      ),
+      unread AS (
+        SELECT sender_id AS other_id, count(*)::int AS n
+        FROM direct_messages
+        WHERE receiver_id = ${userId} AND read = false
+        GROUP BY sender_id
+      )
+      SELECT p.other_id,
+             m.id AS m_id, m.sender_id AS m_sender, m.receiver_id AS m_receiver,
+             m.content AS m_content, m.read AS m_read, m.created_at AS m_created,
+             coalesce(u.n, 0) AS unread_count
+      FROM partners p
+      JOIN direct_messages m ON m.id = p.msg_id
+      JOIN users usr ON usr.id = p.other_id
+      LEFT JOIN unread u ON u.other_id = p.other_id
+      WHERE usr.suspended_at IS NULL
+        AND usr.deleted_at IS NULL
+        /* The join the old list was missing: an accepted connection is what
+           the message routes authorise against, so it is what decides whether
+           a thread is openable and therefore whether it belongs in the list. */
+        AND EXISTS (
+          SELECT 1 FROM connections c
+          WHERE c.status = 'accepted'
+            AND ((c.requester_id = ${userId} AND c.receiver_id = p.other_id)
+              OR (c.receiver_id = ${userId} AND c.requester_id = p.other_id))
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM user_blocks b
+          WHERE (b.blocker_id = ${userId} AND b.blocked_id = p.other_id)
+             OR (b.blocked_id = ${userId} AND b.blocker_id = p.other_id)
+        )
+      ORDER BY m.created_at DESC
+      LIMIT 200
+    `);
 
-    const conversationMap = new Map<string, { lastMessage: DirectMessage; unreadCount: number }>();
-    for (const msg of allMsgs) {
-      const otherId = msg.senderId === userId ? msg.receiverId : msg.senderId;
-      if (!conversationMap.has(otherId)) {
-        conversationMap.set(otherId, { lastMessage: msg, unreadCount: 0 });
-      }
-      if (msg.receiverId === userId && !msg.read) {
-        const conv = conversationMap.get(otherId)!;
-        conv.unreadCount++;
-      }
-    }
+    const partners = (rows.rows ?? []) as any[];
+    if (!partners.length) return [];
 
-    const results = await Promise.all(
-      Array.from(conversationMap.entries()).map(async ([otherId, data]) => {
-        const [user] = await db.select().from(users).where(eq(users.id, otherId));
-        const profile = await this.getUserProfile(otherId);
-        return { userId: otherId, user, profile, ...data };
-      })
-    );
+    // Names and avatars in two bulk reads rather than two per conversation.
+    const ids = partners.map((r) => r.other_id as string);
+    const [people, profiles] = await Promise.all([
+      db.select().from(users).where(inArray(users.id, ids)),
+      db.select().from(userProfiles).where(inArray(userProfiles.userId, ids)),
+    ]);
+    const byId = new Map(people.map((u) => [u.id, u]));
+    const profileById = new Map(profiles.map((p) => [p.userId, p]));
 
-    return results.sort((a, b) => b.lastMessage.createdAt.getTime() - a.lastMessage.createdAt.getTime());
+    return partners.flatMap((r) => {
+      const user = byId.get(r.other_id as string);
+      if (!user) return [];
+      return [{
+        userId: r.other_id as string,
+        user,
+        profile: profileById.get(r.other_id as string),
+        lastMessage: {
+          id: r.m_id, senderId: r.m_sender, receiverId: r.m_receiver,
+          content: r.m_content, read: r.m_read,
+          createdAt: r.m_created instanceof Date ? r.m_created : new Date(r.m_created),
+        } as DirectMessage,
+        unreadCount: Number(r.unread_count ?? 0),
+      }];
+    });
   }
 
   async markMessagesRead(userId: string, otherUserId: string): Promise<void> {
@@ -2108,10 +2655,33 @@ export class DatabaseStorage implements IStorage {
       );
   }
 
+  /**
+   * The number on the messages tab.
+   *
+   * Counted over exactly the threads `getConversationList` will show, for one
+   * reason: a badge that counts something the person cannot open is a badge
+   * they cannot clear. Unread messages from a connection that has since been
+   * removed, from somebody they've blocked, or from a suspended account used
+   * to sit in this total forever — the tab said "2", the list showed nothing
+   * to open, and no amount of reading made it go away.
+   */
   async getUnreadCount(userId: string): Promise<number> {
-    const result = await db.select({ count: sql<number>`count(*)` })
+    const result = await db.select({ count: sql<number>`count(*)::int` })
       .from(directMessages)
-      .where(and(eq(directMessages.receiverId, userId), eq(directMessages.read, false)));
+      .innerJoin(users, eq(users.id, directMessages.senderId))
+      .where(and(
+        eq(directMessages.receiverId, userId),
+        eq(directMessages.read, false),
+        isNull(users.suspendedAt),
+        isNull(users.deletedAt),
+        sql`exists (
+          select 1 from ${connections} c
+          where c.status = 'accepted'
+            and ((c.requester_id = ${userId} and c.receiver_id = ${directMessages.senderId})
+              or (c.receiver_id = ${userId} and c.requester_id = ${directMessages.senderId}))
+        )`,
+        notBlockedSql(userId, directMessages.senderId),
+      ));
     return Number(result[0]?.count || 0);
   }
 

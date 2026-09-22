@@ -7,8 +7,9 @@
  * nobody has run a contest yet. Unproven isn't: the first contest is the worst
  * moment to find out that joining it doesn't work.
  *
- * Contests are created by hand in the database today (there's no route that
- * makes one), so the fixtures here do what a founder would do with SQL.
+ * The fixtures build contests with SQL rather than through the admin routes,
+ * so these tests stay about joining and submitting; the admin routes have
+ * their own test (contest-admin.test.ts).
  */
 import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";

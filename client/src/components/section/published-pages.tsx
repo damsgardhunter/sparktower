@@ -50,11 +50,20 @@ export function PublishedPages({ projectId }: { projectId: string }) {
   const live = (data ?? []).filter((a) => a.visibility === "public");
 
   const takeDown = useMutation({
-    mutationFn: async (id: string) => (await apiRequest("POST", `/api/artifacts/${id}/unpublish`)).json(),
-    onSuccess: () => {
-      toast({ title: "The page is down", description: "The link leads nowhere now. Your post about it is still on the feed until you delete it." });
+    mutationFn: async ({ id, removePost }: { id: string; removePost: boolean }) =>
+      (await apiRequest("POST", `/api/artifacts/${id}/unpublish`, { removePost })).json() as Promise<{ postId: string | null; post: string }>,
+    onSuccess: (r) => {
+      toast({
+        title: "The page is down",
+        description: r.post === "deleted" || r.post === "kept"
+          ? "The link leads nowhere now, and the post announcing it is gone from the feed."
+          : r.post === "not_yours"
+            ? "The link leads nowhere now. The post announcing it belongs to whoever wrote it, so it's theirs to delete."
+            : "The link leads nowhere now. Your post about it is still on the feed until you delete it.",
+      });
       setTakingDown(null);
       queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "artifacts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/feed"] });
     },
     onError: (e) => toast({ title: "Couldn't take it down", description: errorText(e), variant: "destructive" }),
   });
@@ -89,15 +98,30 @@ export function PublishedPages({ projectId }: { projectId: string }) {
           <AlertDialogHeader>
             <AlertDialogTitle>Take this page down?</AlertDialogTitle>
             <AlertDialogDescription>
-              The page stops being reachable. Anyone who opens the link — including people who already have it — gets nothing.
-              Your post about it stays on the feed until you delete it, and you can publish the page again later.
+              The page stops being reachable. Anyone who opens the link — including people who already have it — gets nothing,
+              and you can publish the page again later.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
+          {/* The feed post is the other half of publishing: left up on its own
+              it sits at the top of the feed announcing a link that 404s. */}
+          <AlertDialogFooter className="sm:justify-between">
             <AlertDialogCancel>Leave it up</AlertDialogCancel>
-            <AlertDialogAction disabled={takeDown.isPending} onClick={() => takingDown && takeDown.mutate(takingDown.id)} data-testid="button-confirm-take-down">
-              Take it down
-            </AlertDialogAction>
+            <div className="flex gap-2">
+              <AlertDialogAction
+                disabled={takeDown.isPending}
+                onClick={(e) => { e.preventDefault(); takingDown && takeDown.mutate({ id: takingDown.id, removePost: true }); }}
+                data-testid="button-confirm-take-down-with-post"
+              >
+                Take it down and delete the post
+              </AlertDialogAction>
+              <AlertDialogAction
+                disabled={takeDown.isPending}
+                onClick={(e) => { e.preventDefault(); takingDown && takeDown.mutate({ id: takingDown.id, removePost: false }); }}
+                data-testid="button-confirm-take-down"
+              >
+                Page only
+              </AlertDialogAction>
+            </div>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

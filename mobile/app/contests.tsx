@@ -4,7 +4,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../src/api/client";
 import { useAuth } from "../src/auth/AuthContext";
 import { colors, font, fontFamily, radius, spacing } from "../src/theme";
-import { Btn, Empty, Icon, Loading, NovaGradient, type IconName } from "../src/components/ui";
+import { Btn, Empty, Icon, Loading, NovaGradient, errText, type IconName } from "../src/components/ui";
+import { NoticeBanner, useNotice } from "../src/components/Sheet";
 import { FeaturedContestCard } from "../src/components/FeaturedContest";
 
 interface Community {
@@ -22,10 +23,19 @@ const KEY = ["communities"];
 export default function ContestsAndCommunities() {
   const { user } = useAuth();
   const qc = useQueryClient();
+  const { notice, show, clear } = useNotice();
   const { data: communities, isLoading } = useQuery({ queryKey: KEY, queryFn: () => api<Community[]>("/api/communities") });
+  /*
+   * Joining and leaving write the row straight into the cache on success, so a
+   * failure changed nothing at all on screen: the button stopped spinning, the
+   * label still said "Join", and there was no way to tell a refused request
+   * from a tap that didn't land. People tap again, which is a second request to
+   * an endpoint that may have refused the first one for rate-limiting it.
+   */
   const toggle = useMutation({
     mutationFn: (c: Community) => api<Community>(`/api/communities/${c.slug}/join`, { method: c.joined ? "DELETE" : "POST" }),
     onSuccess: (updated) => qc.setQueryData<Community[]>(KEY, (list) => list?.map((c) => (c.id === updated.id ? updated : c))),
+    onError: (e, c) => show({ tone: "error", text: errText(e, c.joined ? `Couldn't leave ${c.name}. You're still a member.` : `Couldn't join ${c.name}. Try again.`) }),
   });
   const label = { color: colors.textTertiary, fontSize: font.xs, fontFamily: fontFamily.semibold, letterSpacing: 0.8, textTransform: "uppercase" as const };
 
@@ -83,6 +93,7 @@ export default function ContestsAndCommunities() {
           })}
         </View>
       </ScrollView>
+      <NoticeBanner notice={notice} onDismiss={clear} />
     </>
   );
 }

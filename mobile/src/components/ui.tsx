@@ -469,6 +469,41 @@ export function Empty({
   );
 }
 
+/**
+ * A request that failed, with a way out of it.
+ *
+ * The third state, and the one screens kept forgetting. A one-shot query that
+ * errors leaves `isLoading` false and `data` undefined for ever, so a screen
+ * branching on those two alone either spins until it's closed or — worse —
+ * renders its empty state and tells the person a lie: "No messages yet" when
+ * the request 500'd, "No projects ranked yet" when the phone was on a train.
+ * An empty state is a fact about their account; this is a fact about the
+ * network, and the difference is whether tapping something can fix it.
+ *
+ * `message` takes the server's words where it has any (errText), because
+ * "you're signed out" and "we're down" want different reactions.
+ */
+export function ErrorState({
+  title = "That didn't load", message, onRetry, retryLabel = "Try again", icon = "cloud-offline-outline",
+}: {
+  title?: string;
+  message?: string;
+  onRetry?: () => void;
+  retryLabel?: string;
+  icon?: IconName;
+}) {
+  return (
+    <View style={s.empty} testID="error-state">
+      <Ionicons name={icon} size={40} color={colors.textTertiary} />
+      <H2 style={{ textAlign: "center" }}>{title}</H2>
+      <Body muted style={{ textAlign: "center", maxWidth: 280 }}>
+        {message || "Something went wrong on the way. Check your connection and try again."}
+      </Body>
+      {onRetry && <Btn label={retryLabel} onPress={onRetry} variant="outline" small testID="button-retry" />}
+    </View>
+  );
+}
+
 export function ErrorNote({ message }: { message: string }) {
   return <Text style={s.error}>{message}</Text>;
 }

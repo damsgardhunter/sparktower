@@ -35,18 +35,32 @@ describe("people search, sent requests and public milestones", () => {
     const saved = await bo.agent.post("/api/profile").send({ headline: `Quantum ${tag} tinkerer`, skills: [`Rust${tag}`], interests: [] });
     expect([200, 201]).toContain(saved.status);
 
-    const bySkill = (await request(app).get(`/api/users/search?q=rust${tag}`)).body;
-    expect(bySkill.map((u: any) => u.id)).toEqual([bo.id]);
-    const byHeadline = (await request(app).get(`/api/users/search?q=${encodeURIComponent(`quantum ${tag}`)}`)).body;
-    expect(byHeadline.map((u: any) => u.id)).toEqual([bo.id]);
-    const byName = (await request(app).get(`/api/users/search?q=${encodeURIComponent(`ada${tag} searcher`)}`)).body;
-    expect(byName.map((u: any) => u.id)).toEqual([ada.id]);
-    expect((await request(app).get(`/api/users/search?q=${encodeURIComponent(ada.email)}`)).body).toEqual([]);
-    expect((await request(app).get(`/api/users/search?q=%25`)).body.length).toBe(0);
+    /*
+     * Signed in, because this is the member directory. Anonymous, with an
+     * offset and a page of five hundred, it could be walked end to end by
+     * anybody — and every row carried the whole profile, résumé link and work
+     * history included. Discover's equivalent always required an account;
+     * this was the way around it.
+     */
+    expect((await request(app).get(`/api/users/search?q=rust${tag}`)).status, "signed out gets nothing").toBe(401);
 
-    const page = (await request(app).get(`/api/users/search?q=${tag}&limit=1`)).body;
+    const bySkill = (await ada.agent.get(`/api/users/search?q=rust${tag}`)).body;
+    expect(bySkill.map((u: any) => u.id)).toEqual([bo.id]);
+    // A card's worth of person, and no more: the history is on their profile, where asking for it is a visit.
+    expect(bySkill[0].profile.headline).toContain("tinkerer");
+    for (const field of ["resumeUrl", "experience", "education"]) {
+      expect(bySkill[0].profile[field], field).toBeUndefined();
+    }
+    const byHeadline = (await ada.agent.get(`/api/users/search?q=${encodeURIComponent(`quantum ${tag}`)}`)).body;
+    expect(byHeadline.map((u: any) => u.id)).toEqual([bo.id]);
+    const byName = (await ada.agent.get(`/api/users/search?q=${encodeURIComponent(`ada${tag} searcher`)}`)).body;
+    expect(byName.map((u: any) => u.id)).toEqual([ada.id]);
+    expect((await ada.agent.get(`/api/users/search?q=${encodeURIComponent(ada.email)}`)).body).toEqual([]);
+    expect((await ada.agent.get(`/api/users/search?q=%25`)).body.length).toBe(0);
+
+    const page = (await ada.agent.get(`/api/users/search?q=${tag}&limit=1`)).body;
     expect(page.length).toBe(1);
-    const next = (await request(app).get(`/api/users/search?q=${tag}&limit=1&offset=1`)).body;
+    const next = (await ada.agent.get(`/api/users/search?q=${tag}&limit=1&offset=1`)).body;
     expect(next.length).toBe(1);
     expect(next[0].id).not.toBe(page[0].id);
   });

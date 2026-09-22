@@ -295,6 +295,41 @@
       "when": 1789854168206,
       "tag": "0041_web_handoff_tokens",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1789857746696,
+      "tag": "0042_document_history_and_artifact_drafts",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1789857911215,
+      "tag": "0043_project_takedown_and_contest_entries",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1789858049301,
+      "tag": "0044_badge_awards_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1789858196907,
+      "tag": "0045_connection_pair_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1789858549337,
+      "tag": "0046_anonymous_artifact_reports",
+      "breakpoints": true
     }
   ]
 }

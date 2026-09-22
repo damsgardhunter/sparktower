@@ -22,7 +22,12 @@ export default function GameBoardsPage() {
   const [board, setBoard] = useState("overall");
 
   const { data, isLoading } = useQuery<any>({
-    queryKey: [`/api/games/leaderboard?board=${board}`],
+    /* Two parts, so ["/api/games"] and ["/api/games", "leaderboard"] both
+       prefix-match it — a single template string matches neither, which is why
+       finishing a game never refreshed the board it had just changed. The
+       default query function joins the key with "/", so this is still
+       /api/games/leaderboard?board=… */
+    queryKey: ["/api/games", `leaderboard?board=${board}`],
   });
 
   const boards = data?.boards ?? [];

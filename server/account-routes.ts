@@ -10,6 +10,7 @@
  */
 import type { Express } from "express";
 import bcrypt from "bcryptjs";
+import { pledgeRefunded } from "./backing-notices";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "./db";
 import { users, projectBackings } from "@shared/schema";
@@ -118,7 +119,14 @@ async function refundPledgesLeavingWith(userId: string): Promise<number> {
         .where(eq(projectBackings.id, pledge.id));
       return true;
     });
-    if (done) refunded += 1;
+    if (done) {
+      refunded += 1;
+      // Their project is gone with its creator; say so, rather than letting a refund arrive unexplained.
+      void pledgeRefunded({
+        projectId: pledge.projectId, backerId: pledge.backerId,
+        amountCents: pledge.amountCents, reason: "creator_left",
+      }).catch((err) => console.error("[backing] refund notice failed:", err));
+    }
   }
   return refunded;
 }

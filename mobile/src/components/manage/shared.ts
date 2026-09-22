@@ -55,8 +55,20 @@ export const ACTOR_LABEL: Record<Actor, string> = {
   "user-decides": "Nova lays out options — you choose",
   "user-does": "Only you can do this",
 };
+/*
+ * Word for word from client/src/components/section/path-types.ts.
+ *
+ * These are the badges on a step, so the same step read "Nova builds" in the
+ * app and "Nova builds it" in the browser, and "You" against "Only you" — the
+ * latter being a real difference in meaning rather than in length, since "You"
+ * beside a step reads as whose step it is and "Only you" says nobody else can
+ * do it, which is the whole point of the tier.
+ */
 export const ACTOR_SHORT: Record<Actor, string> = {
-  "nova-builds": "Nova builds", "nova-drafts": "Nova drafts", "user-decides": "You choose", "user-does": "You",
+  "nova-builds": "Nova builds it",
+  "nova-drafts": "Nova drafts it",
+  "user-decides": "You choose",
+  "user-does": "Only you",
 };
 export const TIER_LABEL: Record<VerificationTier, string> = {
   verified: "Nova checks this itself",

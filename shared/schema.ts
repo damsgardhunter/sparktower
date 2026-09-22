@@ -1,4 +1,4 @@
-import { pgTable, text, varchar, timestamp, integer, boolean, index, jsonb, unique, foreignKey, bigserial, bigint, real, primaryKey } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, integer, boolean, index, uniqueIndex, jsonb, unique, foreignKey, bigserial, bigint, real, primaryKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
@@ -219,6 +219,22 @@ export const projects = pgTable("projects", {
   // Private projects are a paid entitlement; see checkPrivateProjectQuota.
   isPrivate: boolean("is_private").default(false).notNull(),
   externalTractionUrl: text("external_traction_url"),
+  /*
+   * Taken down by a reviewer. A project was a *reportable* thing but not an
+   * actionable one: the queue could file the report, mark it actioned, and
+   * change nothing. The only lever was suspending the owner, and a suspension
+   * blocks writes — it does not unpublish anything — so a doxxing or spam
+   * project stayed on the public listing, the leaderboard, Discover and the
+   * sitemap while its report read "handled".
+   *
+   * Same three columns as every other takedown target (feed posts, project
+   * comments, feed comments), so `TAKEDOWN_TABLES`, the undo path and the
+   * moderation log all treat a project exactly like any other content.
+   * Reads that serve strangers must test `hiddenAt is null`.
+   */
+  hiddenAt: timestamp("hidden_at"),
+  hiddenById: varchar("hidden_by_id").references(() => users.id),
+  hiddenReason: text("hidden_reason"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -531,7 +547,19 @@ export const userBadges = pgTable("user_badges", {
   userId: varchar("user_id").notNull().references(() => users.id),
   badgeId: varchar("badge_id").notNull().references(() => badges.id),
   awardedAt: timestamp("awarded_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  /**
+   * You can hold a badge once.
+   *
+   * `awardBadge` used to select-then-insert, which is a check-then-act with a
+   * network round trip in the middle: one request that trips two milestones,
+   * or two requests landing together, both read "not awarded" and both write.
+   * The profile then shows the same badge twice and no amount of re-reading
+   * fixes it. With this index the second write is a no-op instead
+   * (`onConflictDoNothing`), so the race has no outcome at all.
+   */
+  oneAwardPerBadge: uniqueIndex("user_badges_user_badge_unique").on(table.userId, table.badgeId),
+}));
 
 export const contests = pgTable("contests", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -557,7 +585,22 @@ export const contestParticipants = pgTable("contest_participants", {
   submissionNote: text("submission_note"),
   score: integer("score"),
   joinedAt: timestamp("joined_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  /*
+   * One entry per person per contest.
+   *
+   * Joining was a check-then-insert with nothing underneath it: read "are they
+   * already in?", read the participant count against `maxParticipants`, then
+   * insert. A double-clicked button — or two tabs — ran both reads before
+   * either insert, so one person could end up in the table twice. That
+   * double-counted the entrants shown on the contest, let a contest overfill
+   * past its own maximum, and would have given one person two places in the
+   * judging. The database is now the thing that answers, and `joinContest`
+   * inserts with `onConflictDoNothing` and enforces the cap in the insert's
+   * own WHERE rather than in a read before it.
+   */
+  oneEntry: unique("contest_participants_contest_user_unique").on(table.contestId, table.userId),
+}));
 
 export const connections = pgTable("connections", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -572,6 +615,25 @@ export const connections = pgTable("connections", {
   note: text("note"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+/*
+ * There is one more constraint on this table than drizzle can describe:
+ *
+ *   create unique index connections_pair_unique
+ *     on connections (least(requester_id, receiver_id), greatest(requester_id, receiver_id));
+ *
+ * It is an expression index, so it lives in the migration (0042) rather than
+ * here. It is the thing that makes a connection a fact about a *pair* rather
+ * than about a direction. Without it `sendConnectionRequest` was a
+ * check-then-insert with nothing underneath it: a double-submitted button, or
+ * A and B pressing "connect" on each other in the same second, left two rows
+ * for one pair. From then on `getConnectionStatus` returned whichever row the
+ * planner handed back first, so messaging between the two 403'd on some
+ * requests and worked on others — the shape of bug nobody can reproduce.
+ *
+ * drizzle-kit doesn't know about it, which is fine: it only drops what it
+ * knows. Don't add a plain unique on (requester_id, receiver_id) as well — it
+ * would allow exactly the reversed-pair duplicate this one exists to stop.
+ */
 
 export const directMessages = pgTable("direct_messages", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -630,6 +692,50 @@ export const userFollows = pgTable("user_follows", {
 }));
 
 export type UserFollow = typeof userFollows.$inferSelect;
+
+/**
+ * One person deciding they never want to hear from another again.
+ *
+ * Reporting was the only tool anyone had, and a report changes nothing
+ * between two people: it opens a queue item for a reviewer and, in the
+ * meantime, the person being harassed still gets connection requests with a
+ * 280-character note attached, still sees their harasser in matches and
+ * search, and still gets a bell ping every time they react to something. The
+ * block is the part the person being harassed controls, and it takes effect
+ * the moment it's made.
+ *
+ * Deliberately one-directional as a row and two-directional in effect: `a`
+ * blocking `b` means neither can reach the other, but only `a` is ever told
+ * the block exists. The blocked person sees a profile that is simply absent
+ * and requests that simply don't arrive — telling them "you were blocked" is
+ * how a block turns into the next argument.
+ *
+ * `reason` is for the blocker's own memory when they review the list months
+ * later. It is never shown to the blocked person and never leaves this row.
+ */
+export const userBlocks = pgTable("user_blocks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  blockerId: varchar("blocker_id").notNull().references(() => users.id),
+  blockedId: varchar("blocked_id").notNull().references(() => users.id),
+  reason: text("reason"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /*
+   * In column order, for the same drizzle-kit reason as project_follows above.
+   * Blocking twice (a double-tap on the confirm) must be the same block, not
+   * two rows that then need two unblocks to undo.
+   */
+  blockerBlockedUnique: unique().on(table.blockerId, table.blockedId),
+  /*
+   * The unique covers "who have I blocked"; this covers the question every
+   * reach check actually asks — "who has blocked me" — which otherwise
+   * sequentially scans the table on every notification fan-out.
+   */
+  blockedIdx: index("user_blocks_blocked_idx").on(table.blockedId),
+}));
+
+export type UserBlock = typeof userBlocks.$inferSelect;
+export type InsertUserBlock = typeof userBlocks.$inferInsert;
 
 export const projectKanbanTasks = pgTable("project_kanban_tasks", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -798,6 +904,36 @@ export const codeAuditRuns = pgTable("code_audit_runs", {
 
 export type CodeAuditRun = typeof codeAuditRuns.$inferSelect;
 
+/**
+ * One record per batch of project operations that has actually been applied.
+ *
+ * Every "apply what Nova suggested" route took a raw array of operations and
+ * ran it, so a double click, or a client retrying a slow request, applied the
+ * whole batch twice: two of every task, two of every milestone, and — worse —
+ * an update_scope replaying a stale array, silently discarding everything
+ * added to the bucket since. The key is either the caller's Idempotency-Key or
+ * a fingerprint of the batch itself, so protection does not depend on the
+ * client having been updated to send one. The stored result lets a genuine
+ * retry receive the original answer rather than an error.
+ */
+export const projectOperationApplications = pgTable("project_operation_applications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** The caller's Idempotency-Key, or a hash of the operations when there is none. */
+  key: text("key").notNull(),
+  /** Which route applied it, for reading the table back. */
+  source: text("source").notNull(),
+  /** The answer the first apply gave, replayed to a retry. */
+  result: jsonb("result").default({}),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [
+  unique("project_operation_applications_key_idx").on(t.projectId, t.key),
+  index("project_operation_applications_made_idx").on(t.createdAt),
+]);
+
+export type ProjectOperationApplication = typeof projectOperationApplications.$inferSelect;
+
 export const projectCodeAudits = pgTable("project_code_audits", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
@@ -872,6 +1008,29 @@ export const projectDocuments = pgTable("project_documents", {
   fileId: varchar("file_id"),
   /** Object-storage path of the most recent PDF render, if any. */
   pdfUrl: text("pdf_url"),
+  /*
+   * The last few versions of `pages`, newest first, stamped before anything
+   * that rewrites the whole structure (a re-plan).
+   *
+   * A restructure is a model call: it can decide a page is redundant and drop
+   * it, taking prose the builder wrote with it. Before this there was no way
+   * back — the pages column had been overwritten and the only copy of those
+   * paragraphs was in the PDF, if one had ever been published. Bounded to a
+   * handful of versions because a thirty-page document is a large JSON blob
+   * and this is an undo, not an archive.
+   */
+  pagesHistory: jsonb("pages_history").$type<{ at: string; reason: string; pages: unknown }[]>().default([]).notNull(),
+  /*
+   * Block ids whose last fill produced nothing, so the failure outlives the
+   * one response that mentioned it.
+   *
+   * A fill that fails on three pages out of twenty used to say so in a single
+   * toast and then forget. Reload the editor and those blocks look like blocks
+   * nobody has got to yet, indistinguishable from the ones never asked for, so
+   * the builder either re-fills the whole document (paying again for the
+   * nineteen pages that worked) or ships with holes in it.
+   */
+  fillFailures: jsonb("fill_failures").$type<string[]>().default([]).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -1180,6 +1339,23 @@ export const pathArtifacts = pgTable("path_artifacts", {
   files: jsonb("files").$type<{ path: string; purpose?: string }[]>().default([]).notNull(),
   tags: text("tags").array().default([]).notNull(),
   visibility: text("visibility", { enum: ["private", "public"] }).default("private").notNull(),
+  /*
+   * A re-assembled version of a page that is already live, held back until
+   * somebody publishes it.
+   *
+   * Regenerating an artifact re-reads the step it came from, and that step is
+   * a working surface: a builder pastes a customer's name, a price they
+   * haven't announced or a note to themselves into the step's answer while
+   * thinking. Writing that straight over `body` put it on /a/<id> the instant
+   * the dialog opened — no button pressed, no warning, and no way to know it
+   * had happened. So a refresh of a public artifact lands here instead, and
+   * the publish route is what moves it across.
+   */
+  draftSummary: text("draft_summary"),
+  draftBody: text("draft_body"),
+  draftFiles: jsonb("draft_files").$type<{ path: string; purpose?: string }[]>(),
+  /** When the held-back draft was assembled. Null means there isn't one. */
+  draftAt: timestamp("draft_at"),
   publishedPostId: varchar("published_post_id"),
   publishedAt: timestamp("published_at"),
   views: integer("views").default(0).notNull(),
@@ -1241,6 +1417,8 @@ export const NOTIFICATION_KINDS = [
   "job_due",
   // It's check-in day for the company you help run.
   "checkin_due",
+  // Money: somebody backed your project, a reviewer decided, a pledge was released or refunded.
+  "pledge_received", "campaign_decision", "pledge_refunding", "pledge_released", "pledge_refunded",
   // Someone applied to your project; the owner decided on your application.
   "project_application", "application_accepted", "application_rejected",
   // The owner removed you from their project's team.
@@ -1499,6 +1677,22 @@ export const activityEvents = pgTable("activity_events", {
   /* One person's trail, newest first. */
   visitorIdx: index("activity_events_visitor_idx").on(table.visitorId, table.createdAt),
 }));
+/*
+ * One more index than drizzle can describe here:
+ *
+ *   create index activity_events_view_dedupe_idx
+ *     on activity_events (name, (props->>'targetId'), coalesce(user_id, visitor_id), created_at)
+ *     where name in ('project.view', 'profile.view');
+ *
+ * It is a partial expression index, so it lives in its migration rather than
+ * in this table definition. It exists for exactly one query: the "have I
+ * already counted this viewer for this thing today?" check in server/views.ts,
+ * which runs on every anonymous GET of a public project page or profile. With
+ * no index that check was a sequential scan of the whole behaviour stream —
+ * the busiest table in the database, on the cheapest-to-call surface there is,
+ * with no rate limit in front of it because it is a GET. The table grows, the
+ * scan grows with it, and the page a stranger lands on gets slower every week.
+ */
 
 /**
  * Which feature areas are switched on.
@@ -1633,7 +1827,28 @@ export const exploreSeen = pgTable("explore_seen", {
 
 export const contentReports = pgTable("content_reports", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  reporterId: varchar("reporter_id").notNull().references(() => users.id),
+  /**
+   * Null for a report filed with no account.
+   *
+   * A public artifact page is the one surface built for people who have never
+   * signed in, and until now it had no way to report anything: the only report
+   * route required an account, so a stranger who landed on something abusive
+   * could close the tab and that was the whole of it. Requiring a signup before
+   * someone can tell you about abuse is asking for the abuse not to be
+   * reported. `reporterAddressHash` stands in for the reporter on those rows.
+   */
+  reporterId: varchar("reporter_id").references(() => users.id),
+  /**
+   * SHA-256 of the reporting address, on anonymous reports only.
+   *
+   * Hashed rather than stored: this only has to answer "is this the same
+   * reporter as that one?", which a hash does, and keeping visitors' addresses
+   * in a table that lives forever is a cost with no matching benefit. It makes
+   * "one report per reporter per thing" true for anonymous reports too — the
+   * unique index below can't do it, because in SQL one null is never equal to
+   * another and every anonymous row would slip past it.
+   */
+  reporterAddressHash: varchar("reporter_address_hash"),
   /** One of REPORT_TARGETS — see shared/moderation.ts. */
   targetType: text("target_type").notNull(),
   targetId: varchar("target_id").notNull(),
@@ -1660,6 +1875,18 @@ export const contentReports = pgTable("content_reports", {
   /** One report per person per thing — re-reporting shouldn't inflate a queue. */
   oneReportPerPerson: unique().on(table.reporterId, table.targetType, table.targetId),
 }));
+/*
+ * And the same rule for reports with no account behind them, which the index
+ * above cannot express:
+ *
+ *   create unique index content_reports_anon_unique
+ *     on content_reports (reporter_address_hash, target_type, target_id)
+ *     where reporter_id is null;
+ *
+ * A partial index, so it lives in its migration. Without it every anonymous
+ * report is unique as far as the database is concerned — `null <> null` — and
+ * one reader pressing the button twice would be two rows in the queue.
+ */
 
 export const surfaceFlags = pgTable("surface_flags", {
   surfaceId: varchar("surface_id").primaryKey(),

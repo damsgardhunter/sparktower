@@ -23,8 +23,12 @@
  *     back-button, and a client refetch are one visit.
  *   - the request looks like a person rather than a crawler.
  *
- * Every view also writes an activity event, so the count can always be checked
- * against the record it came from — which is how the numbers above were found.
+ * A view by a person also writes an activity event, counted or not, so the
+ * count can always be checked against the record it came from — which is how
+ * the numbers above were found. What it deliberately does not record is the
+ * automated half: crawlers, requests with no visitor at all, and anything
+ * arriving faster than a person can read. See the note above `recordActivity`
+ * below, and `VIEWS_PER_ADDRESS_PER_WINDOW`.
  */
 import { sql } from "drizzle-orm";
 import { db } from "./db";
@@ -53,12 +57,68 @@ export interface ViewerContext {
   userAgent?: string | null;
   path?: string | null;
   referrer?: string | null;
+  /** The request's address, for the per-address cap on recording. */
+  address?: string | null;
 }
 
 /** Who this is, for counting purposes: the account if signed in, otherwise the browser. */
 const viewerKey = (who: ViewerContext): string | null => who.userId ?? who.visitorId ?? null;
 
-export type ViewOutcome = "counted" | "own" | "repeat" | "crawler" | "unknown-viewer";
+export type ViewOutcome = "counted" | "own" | "repeat" | "crawler" | "unknown-viewer" | "flooding";
+
+/**
+ * How many views one address may have *recorded* in a window.
+ *
+ * Recording a view is a write and an indexed read, on an endpoint anybody can
+ * call with no account and no rate limit — it is a GET, so the write floor
+ * (server/moderation.ts) never sees it. Nothing stopped one machine walking
+ * every project id in a loop, or sending the same id with a fresh visitor
+ * cookie each time: each request wrote an activity row and ran the
+ * twenty-four-hour lookup, and the table it was writing to is the one the
+ * lookup scans.
+ *
+ * Kept in memory on purpose. A limiter that writes a row to count a write
+ * doubles the cost of the thing it is protecting against, and the counting
+ * here does not have to be exact — it has to stop a loop. Per instance is
+ * enough for that: a script that gets N times the limit across N instances is
+ * still bounded, where before it was not bounded at all.
+ */
+const VIEWS_PER_ADDRESS_PER_WINDOW = 120;
+const VIEW_WINDOW_MS = 10 * 60_000;
+/** Bounded, so the limiter itself can't be turned into the memory leak. */
+const MAX_TRACKED_ADDRESSES = 20_000;
+
+const viewsByAddress = new Map<string, { windowStart: number; n: number }>();
+
+/** True when this address still has room to have a view recorded for it. */
+function addressHasRoom(address: string | null | undefined): boolean {
+  if (!address) return true;
+  const now = Date.now();
+  const seen = viewsByAddress.get(address);
+  if (!seen || now - seen.windowStart >= VIEW_WINDOW_MS) {
+    /*
+     * Sweep on insert rather than on a timer: the map only grows when new
+     * addresses arrive, so that is the moment it is worth looking at. Dropping
+     * everything expired keeps this O(1) amortised.
+     */
+    if (!seen && viewsByAddress.size >= MAX_TRACKED_ADDRESSES) {
+      for (const [k, v] of viewsByAddress) if (now - v.windowStart >= VIEW_WINDOW_MS) viewsByAddress.delete(k);
+      // Still full: every address is inside its window, so stop recording new
+      // ones rather than growing without limit. Views are a nice-to-have number.
+      if (viewsByAddress.size >= MAX_TRACKED_ADDRESSES) return false;
+    }
+    viewsByAddress.set(address, { windowStart: now, n: 1 });
+    return true;
+  }
+  if (seen.n >= VIEWS_PER_ADDRESS_PER_WINDOW) return false;
+  seen.n += 1;
+  return true;
+}
+
+/** For tests, which must not inherit a window from the test before. */
+export function resetViewLimiter(): void {
+  viewsByAddress.clear();
+}
 
 /**
  * Records that somebody looked at a project or a profile, and says whether it
@@ -81,6 +141,9 @@ export async function recordView(opts: {
     if (!key) return "unknown-viewer";
     if (CRAWLER.test(viewer.userAgent ?? "")) return "crawler";
     if (viewer.userId && (viewer.userId === ownerId || insiders.includes(viewer.userId))) return "own";
+    // Before the repeat check, not after: the check is the expensive half, and
+    // an address sending views in a loop must not get to run it every time.
+    if (!addressHasRoom(viewer.address)) return "flooding";
 
     try {
       const [seen] = await db
@@ -107,10 +170,22 @@ export async function recordView(opts: {
   })();
 
   /*
-   * The event is written either way, with the verdict on it. A view that didn't
-   * count is still something that happened, and keeping it is what makes the
-   * counter checkable afterwards.
+   * A view that didn't count is still written — but only when writing it says
+   * something. "Somebody who isn't on the team looked at this and we didn't
+   * count it because it's their second look today" is the record that makes
+   * the counter checkable, and that is what `own` and `repeat` are.
+   *
+   * `crawler`, `unknown-viewer` and `flooding` are not. They are, between them,
+   * every automated hit on a public page: a crawler sweep, a request with no
+   * cookie at all, a script in a loop. Writing a row for each meant an
+   * unauthenticated GET — the only kind of request no rate limit can refuse —
+   * could grow the busiest table in the database as fast as it could send, and
+   * each of those rows then made the repeat lookup above slower for everybody
+   * else. None of them can ever become a counted view, so none of them is
+   * evidence about a number; they are just the cost of having a public page.
    */
+  if (outcome === "crawler" || outcome === "unknown-viewer" || outcome === "flooding") return outcome;
+
   void recordActivity({
     name: `${kind}.view`,
     userId: viewer.userId ?? null,

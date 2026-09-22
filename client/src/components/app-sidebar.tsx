@@ -210,6 +210,25 @@ export function AppSidebar() {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 )}
+                {/*
+                  * The only way into the contest editor. Admins only, and under
+                  * the contests flag: with the surface off there is nothing for
+                  * a contest to appear on, so offering to make one is a trap.
+                  */}
+                {isAdmin && on("contests") && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={location === "/admin/contests"}
+                      className="data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground"
+                    >
+                      <Link href="/admin/contests" data-testid="link-admin-contests">
+                        <Trophy className="h-4 w-4" />
+                        <span className="flex-1">Contests</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

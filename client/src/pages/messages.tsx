@@ -6,6 +6,8 @@ import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { errorText } from "@/lib/api-error";
 import { UserAvatar } from "@/components/user-avatar";
+import { BlockButton } from "@/components/block-button";
+import { ReportButton } from "@/components/report-button";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
@@ -168,9 +170,12 @@ function ConversationList({
 function ChatPanel({
   userId,
   currentUserId,
+  onBlocked,
 }: {
   userId: string;
   currentUserId: string;
+  /** Blocking severs the connection, so the thread closes: the page goes back to the list. */
+  onBlocked?: () => void;
 }) {
   const [message, setMessage] = useState("");
   const { toast } = useToast();
@@ -266,6 +271,19 @@ function ChatPanel({
             <p className="text-xs text-muted-foreground">{otherUser.profile.headline}</p>
           )}
         </div>
+        {/*
+          * Block, in the conversation header.
+          *
+          * The profile is where you find out who someone is; the thread is
+          * where the thing you want to stop is actually happening. Making
+          * somebody navigate to a profile to get away from a message is a
+          * detour at the worst possible moment, so the same control is here.
+          * Blocking removes the connection, which closes this thread — hence
+          * the jump back to the list.
+          */}
+        <div className="ml-auto">
+          <BlockButton userId={userId} name={displayName} onBlocked={onBlocked} />
+        </div>
       </div>
 
       <ScrollArea className="flex-1 p-4" ref={scrollAreaRef}>
@@ -317,6 +335,17 @@ function ChatPanel({
                       }`}
                     >
                       <p className="whitespace-pre-wrap break-words">{msg.content}</p>
+                      {/*
+                        * Reporting what was said, not just who said it. Until
+                        * now the only reportable thing about a private
+                        * conversation was the person, so a threat in an inbox
+                        * reached a reviewer as "this account is abusive" with
+                        * nothing attached. Only on their messages: reporting
+                        * your own is refused by the server anyway.
+                        */}
+                      {!isMine && (
+                        <ReportButton targetType="message" targetId={msg.id} className="mt-1 -ml-1" />
+                      )}
                       <div
                         className={`flex items-center gap-1 mt-1 ${
                           isMine ? "justify-end" : "justify-start"
@@ -404,7 +433,7 @@ export default function MessagesPage() {
           // Keyed by the person: the draft and scroll state belong to one
           // conversation, and without a remount switching people carried a
           // half-typed message over to someone else, one Enter from being sent.
-          <ChatPanel key={selectedUserId} userId={selectedUserId} currentUserId={user.id} />
+          <ChatPanel key={selectedUserId} userId={selectedUserId} currentUserId={user.id} onBlocked={() => setSelectedUserId(null)} />
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <MessageSquare className="h-16 w-16 text-muted-foreground mb-4" />

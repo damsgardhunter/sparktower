@@ -1,11 +1,22 @@
 import { useState } from "react";
-import { Clipboard, Linking, ScrollView, Text, View } from "react-native";
+import { Linking, ScrollView, Text, View } from "react-native";
+/*
+ * expo-clipboard, not react-native's Clipboard.
+ *
+ * RN's Clipboard is long deprecated and, in this version, reaches for a native
+ * module at *module load*. In a build that doesn't include it that throws while
+ * this file is being imported — which doesn't break the copy button, it breaks
+ * the whole Security screen, and with it the only way to turn on the 2FA that
+ * reviewers and admins are required to have. expo-clipboard is already a
+ * dependency and is used the same way in src/components/profile/EditorAccess.tsx.
+ */
+import * as Clipboard from "expo-clipboard";
 import { Stack } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../src/api/client";
 import { useAuth } from "../src/auth/AuthContext";
 import { colors, font, fontFamily, radius, spacing } from "../src/theme";
-import { Btn, ErrorNote, Field, Loading, errText } from "../src/components/ui";
+import { Btn, ErrorNote, ErrorState, Field, Loading, errText } from "../src/components/ui";
 import { Group, MenuRow } from "../src/components/MoreKit";
 import { NoticeBanner, useNotice } from "../src/components/Sheet";
 
@@ -25,7 +36,7 @@ interface MfaStatus { required: boolean; enabled: boolean; verified: boolean; re
 export default function Security() {
   const qc = useQueryClient();
   const { notice, show, clear } = useNotice();
-  const { data: status, isLoading } = useQuery<MfaStatus>({ queryKey: ["mfa-status"], queryFn: () => api<MfaStatus>("/api/auth/mfa/status") });
+  const { data: status, isLoading, error: statusError, refetch } = useQuery<MfaStatus>({ queryKey: ["mfa-status"], queryFn: () => api<MfaStatus>("/api/auth/mfa/status") });
   const [setup, setSetup] = useState<{ secret: string; otpauthUrl: string } | null>(null);
   const [code, setCode] = useState("");
   const [codes, setCodes] = useState<string[] | null>(null);
@@ -51,13 +62,35 @@ export default function Security() {
     onError: (e) => setError(errText(e, "Couldn't make new codes.")),
   });
 
-  const copy = (text: string, what: string) => { Clipboard.setString(text); show({ tone: "success", text: `${what} copied.` }); };
+  const copy = (text: string, what: string) => {
+    void Clipboard.setStringAsync(text)
+      .then(() => show({ tone: "success", text: `${what} copied.` }))
+      .catch(() => show({ tone: "error", text: `Couldn't copy the ${what.toLowerCase()}. Select it and copy by hand.` }));
+  };
 
-  if (isLoading || !status) {
+  if (isLoading) {
     return (
       <View style={{ flex: 1, backgroundColor: colors.canvas }}>
         <Stack.Screen options={{ title: "Security" }} />
         <Loading />
+      </View>
+    );
+  }
+
+  /*
+   * A failed status lookup used to be indistinguishable from a slow one — the
+   * branch above tested `!status` as well, so an error left the spinner up for
+   * ever on a screen an admin may need to reach in a hurry.
+   */
+  if (statusError || !status) {
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.canvas, justifyContent: "center" }}>
+        <Stack.Screen options={{ title: "Security" }} />
+        <ErrorState
+          title="Couldn't load your security settings"
+          message={statusError ? errText(statusError, "We couldn't reach the server.") : undefined}
+          onRetry={() => void refetch()}
+        />
       </View>
     );
   }

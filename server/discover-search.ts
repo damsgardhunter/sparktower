@@ -89,7 +89,9 @@ export function registerDiscoverSearchRoutes(app: Express) {
         : [];
 
       const people = wantPeople
-        ? (await storage.searchUsers(f.q, { limit: 200 }))
+        // The viewer travels with the query so blocks are cut in SQL: Discover
+        // is the other way somebody blocked walks back into view.
+        ? (await storage.searchUsers(f.q, { limit: 200, viewerId }))
           .filter((u) => u.id !== viewerId && u.profile?.isOnboarded)
           .filter((u) => {
             if (!f.needs) return true;

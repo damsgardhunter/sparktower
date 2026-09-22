@@ -11,8 +11,8 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../src/api/client";
 import { colors, font, fontFamily, radius, spacing } from "../../src/theme";
-import { Btn, Icon, Screen, TAB_BAR_SPACE } from "../../src/components/ui";
-import { Sheet } from "../../src/components/Sheet";
+import { Btn, Icon, Screen, TAB_BAR_SPACE, errText } from "../../src/components/ui";
+import { NoticeBanner, Sheet, useNotice } from "../../src/components/Sheet";
 import { Players, PickCard, RoundHeader, type GamePlayer } from "../../src/components/game/GameKit";
 import { GameBudgetRound } from "../../src/components/game/GameBudget";
 import {
@@ -25,6 +25,7 @@ export default function GameScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const qc = useQueryClient();
+  const { notice, show, clear } = useNotice();
   const [chatOpen, setChatOpen] = useState(false);
 
   /*
@@ -47,14 +48,28 @@ export default function GameScreen() {
     staleTime: Infinity,
   });
 
+  /*
+   * Both of these used to fail in silence.
+   *
+   * A round is on a clock. A submit that 500s or times out left the button
+   * un-pressed-looking, the board unchanged and the answer un-sent — and by the
+   * time the person worked out that nothing had happened, the round had
+   * settled without them. Leaving was the same shape: tap "Leave the game",
+   * stay on the board, and there is nothing to read that says why.
+   *
+   * The draft survives on purpose: RoundBody keeps its own state and is keyed
+   * by the round, so what was typed is still in the boxes to send again.
+   */
   const submit = useMutation({
     mutationFn: (payload: any) => api(`/api/games/${id}/submit`, { method: "POST", body: payload }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["game", id] }),
+    onError: (e) => show({ tone: "error", text: errText(e, "That didn't send. Your answer is still here — try again.") }),
   });
 
   const leave = useMutation({
     mutationFn: () => api(`/api/games/${id}/leave`, { method: "POST", body: {} }),
     onSuccess: () => router.replace("/(tabs)/sprints"),
+    onError: (e) => show({ tone: "error", text: errText(e, "Couldn't leave the game. You're still in it.") }),
   });
 
   if (isLoading || !state) {
@@ -146,6 +161,8 @@ export default function GameScreen() {
       <Sheet visible={chatOpen} onClose={() => setChatOpen(false)} title="Talk it out">
         <Chat gameId={String(id)} players={players} />
       </Sheet>
+
+      <NoticeBanner notice={notice} onDismiss={clear} />
     </Screen>
   );
 }

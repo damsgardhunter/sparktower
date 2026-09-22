@@ -19,6 +19,7 @@ import {
   type PrintfulOrderItem, type PrintfulRecipient,
 } from "./printful";
 import { type MerchConfig } from "@shared/backing";
+import { pledgeRefunded } from "./backing-notices";
 import { openPii } from "./pii";
 
 /** Distinct ids so the two jobs never block each other. */
@@ -336,6 +337,12 @@ export async function runRefundSweep(): Promise<{ refunded: number; converted: n
               eq(projectMerchOrders.backingId, backing.id),
               inArray(projectMerchOrders.status, ["queued", "failed"]),
             ));
+
+          // The backer, who would otherwise see money appear in their statement with no idea what it was.
+          void pledgeRefunded({
+            projectId: backing.projectId, backerId: backing.backerId,
+            amountCents: backing.amountCents, reason: "not_approved",
+          }).catch((err) => console.error("[backing] refund notice failed:", err));
 
           refunded++;
         } catch (err: any) {

@@ -3,6 +3,7 @@ import { ActivityIndicator, View } from "react-native";
 import { Redirect, useRouter } from "expo-router";
 import { useAuth } from "../src/auth/AuthContext";
 import { api } from "../src/api/client";
+import { takePendingDestination } from "../src/pendingDestination";
 import { colors } from "../src/theme";
 
 interface NextStepItem { project: { id: string }; track?: { goal: string } | null }
@@ -41,11 +42,39 @@ function OpenOnPath() {
         setTimeout(() => router.push(`/manage/${item.project.id}?from=launch${section}` as any), 0);
       }
     };
+    /*
+     * Before anything else: where were they going before they had to sign in?
+     *
+     * An invite or a published artifact is the one screen the app shows signed
+     * out, and the account that just came into being usually came into being
+     * *because* of it. Opening on the path instead would be correct for every
+     * other launch and wrong for this one — the invited person joins nothing,
+     * and the artifact's reader never starts the path they tapped. The feed
+     * still goes underneath, so Back means home here as everywhere else.
+     */
+    /*
+     * The timer covers both lookups, and starts before either. Reading the
+     * device's stored destination is normally instant, but it is still I/O —
+     * and a launch that hangs on a spinner because SecureStore didn't answer
+     * is the failure this timeout was always there to prevent.
+     */
     const timer = setTimeout(() => land(null), PATH_LOOKUP_TIMEOUT_MS);
-    api<{ items: NextStepItem[] }>("/api/me/next-steps")
-      .then((r) => land(r.items?.[0] ?? null))
-      .catch(() => land(null))
-      .finally(() => clearTimeout(timer));
+    void takePendingDestination()
+      .then((destination) => {
+        if (done.current) return;
+        if (destination) {
+          clearTimeout(timer);
+          done.current = true;
+          router.replace("/(tabs)/feed");
+          setTimeout(() => router.push(destination as any), 0);
+          return;
+        }
+        return api<{ items: NextStepItem[] }>("/api/me/next-steps")
+          .then((r) => land(r.items?.[0] ?? null))
+          .catch(() => land(null))
+          .finally(() => clearTimeout(timer));
+      })
+      .catch(() => land(null));
     return () => clearTimeout(timer);
   }, [router]);
   return (

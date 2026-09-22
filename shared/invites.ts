@@ -18,6 +18,21 @@ export const DEFAULT_INVITE_EXPIRY_DAYS = 7;
 export const INVITES_PER_PROJECT_PER_DAY = 25;
 /** Pending invites a project may hold at once. */
 export const MAX_PENDING_INVITES = 50;
+/**
+ * Invites one email address may be sent in a day, from anywhere on the site.
+ *
+ * The other two caps are both counted per project, and the per-person rate
+ * limit is counted per sender — so somebody with five projects could mail one
+ * stranger five times an hour, indefinitely, with every check passing every
+ * time. Nobody was over any limit; the person on the receiving end was being
+ * mailed by us on repeat, and had no account here to turn it off with. The cap
+ * that was missing is the one counted from the recipient's side, which is the
+ * only side that experiences it.
+ *
+ * Three is a real invitation plus two honest reminders. A fourth in a day is
+ * not persuasion.
+ */
+export const INVITES_PER_ADDRESS_PER_DAY = 3;
 
 /** The link to an invite, relative to the site. */
 export const invitePath = (token: string) => `/invite/${token}`;

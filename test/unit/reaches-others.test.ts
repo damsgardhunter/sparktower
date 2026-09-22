@@ -50,6 +50,11 @@ const DOESNT_REACH_ANYONE: Record<string, string> = {
   "POST /api/connections/:id/reject": "answering a request that was sent to them",
   "POST /api/messages/:userId/read": "marks a conversation read, for them",
   "POST /api/contests/:id/join": "entering a contest",
+  // Both admin-only, and the admin routes additionally require a session that
+  // has proved its second factor — an account that has not confirmed its own
+  // address cannot be an admin with 2FA on, so the email gate would add nothing.
+  "POST /api/admin/contests": "an admin publishing a contest; admin role plus a proved second factor",
+  "PUT /api/admin/contests/:id": "an admin editing a contest; admin role plus a proved second factor",
   "POST /api/games/:id/submit": "a decision inside a game the two of them already share",
   "POST /api/games/:id/leave": "walking out of a game they are already in",
   "POST /api/contests/:id/submit": "a contest entry, judged by the organiser",

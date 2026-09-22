@@ -77,7 +77,18 @@ export function ReputationCard({ userId, isOwnProfile }: ReputationCardProps) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/reputation", userId] });
-      queryClient.invalidateQueries({ queryKey: ["/api/leaderboard/reputation"] });
+      /*
+       * The keys that actually exist.
+       *
+       * This used to invalidate ["/api/leaderboard/reputation"], which no
+       * query in the app uses — a line that looked like a refresh and did
+       * nothing at all. Recalculating the Builder Index changes the number on
+       * the profile header and in the profile summary, so those are what have
+       * to be thrown away: under `staleTime: Infinity` an uninvalidated cache
+       * is kept forever, and the card showed a new index beside a stale one.
+       */
+      queryClient.invalidateQueries({ queryKey: ["/api/users", userId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profile/summary"] });
       toast({ title: "Reputation Updated", description: "Your Builder Index has been recalculated" });
     },
     onError: (error: any) => {

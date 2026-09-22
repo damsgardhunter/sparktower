@@ -14,7 +14,7 @@ import OpenAI from "openai";
 import { storage } from "./storage";
 import { scanSecurity, renderSecurityGaps } from "@shared/security-checks";
 import { db } from "./db";
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { codeAuditRuns } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
@@ -45,6 +45,7 @@ import {
 import { fetchCommitsSince } from "./code-ingest";
 import { sanitizeLoopClosures } from "@shared/phase-trees";
 import { rereadOpenLoops } from "./audit-loop-reads";
+import { withProjectLock } from "./project-lock";
 
 let _openai: OpenAI | null = null;
 function getOpenAI(): OpenAI {
@@ -226,6 +227,19 @@ export async function auditRunStatus(projectId: string) {
   }).from(codeAuditRuns).where(eq(codeAuditRuns.projectId, projectId)).orderBy(desc(codeAuditRuns.startedAt)).limit(5);
   const runningRow = rows.find((r) => !r.run.finishedAt && Number(r.ageSeconds) * 1000 < AUDIT_RUN_STALE_MS) ?? null;
   const running = runningRow?.run ?? null;
+  /*
+   * A run that died mid-flight — a restart, a crash, a dropped connection —
+   * never got its finishedAt, so it was neither "running" (too old) nor "last"
+   * (never finished): the card went quiet and nothing ever told the builder to
+   * try again. Stamping it here, on the read that notices, closes it as the
+   * failure it was, so the status shows "the last audit didn't finish".
+   */
+  const stale = rows.filter((r) => !r.run.finishedAt && Number(r.ageSeconds) * 1000 >= AUDIT_RUN_STALE_MS);
+  for (const r of stale) {
+    const error = "The audit stopped before it finished — the server restarted or the connection dropped. Run it again.";
+    await db.update(codeAuditRuns).set({ finishedAt: new Date(), error }).where(and(eq(codeAuditRuns.id, r.run.id), isNull(codeAuditRuns.finishedAt))).catch(() => {});
+    r.run = { ...r.run, finishedAt: new Date(), error } as typeof r.run;
+  }
   const last = rows.find((r) => r.run.finishedAt)?.run ?? null;
   const starter = running ? await storage.getUser(running.startedById).catch(() => undefined) : undefined;
   return {
@@ -551,12 +565,41 @@ export async function applyAuditSections(
   auditId: string, userId: string, ent: { aiMilestones?: boolean; roadmapUpdates?: boolean },
   sections: readonly string[], opts: { declineOthers: boolean },
 ) {
+  /*
+   * Serialized, and each edit's outcome written as it happens.
+   *
+   * The whole run used to mark operations applied in memory and save the array
+   * once at the end. A double click, a client retry on a slow apply, or a crash
+   * part-way through left every operation still reading "pending" — so the
+   * second run applied the lot again, and a thirty-operation catch-up produced
+   * thirty duplicate tasks and milestones. Now the second caller waits for the
+   * first, re-reads inside the lock, finds nothing pending and is told so (409),
+   * and a crash mid-run loses at most the one operation in flight.
+   */
+  return withProjectLock("audit-apply", auditId, () => applyAuditSectionsLocked(auditId, userId, ent, sections, opts));
+}
+
+async function applyAuditSectionsLocked(
+  auditId: string, userId: string, ent: { aiMilestones?: boolean; roadmapUpdates?: boolean },
+  sections: readonly string[], opts: { declineOthers: boolean },
+) {
+  // Read inside the lock: whatever the caller checked before it queued may have been applied by then.
   const audit = await storage.getCodeAudit(auditId);
   if (!audit) throw Object.assign(new Error("Audit not found"), { status: 404 });
   const ops = ((audit.operations as any[]) ?? []).map((o) => ({ ...o }));
   const pending = (o: any) => !o._status || o._status === "pending";
+  const mine = (o: any) => pending(o) && sections.includes(o._section ?? "plan");
+  if (!ops.some(mine)) {
+    throw Object.assign(
+      new Error("Nothing from this audit is waiting — it has already been applied. Run a new audit to pick up changes since."),
+      { status: 409, code: "already_applied" },
+    );
+  }
   const changes: Awaited<ReturnType<typeof applyProjectOperations>>["changes"] = [];
   const skipped: string[] = [];
+  /** The operation statuses, saved as they are decided, so a crash can't replay what already ran. */
+  const persist = () => storage.updateCodeAudit(audit.id, { operations: ops } as any)
+    .catch((e) => console.error("[audit] couldn't record an operation's outcome:", e));
   /*
    * One edit at a time, so each is marked with what really happened to it. As
    * a batch, an edit the engine skipped (a loop kind already written, a task
@@ -566,16 +609,25 @@ export async function applyAuditSections(
   for (const o of ops) {
     if (!pending(o)) continue;
     if (!sections.includes(o._section ?? "plan")) {
-      if (opts.declineOthers) o._status = "declined";
+      if (opts.declineOthers) { o._status = "declined"; await persist(); }
       continue;
     }
     const { _section, _status, _label, _reason, ...op } = o;
+    /*
+     * Claimed before it runs. If the process dies between the apply and the
+     * save, the operation is left "applying" rather than "pending", so the
+     * next run reports it instead of doing it a second time — a duplicate is
+     * worse than a line saying an edit needs checking.
+     */
+    o._status = "applying";
+    await persist();
     const r = await applyProjectOperations(audit.projectId, userId, [op], {
       canEditMilestones: ent.aiMilestones, canEditRoadmap: ent.roadmapUpdates, maxOperations: 1, source: "audit",
-    });
-    changes.push(...r.changes);
-    if (r.changes.length) o._status = "applied";
-    else { o._status = "skipped"; o._reason = r.skipped[0] ?? "Nothing changed."; skipped.push(`${o._label ?? op.op}: ${o._reason}`); }
+    }).catch((e) => { console.error("[audit] operation failed:", e); return null; });
+    changes.push(...(r?.changes ?? []));
+    if (r?.changes.length) o._status = "applied";
+    else { o._status = "skipped"; o._reason = r?.skipped[0] ?? "Nothing changed."; skipped.push(`${_label ?? op.op}: ${o._reason}`); }
+    await persist();
   }
   const findings = (audit.findings as any) ?? {};
   if (findings.catchUp) {

@@ -13,6 +13,7 @@ import { getUserEntitlements } from "./entitlements";
 import { CREDIT_COSTS, roadmapRebuildCost } from "@shared/plans";
 import { PROJECT_SECTIONS, sectionHasContent } from "@shared/project-sections";
 import type { NovaHandoff } from "@shared/nova-handoff";
+import { emptyBlocks, type DocumentPage } from "@shared/documents";
 
 /** Where the action button sends the user, and what it costs. */
 export interface NovaRecommendation {
@@ -100,7 +101,7 @@ export function registerNovaBriefingRoutes(app: Express) {
       const isMember = project.ownerId === userId || members.some((m) => m.userId === userId);
       if (!isMember) return res.status(403).json({ message: "Not a project member" });
 
-      const [roadmap, milestones, tasks, personas, artifacts, pricingTiers, completions] = await Promise.all([
+      const [roadmap, milestones, tasks, personas, artifacts, pricingTiers, completions, documents] = await Promise.all([
         storage.getProjectRoadmap(projectId).catch(() => undefined),
         storage.getProjectMilestones(projectId).catch(() => []),
         storage.getProjectKanbanTasks(projectId).catch(() => []),
@@ -108,6 +109,7 @@ export function registerNovaBriefingRoutes(app: Express) {
         storage.getInvestorArtifacts(projectId).catch(() => []),
         storage.getProjectPricingTiers(projectId).catch(() => []),
         storage.getProjectTaskCompletions(projectId, 500).catch(() => []),
+        storage.getProjectDocuments(projectId).catch(() => []),
       ]);
 
       const ent = await getUserEntitlements(userId);
@@ -350,6 +352,36 @@ export function registerNovaBriefingRoutes(app: Express) {
           tab: "kanban",
           action: "kanban.generate",
           weight: 78,
+          severity: "important",
+        });
+      }
+
+      /*
+       * --- Documents left half-written ---
+       *
+       * Starting a document lays out its pages as empty blocks, and filling
+       * them is a separate, paid step. Nothing ever mentioned a document again
+       * once it was started, so a pitch deck begun on a Tuesday and abandoned
+       * three blocks in sat in the Files tab looking finished from the outside
+       * — the list route strips the pages — while the work it was meant to
+       * carry was never done. Counted here from the pages themselves.
+       */
+      const halfWritten = (documents as any[])
+        .map((d) => ({ title: String(d.title ?? "Untitled"), pending: Array.isArray(d.pages) ? emptyBlocks(d.pages as DocumentPage[]).length : 0 }))
+        .filter((d) => d.pending > 0)
+        .sort((a, b) => b.pending - a.pending);
+      if (halfWritten.length) {
+        const blocks = halfWritten.reduce((n, d) => n + d.pending, 0);
+        recs.push({
+          id: "documents-unwritten",
+          title: halfWritten.length === 1
+            ? `"${halfWritten[0].title}" has ${halfWritten[0].pending} block${halfWritten[0].pending === 1 ? "" : "s"} still empty`
+            : `${halfWritten.length} documents have ${blocks} empty blocks between them`,
+          detail: "A document nobody finished reads as done from the outside. Open it and fill what's left, or let Nova write it.",
+          actionLabel: "Finish the document",
+          credits: 0,
+          tab: "files",
+          weight: 72,
           severity: "important",
         });
       }

@@ -38,7 +38,7 @@ export default function StartupGamePage() {
    * after the verdict there is nothing left to change.
    */
   const { data: state, isLoading } = useQuery<any>({
-    queryKey: [`/api/games/${id}`],
+    queryKey: ["/api/games", id],
     refetchInterval: (q) => {
       const round = (q.state.data as any)?.round;
       return round === "verdict" || round === "abandoned" ? 5000 : 1000;
@@ -50,16 +50,48 @@ export default function StartupGamePage() {
   const you = players.find((p) => p.isYou);
   const them = players.find((p) => !p.isYou);
 
+  /*
+   * What "this game is over" has to touch.
+   *
+   * Every query in this app is `staleTime: Infinity`, so a cached answer is
+   * kept until something invalidates it — and nothing did. Leaving a game
+   * invalidated nothing at all, so `/api/games/active` still held the game you
+   * had just walked out of: the entry card on /sprints went on offering "Back
+   * to your game" and clicking it landed on "That game ended". The same held
+   * after the last round, where the finished game is also no longer active and
+   * has just changed every board it appears on.
+   */
+  const gameEnded = () => {
+    void qc.invalidateQueries({ queryKey: ["/api/games", "active"] });
+    void qc.invalidateQueries({ queryKey: ["/api/games", "history"] });
+    void qc.invalidateQueries({ queryKey: ["/api/games", "leaderboard"] });
+  };
+
   const submit = useMutation({
     mutationFn: async (payload: any) => (await apiRequest("POST", `/api/games/${id}/submit`, payload)).json(),
-    onSuccess: () => qc.invalidateQueries({ queryKey: [`/api/games/${id}`] }),
+    onSuccess: (data: any) => {
+      void qc.invalidateQueries({ queryKey: ["/api/games", id], exact: true });
+      // The submit that closes the final round is the one that ends the game.
+      if (data?.state?.round === "verdict") gameEnded();
+    },
     onError: (e: any) => toast({ title: "Couldn't put that in", description: readMessage(e), variant: "destructive" }),
   });
 
   const leave = useMutation({
     mutationFn: async () => (await apiRequest("POST", `/api/games/${id}/leave`, {})).json(),
-    onSuccess: () => { toast({ title: "You left the game." }); navigate("/sprints"); },
+    onSuccess: () => { gameEnded(); toast({ title: "You left the game." }); navigate("/sprints"); },
   });
+
+  /*
+   * The clock can end a game without anybody pressing anything: the last round
+   * settles on the sweep, or on a poll. So the cached active-game list is
+   * refreshed when the poll reports an ending too, not only on the mutations.
+   */
+  const endedRound = state?.round === "verdict" || state?.round === "abandoned" ? state.round : null;
+  useEffect(() => {
+    if (endedRound) gameEnded();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [endedRound, id]);
 
   if (isLoading) {
     return <div className="flex justify-center py-20"><Loader2 className="h-6 w-6 animate-spin" /></div>;
@@ -194,7 +226,7 @@ function RoundBody({
   }, [allocation]);
 
   const { data: deck } = useQuery<any>({
-    queryKey: [`/api/games/${gameId}/deck/${round}`],
+    queryKey: ["/api/games", gameId, "deck", round],
     enabled: round === "customer" || round === "model",
   });
 
@@ -340,7 +372,7 @@ function RoundBody({
  */
 function useStandings(gameId: string, scored: boolean) {
   return useQuery<StandingRow[] | null>({
-    queryKey: [`/api/games/${gameId}/standings`],
+    queryKey: ["/api/games", gameId, "standings"],
     enabled: scored,
     select: (data: any) => (data?.scored ? (data.standings as StandingRow[]) : null),
   });
@@ -353,13 +385,13 @@ function Chat({ gameId, players, live }: { gameId: string; players: GamePlayer[]
   const bottom = useRef<HTMLDivElement>(null);
 
   const { data } = useQuery<any>({
-    queryKey: [`/api/games/${gameId}/messages`],
+    queryKey: ["/api/games", gameId, "messages"],
     refetchInterval: live ? 2000 : false,
   });
 
   const send = useMutation({
     mutationFn: async () => (await apiRequest("POST", `/api/games/${gameId}/messages`, { body })).json(),
-    onSuccess: () => { setBody(""); qc.invalidateQueries({ queryKey: [`/api/games/${gameId}/messages`] }); },
+    onSuccess: () => { setBody(""); qc.invalidateQueries({ queryKey: ["/api/games", gameId, "messages"] }); },
   });
 
   const messages = data?.messages ?? [];

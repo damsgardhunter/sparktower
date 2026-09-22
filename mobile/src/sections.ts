@@ -180,9 +180,18 @@ export interface AuditStatus {
   last: { id?: string; source?: string; finishedAt: string | null; auditId: string | null; error: string | null } | null;
 }
 
+/*
+ * Word for word from client/src/lib/audit-status.ts.
+ *
+ * `reading` said "Reading the code" here and "Nova is reading it" on the web,
+ * so the same audit described itself differently depending on which screen you
+ * watched it from — and this file's own fallback below already says "Nova is
+ * reading it", which meant the stage label and the label for no stage at all
+ * disagreed within one file.
+ */
 export const AUDIT_STAGE_LABEL: Record<string, string> = {
   fetching: "Fetching the code",
-  reading: "Reading the code",
+  reading: "Nova is reading it",
   saving: "Saving what it found",
 };
 export const auditStageLabel = (stage: string | null | undefined) => AUDIT_STAGE_LABEL[stage ?? ""] ?? "Nova is reading it";
