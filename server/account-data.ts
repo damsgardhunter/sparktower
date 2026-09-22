@@ -198,6 +198,8 @@ export const KEPT: Owned[] = [
   { table: "promotion_settings", column: "updated_by_id" },
   // A reviewer's decision to hide a project, and which account applied a batch of operations to one.
   { table: "projects", column: "hidden_by_id" },
+  // Who ticked a milestone off: part of the project's history, and the Builder Index reads it.
+  { table: "project_milestones", column: "completed_by_id" },
   { table: "project_operation_applications", column: "user_id" },
   // Who asked what it would take to reach a target: the roadmap is the company's, the name on it is a record.
   { table: "what_would_it_take_roadmaps", column: "generated_by" },
