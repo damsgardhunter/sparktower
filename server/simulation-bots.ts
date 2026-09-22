@@ -218,6 +218,8 @@ export async function fileBotDecisions(input: {
       role,
       company,
       previous: (last as Record<string, any>) ?? undefined,
+      // So it can price what a choice costs, and aim at real regions and segments.
+      niche,
     });
 
     /*

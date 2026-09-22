@@ -19,6 +19,7 @@ import type { Listing } from "@shared/simulation/assets";
 import { LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision } from "@shared/simulation/levers";
 import { nextPhase } from "@shared/simulation/lobby";
 import { ROLES } from "@shared/simulation/types";
+import { NICHES, nicheById } from "@shared/simulation/niches";
 import type { Company } from "@shared/simulation/types";
 
 /** A company mid-season, plain enough that any lever can be filed against it. */
@@ -286,6 +287,94 @@ describe("what a seat is allowed to file", () => {
       const d = botDecision({ ventureId: "v1", year, role, company: company() });
       const clean = cleanDecision(role, d, [], { year });
       expect(clean, `${role} in year ${year} loses something on the way in`).toEqual(d);
+    }
+  });
+});
+
+describe("a bot that knows the market", () => {
+  const niche = nicheById("dating_apps")!;
+  const running = (over: Partial<Company> = {}) => company({
+    capacity: 50_000,
+    customers: { swipers: 20_000, recently_single: 18_000, long_haulers: 4_000 } as any,
+    cities: ["leeds", "manchester"],
+    automation: 10,
+    ...(over as any),
+  });
+
+  it("files a year that survives the same cleaning a person's does", () => {
+    const cityIds = niche.cities.map((c) => c.id);
+    const segmentIds = niche.segments.map((g) => g.id);
+    for (const year of [1, 3, 5, 7, 9, 14]) for (const role of ROLES) {
+      const d = botDecision({ ventureId: "v1", year, role, company: running(), niche });
+      const clean = cleanDecision(role, d, cityIds, { year, segmentIds });
+      expect(clean, `${role} in year ${year} loses something on the way in`).toEqual(d);
+    }
+  });
+
+  /*
+   * The point of the coin. Five bot companies in a season used to answer every
+   * standing question identically for fourteen years, which made them one
+   * company copied five times.
+   */
+  it("does not make the same calls as the company next door", () => {
+    const shown = ["alpha", "beta", "gamma", "delta"].map((v) =>
+      JSON.stringify(ROLES.map((role) => botDecision({ ventureId: v, year: 6, role, company: running(), niche }))));
+    expect(new Set(shown).size, "every bot company filed the same year").toBeGreaterThan(1);
+  });
+
+  it("makes the same calls twice for the same company and year", () => {
+    const once = botDecision({ ventureId: "v1", year: 6, role: "coo", company: running(), niche });
+    const again = botDecision({ ventureId: "v1", year: 6, role: "coo", company: running(), niche });
+    expect(again).toEqual(once);
+  });
+
+  it("changes its mind from one year to the next", () => {
+    const years = [3, 4, 5, 6, 7, 8].map((year) =>
+      JSON.stringify(botDecision({ ventureId: "v1", year, role: "cfo", company: running(), niche })));
+    expect(new Set(years).size, "filed the identical year six times").toBeGreaterThan(1);
+  });
+
+  /*
+   * The hard rule: a bot may be wrong, but it may not spend money the company
+   * does not have. Everything that costs cash is offered only while the purse
+   * covers it, so a company with nothing buys nothing.
+   */
+  it("buys nothing when there is no money", () => {
+    const broke = running({ cash: 0, creditLimit: 0, debt: 0 });
+    for (const v of ["a", "b", "c", "d", "e", "f"]) {
+      const coo: any = botDecision({ ventureId: v, year: 9, role: "coo", company: broke, niche });
+      expect(coo.automationTarget, "automated a plant it cannot pay for").toBe(Math.round(broke.automation ?? 0));
+      expect(coo.shiftCapacity).toBe(0);
+      expect(coo.stockTarget).toBe(0);
+      const cmo: any = botDecision({ ventureId: v, year: 9, role: "cmo", company: broke, niche });
+      expect(cmo.research, "bought research it cannot pay for").toBe("none");
+      expect(cmo.targetCities, "opened a region it cannot pay for").toEqual(broke.cities);
+    }
+  });
+
+  it("opens a region once it has filled the one it is in, and only one", () => {
+    const full = running({ capacity: 40_000, cash: 8_000_000 });
+    const opened = ["a", "b", "c", "d", "e", "f", "g", "h"].map((v) => {
+      const d: any = botDecision({ ventureId: v, year: 9, role: "cmo", company: full, niche });
+      return (d.targetCities as string[]).filter((c) => !(full.cities ?? []).includes(c));
+    });
+    for (const added of opened) expect(added.length, "opened more than one region in a year").toBeLessThanOrEqual(1);
+    expect(opened.some((added) => added.length === 1), "never left home").toBe(true);
+  });
+
+  it("aims its marketing at the regions and segments that are actually there", () => {
+    const d: any = botDecision({ ventureId: "v1", year: 9, role: "cmo", company: running(), niche });
+    for (const key of Object.keys(d.regionFocus ?? {})) expect(running().cities).toContain(key);
+    for (const key of Object.keys(d.segmentFocus ?? {})) expect(niche.segments.map((g) => g.id)).toContain(key);
+    const total = (map: Record<string, number>) => Object.values(map ?? {}).reduce((a, b) => a + b, 0);
+    expect(total(d.regionFocus), "a split that is not a hundred points").toBeLessThanOrEqual(100);
+    expect(total(d.segmentFocus)).toBeLessThanOrEqual(100);
+  });
+
+  it("files a legal year in every market", () => {
+    for (const n of NICHES) for (const role of ROLES) {
+      const d = botDecision({ ventureId: "v1", year: 9, role, company: running(), niche: n });
+      expect(validateDecision(role, d, running()).ok, `${n.id}/${role}`).toBe(true);
     }
   });
 });
