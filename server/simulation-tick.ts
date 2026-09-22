@@ -24,7 +24,7 @@ import { and, eq, inArray, isNull, lte, sql } from "drizzle-orm";
 import { db, pool } from "./db";
 import {
   simSeasons, simVentures, simSeats, simDecisions, simReports,
-  simChallenges, simListings, simBids, simRecoveryMoves, simOffers,
+  simChallenges, simListings, simBids, simRecoveryMoves, simOffers, users,
 } from "@shared/schema";
 import { nicheById } from "@shared/simulation/niches";
 import { resolveYear } from "@shared/simulation/resolve";
@@ -273,9 +273,18 @@ export async function startSeason(seasonId: string): Promise<StartOutcome> {
       return { outcome: { outcome: "abandoned" } };
     }
 
+    /*
+     * Who is in each chair, and whether they are a person.
+     *
+     * The chief executive's chair decides where the company opens: a bot-run
+     * company picks its own home (see `openingRegion`), a team with a person
+     * in that chair gets the same defensible home every season. It is the
+     * same rule the auction uses to decide who bids.
+     */
     const seats = await tx
-      .select({ ventureId: simSeats.ventureId, role: simSeats.role })
+      .select({ ventureId: simSeats.ventureId, role: simSeats.role, isBot: users.isBot })
       .from(simSeats)
+      .innerJoin(users, eq(users.id, simSeats.userId))
       .where(inArray(simSeats.ventureId, playing.map((v) => v.id)));
 
     const world = buildWorld({
@@ -285,6 +294,7 @@ export async function startSeason(seasonId: string): Promise<StartOutcome> {
         id: v.id,
         name: v.name ?? "Unnamed",
         seats: seats.filter((s) => s.ventureId === v.id && s.role).map((s) => s.role as Role),
+        botRun: seats.some((s) => s.ventureId === v.id && s.role === "ceo" && s.isBot),
       })),
     });
 

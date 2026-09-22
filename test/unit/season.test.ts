@@ -10,11 +10,11 @@
 import { describe, it, expect } from "vitest";
 import { forecastDemand } from "@shared/simulation/forecast";
 import {
-  economyFor, startingCompany, buildWorld, openingDecisions, caretakerDecisions,
+  economyFor, startingCompany, buildWorld, openingDecisions, caretakerDecisions, openingRegion, OPENING_BUDGET,
   decisionsForYear, absenceNote, tickDueAt, seasonOver, CARETAKER_RATE, SEASON_YEARS,
 } from "@shared/simulation/season";
 import { resolveYear } from "@shared/simulation/resolve";
-import { nicheById } from "@shared/simulation/niches";
+import { nicheById, NICHES } from "@shared/simulation/niches";
 import { ROLE_TITLES, type Role, type World } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
 
@@ -111,6 +111,46 @@ describe("the weather", () => {
     const early = economyFor("s", 1).costIndex;
     const late = economyFor("s", 14).costIndex;
     expect(late).toBeGreaterThan(early);
+  });
+});
+
+describe("where a company opens", () => {
+  /*
+   * A person's team gets the same defensible home every season, so teams are
+   * comparable. A bot-run company picks its own, which is the only reason a
+   * season does not begin with every company in one region fighting over a
+   * twelfth of the market.
+   */
+  it("gives a team the cheapest region that is still somewhere", () => {
+    for (const n of NICHES) {
+      const home = openingRegion(n);
+      expect(home, n.id).toBeTruthy();
+      const cheaperReal = n.cities.filter((c) => c.weight >= 0.08 && c.entryCost < home.entryCost);
+      expect(cheaperReal, `${n.id}: something real and cheaper was passed over`).toEqual([]);
+    }
+  });
+
+  it("sends a bot to the best region it can afford about half the time, and anywhere it can the rest", () => {
+    for (const n of NICHES) {
+      const affordable = n.cities.filter((c) => c.entryCost <= OPENING_BUDGET);
+      const best = [...affordable].sort((a, b) => b.weight - a.weight)[0];
+      const homes = Array.from({ length: 300 }, (_, i) => openingRegion(n, { botRun: true, seed: `v${i}` }));
+      for (const h of homes) expect(h.entryCost, `${n.id}: opened somewhere it cannot pay for`).toBeLessThanOrEqual(OPENING_BUDGET);
+      const bestShare = homes.filter((h) => h.id === best.id).length / homes.length;
+      // Half on the coin, plus the times the random half lands on it anyway.
+      expect(bestShare, `${n.id} picks the best region ${Math.round(bestShare * 100)}% of the time`).toBeGreaterThan(0.45);
+      expect(bestShare, `${n.id} always picks the best region`).toBeLessThan(0.85);
+      if (affordable.length > 2) {
+        expect(new Set(homes.map((h) => h.id)).size, `${n.id}: bots all opened in the same place`).toBeGreaterThan(1);
+      }
+    }
+  });
+
+  it("opens the same venture in the same place every time", () => {
+    const n = NICHES[0];
+    const once = openingRegion(n, { botRun: true, seed: "venture-1" });
+    const again = openingRegion(n, { botRun: true, seed: "venture-1" });
+    expect(again.id).toBe(once.id);
   });
 });
 

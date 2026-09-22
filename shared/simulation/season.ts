@@ -33,9 +33,10 @@
  * tomorrow. The engine's job is to leave them a company worth coming back to.
  */
 import { defaultDraft } from "./levers";
-import type { Company, Niche, Role, World } from "./types";
+import type { City, Company, Niche, Role, World } from "./types";
 import type { TeamDecisions } from "./decisions";
 import { seedIncumbents } from "./incumbents";
+import { between, pick } from "./random";
 
 /** Fourteen days, fourteen years. One tick a day. */
 export const SEASON_YEARS = 14;
@@ -109,13 +110,56 @@ export function economyFor(seasonId: string, year: number): {
  * nobody has heard of it. Price starts at the middle segment's reference,
  * which is a defensible opening nobody has to think about on their first day.
  */
+/** What a new company is given to start with. Named because the plant and the home are sized against it. */
+export const STARTING_CASH = 6_000_000;
+
+/**
+ * What a company can sensibly pay to open its first region: a sixth of the
+ * money it has, which leaves it able to trade for three years afterwards.
+ */
+export const OPENING_BUDGET = STARTING_CASH * 0.15;
+
+/**
+ * Where a company opens.
+ *
+ * A person's team opens in the cheapest region that is still a real place to
+ * sell (see `cities` below), which is the same home every season and makes
+ * teams comparable.
+ *
+ * A bot-run company tosses a seeded coin instead. Half the time it makes the
+ * call a good operator would — the largest region it can open without gutting
+ * the balance sheet — and half the time it takes any region it can afford,
+ * good or daft. Deterministic, like every other bot decision: the same venture
+ * always opens in the same place.
+ *
+ * The point is not that bots play well. It is that five bot companies no
+ * longer all open in one region and fight over a twelfth of the market while
+ * the incumbents hold the rest.
+ */
+export function openingRegion(niche: Niche, options: { botRun?: boolean; seed?: string } = {}): City {
+  const real = [...niche.cities].sort((a, b) => a.entryCost - b.entryCost).find((c) => c.weight >= 0.08)
+    ?? [...niche.cities].sort((a, b) => b.weight - a.weight)[0];
+  if (!options.botRun) return real;
+
+  const affordable = niche.cities.filter((c) => c.entryCost <= OPENING_BUDGET);
+  if (affordable.length === 0) return real;
+
+  const seed = options.seed ?? niche.id;
+  if (between(`${seed}:home:coin`, 0, 1) < 0.5) {
+    return [...affordable].sort((a, b) => b.weight - a.weight)[0];
+  }
+  return pick(`${seed}:home:any`, affordable);
+}
+
 export function startingCompany(input: {
   id: string;
   name: string;
   niche: Niche;
   seats: Role[];
+  /** Whether the chief executive's chair is held by a bot. See `openingRegion`. */
+  botRun?: boolean;
 }): Company {
-  const { id, name, niche, seats } = input;
+  const { id, name, niche, seats, botRun } = input;
   /*
    * Priced where most of the customers are.
    *
@@ -138,8 +182,7 @@ export function startingCompany(input: {
    * because the plant is sized against it. See `cities` below for why it is
    * this one.
    */
-  const home = [...niche.cities].sort((a, b) => a.entryCost - b.entryCost).find((c) => c.weight >= 0.08)
-    ?? [...niche.cities].sort((a, b) => b.weight - a.weight)[0];
+  const home = openingRegion(niche, { botRun, seed: id });
 
   return {
     id,
@@ -156,7 +199,7 @@ export function startingCompany(input: {
      * of it, and every season ends in five identical bankruptcies. Runway is
      * what makes the early decisions decisions rather than a countdown.
      */
-    cash: 6_000_000,
+    cash: STARTING_CASH,
     debt: 0,
     creditLimit: 2_000_000,
     reputation: 50,
@@ -237,7 +280,7 @@ export function startingCompany(input: {
 export function buildWorld(input: {
   seasonId: string;
   niche: Niche;
-  teams: { id: string; name: string; seats: Role[] }[];
+  teams: { id: string; name: string; seats: Role[]; botRun?: boolean }[];
 }): World {
   const { seasonId, niche, teams } = input;
   return {
@@ -246,7 +289,7 @@ export function buildWorld(input: {
     year: 1,
     companies: [
       ...seedIncumbents(niche),
-      ...teams.map((t) => startingCompany({ id: t.id, name: t.name, niche, seats: t.seats })),
+      ...teams.map((t) => startingCompany({ id: t.id, name: t.name, niche, seats: t.seats, botRun: t.botRun })),
     ],
     economy: economyFor(seasonId, 1),
   };
