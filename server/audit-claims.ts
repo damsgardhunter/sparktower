@@ -25,6 +25,7 @@
  * saying things that aren't true.
  */
 import type { RouteCoverageRow } from "./route-coverage";
+import { AREA_TERMS, areaLabel, type CapabilityArea, type CapabilityEntry } from "@shared/capabilities";
 
 export interface ClaimIndex {
   /** Route shapes ("post /api/projects/:p/backings") → where they're registered. */
@@ -228,4 +229,99 @@ export function verifyFindings(findings: unknown, index: ClaimIndex): { correcte
 
   walk(findings);
   return { corrected: corrections.length, corrections };
+}
+
+// --- The other half: what the audit did not read ------------------------------
+//
+// Everything above corrects a sentence that names something present. This
+// corrects the subtler failure, the one that cost three audits this week: the
+// audit graded an area it never read, and wrote "missing".
+//
+// The digest is a view of the repository — lists clipped, most files excerpts,
+// an archive cut to a byte budget. When that view is partial, "I did not find
+// it" is a fact about the read and nothing at all about the code. A model
+// cannot be trusted to police this about itself (asked what it didn't see, it
+// guesses), so the rule is applied here, deterministically, after the answer
+// comes back: a partial read cannot produce a "missing" verdict.
+
+
+/** What the audit had in front of it, as far as absence claims are concerned. */
+export interface ReadView {
+  /** The archive was cut, or files were listed and not read. Either way, a view. */
+  partial: boolean;
+  fileCount: number;
+  readCount: number;
+}
+
+export interface UnreadDowngrade {
+  area: CapabilityArea;
+  from: "missing";
+  reason: string;
+}
+
+/**
+ * Turns every "missing" into "unknown" when the read was partial.
+ *
+ * Blunt on purpose. The finer rule — "downgrade only when *this area's* files
+ * went unread" — needs a map from an area to the files that would prove it,
+ * and the audit doesn't have one for an area it found nothing for: the files
+ * it would name are precisely the ones it never saw. So the trigger is the one
+ * fact that is known for certain, whether the digest was complete, and a
+ * complete read keeps its "missing" verdicts untouched.
+ *
+ * "built" and "partial" are left alone in both cases. They are claims about
+ * something the audit did read, and they carry their own evidence.
+ */
+export function downgradeUnreadCapabilities(
+  capabilities: CapabilityEntry[],
+  view: ReadView,
+): { capabilities: CapabilityEntry[]; downgraded: UnreadDowngrade[] } {
+  if (!view.partial) return { capabilities, downgraded: [] };
+  const downgraded: UnreadDowngrade[] = [];
+  const why = `This audit read ${view.readCount} of ${view.fileCount} files, so the codebase was only partly in view. Nothing was found for this area in what was read — which is not the same as it not being there. Confirm before building it.`;
+
+  const next = capabilities.map((c) => {
+    if (c.status !== "missing") return c;
+    downgraded.push({ area: c.area, from: "missing", reason: why });
+    return { ...c, status: "unknown" as const, note: c.note ? `${c.note} ${why}` : why };
+  });
+  return { capabilities: next, downgraded };
+}
+
+/**
+ * A recommendation must not be to build what already exists.
+ *
+ * When an area is unknown rather than missing, "add Stripe checkout" is advice
+ * founded on nothing — the audit has no idea whether checkout is there. The
+ * sentence is kept and the fact is attached, exactly as absence claims are
+ * handled above: the model may be right, and the builder can tell in a minute
+ * what the audit could not tell in a whole read.
+ */
+export function noteUnreadRecommendations(
+  findings: any,
+  unknownAreas: CapabilityArea[],
+): number {
+  if (!unknownAreas.length || !findings) return 0;
+  let noted = 0;
+
+  const annotate = (text: unknown): string => {
+    const value = typeof text === "string" ? text : "";
+    if (!value || /could not read/i.test(value)) return value;
+    const lower = value.toLowerCase();
+    const hit = unknownAreas.find((a) => (AREA_TERMS[a] ?? []).some((term) => lower.includes(term)));
+    if (!hit) return value;
+    noted++;
+    return `${value} [Confirm whether this exists first — ${areaLabel(hit)} is UNKNOWN in this audit, not missing: the read was partial and never covered it.]`;
+  };
+
+  if (Array.isArray(findings.nextThreeThings)) {
+    findings.nextThreeThings = findings.nextThreeThings.map(annotate);
+  }
+  for (const risk of Array.isArray(findings.risks) ? findings.risks : []) {
+    if (risk && typeof risk === "object") risk.recommendation = annotate(risk.recommendation);
+  }
+  for (const item of Array.isArray(findings.missing) ? findings.missing : []) {
+    if (item && typeof item === "object") item.matters = annotate(item.matters);
+  }
+  return noted;
 }

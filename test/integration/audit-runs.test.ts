@@ -105,3 +105,98 @@ describe("audit runs", () => {
     expect((await stranger.get(`/api/projects/${project.id}/code-audit/status`)).status).toBe(403);
   });
 });
+
+/**
+ * An audit must say what it read, and must not grade what it didn't.
+ *
+ * Both halves of the same week: audits that reported shipped, tested features
+ * as partial or absent because the digest they read was a clipped view, and a
+ * builder with no way of telling from the page that it was.
+ */
+describe("what the audit read", () => {
+  it("records the provenance and holds a partial read's 'missing' as unknown", async () => {
+    const app = await getTestApp();
+    const agent = request.agent(app);
+    const email = `prov-${Date.now()}@example.test`;
+    await agent.post("/api/auth/register").set("x-forwarded-for", "203.0.113.233").send({ email, password: "Testpass123!", firstName: "Prov" });
+    await db.update(users).set({ subscriptionTier: "pro" }).where(eq(users.email, email));
+    const project = (await agent.post("/api/projects").send({ title: "Provenance", description: "A project whose audits should say what they read.", category: "saas", goal: "ship_mvp", subcategory: "saas" })).body;
+    const token = (await agent.post("/api/mcp-tokens").send({ label: "editor" })).body.token;
+
+    gate = Promise.resolve();
+    reply = {
+      ...audit,
+      capabilities: [
+        { area: "auth", status: "built", summary: "Sessions in server/index.ts", evidence: [{ file: "server/index.ts" }] },
+        { area: "payments", status: "missing", summary: "No payment provider anywhere in the code" },
+      ],
+      nextThreeThings: ["Build Stripe checkout so the product can charge", "Write the README"],
+    };
+
+    /*
+     * What makes this a partial view is one *source* file the audit could not
+     * open — here, one the editor listed without contents. The lockfile is the
+     * control: it is listed and never read too, and it must not count, or
+     * every audit of every repository would be partial and no verdict of
+     * "missing" could ever survive.
+     */
+    const listedNotRead = { path: "server/unseen.ts" };
+    const partialTree = [...files, { path: "package-lock.json", content: "{}" }, listedNotRead];
+    const done = await request(app).post(`/api/mcp/projects/${project.id}/audit`)
+      .set("authorization", `Bearer ${token}`).send({ files: partialTree, label: "my-branch" });
+    expect(done.status).toBe(200);
+
+    // Returned by the read route, not only by the run that produced it.
+    const saved = (await agent.get(`/api/code-audits/${done.body.audit.id}`)).body;
+    const prov = saved.findings.scan.provenance;
+    expect(prov).toMatchObject({ kind: "worktree", name: "my-branch", ref: null, commit: null, partial: true });
+    expect(prov.readCount).toBeLessThan(prov.fileCount);
+    expect(Date.parse(prov.capturedAt)).toBeGreaterThan(Date.now() - 120_000);
+    expect(saved.findings.scan.provenanceLine).toContain("Editor working tree my-branch");
+    expect(prov.unreadSource, "the unread source file, not the lockfile").toBe(1);
+    expect(saved.findings.scan.provenanceLine).toMatch(/of \d+ files read — 1 source file unread/);
+
+    // The verdict the audit could not support: a question, not a gap.
+    const caps = Object.fromEntries((saved.findings.capabilities as any[]).map((c) => [c.area, c]));
+    expect(caps.auth.status).toBe("built");
+    expect(caps.payments.status).toBe("unknown");
+    expect(caps.payments.note).toMatch(/not the same as it not being there/);
+
+    // And nothing tells the builder to rebuild what the audit never looked for.
+    expect(saved.findings.nextThreeThings[0]).toMatch(/UNKNOWN in this audit, not missing/);
+    expect(saved.findings.nextThreeThings[1]).toBe("Write the README");
+  });
+
+  it("still calls a thing missing when it read every source file there was", async () => {
+    /*
+     * The other side of the same coin. An audit that can never say a feature
+     * is absent cannot tell anybody what to build next, so a complete read
+     * must keep its verdicts — a skipped lockfile is not a reason to doubt one.
+     */
+    const app = await getTestApp();
+    const agent = request.agent(app);
+    const email = `whole-${Date.now()}@example.test`;
+    await agent.post("/api/auth/register").set("x-forwarded-for", "203.0.113.234").send({ email, password: "Testpass123!", firstName: "Whole" });
+    await db.update(users).set({ subscriptionTier: "pro" }).where(eq(users.email, email));
+    const project = (await agent.post("/api/projects").send({ title: "Whole read", description: "A project whose audit saw all of its source.", category: "saas", goal: "ship_mvp", subcategory: "saas" })).body;
+    const token = (await agent.post("/api/mcp-tokens").send({ label: "editor" })).body.token;
+
+    gate = Promise.resolve();
+    reply = {
+      ...audit,
+      capabilities: [{ area: "payments", status: "missing", summary: "No payment provider anywhere in the code" }],
+      nextThreeThings: ["Build Stripe checkout so the product can charge"],
+    };
+
+    const done = await request(app).post(`/api/mcp/projects/${project.id}/audit`)
+      .set("authorization", `Bearer ${token}`).send({ files: [...files, { path: "package-lock.json", content: "{}" }], label: "main" });
+    expect(done.status).toBe(200);
+
+    const saved = (await agent.get(`/api/code-audits/${done.body.audit.id}`)).body;
+    expect(saved.findings.scan.provenance.partial, "a lockfile is not a blind spot").toBe(false);
+    expect(saved.findings.scan.provenanceLine).toContain("every source file among them");
+    const caps = Object.fromEntries((saved.findings.capabilities as any[]).map((c) => [c.area, c]));
+    expect(caps.payments.status, "read it all, so absence means something").toBe("missing");
+    expect(saved.findings.nextThreeThings[0]).toBe("Build Stripe checkout so the product can charge");
+  });
+});
