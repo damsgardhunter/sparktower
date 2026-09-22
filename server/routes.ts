@@ -70,6 +70,7 @@ import OpenAI from "openai";
 import { eq, ne, and, sql, inArray, desc, isNull } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { calculateUserReputation } from "./reputation";
+import { PATH_FUNNEL_EVENTS, sanitizePathFunnelProps } from "@shared/path-funnel";
 import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
 import { formatProjectBriefForPrompt, getProjectBriefContext } from "@shared/project-sections";
 import { TEXT_MODEL, IMAGE_MODEL, IMAGE_SIZE, IMAGE_QUALITY } from "./aiModels";
@@ -743,6 +744,22 @@ Only include fields you have enough info to fill. Start empty if needed.`;
         entityType: "project",
         entityId: project.id,
       });
+    }
+
+    /*
+     * Made from somebody else's published step. The id rides in the body
+     * rather than the filtered fields — it is not a column on the project,
+     * it is where this project came from — and it is what turns "somebody
+     * signed up" into "that page produced a project on that goal".
+     */
+    const fromArtifact = String(req.body?.fromArtifact ?? "");
+    if (/^[A-Za-z0-9-]{8,64}$/.test(fromArtifact)) {
+      void recordActivity({
+        name: PATH_FUNNEL_EVENTS.projectCreated,
+        userId: ownerId, visitorId: req.visitorId || "unknown", sessionId: req.sessionId || "unknown",
+        path: req.originalUrl, projectId: project.id,
+        props: sanitizePathFunnelProps({ artifactId: fromArtifact, projectId: project.id, goal: validated.goal, subcategory: validated.subcategory }),
+      }).catch(() => {});
     }
 
     res.json(project);
@@ -1623,6 +1640,28 @@ If the ask has nothing to do with planning tasks, say so in "summary", return an
       if (movingToDone) {
         // A task on the path is a pace signal; the projection moves on it.
         await onPathTaskDone(task).catch((e) => console.error("[phase-trees] pace refresh failed:", e));
+        /*
+         * The first step this project has ever finished, named once.
+         *
+         * It is the step in the growth loop where a new account stops being a
+         * signup and starts being a builder, and it is invisible in `api.write`
+         * — one PATCH among thousands. Counted from the board rather than from
+         * a flag, so it stays true for a project that finished its first step
+         * long before anybody thought to measure it.
+         */
+        void (async () => {
+          const onPath = (t: any) => (t.tags ?? []).some((x: string) => x.startsWith("backbone:") || x.startsWith("parent:") || x.startsWith("injected:"));
+          if (!onPath(task)) return;
+          const all = await storage.getProjectKanbanTasks(existingTask.projectId).catch(() => []);
+          const done = (all as any[]).filter((t) => t.status === "done" && onPath(t));
+          if (done.length !== 1) return;
+          await recordActivity({
+            name: PATH_FUNNEL_EVENTS.firstStep,
+            userId, visitorId: req.visitorId || "unknown", sessionId: req.sessionId || "unknown",
+            path: req.originalUrl, projectId: existingTask.projectId,
+            props: sanitizePathFunnelProps({ projectId: existingTask.projectId }),
+          });
+        })().catch(() => {});
         /*
          * Finishing a task unblocks whatever was waiting on it.
          *

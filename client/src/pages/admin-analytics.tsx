@@ -62,6 +62,11 @@ interface Summary {
     repeat: { people: number; repeated: number; rate: number | null };
     cycles?: { sessions: number; completedOne: number; twoPlus: number; rate: number | null };
   };
+  pathFunnel?: {
+    funnel: { key: string; label: string; sessions: number; ofRead: number | null }[];
+    events: { name: string; label: string; sessions: number; events: number; people: number }[];
+    topArtifacts: { artifactId: string; reads: number; wanted: number; signups: number }[];
+  };
 }
 
 /** Anonymous visitors have no name; a short id is still a handle to recognise. */
@@ -437,6 +442,56 @@ export default function AdminAnalytics() {
                 </li>
               ))}
             </ul>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* --- The growth loop -------------------------------------------- */}
+      {/*
+       * A published step read by a stranger → they press start → sign up →
+       * make a project → finish their first step → publish one of their own,
+       * which is where somebody else's "read" comes from. The last row being
+       * the same shape as the first is the point: this is a loop, and the
+       * number that matters is how much of it closes.
+       */}
+      <Card data-testid="card-path-funnel">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-semibold">Growth loop — published steps</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {!summary?.pathFunnel || !summary.pathFunnel.funnel[0]?.sessions ? (
+            <p className="text-sm text-muted-foreground py-6 text-center">Nobody read a published step in this window.</p>
+          ) : (
+            <div className="grid md:grid-cols-3 gap-6">
+              <ul className="md:col-span-2 space-y-2.5" data-testid="path-funnel">
+                {summary.pathFunnel.funnel.map((step) => (
+                  <li key={step.key} className="space-y-1" data-testid={`path-funnel-${step.key}`}>
+                    <div className="flex items-baseline gap-2 text-sm">
+                      <span className="truncate">{step.label}</span>
+                      <span className="flex-1 border-b border-dashed border-border/60" />
+                      <span className="tabular-nums font-medium">{step.sessions}</span>
+                      {step.ofRead != null && <span className="tabular-nums text-xs text-muted-foreground w-12 text-right">{Math.round(step.ofRead * 100)}%</span>}
+                    </div>
+                    <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                      <div className="h-full bg-primary" style={{ width: `${Math.round((step.ofRead ?? 0) * 100)}%` }} />
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              <div className="space-y-2" data-testid="path-funnel-top">
+                <p className="text-xs font-medium text-muted-foreground">Which pages bring people in</p>
+                {summary.pathFunnel.topArtifacts.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No reads with a page attached yet.</p>
+                ) : summary.pathFunnel.topArtifacts.map((a) => (
+                  <div key={a.artifactId} className="flex items-baseline gap-2 text-xs">
+                    <a href={`/a/${a.artifactId}`} className="text-primary hover:underline truncate" target="_blank" rel="noreferrer">{a.artifactId.slice(0, 8)}</a>
+                    <span className="flex-1 border-b border-dashed border-border/60" />
+                    <span className="tabular-nums text-muted-foreground">{a.reads} read</span>
+                    <span className="tabular-nums font-medium">{a.signups} joined</span>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
         </CardContent>
       </Card>

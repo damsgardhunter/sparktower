@@ -23,6 +23,7 @@ import {
 import {
   EXPLORE_ACTIONS, EXPLORE_EVENTS, EXPLORE_EVENT_NAMES, EXPLORE_FUNNEL, EXPLORE_LABEL, countCycles, exploreLabel,
 } from "@shared/explore-events";
+import { PATH_FUNNEL, PATH_FUNNEL_EVENTS, PATH_FUNNEL_EVENT_NAMES, PATH_FUNNEL_LABEL } from "@shared/path-funnel";
 
 /** Rows one export may hold. */
 export const EXPORT_MAX_ROWS = 50_000;
@@ -193,6 +194,68 @@ async function exploreSummary(since: SQL) {
       twoPlus,
       rate: perSession.length ? twoPlus / perSession.length : null,
     },
+  };
+}
+
+/**
+ * The growth loop, counted: read a published step → press start → sign up →
+ * make a project → finish the first step → publish one of your own.
+ *
+ * Sessions rather than events, like the Explore funnel, so one person reading
+ * three artifacts is one arrival. The last step is deliberately the same shape
+ * as the first: a publish is somebody else's "read", which is what makes this
+ * a loop rather than a line.
+ */
+async function pathFunnelSummary(since: SQL) {
+  const list = (names: readonly string[]) => sql.join(names.map((name) => sql`${name}`), sql`, `);
+
+  const steps = sql.join(PATH_FUNNEL.map((step) =>
+    sql`count(DISTINCT session_id) FILTER (WHERE name IN (${list(step.events)}))::int AS ${sql.identifier(step.key)}`), sql`, `);
+  const funnelRows = await db.execute<any>(sql`
+    SELECT ${steps} FROM ${activityEvents}
+    WHERE created_at >= ${since} AND name IN (${list(PATH_FUNNEL_EVENT_NAMES)})
+  `);
+
+  const byEvent = await db.execute<any>(sql`
+    SELECT name, count(DISTINCT session_id)::int AS sessions, count(*)::int AS events,
+           count(DISTINCT coalesce(user_id, visitor_id))::int AS people
+    FROM ${activityEvents}
+    WHERE created_at >= ${since} AND name IN (${list(PATH_FUNNEL_EVENT_NAMES)})
+    GROUP BY name
+  `);
+
+  /* Which published pages actually bring people in, rather than how many do. */
+  const byArtifact = await db.execute<any>(sql`
+    SELECT props->>'artifactId' AS artifact_id,
+           count(DISTINCT session_id) FILTER (WHERE name = ${PATH_FUNNEL_EVENTS.artifactView})::int AS reads,
+           count(DISTINCT session_id) FILTER (WHERE name = ${PATH_FUNNEL_EVENTS.artifactCta})::int AS wanted,
+           count(*) FILTER (WHERE name = ${PATH_FUNNEL_EVENTS.signup})::int AS signups
+    FROM ${activityEvents}
+    WHERE created_at >= ${since} AND name IN (${list(PATH_FUNNEL_EVENT_NAMES)}) AND props ? 'artifactId'
+    GROUP BY 1
+    ORDER BY signups DESC, reads DESC
+    LIMIT 10
+  `);
+
+  const funnel = funnelRows.rows?.[0] ?? {};
+  const read = Number(funnel.read ?? 0);
+  const counts = new Map((byEvent.rows ?? []).map((r: any) => [r.name, r]));
+
+  return {
+    funnel: PATH_FUNNEL.map((step) => {
+      const sessions = Number(funnel[step.key] ?? 0);
+      return { key: step.key, label: step.label, sessions, ofRead: read ? sessions / read : null };
+    }),
+    events: PATH_FUNNEL_EVENT_NAMES.map((name) => {
+      const row: any = counts.get(name);
+      return { name, label: PATH_FUNNEL_LABEL[name], sessions: Number(row?.sessions ?? 0), events: Number(row?.events ?? 0), people: Number(row?.people ?? 0) };
+    }),
+    topArtifacts: (byArtifact.rows ?? []).map((r: any) => ({
+      artifactId: r.artifact_id as string,
+      reads: Number(r.reads ?? 0),
+      wanted: Number(r.wanted ?? 0),
+      signups: Number(r.signups ?? 0),
+    })),
   };
 }
 
@@ -387,10 +450,12 @@ export function registerAnalyticsRoutes(app: Express) {
         .limit(20);
 
       const explore = await exploreSummary(since);
+      const pathFunnel = await pathFunnelSummary(since);
 
       res.json({
         windowDays,
         explore,
+        pathFunnel,
         onlineNow: now?.online ?? 0,
         signupSources: signupSources.map((r) => ({
           source: r.source ?? "unknown",

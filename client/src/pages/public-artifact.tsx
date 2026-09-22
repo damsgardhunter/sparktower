@@ -9,7 +9,9 @@ import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import NotFound from "@/pages/not-found";
 import { ArrowRight, Check, Compass, Copy, FileCode2, Loader2, MessageSquare } from "lucide-react";
-import { PENDING_PATH_KEY, afterOnboardingPath, artifactPath, type PendingPath } from "@shared/path-artifacts";
+import { PENDING_PATH_KEY, afterOnboardingPath, artifactPath, pendingPathQuery, type PendingPath } from "@shared/path-artifacts";
+import { PATH_FUNNEL_EVENTS } from "@shared/path-funnel";
+import { trackEvent } from "@/lib/analytics";
 
 interface PublicArtifact {
   id: string;
@@ -63,10 +65,22 @@ export default function PublicArtifactPage() {
   if (isError || !data) return <NotFound />;
 
   const go = (intent: "start" | "explore") => {
-    const pending: PendingPath = { goal: data.path.goal, fromArtifact: data.id, intent, projectId: data.project.id };
-    try { localStorage.setItem(PENDING_PATH_KEY, JSON.stringify(pending)); } catch { /* the choice just isn't remembered */ }
-    // A full load: the app decides between sign up, onboarding and create from a fresh start.
-    window.location.href = user ? afterOnboardingPath(pending) : `/?signup=1&artifact=${encodeURIComponent(data.id)}`;
+    const pending: PendingPath = {
+      goal: data.path.goal,
+      // Null on an older row; the field is optional, so leave it off rather than carrying a null.
+      ...(data.path.subcategory ? { subcategory: data.path.subcategory } : {}),
+      fromArtifact: data.id,
+      intent,
+      projectId: data.project.id,
+    };
+    try { localStorage.setItem(PENDING_PATH_KEY, JSON.stringify(pending)); } catch { /* the address below carries it instead */ }
+    trackEvent(PATH_FUNNEL_EVENTS.artifactCta, { artifactId: data.id, goal: pending.goal, subcategory: pending.subcategory, intent });
+    /*
+     * A full load: the app decides between sign up, onboarding and create from
+     * a fresh start. The query carries the same choice the store does, so a
+     * browser that won't keep the store still arrives with it.
+     */
+    window.location.href = user ? afterOnboardingPath(pending) : `/?${pendingPathQuery(pending)}`;
   };
   const copy = async () => {
     try {

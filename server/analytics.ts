@@ -25,6 +25,7 @@ import {
 import { rateLimit } from "./moderation";
 import { CLIENT_EXPLORE_EVENT_NAMES, isExploreEvent, sanitizeExploreProps } from "@shared/explore-events";
 import { PROMO_EVENT_NAMES, sanitizePromoProps } from "@shared/promotions";
+import { PATH_FUNNEL_EVENTS, sanitizePathFunnelProps } from "@shared/path-funnel";
 
 /** Cookie holding the visitor id. Not httpOnly: the client stamps events too. */
 const VISITOR_COOKIE = "st_vid";
@@ -247,7 +248,17 @@ export function registerAnalyticsIngest(app: Express) {
       // except its actions, which the follow, connect and message endpoints
       // record themselves. "Arrived" is the server's to emit — see attachVisitor.
       // And featured tools' impressions, clicks and video plays (shared/promotions.ts).
-      const allowed = new Set<string>([ACTIVITY_EVENTS.pageView, ...CLIENT_EXPLORE_EVENT_NAMES, ...PROMO_EVENT_NAMES]);
+      /*
+       * The artifact call-to-action is the one funnel event a client has to
+       * send: it happens before there is an account, before any request the
+       * server would otherwise see, and it is the whole measure of whether a
+       * published page was worth acting on. The other five are written by the
+       * server, where they can't be invented.
+       */
+      const allowed = new Set<string>([
+        ACTIVITY_EVENTS.pageView, ...CLIENT_EXPLORE_EVENT_NAMES, ...PROMO_EVENT_NAMES,
+        PATH_FUNNEL_EVENTS.artifactCta,
+      ]);
 
       for (const e of batch.slice(0, MAX_BATCH_EVENTS)) {
         const name = String(e?.name || "");
@@ -255,6 +266,7 @@ export function registerAnalyticsIngest(app: Express) {
         const path = String(e?.path || "/").slice(0, 500);
         const promo = PROMO_EVENT_NAMES.includes(name) ? sanitizePromoProps(e?.props) : null;
         if (PROMO_EVENT_NAMES.includes(name) && !promo) continue;
+        const funnel = name === PATH_FUNNEL_EVENTS.artifactCta ? sanitizePathFunnelProps(e?.props) : null;
 
         await recordActivity({
           name,
@@ -266,7 +278,7 @@ export function registerAnalyticsIngest(app: Express) {
           userAgent: req.headers["user-agent"],
           // An Explore event keeps its five properties and nothing else; see
           // sanitizeExploreProps for why that's the boundary.
-          props: promo ? { ...promo } : isExploreEvent(name) ? { ...sanitizeExploreProps(e?.props) } : {
+          props: funnel ? { ...funnel } : promo ? { ...promo } : isExploreEvent(name) ? { ...sanitizeExploreProps(e?.props) } : {
             ...(typeof e?.title === "string" ? { title: e.title.slice(0, 200) } : {}),
             ...(Number.isFinite(e?.msOnPage) ? { msOnPage: Math.round(e.msOnPage) } : {}),
           },
