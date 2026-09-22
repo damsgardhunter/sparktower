@@ -1,3 +1,4 @@
+import type { ContinentId } from "./geography";
 /**
  * The market simulation's domain: what a world is made of, before anything
  * decides what happens to it.
@@ -138,6 +139,27 @@ export interface Niche {
   incumbents: IncumbentSeed[];
   /** Where this market exists. A company only sells where it has opened. */
   cities: City[];
+  /**
+   * Where those regions are, on the world map (see `geography.ts`).
+   *
+   * Four of these markets are a country's worth of regions — Leeds, Manchester,
+   * the North West — and they sit inside one region of the map. Naming it is
+   * what lets a season widen from "the UK in ten pieces" to "the world in
+   * thirty-five, one piece of which is the UK in ten". A market whose regions
+   * are already continental leaves it unset and widens straight onto the map.
+   */
+  worldHome?: string;
+  /**
+   * How much of this market lives on each continent, relative to how much
+   * money lives there.
+   *
+   * One means "as you would expect from the population and the money". Drone
+   * delivery in Central Africa is not a fifth of a market the way its people
+   * and money suggest, because there is nowhere to land; a mobile game in
+   * Southeast Asia is more than its money suggests, because that is where the
+   * players are. Anything unlisted is one.
+   */
+  penetration?: Partial<Record<ContinentId, number>>;
   /** What it costs to make one unit, before anyone improves anything. */
   baseUnitCost: number;
   /** Multiplies how fast quality can be moved in this market — software moves faster than hardware. */
