@@ -20,6 +20,8 @@ import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { enforceRateLimit, ipKey, rateLimit } from "./moderation";
 import { fillVentureWithBots } from "./simulation-bots";
 import { BOT_FILL_AFTER_SECONDS } from "@shared/bots";
+import { botsForVenture } from "@shared/simulation/bots";
+import { ensureBotUser } from "./bot-accounts";
 import { NICHES, nicheById } from "@shared/simulation/niches";
 import { ROLES, ROLE_LEVERS, ROLE_TITLES, type Role } from "@shared/simulation/types";
 import {
@@ -327,7 +329,17 @@ function pgErrorCode(err: unknown): string | undefined {
 
     try {
       const ventureId = await db.transaction(async (tx) => {
-        // Already in a room for this niche? Go back to it rather than making a second.
+        /*
+         * Already in a room for this niche? Go back to it rather than making a
+         * second.
+         *
+         * A season that has *finished* is not a room to go back to, and it
+         * used not to say so: a venture stays in phase "running" for as long
+         * as it exists, so once the fourteen years were up, pressing join in
+         * that market handed the player their old, over company for ever, and
+         * there was no way to start another. Only a season still forming or
+         * running holds a place.
+         */
         const [existing] = await tx
           .select({ id: simVentures.id })
           .from(simSeats)
@@ -344,6 +356,7 @@ function pgErrorCode(err: unknown): string | undefined {
              */
             isNull(simSeasons.companyId),
             sql`${simVentures.phase} not in ('retired')`,
+            sql`${simSeasons.status} in ('forming', 'running')`,
           ))
           .limit(1);
         if (existing) return existing.id;
@@ -523,6 +536,7 @@ function pgErrorCode(err: unknown): string | undefined {
         phaseEndsAt: simVentures.phaseEndsAt,
         nicheId: simSeasons.nicheId,
         role: simSeats.role,
+        seasonStatus: simSeasons.status,
       })
       .from(simSeats)
       .innerJoin(simVentures, eq(simVentures.id, simSeats.ventureId))
@@ -544,6 +558,12 @@ function pgErrorCode(err: unknown): string | undefined {
          */
         roleTitle: r.role ? ROLE_TITLES[r.role as Role] ?? null : null,
         niche: { id: r.nicheId, name: nicheById(r.nicheId)?.name ?? r.nicheId },
+        /**
+         * "forming" | "running" | "finished" | "abandoned". A venture stays in
+         * phase "running" after its season ends, so this is the only thing
+         * that says whether there is still a game to go back to.
+         */
+        seasonStatus: r.seasonStatus,
         secondsLeft: r.phaseEndsAt ? Math.max(0, secondsLeft(r.phaseEndsAt)) : null,
       })),
     });
@@ -705,6 +725,87 @@ function pgErrorCode(err: unknown): string | undefined {
     await db.update(simSeats).set({ role: null, assigned: false, claimedAt: null })
       .where(and(eq(simSeats.ventureId, venture.id), eq(simSeats.userId, req.user.id)));
     res.json({ ok: true });
+  });
+
+  /**
+   * Leave.
+   *
+   * There was no way out of a company once you were in one. Not from the
+   * lobby, where somebody might have joined the wrong market, and not from a
+   * running season, which is fourteen days long — and since join hands you
+   * back the room you are already in, being in one meant never playing
+   * anything else in that market again.
+   *
+   * What leaving means depends on how far along it is, and the difference
+   * matters to the four other people:
+   *
+   *   - **Before the year one starts** the seat is simply given up. If that
+   *     empties the room, the room is retired rather than left standing with
+   *     nobody in it.
+   *   - **Once the season is running** the company cannot be unmade — four
+   *     other people are playing it — so the chair is handed to a bot, which
+   *     is what the product already does for a seat nobody is filling. The
+   *     company keeps playing, its decisions keep being filed, and the person
+   *     who left is out of it.
+   *   - **Once the season is over** there is nothing to hand over: the seat
+   *     goes, and the report stays where it is.
+   */
+  app.post("/api/sim/ventures/:id/leave", isAuthenticated, async (req: any, res) => {
+    if (!(await enforceRateLimit(res, req.user.id, "session"))) return;
+
+    const [row] = await db
+      .select({ venture: simVentures, seasonStatus: simSeasons.status })
+      .from(simVentures)
+      .innerJoin(simSeasons, eq(simSeasons.id, simVentures.seasonId))
+      .where(eq(simVentures.id, req.params.id));
+    if (!row) return res.status(404).json({ message: "No such room." });
+
+    const [seat] = await db.select().from(simSeats)
+      .where(and(eq(simSeats.ventureId, row.venture.id), eq(simSeats.userId, req.user.id)));
+    // A room you are not in is one you have already left, as far as you are concerned.
+    if (!seat) return res.json({ left: true, handedOver: false });
+
+    const started = row.venture.phase === "running" && row.seasonStatus === "running";
+
+    if (started && seat.role) {
+      /*
+       * The chair goes to one of this venture's own bots — the same cast the
+       * lobby would have filled it with — so the name on the seat is a name
+       * the table already recognises. If none can be made, the seat is left
+       * empty rather than the person being trapped in it: an empty seat runs
+       * on the caretaker rules, which is a worse company but somebody else's
+       * decision to fix.
+       */
+      const taken = new Set(
+        (await db.select({ userId: simSeats.userId }).from(simSeats).where(eq(simSeats.ventureId, row.venture.id)))
+          .map((s) => s.userId),
+      );
+      let handedOver = false;
+      for (const bot of botsForVenture(row.venture.id, LOBBY_SIZE + 2)) {
+        const botId = await ensureBotUser(bot);
+        if (!botId || taken.has(botId)) continue;
+        await db.update(simSeats).set({ userId: botId }).where(eq(simSeats.id, seat.id));
+        handedOver = true;
+        break;
+      }
+      if (!handedOver) await db.delete(simSeats).where(eq(simSeats.id, seat.id));
+      return res.json({ left: true, handedOver });
+    }
+
+    await db.delete(simSeats).where(eq(simSeats.id, seat.id));
+
+    /* A room with nobody real left in it is not a room. */
+    if (!started) {
+      const left = await db
+        .select({ isBot: users.isBot })
+        .from(simSeats)
+        .innerJoin(users, eq(users.id, simSeats.userId))
+        .where(eq(simSeats.ventureId, row.venture.id));
+      if (!left.some((s) => !s.isBot)) {
+        await db.update(simVentures).set({ phase: "retired" }).where(eq(simVentures.id, row.venture.id));
+      }
+    }
+    res.json({ left: true, handedOver: false });
   });
 
   /**

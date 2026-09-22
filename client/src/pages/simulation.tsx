@@ -34,6 +34,10 @@ import { UserAvatar } from "@/components/user-avatar";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { NOVA_GRADIENT_CSS } from "@shared/backing";
 import { countdown, phaseCopy, urgency } from "@shared/simulation/lobby-copy";
 import type { Role } from "@shared/simulation/types";
@@ -88,7 +92,7 @@ export default function SimulationPage() {
    * same room — the server is careful about that — but nobody would think to,
    * because the screen had already told them they were nowhere.
    */
-  const { data: mine, isLoading } = useQuery<{ ventures: { id: string; phase: string }[] }>({
+  const { data: mine, isLoading } = useQuery<{ ventures: { id: string; phase: string; seasonStatus?: string }[] }>({
     queryKey: ["/api/sim/ventures"],
     /*
      * Fresh every time the page opens. The app caches queries for ever by
@@ -110,8 +114,21 @@ export default function SimulationPage() {
 
   useEffect(() => {
     if (ventureId || !mine?.ventures?.length) return;
-    // The most recent room that has not been retired. The server orders them.
-    const open = mine.ventures.find((v) => v.phase !== "retired" && !left.current.has(v.id));
+    /*
+     * The most recent room still being played, and not one walked out of.
+     * The server orders them.
+     *
+     * Two ways this reopened a room it shouldn't. A venture stays in phase
+     * "running" after its season ends, so a company whose fourteen years were
+     * up was handed back for ever and the market picker was unreachable —
+     * hence the season's own status, which is the server's answer rather than
+     * the venture's. And a room left during this visit is not one to be
+     * returned to, however the cached list still describes it.
+     */
+    const open = mine.ventures.find((v) =>
+      v.phase !== "retired"
+      && v.seasonStatus !== "finished" && v.seasonStatus !== "abandoned"
+      && !left.current.has(v.id));
     if (open) setVentureId(open.id);
   }, [mine, ventureId]);
 
@@ -312,6 +329,31 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
     },
   });
 
+  /*
+   * Leaving. What it costs depends on how far along the room is, and the
+   * dialog says which one it is about to do — giving up a seat nobody is
+   * counting on yet is not the same as walking out on four people mid-season.
+   */
+  const [leaving, setLeaving] = useState(false);
+  const leave = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/sim/ventures/${ventureId}/leave`, {}).then((r) => r.json()),
+    onSuccess: (body: { handedOver?: boolean }) => {
+      setLeaving(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/sim/ventures"] });
+      toast({
+        title: "You're out",
+        description: body?.handedOver
+          ? "Your chair went to a stand-in, and the company plays on without you."
+          : "You can join another market whenever you like.",
+      });
+      onLeave();
+    },
+    onError: (err) => {
+      setLeaving(false);
+      toast({ title: "Still here", description: errorText(err), variant: "destructive" });
+    },
+  });
+
   const release = useMutation({
     mutationFn: () => apiRequest("POST", `/api/sim/ventures/${ventureId}/release`, {}),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}`] }),
@@ -340,6 +382,8 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
 
   const roleInfo = (role: Role) => meta?.roles.find((r) => r.id === role);
   const clock = urgency(secondsLeft);
+
+  const started = room.phase === "running";
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8 space-y-5">
@@ -491,6 +535,42 @@ function Room({ ventureId, onLeave }: { ventureId: string; onLeave: () => void }
           </div>
         </CardContent></Card>
       )}
+
+      {/* Quietly, at the foot: leaving is allowed, and it is not the thing to do next. */}
+      {room.phase !== "retired" && (
+        <button
+          type="button"
+          onClick={() => setLeaving(true)}
+          className="mx-auto block text-xs text-muted-foreground underline-offset-4 hover:underline"
+          data-testid="button-leave-room"
+        >
+          {started ? "Leave this company" : "Leave this room"}
+        </button>
+      )}
+
+      <AlertDialog open={leaving} onOpenChange={setLeaving}>
+        <AlertDialogContent data-testid="dialog-leave-room">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{started ? `Leave ${room.name ?? "this company"}?` : "Leave this room?"}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {started
+                ? "The season carries on without you: your chair goes to a stand-in, who files an ordinary decision every year. You can't take it back, and you won't be able to rejoin this company."
+                : "Your seat goes back, and you can pick a different market. If you're the last one here, the room closes."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-leave-cancel">Stay</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); leave.mutate(); }}
+              disabled={leave.isPending}
+              data-testid="button-leave-confirm"
+            >
+              {leave.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              {started ? "Leave the company" : "Leave"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
