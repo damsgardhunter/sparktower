@@ -89,6 +89,21 @@ describe("metrics", () => {
   it("reads numbers leniently and refuses what isn't one", () => {
     expect(cleanNumbers({ sales: "12,500", cash: "", covers: 3 })).toEqual({ ok: true, numbers: { sales: 12500, cash: null, covers: 3 } });
     expect(cleanNumbers({ sales: "lots" }).ok).toBe(false);
+
+    /*
+     * Names that mean something to JavaScript and nothing to a business. Each
+     * one is written straight onto the object that becomes the check-in's
+     * jsonb, so "__proto__" as a metric name would set a prototype rather than
+     * record a number.
+     */
+    for (const name of ["__proto__", "constructor", "prototype"]) {
+      const answer = cleanNumbers({ [name]: 4 });
+      expect(answer.ok, name).toBe(false);
+      expect((answer as any).message, "and it says which name it won't take").toContain(name);
+    }
+    // And the object it does build inherits nothing at all.
+    const clean = cleanNumbers({ sales: 10 });
+    expect(Object.getPrototypeOf((clean as any).numbers)).toBeNull();
     expect(cleanNumbers({}).ok).toBe(false);
     expect(cleanNumbers([1, 2]).ok).toBe(false);
   });
