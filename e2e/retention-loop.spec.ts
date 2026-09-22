@@ -26,11 +26,9 @@ test("the home screen brings you back to the next step, and a finished step can 
   // 1. Open SparkTower: the next step is at the top of the feed.
   await page.goto("/");
   await page.getByTestId("btn-skip-onboarding").click({ timeout: 5_000 }).catch(() => {});
-  // The paths are a closed dropdown on home until opened.
+  // Home opens on the path: no toggle, nothing to expand.
   const card = page.getByTestId(`continue-path-${project.id}`);
-  await expect(page.getByTestId("button-toggle-continue-path")).toBeVisible();
-  await expect(card).toHaveCount(0);
-  await page.getByTestId("button-toggle-continue-path").click();
+  await expect(page.getByTestId("continue-path-heading")).toBeVisible();
   await expect(card).toBeVisible();
   await expect(page.getByTestId(`continue-path-next-${project.id}`)).toContainText("Product statement");
 
@@ -46,8 +44,6 @@ test("the home screen brings you back to the next step, and a finished step can 
 
   // 4. Back home: the next step has moved, and the one just finished can be shared for feedback.
   await page.goto("/");
-  // The paths are a closed dropdown on home until opened.
-  await page.getByTestId("button-toggle-continue-path").click();
   await expect(page.getByTestId(`continue-path-next-${project.id}`)).not.toContainText("Product statement");
   await page.getByTestId(`button-share-last-step-${project.id}`).click();
   await expect(page.getByTestId("share-step-dialog")).toBeVisible();
@@ -92,7 +88,6 @@ test("finishing a step on the project moves the home card, with no reload", asyn
    * and prove nothing about whether finishing the step invalidated the card.
    */
   await page.getByTestId("link-home").click({ timeout: 10_000 }).catch(async () => { await page.goto("/"); });
-  await page.getByTestId("button-toggle-continue-path").click();
   await expect(page.getByTestId(`continue-path-next-${project.id}`)).not.toContainText("Product statement");
 });
 
@@ -116,7 +111,6 @@ test("a project with no path is offered one from the home card", async ({ page }
 
   await page.goto("/");
   await page.getByTestId("btn-skip-onboarding").click({ timeout: 5_000 }).catch(() => {});
-  await page.getByTestId("button-toggle-continue-path").click();
   await expect(page.getByTestId(`continue-path-needs-${project.id}`), "it says what it needs, rather than vanishing").toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId(`button-start-path-${project.id}`)).toBeVisible();
 });
