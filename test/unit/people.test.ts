@@ -49,14 +49,23 @@ describe("a company that touches none of it", () => {
 });
 
 describe("the schedule", () => {
-  it("brings the people levers in from year three, and firing last", () => {
+  it("brings the people levers in early, and the ones aimed at a person last", () => {
     const at = (role: string, field: string) => UNLOCKS.find((u) => u.role === role && u.field === field)?.year;
-    expect(at("ceo", "targets")).toBe(3);
-    expect(at("ceo", "overrule")).toBe(5);
-    expect(at("ceo", "replaceSeat")).toBe(6);
-    expect(at("cto", "engineerPay")).toBe(3);
-    expect(at("coo", "trainingSpend")).toBe(4);
-    expect(at("cfo", "costReview")).toBe(5);
+    // Managing people is most of the job, so it starts as soon as there is a year to judge.
+    expect(at("ceo", "targets")).toBe(2);
+    expect(at("cto", "engineerPay")).toBe(2);
+    expect(at("coo", "trainingSpend")).toBe(3);
+    /*
+     * Overruling a teammate, cutting their budget and firing them stay later
+     * than the rest — not because they are complicated, but because they are
+     * done to somebody, and a table needs a couple of years of each other
+     * first.
+     */
+    expect(at("ceo", "overrule")).toBe(4);
+    expect(at("cfo", "costReview")).toBe(4);
+    expect(at("ceo", "replaceSeat")).toBe(5);
+    expect(at("ceo", "overrule")!).toBeGreaterThan(at("ceo", "targets")!);
+    expect(at("ceo", "replaceSeat")!).toBeGreaterThan(at("ceo", "overrule")!);
   });
 });
 

@@ -255,6 +255,8 @@ export function botDecision(input: {
       delete draft[field.id];
       continue;
     }
+    // A bot never pays the money out: it keeps it in the company it is running.
+    if (field.id === "dividendPct") { draft[field.id] = 0; continue; }
     if (field.id === "holdBack" || field.id === "costReview" || field.id === "bonusPool" || field.id === "replaceBid") {
       draft[field.id] = 0;
       continue;
@@ -304,7 +306,12 @@ export function botDecision(input: {
     if (field.id === "shiftCapacity" || field.id === "stockTarget" || field.id === "factorPct"
       || field.id === "refinance" || field.id === "buyback") { draft[field.id] = 0; continue; }
     if (field.id === "sourcing") { draft[field.id] = company.sourcing ?? "in_house"; continue; }
-    if (field.id === "terms") { draft[field.id] = company.terms ?? 30; continue; }
+    /*
+     * As the company already bills, as a string — the lever's answers are
+     * strings, and a number here failed validation, which threw away the whole
+     * draft and left the seat filing bare defaults for the rest of the season.
+     */
+    if (field.id === "terms") { draft[field.id] = String(company.terms ?? 0); continue; }
     if (field.id === "segmentFocus") { delete draft[field.id]; continue; }
     if (field.id === "featureBet") { draft[field.id] = ""; continue; }
     if (field.id === "featureMode") { draft[field.id] = "build"; continue; }

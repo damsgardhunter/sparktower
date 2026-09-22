@@ -276,8 +276,13 @@ describe("what a seat is allowed to file", () => {
   });
 
   it("passes everything a bot files", () => {
-    // Every year, since levers arrive over the season and a bot must file only what it has.
-    for (const year of [1, 2, 3, 4, 5]) for (const role of ROLES) {
+    /*
+     * Every year of a season, not just the early ones. This used to stop at
+     * five and so never reached the levers that arrive later — one of which
+     * the bot filed in the wrong type, failing validation and quietly falling
+     * back to bare defaults for the rest of the game.
+     */
+    for (const year of [1, 2, 3, 4, 5, 6, 7, 8, 10, 14]) for (const role of ROLES) {
       const d = botDecision({ ventureId: "v1", year, role, company: company() });
       const clean = cleanDecision(role, d, [], { year });
       expect(clean, `${role} in year ${year} loses something on the way in`).toEqual(d);

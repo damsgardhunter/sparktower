@@ -130,7 +130,9 @@ describe("responsibilities arriving over the season", () => {
     expect(budget.options.map((o: any) => o.value).sort()).toEqual(["cmo", "coo", "cto"]);
     const cmo2 = await seat("cmo").agent.get(`/api/sim/ventures/${ventureId}/desk`);
     expect(idsOf(cmo2)).toContain("forecast");
-    expect(idsOf(cmo2), "tiers are a year off yet").not.toContain("tiers");
+    expect(idsOf(cmo2), "and pricing by segment arrives with it").toContain("tiers");
+    // The sharper tools are still a way off: overruling a teammate is year four.
+    expect(idsOf(y2), "overruling a seat is not a year-two decision").not.toContain("overrule");
   }, 180_000);
 
   it("drops a lever filed before it has arrived", async () => {

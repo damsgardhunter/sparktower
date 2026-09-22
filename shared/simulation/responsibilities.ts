@@ -45,76 +45,80 @@ export interface Unlock {
 }
 
 /**
- * When each new responsibility arrives. One or two a year across the table,
- * so no seat has a year where it gets three new things and nobody else gets
- * any, and so the year a lever arrives is a year that seat has something new
- * to argue for.
+ * When each new responsibility arrives.
+ *
+ * A season is fourteen years and a table that has to wait until year eight for
+ * the decisions it was promised is a table playing the old game for half of
+ * it. So the ramp is short: year one is the on-ramp, by year two every seat is
+ * running most of its job, and by year five it has all of it. What stays late
+ * is what needs something to already exist — you cannot automate a plant
+ * nobody has built, or buy back shares nobody else owns yet — and the two
+ * levers that are aimed at people rather than numbers.
  */
 export const UNLOCKS: Unlock[] = [
-  // Year two: the first arguments about the whole company's money.
+  // Year two: the whole company's money, the forecast, and room to rent.
   { role: "ceo", field: "budget", year: 2 },
   { role: "cmo", field: "forecast", year: 2 },
   { role: "coo", field: "leaseCapacity", year: 2 },
-  // Year three: pricing properly, and borrowing properly.
-  { role: "cmo", field: "tiers", year: 3 },
-  { role: "cfo", field: "borrowTerm", year: 3 },
-  // Year four: the finance seat's reach over everybody else.
-  { role: "cfo", field: "holdBack", year: 4 },
-  { role: "cfo", field: "holdBackSeat", year: 4 },
-  { role: "cfo", field: "annualDiscount", year: 4 },
-  // Year three: the chief executive starts managing people, and pay becomes a lever.
-  { role: "ceo", field: "targets", year: 3 },
-  { role: "ceo", field: "bonusPool", year: 3 },
-  { role: "cto", field: "engineerPay", year: 3 },
-  // Year four: who operations hires, and how they are trained.
-  { role: "coo", field: "recruitingSpend", year: 4 },
-  { role: "coo", field: "trainingSpend", year: 4 },
-  // Year five: the sharp tools — overruling a seat, and cutting costs.
-  { role: "ceo", field: "overrule", year: 5 },
-  { role: "cfo", field: "costReview", year: 5 },
-  // Phase three, the bets: security early, then channels and data, then the big product calls.
+  // Year two: pricing properly, borrowing properly, and the first product bet.
+  { role: "cmo", field: "tiers", year: 2 },
+  { role: "cfo", field: "borrowTerm", year: 2 },
   { role: "cto", field: "securitySpend", year: 2 },
+  { role: "ceo", field: "shockAnswer", year: 2 },
+  // Year two: the chief executive starts managing people, and pay becomes a lever.
+  { role: "ceo", field: "targets", year: 2 },
+  { role: "ceo", field: "bonusPool", year: 2 },
+  { role: "cto", field: "engineerPay", year: 2 },
+  // Year three: the finance seat's reach over everybody else.
+  { role: "cfo", field: "holdBack", year: 3 },
+  { role: "cfo", field: "holdBackSeat", year: 3 },
+  { role: "cfo", field: "annualDiscount", year: 3 },
+  // Year three: who operations hires, how they are trained, and what it runs.
+  { role: "coo", field: "recruitingSpend", year: 3 },
+  { role: "coo", field: "trainingSpend", year: 3 },
+  { role: "coo", field: "programme", year: 3 },
+  // Year three: the bets — channels, data, and the big product calls.
   { role: "cto", field: "dataSpend", year: 3 },
   { role: "cmo", field: "prSpend", year: 3 },
-  { role: "ceo", field: "pace", year: 4 },
-  { role: "cto", field: "featureBet", year: 4 },
-  { role: "cto", field: "featureMode", year: 4 },
-  { role: "cmo", field: "referralSpend", year: 4 },
-  // Phase four, the world: an answer to a shock from the first year there can be one.
-  { role: "ceo", field: "shockAnswer", year: 2 },
-  { role: "coo", field: "programme", year: 3 },
-  // Year five: the offers that arrive, and the table's vote on them.
-  { role: "ceo", field: "deals", year: 5 },
-  { role: "cmo", field: "dealVotes", year: 5 },
-  { role: "cfo", field: "dealVotes", year: 5 },
-  { role: "cto", field: "dealVotes", year: 5 },
-  { role: "coo", field: "dealVotes", year: 5 },
-  { role: "cmo", field: "promo", year: 5 },
-  { role: "coo", field: "expand", year: 5 },
-  // Year six: the patient money.
-  { role: "cmo", field: "winbackSpend", year: 6 },
-  { role: "cmo", field: "research", year: 6 },
-  { role: "cfo", field: "insurance", year: 6 },
-  { role: "cfo", field: "dividendPct", year: 6 },
+  { role: "ceo", field: "pace", year: 3 },
+  { role: "cto", field: "featureBet", year: 3 },
+  { role: "cto", field: "featureMode", year: 3 },
+  { role: "cmo", field: "referralSpend", year: 3 },
+  // Year three: the offers that arrive, and the table's vote on them.
+  { role: "ceo", field: "deals", year: 3 },
+  { role: "cmo", field: "dealVotes", year: 3 },
+  { role: "cfo", field: "dealVotes", year: 3 },
+  { role: "cto", field: "dealVotes", year: 3 },
+  { role: "coo", field: "dealVotes", year: 3 },
+  // Year four: the sharp tools, the patient money, and aiming the marketing.
+  { role: "ceo", field: "overrule", year: 4 },
+  { role: "cfo", field: "costReview", year: 4 },
+  { role: "cmo", field: "promo", year: 4 },
+  { role: "coo", field: "expand", year: 4 },
+  { role: "cmo", field: "winbackSpend", year: 4 },
+  { role: "cmo", field: "research", year: 4 },
+  { role: "cfo", field: "insurance", year: 4 },
+  { role: "cfo", field: "dividendPct", year: 4 },
+  { role: "cmo", field: "regionFocus", year: 4 },
+  { role: "cmo", field: "segmentFocus", year: 4 },
   /*
-   * Phase five, depth: the plant, the balance sheet, and aiming the marketing
-   * rather than spraying it. These arrive after the first six years because
-   * they are refinements of decisions the table has already been making —
-   * there is no point automating a plant before anybody has built one.
+   * Year five, the plant and the balance sheet: refinements of decisions the
+   * table has already been making for four years. There is no point automating
+   * a plant before anybody has built one, or selling receivables before there
+   * is anything owed.
    */
-  { role: "cmo", field: "regionFocus", year: 7 },
-  { role: "coo", field: "automationTarget", year: 7 },
-  { role: "coo", field: "shiftCapacity", year: 7 },
-  { role: "cfo", field: "terms", year: 7 },
-  { role: "cmo", field: "segmentFocus", year: 8 },
-  { role: "coo", field: "stockTarget", year: 8 },
-  { role: "coo", field: "sourcing", year: 8 },
-  { role: "cfo", field: "factorPct", year: 8 },
-  { role: "cfo", field: "refinance", year: 8 },
-  { role: "cfo", field: "buyback", year: 9 },
-  // Year six: firing someone.
-  { role: "ceo", field: "replaceSeat", year: 6 },
-  { role: "ceo", field: "replaceBid", year: 6 },
+  { role: "coo", field: "automationTarget", year: 5 },
+  { role: "coo", field: "shiftCapacity", year: 5 },
+  { role: "coo", field: "stockTarget", year: 5 },
+  { role: "coo", field: "sourcing", year: 5 },
+  { role: "cfo", field: "terms", year: 5 },
+  { role: "cfo", field: "factorPct", year: 5 },
+  { role: "cfo", field: "refinance", year: 5 },
+  // Later, and on purpose: buying the company back needs somebody to buy from,
+  // and firing a teammate is not a year-four decision.
+  { role: "cfo", field: "buyback", year: 6 },
+  { role: "ceo", field: "replaceSeat", year: 5 },
+  { role: "ceo", field: "replaceBid", year: 5 },
 ];
 
 const unlockOf = new Map(UNLOCKS.map((u) => [`${u.role}:${u.field}`, u.year]));

@@ -48,16 +48,24 @@ const report = (r: any) => r.reports.find((x: any) => x.companyId === "t");
 const after = (r: any) => r.world.companies.find((x: any) => x.id === "t") as Company;
 
 describe("the schedule", () => {
-  it("gives every seat something new, and never more than two things in one year", () => {
-    const byYearSeat = new Map<string, number>();
-    for (const u of UNLOCKS) {
-      const key = `${u.year}:${u.role}`;
-      byYearSeat.set(key, (byYearSeat.get(key) ?? 0) + 1);
+  it("gives every seat its job by year five, and nobody a year with nothing", () => {
+    /*
+     * The ramp used to be one or two levers a seat a year, which read well on
+     * paper and meant a fourteen-year season spent half of itself as the old
+     * game. What matters is not how thin each year is: it is that no seat
+     * waits while another grows, and that the waiting ends.
+     */
+    for (const role of ["ceo", "cmo", "cfo", "cto", "coo"] as const) {
+      const years = UNLOCKS.filter((u) => u.role === role).map((u) => u.year);
+      expect(years.length, `${role} should get new responsibilities`).toBeGreaterThan(0);
+      expect(Math.max(...years), `${role} should have its whole job by year six`).toBeLessThanOrEqual(6);
+      const growing = new Set(years);
+      expect(growing.size, `${role} should grow across several years, not all at once`).toBeGreaterThanOrEqual(2);
     }
-    // holdBack and holdBackSeat are one decision drawn as two controls.
-    for (const [key, n] of byYearSeat) expect(n, key).toBeLessThanOrEqual(key.endsWith("cfo") ? 3 : 2);
-    for (const role of ["ceo", "cmo", "cfo", "coo"] as const) {
-      expect(UNLOCKS.some((u) => u.role === role), role).toBe(true);
+    // And every seat is still growing in the early years, not just the loud ones.
+    for (const year of [2, 3]) {
+      const seats = new Set(UNLOCKS.filter((u) => u.year === year).map((u) => u.role));
+      expect(seats.size, `year ${year} should give most of the table something`).toBeGreaterThanOrEqual(4);
     }
   });
 
@@ -68,11 +76,11 @@ describe("the schedule", () => {
   });
 
   it("will not take a lever before it arrives", () => {
-    expect(isUnlocked("cmo", "tiers", 2)).toBe(false);
-    expect(isUnlocked("cmo", "tiers", 3)).toBe(true);
-    const early = cleanDecision("cmo", { price: 40, tiers: { swipers: 0 } }, [], { year: 2, segmentIds: ["swipers"] });
+    expect(isUnlocked("cmo", "tiers", 1)).toBe(false);
+    expect(isUnlocked("cmo", "tiers", 2)).toBe(true);
+    const early = cleanDecision("cmo", { price: 40, tiers: { swipers: 0 } }, [], { year: 1, segmentIds: ["swipers"] });
     expect(early.tiers, "filed a year early, and dropped").toBeUndefined();
-    const onTime = cleanDecision("cmo", { price: 40, tiers: { swipers: 0, made_up: 5 } }, [], { year: 3, segmentIds: ["swipers"] });
+    const onTime = cleanDecision("cmo", { price: 40, tiers: { swipers: 0, made_up: 5 } }, [], { year: 2, segmentIds: ["swipers"] });
     expect(onTime.tiers, "and only for segments that exist").toEqual({ swipers: 0 });
   });
 });
