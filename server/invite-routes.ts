@@ -17,7 +17,7 @@ import { and, count, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import { db } from "./db";
 import { projectInvites, projectMembers, projects, users, userProfiles } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
-import { enforceRateLimit, ipKey, rateLimit } from "./moderation";
+import { enforceRateLimit, ipKey, rateLimit, refuseWithRetry } from "./moderation";
 import { notify } from "./notifications";
 import { sendEmail, devOutbox } from "./email";
 import { feedDisplayName } from "./feed-routes";
@@ -98,12 +98,36 @@ export function registerInviteRoutes(app: Express) {
       const [today] = await db.select({ n: count() }).from(projectInvites)
         .where(and(eq(projectInvites.projectId, project.id), gt(projectInvites.createdAt, sql`now() - interval '1 day'`)));
       if (today.n >= INVITES_PER_PROJECT_PER_DAY) {
-        return res.status(429).json({ message: `This project has sent ${INVITES_PER_PROJECT_PER_DAY} invites today. Try again tomorrow.`, code: "rate_limited", action: "invite" });
+        /*
+         * The wait is until the oldest of today's invites falls out of the
+         * day-long window, which is what "try again tomorrow" actually means.
+         * Through the shared refusal so the body and Retry-After match every
+         * other limit in the product (server/moderation.ts).
+         */
+        const [oldest] = await db.select({ at: projectInvites.createdAt }).from(projectInvites)
+          .where(and(eq(projectInvites.projectId, project.id), gt(projectInvites.createdAt, sql`now() - interval '1 day'`)))
+          .orderBy(projectInvites.createdAt).limit(1);
+        const freesAt = (oldest?.at?.getTime() ?? Date.now()) + 24 * 60 * 60 * 1000;
+        return refuseWithRetry(res, {
+          action: "invite",
+          message: `This project has sent ${INVITES_PER_PROJECT_PER_DAY} invites today. Try again tomorrow.`,
+          retryAfterSeconds: Math.max(1, Math.round((freesAt - Date.now()) / 1000)),
+        });
       }
       const [pending] = await db.select({ n: count() }).from(projectInvites)
         .where(and(eq(projectInvites.projectId, project.id), isNull(projectInvites.acceptedAt), isNull(projectInvites.revokedAt), gt(projectInvites.expiresAt, new Date())));
       if (pending.n >= MAX_PENDING_INVITES) {
-        return res.status(429).json({ message: `${MAX_PENDING_INVITES} invites are waiting on this project. Revoke some first.`, code: "rate_limited", action: "invite" });
+        /*
+         * Waiting doesn't clear this one — somebody has to revoke or someone
+         * has to accept — but the shape is still the shape, and a minute is an
+         * honest "ask again after you've done something about it".
+         */
+        return refuseWithRetry(res, {
+          action: "invite",
+          message: `${MAX_PENDING_INVITES} invites are waiting on this project. Revoke some first.`,
+          retryAfterSeconds: 60,
+          extra: { pending: pending.n, max: MAX_PENDING_INVITES },
+        });
       }
       if (email) {
         const [already] = await db.select({ id: projectMembers.id }).from(projectMembers).innerJoin(users, eq(users.id, projectMembers.userId))
