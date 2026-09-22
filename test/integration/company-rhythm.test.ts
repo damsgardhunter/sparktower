@@ -209,6 +209,51 @@ describe("the monthly report", () => {
   });
 });
 
+describe("which company a project belongs to", () => {
+  /*
+   * The manager's Simulations panel asks this to decide what to show: a
+   * company's season list and a way to start one, the same list read-only, or
+   * the public market for a project no company owns. Getting it wrong either
+   * hides the feature from the people it is for, or offers a button that
+   * cannot work.
+   */
+  it("answers with the company and the asker's powers, or nothing when it's nobody's", async () => {
+    const app = await getTestApp();
+    const owner = await person(app);
+    const plain = await person(app);
+    const outsider = await person(app);
+    const [company] = await db.insert(companies).values({
+      name: `Rail Co ${Date.now()}`, slug: `rail-${Date.now()}`, industry: "Other", createdBy: owner.id, createdAt: new Date(),
+    }).returning();
+    await db.insert(companyMembers).values([
+      { companyId: company.id, userId: owner.id, role: "owner", joinedAt: new Date() },
+      { companyId: company.id, userId: plain.id, role: "member", joinedAt: new Date() },
+    ]);
+    const projectId = (await owner.agent.post(`/api/companies/${company.id}/run-project`)).body.project.id as string;
+
+    const asOwner = await owner.agent.get(`/api/projects/${projectId}/company`);
+    expect(asOwner.status).toBe(200);
+    expect(asOwner.body.company).toMatchObject({ id: company.id, name: company.name });
+    expect(asOwner.body.powers, "an owner can run seasons for their people").toContain("run_seasons");
+
+    // On the project, in the company, without the power: the season list, not the button.
+    const asMember = await plain.agent.get(`/api/projects/${projectId}/company`);
+    expect(asMember.body.company.id).toBe(company.id);
+    expect(asMember.body.powers).not.toContain("run_seasons");
+
+    // Nobody else's business, in both senses.
+    expect((await outsider.agent.get(`/api/projects/${projectId}/company`)).status).toBe(404);
+
+    // A project of somebody's own says so, rather than looking broken.
+    const solo = (await owner.agent.post("/api/projects").send({
+      title: "Just mine", description: "A project that belongs to no company at all.", category: "saas", goal: "ship_mvp", subcategory: "saas",
+    })).body.id as string;
+    const alone = await owner.agent.get(`/api/projects/${solo}/company`);
+    expect(alone.status).toBe(200);
+    expect(alone.body.company).toBeNull();
+  }, 60_000);
+});
+
 describe("starting the rhythm from a company", () => {
   it("creates the Run project, puts the company's people on it, and links it", async () => {
     const app = await getTestApp();

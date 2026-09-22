@@ -116,7 +116,7 @@ export const RUN_TREE: PathTree = {
     },
     {
       id: "run-4", title: "Week 4 — The money it runs on",
-      checkpoint: "Thirteen weeks of cash in view, prices checked against costs, and three goals for the quarter.",
+      checkpoint: "Thirteen weeks of cash in view, prices checked against costs, three goals for the quarter, and an honest answer on how big this can get.",
       milestones: [
         { id: "RUN.S4.1", title: "Thirteen weeks of cash", actor: "nova-builds", estimateMinutes: 30, tier: "artifact", work: "plan",
           description: "A thirteen-week cash forecast built from your check-ins and costs: what comes in, what goes out, the week it gets tight, and what to move now so that week isn't a surprise." },
@@ -126,6 +126,17 @@ export const RUN_TREE: PathTree = {
           description: "Three goals for the next thirteen weeks, drawn from what the check-ins keep pointing at, each with the number that says it happened and who owns it. Next quarter's review starts from here." },
         { id: "RUN.S4.4", title: "Set the rhythm", actor: "user-does", estimateMinutes: 5, tier: "claimed",
           description: "You pick the day the weekly check-in happens and who joins it. A rhythm that is nobody's appointment is a rhythm that stops in week three." },
+        /*
+         * The one step that looks past the quarter. The rest of this path is
+         * deliberately about the week in front of you, which works right up
+         * until an owner wants to know whether any of it is going anywhere —
+         * and then a weekly check-in has nothing to say. This is where that
+         * question gets an answer made of the company's own numbers, including
+         * the answer nobody wants: that the target chosen is a different
+         * business, not a harder-working version of this one.
+         */
+        { id: "RUN.S4.5", title: "What would it take?", actor: "nova-builds", estimateMinutes: 15, tier: "artifact",
+          description: "You pick a size — $1m, $100m, $1bn or $50bn a year — and Nova builds the route there from the numbers your check-ins already hold: the arithmetic of the gap, the stages and how long each takes, what has to be true at each one, what breaks first and what it costs to fix, the first ninety days, and an honest verdict on whether it is reachable from here. Re-run it in six months to see whether the gap moved." },
       ],
     },
   ],

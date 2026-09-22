@@ -11,7 +11,7 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Check, Copy, Link2, Loader2, LogOut, ShieldCheck } from "lucide-react";
+import { Check, Copy, Link2, Loader2, LogOut, ShieldCheck, Gamepad2 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
 import { useToast } from "@/hooks/use-toast";
@@ -62,6 +62,19 @@ export function TeamTab({ companyId, canManage, powers = [] }: { companyId: stri
   return (
     <div className="space-y-4">
       {managesTeam && <InviteLink companyId={companyId} canInviteAdmins={canManage} />}
+
+      {/*
+        * The people are here, so the thing you do with them is one tap away:
+        * a training season is played by this team, and looking them up and
+        * then hunting for where to start one is two jobs for one thought.
+        */}
+      <div className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm text-muted-foreground">
+        <Gamepad2 className="h-4 w-4 text-primary shrink-0" />
+        <span className="flex-1">Run a market simulation for these people: five of them take the seats of one company for a fortnight.</span>
+        <Button variant="outline" size="sm" onClick={() => navigate(`/companies/${companyId}?tab=training`, { replace: true })} data-testid="button-go-simulations">
+          Simulations
+        </Button>
+      </div>
 
       {managesTeam && (
         <div className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm text-muted-foreground">

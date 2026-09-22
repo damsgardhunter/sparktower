@@ -54,6 +54,7 @@ import { ProjectCalendar, TASK_DRAG_TYPE } from "@/components/project-calendar";
 import { NovaTaskPlanner } from "@/components/nova-task-planner";
 import { DocumentStartDialog, looksLikeDocumentTask } from "@/components/document-start-dialog";
 import { CodebaseTab } from "@/components/codebase-tab";
+import { SimulationsPanel } from "@/components/manager/simulations-panel";
 import { NovaActionButton } from "@/components/nova-action-button";
 import { NovaHandoffProvider } from "@/components/nova-handoff";
 import { BackingSetup } from "@/components/backing-setup";
@@ -852,6 +853,8 @@ export default function ProjectManager() {
         {activeTab === "codebase" && projectId && (
           <CodebaseTab projectId={projectId} repoUrl={project.repoUrl} isOwner={isOwner} />
         )}
+        {/* A market season for the people on this project — see the panel's own note. */}
+        {activeTab === "simulations" && projectId && <SimulationsPanel projectId={projectId} />}
         {activeTab === "files" && (
           <FilesTab
             files={projectFiles || []} isUploading={isUploadingFile}

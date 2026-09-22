@@ -33,6 +33,7 @@ import {
   formatValue, customMetricId, metricFor, addMonthsToMonth, JOB_INTERVALS, JOB_INTERVAL_LABEL, daysOverdue, CHECKIN_DAYS,
   type RhythmMetric, type JobInterval, type MonthlyReport, type GoalProgress,
 } from "@shared/company-rhythm";
+import { WhatWouldItTake } from "@/components/what-would-it-take";
 
 interface Checkin {
   id: string; weekOf: string; numbers: Record<string, number | null>;
@@ -146,6 +147,14 @@ export function CompanyRhythm({ projectId }: { projectId: string }) {
       <JobsCard projectId={projectId} data={data} />
       <GoalsCard projectId={projectId} data={data} />
       <ReportCard projectId={projectId} today={data.today} />
+      {/*
+        * Under the week and the month, because it is the one thing here that
+        * is not about either. An owner opens this section to file Monday's
+        * numbers; the question of where the company is going is worth asking
+        * a couple of times a year, so it sits where it will be found when
+        * somebody goes looking rather than in the way of the weekly job.
+        */}
+      <WhatWouldItTake projectId={projectId} />
       <SettingsCard projectId={projectId} data={data} />
     </div>
   );

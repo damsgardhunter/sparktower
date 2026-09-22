@@ -18,11 +18,17 @@ import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Loader2, CalendarCheck, ArrowRight, AlertTriangle, Check, Repeat, FileBarChart, Target } from "lucide-react";
+import { Loader2, CalendarCheck, ArrowRight, AlertTriangle, Check, Repeat, FileBarChart, Target, TrendingUp } from "lucide-react";
 import { useRhythm, useGoals, shortDate, quarterName, GoalProgressView } from "@/components/company-rhythm";
 import { CHECKIN_DAYS, daysOverdue, type MonthlyReport } from "@shared/company-rhythm";
+import type { WwitTargetId, WwitVerdict } from "@shared/what-would-it-take";
 
 interface CompanyPayload { company: { id: string; name: string; projectId: string | null } }
+/** Only the parts of the roadmap payload this glance needs — see client/src/components/what-would-it-take.tsx for the whole shape. */
+interface WwitGlance {
+  targets: { id: WwitTargetId; label: string }[];
+  roadmaps: Record<WwitTargetId, { latest: { target: WwitTargetId; generatedAt: string; roadmap: { gap: { multiple: number } | null; body: { headline: string; verdict: WwitVerdict } } } | null }>;
+}
 
 export function RunTab({ companyId, canManage }: { companyId: string; canManage: boolean }) {
   const { toast } = useToast();
@@ -86,6 +92,20 @@ function RunSummary({ projectId }: { projectId: string }) {
     enabled: !!data && !!month,
   });
   const activeGoals = goals?.goals.filter((g) => g.status !== "dropped") ?? [];
+  /*
+   * The ambition line. Only shown once a roadmap exists: the company page is a
+   * glance, and an empty "What would it take?" prompt here would be a second
+   * place asking for credits rather than a summary of work already done.
+   */
+  const { data: wwit } = useQuery<WwitGlance>({
+    queryKey: ["/api/projects", projectId, "what-would-it-take"],
+    enabled: !!data,
+  });
+  const built = wwit
+    ? Object.values(wwit.roadmaps).map((s) => s.latest).filter((r): r is NonNullable<typeof r> => !!r)
+        .sort((a, b) => b.generatedAt.localeCompare(a.generatedAt))[0] ?? null
+    : null;
+  const builtTarget = built ? wwit!.targets.find((t) => t.id === built.target) ?? null : null;
 
   return (
     <Card data-testid="run-tab-summary">
@@ -142,6 +162,19 @@ function RunSummary({ projectId }: { projectId: string }) {
                 </ul>
               )}
             </div>
+
+            {built && builtTarget && (
+              <div className="space-y-1 pt-1" data-testid="run-wwit">
+                <p className="text-sm flex items-center gap-1.5"><TrendingUp className="h-4 w-4 text-primary" />What it would take to reach {builtTarget.label}</p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Badge variant={built.roadmap.body.verdict === "a different business" ? "destructive" : built.roadmap.body.verdict === "reachable" ? "secondary" : "outline"} data-testid="run-wwit-verdict">
+                    {built.roadmap.body.verdict}
+                  </Badge>
+                  {built.roadmap.gap && <span className="text-xs text-muted-foreground tabular-nums">{Math.round(built.roadmap.gap.multiple).toLocaleString("en-GB")}× where you are</span>}
+                </div>
+                <p className="text-sm text-muted-foreground line-clamp-2">{built.roadmap.body.headline}</p>
+              </div>
+            )}
 
             {report && (
               <div className="space-y-1 pt-1" data-testid="run-report-headline">

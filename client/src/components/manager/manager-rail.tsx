@@ -12,7 +12,8 @@ const ICON_TONE: Record<string, string> = {
   setup: "text-emerald-600",
   codebase: "text-purple-600",
   team: "text-emerald-600",
-  chat: "text-purple-600",
+  simulations: "text-purple-600",
+  chat: "text-emerald-600",
 };
 
 function ago(iso: string | null | undefined) {
@@ -38,7 +39,8 @@ export function ManagerRail({ projectId, active, onSelect }: {
   return (
     <div className={`rounded-2xl p-[1.5px] ${NOVA_GRADIENT}`}>
       <nav
-        className="rounded-[14px] bg-background p-1.5 grid grid-cols-4 gap-1 lg:grid-cols-1 lg:p-2"
+        // Five across on a phone now, one column from large up, as before.
+        className="rounded-[14px] bg-background p-1.5 grid grid-cols-5 gap-1 lg:grid-cols-1 lg:p-2"
         aria-label="Project"
         data-testid="manager-rail"
       >

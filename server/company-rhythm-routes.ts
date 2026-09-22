@@ -28,7 +28,7 @@ import { requireCredits, modelFor } from "./entitlements";
 import { getOpenAI, openAiConfigured } from "./openai-client";
 import { CREDIT_COSTS } from "@shared/plans";
 import { instantiatePathTree } from "./phase-trees";
-import { companyCan } from "./company-access";
+import { companyCan, companyMember, powersOf } from "./company-access";
 import { completeRunMilestone } from "./company-rhythm-jobs";
 import { PROJECT_CATEGORIES } from "@shared/categories";
 import {
@@ -133,6 +133,31 @@ export function registerCompanyRhythmRoutes(app: Express): void {
    * this week's check-in if filed, recent weeks, and the jobs — what the Run
    * section and the company page both open with.
    */
+  /**
+   * Which company this project belongs to, and what you may do there.
+   *
+   * The project manager's rail offers a company's people a simulation season
+   * for this team, and the rail belongs to every project — most of which no
+   * company owns. Rather than teach the client to join projects to companies,
+   * it asks here: null when this is somebody's own project, and otherwise the
+   * company with the powers this person holds in it, which is what decides
+   * whether the panel can start a season or only watch one.
+   */
+  app.get("/api/projects/:id/company", isAuthenticated, async (req: any, res) => {
+    const project = await projectFor(res, req.params.id, req.user.id);
+    if (!project) return;
+    const [company] = await db.select({ id: companies.id, name: companies.name })
+      .from(companies).where(eq(companies.projectId, project.id));
+    if (!company) return res.json({ company: null, powers: [] as string[] });
+    const membership = await companyMember(company.id, req.user.id);
+    /*
+     * Not a member of the company, though they are on its project — an
+     * outside collaborator. They see that the project belongs to a company
+     * and nothing they could act on, which is the truth.
+     */
+    res.json({ company, role: membership?.role ?? null, powers: membership ? powersOf(membership) : [] });
+  });
+
   app.get("/api/projects/:id/rhythm", isAuthenticated, async (req: any, res) => {
     const project = await projectFor(res, req.params.id, req.user.id);
     if (!project) return;

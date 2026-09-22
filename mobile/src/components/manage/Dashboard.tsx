@@ -16,6 +16,7 @@ import { Block, Clamp, useNotify } from "./bits";
 import { PathPanel, usePath } from "./PathPanel";
 import { IntakeView } from "./WorkView";
 import { NovaWelcomeCard } from "./path/NovaGuide";
+import { WhatWouldItTake } from "./WhatWouldItTake";
 import { mkey, type ProjectGoal } from "./shared";
 
 interface Briefing {
@@ -94,6 +95,13 @@ export function Dashboard({ projectId, project, goal, isPrimary, onNavigate, onO
       )}
 
       {!moneyStep && <PathPanel projectId={projectId} goal={goal} isPrimary={isPrimary} onNavigate={onNavigate} onStartSection={onStartSection} />}
+
+      {/*
+        * The Run section's one long-range question, under the path. The rest of
+        * a running company's screen is about this week; this is where an owner
+        * can ask where any of it is going, and read the answer the web built.
+        */}
+      {goal === "run_company" && !moneyStep && <WhatWouldItTake projectId={projectId} />}
 
       {/* The next step stays first; Nova's welcome waits under the path until setup is done or skipped. */}
       {welcome && <NovaWelcomeCard onOpen={(m) => onOpenNova!(m)} onSkip={() => completeOnboarding.mutate()} skipping={completeOnboarding.isPending} />}

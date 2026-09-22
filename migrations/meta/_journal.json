@@ -330,6 +330,13 @@
       "when": 1789858549337,
       "tag": "0046_anonymous_artifact_reports",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1790084472933,
+      "tag": "0047_what_would_it_take",
+      "breakpoints": true
     }
   ]
 }

@@ -163,6 +163,8 @@ CATCHING THE PROJECT UP. Builders work ahead: they ship features without writing
 - The brief, scope and tech stack: update_project / update_scope only where the code shows the project has moved — a new direction, a feature now core, a stack that changed, a live URL. Rewrite the field in the builder's voice; don't pad it.
 - The core loops follow the product. When the code shows the product has changed direction — a loop now works differently, a new cycle has become central, an old one is gone — change them: update_loop to rewrite one (or change its kind), create_loop for a kind that isn't written, retire_loop for a loop the product no longer runs (never the last of its kind; rewrite that instead). Change a loop only on clear evidence in the code, say what changed in the steps, and never propose anything the builder REMOVED.
 - THE BOARD MUST NOT CONTRADICT THE CODE OR THE BUILDER'S STANDING NOTES. When a task or loop build step is for something the code has removed or the standing notes say is retired, propose retire_task for it with the reason (for a whole loop, retire_loop). When a task is marked done but the code has no trace of it, propose update_task back to "todo" and list it under taskReconciliation.notStarted. These wait for the builder's OK, so propose them whenever the evidence is clear — naming the drift in a risk or note without these operations is a failed audit. Never retire a path milestone (a backbone: task).
+- TAKING WORK AWAY NEEDS EVIDENCE OF REMOVAL, NOT AN ABSENCE OF EVIDENCE. This digest is a view of the repository: lists are clipped, most files appear as excerpts, and the archive may predate work finished this week. So "I cannot see it" is a fact about the digest, not about the product. Only propose retire_task, retire_loop, or reopening a card the builder marked done when one of these is true, and say which in the reason: the STANDING NOTES say it is retired; a commit in WHAT CHANGED shows it deleted; or the code shows the thing that replaced it, cited by path. Otherwise leave it alone — and if it matters, put it in "questions" for the builder rather than in operations. A builder who has shipped a wedge into the product and is told to cancel it has been failed by the audit, however tidy the board looks afterwards.
+- WHEN THE CODE IS AHEAD OF THE PLAN, MOVE THE PLAN. That is the ordinary case, not a problem: builders build faster than they write things down. A whole cycle working in the code that no written loop describes is a create_loop with its steps, the built ones marked done — never a reason to retire the loop that is written. A feature the brief doesn't mention is an update_project and a create_task with "status": "done". A milestone the code has reached is a complete_path_milestone. The plan is a description of the product, and when they disagree and the code is real, the description is what changes.
 - SECURITY BEFORE RELEASE. SECURITY CHECKS lists what the deterministic checklist found missing or partial. "securityPlan" is up to 8 fixes in priority order for THIS codebase: every release blocker (a missing high-severity check) first, then the rest that matter, then anything the checks can't see that the code shows (an unguarded admin route, a secret logged, a token in a URL) — each with the exact file and package to change. Never list a check that passed. For each release blocker also propose ONE create_task titled "Security: <what to fix>" with "priority": "high" and "tags": ["security"], unless the board already has it.
 - What's next: create_task for real gaps in the direction the builder is heading (at most 10), update_task where a task's scope changed. Milestones and roadmap phases only where they're plainly out of date.
 - A note that names a problem with no operation for it is a failed audit. If catchUpNote says the direction needs reconciling — a loop that contradicts THE BUILDER'S STANDING NOTES, two loops that are the same loop (see POSSIBLE DUPLICATE LOOPS), a brief that describes a product the code has moved away from — operations must contain the edits that reconcile it: update_loop to rewrite, retire_loop to drop a duplicate or a dead loop, update_project for the brief.
@@ -495,6 +497,17 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
     rejectedLoops: project.rejectedLoops ?? [],
     pathDone: new Set(board.filter((t) => t.status === "done").map((t) => backboneIdOf(t.tags)).filter(Boolean) as string[]),
     declined,
+    /*
+     * Did this audit see the whole codebase?
+     *
+     * The archive can be cut to a budget, and files can be skipped for being
+     * large or binary. Either way the digest is a view, and a view is a poor
+     * basis for telling somebody to cancel their work — see the removal rule
+     * in tidyCatchUp. Half the files read is generous rather than strict: an
+     * audit that saw most of the repository can still be wrong about the part
+     * it didn't, so anything that takes work away waits for a full reading.
+     */
+    partialView: snapshot.truncated || digest.signals.readCount < digest.signals.fileCount,
   });
   (findings as any).catchUp = {
     note: clipToSentence(str(parsed.catchUpNote, 2000), 900),

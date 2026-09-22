@@ -33,23 +33,33 @@ export interface CompanyView {
   me: { userId: string; role: CompanyRole; permissions: CompanyPermission[]; powers: CompanyPermission[] };
 }
 
+/*
+ * Running the business first, because that is what a company is here to do,
+ * and Simulations directly under Team, because a season is something you run
+ * *for* your people: you pick who plays from the same place you manage them.
+ * It opened on training seasons, which put the game in front of the work.
+ */
 const TABS = [
-  { id: "training", label: "Training seasons" },
+  { id: "run", label: "Run the business" },
+  { id: "team", label: "Team" },
+  { id: "training", label: "Simulations" },
   { id: "talent", label: "Talent" },
   { id: "challenges", label: "Challenges" },
   { id: "scouting", label: "Scouting" },
-  { id: "run", label: "Run the business" },
   { id: "posts", label: "Posts" },
-  { id: "team", label: "Team" },
   { id: "admin", label: "Admin" },
 ] as const;
+
+/** Links written before the tabs were renamed, so a bookmark or an email still lands. */
+const TAB_ALIASES: Record<string, string> = { simulations: "training", seasons: "training", business: "run" };
 
 export default function CompanyPage() {
   const { id } = useParams<{ id: string }>();
   const [, navigate] = useLocation();
   const search = useSearch();
   const initial = new URLSearchParams(search).get("tab");
-  const tab = TABS.some((t) => t.id === initial) ? initial! : "training";
+  const asked = initial ? TAB_ALIASES[initial] ?? initial : null;
+  const tab = TABS.some((t) => t.id === asked) ? asked! : "run";
 
   const { data, isLoading, isError } = useQuery<CompanyView>({ queryKey: [`/api/companies/${id}`] });
 

@@ -3026,6 +3026,38 @@ export const recurringJobRuns = pgTable("recurring_job_runs", {
 }));
 
 /**
+ * One "What would it take?" roadmap: a company's route from where it is to
+ * $1m, $100m, $1bn or $50bn a year.
+ *
+ * Every run is kept, not just the latest. The point of the feature is that a
+ * company runs it again in six months and sees whether the gap moved, and that
+ * comparison is only possible because each row carries `grounding` — the
+ * revenue, the week and the check-in count the roadmap was built from. A row
+ * that stored only the answer would leave "is this better than last time?"
+ * unanswerable, which is the question that makes it worth coming back to.
+ *
+ * `generated_at` is a zoneless timestamp holding UTC, written from JS.
+ */
+export const whatWouldItTakeRoadmaps = pgTable("what_would_it_take_roadmaps", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  /** One of shared/what-would-it-take.ts's target ids: m1, m100, b1, b50. */
+  target: text("target").notNull(),
+  /** The numbers it was built from (WwitGrounding). */
+  grounding: jsonb("grounding").notNull(),
+  /** The roadmap itself (WwitRoadmapBody), plus the computed gap. */
+  roadmap: jsonb("roadmap").notNull(),
+  /** Kept for the comparison view, so "how big was the gap then" needs no re-derivation. */
+  annualRevenue: real("annual_revenue"),
+  /** Who ran it. Set null if their account goes; the company keeps its roadmap. */
+  generatedBy: varchar("generated_by").references(() => users.id, { onDelete: "set null" }),
+  generatedAt: timestamp("generated_at").notNull(),
+}, (t) => ({
+  /** Every read is "this project's runs for this target, newest first". */
+  byTarget: index("wwit_project_target_idx").on(t.projectId, t.target, t.generatedAt),
+}));
+
+/**
  * What a player has typed and not yet put forward.
  *
  * Kept apart from submissions on purpose. A submission is a decision — against
