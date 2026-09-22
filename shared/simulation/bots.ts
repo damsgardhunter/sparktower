@@ -446,8 +446,24 @@ export function botCapacity(input: { seed: string; company: Company; step?: numb
   const load = room > 0 ? held / room : 1;
 
   if (load < 0.5) {
-    // Mostly idle: trim, gently.
-    return snap(built * (1 - between(`${seed}:trim`, 0, 0.1)), step, min, max, built);
+    /*
+     * Mostly idle — and idle room is not free. A company serving a third of
+     * what it built pays every year to keep the rest ready, so trimming five
+     * per cent of it is not an operations decision, it is a shrug: the seat
+     * that is supposed to hold the company's costs down watched a quarter of
+     * a million pounds a year go on empty room and gave back a rounding
+     * error.
+     *
+     * So it gives back what it cannot foresee using, down to half as much
+     * again as it serves now, and never more than half the plant in one year
+     * — room sold back goes at a loss, and a good year would have to buy it
+     * again. A company that has not opened yet is left alone: nought
+     * customers is not an empty plant, it is a plant waiting for its first
+     * year.
+     */
+    if (held <= 0) return snap(built, step, min, max, built);
+    const keep = Math.max(held * 1.5, built * 0.5);
+    return snap(Math.min(built, keep), step, min, max, built);
   }
   if (load < 0.85) {
     // Comfortable: hold, or edge up. Never a cut on a busy operation.

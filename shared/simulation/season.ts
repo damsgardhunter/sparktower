@@ -133,6 +133,14 @@ export function startingCompany(input: {
 
   const market = niche.segments.reduce((sum, s) => sum + s.size, 0);
 
+  /*
+   * The one region the company opens in, chosen before the plant is sized —
+   * because the plant is sized against it. See `cities` below for why it is
+   * this one.
+   */
+  const home = [...niche.cities].sort((a, b) => a.entryCost - b.entryCost).find((c) => c.weight >= 0.08)
+    ?? [...niche.cities].sort((a, b) => b.weight - a.weight)[0];
+
   return {
     id,
     name,
@@ -183,12 +191,22 @@ export function startingCompany(input: {
      * before anyone had made a decision, and it made the operations seat's
      * first job undoing a mistake it did not make.
      *
-     * A percent and a half of the market is room to be surprised by a good
-     * year without paying for a fantasy. Building more is the operations
-     * seat's call, and the forecast on the desk is there to make it.
+     * And sized against the region it opens in, not the whole market.
+     *
+     * A percent and a half of the *market* was still a fantasy, because a new
+     * company sells in one region: a dating app opened in a region holding a
+     * twelfth of the country with room for a sixtieth of it, and paid to keep
+     * two thirds of that room empty from its first year — before anybody had
+     * made a decision, and with no lever the chief executive could reach.
+     *
+     * A tenth of the region it actually sells in is about half as much again
+     * as a good first year there, which is room to be surprised without paying
+     * for a fantasy — and still enough plant to cover the salary bill in the
+     * markets where one customer is worth a great deal. Building more is the operations seat's call, and
+     * the forecast on the desk is there to make it.
      */
     capacity: Math.min(
-      Math.round(market * 0.015),
+      Math.round(market * home.weight * 0.1),
       Math.round(9_000_000 / Math.max(1, opening.referencePrice)),
     ),
     unitCost: niche.baseUnitCost,
@@ -210,10 +228,7 @@ export function startingCompany(input: {
      * could find, in a game where being found is the first problem. So the
      * home is the cheapest region that is still a real place to sell.
      */
-    cities: [(
-      [...niche.cities].sort((a, b) => a.entryCost - b.entryCost).find((c) => c.weight >= 0.08)
-      ?? [...niche.cities].sort((a, b) => b.weight - a.weight)[0]
-    )?.id].filter(Boolean) as string[],
+    cities: [home?.id].filter(Boolean) as string[],
     founderShare: 1,
   };
 }

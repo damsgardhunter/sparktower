@@ -311,13 +311,23 @@ describe("an operations bot's capacity", () => {
     expect(botCapacity({ seed: "x", company: lapsing, step: 10_000 })).toBeGreaterThan(botCapacity({ seed: "x", company: lasting, step: 10_000 }));
   });
 
-  it("trims only a mostly idle company, and gently", () => {
+  it("gives back room a mostly idle company is paying to keep empty", () => {
+    /*
+     * It used to trim up to a tenth and no more, which on a plant four fifths
+     * empty is a shrug: the seat holding the company's costs down watched a
+     * quarter of a million a year go on room nobody used.
+     */
     const idle = company({ capacity: 500_000, customers: { swipers: 100_000 } as any, assets: [] });
     for (let i = 0; i < 50; i++) {
       const v = botCapacity({ seed: `i${i}`, company: idle, step: 10_000 });
-      expect(v).toBeLessThanOrEqual(500_000);
-      expect(v).toBeGreaterThanOrEqual(450_000);
+      expect(v, "half the plant is the most it will give back in one year").toBe(250_000);
     }
+    // Still room to grow into: half as much again as it serves now, at least.
+    const lopsided = company({ capacity: 500_000, customers: { swipers: 40_000 } as any, assets: [] });
+    expect(botCapacity({ seed: "x", company: lopsided, step: 10_000 })).toBe(250_000);
+    // And a company that has not opened yet keeps what it was given.
+    const unopened = company({ capacity: 90_000, customers: {} as any, assets: [] });
+    expect(botCapacity({ seed: "x", company: unopened, step: 10_000 })).toBe(90_000);
   });
 });
 

@@ -1495,7 +1495,20 @@ function Field({ field, value, error, onChange, cities, isNew, listPrice }: {
         <Label className="text-sm font-medium">{field.label}{badge}</Label>
         <p className="text-xs text-muted-foreground mt-0.5 mb-2">{field.help}</p>
         {(field.options?.length ?? 0) === 0 && (
-          <p className="text-xs text-muted-foreground">Nothing to choose here — every seat is filled.</p>
+          /*
+           * Why there is nothing to choose, in this lever's own words. Every
+           * empty choice used to say "every seat is filled" — which is true of
+           * bringing a seat back and nonsense under "Answer the shock", where
+           * it read as though the game had lost track of itself.
+           */
+          <p className="text-xs text-muted-foreground">
+            {field.id === "rehire" ? "Nothing to choose here — every seat is filled."
+              : field.id === "shockAnswer" ? "Nothing happened this year that needs an answer."
+                : field.id === "overrule" ? "Nothing to overrule — every seat's own decision stands."
+                  : field.id === "replaceSeat" ? "Nobody to replace — the table is as you want it."
+                    : field.id === "deals" ? "No offers on the table this year."
+                      : "Nothing to choose here this year."}
+          </p>
         )}
         <div className="grid grid-cols-2 gap-2">
           {field.options?.map((o) => (
