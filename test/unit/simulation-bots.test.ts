@@ -11,9 +11,10 @@
  */
 import { describe, it, expect } from "vitest";
 import {
-  BOT_FILL_AFTER_SECONDS, BOT_JITTER, botDecision, botDisplayName, botIdentity,
+  BOT_FILL_AFTER_SECONDS, BOT_JITTER, botAmbition, botBids, botDecision, botDisplayName, botIdentity,
   botsForVenture, botsNeeded, decisionSeed, jitter,
 } from "@shared/simulation/bots";
+import type { Listing } from "@shared/simulation/assets";
 import { LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision } from "@shared/simulation/levers";
 import { nextPhase } from "@shared/simulation/lobby";
 import { ROLES } from "@shared/simulation/types";
@@ -270,5 +271,105 @@ describe("what a seat is allowed to file", () => {
       const clean = cleanDecision(role, d);
       expect(clean, `${role} loses something on the way in`).toEqual(d);
     }
+  });
+});
+
+/**
+ * Keeping up.
+ *
+ * A bot carried last year's plan forward and nudged it, which meant a company
+ * that started modestly stayed that size for the whole season while the people
+ * next door grew out of a growing balance. These are the two places that was
+ * decided: what a seat spends, and how much room operations builds.
+ */
+describe("a bot company that is growing", () => {
+  const grown = company({ cash: 60_000_000, capacity: 900_000, customers: { commuters: 800_000 } as any });
+  const small = company({ cash: 6_000_000, capacity: 250_000, customers: { commuters: 100_000 } as any });
+
+  const spend = (c: Company, role: "cmo" | "cto" | "coo", previous?: any) =>
+    Object.entries(botDecision({ ventureId: "v-growth", year: 4, role, company: c, previous }))
+      .filter(([k]) => k.endsWith("Spend"))
+      .reduce((sum, [, v]) => sum + (Number(v) || 0), 0);
+
+  it("spends against the company it has now, not the one it had in year one", () => {
+    for (const role of ["cmo", "cto", "coo"] as const) {
+      // Last year's plan, from when the company was small, carried forward.
+      const lastYear = botDecision({ ventureId: "v-growth", year: 3, role, company: small });
+      expect(spend(grown, role, lastYear), role).toBeGreaterThan(spend(small, role, lastYear) * 2);
+    }
+  });
+
+  it("never commits more than a quarter of the money it could raise", () => {
+    const tight = company({ cash: 2_000_000, creditLimit: 1_000_000, debt: 1_000_000, customers: { commuters: 500_000 } as any });
+    for (const role of ["cmo", "cto", "coo"] as const) {
+      // The budget, plus at most the rounding each lever's own step adds.
+      expect(spend(tight, role), role).toBeLessThanOrEqual(2_000_000 * 0.25 + 150_000);
+    }
+  });
+
+  it("builds room for the customers it is serving, capped at half again a year", () => {
+    const full = company({ capacity: 400_000, customers: { commuters: 400_000 } as any });
+    const target = Number(botDecision({ ventureId: "v-growth", year: 5, role: "coo", company: full }).capacityTarget);
+    expect(target, "more room than it is already filling").toBeGreaterThan(400_000);
+    expect(target, "and not a factory it cannot pay for").toBeLessThanOrEqual(600_000);
+  });
+
+  it("stops the bleeding when the money is gone, whatever its appetite", () => {
+    const broke = company({ cash: -2_000_000, customers: { commuters: 10_000 } as any });
+    expect(botDecision({ ventureId: "v-growth", year: 6, role: "ceo", company: broke }).focus).toBe("survival");
+  });
+
+  it("gives two companies different appetites, and keeps each one's for the season", () => {
+    expect(botAmbition("v1")).toBe(botAmbition("v1"));
+    expect(botAmbition("v1")).not.toBe(botAmbition("v2"));
+    for (const id of ["v1", "v2", "v3", "v4"]) {
+      expect(botAmbition(id)).toBeGreaterThanOrEqual(0.75);
+      expect(botAmbition(id)).toBeLessThanOrEqual(1.4);
+    }
+  });
+});
+
+/**
+ * The auction. Nothing bid for the things on sale but the teams with a person
+ * in the chief executive's chair, so a bot company never bought anything.
+ */
+describe("what a bot bids for", () => {
+  const listing = (id: string, reserve: number, sellerId: string | null = null): Listing => ({
+    id, reserve, sellerId, blurb: "A thing.",
+    asset: { id: `ast_${id}`, kind: "distribution", name: `Lot ${id}`, effect: { capacity: 50_000 }, bookValue: reserve },
+  });
+  const listings = [listing("a", 1_000_000), listing("b", 2_000_000), listing("c", 3_000_000)];
+  const rich = company({ cash: 40_000_000, creditLimit: 10_000_000, debt: 0 });
+
+  it("bids, which is the whole point", () => {
+    const bids = botBids({ ventureId: "v1", year: 2, company: rich, listings });
+    expect(bids.length).toBeGreaterThan(0);
+    for (const bid of bids) {
+      const lot = listings.find((l) => l.id === bid.listingId)!;
+      expect(bid.amount, "over the reserve, or it buys nothing").toBeGreaterThanOrEqual(lot.reserve);
+      expect(bid.amount, "and not a number nobody could be outbid on").toBeLessThanOrEqual(lot.reserve * 2);
+    }
+  });
+
+  it("bids for at most two things, and within what it could raise", () => {
+    for (const id of ["v1", "v2", "v3", "v4", "v5"]) {
+      const bids = botBids({ ventureId: id, year: 3, company: rich, listings });
+      expect(bids.length).toBeLessThanOrEqual(2);
+      const total = bids.reduce((sum, b) => sum + b.amount, 0);
+      expect(total).toBeLessThanOrEqual(40_000_000 * 0.6 * 1.4);
+      expect(new Set(bids.map((b) => b.listingId)).size, "never twice for one lot").toBe(bids.length);
+    }
+  });
+
+  it("buys nothing while it is in the red, and nothing it is selling itself", () => {
+    expect(botBids({ ventureId: "v1", year: 2, company: company({ cash: -1 }), listings })).toEqual([]);
+    const own = [listing("mine", 1_000_000, "v1")];
+    expect(botBids({ ventureId: "v1", year: 2, company: rich, listings: own })).toEqual([]);
+  });
+
+  it("bids the same numbers on a re-run, and different ones from the company next door", () => {
+    const args = { year: 2, company: rich, listings };
+    expect(botBids({ ventureId: "v1", ...args })).toEqual(botBids({ ventureId: "v1", ...args }));
+    expect(botBids({ ventureId: "v1", ...args })).not.toEqual(botBids({ ventureId: "v2", ...args }));
   });
 });

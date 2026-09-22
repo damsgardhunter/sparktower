@@ -27,8 +27,8 @@ import { useParams, useLocation } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CompanyProfile } from "@/components/sim/company-profile";
-import { NOVA_GRADIENT_CSS } from "@shared/backing";
-import { Loader2, ArrowLeft, Trophy, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { Loader2, Trophy, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { SimHeader } from "@/components/sim/sim-header";
 
 interface Row {
   id: string; name: string; kind: "player" | "incumbent";
@@ -81,36 +81,29 @@ export default function SimulationStandingsPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8 space-y-4">
-      <div className="rounded-2xl p-[2px]" style={{ backgroundImage: NOVA_GRADIENT_CSS }}>
-        <div className="rounded-[calc(1rem-1px)] bg-background p-6">
-          <button onClick={() => navigate(`/simulation/${id}`)} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 mb-2" data-testid="button-back-desk">
-            <ArrowLeft className="h-3 w-3" /> Back to your desk
-          </button>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <Trophy className="h-5 w-5 text-primary" /> The market
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            {data.status === "finished"
-              ? `The season is over. Fourteen years, and this is where it ended.`
-              : `Year ${data.year} of ${data.totalYears}. Everyone in this market, including the companies that were here first.`}
-          </p>
-          {you && (
-            <>
-              <p className="text-sm mt-3" data-testid="text-your-rank">
-                <span className="text-muted-foreground">You are </span>
-                <span className="font-semibold">#{you.rank} of {data.rows.length}</span>
-                <span className="text-muted-foreground">, holding {(you.share * 100).toFixed(1)}% of the market.</span>
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                The table is ordered by what each side's owners hold — {compact(you.founderValue)} of yours.
-                A bigger company you own less of can be worth less than a smaller one you own all of.
-              </p>
-            </>
-          )}
-        </div>
-      </div>
+      {/* Titled "The market" before — copied from the market page; the desk has always called this Standings. */}
+      <SimHeader icon={Trophy} title="Standings" onBack={() => navigate(`/simulation/${id}`)}>
+        <p className="text-sm text-muted-foreground mt-1">
+          {data.status === "finished"
+            ? `The season is over. Fourteen years, and this is where it ended.`
+            : `Year ${data.year} of ${data.totalYears}. Everyone in this market, including the companies that were here first.`}
+        </p>
+        {you && (
+          <>
+            <p className="text-sm mt-3" data-testid="text-your-rank">
+              <span className="text-muted-foreground">You are </span>
+              <span className="font-semibold">#{you.rank} of {data.rows.length}</span>
+              <span className="text-muted-foreground">, holding {(you.share * 100).toFixed(1)}% of the market.</span>
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              The table is ordered by what each side's owners hold — {compact(you.founderValue)} of yours.
+              A bigger company you own less of can be worth less than a smaller one you own all of.
+            </p>
+          </>
+        )}
+      </SimHeader>
 
-      <Card>
+      <Card className="rounded-2xl nova-ring-soft">
         <CardContent className="p-0">
           <div className="divide-y divide-border">
             {data.rows.map((row) => (
@@ -170,7 +163,7 @@ export default function SimulationStandingsPage() {
       </Card>
 
       {data.history.length > 0 && (
-        <Card>
+        <Card className="rounded-2xl nova-ring-soft">
           <CardContent className="p-5">
             <h2 className="text-sm font-semibold">Your season so far</h2>
             <p className="text-xs text-muted-foreground mt-0.5 mb-4">

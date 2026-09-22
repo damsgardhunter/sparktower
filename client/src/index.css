@@ -44,7 +44,8 @@
   --chart-3: 42 93% 56%;
   --chart-4: 147 79% 42%;
   --chart-5: 341 75% 51%;
-  --font-sans: 'Space Grotesk', sans-serif;
+  /* Plus Jakarta Sans everywhere: cleaner and friendlier than Space Grotesk, with none of its oddball letterforms. */
+  --font-sans: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
   --font-serif: 'Geist', sans-serif;
   --font-mono: 'Geist Mono', monospace;
   --radius: 0rem;
@@ -646,4 +647,83 @@
   --viz-grid: #2c2c2a;
   --viz-good: #0ca30c;
   --viz-bad: #e66767;
+}
+
+/*
+ * The landing page's headlines: Plus Jakarta Sans at 800.
+ *
+ * The whole app is Jakarta now (--font-sans), 400 for body text. Display text
+ * on the landing page — the hero, section headings, the sign-up panel's
+ * heading, the pull-quote — goes to 800, the family's heaviest weight: the
+ * `font-bold` / `font-black` classes those headings carry would otherwise
+ * leave them at 700, or ask for a 900 Jakarta doesn't have.
+ */
+.landing-type :is(h1, h2, blockquote) {
+  font-weight: 800;
+}
+
+/*
+ * The slogan keeps the typeface it was designed in.
+ *
+ * "The fastest growing startup community." was drawn in Space Grotesk at its
+ * heaviest, gradient rim and glow included, before the site moved to Plus
+ * Jakarta Sans — and it was asked to stay that way. Space Grotesk is still in
+ * the font request. More specific than the `.landing-type` headline rule
+ * above, so it wins over that rule's font and its 800 weight.
+ */
+.landing-type .landing-tagline {
+  font-family: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  font-weight: 900;
+}
+
+/*
+ * Nova surfaces: the gradient outline and glow the project manager is built
+ * from, as classes any card can take — so the look spreads by adding a class,
+ * not by wrapping every card in a padded gradient div.
+ *
+ * The ring is one element: a card-coloured fill clipped to the padding box
+ * over the Nova gradient clipped to the border box, so the gradient shows only
+ * in the border and the corners stay round. The fill is the theme's own card
+ * colour, so it is right in dark mode without a second rule.
+ */
+.nova-ring {
+  border: 1.5px solid transparent;
+  background:
+    linear-gradient(hsl(var(--card)), hsl(var(--card))) padding-box,
+    linear-gradient(90deg, #4ade80, #10b981, #a855f7) border-box;
+}
+/* The same ring on a page-coloured surface (a header that sits on the page, not a card). */
+.nova-ring-page {
+  border: 1.5px solid transparent;
+  background:
+    linear-gradient(hsl(var(--background)), hsl(var(--background))) padding-box,
+    linear-gradient(90deg, #4ade80, #10b981, #a855f7) border-box;
+}
+/* For the one or two things on a screen that should draw the eye: the ring, lit. */
+.nova-glow {
+  box-shadow:
+    0 0 0 1px rgb(16 185 129 / 0.08),
+    -8px 6px 24px -10px rgb(74 222 128 / 0.45),
+    8px 6px 24px -10px rgb(168 85 247 / 0.45);
+}
+/* A quieter ring for secondary cards: the gradient at a third of its strength. */
+.nova-ring-soft {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(hsl(var(--card)), hsl(var(--card))) padding-box,
+    linear-gradient(90deg, rgb(74 222 128 / 0.45), rgb(16 185 129 / 0.45), rgb(168 85 247 / 0.45)) border-box;
+}
+/* The icon square the manager's rail uses for the active tab. */
+.nova-chip {
+  background-image: linear-gradient(90deg, #4ade80, #10b981, #a855f7);
+  color: #fff;
+  box-shadow: 0 4px 14px -4px rgb(168 85 247 / 0.5);
+}
+/* Something to press that goes somewhere: lights up on hover. (A plain-CSS class can't take Tailwind's hover: variant.) */
+.nova-hover-glow { transition: box-shadow 0.2s ease, transform 0.2s ease; }
+.nova-hover-glow:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    -8px 6px 24px -10px rgb(74 222 128 / 0.45),
+    8px 6px 24px -10px rgb(168 85 247 / 0.45);
 }

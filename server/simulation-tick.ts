@@ -34,7 +34,7 @@ import {
   buildWorld, decisionsForYear, economyFor, absenceNote, tickDueAt, seasonOver, DAY_MS,
 } from "@shared/simulation/season";
 import { advanceVenture } from "./simulation-routes";
-import { fileBotDecisions, fillWaitingLobbies } from "./simulation-bots";
+import { fileBotBids, fileBotDecisions, fillWaitingLobbies } from "./simulation-bots";
 import { marketListings, resolveBids, biddableFunds, type Bid, type Listing } from "@shared/simulation/assets";
 import { applyRecovery, reviewCovenant, type RecoveryKind } from "@shared/simulation/recovery";
 import { challengeFor, checkChallenge, applyReward, discretionarySpend, type Challenge } from "@shared/simulation/challenges";
@@ -1066,6 +1066,21 @@ async function settleMarket(input: {
   ];
 
   if (listings.length > 0) {
+    /*
+     * The bot-run companies bid last, and only now: a sealed auction means
+     * nobody sees anybody else's number, and the bots are held to that too —
+     * their bids are seeded on the venture and the year, not on what is already
+     * in the table. A human's bid for the same lot is never replaced.
+     *
+     * Inside the guard, because with nothing on the market there is nothing to
+     * bid on, and an empty auction should cost no work at all.
+     */
+    await fileBotBids({
+      companies: world.companies.filter((c) => c.kind === "player").map((c) => ({ id: c.id, company: c })),
+      listings,
+      year,
+    });
+
     const bidRows = await db
       .select()
       .from(simBids)

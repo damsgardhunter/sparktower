@@ -66,7 +66,7 @@ export default function LandingPage() {
   };
 
   return (
-    <div className="flex flex-col min-h-screen bg-white text-foreground">
+    <div className="landing-type flex flex-col min-h-screen bg-white text-foreground">
       {/*
         * The same header a signed-in person gets (App.tsx) — Nova's gradient
         * with the logo hanging under it in a semicircle — scaled up, because
@@ -428,7 +428,7 @@ function TaglineBanner() {
 
   return (
     <section className="relative bg-white px-4 pt-6 pb-14 sm:pb-20" data-testid="section-tagline">
-      <h2 className="relative mx-auto max-w-4xl text-center font-black tracking-tight leading-[1.05] text-[2rem] sm:text-5xl md:text-[3.5rem]">
+      <h2 className="landing-tagline relative mx-auto max-w-4xl text-center font-black tracking-tight leading-[1.05] text-[2rem] sm:text-5xl md:text-[3.5rem]">
         {/* The glow: the same words, fattened and blurred, sitting underneath. */}
         <span aria-hidden className="absolute inset-0 select-none" style={{ ...gradientText, WebkitTextStroke: "6px transparent", filter: "blur(18px)", opacity: 0.45 }}>
           {TAGLINE}

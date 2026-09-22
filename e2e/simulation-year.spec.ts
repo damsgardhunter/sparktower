@@ -159,13 +159,25 @@ test("a year is filed, resolves overnight, and comes back as something to read",
    * yesterday has to open tomorrow with the result on it, above a fresh form.
    */
   await cmo.reload();
+  // The desk opens on Decisions; Past says it has something new until it is opened.
+  await expect(cmo.getByTestId("dot-past-new")).toBeVisible({ timeout: 40_000 });
+  await cmo.getByTestId("tab-past").click();
+  await expect(cmo.getByTestId("dot-past-new")).toHaveCount(0);
   await expect(cmo.getByTestId("card-last-year")).toBeVisible({ timeout: 40_000 });
   await expect(cmo.getByTestId("text-last-year")).toHaveText("Year 1");
   await expect(cmo.getByTestId("text-last-rank")).toContainText("in the market");
   await expect(cmo.getByTestId("card-last-year").getByText("Revenue", { exact: true })).toBeVisible();
   await expect(cmo.getByTestId("card-last-year").getByText("Turned away", { exact: true }), "including the number nobody wants to see").toBeVisible();
+  // The market and the notes sit folded under the headline numbers, one click away.
+  const details = cmo.getByTestId("button-year-details");
+  if (await details.count()) {
+    await expect(details).toHaveAttribute("aria-expanded", "false");
+    await details.click();
+    await expect(details).toHaveAttribute("aria-expanded", "true");
+  }
 
   // A new year is a new decision, not yesterday's still sitting there filed.
+  await cmo.getByTestId("tab-decisions").click();
   await expect(cmo.getByTestId("badge-filed"), "last year's filing does not carry over").toHaveCount(0);
   await expect(cmo.getByTestId("button-file-decision")).toBeEnabled();
   await expect(cmo.getByTestId("text-company-name")).toContainText("Longwave");
@@ -182,6 +194,8 @@ test("a year is filed, resolves overnight, and comes back as something to read",
   const cfo = await people[2].context.newPage();
   await cfo.goto(`/simulation/${ventureId}`);
   await cfo.getByTestId("btn-skip-onboarding").click({ timeout: 5_000 }).catch(() => {});
+  await expect(cfo.getByTestId("text-company-name")).toBeVisible({ timeout: 40_000 });
+  await cfo.getByTestId("tab-past").click();
   await expect(cfo.getByTestId("card-last-year")).toBeVisible({ timeout: 40_000 });
   await expect(cfo.getByText(/No decisions came in from/i).first()).toBeVisible();
   await expect(cfo.getByTestId("card-last-year")).not.toContainText(/nobody filed/i);
@@ -192,10 +206,15 @@ test("a year is filed, resolves overnight, and comes back as something to read",
    * argument between marketing and operations about how many people will
    * turn up is one the whole table has.
    */
+  // What each segment weighs is the market as it stands, under Past; the forecast is Future.
+  await expect(cfo.locator('[data-testid^="criteria-"]').first()).toContainText(/price \d+%/);
+  await cfo.getByTestId("tab-future").click();
+  await expect(cfo).toHaveURL(/\?tab=future/);
   await expect(cfo.getByTestId("card-forecast")).toBeVisible();
   await expect(cfo.getByTestId("text-forecast-range")).toContainText(/between .* and .* listeners/i);
   await expect(cfo.getByTestId("text-capacity-verdict")).toBeVisible();
-  await expect(cfo.locator('[data-testid^="criteria-"]').first()).toContainText(/price \d+%/);
+  await expect(cfo.getByTestId("card-coming")).toBeVisible();
+  await cfo.getByTestId("tab-past").click();
 
   /*
    * And the whole year, one tap from the summary. This is the screen a team
@@ -218,8 +237,10 @@ test("a year is filed, resolves overnight, and comes back as something to read",
       await cfo.getByTestId(card).screenshot({ path: `${process.env.E2E_SCREENSHOTS}/${card}.png` });
     }
     await cfo.getByTestId("button-back").click();
+    await cfo.getByTestId("tab-future").click();
     await expect(cfo.getByTestId("card-forecast")).toBeVisible({ timeout: 30_000 });
     await cfo.getByTestId("card-forecast").screenshot({ path: `${process.env.E2E_SCREENSHOTS}/card-forecast.png` });
+    await cfo.getByTestId("tab-past").click();
     await cfo.locator('[data-testid^="criteria-"]').first().locator("..").screenshot({ path: `${process.env.E2E_SCREENSHOTS}/criteria.png` });
   }
 
