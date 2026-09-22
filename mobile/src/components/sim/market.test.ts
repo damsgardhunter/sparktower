@@ -11,7 +11,7 @@
  */
 import { describe, it, expect } from "vitest";
 import {
-  bidsOutstanding, canSell, effectLines, lifePill, lifeRead, marketNotesRead,
+  bidsOutstanding, canBid, canSell, effectLines, lifePill, lifeRead, marketNotesRead,
   saleRead, validateBid, validateReserve, type MarketListing,
 } from "./market";
 import type { ReportMarketNote } from "./desk";
@@ -124,6 +124,14 @@ describe("what is already promised", () => {
   it("keeps quiet when nothing is bid", () => {
     expect(bidsOutstanding([listing("a", null)], 1_000).line).toBeNull();
     expect(bidsOutstanding(undefined, 0)).toMatchObject({ count: 0, total: 0 });
+  });
+});
+
+describe("who may bid", () => {
+  it("is the chief executive alone, matching the route's 403", () => {
+    expect(canBid("ceo")).toBe(true);
+    for (const role of ["cfo", "cmo", "cto", "coo"]) expect(canBid(role), role).toBe(false);
+    expect(canBid(null)).toBe(false);
   });
 });
 

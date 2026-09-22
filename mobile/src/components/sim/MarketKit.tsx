@@ -124,7 +124,7 @@ export function EffectChips({ effect }: { effect: MarketListing["effect"] }) {
  * assume the screen is simply failing to show them the leaderboard.
  */
 export function ListingCard({
-  listing, open, draft, check, onOpen, onDraft, onBid, onWithdraw, busy,
+  listing, open, draft, check, onOpen, onDraft, onBid, onWithdraw, busy, canBid = true,
 }: {
   listing: MarketListing;
   open: boolean;
@@ -135,6 +135,8 @@ export function ListingCard({
   onBid: () => void;
   onWithdraw: () => void;
   busy: boolean;
+  /** Whether this seat may file the bid. Everyone sees it; the chief executive files it. */
+  canBid?: boolean;
 }) {
   const bid = listing.yourBid;
   return (
@@ -180,7 +182,9 @@ export function ListingCard({
         </View>
         {bid != null ? (
           <View style={{ alignItems: "flex-end", gap: 1 }}>
-            <Text style={{ color: colors.primary, fontSize: 10, fontFamily: fontFamily.semibold, letterSpacing: 0.4 }}>YOUR BID</Text>
+            <Text style={{ color: colors.primary, fontSize: 10, fontFamily: fontFamily.semibold, letterSpacing: 0.4 }}>
+              {canBid ? "YOUR BID" : "THE BID"}
+            </Text>
             <Text testID={`market-yourbid-${listing.id}`} style={{ color: colors.primary, fontSize: font.lg, fontFamily: fontFamily.bold, fontVariant: ["tabular-nums"] }}>
               {exact(bid)}
             </Text>
@@ -231,7 +235,7 @@ export function ListingCard({
             ) : null}
           </View>
         </View>
-      ) : (
+      ) : canBid ? (
         <Btn
           label={bid != null ? "Change or withdraw your bid" : "Bid on this"}
           icon={bid != null ? "create-outline" : "hammer-outline"}
@@ -240,6 +244,16 @@ export function ListingCard({
           onPress={onOpen}
           testID={`market-open-${listing.id}`}
         />
+      ) : (
+        /* Not your call, and not a secret: the bid is the company's. */
+        <Text
+          testID={`market-watching-${listing.id}`}
+          style={{ color: colors.textTertiary, fontSize: font.xs, lineHeight: 16, fontFamily: fontFamily.regular }}
+        >
+          {bid != null
+            ? "Your chief executive has bid on this. Argue for it before the year resolves."
+            : "Nothing bid on this yet. Bidding is the chief executive's call."}
+        </Text>
       )}
     </View>
   );

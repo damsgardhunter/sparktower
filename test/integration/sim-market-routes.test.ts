@@ -138,10 +138,11 @@ describe("a sealed bid", () => {
     const listing = marketListings({ seasonId: first.seasonId, year: 1, niche })[0];
     await db.insert(simBids).values({ ventureId: second.ventureId, listingId: listing.id, year: 1, amount: 9_000_000 });
 
-    const mine = await first.seat("cfo").agent.post(`/api/sim/ventures/${first.ventureId}/bids`)
+    const mine = await first.seat("ceo").agent.post(`/api/sim/ventures/${first.ventureId}/bids`)
       .send({ listingId: listing.id, amount: 1_250_000 });
     expect(mine.status, JSON.stringify(mine.body)).toBe(200);
 
+    // Read by a seat that did not file it: the bid is the company's.
     const market = await first.seat("cfo").agent.get(`/api/sim/ventures/${first.ventureId}/market`);
     const row = market.body.listings.find((l: any) => l.id === listing.id);
     expect(row.yourBid).toBe(1_250_000);
@@ -150,6 +151,38 @@ describe("a sealed bid", () => {
     const body = JSON.stringify(market.body);
     expect(body).not.toContain("9000000");
     expect(body).not.toMatch(/bidder|highest|competing|otherBids/i);
+  }, 180_000);
+
+  it("takes a bid from the chief executive, and from nobody else", async () => {
+    /*
+     * A bid is the company's: one per listing per year, sealed, spending
+     * money the whole table is counting on. Every seat could file, raise and
+     * withdraw it, so five people could talk each other's bids over the top of
+     * one another and the money left the company anyway. The call belongs in
+     * the chair that answers for it — the same rule as selling the business.
+     */
+    const app = await getTestApp();
+    const { ventureId, seasonId, seat } = await runningCompany(app);
+    const listing = marketListings({ seasonId, year: 1, niche })[0];
+
+    for (const role of ["cfo", "cmo", "cto", "coo"] as const) {
+      const refused = await seat(role).agent.post(`/api/sim/ventures/${ventureId}/bids`)
+        .send({ listingId: listing.id, amount: listing.reserve });
+      expect(refused.status, `${role} was allowed to bid`).toBe(403);
+      expect(refused.body.code).toBe("not_yours");
+    }
+
+    const filed = await seat("ceo").agent.post(`/api/sim/ventures/${ventureId}/bids`)
+      .send({ listingId: listing.id, amount: listing.reserve });
+    expect(filed.status, JSON.stringify(filed.body)).toBe(200);
+
+    // And the table can see what was bid, without being able to change it.
+    const watching = await seat("coo").agent.get(`/api/sim/ventures/${ventureId}/market`);
+    expect(watching.body.listings.find((l: any) => l.id === listing.id).yourBid).toBe(listing.reserve);
+    const withdrawn = await seat("coo").agent.delete(`/api/sim/ventures/${ventureId}/bids/${listing.id}`);
+    expect(withdrawn.status, "a seat that cannot bid withdrew the bid").toBe(403);
+    const still = await seat("cmo").agent.get(`/api/sim/ventures/${ventureId}/market`);
+    expect(still.body.listings.find((l: any) => l.id === listing.id).yourBid).toBe(listing.reserve);
   }, 180_000);
 
   it("lets a team change its mind up to the tick", async () => {

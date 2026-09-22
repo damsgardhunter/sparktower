@@ -206,6 +206,23 @@ export function registerSimulationMarketRoutes(app: Express): void {
    * now would leak that the money had moved, and the money may well be back by
    * the time the year resolves.
    */
+/**
+ * Bidding is the chief executive's call, and the table watches.
+ *
+ * A bid is the company's, not a seat's: one bid per listing per year, sealed,
+ * and it spends money the whole table is counting on. Every seat could place,
+ * raise and withdraw it, which meant five people could talk each other's bids
+ * over the top of one another with no record of who did what — and the money
+ * left the company anyway. So the call sits in the chair that answers for the
+ * company's money, exactly like selling the business and taking a deal, and
+ * everyone else sees the bid and what it would buy (see `GET /market`, where
+ * `yourBid` is the company's bid whoever filed it).
+ */
+const BID_IS_THE_CEOS = {
+  message: "Bidding is the chief executive's call. You can see the bid and what it would buy.",
+  code: "not_yours",
+} as const;
+
   app.post("/api/sim/ventures/:id/bids", isAuthenticated, async (req: any, res) => {
     if (!(await enforceRateLimit(res, req.user.id, "session"))) return;
 
@@ -213,7 +230,8 @@ export function registerSimulationMarketRoutes(app: Express): void {
     if (!ctx) return res.status(404).json({ message: "No such company." });
     if (ctx.over) return res.status(409).json(SEASON_OVER);
     if (yearClosing(ctx.season)) return res.status(409).json(YEAR_CLOSING);
-    const { season, company } = ctx;
+    const { season, company, seat } = ctx;
+    if (seat.role !== "ceo") return res.status(403).json(BID_IS_THE_CEOS);
 
     const listingId = String(req.body?.listingId ?? "");
     const amount = Math.round(Number(req.body?.amount));
@@ -252,6 +270,7 @@ export function registerSimulationMarketRoutes(app: Express): void {
     if (!ctx) return res.status(404).json({ message: "No such company." });
     if (ctx.over) return res.status(409).json(SEASON_OVER);
     if (yearClosing(ctx.season)) return res.status(409).json(YEAR_CLOSING);
+    if (ctx.seat.role !== "ceo") return res.status(403).json(BID_IS_THE_CEOS);
 
     await db.delete(simBids).where(and(
       eq(simBids.ventureId, ctx.company.id),

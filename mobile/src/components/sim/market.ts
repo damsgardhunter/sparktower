@@ -264,6 +264,16 @@ export function bidsOutstanding(listings: MarketListing[] | undefined, funds: nu
 export const canSell = (role: string | null | undefined): boolean => role === "ceo" || role === "cfo";
 
 /**
+ * Who may bid.
+ *
+ * A bid is the company's — one per listing per year, sealed, spending money
+ * the whole table is counting on — so it is filed by the chair that answers
+ * for the company's money. Everyone else sees the bid and what it would buy.
+ * Mirrors the check in server/simulation-market-routes.ts.
+ */
+export const canBid = (role: string | null | undefined): boolean => role === "ceo";
+
+/**
  * Whether a reserve can be set, and whether it is a sensible one.
  *
  * `willingSale` is what the engine says an unforced sale is worth, and it is

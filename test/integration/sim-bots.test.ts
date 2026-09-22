@@ -75,19 +75,20 @@ const seatsIn = (ventureId: string) =>
  * half-filled room becomes the next test's starting position. What's under
  * test here is what happens to a room that waits, so each one gets its own.
  */
-async function roomOfOne(app: any) {
+async function roomOfOne(app: any, id?: string) {
   const one = await player(app);
-  const ventureId = await emptyRoom();
+  const ventureId = await emptyRoom(id);
   // `joinedAt` explicitly, as the join route writes it — see the comment there.
   await db.insert(simSeats).values({ ventureId, userId: one.id, joinedAt: new Date() } as any);
   return { one, ventureId };
 }
 
 /** A room in a season of its own, so nothing else can wander into it. */
-async function emptyRoom(): Promise<string> {
+async function emptyRoom(id?: string): Promise<string> {
   const [season] = await db.insert(simSeasons)
     .values({ nicheId: NICHE, name: `Bots ${Date.now()}-${n}` } as any).returning();
   const [venture] = await db.insert(simVentures).values({
+    ...(id ? { id } : {}),
     seasonId: season.id,
     phase: "filling",
     phaseEndsAt: new Date(Date.now() + 15 * 60_000),
@@ -445,8 +446,19 @@ describe("what the bots bid for", () => {
   ];
 
   /** A full room whose chief executive is a bot. */
-  async function botRunRoom(app: any) {
-    const { one, ventureId } = await roomOfOne(app);
+  /*
+   * A named venture, because what a bot bids is seeded on the venture's id.
+   *
+   * How keen a bot is (`botAmbition`) is drawn from that id, and its offer is
+   * the reserve times that keenness times a draw of its own — so a timid
+   * company bids under the reserve and files nothing, on purpose. With a
+   * random id this test asked "was this company born keen?", and failed about
+   * one run in four. This one is keen, every year.
+   */
+  const KEEN = "9e391d27-2c38-4575-bf9a-b63e6fc9f528";
+
+  async function botRunRoom(app: any, id?: string) {
+    const { one, ventureId } = await roomOfOne(app, id);
     await waitedAMinute(ventureId);
     await fillVentureWithBots(ventureId);
     const bots = (await seatsIn(ventureId)).filter((s) => s.isBot);
@@ -458,7 +470,7 @@ describe("what the bots bid for", () => {
 
   it("puts money on the table for a company whose chief executive is a bot", async () => {
     const app = await getTestApp();
-    const { ventureId } = await botRunRoom(app);
+    const { ventureId } = await botRunRoom(app, KEEN);
 
     const placed = await fileBotBids({ companies: [{ id: ventureId, company: rich(ventureId) }], listings, year: 1 });
     expect(placed, "a bot chair bids").toBeGreaterThan(0);

@@ -50,6 +50,7 @@ interface Holding {
 }
 interface Market {
   year: number;
+  yourRole: string;
   funds: number;
   listings: Listing[];
   holdings: Holding[];
@@ -93,6 +94,8 @@ export default function SimulationMarketPage() {
     return <div className="flex min-h-[60vh] items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>;
   }
 
+  const isCeo = market.yourRole === "ceo";
+
   return (
     <div className="mx-auto max-w-3xl px-4 py-8 space-y-4">
       <SimHeader icon={Store} title="The market" onBack={() => navigate(`/simulation/${id}`)}>
@@ -100,8 +103,14 @@ export default function SimulationMarketPage() {
           Year {market.year}. Bids are sealed — nobody sees anyone else's, including you, until the year resolves.
           The highest offer over the reserve takes it and pays what they bid.
         </p>
+        {!isCeo && (
+          <p className="text-sm mt-3 rounded-lg bg-muted/60 px-3 py-2 text-muted-foreground" data-testid="text-bidding-is-ceos">
+            Bidding is the chief executive's call. You can see what has been bid and what it would buy, and argue for it
+            before the year resolves.
+          </p>
+        )}
         <p className="text-sm mt-3">
-          <span className="text-muted-foreground">You can back bids up to </span>
+          <span className="text-muted-foreground">{isCeo ? "You can back bids up to " : "The company can back bids up to "}</span>
           <span className="font-semibold tabular-nums" data-testid="text-funds">{compact(market.funds)}</span>
           <span className="text-muted-foreground"> — cash plus what is still borrowable.</span>
         </p>
@@ -110,7 +119,7 @@ export default function SimulationMarketPage() {
       {market.listings.length === 0 ? (
         <Card className="rounded-2xl nova-ring-soft"><CardContent className="p-6 text-sm text-muted-foreground">Nothing is for sale this year.</CardContent></Card>
       ) : (
-        market.listings.map((listing) => <ListingCard key={listing.id} listing={listing} ventureId={id} funds={market.funds} />)
+        market.listings.map((listing) => <ListingCard key={listing.id} listing={listing} ventureId={id} funds={market.funds} isCeo={isCeo} />)
       )}
 
       <Card className="rounded-2xl nova-ring-soft">
@@ -145,7 +154,7 @@ export default function SimulationMarketPage() {
   );
 }
 
-function ListingCard({ listing, ventureId, funds }: { listing: Listing; ventureId: string; funds: number }) {
+function ListingCard({ listing, ventureId, funds, isCeo }: { listing: Listing; ventureId: string; funds: number; isCeo: boolean }) {
   const { toast } = useToast();
   const [amount, setAmount] = useState<string>(String(listing.yourBid ?? listing.reserve));
 
@@ -203,29 +212,42 @@ function ListingCard({ listing, ventureId, funds }: { listing: Listing; ventureI
           </span>
         </div>
 
-        <div className="mt-4 flex flex-wrap gap-2 items-center">
-          <Input
-            type="number"
-            inputMode="numeric"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            className="w-40 tabular-nums"
-            data-testid={`input-bid-${listing.id}`}
-          />
-          <Button size="sm" onClick={() => bid.mutate()} disabled={bid.isPending} data-testid={`button-bid-${listing.id}`}>
-            <Gavel className="h-3.5 w-3.5 mr-1.5" />
-            {listing.yourBid !== null ? "Change your bid" : "Bid"}
-          </Button>
-          {listing.yourBid !== null && (
-            <Button size="sm" variant="ghost" onClick={() => withdraw.mutate()} data-testid={`button-withdraw-${listing.id}`}>
-              Withdraw
+        {isCeo && (
+          <div className="mt-4 flex flex-wrap gap-2 items-center">
+            <Input
+              type="number"
+              inputMode="numeric"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              className="w-40 tabular-nums"
+              data-testid={`input-bid-${listing.id}`}
+            />
+            <Button size="sm" onClick={() => bid.mutate()} disabled={bid.isPending} data-testid={`button-bid-${listing.id}`}>
+              <Gavel className="h-3.5 w-3.5 mr-1.5" />
+              {listing.yourBid !== null ? "Change your bid" : "Bid"}
             </Button>
-          )}
-        </div>
+            {listing.yourBid !== null && (
+              <Button size="sm" variant="ghost" onClick={() => withdraw.mutate()} data-testid={`button-withdraw-${listing.id}`}>
+                Withdraw
+              </Button>
+            )}
+          </div>
+        )}
 
+        {/*
+          * The bid is the company's, so every seat sees it — what was offered
+          * and what it would buy — while the chair that answers for the
+          * company's money is the one that files it.
+          */}
         {listing.yourBid !== null && (
           <p className="text-xs text-muted-foreground mt-2" data-testid={`text-your-bid-${listing.id}`}>
-            Your bid: <span className="tabular-nums font-medium text-foreground">{compact(listing.yourBid)}</span>. Sealed until the year resolves.
+            {isCeo ? "Your bid" : "Your chief executive has bid"}:{" "}
+            <span className="tabular-nums font-medium text-foreground">{compact(listing.yourBid)}</span>. Sealed until the year resolves.
+          </p>
+        )}
+        {!isCeo && listing.yourBid === null && (
+          <p className="text-xs text-muted-foreground mt-2" data-testid={`text-no-bid-${listing.id}`}>
+            Nothing bid on this yet.
           </p>
         )}
         {underReserve && <p className="text-xs text-amber-600 mt-1">Under the reserve — this would buy nothing.</p>}

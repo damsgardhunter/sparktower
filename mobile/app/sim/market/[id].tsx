@@ -10,7 +10,7 @@ import { NoticeBanner, useNotice } from "../../../src/components/Sheet";
 import { SimSectionTitle } from "../../../src/components/sim/SimKit";
 import { HoldingCard, ListingCard, MarketBanner, SellingRowView } from "../../../src/components/sim/MarketKit";
 import { ROOM_POLL_MS, useMarket } from "../../../src/components/sim/useSim";
-import { bidsOutstanding, canSell, validateBid, validateReserve, type BidResult } from "../../../src/components/sim/market";
+import { bidsOutstanding, canBid, canSell, validateBid, validateReserve, type BidResult } from "../../../src/components/sim/market";
 import { formatUntil, secondsUntil } from "../../../src/components/sim/desk";
 
 /**
@@ -54,6 +54,7 @@ export default function Market() {
    * own buttons.
    */
   const selling = canSell(data?.yourRole ?? null);
+  const bidding = canBid(data?.yourRole ?? null);
 
   /*
    * One editor open at a time, with the amount held here rather than in the
@@ -231,6 +232,7 @@ export default function Market() {
                     bid.mutate({ listingId: listing.id, amount: Number(amount) });
                   }}
                   onWithdraw={() => withdraw.mutate(listing.id)}
+                  canBid={bidding}
                 />
               );
             })
