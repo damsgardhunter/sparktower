@@ -235,9 +235,36 @@ export async function truncateAll(databaseUrl: string): Promise<void> {
       WHERE schemaname = 'public'
     `);
     if (rows.length === 0) return;
-    await client.query(
-      `TRUNCATE ${rows.map((r) => r.name).join(", ")} RESTART IDENTITY CASCADE`,
-    );
+    const truncate = `TRUNCATE ${rows.map((r) => r.name).join(", ")} RESTART IDENTITY CASCADE`;
+
+    /*
+     * Retried, because the thing it is racing is the product working properly.
+     *
+     * A request answers and then keeps writing: a notification fans out, an
+     * audit line is filed, an analytics event lands, a badge is awarded. Those
+     * are deliberately not awaited — nobody should wait for their bell to be
+     * rung — so a few are still in flight when the next test starts. TRUNCATE
+     * wants an exclusive lock on every table at once, the in-flight write
+     * holds a row lock on one of them and wants another, and Postgres breaks
+     * the tie by killing somebody: "deadlock detected". When it kills the
+     * truncate, the test's `beforeEach` throws and every test in the file
+     * fails at once, nowhere near the code they were checking. It cost a
+     * whole suite run to find that, twice.
+     *
+     * A short wait and another go is enough: the stragglers finish in
+     * milliseconds. Only deadlock and lock-timeout are retried, so a real
+     * failure — a bad statement, the wrong database — still stops immediately.
+     */
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await client.query(truncate);
+        return;
+      } catch (err: any) {
+        const contended = err?.code === "40P01" || err?.code === "55P03";
+        if (!contended || attempt === 4) throw err;
+        await new Promise((r) => setTimeout(r, attempt * 100));
+      }
+    }
   } finally {
     await client.end();
   }
