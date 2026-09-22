@@ -34,8 +34,11 @@ const PATHS = [
   {
     // Run a company — the third path, since funding folded into Systemize.
     goal: "run_company", subcategory: "software", first: null,
-    answer: "Eighteen months of runway buys the second city and the team to run it. The raise is sized to that and to nothing else.",
-    title: "What the money is actually for",
+    // The answer the first milestone asks for, rather than the raise this row
+    // used to describe: the artifact is the answer, so leaving fundraising copy
+    // on a run_company step would publish a page about the wrong thing.
+    answer: "Eleven people, two products and one week that never looks the same twice. The rhythm is Monday the numbers, Wednesday the customers we lost, Friday what shipped.",
+    title: "Where the company stands this week",
   },
 ] as const;
 
