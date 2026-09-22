@@ -371,3 +371,62 @@ export function sanitizeMissing(raw: unknown, isRealFile: (path: string) => bool
     };
   }).filter((b) => b.item);
 }
+
+/**
+ * Claims about what a file does, made about a file nobody opened.
+ *
+ * The absence checker above answers "does this exist". This answers the other
+ * half, and it is the half that produced the worst finding this audit has
+ * given anyone: *"signed-in web / is still feed-first (client/src/pages/home.tsx)"*
+ * — named the file, was wrong about it, and led the report. The page had led
+ * with the path card for a fortnight. The read had never seen it: the digest
+ * excerpts a couple of dozen files out of thousands, and the rest are paths in
+ * a tree. From inside that read there is nothing to distinguish a file it
+ * studied from a file it only knows the name of.
+ *
+ * So where a claim names a file the audit did not read, it says so. The claim
+ * stays — plenty of them are right, and some are drawn from the route list or
+ * the screen inventory, which are real evidence — but a builder gets to see
+ * which judgements came from reading code and which came from a filename.
+ *
+ * Deliberately not applied to the close reads (`capabilities[].detail`, the
+ * loop closures): those are given whole files, and annotating them would be a
+ * lie in the other direction.
+ */
+export function flagUnreadFiles(
+  findings: any,
+  opts: { read: Set<string>; inRepo: Set<string>; skip?: string[] },
+): number {
+  const skip = new Set(opts.skip ?? ["capabilities", "loops", "scan", "security"]);
+  let flagged = 0;
+
+  /** The first file in the sentence that is in the repository and wasn't read. A full path only: a bare name is too often ambiguous to accuse a sentence over. */
+  const unreadIn = (text: string): string | null => {
+    for (const m of text.matchAll(FILE_PATH)) {
+      if (opts.inRepo.has(m[1]) && !opts.read.has(m[1])) return m[1];
+    }
+    return null;
+  };
+
+  const walk = (node: any, key?: string): any => {
+    if (typeof node === "string") {
+      if (!key || CLAIM_FIELDS.includes(key) || key === "__item") {
+        const unread = unreadIn(node);
+        if (unread && !node.includes("was not read by this audit")) {
+          flagged += 1;
+          return `${node} [${unread} was not read by this audit — only its path was in view. Check the file before acting on this.]`;
+        }
+      }
+      return node;
+    }
+    if (Array.isArray(node)) return node.map((v) => walk(v, typeof v === "string" ? "__item" : key));
+    if (node && typeof node === "object") {
+      for (const k of Object.keys(node)) if (!skip.has(k)) node[k] = walk(node[k], k);
+      return node;
+    }
+    return node;
+  };
+
+  walk(findings);
+  return flagged;
+}

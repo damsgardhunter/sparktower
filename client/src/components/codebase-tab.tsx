@@ -770,9 +770,11 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
                 * one number that tells you how much of this page to trust was
                 * visible only in a server log.
                 */}
-              {(findings.scan?.claimsContradicted ?? 0) > 0 && (
+              {((findings.scan?.claimsContradicted ?? 0) > 0 || (findings.scan?.claimsUnread ?? 0) > 0) && (
                 <p className="text-xs text-amber-600 dark:text-amber-500" data-testid="audit-claims-contradicted">
-                  {findings.scan.claimsContradicted} claim{findings.scan.claimsContradicted === 1 ? "" : "s"} here said something was missing that is in the repository. Each one is marked in place — read this audit with that in mind.
+                  {findings.scan.claimsContradicted > 0 && `${findings.scan.claimsContradicted} claim${findings.scan.claimsContradicted === 1 ? "" : "s"} here said something was missing that is in the repository. `}
+                  {findings.scan.claimsUnread > 0 && `${findings.scan.claimsUnread} judge${findings.scan.claimsUnread === 1 ? "s" : ""} a file this audit didn't read. `}
+                  Each one is marked in place — read this audit with that in mind.
                 </p>
               )}
 

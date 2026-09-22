@@ -16,6 +16,9 @@ import { fileIndexOf } from "@shared/audit-catchup";
 import type { RepoFile, RepoSnapshot } from "./code-ingest";
 import { buildRouteCoverage, renderRouteCoverage, type RouteCoverage } from "./route-coverage";
 import { tablesExercisedByTests } from "@shared/data-shape";
+// Circular by nature — the evidence module re-exports isTest from here — and safe:
+// both sides only read each other's bindings when a function is called.
+import { entryScreenFiles } from "./audit-evidence";
 
 const text = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
 
@@ -534,6 +537,14 @@ export interface CodeDigest {
   signals: DigestSignals;
   /** The prompt-ready text. */
   prompt: string;
+  /**
+   * The files whose text is actually in the prompt.
+   *
+   * Everything else the model has is a path in a tree or a line in an
+   * inventory, and the difference matters: a claim about what a file *does*,
+   * made about a file that isn't in here, was made without reading it.
+   */
+  excerptedPaths: string[];
 }
 
 export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
@@ -683,6 +694,14 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
   // more lines: a model that only sees them in the tree cannot tell what they
   // do, and then plans the mechanism again. The ranked set fills the rest.
   const guardPaths = new Set(guards.map((g) => g.evidence));
+  /*
+   * And what each app opens on. An audit is asked "what does a signed-in
+   * person see first" every single time, and the page behind "/" rarely ranks
+   * into the excerpt budget — so the answer came from the roadmap's intentions
+   * rather than from the file, which is how a home page that had led with the
+   * path card for a fortnight got reported as still feed-first.
+   */
+  for (const path of entryScreenFiles(read)) guardPaths.add(path);
   const guardFiles = read.filter((f) => guardPaths.has(f.path));
   const excerptBudget = 26;
   const rest = ranked.filter(({ file }) => !guardPaths.has(file.path)).slice(0, Math.max(10, excerptBudget - guardFiles.length));
@@ -767,7 +786,7 @@ export function buildCodeDigest(snapshot: RepoSnapshot): CodeDigest {
       : "",
   ].filter(Boolean).join("\n\n");
 
-  return { signals, prompt };
+  return { signals, excerptedPaths: excerpts.map((e) => e.path), prompt };
 }
 
 function dedupeStack(stack: StackSignal[]): StackSignal[] {

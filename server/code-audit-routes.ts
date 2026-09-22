@@ -30,7 +30,7 @@ import {
 } from "./code-ingest";
 import { buildCodeDigest, type CodeDigest } from "./code-digest";
 import { summarizeWebScreens } from "./audit-evidence";
-import { buildClaimIndex, verifyFindings, correct, sanitizeRisks, sanitizeMissing } from "./audit-claims";
+import { buildClaimIndex, verifyFindings, correct, sanitizeRisks, sanitizeMissing, flagUnreadFiles } from "./audit-claims";
 import { CAPABILITY_AREAS, sanitizeCapabilities } from "@shared/capabilities";
 import { deepReadAll } from "./audit-deep-reads";
 import { computeAuditDelta } from "@shared/audit-delta";
@@ -480,6 +480,18 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
     console.warn(`[audit] ${claims.corrected} claim(s) contradicted by the repository and annotated:`,
       claims.corrections.slice(0, 5).map((c) => `${c.claimed} → ${c.found}`));
   }
+  /*
+   * And the other half of the same problem: a claim about what a file *does*,
+   * made about a file this audit never opened. The close reads are exempt —
+   * they are handed whole files — so this is the first pass judging the tree.
+   */
+  const unread = flagUnreadFiles(findings, {
+    read: new Set([...digest.excerptedPaths, ...capabilities.flatMap((c) => c.evidence.map((e) => e.file))]),
+    inRepo: realFiles,
+  });
+  (findings.scan as any).claimsUnread = unread;
+  if (unread) console.warn(`[audit] ${unread} claim(s) judged a file the digest never excerpted`);
+
   // Counted where the builder can see it: an audit that had to correct itself
   // five times is telling you something about the audit.
   (findings.scan as any).claimsContradicted = claims.corrections.length;

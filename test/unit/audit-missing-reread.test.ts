@@ -127,3 +127,48 @@ describe("a gap that cites a file the read never saw", () => {
     expect(detail?.gaps[0]).toEqual({ item: "No signature check", file: "server/webhookHandlers.ts", severity: "medium" });
   });
 });
+
+/**
+ * The finding that prompted all of this: "signed-in web / is still feed-first
+ * (client/src/pages/home.tsx)", led the report, named the file, and was wrong
+ * — about a file the read had never been given. The page had opened with the
+ * path card for two weeks.
+ */
+describe("a claim about a file nobody opened", () => {
+  const opts = {
+    read: new Set(["server/routes.ts"]),
+    inRepo: new Set(["server/routes.ts", "client/src/pages/home.tsx"]),
+  };
+
+  it("says which file the judgement was made without reading", async () => {
+    const { flagUnreadFiles } = await import("../../server/audit-claims");
+    const findings: any = {
+      nextThreeThings: ["Make signed-in web / path-first — client/src/pages/home.tsx is still feed-first"],
+    };
+    expect(flagUnreadFiles(findings, opts)).toBe(1);
+    expect(findings.nextThreeThings[0]).toMatch(/client\/src\/pages\/home\.tsx was not read by this audit/);
+  });
+
+  it("leaves a claim about a file it did read exactly as written", async () => {
+    const { flagUnreadFiles } = await import("../../server/audit-claims");
+    const findings: any = { risks: [{ finding: "server/routes.ts mounts everything in one file." }] };
+    expect(flagUnreadFiles(findings, opts)).toBe(0);
+    expect(findings.risks[0].finding).toBe("server/routes.ts mounts everything in one file.");
+  });
+
+  it("does not second-guess the close reads, which are handed whole files", async () => {
+    const { flagUnreadFiles } = await import("../../server/audit-claims");
+    const findings: any = {
+      capabilities: [{ detail: { gaps: [{ item: "client/src/pages/home.tsx has no test" }] } }],
+      loops: [{ breaksAt: "client/src/pages/home.tsx never links back" }],
+    };
+    expect(flagUnreadFiles(findings, opts)).toBe(0);
+  });
+
+  it("stays quiet about a path that isn't in the repository at all", async () => {
+    // That is the absence checker's business, and it has a different answer.
+    const { flagUnreadFiles } = await import("../../server/audit-claims");
+    const findings: any = { missing: [{ item: "server/invented.ts does nothing" }] };
+    expect(flagUnreadFiles(findings, opts)).toBe(0);
+  });
+});
