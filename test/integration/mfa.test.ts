@@ -74,7 +74,14 @@ describe("two-factor sign-in", () => {
     // Setting it up: a wrong code doesn't; a right one turns it on and verifies this session.
     const setup = await first.agent.post("/api/auth/mfa/setup").send({});
     expect(setup.body.otpauthUrl).toContain(`secret=${setup.body.secret}`);
-    expect((await first.agent.post("/api/auth/mfa/enable").send({ code: "000000" })).body.code).toBe("mfa_invalid_code");
+    /*
+     * The status and body are in the message because this line has failed in
+     * CI as "expected undefined to be 'mfa_invalid_code'", which says only
+     * that the body had no code — true of a 401 from a session that went
+     * missing as much as of a wrong answer here. Next time it will say which.
+     */
+    const wrongCode = await first.agent.post("/api/auth/mfa/enable").send({ code: "000000" });
+    expect(wrongCode.body.code, `${wrongCode.status}: ${JSON.stringify(wrongCode.body).slice(0, 200)}`).toBe("mfa_invalid_code");
     const enabled = await first.agent.post("/api/auth/mfa/enable").send({ code: codeFor(setup.body.secret) });
     expect(enabled.status, JSON.stringify(enabled.body)).toBe(200);
     expect(enabled.body.recoveryCodes, "recovery codes are gone").toBeUndefined();
