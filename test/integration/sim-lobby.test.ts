@@ -17,7 +17,7 @@ import { and, eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
-import { simSeats, simVentures } from "@shared/schema";
+import { simSeasons, simSeats, simVentures, users } from "@shared/schema";
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -350,4 +350,91 @@ describe("a room that is nearly full", () => {
       expect(mine, "everyone who joined should have a seat somewhere").toHaveLength(1);
     }
   }, 180_000);
+});
+
+/**
+ * Getting out again.
+ *
+ * There was no way to leave a company once you were in one, and because join
+ * hands you back the room you are already in, being in one meant never playing
+ * that market again — including after the season had ended, since a venture
+ * stays in phase "running" for ever.
+ */
+describe("leaving", () => {
+  it("gives up a seat in a room that hasn't started, and lets you join a fresh one", async () => {
+    const app = await getTestApp();
+    const one = await player(app);
+    const two = await player(app);
+    const first = (await one.agent.post("/api/sim/join").send({ nicheId: NICHE })).body.ventureId;
+    // Somebody else in the room, so leaving doesn't simply retire it.
+    await two.agent.post("/api/sim/join").send({ nicheId: NICHE });
+
+    const left = await one.agent.post(`/api/sim/ventures/${first}/leave`).send({});
+    expect(left.status, JSON.stringify(left.body)).toBe(200);
+    expect(left.body).toMatchObject({ left: true, handedOver: false });
+    expect((await db.select().from(simSeats).where(and(eq(simSeats.ventureId, first), eq(simSeats.userId, one.id)))).length).toBe(0);
+
+    // And the lobby no longer says you are in one.
+    expect((await one.agent.get("/api/sim/ventures")).body.ventures.some((v: any) => v.id === first)).toBe(false);
+  }, 120_000);
+
+  it("closes the room when the last person walks out of it", async () => {
+    const app = await getTestApp();
+    const alone = await player(app);
+    const ventureId = (await alone.agent.post("/api/sim/join").send({ nicheId: NICHE })).body.ventureId;
+
+    await alone.agent.post(`/api/sim/ventures/${ventureId}/leave`).send({});
+    const [after] = await db.select().from(simVentures).where(eq(simVentures.id, ventureId));
+    expect(after.phase, "an empty room is not a room").toBe("retired");
+
+    // Joining again is a new room, not the one just abandoned.
+    const again = await alone.agent.post("/api/sim/join").send({ nicheId: NICHE });
+    expect(again.status).toBe(200);
+    expect(again.body.ventureId).not.toBe(ventureId);
+  }, 120_000);
+
+  it("hands the chair to a stand-in when the season is under way, and the company plays on", async () => {
+    const app = await getTestApp();
+    const { players, ventureId } = await roomOfFive(app);
+    for (const [i, p] of players.entries()) {
+      await p.agent.post(`/api/sim/ventures/${ventureId}/claim`).send({ role: ["ceo", "cmo", "cfo", "cto", "coo"][i] });
+    }
+    await players[0].agent.post(`/api/sim/ventures/${ventureId}/name`).send({ name: "Leavers Ltd" });
+    const [venture] = await db.select().from(simVentures).where(eq(simVentures.id, ventureId));
+    expect(venture.phase).toBe("running");
+    await db.update(simSeasons).set({ status: "running" }).where(eq(simSeasons.id, venture.seasonId));
+
+    const left = await players[1].agent.post(`/api/sim/ventures/${ventureId}/leave`).send({});
+    expect(left.status, JSON.stringify(left.body)).toBe(200);
+    expect(left.body).toMatchObject({ left: true, handedOver: true });
+
+    // The seat is still there, still the marketing chair, and a bot is in it.
+    const seats = await db
+      .select({ role: simSeats.role, userId: simSeats.userId, isBot: users.isBot })
+      .from(simSeats).innerJoin(users, eq(users.id, simSeats.userId))
+      .where(eq(simSeats.ventureId, ventureId));
+    expect(seats.length, "four people and a stand-in").toBe(5);
+    const stand = seats.find((s) => s.role === "cmo")!;
+    expect(stand.isBot).toBe(true);
+    expect(stand.userId).not.toBe(players[1].id);
+    // And the person who left is out of it.
+    expect((await players[1].agent.get(`/api/sim/ventures/${ventureId}/desk`)).status).not.toBe(200);
+  }, 180_000);
+
+  it("stops handing back a company whose season is over, so a new game can be started", async () => {
+    const app = await getTestApp();
+    const one = await player(app);
+    const ventureId = (await one.agent.post("/api/sim/join").send({ nicheId: NICHE })).body.ventureId;
+    const [venture] = await db.select().from(simVentures).where(eq(simVentures.id, ventureId));
+    await db.update(simVentures).set({ phase: "running" }).where(eq(simVentures.id, ventureId));
+    await db.update(simSeasons).set({ status: "finished" }).where(eq(simSeasons.id, venture.seasonId));
+
+    const again = await one.agent.post("/api/sim/join").send({ nicheId: NICHE });
+    expect(again.status, JSON.stringify(again.body)).toBe(200);
+    expect(again.body.ventureId, "a season that is over is not a room to go back to").not.toBe(ventureId);
+
+    // The old company is still listed, and says why it is not where you are playing.
+    const listed = (await one.agent.get("/api/sim/ventures")).body.ventures.find((v: any) => v.id === ventureId);
+    expect(listed?.seasonStatus).toBe("finished");
+  }, 120_000);
 });

@@ -22,12 +22,13 @@ import { and, eq, inArray } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
-import { simDecisions, simSeasons, simSeats, simVentures, users } from "@shared/schema";
-import { fileBotDecisions, fillVentureWithBots } from "../../server/simulation-bots";
+import { simBids, simDecisions, simSeasons, simSeats, simVentures, users } from "@shared/schema";
+import { fileBotBids, fileBotDecisions, fillVentureWithBots } from "../../server/simulation-bots";
 import { startReadySeasons } from "../../server/simulation-tick";
 import { BOT_FILL_AFTER_SECONDS } from "@shared/simulation/bots";
 import { LOBBY_SIZE } from "@shared/simulation/lobby";
 import { nicheById } from "@shared/simulation/niches";
+import type { Listing } from "@shared/simulation/assets";
 import type { Company } from "@shared/simulation/types";
 
 afterAll(async () => { await closeTestApp(); });
@@ -381,5 +382,75 @@ describe("where bots must never turn up", () => {
     const { storage } = await import("../../server/storage");
     const pool = await storage.searchUsers("");
     expect(pool.map((u) => u.id), "a match is an introduction to a person").not.toContain(bot.userId);
+  }, 120_000);
+});
+
+/**
+ * The marketplace.
+ *
+ * Three things come up for sale every year and every team sees the same list,
+ * but only a team with a person in the chief executive's chair ever bid — so a
+ * company run by bots watched the distribution deal it needed go to whoever
+ * turned up. It bids for itself now.
+ */
+describe("what the bots bid for", () => {
+  const rich = (id: string): Company => ({
+    id, kind: "player", name: "Test Co", cash: 40_000_000, creditLimit: 10_000_000, debt: 0,
+    price: 40, capacity: 250_000, positioning: "", cities: [], customers: {}, assets: [],
+  } as any);
+  const listings: Listing[] = [
+    { id: "lot-a", reserve: 1_000_000, sellerId: null, blurb: "A thing.",
+      asset: { id: "ast-a", kind: "distribution", name: "Lot A", effect: { capacity: 50_000 }, bookValue: 1_000_000 } },
+    { id: "lot-b", reserve: 2_000_000, sellerId: null, blurb: "Another.",
+      asset: { id: "ast-b", kind: "patent", name: "Lot B", effect: { quality: 4 }, bookValue: 2_000_000 } },
+  ];
+
+  /** A full room whose chief executive is a bot. */
+  async function botRunRoom(app: any) {
+    const { one, ventureId } = await roomOfOne(app);
+    await waitedAMinute(ventureId);
+    await fillVentureWithBots(ventureId);
+    const bots = (await seatsIn(ventureId)).filter((s) => s.isBot);
+    await db.update(simSeats).set({ role: "cmo" }).where(and(eq(simSeats.ventureId, ventureId), eq(simSeats.userId, one.id)));
+    await db.update(simSeats).set({ role: "ceo" })
+      .where(and(eq(simSeats.ventureId, ventureId), eq(simSeats.userId, bots[0].userId)));
+    return { ventureId, chair: bots[0].userId };
+  }
+
+  it("puts money on the table for a company whose chief executive is a bot", async () => {
+    const app = await getTestApp();
+    const { ventureId } = await botRunRoom(app);
+
+    const placed = await fileBotBids({ companies: [{ id: ventureId, company: rich(ventureId) }], listings, year: 1 });
+    expect(placed, "a bot chair bids").toBeGreaterThan(0);
+
+    const rows = await db.select().from(simBids).where(eq(simBids.ventureId, ventureId));
+    expect(rows.length).toBe(placed);
+    for (const row of rows) {
+      const lot = listings.find((l) => l.id === row.listingId)!;
+      expect(row.amount, "over the reserve, or it buys nothing").toBeGreaterThanOrEqual(lot.reserve);
+    }
+  }, 120_000);
+
+  it("leaves the bidding to the person when the chair is theirs", async () => {
+    const app = await getTestApp();
+    const { one, ventureId } = await roomOfOne(app);
+    await waitedAMinute(ventureId);
+    await fillVentureWithBots(ventureId);
+    await db.update(simSeats).set({ role: "ceo" }).where(and(eq(simSeats.ventureId, ventureId), eq(simSeats.userId, one.id)));
+
+    expect(await fileBotBids({ companies: [{ id: ventureId, company: rich(ventureId) }], listings, year: 1 })).toBe(0);
+    expect((await db.select().from(simBids).where(eq(simBids.ventureId, ventureId))).length).toBe(0);
+  }, 120_000);
+
+  it("never replaces a bid that is already on the table, however it got there", async () => {
+    const app = await getTestApp();
+    const { ventureId } = await botRunRoom(app);
+    await db.insert(simBids).values({ ventureId, listingId: "lot-a", year: 1, amount: 9_999_999 } as any);
+
+    await fileBotBids({ companies: [{ id: ventureId, company: rich(ventureId) }], listings, year: 1 });
+    const [kept] = await db.select().from(simBids)
+      .where(and(eq(simBids.ventureId, ventureId), eq(simBids.listingId, "lot-a"), eq(simBids.year, 1)));
+    expect(kept.amount, "the bid that was there stands").toBe(9_999_999);
   }, 120_000);
 });
