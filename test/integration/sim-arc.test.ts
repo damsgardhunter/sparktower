@@ -315,7 +315,6 @@ describe("the marketplace", () => {
     const after = await companyIn(seasonId, ventureId);
 
     expect(after.assets.map((a) => a.name)).toContain(listing.asset.name);
-    expect(after.cash).toBeLessThan(before.cash);
 
     /*
      * And the team is told. A sealed bid that resolves silently leaves a
@@ -324,6 +323,15 @@ describe("the marketplace", () => {
      */
     const [report] = await db.select().from(simReportsTable)
       .where(and(eq(simReportsTable.ventureId, ventureId), eq(simReportsTable.year, 1)));
+    /*
+     * Charged what it bid. Not "the company ended the year poorer": it also
+     * traded for a year, and a good year can be worth more than the lot it
+     * bought — which is what the closing balance used to be read as proof of.
+     */
+    const paid = ((report.report as any).cashBridge?.lines ?? [])
+      .find((l: any) => l.label === "The marketplace");
+    expect(paid?.amount, "the bid, taken out of the year's cash").toBeCloseTo(-listing.reserve, -3);
+
     const market = (report.report as any).market ?? [];
     expect(market, "a win should come back typed, not buried in prose").toContainEqual(
       expect.objectContaining({ kind: "won" }),
