@@ -77,7 +77,13 @@ test("a published step brings a stranger in, and they publish their own", async 
   await expect(stranger.getByTestId("artifact-project")).toContainText(project.title);
   await expect(stranger.getByTestId("button-explore-project-path")).toBeVisible();
   await stranger.getByTestId("button-start-own-path").click();
-  await expect(stranger).toHaveURL(/\?signup=1&artifact=[0-9a-f-]{36}$/);
+  /*
+   * The address carries the whole choice, not just the artifact id. It is the
+   * belt to localStorage's braces: in a private window, or with site data
+   * blocked, the store keeps nothing and the visitor used to arrive at an
+   * empty form with the page they came from uncredited.
+   */
+  await expect(stranger).toHaveURL(/\?signup=1&artifact=[0-9a-f-]{36}&goal=ship_mvp&subcategory=saas&intent=start$/);
   expect(await stranger.evaluate(() => localStorage.getItem("st_pending_path"))).toContain("ship_mvp");
   await stranger.getByTestId("input-signup-firstname").fill("Newcomer");
   await stranger.getByTestId("input-signup-lastname").fill("Growth");
@@ -138,7 +144,13 @@ test("a published step brings a stranger in, and they publish their own", async 
   await expect(stranger.getByTestId("goal-ship_mvp")).toHaveAttribute("aria-pressed", "true");
   expect(await stranger.evaluate(() => localStorage.getItem("st_pending_path"))).toContain("ship_mvp");
   await stranger.getByTestId("button-next").click();
-  await stranger.getByTestId("subcategory-saas").click();
+  /*
+   * The kind of project comes across too. The page they read was a SaaS
+   * project's, and the public page has always known that — it was simply
+   * dropped between the artifact and this screen, so somebody who had just
+   * read a restaurant's path was asked what kind of thing they were building.
+   */
+  await expect(stranger.getByTestId("subcategory-saas"), "the kind of project carried across too").toHaveAttribute("aria-pressed", "true");
   await stranger.getByTestId("button-next").click();
   await stranger.getByTestId("button-create-project").click();
 

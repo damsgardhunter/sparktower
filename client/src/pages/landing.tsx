@@ -20,9 +20,22 @@ import { PROJECT_GOALS } from "@shared/goals";
 import { LiveProjects } from "@/components/live-projects";
 import { Link } from "wouter";
 
-/** The artifact a visitor chose "start" or "explore" on before signing up, so the signup is credited to it. */
+/**
+ * The artifact a visitor chose "start" or "explore" on before signing up, so
+ * the signup is credited to it.
+ *
+ * The store first, the address second: `?artifact=` has been on this URL since
+ * the call-to-action was written and nothing ever read it, so a browser that
+ * keeps no site data lost the credit — and the author of the page that brought
+ * somebody in was never told they had.
+ */
 function pendingArtifactId(): string | undefined {
-  try { return (JSON.parse(localStorage.getItem(PENDING_PATH_KEY) ?? "null") as PendingPath | null)?.fromArtifact; } catch { return undefined; }
+  try {
+    const stored = (JSON.parse(localStorage.getItem(PENDING_PATH_KEY) ?? "null") as PendingPath | null)?.fromArtifact;
+    if (stored) return stored;
+  } catch { /* the address may still have it */ }
+  const fromUrl = new URLSearchParams(typeof location !== "undefined" ? location.search : "").get("artifact") ?? "";
+  return /^[A-Za-z0-9-]{8,64}$/.test(fromUrl) ? fromUrl : undefined;
 }
 
 /** After signing in or up: back to an invite this browser was holding, else home. */

@@ -21,6 +21,8 @@ import { latestWork, backboneIdOf } from "./phase-trees";
 import { projectTeam } from "./feedback-loop-routes";
 import { markStepsShared, pathProgress } from "./path-return";
 import { notify } from "./notifications";
+import { recordActivity } from "./analytics";
+import { PATH_FUNNEL_EVENTS, sanitizePathFunnelProps } from "@shared/path-funnel";
 import { validateAsks } from "@shared/feedback-loop";
 import { feedDisplayName } from "./feed-routes";
 
@@ -97,7 +99,14 @@ export async function creditArtifactSignup(userId: string, landingPath: string |
     if (!id) return;
     const [artifact] = await db.update(pathArtifacts).set({ signups: sql`${pathArtifacts.signups} + 1` })
       .where(and(eq(pathArtifacts.id, id), eq(pathArtifacts.visibility, "public"))).returning();
-    if (!artifact || artifact.authorId === userId) return;
+    if (!artifact) return;
+    void recordActivity({
+      name: PATH_FUNNEL_EVENTS.signup,
+      userId, visitorId: "unknown", sessionId: "unknown",
+      path: artifactPath(artifact.id), projectId: artifact.projectId,
+      props: sanitizePathFunnelProps({ artifactId: artifact.id }),
+    }).catch(() => {});
+    if (artifact.authorId === userId) return;
     await notify({
       recipients: [artifact.authorId], actorId: userId, kind: "artifact_signup", targetId: `${artifact.id}:${userId}`,
       projectId: artifact.projectId, postId: null, excerpt: artifact.title,
@@ -191,6 +200,12 @@ export function registerArtifactRoutes(app: Express) {
         title: checked.title, tags: checked.tags, visibility: "public", publishedPostId: postId,
         publishedAt: artifact.publishedAt ?? new Date(), updatedAt: new Date(),
       }).where(eq(pathArtifacts.id, artifact.id)).returning();
+      void recordActivity({
+        name: PATH_FUNNEL_EVENTS.published,
+        userId: req.user.id, visitorId: (req as any).visitorId || "unknown", sessionId: (req as any).sessionId || "unknown",
+        path: artifactPath(published.id), projectId: published.projectId,
+        props: sanitizePathFunnelProps({ artifactId: published.id }),
+      }).catch(() => {});
       res.json({ artifact: published, postId, url: artifactPath(published.id) });
     } catch (error) {
       console.error("Artifact publish error:", error);
@@ -218,6 +233,23 @@ export function registerArtifactRoutes(app: Express) {
     try {
       const artifact = await publicArtifact(String(req.params.id), { countView: true });
       if (!artifact) return res.status(404).json({ message: "This artifact isn't published." });
+      /*
+       * The top of the funnel, named. The view counter on the row says how
+       * many times the page was read; this says which visit read it, so the
+       * step from reading to acting can be counted in people rather than in
+       * page loads (shared/path-funnel.ts).
+       */
+      void recordActivity({
+        name: PATH_FUNNEL_EVENTS.artifactView,
+        userId: (req as any).user?.id ?? null,
+        visitorId: (req as any).visitorId || "unknown",
+        sessionId: (req as any).sessionId || "unknown",
+        path: artifactPath(artifact.id),
+        projectId: artifact.project?.id ?? null,
+        referrer: typeof req.headers.referer === "string" ? req.headers.referer : null,
+        userAgent: req.headers["user-agent"],
+        props: sanitizePathFunnelProps({ artifactId: artifact.id, goal: artifact.path?.goal, subcategory: artifact.path?.subcategory }),
+      }).catch(() => {});
       res.json(artifact);
     } catch (error) {
       console.error("Public artifact error:", error);
