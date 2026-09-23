@@ -8,7 +8,7 @@ import { Avatar, Empty, ErrorState, Icon, IconButton, Loading, Segments, TAB_BAR
 import { Sheet } from "../../src/components/Sheet";
 import { inboxTime, personAvatar, personName, useConnections } from "../../src/networkData";
 // The header floats over the scene, so this screen leaves its room in the scroll content.
-import { useHeaderSpace } from "../../src/components/AppHeader";
+import { usePlainHeaderSpace } from "../../src/components/AppHeader";
 
 interface Conversation {
   userId: string;
@@ -26,7 +26,8 @@ type Filter = "all" | "unread";
  * a conversation with someone you're connected to.
  */
 export default function Messages() {
-  const headerSpace = useHeaderSpace();
+  // Under the page's own header (see the tabs layout), which is far shorter than the cover one.
+  const headerSpace = usePlainHeaderSpace({ subtitle: true });
   const router = useRouter();
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
