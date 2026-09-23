@@ -2,13 +2,14 @@ import { useMemo, useState } from "react";
 import { Animated, ImageBackground, Pressable, Text, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { StatusBar } from "expo-status-bar";
-import { useRouter } from "expo-router";
+import { useRouter, useSegments } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api, fetchMe } from "../api/client";
 import { colors, font, fontFamily, novaGradient, spacing } from "../theme";
 import { Avatar, Icon, assetUri } from "./ui";
 import { useTabBarVisibility } from "./tab-bar-visibility";
+import { usesPlainHeader } from "./header-kind";
 
 /**
  * The top of the app is you: your cover photo, your face on it, and the three
@@ -254,7 +255,14 @@ export function PlainHeader({ title }: { title: string }) {
   );
 }
 
-/** What a screen under a PlainHeader must leave clear, since it floats like the other one. */
+/**
+ * What a screen under a PlainHeader must leave clear, since it floats like the
+ * other one.
+ *
+ * `useHeaderSpace` now works this out for itself from the route, so a screen
+ * should call that and stop caring which header it has. Kept because the
+ * screens that predate the change call it directly and are correct either way.
+ */
 export function usePlainHeaderSpace(): number {
   const insets = useSafeAreaInsets();
   return insets.top + PLAIN_H;
@@ -273,10 +281,35 @@ const PLAIN_H = 48;
  * Floating means the screen has to leave the room itself, and it has to be
  * padding INSIDE the scroll content rather than around it: padding around it
  * moves with the screen and the gap comes straight back.
+ *
+ * ## It works the answer out rather than being told
+ *
+ * This used to return one number — the profile header's height — for every
+ * caller. Two things were wrong with that, and both were invisible until you
+ * held the phone.
+ *
+ * A screen under the *plain* header was told to leave 220 points for a bar 48
+ * tall, so it opened on a field of empty canvas. And a screen outside the tabs
+ * entirely, where the navigator's own header takes up real layout, was told to
+ * leave room for a header that was not floating over it at all.
+ *
+ * Both are decided by where the caller is, which it can look up, so it does.
+ * Nothing has to remember to pass anything, and a screen cannot be given the
+ * wrong number by being moved.
  */
 export function useHeaderSpace(): number {
   const insets = useSafeAreaInsets();
-  return insets.top + COVER_H + INFO_H;
+  const segments = useSegments() as string[];
+
+  /*
+   * Only the tab group floats a header over its scenes. Everywhere else the
+   * navigator's header occupies layout the ordinary way, and padding for it
+   * would be a second gap under the first.
+   */
+  const inTabs = segments[0] === "(tabs)";
+  if (!inTabs) return 0;
+
+  return usesPlainHeader(segments[1]) ? insets.top + PLAIN_H : insets.top + COVER_H + INFO_H;
 }
 
 /**

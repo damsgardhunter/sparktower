@@ -49,10 +49,20 @@ export function Screen({
 }) {
   const hiding = useHideTabBarOnScroll();
   /*
-   * Both ends of the floating chrome. `hideTabBar` says "this screen sits
-   * under the bar and the header", so it pays for both: room at the top for a
-   * header that owns no layout, and room at the bottom for a bar that doesn't
-   * either.
+   * Room at the top for a header that owns no layout.
+   *
+   * This used to be paid only when `hideTabBar` was set, which conflated two
+   * unrelated things: whether the bottom bar slides away as you read, and
+   * whether a floating header is covering the top of the screen. A tab that
+   * wanted the bar to stay put therefore got no top padding at all and drew
+   * its first rows *underneath* the header — sixteen points of room for two
+   * hundred and twenty of header, on Simulations, the leaderboard and your own
+   * profile.
+   *
+   * `useHeaderSpace` returns zero outside the tab group, where the navigator's
+   * header takes real layout and no padding is wanted, so this is safe to
+   * apply always. The bottom half stays with `hideTabBar`, which is genuinely
+   * what it is about.
    */
   const headerSpace = useHeaderSpace();
   const base = [s.screenBase, canvas && { backgroundColor: colors.canvas }];
@@ -62,7 +72,12 @@ export function Screen({
   return (
     <ScrollView
       style={base}
-      contentContainerStyle={[s.screenContent, hideTabBar && { paddingTop: headerSpace, paddingBottom: TAB_BAR_SPACE }, contentStyle]}
+      contentContainerStyle={[
+        s.screenContent,
+        headerSpace > 0 && { paddingTop: headerSpace },
+        hideTabBar && { paddingBottom: TAB_BAR_SPACE },
+        contentStyle,
+      ]}
       keyboardShouldPersistTaps="handled"
       {...(hideTabBar ? hiding : null)}
       refreshControl={

@@ -198,7 +198,8 @@ export function ProfileView({ userId: routeId, isOwn: ownRoute, onName, initialT
 
   return (
     <>
-      <Screen canvas onRefresh={onRefresh} refreshing={refreshing} contentStyle={{ paddingHorizontal: 0, paddingTop: spacing.md, gap: spacing.md, paddingBottom: spacing.xxl * 3 }}>
+      <Screen canvas onRefresh={onRefresh} refreshing={refreshing} /* No paddingTop: Screen leaves room for the floating header, and sixteen points of it is not enough. */
+        contentStyle={{ paddingHorizontal: 0, gap: spacing.md, paddingBottom: spacing.xxl * 3 }}>
         <ProfileHeader
           userId={userId}
           profile={profile}
