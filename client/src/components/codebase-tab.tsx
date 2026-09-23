@@ -787,6 +787,20 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
                 </div>
               }
             >
+              {/*
+                * How often this audit contradicted itself, said where a reader
+                * will meet it. The count was recorded and shown nowhere, so the
+                * one number that tells you how much of this page to trust was
+                * visible only in a server log.
+                */}
+              {((findings.scan?.claimsContradicted ?? 0) > 0 || (findings.scan?.claimsUnread ?? 0) > 0) && (
+                <p className="text-xs text-amber-600 dark:text-amber-500" data-testid="audit-claims-contradicted">
+                  {findings.scan.claimsContradicted > 0 && `${findings.scan.claimsContradicted} claim${findings.scan.claimsContradicted === 1 ? "" : "s"} here said something was missing that is in the repository. `}
+                  {findings.scan.claimsUnread > 0 && `${findings.scan.claimsUnread} judge${findings.scan.claimsUnread === 1 ? "s" : ""} a file this audit didn't read. `}
+                  Each one is marked in place — read this audit with that in mind.
+                </p>
+              )}
+
               {findings.nextThreeThings?.length > 0 && (
                 <ol className="space-y-1.5" data-testid="audit-next">
                   {findings.nextThreeThings.map((thing: string, i: number) => (
@@ -915,7 +929,11 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
                 {findings.missing?.length > 0 && (
                   <Group title="Missing" icon={XCircle} tone="text-rose-500" count={findings.missing.length}>
                     {findings.missing.map((b: any, i: number) => (
-                      <Row key={i} title={<span className="font-medium">{b.item}</span>}>{b.matters ? <p>{b.matters}</p> : null}</Row>
+                      <Row key={i} title={<span className="font-medium">{b.item}</span>}>
+                        {b.matters ? <p>{b.matters}</p> : null}
+                        {/* Where it looked before calling this missing — absent when it didn't say. */}
+                        {b.searched?.length > 0 && <p className="text-muted-foreground">Looked in: {b.searched.join(", ")}</p>}
+                      </Row>
                     ))}
                   </Group>
                 )}

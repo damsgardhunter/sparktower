@@ -32,13 +32,30 @@ export interface ClaimIndex {
   routes: Map<string, { label: string; file: string; mounted: boolean }>;
   /** Every path in the tree, for file claims. */
   files: Set<string>;
+  /**
+   * Bare filenames to the one file that carries them.
+   *
+   * Prose names a file both ways — "server/webhookHandlers.ts" and "the
+   * webhookHandlers.ts file" — and only the first was ever checked, so half of
+   * "X does not exist" survived by being written the shorter way. Only unique
+   * names are here: two files called `index.ts` make the sentence ambiguous,
+   * and an ambiguous subject is one this must not correct.
+   */
+  basenames: Map<string, string>;
 }
 
 /** `/api/users/:id/follow` and `/api/users/:userId/follow` are the same endpoint. */
 const shape = (path: string) => path.replace(/:[\w-]+/g, ":p").replace(/\/+$/, "").toLowerCase();
 
 export function buildClaimIndex(files: { path: string }[], routes: RouteCoverageRow[]): ClaimIndex {
-  const index: ClaimIndex = { routes: new Map(), files: new Set(files.map((f) => f.path)) };
+  const index: ClaimIndex = { routes: new Map(), files: new Set(files.map((f) => f.path)), basenames: new Map() };
+  const seen = new Map<string, string | null>();
+  for (const f of files) {
+    const base = f.path.split("/").pop() ?? "";
+    if (!base) continue;
+    seen.set(base, seen.has(base) ? null : f.path);
+  }
+  for (const [base, path] of seen) if (path) index.basenames.set(base, path);
   for (const r of routes) {
     const key = `${r.method.toLowerCase()} ${shape(r.path)}`;
     if (!index.routes.has(key) || r.mounted) {
@@ -72,11 +89,30 @@ const ROUTE_ABSENCE = /\b(?:not registered|never registered|not mounted|never mo
  * follows, so absence only counts when "missing" ends the clause or hands off
  * to "from"/"in".
  */
+/*
+ * The third family: phrases whose subject can only be what comes after them.
+ *
+ * "there is no server/email.ts" and "no trace of shared/surfaces.ts" are the
+ * commonest way an audit says something isn't there, and neither was checked,
+ * because both families above look backwards for their subject. Looking
+ * backwards from these would be actively wrong — the name before "there is no"
+ * is the place being searched, not the thing said to be missing.
+ *
+ * The window after them is tiny and the gap has to be empty (or a word like
+ * "file"), so "there is no rate limit in server/routes.ts" resolves to nothing
+ * rather than contradicting a sentence that never claimed the file was absent.
+ */
+const AFTER_ABSENCE = /\b(?:there (?:is|are|'s) no|no trace of|(?:found|find) no|could ?n[o']t find|can ?n[o']t find|cannot find|no sign of|nothing (?:named|called))\b/gi;
+/** What may sit between one of those phrases and its subject, and nothing else. */
+const AFTER_GAP = /^[\s:;,"'`(\[]*(?:such\s+)?(?:an?\s+|any\s+)?(?:file|route|endpoint|module|script)?[\s:;,"'`(\[]*$/i;
+
 const THING_ABSENCE = /\b(?:does ?n[o']t exist|do ?n[o']t exist|did ?n[o']t exist|(?:is|are|were|was) missing(?=\s*(?:from\b|in\b|[.,;:)]|$))|missing from|not present|not found|NOT FOUND|nowhere in|absent from|no such file)\b/gi;
 
 /** An /api path, or a repository file path, as prose writes them. */
 const API_PATH = /(?:\b(GET|POST|PUT|PATCH|DELETE)\s+)?(\/api\/[\w:./{}*-]+)/gi;
-const FILE_PATH = /(?:^|[\s`'"(\[])((?:[\w@.-]+\/)+[\w@.-]+\.(?:tsx?|jsx?|mjs|cjs|md|sql|ya?ml|json))(?=$|[\s`'")\],:;])/g;
+const FILE_PATH = /(?:^|[\s`'"(\[])((?:[\w@.-]+\/)+[\w@.-]+\.(?:tsx?|jsx?|mjs|cjs|md|sql|ya?ml|json))(?=$|[\s`'")\],:;.])/g;
+/** The same file named without its directory: "the webhookHandlers.ts file". */
+const BARE_FILE = /(?:^|[\s`'"(\[])([\w@.-]+\.(?:tsx?|jsx?|mjs|cjs|sql|ya?ml))(?=$|[\s`'")\],:;.])/g;
 
 /** How far from the phrase a name can sit and still be its subject. */
 const BEFORE = 90;
@@ -111,9 +147,10 @@ export function contradictions(text: unknown, index: ClaimIndex): Contradiction[
   const out: Contradiction[] = [];
 
   for (const sentence of value.split(/(?<=[.!?;])\s+|\n+/)) {
-    const routeOnly = [...sentence.matchAll(ROUTE_ABSENCE)].map((m) => ({ at: m.index!, end: m.index! + m[0].length, routesOnly: true }));
-    const anything = [...sentence.matchAll(THING_ABSENCE)].map((m) => ({ at: m.index!, end: m.index! + m[0].length, routesOnly: false }));
-    const phrases = [...routeOnly, ...anything];
+    const routeOnly = [...sentence.matchAll(ROUTE_ABSENCE)].map((m) => ({ at: m.index!, end: m.index! + m[0].length, routesOnly: true, afterOnly: false }));
+    const anything = [...sentence.matchAll(THING_ABSENCE)].map((m) => ({ at: m.index!, end: m.index! + m[0].length, routesOnly: false, afterOnly: false }));
+    const forward = [...sentence.matchAll(AFTER_ABSENCE)].map((m) => ({ at: m.index!, end: m.index! + m[0].length, routesOnly: false, afterOnly: true }));
+    const phrases = [...routeOnly, ...anything, ...forward];
     if (!phrases.length) continue;
 
     /** Candidates with their position, so "the subject of this phrase" is answerable. */
@@ -141,6 +178,15 @@ export function contradictions(text: unknown, index: ClaimIndex): Contradiction[
       });
     }
 
+    for (const m of sentence.matchAll(BARE_FILE)) {
+      const named = index.basenames.get(m[1]);
+      if (!named) continue;
+      candidates.push({
+        at: m.index!, end: m.index! + m[0].length,
+        check: () => ({ claimed: m[1], found: `${named} is in the repository`, sentence: sentence.trim().slice(0, 300) }),
+      });
+    }
+
     for (const m of sentence.matchAll(FILE_PATH)) {
       const path = m[1];
       candidates.push({
@@ -162,9 +208,22 @@ export function contradictions(text: unknown, index: ClaimIndex): Contradiction[
        * A pronoun immediately before the phrase means the subject isn't the
        * name we found.
        */
-      if (/\b(they|it|these|those|which|that|them|any|some|both|all)\s*$/i.test(sentence.slice(Math.max(0, phrase.at - 16), phrase.at))) continue;
+      if (!phrase.afterOnly && /\b(they|it|these|those|which|that|them|any|some|both|all)\s*$/i.test(sentence.slice(Math.max(0, phrase.at - 16), phrase.at))) continue;
 
       const eligible = candidates.filter((c) => (phrase.routesOnly ? isRoute(c) : true));
+
+      /*
+       * "there is no X": only X, and only when it follows immediately. The
+       * name before the phrase is where the audit looked, not what it says is
+       * missing, so this family never reads backwards.
+       */
+      if (phrase.afterOnly) {
+        const next = eligible.filter((c) => c.at >= phrase.end).sort((a, b) => a.at - b.at)[0];
+        const gap = next ? sentence.slice(phrase.end, next.at) : null;
+        const found = next && gap !== null && AFTER_GAP.test(gap) ? next.check() : null;
+        if (found) out.push(found);
+        continue;
+      }
       // The nearest name before the phrase is its subject; failing that, one right after it.
       const before = eligible.filter((c) => c.end <= phrase.at && phrase.at - c.end <= BEFORE).sort((a, b) => b.end - a.end)[0];
       const after = eligible.filter((c) => c.at >= phrase.end && c.at - phrase.end <= AFTER).sort((a, b) => a.at - b.at)[0];
@@ -197,7 +256,17 @@ export function correct(text: unknown, index: ClaimIndex): { text: string; corre
 }
 
 /** Every place in an audit's findings where a claim can hide. */
-const CLAIM_FIELDS = ["item", "matters", "missing", "exists", "finding", "detail", "why", "fix", "breaksAt", "note", "summary", "coverage", "mechanism"];
+const CLAIM_FIELDS = [
+  "item", "matters", "missing", "exists", "finding", "detail", "why", "fix", "breaksAt", "note", "summary", "coverage", "mechanism",
+  /*
+   * Added after reading what the fields actually carry: `recommendation` is
+   * the sentence a builder acts on ("add the route, it isn't registered"),
+   * `title` heads a security-plan entry and a reconciled task, and `_reason` /
+   * `_label` are the catch-up cards' own prose. All four could assert absence
+   * and none of them was ever read by this.
+   */
+  "recommendation", "title", "_reason", "_label",
+];
 
 /**
  * Walks a whole findings object and corrects every absence claim in it.
@@ -324,4 +393,136 @@ export function noteUnreadRecommendations(
     if (item && typeof item === "object") item.matters = annotate(item.matters);
   }
   return noted;
+}
+
+/* ------------------------------------------------------------------------- *
+ * Two lists that asserted things and cited nothing.
+ *
+ * Capability evidence is held to the digest's files, the security plan's files
+ * are filtered to real paths, loop stages are discarded when their evidence
+ * isn't real. Risks and the missing list were the two that skipped all of that
+ * — and between them they are most of what a builder reads as "what's wrong
+ * with my codebase". A risk could name a path that has never existed and sort
+ * to the top of the page on severity alone; a missing entry asserted absence
+ * and had no evidence field at all to be wrong about.
+ * ------------------------------------------------------------------------- */
+
+const clip = (v: unknown, n: number) => String(v ?? "").trim().slice(0, n);
+const clipList = (v: unknown, n: number, each: number) =>
+  (Array.isArray(v) ? v : []).map((x) => clip(x, each)).filter(Boolean).slice(0, n);
+
+export interface AuditRisk { area: string; severity: "low" | "medium" | "high"; finding: string; evidence: string[]; recommendation: string }
+export interface AuditMissing { item: string; matters: string; searched: string[] }
+
+/** The inventories the audit is handed whole, so "the route list" is a real answer to where it looked. */
+export const KNOWN_LISTS = /^(?:the\s+)?(?:route (?:list|inventory|coverage)|routes and pages|test (?:list|inventory)|file tree|data models?|web screens|mobile screens|commits?(?: messages)?|package\.json|README(?:\.md)?)$/i;
+
+/**
+ * Risks, with their citations held to the repository.
+ *
+ * Unreal paths are dropped rather than shown as though a builder could open
+ * them, and a risk that cited only unreal paths says so in its own text. A
+ * high one is held at medium until something real is behind it: severity is
+ * what orders the page, and an unevidenced claim must not outrank a finding
+ * that names code.
+ */
+export function sanitizeRisks(raw: unknown, isRealFile: (path: string) => boolean): AuditRisk[] {
+  const severities = ["low", "medium", "high"];
+  return (Array.isArray(raw) ? raw : []).slice(0, 20).map((r: any) => {
+    const cited = clipList(r?.evidence, 6, 200);
+    const evidence = cited.filter(isRealFile);
+    const claimed = (severities.includes(r?.severity) ? r.severity : "medium") as AuditRisk["severity"];
+    const unverified = cited.length > 0 && evidence.length === 0;
+    return {
+      area: clip(r?.area, 80),
+      severity: unverified && claimed === "high" ? "medium" : claimed,
+      finding: unverified
+        ? `${clip(r?.finding, 800)} [Cited ${cited.slice(0, 3).join(", ")}, ${cited.length === 1 ? "which is not" : "none of which are"} in this repository${claimed === "high" ? "; held at medium until something real is cited" : ""}.]`
+        : clip(r?.finding, 800),
+      evidence,
+      recommendation: clip(r?.recommendation, 600),
+    };
+  }).filter((r) => r.finding);
+}
+
+/**
+ * The missing list, made falsifiable.
+ *
+ * It now has to say where it looked, those places are held to the repository
+ * like every other citation, and an entry that looked nowhere carries that on
+ * its face. The entry is kept either way: the audit may well be right, and the
+ * builder is the one who gets to decide — which is only possible if they can
+ * see what it is based on.
+ */
+export function sanitizeMissing(raw: unknown, isRealFile: (path: string) => boolean): AuditMissing[] {
+  return (Array.isArray(raw) ? raw : []).slice(0, 30).map((b: any) => {
+    const searched = clipList(b?.searched, 6, 200).filter((f) => isRealFile(f) || KNOWN_LISTS.test(f));
+    const matters = clip(b?.matters, 400);
+    return {
+      item: clip(b?.item, 300),
+      matters: searched.length
+        ? matters
+        : `${matters} [The audit did not say where it looked for this. The first pass reads excerpts, not the whole repository — check before writing anything new.]`.trim(),
+      searched,
+    };
+  }).filter((b) => b.item);
+}
+
+/**
+ * Claims about what a file does, made about a file nobody opened.
+ *
+ * The absence checker above answers "does this exist". This answers the other
+ * half, and it is the half that produced the worst finding this audit has
+ * given anyone: *"signed-in web / is still feed-first (client/src/pages/home.tsx)"*
+ * — named the file, was wrong about it, and led the report. The page had led
+ * with the path card for a fortnight. The read had never seen it: the digest
+ * excerpts a couple of dozen files out of thousands, and the rest are paths in
+ * a tree. From inside that read there is nothing to distinguish a file it
+ * studied from a file it only knows the name of.
+ *
+ * So where a claim names a file the audit did not read, it says so. The claim
+ * stays — plenty of them are right, and some are drawn from the route list or
+ * the screen inventory, which are real evidence — but a builder gets to see
+ * which judgements came from reading code and which came from a filename.
+ *
+ * Deliberately not applied to the close reads (`capabilities[].detail`, the
+ * loop closures): those are given whole files, and annotating them would be a
+ * lie in the other direction.
+ */
+export function flagUnreadFiles(
+  findings: any,
+  opts: { read: Set<string>; inRepo: Set<string>; skip?: string[] },
+): number {
+  const skip = new Set(opts.skip ?? ["capabilities", "loops", "scan", "security"]);
+  let flagged = 0;
+
+  /** The first file in the sentence that is in the repository and wasn't read. A full path only: a bare name is too often ambiguous to accuse a sentence over. */
+  const unreadIn = (text: string): string | null => {
+    for (const m of text.matchAll(FILE_PATH)) {
+      if (opts.inRepo.has(m[1]) && !opts.read.has(m[1])) return m[1];
+    }
+    return null;
+  };
+
+  const walk = (node: any, key?: string): any => {
+    if (typeof node === "string") {
+      if (!key || CLAIM_FIELDS.includes(key) || key === "__item") {
+        const unread = unreadIn(node);
+        if (unread && !node.includes("was not read by this audit")) {
+          flagged += 1;
+          return `${node} [${unread} was not read by this audit — only its path was in view. Check the file before acting on this.]`;
+        }
+      }
+      return node;
+    }
+    if (Array.isArray(node)) return node.map((v) => walk(v, typeof v === "string" ? "__item" : key));
+    if (node && typeof node === "object") {
+      for (const k of Object.keys(node)) if (!skip.has(k)) node[k] = walk(node[k], k);
+      return node;
+    }
+    return node;
+  };
+
+  walk(findings);
+  return flagged;
 }

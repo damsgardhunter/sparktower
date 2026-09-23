@@ -274,3 +274,38 @@ describe("the test inventory a close read gets", () => {
     expect(summarizeUntestedRoutes(tested, [])).toBeNull();
   });
 });
+
+describe("the files every audit is asked about", () => {
+  it("names the page behind / for both a visitor and an account, and the app's entry", async () => {
+    const { entryScreenFiles } = await import("../../server/audit-evidence");
+    const files = [
+      {
+        path: "client/src/App.tsx",
+        content: `
+import Landing from "@/pages/landing";
+import Home from "@/pages/home";
+import Profile from "@/pages/profile";
+function Router() {
+  if (!isAuthenticated) {
+    return <Switch><Route path="/" component={Landing} /></Switch>;
+  }
+  return <AppSidebar><Switch><Route path="/" component={Home} /><Route path="/profile" component={Profile} /></Switch></AppSidebar>;
+}`,
+      },
+      { path: "client/src/pages/home.tsx", content: "export default function Home() { return null; }" },
+      { path: "client/src/pages/landing.tsx", content: "export default function Landing() { return null; }" },
+      { path: "client/src/pages/profile.tsx", content: "export default function Profile() { return null; }" },
+      { path: "mobile/app/index.tsx", content: "export default function Index() { return null; }" },
+    ];
+    const entries = await entryScreenFiles(files);
+    expect(entries).toContain("client/src/pages/home.tsx");
+    expect(entries).toContain("client/src/pages/landing.tsx");
+    expect(entries).toContain("mobile/app/index.tsx");
+    expect(entries, "only what the product opens on — every other page takes its chances with the budget").not.toContain("client/src/pages/profile.tsx");
+  });
+
+  it("says nothing when there is no router to read", async () => {
+    const { entryScreenFiles } = await import("../../server/audit-evidence");
+    expect(entryScreenFiles([{ path: "server/index.ts", content: "x" }])).toEqual([]);
+  });
+});

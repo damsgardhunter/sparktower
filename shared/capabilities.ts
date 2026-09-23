@@ -102,6 +102,17 @@ export interface CapabilityDetail {
   coverage: string;
   gaps: { item: string; file?: string; severity: "low" | "medium" | "high" }[];
   strengths: string[];
+  /**
+   * Only asked when the first pass said the area was missing: with the files
+   * in front of it, is there anything here at all?
+   *
+   * The first pass reads a digest — excerpts of 26 files out of thousands —
+   * and "I was not shown it" and "it is not there" look identical from inside
+   * that read. A wrong "missing" was terminal, because second reads only ran
+   * for areas already called built or partial, and it is the verdict a builder
+   * acts on hardest: it says write this from scratch.
+   */
+  present?: boolean;
 }
 export interface CapabilityEntry {
   area: CapabilityArea;
@@ -188,9 +199,18 @@ export function sanitizeDeepRead(raw: unknown, allowedFiles: Set<string>): Capab
   const r = raw as any;
   const gaps = (Array.isArray(r.gaps) ? r.gaps : []).slice(0, 12).map((g: any) => {
     const file = g?.file ? String(g.file).trim() : undefined;
+    const kept = file && allowedFiles.has(file) ? file : undefined;
+    const item = String(g?.item ?? "").trim().slice(0, 300);
     return {
-      item: String(g?.item ?? "").trim().slice(0, 300),
-      file: file && allowedFiles.has(file) ? file : undefined,
+      /*
+       * A gap that cited a file this read was never given used to have the
+       * path quietly removed and the sentence kept, which turned a claim about
+       * one file into a claim about the codebase — and the reader had no way
+       * to tell the two apart. The sentence is still kept, because the gap may
+       * be real; what it cited is now said out loud.
+       */
+      item: file && !kept ? `${item} [cited ${file}, which was not among the files this read was given]` : item,
+      file: kept,
       severity: ((["low", "medium", "high"] as string[]).includes(g?.severity) ? g.severity : "medium") as "low" | "medium" | "high",
     };
   }).filter((g: any) => g.item);
@@ -199,6 +219,7 @@ export function sanitizeDeepRead(raw: unknown, allowedFiles: Set<string>): Capab
   return {
     coverage,
     gaps,
+    ...(typeof r.present === "boolean" ? { present: r.present } : {}),
     strengths: (Array.isArray(r.strengths) ? r.strengths : []).map((x: any) => String(x).trim().slice(0, 200)).filter(Boolean).slice(0, 6),
   };
 }

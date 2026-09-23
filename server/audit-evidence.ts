@@ -154,7 +154,18 @@ export function summarizeMobileScreens(files: { path: string; content?: string }
  * for the wrong person is how the wrong thing gets seen, and a disagreement
  * between the two lists is worth noticing.
  */
-export function summarizeWebScreens(files: { path: string; content?: string }[]): string | null {
+export interface WebRouteRow { route: string; gate: string; file: string; calls: string[] }
+
+/**
+ * The router, resolved: every declared route, what gates it, the file behind
+ * it and what that file reaches.
+ *
+ * Separated from the prose below because two things need it now. The summary
+ * prints it for the model; the digest uses it to decide which files to excerpt,
+ * since the page behind "/" is the one an audit is asked about most and knowing
+ * its path is not the same as having read it.
+ */
+export function webRouteRows(files: { path: string; content?: string }[]): { appPath: string; rows: WebRouteRow[]; orphans: string[] } | null {
   const app = files.find((f) => /^client\/src\/App\.[jt]sx?$/.test(f.path) && f.content);
   if (!app?.content) return null;
   const content = app.content;
@@ -254,7 +265,7 @@ export function summarizeWebScreens(files: { path: string; content?: string }[])
     return [...found].sort();
   };
 
-  const rows: { route: string; gate: string; file: string; calls: string[] }[] = [];
+  const rows: WebRouteRow[] = [];
   for (const m of content.matchAll(/<Route\s+path=["']([^"']+)["'][^>]*component=\{(\w+)\}/g)) {
     const spec = pages.get(m[2]);
     const file = spec ? resolve(spec, app.path) : null;
@@ -265,6 +276,14 @@ export function summarizeWebScreens(files: { path: string; content?: string }[])
   // Page files that exist and no route renders: dead, or reachable some other way. Either is worth seeing.
   const routed = new Set(rows.map((r) => r.file));
   const orphans = files.filter((f) => /^client\/src\/pages\/.+\.[jt]sx$/.test(f.path) && !routed.has(f.path)).map((f) => f.path);
+  return { appPath: app.path, rows, orphans };
+}
+
+/** The web app's screens as prose, for the read. */
+export function summarizeWebScreens(files: { path: string; content?: string }[]): string | null {
+  const resolved = webRouteRows(files);
+  if (!resolved) return null;
+  const { appPath, rows, orphans } = resolved;
 
   const lines = rows.slice(0, SCREEN_INVENTORY_MAX).map((r) => {
     const calls = r.calls.length
@@ -273,7 +292,28 @@ export function summarizeWebScreens(files: { path: string; content?: string }[])
     return `${r.route}  [${r.gate}]  [${r.file}]  ${calls}`;
   });
   const publicRoutes = rows.filter((r) => r.gate !== "signed in").length;
-  return `WEB SCREENS (${rows.length} routes in ${app.path}, every one declared there; ${publicRoutes} reachable without a signed-in account; calls read off each page and the components it imports, ${IMPORT_DEPTH} deep)\n${lines.join("\n")}${rows.length > SCREEN_INVENTORY_MAX ? `\n… ${rows.length - SCREEN_INVENTORY_MAX} more` : ""}${orphans.length ? `\nPAGE FILES NO ROUTE RENDERS (${orphans.length}): ${orphans.slice(0, 20).join(", ")}${orphans.length > 20 ? `, … ${orphans.length - 20} more` : ""}` : ""}`;
+  return `WEB SCREENS (${rows.length} routes in ${appPath}, every one declared there; ${publicRoutes} reachable without a signed-in account; calls read off each page and the components it imports, ${IMPORT_DEPTH} deep)\n${lines.join("\n")}${rows.length > SCREEN_INVENTORY_MAX ? `\n… ${rows.length - SCREEN_INVENTORY_MAX} more` : ""}${orphans.length ? `\nPAGE FILES NO ROUTE RENDERS (${orphans.length}): ${orphans.slice(0, 20).join(", ")}${orphans.length > 20 ? `, … ${orphans.length - 20} more` : ""}` : ""}`;
+}
+
+/**
+ * The files an audit will be asked about whatever else it reads: what each app
+ * opens on.
+ *
+ * This is the failure that prompted it. An audit of this repository reported
+ * that signed-in web "/" was still feed-first and named the file — a file it
+ * had never read, because the excerpt budget is a couple of dozen files out of
+ * thousands and the home page didn't rank. The page had led with the path card
+ * for two weeks. "What does the product open on" is the question every audit
+ * answers and the one nobody cites a line for, so the answer is now always in
+ * front of it.
+ */
+export function entryScreenFiles(files: { path: string; content?: string }[]): string[] {
+  const out = new Set<string>();
+  const web = webRouteRows(files);
+  // Both of them: the router declares "/" twice, once for a visitor and once for an account.
+  if (web) for (const r of web.rows) if (r.route === "/" && !r.file.startsWith("(")) out.add(r.file);
+  for (const f of files) if (f.content && /^mobile\/app\/(index|_layout)\.[jt]sx?$/.test(f.path)) out.add(f.path);
+  return [...out];
 }
 
 /**
