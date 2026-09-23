@@ -8,6 +8,7 @@ import {
 import { TEXT_MODEL, PRIORITY_TEXT_MODEL } from "./aiModels";
 import { enforceRateLimit, consumeRateLimit } from "./moderation";
 import { holdCredits } from "./credit-reservations";
+import { beginSpend, overCeiling, recordSpend, slugOf, type Refusal } from "./ai-spend";
 
 export interface UserEntitlements extends Entitlements {
   tier: TierId;
@@ -95,11 +96,66 @@ export async function requireLevel<K extends keyof Entitlements>(
  * realistic human use, but a runaway automation hits the cap and gets a clear
  * message rather than silently costing us thousands of dollars.
  */
+/**
+ * A ceiling refused, said in a way somebody can act on.
+ *
+ * 429 rather than 403: nothing is wrong with the account or the request, it
+ * has simply arrived too soon, and the client should say "tomorrow" rather
+ * than "upgrade". `retryAfterSeconds` is deliberately absent — the window is
+ * a rolling day and the exact second it frees depends on which call rolls
+ * off, which is more precision than the sentence needs.
+ */
+function refuseCeiling(res: Response, over: Refusal, tier: string): void {
+  if (over.kind === "platform") {
+    /*
+     * The platform's own ceiling, not this person's. 503 rather than 429: it
+     * is the service that is unavailable, nothing about their account is
+     * wrong, and they should be told that plainly rather than left to think
+     * they have done something.
+     */
+    res.status(503).json({
+      code: "ai_paused",
+      message: over.tier === "free"
+        ? "Nova is paused for free accounts for the rest of today — more people arrived than we planned for. It comes back tomorrow, and a paid plan isn't affected."
+        : "Nova is paused for the rest of today while we sort out capacity. Nothing has been charged. Sorry — this one is on us.",
+      tier: over.tier,
+      upgradeUrl: over.tier === "free" ? "/pricing" : undefined,
+    });
+    return;
+  }
+
+  const body = over.kind === "daily_credits"
+    ? {
+        message: `That's today's limit of ${over.cap} AI credits. It resets as the day rolls on — or upgrade for a bigger one.`,
+        code: "daily_credit_cap",
+        spentToday: over.spent, dailyCap: over.cap, cost: over.amount,
+      }
+    : over.kind === "action_day"
+      ? {
+          message: `You've run that ${over.cap} time${over.cap === 1 ? "" : "s"} today, which is the limit for this plan. It's one of the expensive ones — try again tomorrow.`,
+          code: "action_daily_cap",
+          action: over.action, used: over.used, cap: over.cap,
+        }
+      : {
+          message: `You've run that ${over.cap} times in the last thirty days, which is the limit for this plan.`,
+          code: "action_monthly_cap",
+          action: over.action, used: over.used, cap: over.cap,
+        };
+  res.status(429).json({ ...body, tier, upgradeUrl: "/pricing" });
+}
+
 export async function requireCredits(
   res: Response,
   userId: string,
   amount: number,
-  label: string
+  label: string,
+  /**
+   * The action's key, for the actions that have a ceiling of their own (see
+   * `HEAVY_ACTION_LIMITS`). Optional: a call that names none is still bound by
+   * the daily credit cap, which is what protects the routes nobody thought
+   * about.
+   */
+  action?: string,
 ): Promise<UserEntitlements | null> {
   /*
    * Every AI endpoint passes through here for its credit check, which makes
@@ -121,10 +177,30 @@ export async function requireCredits(
    * the fair-use ceiling for unlimited tiers — and a route that never deducts
    * gets the credits back before its response goes out.
    */
+  /*
+   * The daily ceiling, and the per-action one where there is one. Checked
+   * before the credits are charged and before the model is called, so a
+   * refusal costs the person nothing — the same rule the rest of the metering
+   * follows.
+   */
+  const over = await overCeiling(userId, ent.tier, amount, action);
+  if (over) { refuseCeiling(res, over, ent.tier); return null; }
+
   const unlimited = ent.credits === Infinity;
   const refused = unlimited ? sub.creditsUsed + amount > FAIR_USE_MONTHLY_CAP : sub.creditsRemaining < amount;
   if (!refused && (await storage.chargeCredits(userId, amount))) {
     holdCredits(res, userId, amount);
+    /*
+     * Written down as it is charged, so the ceilings count it and so that
+     * what this call costs in tokens can be filled in once the model has
+     * answered. Never throws — see `recordSpend`.
+     */
+    const spendId = await recordSpend({
+      userId, action: action ?? slugOf(label), credits: amount, model: modelFor(ent),
+    });
+    res.locals.aiSpendId = spendId;
+    // Everything this request asks the model from here on is attributed to that row.
+    beginSpend(spendId);
     return ent;
   }
   // Refused by the check, or by the charge because a request running alongside took the last of them.

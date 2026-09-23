@@ -393,6 +393,27 @@
       "when": 1790111847714,
       "tag": "0055_two_seat_tiers",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1790111848714,
+      "tag": "0056_ai_spend",
+      "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1790111850714,
+      "tag": "0058_ai_spend_cached",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1790111852714,
+      "tag": "0060_ai_settings",
+      "breakpoints": true
     }
   ]
 }

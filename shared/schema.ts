@@ -1560,6 +1560,52 @@ export const moderationLog = pgTable("moderation_log", {
  * across instances — an in-memory counter on autoscale is one counter per
  * instance, which is N times the limit. Swept after a day.
  */
+/**
+ * What Nova actually spent, per call.
+ *
+ * Two jobs, and the second is the reason this is a table rather than a
+ * counter. The first is enforcement: a daily ceiling on credits needs to know
+ * what today has already cost, and `rate_limit_hits` cannot answer it — it
+ * counts calls rather than credits and is swept after a day.
+ *
+ * The second is that nobody could say what a subscription costs to serve. A
+ * credit is a price, not a cost: a chat turn and an audit of a whole
+ * repository are one credit and eight, and their real costs are not in that
+ * ratio at all. Without the tokens written down, "are we making money on the
+ * thirty-dollar plan" is a matter of opinion. With them it is a query.
+ *
+ * Tokens arrive after the answer does, so they are null until the call
+ * returns and stay null if it failed. A row with no tokens is a call that was
+ * charged for and produced nothing, which is worth being able to find.
+ */
+export const aiSpend = pgTable("ai_spend", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull(),
+  /** The action's key where the caller named one, else a slug of what the person was told. */
+  action: varchar("action").notNull(),
+  /** What it was priced at. */
+  credits: integer("credits").notNull(),
+  /** What it cost, once the model has answered. Null while in flight, and for a call that failed. */
+  promptTokens: integer("prompt_tokens"),
+  completionTokens: integer("completion_tokens"),
+  /**
+   * Of the prompt tokens, how many the provider served from its cache.
+   *
+   * The whole point of ordering a prompt so the unchanging part comes first is
+   * that this number goes up. Without it, "is caching working" is a thing to
+   * believe rather than a thing to look at — and a change that quietly breaks
+   * the shared prefix looks identical to one that does not.
+   */
+  cachedTokens: integer("cached_tokens"),
+  model: text("model"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  /** The daily ceiling: this person, everything since a moment. */
+  spent: index("ai_spend_user_idx").on(table.userId, table.createdAt),
+  /** The per-action ceiling: this person, this action, since a moment. */
+  perAction: index("ai_spend_action_idx").on(table.userId, table.action, table.createdAt),
+}));
+
 export const rateLimitHits = pgTable("rate_limit_hits", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull(),
@@ -3379,6 +3425,52 @@ export const simSeatPurchases = pgTable("sim_seat_purchases", {
   oncePerSession: unique("sim_seat_purchases_session").on(table.stripeSessionId),
   byCompany: index("sim_seat_purchases_company_idx").on(table.companyId, table.createdAt),
 }));
+
+/**
+ * What the last audit read for one area, and what it concluded.
+ *
+ * A codebase audit re-read the whole repository every time. On a measured day
+ * six of them were 2.19M tokens and $3.40 — 44% of everything Nova spent —
+ * and almost none of that repository had changed between runs. Reading a file
+ * to conclude what you concluded about it yesterday is the clearest waste in
+ * the product.
+ *
+ * So each area remembers the exact files it read, by content, as one
+ * fingerprint. If the next audit would read the same bytes, the stored
+ * conclusion is reused and no model is called at all. The fingerprint covers
+ * the file *contents*, not their names, so a changed file invalidates the
+ * area that reads it and nothing else.
+ *
+ * Cheap to be wrong about in one direction only: a stale fingerprint means a
+ * re-read that was not needed, which costs money. A fingerprint that matches
+ * when the code changed would mean a wrong verdict, which is why it is a hash
+ * of content and not a timestamp.
+ */
+/**
+ * The two numbers the whole AI economy hangs on, where they can be changed
+ * without a deploy.
+ *
+ * `costPerCreditMicros` is what a credit costs to serve. It is not a constant
+ * — it is whatever people happened to do that day, and it has already been
+ * measured at four cents and at two — so it has to be adjustable by whoever
+ * is watching the bill, not fixed in a file by whoever last deployed.
+ * Everything derives from it: the daily ceilings, what a price can include,
+ * and every figure on the spend console.
+ *
+ * `dailySpendCapUsd` is the brake over the whole platform.
+ *
+ * Stored in millionths of a dollar because a credit costs pennies and floats
+ * do not belong in money. One row, ever: `id` is fixed.
+ */
+export const aiSettings = pgTable("ai_settings", {
+  id: varchar("id").primaryKey().default("singleton"),
+  /** What a credit costs to serve, in millionths of a dollar. 20,000 = 2 cents. */
+  costPerCreditMicros: integer("cost_per_credit_micros").notNull(),
+  /** The platform's daily ceiling in whole dollars. Zero takes the brake off. */
+  dailySpendCapUsd: integer("daily_spend_cap_usd").notNull(),
+  updatedBy: varchar("updated_by").references(() => users.id, { onDelete: "set null" }),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
 
 export const simSeasons = pgTable("sim_seasons", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

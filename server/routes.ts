@@ -3474,7 +3474,7 @@ ${projectContext}`;
         return res.status(400).json({ message: `Write every loop first — still to do: ${still.join(", ")}.`, code: "loops_incomplete", missing: read.coverage.missing, unwritten: read.coverage.unwritten });
       }
 
-      const ent = await requireCredits(res, userId, CREDIT_COSTS.loopAudit, "Nova auditing your loops");
+      const ent = await requireCredits(res, userId, CREDIT_COSTS.loopAudit, "Nova auditing your loops", "loopAudit");
       if (!ent) return;
       const brief = [formatProjectBriefForPrompt(project), project.novaNotes ? `THE BUILDER'S STANDING NOTES (these outrank the brief)\n${project.novaNotes}` : ""].filter(Boolean).join("\n\n");
       let result: Awaited<ReturnType<typeof auditLoopsAgainstCompetition>>;
@@ -5264,7 +5264,7 @@ ${PLAIN_LANGUAGE_RULES}`,
         milestones: milestones.length,
         tasks: tasks.length,
       });
-      if (!(await requireCredits(res, userId, cost, "a roadmap rebuild"))) return;
+      if (!(await requireCredits(res, userId, cost, "a roadmap rebuild", "roadmapRebuild"))) return;
 
       const { whatChanged, newGoal, startingPoint: newStartingPoint } = req.body as {
         whatChanged?: string; newGoal?: string; startingPoint?: string;
