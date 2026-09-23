@@ -86,6 +86,7 @@ locally, and neither should be used to.
 |---|---|---|
 | `AI_STUB` | off | `1` makes every OpenAI call return a synthetic answer built from the JSON shape the prompt asked for (`server/ai-stub.ts`). Nothing reaches OpenAI, nothing is billed, and no key is needed at all — `openAiConfigured()` reports true so the features still offer themselves. Refused under `NODE_ENV=production`, whatever the value. |
 | `ALLOW_DEV_TIER_OVERRIDE` | off | Already existed for `/api/dev/set-tier`; it also gates `/api/dev/credit-wallet` and `/api/dev/reset-credits`. Outside production these routes are open without it. |
+| `DEV_FREE_CHALLENGES` | off | Posting a challenge costs nothing and the prize is held without taking it from a balance. Needs `ALLOW_DEV_TIER_OVERRIDE` too in production, and is refused outright on a server with live Stripe keys. The prize still moves through the safe, so awarding and refunding are the real code. |
 
 `POST /api/dev/credit-wallet` with `{"amountCents": 5000}` puts money on the
 signed-in account the way the Stripe webhook does — a real ledger row, a real

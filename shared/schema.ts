@@ -2966,11 +2966,94 @@ export const companies = pgTable("companies", {
    * removal) makes every earlier link stop working at once.
    */
   inviteKeyVersion: integer("invite_key_version").default(0).notNull(),
+  /**
+   * The domain somebody proved they control, normalised (shared/company-verification.ts).
+   *
+   * Unique across every company, and that uniqueness is the anti-impersonation
+   * rule doing most of the work: once acme.com is claimed, a second "ACME Inc."
+   * cannot claim it. Null only for companies that predate verification — they
+   * can still be run, and cannot post a challenge until somebody proves the
+   * domain.
+   */
+  verifiedDomain: text("verified_domain"),
+  verifiedAt: timestamp("verified_at"),
+  /** "file" or "dns" — which proof was accepted, kept for the record. */
+  verifiedMethod: text("verified_method"),
   createdAt: timestamp("created_at").notNull(),
 }, (t) => ({
   bySlug: unique("companies_slug").on(t.slug),
+  /** One domain, one company. The database is where this is true, not the route. */
+  byDomain: unique("companies_verified_domain").on(t.verifiedDomain),
 }));
 export type Company = typeof companies.$inferSelect;
+
+/**
+ * Somebody proving they control a domain, before there is a company to attach
+ * it to.
+ *
+ * Keyed on the person rather than the company on purpose: the proof has to
+ * come *first*, or the hole stays open — a company row that exists before
+ * anybody has proved anything is a company that can be named "Stripe" and left
+ * sitting there. So a verification is started, passed, and then spent on a
+ * company that is created in the same breath.
+ *
+ * Rows are kept after they are spent. "Who proved acme.com, when, and by which
+ * method" is the question worth being able to answer when somebody disputes a
+ * challenge.
+ */
+export const companyVerifications = pgTable("company_verifications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** Normalised, so the uniqueness check and the claim are about the same string. */
+  domain: text("domain").notNull(),
+  /** What must appear in the file or the TXT record. Opaque, prefixed so one found in the wild is obviously ours. */
+  token: text("token").notNull(),
+  /** Which proof was accepted; null until one is. */
+  method: text("method", { enum: ["file", "dns"] }),
+  verifiedAt: timestamp("verified_at"),
+  /** The company it was spent on. Null while unspent; a verification is good for exactly one. */
+  companyId: varchar("company_id").references(() => companies.id, { onDelete: "set null" }),
+  /** Failed checks, so a token cannot be ground against somebody else's site indefinitely. */
+  attempts: integer("attempts").default(0).notNull(),
+  /** What the last check actually saw, for somebody debugging their own DNS. */
+  lastError: text("last_error"),
+  expiresAt: timestamp("expires_at").notNull(),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  byUser: index("company_verifications_user_idx").on(t.userId, t.createdAt),
+  byDomain: index("company_verifications_domain_idx").on(t.domain),
+}));
+
+/**
+ * The safe: a challenge's prize, taken from the company up front and held here
+ * until somebody wins it.
+ *
+ * One row per challenge, and the row is the money. A prize that is a sentence
+ * in a text box costs nothing to promise and nothing to break, and the person
+ * who pays for a broken one is an entrant who spent a fortnight on it. This is
+ * what lets the challenge page say "already paid in and held" rather than
+ * "the company says".
+ *
+ * `state` is the whole lifecycle (shared/challenges-money.ts) and the row is
+ * always in exactly one of its four states.
+ */
+export const challengePrizes = pgTable("challenge_prizes", {
+  challengeId: varchar("challenge_id").primaryKey().references(() => companyChallenges.id, { onDelete: "cascade" }),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  /** Whose balance it came out of, and whose it goes back to. */
+  fundedBy: varchar("funded_by").references(() => users.id, { onDelete: "set null" }),
+  amountCents: integer("amount_cents").notNull(),
+  /** What was charged to post, kept apart from the prize: the fee is ours and is never refunded with it. */
+  feeCents: integer("fee_cents").notNull(),
+  state: text("state", { enum: ["held", "awarded", "refunded", "released"] }).default("held").notNull(),
+  /** Who it went to, once it has gone. */
+  awardedTo: varchar("awarded_to").references(() => users.id, { onDelete: "set null" }),
+  awardedAt: timestamp("awarded_at"),
+  settledAt: timestamp("settled_at"),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  byCompany: index("challenge_prizes_company_idx").on(t.companyId, t.state),
+}));
 
 /** Who acts for a company. An owner can do anything; an admin everything but delete it; a member can see and join. */
 export const companyMembers = pgTable("company_members", {

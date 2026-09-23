@@ -400,6 +400,13 @@
       "when": 1790099981639,
       "tag": "0056_decision_simulations",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1790100041639,
+      "tag": "0059_company_verification_and_prizes",
+      "breakpoints": true
     }
   ]
 }

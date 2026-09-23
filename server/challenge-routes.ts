@@ -33,6 +33,8 @@ import {
   type EntryStatus,
 } from "@shared/challenges";
 import { INDUSTRIES, hasPower } from "@shared/companies";
+import { CHALLENGE_FEE_CENTS, formatPrize, readPrize } from "@shared/challenges-money";
+import { recordPrize, releasePrize, takePrize } from "./challenge-prizes";
 
 type Challenge = typeof companyChallenges.$inferSelect;
 type Entry = typeof challengeEntries.$inferSelect;
@@ -113,19 +115,93 @@ export function registerChallengeRoutes(app: Express): void {
     })));
   });
 
+  /**
+   * Post one: verified company, fee paid, prize in the safe.
+   *
+   * Three gates, and each closes a different half of the same hole. Only a
+   * company that has proved its domain may post, so a challenge cannot be
+   * posted in somebody else's name. It costs $4.99, so posting one is a
+   * decision rather than a reflex. And the prize is taken from the balance and
+   * held here, so what an entrant is told is "already paid in" rather than
+   * "the company says".
+   *
+   * The money moves in the same transaction as the insert. A challenge whose
+   * prize was not taken, or a prize taken for a challenge that was not
+   * created, are both worse than a failed request.
+   */
   app.post("/api/companies/:id/challenges", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     const access = await companyCan(res, req.params.id, req.user.id, "challenges");
     if (!access) return;
+
+    /*
+     * Unverified companies keep everything else — their people, their seasons,
+     * their recruiting. What they cannot do is put a challenge in front of
+     * strangers, because that is the surface where being able to check who is
+     * asking is the whole of the protection.
+     */
+    if (!access.company.verifiedDomain) {
+      return res.status(403).json({
+        code: "company_not_verified",
+        message: "Only a company that has proved its website can post a challenge. Verify your domain first — it takes a file or a DNS record, and it's what tells entrants you're real.",
+      });
+    }
+
     const check = validateChallenge(req.body, Date.now());
     if (!check.ok) return res.status(400).json({ message: check.message });
     const v = check.value;
-    const [created] = await db.insert(companyChallenges).values({
-      companyId: access.company.id, title: v.title!, brief: v.brief!, criteria: v.criteria ?? null,
-      prize: v.prize ?? null, terms: v.terms!, industry: v.industry ?? null, deadline: v.deadline!,
-      status: "open", createdBy: req.user.id, createdAt: new Date(),
-    }).returning();
-    await logCompany(access.company.id, req.user.id, "challenge_posted", null, { challengeId: created.id, title: created.title });
-    res.status(201).json({ ...created, acceptingEntries: true, entryCount: 0 });
+
+    const prize = readPrize(req.body?.prizeCents);
+    if (!prize.ok) return res.status(400).json({ code: "bad_prize", message: prize.message });
+
+    const now = new Date();
+    /*
+     * The money first, then the challenge.
+     *
+     * In that order there is nothing to undo when the balance cannot cover it:
+     * the debit is one conditional update that either moved the money or did
+     * not, and the insert simply never happens. The alternative — insert, try
+     * to charge, roll back — is a rollback path running with real money in the
+     * middle of it, which is the one place not to be clever.
+     */
+    const outcome = await db.transaction(async (tx) => {
+      const taken = await takePrize({
+        tx, companyId: access.company.id, userId: req.user.id, amountCents: prize.cents, now,
+      });
+      if (!taken.ok) return { ok: false as const, refused: taken };
+
+      const [created] = await tx.insert(companyChallenges).values({
+        companyId: access.company.id, title: v.title!, brief: v.brief!, criteria: v.criteria ?? null,
+        /* The words stay for anything the money can't say — "and a call with our CTO". */
+        prize: v.prize ?? null, terms: v.terms!, industry: v.industry ?? null, deadline: v.deadline!,
+        status: "open", createdBy: req.user.id, createdAt: now,
+      }).returning();
+
+      await recordPrize({ tx, challengeId: created.id, companyId: access.company.id, userId: req.user.id, taken, now });
+      return { ok: true as const, created, taken };
+    });
+
+    if (!outcome.ok) {
+      const r = outcome.refused;
+      return res.status(402).json({
+        code: "insufficient_balance",
+        message: r
+          ? `Posting this needs ${formatPrize(r.needCents)} — ${formatPrize(CHALLENGE_FEE_CENTS)} to post and ${formatPrize(prize.cents)} held for the prize — and your balance is ${formatPrize(r.haveCents)}. Top up and it goes straight out.`
+          : "Posting this needs more than your balance covers. Top up and it goes straight out.",
+        needCents: r?.needCents,
+        haveCents: r?.haveCents,
+      });
+    }
+
+    await logCompany(access.company.id, req.user.id, "challenge_posted", null, {
+      challengeId: outcome.created.id, title: outcome.created.title,
+      prizeCents: prize.cents, feeCents: outcome.taken.feeCents,
+    });
+    res.status(201).json({
+      ...outcome.created,
+      acceptingEntries: true, entryCount: 0,
+      prize: { amountCents: prize.cents, state: "held" },
+      paid: { feeCents: outcome.taken.feeCents, prizeHeldCents: prize.cents },
+    });
   });
 
   app.patch("/api/companies/:id/challenges/:cid", isAuthenticated, rateLimit("write"), async (req: any, res) => {
@@ -221,7 +297,42 @@ export function registerChallengeRoutes(app: Express): void {
     if (!entry) return res.status(404).json({ message: "No such entry." });
     if (entry.status === "withdrawn") return res.status(409).json({ message: "That entry was withdrawn." });
     const [updated] = await db.update(challengeEntries).set(set).where(eq(challengeEntries.id, entry.id)).returning();
-    res.json(updated);
+
+    /*
+     * Naming a winner pays the prize, there and then.
+     *
+     * Not on announce, and not on a nightly job: the moment a company says who
+     * won is the moment the money should be theirs, and anything later is a
+     * window in which a company can name a winner and quietly unname them.
+     * `releasePrize` moves the row out of `held` in the same statement it
+     * reads, so two judges clicking at once cannot pay it twice — and a second
+     * winner named afterwards finds nothing left to release, which is the
+     * honest outcome rather than a second payout.
+     */
+    let paid: { amountCents: number } | null = null;
+    if (status === "winner") {
+      const released = await releasePrize({
+        challengeId: c.id, exit: "awarded", toUserId: entry.userId, now: new Date(),
+      });
+      if (released) {
+        paid = { amountCents: released.amountCents };
+        await logCompany(access.company.id, req.user.id, "challenge_prize_awarded", entry.userId, {
+          challengeId: c.id, entryId: entry.id, amountCents: released.amountCents,
+        });
+        /*
+         * The existing "news on your entry" kind, rather than a new one: the
+         * announcement below already uses it, and the money is the news. The
+         * excerpt is what the person reads, so it says the amount.
+         */
+        await notify({
+          recipients: [entry.userId], actorId: req.user.id, kind: "challenge_result",
+          targetId: `${c.id}:${entry.id}`, projectId: entry.projectId,
+          excerpt: `${access.company.name} picked your entry to "${c.title}". ${formatPrize(released.amountCents)} is on your balance.`,
+        }).catch(() => {});
+      }
+    }
+
+    res.json({ ...updated, prizePaid: paid });
   });
 
   app.post("/api/companies/:id/challenges/:cid/announce", isAuthenticated, rateLimit("write"), async (req: any, res) => {
@@ -248,6 +359,23 @@ export function registerChallengeRoutes(app: Express): void {
       targetId: `${c.id}:${e.id}`, excerpt: resultExcerpt(access.company.name, c.title, e.status as EntryStatus),
       projectId: e.projectId,
     })));
+    /*
+     * Nobody won: the prize goes back.
+     *
+     * Announcing is the end of the challenge, so it is the moment the money
+     * has to stop being held — a prize that sat in the safe after the results
+     * were out would be the company's money held for nothing, which is the
+     * mirror image of the problem this whole mechanism exists to fix.
+     * `releasePrize` finds nothing to move when a winner was already paid, so
+     * this is safe either way.
+     */
+    const returned = await releasePrize({ challengeId: c.id, exit: "refunded", now: new Date() });
+    if (returned) {
+      await logCompany(access.company.id, req.user.id, "challenge_prize_refunded", null, {
+        challengeId: c.id, amountCents: returned.amountCents,
+      });
+    }
+
     await logCompany(access.company.id, req.user.id, "challenge_announced", null, { challengeId: c.id, title: c.title, notified: entries.length });
     res.json({ ...updated, notified: entries.length });
   });

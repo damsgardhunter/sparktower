@@ -210,13 +210,30 @@ describe("the price list", () => {
       // second scenario is where the learning is, and charging for it would be
       // charging somebody to compare.
       simulations: 300,
+      // Posting a company challenge, at $4.99 — deliberately not a whole
+      // dollar. It is a deterrent rather than revenue: the note in
+      // shared/plans.ts says why, and the prize it holds is separate money
+      // that never belongs to us.
+      challenge: 499,
       // A day of pictures. Its own price rather than a small action, because
       // an image is the most expensive thing here per press.
       imagePass: 500,
     });
-    // Whole dollars, on purpose: the point of leaving credits is that nobody
-    // has to convert a number into money in their head.
-    for (const cents of Object.values(OUTCOME_PRICE_CENTS)) expect(cents % 100).toBe(0);
+    /*
+     * Whole dollars, on purpose — with one exception, on purpose.
+     *
+     * The point of leaving credits behind was that nobody should have to
+     * convert a number into money in their head, and $3 does that better than
+     * $2.99. `challenge` earns the exception because it is not revenue: it is
+     * a deterrent, set at the price that makes posting one a decision. Named
+     * rather than loosened to "anything goes", so the next price added has to
+     * argue for itself the way this one did.
+     */
+    const NOT_WHOLE_DOLLARS = new Set(["challenge"]);
+    for (const [id, cents] of Object.entries(OUTCOME_PRICE_CENTS)) {
+      if (NOT_WHOLE_DOLLARS.has(id)) continue;
+      expect(cents % 100, `${id} should be whole dollars`).toBe(0);
+    }
     expect(MONTHLY_SMALL_ACTIONS).toBe(25);
   });
 

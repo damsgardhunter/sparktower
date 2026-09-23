@@ -37,9 +37,10 @@ import crypto from "node:crypto";
 import { and, asc, desc, eq, lt, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "./db";
-import { companies, companyAuditLog, companyMembers, users, userProfiles } from "@shared/schema";
+import { companies, companyAuditLog, companyMembers, companyVerifications, users, userProfiles } from "@shared/schema";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { rateLimit } from "./moderation";
+import { spendableVerification } from "./company-verification-routes";
 import { feedDisplayName } from "./feed-routes";
 import { publicBaseUrl } from "./public-url";
 import { notify } from "./notifications";
@@ -239,18 +240,47 @@ export function registerCompanyRoutes(app: Express): void {
       if (!checked.ok) return res.status(400).json({ message: checked.message, code: "invalid_input", field: checked.field });
       const input = checked.value as CompanyInput;
       const now = new Date();
-      const company = await db.transaction(async (tx) => {
+
+      /*
+       * A proven domain, or no company.
+       *
+       * Anybody could create a company called anything and post challenges
+       * under it, and a builder could spend a fortnight entering one for a
+       * company that did not exist. The proof comes first — see
+       * company-verification-routes.ts for why it is keyed on the person
+       * rather than the company — and it is spent inside this transaction, so
+       * one proof can never become two companies.
+       */
+      const result = await db.transaction(async (tx) => {
+        const claim = await spendableVerification(tx, req.user.id, req.body?.verificationId);
+        if (!claim.ok) return claim;
+
         const [row] = await tx.insert(companies).values({
           name: input.name,
           // Random rather than counted, so a slug says nothing about how many companies share a name.
           slug: slugify(input.name, crypto.randomBytes(4).toString("hex")),
-          website: input.website ?? null, industry: input.industry ?? null, size: input.size ?? null,
+          /*
+           * The website is the proven domain, not whatever was typed in the
+           * form. Letting those differ would put "acme.com" on the badge and
+           * send people to somewhere else entirely.
+           */
+          website: `https://${claim.verification.domain}`,
+          verifiedDomain: claim.verification.domain,
+          verifiedAt: now,
+          verifiedMethod: claim.verification.method,
+          industry: input.industry ?? null, size: input.size ?? null,
           description: input.description ?? null, createdBy: req.user.id, createdAt: now,
         }).returning();
         await tx.insert(companyMembers).values({ companyId: row.id, userId: req.user.id, role: "owner", joinedAt: now });
-        return row;
+        await tx.update(companyVerifications).set({ companyId: row.id })
+          .where(eq(companyVerifications.id, claim.verification.id));
+        return { ok: true as const, company: row };
       });
-      res.status(201).json({ company: publicCompany(company), role: "owner" });
+
+      if (!result.ok) {
+        return res.status(result.status).json({ code: result.code, message: result.message });
+      }
+      res.status(201).json({ company: publicCompany(result.company), role: "owner" });
     } catch (error) {
       console.error("Company create error:", error);
       res.status(500).json({ message: "Couldn't create that company." });

@@ -57,6 +57,7 @@ export type PricedOutcomeId =
   | "seasonSeat"
   | "wwit"
   | "simulations"
+  | "challenge"
   | "imagePass";
 
 /**
@@ -78,6 +79,12 @@ export type PricedOutcomeId =
  *                month, so they are not covered by the ordinary day pass: the
  *                first generation for a project (or a badge) is free, and
  *                anyone who wants more buys the day.
+ *   challenge  — posting a company challenge. Not revenue: $4.99 is not a
+ *                business. It is the cheapest way to make posting a challenge
+ *                a decision rather than a reflex, on a surface where the cost
+ *                of a careless one falls on whoever spends a fortnight
+ *                entering it. The prize is separate and is held, not spent —
+ *                see shared/challenges-money.ts.
  *   simulations— the decision simulator and the ten-year outlook for one
  *                project: ask what happens if you hire twelve people, or put a
  *                thousand a month into marketing, and get the answer worked out
@@ -102,6 +109,7 @@ export const OUTCOME_PRICE_CENTS: Record<PricedOutcomeId, number> = {
   seasonSeat: 300,
   wwit: 300,
   simulations: 300,
+  challenge: 499,
   imagePass: 500,
 };
 
@@ -384,6 +392,10 @@ export const OUTCOME_COPY: Record<PricedOutcomeId, { name: string; blurb: string
   wwit: {
     name: "What would it take?",
     blurb: "Pick a size — $1m, $100m, $1bn or $50bn a year — and Nova builds the route there from your own check-in numbers: the gap, the stages, what breaks first, and an honest verdict on whether it's reachable from here.",
+  },
+  challenge: {
+    name: "Post a challenge",
+    blurb: "One challenge, posted by a verified company. The prize is separate and is held by SparkTower until you pick a winner, so entrants can see the money is real before they spend a fortnight on it.",
   },
   simulations: {
     name: "Simulate a decision",
