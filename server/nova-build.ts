@@ -25,6 +25,7 @@ import { buildOperableProjectState } from "./project-operations";
 import { workKindFor } from "@shared/phase-trees/work";
 import { getUserEntitlements } from "./entitlements";
 import { hasBuildPass } from "./wallet";
+import { notify } from "./notifications";
 import {
   BUILD_STAGE_COPY, BUILD_STALE_MS, BUILD_STEP_CAP, buildSummary,
   type BuildRunStatus, type BuildStage,
@@ -269,11 +270,36 @@ export async function runBusinessBuild(projectId: string, userId: string): Promi
     await run.stage("finishing", null);
     await run.progress(done, forYou, null);
     await run.finish({});
+    await tell(userId, projectId, run.id, buildSummary(done, forYou));
 
   } catch (err: any) {
     console.error(`[nova-build] build for ${projectId} failed:`, err);
-    await run.finish({ error: err?.message ? String(err.message).slice(0, 500) : "The build stopped unexpectedly." });
+    const message = err?.message ? String(err.message).slice(0, 300) : "The build stopped unexpectedly.";
+    await run.finish({ error: message });
+    /*
+     * Told about the failure too, and for the stronger reason: they paid,
+     * walked away, and would otherwise come back to a path that looks
+     * untouched with nothing saying why.
+     */
+    await tell(userId, projectId, run.id, `It stopped early: ${message} Nothing was charged twice — open it and start it again.`);
   }
+}
+
+/**
+ * Ring the bell for the person who paid.
+ *
+ * A build takes minutes and outlives the page, which is the whole reason this
+ * exists: somebody who buys it and goes to make a coffee has no other way of
+ * finding out it is done. `allowSelf` because they are both who started it and
+ * who is being told, and the run id as the target so each build notifies once
+ * and a second build still does.
+ */
+async function tell(userId: string, projectId: string, runId: string, excerpt: string) {
+  if (!runId) return;
+  await notify({
+    recipients: [userId], actorId: userId, kind: "nova_build_done",
+    targetId: runId, projectId, excerpt, allowSelf: true,
+  }).catch((err) => console.error("[nova-build] couldn't notify:", err));
 }
 
 /**

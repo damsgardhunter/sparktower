@@ -1,79 +1,156 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { errorText } from "@/lib/api-error";
 import { useConfirmPurchase } from "@/components/payment-dialog";
-import { buildSummary, type BuildRunStatus } from "@shared/nova-build";
+import { useNow } from "@/components/section/live";
+import { NOVA_GRADIENT } from "@/components/section/path-types";
+import { formatElapsed } from "@/lib/audit-status";
+import {
+  useBuildStatus, quietBuildErrors, buildStageLabel, buildStatusKey, STAGE_ORDER,
+} from "@/lib/build-status";
+import { buildSummary } from "@shared/nova-build";
 import { OUTCOME_COPY, OUTCOME_PRICE_CENTS, formatMoney } from "@shared/plans";
 import { AlertTriangle, Check, Loader2, Sparkles, UserRound } from "lucide-react";
 
 /**
- * "Nova builds your business" on the section it will build.
+ * "Nova builds your business", and what it is doing while it does it.
  *
- * Three states, because there are three things a person can be doing here:
- * deciding whether to buy it, watching it happen, and reading what it did.
+ * The running state is deliberately the same thing the Codebase tab shows for
+ * a code read — a segment per stage, a live dot, the stage in words and the
+ * time so far — because they are the same kind of wait and a builder should
+ * not have to learn two of them. What is added is the step: "19 of 28" and the
+ * name of the one it is on, since a build has somewhere to be and "which step"
+ * is the question people actually have while they watch.
  *
- * The middle one is why this polls a server-side run rather than holding a
- * spinner: the build takes minutes and outlives the tab that started it, and
- * somebody who has just spent $30 will absolutely refresh the page.
+ * It reads a server-side run rather than holding a spinner, so the wait
+ * survives a refresh, a second tab and the phone — which matters most here,
+ * because somebody who has just spent $30 will absolutely reload the page.
  */
+function LiveDot() {
+  return (
+    <span className="relative flex h-2 w-2 shrink-0">
+      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+      <span className={`relative inline-flex h-2 w-2 rounded-full ${NOVA_GRADIENT}`} />
+    </span>
+  );
+}
+
 export function NovaBuildsBusiness({ projectId }: { projectId: string }) {
   const { toast } = useToast();
   const confirmPurchase = useConfirmPurchase();
+  /*
+   * Set the moment the button is pressed and cleared when the run row appears.
+   * The row does not exist until the server has written it, and without this
+   * the offer card sits there unchanged after the press — the one moment
+   * somebody is most likely to press it again.
+   */
+  const [starting, setStarting] = useState(false);
+  const { running, last, paid } = useBuildStatus(projectId, { expectRunning: starting });
+  // Ticks the elapsed time every second while it runs, and hardly ever otherwise.
+  const now = useNow(running ? 1_000 : 30_000);
 
-  const { data } = useQuery<BuildRunStatus>({
-    queryKey: [`/api/projects/${projectId}/nova-build`],
-    // While it runs, often enough to feel live; when it isn't, not at all.
-    refetchInterval: (q) => (q.state.data?.running ? 3_000 : false),
-    refetchOnWindowFocus: true,
-  });
-
+  useEffect(() => { if (running) setStarting(false); }, [running]);
   const start = useMutation({
     mutationFn: async () => {
-      // Free on a project already paid for, so the confirm is only for a first buy.
-      if (!data?.paid && !(await confirmPurchase("buildMyBusiness", {
+      // Free on a project already paid for, so the price is only asked the first time.
+      if (!paid && !(await confirmPurchase("buildMyBusiness", {
         title: OUTCOME_COPY.business.name,
         detail: `${OUTCOME_COPY.business.blurb} Nova writes every step that is its to write, and leaves the decisions that are yours with the options already researched.`,
       }))) return null;
+      // This screen reports its own failure, so the shared watcher doesn't toast it too.
+      quietBuildErrors(projectId, 60_000);
+      setStarting(true);
       return (await apiRequest("POST", "/api/nova/build-my-business", { projectId })).json();
     },
     onSuccess: (result) => {
-      if (!result) return;  // They cancelled at the price.
-      void queryClient.invalidateQueries({ queryKey: [`/api/projects/${projectId}/nova-build`] });
-      toast({ title: "Nova is building", description: "It works through your path step by step. You can leave this page." });
+      if (!result) { setStarting(false); return; }  // They cancelled at the price.
+      void queryClient.invalidateQueries({ queryKey: buildStatusKey(projectId) });
+      toast({ title: "Nova is building", description: "It works down your path step by step. You can close this page — it keeps going, and we'll tell you when it's done." });
     },
-    onError: (e) => toast({ title: "Couldn't start the build", description: errorText(e), variant: "destructive" }),
+    onError: (e) => {
+      setStarting(false);
+      toast({ title: "Couldn't start the build", description: errorText(e), variant: "destructive" });
+    },
   });
 
-  const running = data?.running;
-  const last = data?.last;
+
+  /*
+   * Pressed, and the run row not written yet. Shown as its own line rather
+   * than by faking a stage, because inventing progress for work that has not
+   * started is how a progress bar stops meaning anything.
+   */
+  if (starting && !running) {
+    return (
+      <div className="rounded-lg border border-primary/30 p-4 space-y-2" data-testid="nova-build-starting">
+        <p className="flex items-center gap-1.5 text-xs font-medium">
+          <LiveDot />
+          Starting the build…
+        </p>
+        <p className="text-xs text-muted-foreground">Nova is getting your path ready.</p>
+      </div>
+    );
+  }
 
   if (running) {
-    const total = Math.max(running.stepsTotal, 1);
+    /*
+     * Elapsed is counted from the run's own start rather than from the number
+     * the server sent, so the seconds move between polls instead of jumping
+     * three at a time.
+     */
+    const elapsed = Math.max(running.elapsedSeconds, Math.round((now - Date.parse(running.startedAt)) / 1000));
+    const stageIndex = Math.max(0, STAGE_ORDER.indexOf(running.stage));
     const through = running.stepsDone + running.stepsForYou;
     return (
-      <div className="rounded-lg border border-primary/30 p-4 space-y-3" data-testid="nova-build-running">
-        <div className="flex items-center gap-2">
-          <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          <p className="text-sm font-medium">{running.stageLabel}</p>
-          <span className="ml-auto text-xs text-muted-foreground" data-testid="text-build-count">
-            {through} of {running.stepsTotal || "—"}
+      <div className="rounded-lg border border-primary/30 p-4 space-y-2" data-testid="nova-build-running">
+        {/* One segment per stage, as the code read does it. */}
+        {/* Columns inline rather than as a Tailwind class: the count comes from
+            the stage list, and Tailwind can't generate a class from a variable. */}
+        <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${STAGE_ORDER.length}, minmax(0, 1fr))` }} aria-hidden>
+          {STAGE_ORDER.map((st, i) => (
+            <div key={st} className="h-1.5 overflow-hidden rounded-full bg-muted">
+              <div
+                className={`h-full rounded-full ${NOVA_GRADIENT} transition-all duration-700 ${i === stageIndex ? "animate-pulse" : ""}`}
+                style={{
+                  width: i < stageIndex ? "100%"
+                    // The building stage knows how far along it really is; the others don't, so they breathe.
+                    : i === stageIndex
+                      ? (st === "building" && running.stepsTotal ? `${Math.max(8, Math.round((through / running.stepsTotal) * 100))}%` : "60%")
+                      : "0%",
+                }}
+              />
+            </div>
+          ))}
+        </div>
+
+        <div className="text-xs text-muted-foreground flex items-center justify-between gap-x-3 gap-y-0.5 flex-wrap">
+          <span className="flex items-center gap-1.5 font-medium text-foreground" data-testid="text-build-stage">
+            <LiveDot />
+            {buildStageLabel(running.stage)}…
+          </span>
+          <span className="flex items-center gap-1.5 min-w-0">
+            {running.stepsTotal > 0 && (
+              <span className="tabular-nums" data-testid="text-build-count">step {Math.min(through + 1, running.stepsTotal)} of {running.stepsTotal}</span>
+            )}
+            <span className="tabular-nums" data-testid="text-build-elapsed">· {formatElapsed(elapsed)}</span>
           </span>
         </div>
-        <Progress value={running.stepsTotal ? (through / total) * 100 : undefined} className="h-1.5" />
+
         {running.currentTitle && (
-          <p className="text-xs text-muted-foreground truncate" data-testid="text-build-current">{running.currentTitle}</p>
+          <p className="text-xs text-muted-foreground truncate" title={running.currentTitle} data-testid="text-build-current">
+            {running.currentTitle}
+          </p>
         )}
         <p className="text-xs text-muted-foreground">
-          This takes a few minutes. You can close the page — it keeps going, and what it writes lands on your path.
+          A few minutes. You can close the page — it keeps going, and the bell will tell you when it's done.
         </p>
       </div>
     );
   }
 
-  if (last && data?.paid) {
+  if (last && paid) {
     return (
       <div className="rounded-lg border p-4 space-y-3" data-testid="nova-build-done">
         {last.error ? (

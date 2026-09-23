@@ -61,6 +61,12 @@ export function notificationText(n: NotificationShape): string {
     case "artifact_signup": return `${who} joined SparkTower from your artifact`;
     case "invite_accepted": return n.projectTitle ? `${who} accepted your invite to ${n.projectTitle}` : `${who} accepted your invite`;
     case "weekly_update": return n.projectTitle ? `Share this week's progress on ${n.projectTitle}` : "Share this week's progress";
+    /*
+     * The excerpt carries what it actually did ("Nova wrote 19 steps, and left
+     * 9 for you"), so this line stays the headline and the count is read
+     * underneath it rather than crammed in.
+     */
+    case "nova_build_done": return n.projectTitle ? `Nova finished building ${n.projectTitle}` : "Nova finished building your path";
     case "feedback_used": return n.projectTitle ? `${who} used your feedback in an update on ${n.projectTitle}` : `${who} used your feedback in an update`;
     // Not "cancelled": one person left, and the other is being told, not blamed.
     case "sprint_left": return `${who} left your sprint`;
@@ -107,6 +113,9 @@ export function notificationHref(n: Pick<NotificationShape, "kind" | "actorId" |
   // The path lives on the project's dashboard: straight to the section the step is on, with its Next Step card in view.
   if ((n.kind === "path_step_done" || n.kind === "next_step") && n.projectId) return pathHref(n.projectId, { section: n.section, focus: n.focus });
   if (n.kind === "weekly_update" && n.projectId) return pathHref(n.projectId, { section: n.section, focus: PATH_FOCUS.weekly });
+  // Onto the path it just built, at the next step — which after a build is the
+  // first decision it left for them.
+  if (n.kind === "nova_build_done" && n.projectId) return pathHref(n.projectId, { section: n.section });
   if (n.kind === "artifact_signup" && n.projectId) return `/projects/${n.projectId}/manage`;
   if (n.kind === "project_follow" && n.projectId) return `/projects/${n.projectId}`;
   if (n.kind === "invite_accepted" && n.projectId) return `/projects/${n.projectId}/manage?tab=team`;

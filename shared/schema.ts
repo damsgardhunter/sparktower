@@ -1457,6 +1457,9 @@ export const NOTIFICATION_KINDS = [
   "project_application", "application_accepted", "application_rejected",
   // The owner removed you from their project's team.
   "project_removed",
+  // Nova finished building out a path you paid for. It takes minutes and
+  // outlives the page, so the bell is how somebody who walked away finds out.
+  "nova_build_done",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 

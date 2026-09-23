@@ -149,6 +149,36 @@ describe("Nova builds the whole business", () => {
     }
   }, 300_000);
 
+  it("rings the bell when it's done, because the build outlives the page", async () => {
+    const app = await getTestApp();
+    const b = await builder(app, { balanceCents: OUTCOME_PRICE_CENTS.business });
+
+    expect((await b.agent.post("/api/nova/build-my-business").send({ projectId: b.projectId })).status).toBe(201);
+    const status = await settled(b);
+    expect(status.last.error).toBeNull();
+
+    /*
+     * The whole point of the notification: it takes minutes, so the person who
+     * paid has very likely gone to do something else, and the bell is the only
+     * thing that will find them.
+     */
+    const bell = await b.agent.get("/api/notifications");
+    expect(bell.status).toBe(200);
+    const built = (bell.body.items as any[]).find((x) => x.kind === "nova_build_done");
+    expect(built, JSON.stringify(bell.body.items).slice(0, 300)).toBeTruthy();
+    expect(built.project.id).toBe(b.projectId);
+
+    // It says what it did, not just that something happened.
+    expect(built.text).toContain("Nova finished building");
+    expect(built.excerpt).toMatch(/Nova wrote|nothing left to build/i);
+    // And it lands back on the path it just built, where the open steps are.
+    expect(built.href).toContain(`/projects/${b.projectId}/manage`);
+
+    // It is about their own work, so they are told even though they started it.
+    const unread = await b.agent.get("/api/notifications/unread-count");
+    expect(unread.body.count ?? unread.body.unread ?? 0).toBeGreaterThan(0);
+  }, 300_000);
+
   it("is watchable while it happens, because it outlives the request that paid for it", async () => {
     const app = await getTestApp();
     const b = await builder(app, { balanceCents: OUTCOME_PRICE_CENTS.business });
