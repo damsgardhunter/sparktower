@@ -27,6 +27,7 @@ import { respondToAiError } from "./ai-json";
 import {
   PROJECT_VISUAL_SLOTS, isProjectVisualSlot,
   type ProjectVisualSlot, type ProjectVisualSlotDef, type ProjectVisuals,
+  takeFor,
 } from "@shared/project-visuals";
 
 /** The formats the image edit endpoint takes, by magic bytes. */
@@ -62,7 +63,8 @@ const BRIEF_LABELS: Record<string, string> = {
   successMetrics: "What success looks like",
 };
 
-function visualPrompt(project: Project, def: ProjectVisualSlotDef, hasCover: boolean) {
+/** Exported for the test that redrawing asks for a different picture, like postImagePrompt. */
+export function visualPrompt(project: Project, def: ProjectVisualSlotDef, hasCover: boolean, draws: number) {
   const context = def.briefKeys
     .map((k) => {
       const v = String((project as Record<string, unknown>)[k] ?? "").trim();
@@ -82,6 +84,17 @@ function visualPrompt(project: Project, def: ProjectVisualSlotDef, hasCover: boo
     context ? `What the project is about:\n${context}` : "",
     `Style: polished, modern, editorial; cohesive with the other images on the same page.`,
     def.shape === "wide" ? `Wide landscape composition.` : `Square composition, centred subject.`,
+    /*
+     * What makes a redraw a different picture. Everything above is fixed by
+     * the project, so without this the second press sends the same prompt and
+     * gets the same image — which is what "redo does nothing" actually was.
+     * The take changes where the camera is and how it is lit, never the
+     * subject or the palette, because those are the builder's choices.
+     */
+    takeFor(draws),
+    draws > 0
+      ? `This is attempt ${draws + 1} at this image. Compose it differently from a straightforward first attempt — a different viewpoint and arrangement, the same subject and the same brand.`
+      : "",
     `No text, lettering, words or numbers anywhere in the image.`,
   ].filter(Boolean).join("\n");
 }
@@ -90,10 +103,11 @@ function visualPrompt(project: Project, def: ProjectVisualSlotDef, hasCover: boo
 async function drawSlot(
   project: Project, def: ProjectVisualSlotDef,
   logo: Awaited<ReturnType<typeof readReference>>, cover: Awaited<ReturnType<typeof readReference>>,
+  draws: number,
 ): Promise<string> {
   const response = await openai.images.edit({
     model: IMAGE_MODEL,
-    prompt: visualPrompt(project, def, !!cover),
+    prompt: visualPrompt(project, def, !!cover, draws),
     image: cover ? [logo!, cover] : [logo!],
     size: def.shape === "wide" ? "1536x1024" : "1024x1024",
     quality: IMAGE_QUALITY,
@@ -186,9 +200,11 @@ export function registerProjectVisualRoutes(app: Express) {
       });
       if (!permit) return;
 
+      // How many times each slot has already been drawn — the take rotates on it.
+      const takes = currentVisuals(project).takes ?? {};
       const results = await Promise.all(slots.map(async (def) => {
         try {
-          return { slot: def.slot, path: await drawSlot(project, def, logo, cover), error: null };
+          return { slot: def.slot, path: await drawSlot(project, def, logo, cover, takes[def.slot] ?? 0), error: null };
         } catch (err: any) {
           return { slot: def.slot, path: null, error: String(err?.message || err) };
         }
@@ -202,6 +218,12 @@ export function registerProjectVisualRoutes(app: Express) {
 
       let visuals = currentVisuals(project);
       for (const r of made) visuals = unhide({ ...visuals, [r.slot]: r.path! }, r.slot);
+      /*
+       * Counted only for the slots that actually produced a picture, so a
+       * failed draw doesn't burn a take and hand the next press the one after
+       * the one it never saw.
+       */
+      visuals = { ...visuals, takes: { ...takes, ...Object.fromEntries(made.map((r) => [r.slot, (takes[r.slot] ?? 0) + 1])) } };
       const saved = await saveVisuals(project.id, visuals);
 
       // Recorded with what was actually drawn, so a slot that failed isn't billed against the hour.
