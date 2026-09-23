@@ -27,6 +27,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
 import { useToast } from "@/hooks/use-toast";
 import { useConfirmPurchase } from "@/components/payment-dialog";
+import { useOpenSurface } from "@/components/section/live";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -75,6 +76,8 @@ const stamp = (iso: string) =>
   new Date(iso).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
 export function WhatWouldItTake({ projectId }: { projectId: string }) {
+  // RUN.S4.5's card sends people here rather than offering to write an answer onto the step.
+  const surface = useOpenSurface("wwit");
   const { data, isLoading } = useQuery<WwitPayload>({ queryKey: wwitKey(projectId) });
   const [chosen, setChosen] = useState<WwitTargetId>("m1");
   const [comparing, setComparing] = useState<WwitTargetId | null>(null);
@@ -102,7 +105,7 @@ export function WhatWouldItTake({ projectId }: { projectId: string }) {
   const compareTarget = comparing ? data.targets.find((t) => t.id === comparing) ?? null : null;
 
   return (
-    <Card data-testid="wwit">
+    <Card ref={surface.ref} className={surface.asked ? "ring-2 ring-primary ring-offset-2 ring-offset-background" : undefined} data-testid="wwit">
       <CardContent className="p-5 space-y-4">
         <div className="flex items-center gap-2 flex-wrap">
           <TrendingUp className="h-3.5 w-3.5 text-muted-foreground" />

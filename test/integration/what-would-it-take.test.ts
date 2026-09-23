@@ -455,6 +455,56 @@ describe("what it costs", () => {
   });
 });
 
+/**
+ * The step on the path, and the generic button that used to be wrong on it.
+ *
+ * RUN.S4.5 is a `nova-builds` milestone whose work is not a thing Nova writes
+ * onto the step — it is this roadmap. Left unmarked, the ordinary path-work
+ * generator would answer it with a plausible paragraph and tick it, and the
+ * builder would have a finished step and no roadmap, with nothing on screen
+ * to tell them apart.
+ */
+describe("the step that points at the roadmap", () => {
+  it("refuses to have a generic answer written onto it, and says where the work happens", async () => {
+    const app = await getTestApp();
+    const owner = await person(app);
+    const id = await runProject(owner);
+
+    const path = await owner.agent.get(`/api/projects/${id}/path`);
+    expect(path.status).toBe(200);
+    const all = (path.body.phases as any[]).flatMap((p) => p.milestones);
+    const step = all.find((m) => m.id === "RUN.S4.5");
+    expect(step, "RUN.S4.5 is on the Run path").toBeTruthy();
+
+    // The tree says where it is done, so the card can offer the way there.
+    expect(step.doneOn).toMatchObject({ surface: "wwit" });
+    expect(step.doneOn.label).toBeTruthy();
+
+    // …and the generator is refused on the server, not only hidden in the button.
+    const forced = await owner.agent.post(`/api/projects/${id}/path/work`).send({ taskId: step.taskId });
+    expect(forced.status, JSON.stringify(forced.body)).toBe(400);
+    expect(forced.body.code).toBe("done_on_surface");
+    expect(forced.body.surface).toBe("wwit");
+
+    // Nothing was written and nothing was ticked.
+    const after = await owner.agent.get(`/api/projects/${id}/path`);
+    const still = (after.body.phases as any[]).flatMap((p) => p.milestones).find((m) => m.id === "RUN.S4.5");
+    expect(still.done, "refused, so still open").toBe(false);
+  });
+
+  it("is what closes the step once the roadmap is actually built", async () => {
+    mode = "ok";
+    const app = await getTestApp();
+    const owner = await person(app);
+    const id = await runProject(owner);
+    await fileWeeks(owner.agent, id, 4, { covers: 400, avg_spend: 25, cash: 20_000 });
+
+    expect(await milestoneStatus(id, "RUN.S4.5")).not.toBe("done");
+    expect((await owner.agent.post(`/api/projects/${id}/what-would-it-take/m1`)).status).toBe(200);
+    expect(await milestoneStatus(id, "RUN.S4.5"), "the surface ticks its own step").toBe("done");
+  });
+});
+
 describe("the hand-off to the board", () => {
   it("puts the first ninety days on the board, in the Run section, saying where they came from", async () => {
     mode = "ok";

@@ -2,7 +2,7 @@
  * The shape of GET /api/projects/:id/path?goal=… as the section screens read
  * it, and the small formatters every one of them shares.
  */
-import type { IntakeQuestion, WorkKind, LoopType, Actor, VerificationTier, PaceState, ProjectionMode } from "@shared/phase-trees";
+import type { IntakeQuestion, WorkKind, LoopType, Actor, VerificationTier, PaceState, ProjectionMode, PathSurface } from "@shared/phase-trees";
 import type { ProjectGoal } from "@shared/goals";
 import type { CapitalProfile } from "@shared/capital";
 import type { WorkRow } from "@/components/path-work";
@@ -15,6 +15,8 @@ export interface PathMilestone {
   intake?: IntakeQuestion[];
   prefill?: "resume";
   routeQuestion?: string;
+  /** See BackboneMilestone.doneOn: finished by using a surface of its own. */
+  doneOn?: { surface: PathSurface; label: string };
 }
 export interface PathLoop { taskId: string; title: string; description: string; status: string; expanded: boolean; type: LoopType }
 export interface NextAction extends PathMilestone {

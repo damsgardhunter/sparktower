@@ -3209,6 +3209,19 @@ RULES:
       if (!ctx) return res.status(400).json({ message: "That task isn't on this project's path.", code: "not_on_path" });
       const kind = workKindFor(ctx.actor, ctx.milestone?.work);
       if (kind === "intake") return res.status(400).json({ message: "This step is answered by choosing — tap your answers.", code: "invalid_input" });
+      /*
+       * Refused here and not only in the button. A step with its own surface
+       * is finished by that surface doing its thing — the roadmap built, the
+       * jobs set up, the goals filed — and the generic generator would write a
+       * plausible paragraph over it and close it, leaving the step ticked and
+       * the work not done. The button is not the only way to reach this route.
+       */
+      if (ctx.milestone?.doneOn) {
+        return res.status(400).json({
+          message: `This step is finished by using ${ctx.milestone.doneOn.label}, not by Nova writing an answer here.`,
+          code: "done_on_surface", surface: ctx.milestone.doneOn.surface, label: ctx.milestone.doneOn.label,
+        });
+      }
       const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova working on a milestone");
       if (!ent) return;
       const [state, artifacts] = await Promise.all([

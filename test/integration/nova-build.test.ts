@@ -149,6 +149,42 @@ describe("Nova builds the whole business", () => {
     }
   }, 300_000);
 
+  it("leaves a step alone when its work happens on a surface of its own", async () => {
+    /*
+     * The build writes Nova's own steps and closes them. Three Run milestones
+     * are finished by a screen of their own instead — the roadmap, the jobs
+     * list, the quarter's goals — and writing a paragraph onto those would
+     * tick them while leaving the board empty. A ticked step with nothing
+     * behind it is worse than an untouched one, because the tick is what tells
+     * the buyer it was handled.
+     */
+    const app = await getTestApp();
+    const b = await builder(app, { balanceCents: OUTCOME_PRICE_CENTS.business });
+
+    // A Run project, which is where these milestones live.
+    const run = await b.agent.post("/api/projects").send({
+      title: "The Firm", description: "A company already trading, bought the whole build.",
+      category: "saas", goal: "run_company", subcategory: "software",
+    });
+    expect(run.status).toBe(200);
+    const runId = run.body.id as string;
+
+    expect((await b.agent.post("/api/nova/build-my-business").send({ projectId: runId })).status).toBe(201);
+    await settled({ agent: b.agent, projectId: runId });
+
+    const path = await b.agent.get(`/api/projects/${runId}/path`);
+    const all = (path.body.phases as any[]).flatMap((p) => p.milestones);
+    const surfaced = all.filter((m) => m.doneOn);
+    expect(surfaced.length, "the Run path has steps with their own surfaces").toBeGreaterThan(0);
+
+    for (const step of surfaced) {
+      expect(step.done, `${step.id} was ticked without its surface being used`).toBe(false);
+      // …and nothing was written onto it either.
+      const work = await b.agent.get(`/api/projects/${runId}/path/work/${step.taskId}`);
+      expect(work.body?.work, `${step.id} got a generic answer`).toBeFalsy();
+    }
+  }, 300_000);
+
   it("rings the bell when it's done, because the build outlives the page", async () => {
     const app = await getTestApp();
     const b = await builder(app, { balanceCents: OUTCOME_PRICE_CENTS.business });

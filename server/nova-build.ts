@@ -230,6 +230,15 @@ export async function runBusinessBuild(projectId: string, userId: string): Promi
        */
       if (kind === "intake") { forYou += 1; continue; }
 
+      /*
+       * A step with a surface of its own is left alone for the same reason.
+       * The whole-business build would otherwise have written a paragraph onto
+       * "The jobs that come round" and closed it, and the buyer would have a
+       * ticked step with no jobs on their board — the worst possible outcome
+       * of the purchase, since the tick is what tells them it was handled.
+       */
+      if (ctx.milestone?.doneOn) { forYou += 1; continue; }
+
       try {
         /*
          * A packet that is already there is used rather than paid for again.

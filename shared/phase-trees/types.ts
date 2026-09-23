@@ -50,6 +50,9 @@ export interface IntakeQuestion {
   placeholder?: string;
 }
 
+/** A screen that finishes a step by being used. Each is somewhere on the project's own dashboard. */
+export type PathSurface = "wwit" | "recurring-jobs" | "quarter-goals";
+
 export interface BackboneMilestone {
   /** Stable id, e.g. "SHIP.M1.2". Referenced by injected tasks and switching. */
   id: string;
@@ -87,6 +90,23 @@ export interface BackboneMilestone {
    * plan is "built" by Nova but is a document, not code: `plan`.
    */
   work?: WorkKind;
+  /**
+   * This step is finished by using a surface of its own, and not by Nova
+   * writing an answer onto the step.
+   *
+   * Several Run milestones are closed by the thing they describe actually
+   * happening — the weekly roadmap gets built, the recurring jobs get set up,
+   * the quarter's goals get filed — by routes that call completeRunMilestone.
+   * Without saying so here, those steps still offered the generic "Nova builds
+   * it" button, which ran the ordinary work generator and closed the step with
+   * a plausible paragraph. The builder ended up with the step ticked, no jobs
+   * on the board, and nothing to tell them the difference.
+   *
+   * So the step points at where its work really happens, and the generic
+   * generator is refused for it — on the server too, not only in the button,
+   * because the button is not the only way to reach it.
+   */
+  doneOn?: { surface: PathSurface; label: string };
   /**
    * Authored text this milestone (or a variant) used to have. Tasks are
    * written at creation and keep their text, and "the description differs

@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { usePath } from "@/lib/sections";
 import type { ProjectGoal } from "@shared/goals";
+import type { PathSurface } from "@shared/phase-trees";
 import type { PathResponse, PathStatus } from "./path-types";
 
 /** What each project section's path looked like when last seen, shared by every screen showing it — so a change toasts once. */
@@ -104,6 +105,51 @@ let pendingOpen: { id: string; at: number } | null = null;
 export function requestOpenMilestone(backboneId: string) {
   pendingOpen = { id: backboneId, at: Date.now() };
   if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: backboneId }));
+}
+
+/*
+ * The same shape again, for the surfaces that finish a step by being used —
+ * the roadmap, the jobs list, the quarter's goals (BackboneMilestone.doneOn).
+ * The step's card asks, and whichever card owns that surface scrolls itself
+ * into view and says so. Kept separate from the milestone request because the
+ * two answer different questions: "open this step" and "take me to where this
+ * step is actually done".
+ */
+const SURFACE_EVENT = "sparktower:open-surface";
+let pendingSurface: { surface: string; at: number } | null = null;
+
+export function requestOpenSurface(surface: PathSurface) {
+  pendingSurface = { surface, at: Date.now() };
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(SURFACE_EVENT, { detail: surface }));
+}
+
+/**
+ * A card's side. Returns a ref to put on the element to scroll to, and a flag
+ * that is true for a few seconds after it is asked for, so the card can say
+ * "here" rather than leaving somebody staring at a page that moved.
+ */
+export function useOpenSurface(surface: PathSurface) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [asked, setAsked] = useState(false);
+
+  useEffect(() => {
+    const show = () => {
+      setAsked(true);
+      // After paint, or the element may not be where it is about to be.
+      requestAnimationFrame(() => ref.current?.scrollIntoView({ behavior: "smooth", block: "center" }));
+      window.setTimeout(() => setAsked(false), 4000);
+    };
+    // A request made while the dashboard was mounting still counts.
+    if (pendingSurface && pendingSurface.surface === surface && Date.now() - pendingSurface.at < 5000) {
+      pendingSurface = null;
+      setTimeout(show, 0);
+    }
+    const listener = (e: Event) => { if ((e as CustomEvent<string>).detail === surface) show(); };
+    window.addEventListener(SURFACE_EVENT, listener);
+    return () => window.removeEventListener(SURFACE_EVENT, listener);
+  }, [surface]);
+
+  return { ref, asked };
 }
 
 /** The dashboard's side: a pending request on mount, `?milestone=` in the URL, and any request after. */

@@ -20,8 +20,9 @@ import { sectionDef } from "@/lib/sections";
 import { LOOP_TYPE_INFO, type LoopType } from "@shared/phase-trees";
 import { PATH_FOCUS } from "@shared/notifications";
 import { Chip, Clamp } from "./block";
+import { requestOpenSurface } from "./live";
 import { ACTOR_SHORT, TIER_SHORT, estimate, NOVA_GRADIENT, type PathStatus } from "./path-types";
-import { CheckCircle2, Circle, Clock, ListTree, Loader2, Plus, ShieldCheck, Sparkles, User, Share2, Globe, PartyPopper, ArrowRight, ListChecks, UserPlus } from "lucide-react";
+import { CheckCircle2, Circle, Clock, ListTree, Loader2, Plus, ShieldCheck, Sparkles, User, Share2, Globe, PartyPopper, ArrowRight, ArrowDown, ListChecks, UserPlus } from "lucide-react";
 
 export function NextStep({ projectId, data, onNavigate }: { projectId: string; data: PathStatus; onNavigate: (tab: string) => void }) {
   const { toast } = useToast();
@@ -269,8 +270,26 @@ export function NextStep({ projectId, data, onNavigate }: { projectId: string; d
             </div>
           )}
 
+          {/*
+            * A step whose work happens on a surface of its own: the way there,
+            * not the generic generator. Offering "Nova builds it" here wrote a
+            * plausible paragraph over the step and closed it, so the builder
+            * had a tick and no jobs on their board.
+            */}
+          {next.doneOn && (
+            <div className="pt-1">
+              <Button size="sm" onClick={() => requestOpenSurface(next.doneOn!.surface)} data-testid="button-open-surface">
+                <ArrowDown className="h-3.5 w-3.5 mr-1.5" />
+                Open {next.doneOn.label}
+              </Button>
+              <p className="text-xs text-muted-foreground mt-1.5">
+                This one ticks itself once {next.doneOn.label} is done.
+              </p>
+            </div>
+          )}
+
           {/* Nova's work on it, inline. This is what makes the actor label true. */}
-          {showWork && (
+          {!next.doneOn && showWork && (
             <div className="pt-1">
               <WorkView projectId={projectId} taskId={next.workTaskId!} actor={next.step?.actor ?? next.actor} work={next.work} done={false}
                 intake={next.step ? undefined : next.intake} workKind={next.step ? undefined : next.workKind ?? undefined}
