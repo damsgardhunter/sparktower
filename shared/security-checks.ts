@@ -445,11 +445,88 @@ export function scanSecurity(allFiles: SourceFile[], extra: { suspectedSecrets?:
     const SAFE_OPERAND = /^(?:"[^"]*"|'[^']*'|`[^`$]*`|(?:\w+\.)?escape(?:Identifier|Literal)\s*\()/;
     const concatsUnsafely = (content: string): boolean => {
       for (const call of content.matchAll(/\.(?:query|execute)\(([\s\S]{0,600}?)\)\s*[;,)]/g)) {
-        const args = call[1];
+        /*
+         * With the inside of each `${…}` blanked out first. A `+` in there is
+         * arithmetic in an expression the parser has already taken charge of —
+         * `$${params.length + 1}` renders the placeholder `$2` — and reading it
+         * as SQL being glued together reported the one script in this
+         * repository that builds queries the careful way as the only injection
+         * risk in it. Gluing outside the braces still reads normally.
+         */
+        const args = call[1].replace(/\$\{[^{}]*\}/g, "${}");
         if (!args.includes("+")) continue;
         if (args.split("+").slice(1).some((operand) => !SAFE_OPERAND.test(operand.trim()))) return true;
       }
       return false;
+    };
+
+    /*
+     * Interpolation inside a query template, read one `${}` at a time.
+     *
+     * The same rule as the concatenation above and for the same reason: an
+     * identifier cannot be a bound parameter, so the one legitimate way to put
+     * a table or column name into SQL is to check it against a list you wrote
+     * and quote it. A check that cannot tell that apart from splicing in a
+     * request value leaves the only honest way of doing it permanently
+     * "partial" — and a check that is always red is one people stop reading.
+     *
+     * Three interpolations are safe, and nothing else is:
+     *   - a name this file assigned from quoteIdentifier / quoteKnownIdentifier
+     *     / the driver's escapeIdentifier;
+     *   - such a call written inline;
+     *   - a placeholder number — `$${n}` renders as `$2`, which is the
+     *     opposite of injecting a value.
+     * A fragment built from those (`const cutoff = \`and ${column} < $1\``)
+     * is safe too, and is resolved by walking the declarations twice.
+     *
+     * One unsafe interpolation anywhere in the template is enough: the point
+     * of the lookahead disaster this replaces was that a safe piece must never
+     * stop the reading.
+     */
+    const QUOTE_CALL = /^(?:await\s+)?(?:\w+\.)?(?:quoteKnownIdentifier|quoteIdentifier|escapeIdentifier|escapeLiteral)\s*\(/;
+    /*
+     * Upper case only, deliberately. Half this codebase's long template
+     * literals are prompts written in English, and "update" or "delete" in a
+     * sentence is not a query — lower-casing this turned two of Nova's prompts
+     * into SQL injection findings the moment it was tried.
+     */
+    const SQL_KEYWORD = /\b(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE)\b/;
+
+    /** Every `${…}` in a template, with the character before it. */
+    const interpolationsIn = (template: string): { expr: string; precededByDollar: boolean }[] => {
+      const out: { expr: string; precededByDollar: boolean }[] = [];
+      for (const m of template.matchAll(/\$\{([^{}]*)\}/g)) {
+        out.push({ expr: m[1].trim(), precededByDollar: m.index! > 0 && template[m.index! - 1] === "$" });
+      }
+      return out;
+    };
+
+    const interpolatesUnsafely = (content: string): boolean => {
+      /** Names holding something already quoted as an identifier, or a fragment built only from those. */
+      const safe = new Set<string>();
+      for (const m of content.matchAll(/(?:const|let|var)\s+(\w+)\s*=\s*((?:await\s+)?(?:\w+\.)?(?:quoteKnownIdentifier|quoteIdentifier|escapeIdentifier|escapeLiteral)\s*\()/g)) {
+        safe.add(m[1]);
+      }
+      const isSafe = (piece: { expr: string; precededByDollar: boolean }) =>
+        piece.precededByDollar || safe.has(piece.expr) || QUOTE_CALL.test(piece.expr);
+
+      // Fragments: a name whose initialiser interpolates only safe things. Twice, so a fragment of a fragment resolves.
+      for (let pass = 0; pass < 2; pass++) {
+        for (const m of content.matchAll(/(?:const|let|var)\s+(\w+)\s*=\s*([^;\n]*(?:\n[^;\n]*)??);/g)) {
+          if (safe.has(m[1]) || !m[2].includes("`")) continue;
+          const pieces = interpolationsIn(m[2]);
+          if (pieces.length && pieces.every(isSafe)) safe.add(m[1]);
+        }
+      }
+
+      /** A template handed straight to the driver, or assigned to a name and run later. */
+      const templates: string[] = [];
+      for (const m of content.matchAll(/(?:\.(?:query|execute)|(?<![.\w])raw)\(\s*`([^`]*)`/g)) templates.push(m[1]);
+      for (const m of content.matchAll(/(?:const|let|var)\s+\w+\s*=\s*`([^`]*)`/g)) {
+        if (SQL_KEYWORD.test(m[1])) templates.push(m[1]);
+      }
+
+      return templates.some((t) => interpolationsIn(t).some((piece) => !isSafe(piece)));
     };
 
     const rawSql = Array.from(new Set([
@@ -457,16 +534,11 @@ export function scanSecurity(allFiles: SourceFile[], extra: { suspectedSecrets?:
         String.raw`sql\.raw\(`,
         String.raw`\$queryRawUnsafe`,
         String.raw`cursor\.execute\(\s*f["']`,
-        // Interpolated right at the call.
-        String.raw`\.(?:query|execute)\(\s*\`[^\`]*\$\{`,
-        String.raw`raw\(\s*\`[^\`]*\$\{`,
-        // Built into a variable first, then handed to the driver. The SQL
-        // keyword is what separates a query from any other string with a ${}
-        // in it; without it this matches half the codebase.
-        String.raw`(?:const|let|var)\s+\w+\s*=\s*\`[^\`]*\b(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE)\b[^\`]*\$\{`,
+        // Interpolation is judged by `interpolatesUnsafely` below, which can
+        // tell a quoted identifier from a spliced-in value; a regex cannot.
         String.raw`(?:const|let|var)\s+\w+\s*=\s*(?:"|')[^"']*\b(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE)\b[\s\S]*?(?:"|')\s*\+\s*(?!(?:\w+\.)?escape(?:Identifier|Literal)\s*\()`,
       ].join("|"))),
-      ...server.filter((f) => f.content && concatsUnsafely(f.content)).map((f) => f.path),
+      ...server.filter((f) => f.content && (concatsUnsafely(f.content) || interpolatesUnsafely(f.content))).map((f) => f.path),
     ]));
     add({
       id: "sql-injection", label: "Queries parameterised", category: "input", severity: "high",
