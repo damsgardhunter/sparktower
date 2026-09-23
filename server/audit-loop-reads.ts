@@ -292,7 +292,7 @@ Every stage you call built, and the return path, MUST carry at least one path in
       ],
     }, { timeout: opts.timeoutMs ?? 120_000 });
     const parsed = parseModelJson(completion.choices[0]?.message?.content ?? "", "loop read");
-    const [read] = sanitizeLoopClosures([{ ...parsed, key: loop.key }], [loop], new Set(files.map((f) => f.path)));
+    const [read] = sanitizeLoopClosures([{ ...parsed, key: loop.key }], [loop], new Set(files.map((f) => f.path)), routes);
     return read ? { ...read, note: read.note ? `${read.note} (close read)` : undefined } : null;
   } catch (err) {
     console.error(`[audit] loop read failed for ${loop.title}:`, (err as Error)?.message ?? err);
