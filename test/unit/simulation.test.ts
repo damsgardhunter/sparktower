@@ -310,3 +310,17 @@ describe("the market adds up", () => {
     expect(r.reputationChange).toBeLessThan(0);
   });
 });
+
+describe("the chairs, in the order a player expects", () => {
+  it("lists the other seats canonically, however the company filled them", async () => {
+    const { overrulable } = await import("@shared/simulation/people");
+    // The order chairs happen to sit in after a season of hiring and firing…
+    expect(overrulable(["cfo", "cto", "ceo", "cmo", "coo"] as any)).toEqual(["cmo", "cfo", "cto", "coo"]);
+    // …never changes what the chief executive's menus look like.
+    expect(overrulable(["ceo", "cmo"] as any)).toEqual(["cmo"]);
+    expect(overrulable(["ceo"] as any)).toEqual([]);
+    // A duplicate chair, however it got there, is still one entry.
+    expect(overrulable(["cto", "cto", "ceo"] as any)).toEqual(["cto"]);
+  });
+});
+

@@ -25,7 +25,7 @@
  * loyalty runs out resigns — a bot is replaced by a new hire, a person moves
  * to another table in the same market, where somebody wants them.
  */
-import type { Company, Role } from "./types";
+import { ROLES, type Company, type Role } from "./types";
 import { saturate } from "./market";
 import { rng } from "./random";
 
@@ -279,8 +279,20 @@ export const STOPGAP_SKILL = 40;
 
 // ─── Overrules ───────────────────────────────────────────────────────────────
 
-/** The seats a chief executive can overrule, or fire: every filled seat but their own. */
-export const overrulable = (seats: Role[]): Role[] => seats.filter((r) => r !== "ceo");
+/**
+ * The seats a chief executive can overrule, or fire: every filled seat but
+ * their own, always in the same order.
+ *
+ * Sorted because `company.seats` is in the order the chairs were filled, and
+ * that order changes during a season: replace the marketing seat in year five
+ * and marketing moves to the end of the list. Every list built from this one
+ * moved with it — the desk's "replace a seat" menu reshuffled itself mid-
+ * season for no reason a player could see, and a test that read the menu
+ * failed on a runner where the replacement had happened. The chairs have a
+ * canonical order; this is it.
+ */
+export const overrulable = (seats: Role[]): Role[] =>
+  ROLES.filter((r) => r !== "ceo" && seats.includes(r));
 
 /**
  * Whose call was better, measured on what the year left the founders owning.
