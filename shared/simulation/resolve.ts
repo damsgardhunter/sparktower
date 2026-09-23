@@ -1510,7 +1510,15 @@ export function resolveYear(
           marketing: allowedShare(marketing),
           product: allowedShare(product),
           operations: allowedShare(ops),
-          capacity: room.build + room.lease + plant,
+          /*
+           * Room, and only room. The plant — automating it, a second shift,
+           * stock held ahead — is already inside `ops`, so adding it here
+           * charged the company for it twice in the accounts while the profit
+           * underneath counted it once. The column then did not add up to the
+           * figure printed below it, which is the one thing a column of costs
+           * has to do.
+           */
+          capacity: room.build + room.lease,
           planning,
           incidents: incidentCost,
           partners: partnerShare,
