@@ -1,6 +1,6 @@
 import { getStripeSync, getUncachableStripeClient } from './stripeClient';
 import { db } from './db';
-import { users, donations, projects, projectBackings, projectMerchOrders, stripeEvents, simSeatPurchases, companies } from '@shared/schema';
+import { users, donations, projects, projectBackings, projectMerchOrders, stripeEvents, simSeatPurchases, companies, gamePlayPurchases } from '@shared/schema';
 import { isPaidSubscriptionStatus } from '@shared/subscriptions';
 import { normalizeTier } from '@shared/plans';
 import { and, eq, inArray, or, sql } from 'drizzle-orm';
@@ -218,20 +218,30 @@ export class WebhookHandlers {
       const seats = parseInt(session.metadata.seats ?? '0', 10);
       if (!companyId || !Number.isInteger(seats) || seats < 1) return;
       if (session.payment_status && session.payment_status !== 'paid') return;
+      /*
+       * Which balance to credit. Read from the session's own metadata rather
+       * than inferred from what was paid: the price could change, and a seat
+       * credited to the wrong balance is a seat the company paid for and
+       * cannot spend. An old session from before the two tiers carries no
+       * `seatKind`, and every seat sold then was a Nova seat.
+       */
+      const seatKind = session.metadata?.seatKind === 'play' ? 'play' : 'nova';
+      const column = seatKind === 'play' ? companies.simPlaySeatsPaid : companies.simNovaSeatsPaid;
       await db.transaction(async (tx) => {
         const inserted = await tx.insert(simSeatPurchases).values({
           companyId,
           seats,
+          kind: seatKind,
           amount: Number(session.amount_total ?? 0),
           stripeSessionId: session.id,
           boughtBy: session.metadata?.userId ?? null,
         }).onConflictDoNothing({ target: simSeatPurchases.stripeSessionId }).returning({ id: simSeatPurchases.id });
         if (!inserted.length) return;
         await tx.update(companies)
-          .set({ simSeatsPaid: sql`${companies.simSeatsPaid} + ${seats}` })
+          .set({ [seatKind === 'play' ? 'simPlaySeatsPaid' : 'simNovaSeatsPaid']: sql`${column} + ${seats}` })
           .where(eq(companies.id, companyId));
       });
-      console.log(`Simulation seats credited: ${seats} to company ${companyId}`);
+      console.log(`Simulation seats credited: ${seats} ${seatKind} to company ${companyId}`);
       return;
     }
 

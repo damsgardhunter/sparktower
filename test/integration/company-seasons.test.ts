@@ -14,7 +14,7 @@ import { and, eq } from "drizzle-orm";
 import { getTestApp, closeTestApp } from "../helpers/app";
 import { verifyEmail } from "../helpers/verify-email";
 import { db } from "../../server/db";
-import { companyAuditLog, simSeasons, simVentures, simSeats, simReports, notifications } from "@shared/schema";
+import { companyAuditLog, companies, simSeasons, simVentures, simSeats, simReports, notifications } from "@shared/schema";
 import { startReadySeasons, tickSeason } from "../../server/simulation-tick";
 
 afterAll(async () => { await closeTestApp(); });
@@ -49,6 +49,19 @@ async function companyWithStaff(app: any, staff: number) {
     people.push(p);
   }
   return { owner, companyId, people };
+}
+
+/**
+ * Credit a company's seats, the way a paid Stripe session would.
+ *
+ * Starting a season is charged for, so a test that starts one has to have
+ * bought the seats or it is testing the paywall rather than the season. The
+ * webhook's own path is tested where the webhook is.
+ */
+async function giveSeats(companyId: string, count: number, kind: "play" | "nova" = "play") {
+  await db.update(companies)
+    .set(kind === "play" ? { simPlaySeatsPaid: count } : { simNovaSeatsPaid: count })
+    .where(eq(companies.id, companyId));
 }
 
 async function privateSeason(owner: any, companyId: string, body: Record<string, unknown> = {}) {
@@ -119,6 +132,7 @@ describe("a season a company shapes for itself", () => {
     const { owner, companyId, people } = await companyWithStaff(app, 5);
     const { seasonId, inviteCode } = await privateSeason(owner, companyId, { scope: "north_america" });
     const ventureId = await fillTable(people, inviteCode);
+    await giveSeats(companyId, 5);
     expect((await owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/start`).send({})).status).toBe(200);
 
     const desk = await people[0].agent.get(`/api/sim/ventures/${ventureId}/desk`);
@@ -141,6 +155,7 @@ describe("a season a company shapes for itself", () => {
     const { seasonId, inviteCode } = await privateSeason(owner, companyId, { botTeams: 3 });
     const ventureId = await fillTable(people, inviteCode);
 
+    await giveSeats(companyId, 5);
     const started = await owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/start`).send({});
     expect(started.status, JSON.stringify(started.body)).toBe(200);
     expect(started.body.teams, "the table plus the three it asked for").toBe(4);
@@ -183,10 +198,25 @@ describe("paying for a simulation", () => {
     const { owner, companyId } = await companyWithStaff(app, 2);
     const seats = await owner.agent.get(`/api/companies/${companyId}/simulation-seats`);
     expect(seats.status).toBe(200);
-    expect(seats.body.pricePerSeat).toBe(5);
-    expect(seats.body.paid).toBe(0);
     expect(seats.body.people, "the owner and the two invited").toBe(3);
-    expect(seats.body.shortBy).toBe(3);
+
+    // Two seats, priced apart, each with its own balance and its own shortfall.
+    const by = Object.fromEntries(seats.body.seats.map((t: any) => [t.kind, t]));
+    expect(by.play.pricePerSeat, "one of our markets").toBe(3);
+    expect(by.nova.pricePerSeat, "one Nova builds from their project").toBe(5);
+    for (const kind of ["play", "nova"]) {
+      expect(by[kind].paid).toBe(0);
+      expect(by[kind].shortBy).toBe(3);
+    }
+
+    // And they do not substitute: Nova seats leave the play balance untouched.
+    await giveSeats(companyId, 4, "nova");
+    const after = await owner.agent.get(`/api/companies/${companyId}/simulation-seats`);
+    const now = Object.fromEntries(after.body.seats.map((t: any) => [t.kind, t]));
+    expect(now.nova.paid).toBe(4);
+    expect(now.nova.shortBy).toBe(0);
+    expect(now.play.paid, "buying Nova seats buys no play seats").toBe(0);
+    expect(now.play.shortBy).toBe(3);
   }, 120_000);
 
   it("refuses to build one until a seat is paid for, and says the price", async () => {
@@ -318,6 +348,7 @@ describe("a private season's clock", () => {
     // Only someone with the power may start it.
     expect((await people[1].agent.post(`/api/companies/${companyId}/seasons/${seasonId}/start`).send({})).status).toBe(403);
 
+    await giveSeats(companyId, 5);
     const start = await owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/start`).send({});
     expect(start.status, JSON.stringify(start.body)).toBe(200);
     expect(start.body).toMatchObject({ status: "running", year: 1, teams: 1 });
@@ -414,4 +445,73 @@ describe("a private season's clock", () => {
     const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, venture.seasonId));
     expect(season.nextTickAt!.getTime() - season.startsAt!.getTime()).toBe(24 * 60 * 60_000);
   }, 180_000);
+});
+
+/**
+ * Two seats, two prices, and the gate where the seats are actually filled.
+ *
+ * The hole this closes: the paywall used to sit on the Nova route alone, so a
+ * company that ignored the Nova button and filled in the ordinary form ran
+ * simulations for nothing. Charging at the start line rather than at creation
+ * also means nobody pays for a colleague who never joined.
+ */
+describe("what a season costs", () => {
+  it("charges the cheaper seat for one of our markets, counting only the people who sat down", async () => {
+    const app = await getTestApp();
+    const { owner, companyId, people } = await companyWithStaff(app, 5);
+    const { seasonId, inviteCode } = await privateSeason(owner, companyId);
+    await fillTable(people, inviteCode);
+
+    const start = `/api/companies/${companyId}/seasons/${seasonId}/start`;
+    const refused = await owner.agent.post(start).send({});
+    expect(refused.status, "the ordinary form is not a way round the paywall").toBe(402);
+    expect(refused.body.code).toBe("seats_required");
+    expect(refused.body.seatKind).toBe("play");
+    expect(refused.body.pricePerSeat).toBe(3);
+    expect(refused.body.people, "five sat down").toBe(5);
+    expect(refused.body.shortBy).toBe(5);
+
+    // Four is not enough for five.
+    await giveSeats(companyId, 4);
+    expect((await owner.agent.post(start).send({})).status).toBe(402);
+
+    await giveSeats(companyId, 5);
+    expect((await owner.agent.post(start).send({})).status, "paid for, so it runs").toBe(200);
+  }, 120_000);
+
+  it("does not let play seats pay for a season Nova built", async () => {
+    const app = await getTestApp();
+    const { owner, companyId, people } = await companyWithStaff(app, 5);
+    const { seasonId, inviteCode } = await privateSeason(owner, companyId);
+    await fillTable(people, inviteCode);
+
+    /*
+     * The season is marked as Nova's directly: building one for real needs a
+     * model, and what is under test here is the price of starting it, not how
+     * it came to exist.
+     */
+    await db.update(simSeasons).set({ origin: "nova" }).where(eq(simSeasons.id, seasonId));
+    const start = `/api/companies/${companyId}/seasons/${seasonId}/start`;
+
+    await giveSeats(companyId, 20, "play");
+    const refused = await owner.agent.post(start).send({});
+    expect(refused.status, "twenty play seats buy no Nova season").toBe(402);
+    expect(refused.body.seatKind).toBe("nova");
+    expect(refused.body.pricePerSeat).toBe(5);
+    expect(refused.body.paid).toBe(0);
+
+    await giveSeats(companyId, 5, "nova");
+    expect((await owner.agent.post(start).send({})).status).toBe(200);
+  }, 120_000);
+
+  it("charges for people, not for bots", async () => {
+    const app = await getTestApp();
+    const { owner, companyId, people } = await companyWithStaff(app, 5);
+    const { seasonId, inviteCode } = await privateSeason(owner, companyId, { botTeams: 3 });
+    await fillTable(people, inviteCode);
+
+    // Five people and three tables of bots: the bill is five.
+    await giveSeats(companyId, 5);
+    expect((await owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/start`).send({})).status).toBe(200);
+  }, 120_000);
 });

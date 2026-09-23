@@ -386,6 +386,13 @@
       "when": 1790111846714,
       "tag": "0054_seat_purchases",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1790111847714,
+      "tag": "0055_two_seat_tiers",
+      "breakpoints": true
     }
   ]
 }

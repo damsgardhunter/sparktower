@@ -25,6 +25,7 @@ import { SCOPES } from "@shared/simulation/geography";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { CompanyView } from "@/pages/company";
+import { SeatsNotice, useSeats } from "@/components/company/simulation-seats";
 
 interface SeasonRow {
   id: string;
@@ -38,6 +39,8 @@ interface SeasonRow {
   rooms: number;
   roomsReady: number;
   players: number;
+  /** Which seat this season costs: one of our markets, or one Nova built. */
+  seatKind: "play" | "nova";
   bots: number;
   inviteCode: string | null;
   joinUrl: string | null;
@@ -134,9 +137,7 @@ export function TrainingTab({ companyId, canManage }: { companyId: string; canMa
  */
 function NovaBuild({ companyId, onDone }: { companyId: string; onDone: () => void }) {
   const [, navigate] = useLocation();
-  const { data: seats } = useQuery<{ paid: number; people: number; pricePerSeat: number; shortBy: number }>({
-    queryKey: [`/api/companies/${companyId}/simulation-seats`],
-  });
+  const { data: seats } = useSeats(companyId);
   const [built, setBuilt] = useState<NovaBrief | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [needsSeats, setNeedsSeats] = useState(false);
@@ -153,17 +154,6 @@ function NovaBuild({ companyId, onDone }: { companyId: string; onDone: () => voi
       if (err?.body?.code === "seats_required") { setNeedsSeats(true); setError(err.body.message); return; }
       setError(err?.body?.message ?? "Nova couldn't build that. Try again.");
     },
-  });
-
-  const buy = useMutation({
-    mutationFn: () => apiRequest("POST", `/api/companies/${companyId}/simulation-seats/checkout`, {
-      seats: Math.max(1, seats?.shortBy || seats?.people || 5),
-    }),
-    onSuccess: async (res: any) => {
-      const body = await res.json();
-      if (body.url) window.location.href = body.url;
-    },
-    onError: (err: any) => setError(err?.body?.message ?? "Couldn't start that purchase."),
   });
 
   return (
@@ -183,11 +173,7 @@ function NovaBuild({ companyId, onDone }: { companyId: string; onDone: () => voi
         )}
 
         {seats && !built && (
-          <p className="text-xs text-muted-foreground" data-testid="text-seats">
-            {seats.paid > 0
-              ? `${seats.paid} seat${seats.paid === 1 ? "" : "s"} paid for, ${seats.people} people in the company.`
-              : `$${seats.pricePerSeat} a seat, once. A seat is a person at a table for the life of a season, and it stays with the company.`}
-          </p>
+          <SeatsNotice companyId={companyId} kind="nova" seats={seats} onError={setError} />
         )}
 
         {built && (
@@ -215,13 +201,8 @@ function NovaBuild({ companyId, onDone }: { companyId: string; onDone: () => voi
         {error && <p className="text-sm text-destructive" data-testid="text-nova-error">{error}</p>}
 
         <div className="flex gap-2 flex-wrap">
-          {needsSeats ? (
-            <Button onClick={() => buy.mutate()} disabled={buy.isPending} data-testid="button-buy-seats">
-              {buy.isPending && <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />}
-              Buy seats
-            </Button>
-          ) : built ? (
-            <Button onClick={() => { onDone(); navigate(`/company/${companyId}`); }} data-testid="button-brief-done">
+          {needsSeats ? null : built ? (
+            <Button onClick={() => { onDone(); navigate(`/companies/${companyId}`); }} data-testid="button-brief-done">
               Done
             </Button>
           ) : (
@@ -368,6 +349,8 @@ function SeasonCard({ companyId, season, canManage }: { companyId: string; seaso
   const [copied, setCopied] = useState(false);
   const [inviting, setInviting] = useState(false);
   const [showReport, setShowReport] = useState(false);
+  // Only the people who can start it are shown the price of starting it.
+  const { data: seats } = useSeats(canManage ? companyId : "");
 
   const fullLink = season.joinUrl ? `${window.location.origin}${season.joinUrl}` : null;
   const copy = async () => {
@@ -444,6 +427,10 @@ function SeasonCard({ companyId, season, canManage }: { companyId: string; seaso
               {copied ? <Check className="h-4 w-4 mr-1" /> : <Copy className="h-4 w-4 mr-1" />} {copied ? "Copied" : "Copy link"}
             </Button>
           </div>
+        )}
+
+        {canManage && season.status === "forming" && season.players > 0 && (
+          <SeatsNotice companyId={companyId} kind={season.seatKind} seats={seats} />
         )}
 
         {canManage && (

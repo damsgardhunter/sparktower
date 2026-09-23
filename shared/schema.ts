@@ -2818,7 +2818,16 @@ export const companies = pgTable("companies", {
    * still there for the next one. Held on the company rather than on a season
    * so an away day that ends early does not burn them.
    */
-  simSeatsPaid: integer("sim_seats_paid").default(0).notNull(),
+  simNovaSeatsPaid: integer("sim_nova_seats_paid").default(0).notNull(),
+  /*
+   * And the cheaper seat: one person at a table in a season the company
+   * picked from the markets we wrote, rather than one Nova built around their
+   * business. Kept as its own balance rather than a discount on the same one,
+   * because the two are not the same thing to sell — a Nova seat pays for a
+   * model reading your project and proposing a market, and a company that
+   * bought ten of those did not thereby buy ten of these.
+   */
+  simPlaySeatsPaid: integer("sim_play_seats_paid").default(0).notNull(),
   /*
    * Who did it, for the record — and only for the record. Set null, not
    * cascade, when that account goes: one person closing their account must
@@ -3359,6 +3368,8 @@ export const simSeatPurchases = pgTable("sim_seat_purchases", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
   seats: integer("seats").notNull(),
+  /** Which seat was bought: "play" for a season we wrote, "nova" for one Nova builds. */
+  kind: text("kind", { enum: ["play", "nova"] }).default("nova").notNull(),
   /** In cents, as Stripe counts it. */
   amount: integer("amount").notNull(),
   stripeSessionId: text("stripe_session_id").notNull(),
@@ -3400,6 +3411,18 @@ export const simSeasons = pgTable("sim_seasons", {
    * a stranger in one, and its rooms are reached only with `inviteCode`.
    */
   companyId: varchar("company_id"),
+  /**
+   * Where this season came from, and therefore which seat it costs.
+   *
+   * "catalogue" is one of the markets we wrote, taken as it is. "nova" is one
+   * Nova built by reading the company's own project. They are priced
+   * differently, so the season has to remember which it is — a season that
+   * forgot could be started with the cheaper seat.
+   *
+   * Public seasons are "catalogue" and are not charged for at all; only a
+   * season with a `companyId` passes the gate.
+   */
+  origin: text("origin", { enum: ["catalogue", "nova"] }).default("catalogue").notNull(),
   inviteCode: text("invite_code"),
   /**
    * How long a year lasts, in minutes, when it isn't a real day. A public

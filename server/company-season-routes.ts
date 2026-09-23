@@ -70,8 +70,29 @@ export const TRAINING_YEARS_MAX = 14;
  * market with fifty companies in it is already a crowd.
  */
 export const BOT_TEAMS_MAX = 50;
-/** What one seat at a simulation costs, in cents. A seat is for the life of a season, not a month. */
-export const SEAT_PRICE_CENTS = 500;
+/**
+ * What a seat costs, in cents. A seat is for the life of a season, not a month.
+ *
+ * Two prices, because two different things are being sold. A `play` seat is a
+ * person at a table in one of the markets we wrote, taken as it is. A `nova`
+ * seat is a person at a table in a season Nova built by reading the company's
+ * own project — which costs a model call and is worth more, so it costs more.
+ *
+ * They are separate balances rather than one with a discount: buying ten Nova
+ * seats does not leave you ten play seats, and buying ten play seats does not
+ * entitle you to have Nova build anything.
+ */
+export const SEAT_PRICE_CENTS = { play: 300, nova: 500 } as const;
+export type SeatKind = keyof typeof SEAT_PRICE_CENTS;
+export const SEAT_KINDS = Object.keys(SEAT_PRICE_CENTS) as SeatKind[];
+const isSeatKind = (v: unknown): v is SeatKind => SEAT_KINDS.includes(v as SeatKind);
+/** Which balance a season of this origin is paid for from. */
+export const seatKindFor = (origin: string | null | undefined): SeatKind => origin === "nova" ? "nova" : "play";
+/** What a company holds of each seat. */
+export const seatsHeld = (company: { simPlaySeatsPaid?: number | null; simNovaSeatsPaid?: number | null }) => ({
+  play: company.simPlaySeatsPaid ?? 0,
+  nova: company.simNovaSeatsPaid ?? 0,
+});
 /** The most seats one checkout can carry, so a typo is not a four-figure charge. */
 export const SEATS_PER_PURCHASE_MAX = 250;
 
@@ -162,7 +183,7 @@ export function registerCompanySeasonRoutes(app: Express): void {
           const [season] = await db.insert(simSeasons).values({
             nicheId: niche.id, name, status: "forming", totalYears, yearMinutes,
             companyId: found.company.id, inviteCode, createdAt: new Date(),
-            scope, botTeams,
+            scope, botTeams, origin: "catalogue",
           }).returning();
           await logCompany(found.company.id, req.user.id, "season_created", null, { seasonId: season.id, name, nicheId: niche.id, scope, botTeams });
           return res.status(201).json({ seasonId: season.id, inviteCode, joinUrl: joinPathFor(inviteCode), scope, botTeams });
@@ -216,13 +237,23 @@ export function registerCompanySeasonRoutes(app: Express): void {
       const found = await companyCan(res, String(req.params.id), req.user.id, "run_seasons");
       if (!found) return;
       const members = await companyMembersOf(found.company.id);
+      const held = seatsHeld(found.company);
       res.json({
-        paid: found.company.simSeatsPaid ?? 0,
         people: members.length,
-        pricePerSeat: SEAT_PRICE_CENTS / 100,
         currency: "usd",
-        /** What they would have to buy to seat everyone in the company. */
-        shortBy: Math.max(0, members.length - (found.company.simSeatsPaid ?? 0)),
+        /*
+         * Both balances, each with its price and what seating everyone in the
+         * company would still cost. `shortBy` is against the company's people
+         * because that is the most a season could ever need; the gate itself
+         * counts who actually sat down, so nobody pays for a colleague who
+         * never joined.
+         */
+        seats: SEAT_KINDS.map((kind) => ({
+          kind,
+          paid: held[kind],
+          pricePerSeat: SEAT_PRICE_CENTS[kind] / 100,
+          shortBy: Math.max(0, members.length - held[kind]),
+        })),
       });
     } catch (error) {
       console.error("Simulation seats read error:", error);
@@ -250,6 +281,10 @@ export function registerCompanySeasonRoutes(app: Express): void {
       if (!Number.isInteger(seats) || seats < 1 || seats > SEATS_PER_PURCHASE_MAX) {
         return res.status(400).json({ message: `Buy between 1 and ${SEATS_PER_PURCHASE_MAX} seats at a time.`, code: "invalid_input", field: "seats" });
       }
+      const kind = req.body?.kind ?? "play";
+      if (!isSeatKind(kind)) {
+        return res.status(400).json({ message: "Buy either a seat to play one of our simulations, or one to have Nova build you a simulation.", code: "invalid_input", field: "kind" });
+      }
 
       if (!isStripeConfigured()) {
         return res.status(503).json({ code: "billing_unavailable", message: "Payments aren't configured here." });
@@ -268,24 +303,26 @@ export function registerCompanySeasonRoutes(app: Express): void {
           quantity: seats,
           price_data: {
             currency: "usd",
-            unit_amount: SEAT_PRICE_CENTS,
+            unit_amount: SEAT_PRICE_CENTS[kind],
             product_data: {
-              name: "Simulation seat",
-              description: "One person at a table, for the life of a season. Seats stay with the company.",
+              name: kind === "nova" ? "Simulation seat — built by Nova" : "Simulation seat",
+              description: kind === "nova"
+                ? "One person at a table in a simulation Nova builds from your own project. For the life of a season, and the seat stays with the company."
+                : "One person at a table in one of our simulations. For the life of a season, and the seat stays with the company.",
             },
           },
         }],
-        success_url: `${origin}/company/${found.company.slug ?? found.company.id}?seats=bought`,
-        cancel_url: `${origin}/company/${found.company.slug ?? found.company.id}?seats=cancelled`,
+        success_url: `${origin}/companies/${found.company.slug ?? found.company.id}?seats=bought`,
+        cancel_url: `${origin}/companies/${found.company.slug ?? found.company.id}?seats=cancelled`,
         /*
          * What the webhook needs to credit the right company. Read from the
          * session rather than from anything the browser sends back, because
          * the browser is not who paid.
          */
-        metadata: { companyId: found.company.id, seats: String(seats), kind: "simulation_seats", userId: req.user.id },
+        metadata: { companyId: found.company.id, seats: String(seats), kind: "simulation_seats", seatKind: kind, userId: req.user.id },
       });
 
-      res.json({ url: session.url, seats, total: (seats * SEAT_PRICE_CENTS) / 100 });
+      res.json({ url: session.url, seats, kind, total: (seats * SEAT_PRICE_CENTS[kind]) / 100 });
     } catch (error) {
       console.error("Simulation seat checkout error:", error);
       res.status(500).json({ message: "Couldn't start that purchase." });
@@ -310,12 +347,20 @@ export function registerCompanySeasonRoutes(app: Express): void {
       if (!found) return;
 
       const members = await companyMembersOf(found.company.id);
-      const seats = found.company.simSeatsPaid ?? 0;
+      /*
+       * Nova reading the company's project and proposing a market costs a
+       * model call, so it is gated before the call rather than at the start
+       * line: a company with no Nova seats cannot have one built. How many
+       * are needed is settled at start, against the people who actually sat
+       * down — this only asks that the company has bought into the tier.
+       */
+      const seats = seatsHeld(found.company).nova;
       if (seats < 1) {
         return res.status(402).json({
           code: "seats_required",
-          message: `A simulation is $${SEAT_PRICE_CENTS / 100} a seat. Buy a seat for everyone who will play, and they keep them for every season after this one.`,
-          pricePerSeat: SEAT_PRICE_CENTS / 100,
+          message: `A simulation Nova builds from your own project is $${SEAT_PRICE_CENTS.nova / 100} a seat, against $${SEAT_PRICE_CENTS.play / 100} for one of ours. Buy a seat for everyone who will play, and they keep them for every season after this one.`,
+          seatKind: "nova",
+          pricePerSeat: SEAT_PRICE_CENTS.nova / 100,
           people: members.length,
           paid: seats,
         });
@@ -330,7 +375,7 @@ export function registerCompanySeasonRoutes(app: Express): void {
        * house rule for every route that spends a model call. The seats pay for
        * the simulation; the credit pays for Nova's thinking about it.
        */
-      const ent = await requireCredits(res, req.user.id, CREDIT_COSTS.simulationBuild, "Nova building your simulation");
+      const ent = await requireCredits(res, req.user.id, CREDIT_COSTS.simulationBuild, "Nova building your simulation", "simulationBuild");
       if (!ent) return;
 
       const project = found.company.projectId
@@ -384,6 +429,7 @@ export function registerCompanySeasonRoutes(app: Express): void {
             createdAt: new Date(),
             scope: brief.scope,
             botTeams: brief.botTeams,
+            origin: "nova",
           }).returning();
           await logCompany(found.company.id, req.user.id, "season_created", null, {
             seasonId: season.id, name: brief.name, nicheId: niche.id, scope: brief.scope, botTeams: brief.botTeams, byNova: true,
@@ -438,7 +484,11 @@ export function registerCompanySeasonRoutes(app: Express): void {
             nextTickAt: s.nextTickAt,
             rooms: rooms.length,
             roomsReady: rooms.filter((r) => r.phase === "running").length,
+            /** The people the start line will charge for. Bots are not people and are not charged for. */
             players: inRooms.filter((x) => !x.isBot).length,
+            origin: s.origin,
+            /** Which seat this season costs, and therefore which balance pays for it. */
+            seatKind: seatKindFor(s.origin),
             bots: inRooms.filter((x) => x.isBot).length,
             inviteCode: s.inviteCode,
             joinUrl: s.inviteCode ? joinPathFor(s.inviteCode) : null,
@@ -500,6 +550,40 @@ export function registerCompanySeasonRoutes(app: Express): void {
       if (!found) return;
       const season = await seasonOf(res, found.company.id, String(req.params.seasonId));
       if (!season) return;
+
+      /*
+       * The seats, charged where they are actually filled.
+       *
+       * This is the only gate on playing, and it is here rather than on
+       * creating a season because until people have sat down nobody knows how
+       * many seats a season needs. Counting company members instead would
+       * charge a company of forty for a season five of them play.
+       *
+       * Bots are not people and are not charged for. The price depends on
+       * where the season came from: one of our markets is the cheaper seat,
+       * one Nova built from the company's own project is the dearer one, and
+       * the two balances do not substitute for each other.
+       */
+      const kind = seatKindFor(season.origin);
+      const seated = await db
+        .selectDistinct({ userId: simSeats.userId })
+        .from(simSeats)
+        .innerJoin(simVentures, eq(simVentures.id, simSeats.ventureId))
+        .innerJoin(users, eq(users.id, simSeats.userId))
+        .where(and(eq(simVentures.seasonId, season.id), eq(users.isBot, false)));
+      const paid = seatsHeld(found.company)[kind];
+      if (seated.length > paid) {
+        return res.status(402).json({
+          code: "seats_required",
+          message: `${seated.length} ${seated.length === 1 ? "person has" : "people have"} sat down and the company has ${paid} ${kind === "nova" ? "Nova" : "play"} ${paid === 1 ? "seat" : "seats"}. `
+            + `${kind === "nova" ? "A season Nova builds from your project" : "A season from our markets"} is $${SEAT_PRICE_CENTS[kind] / 100} a seat, and seats stay with the company for every season after this one.`,
+          seatKind: kind,
+          pricePerSeat: SEAT_PRICE_CENTS[kind] / 100,
+          people: seated.length,
+          paid,
+          shortBy: seated.length - paid,
+        });
+      }
 
       /*
        * The rivals the company asked for, seated before the world is built —
