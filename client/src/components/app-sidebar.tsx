@@ -20,14 +20,41 @@ import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/user-avatar";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "@tanstack/react-query";
-import { Progress } from "@/components/ui/progress";
-import { useEntitlements } from "@/hooks/use-entitlements";
 import { TierSwitcher } from "@/components/tier-switcher";
-import { PLAN_PRESENTATION } from "@shared/plans";
+import { formatMoney } from "@shared/plans";
+import { useWallet } from "@/components/payment-dialog";
 import { useSurfaces } from "@/hooks/use-surfaces";
 
 const ICONS = { Home, FolderKanban, Compass, Telescope, Users, Handshake, MessageSquare, Trophy, Medal, CreditCard };
 const MORE_OPEN_KEY = "st_nav_more_open";
+
+/**
+ * Money on the account and this month's free Nova actions — the two numbers
+ * that decide whether the next thing someone presses will ask them for
+ * anything. A link to the price list rather than to an upgrade, because there
+ * is nothing to upgrade to.
+ */
+function WalletSummary() {
+  const { user } = useAuth();
+  const { data: wallet } = useWallet(!!user);
+  if (!user || !wallet) return null;
+  return (
+    <div className="px-2 py-2 rounded-lg bg-sidebar-accent/50" data-testid="sidebar-wallet">
+      <div className="flex items-center justify-between mb-0.5">
+        <span className="text-xs font-medium text-muted-foreground">Balance</span>
+        <span className="text-xs font-semibold tabular-nums" data-testid="text-sidebar-balance">{wallet.balanceDisplay}</span>
+      </div>
+      <p className="text-xs text-muted-foreground" data-testid="text-sidebar-allowance">
+        {wallet.dayPassActive
+          ? "Day pass on — small actions unlimited"
+          : `${wallet.allowanceRemaining} of ${wallet.allowanceLimit} free Nova actions left`}
+      </p>
+      <Link href="/pricing" className="text-xs text-primary hover:underline mt-1 block" data-testid="link-pricing">
+        {wallet.balanceCents > 0 ? "Add to your balance" : `Top up from ${formatMoney(500)}`}
+      </Link>
+    </div>
+  );
+}
 
 export function AppSidebar() {
   const [location] = useLocation();
@@ -39,10 +66,6 @@ export function AppSidebar() {
   const toggleMore = () => setMoreOpen((open) => { try { localStorage.setItem(MORE_OPEN_KEY, open ? "0" : "1"); } catch { /* remembered for this visit only */ } return !open; });
   const { user, logout } = useAuth();
   const displayName = user?.firstName ? `${user.firstName} ${user.lastName || ""}` : user?.email || "User";
-
-  const {
-    tier, plan, subscription, creditsUsed, creditsLimit, creditsRemaining, isUnlimited,
-  } = useEntitlements();
 
   // Not polled for a surface that's switched off: its endpoint answers 404 then anyway.
   const { data: unreadData } = useQuery<{ count: number }>({
@@ -69,10 +92,6 @@ export function AppSidebar() {
     enabled: isReviewer,
     refetchInterval: 5 * 60_000,
   });
-
-  const progressPercent = isUnlimited || creditsLimit <= 0
-    ? 0
-    : Math.min(100, (creditsUsed / creditsLimit) * 100);
 
   return (
     <Sidebar className="border-r border-sidebar-border">
@@ -248,36 +267,14 @@ export function AppSidebar() {
       </SidebarContent>
       <SidebarFooter className="p-4 mt-auto space-y-3">
         <TierSwitcher />
-        {subscription && (
-          <div className="px-2 py-2 rounded-lg bg-sidebar-accent/50" data-testid="sidebar-credit-usage">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-xs font-medium text-muted-foreground">
-                {plan.name} Plan
-              </span>
-              {isUnlimited ? (
-                <span className="text-xs text-primary flex items-center gap-1">
-                  <Sparkles className="h-3 w-3" /> Unlimited
-                </span>
-              ) : (
-                <span className="text-xs text-muted-foreground">
-                  {creditsRemaining} left
-                </span>
-              )}
-            </div>
-            {!isUnlimited && (
-              <Progress value={progressPercent} className="h-1.5" />
-            )}
-            {tier === "free" ? (
-              <Link href="/pricing" className="text-xs text-primary hover:underline mt-1 block" data-testid="link-upgrade">
-                {PLAN_PRESENTATION.builder.promise}
-              </Link>
-            ) : tier !== "pro" ? (
-              <Link href="/pricing" className="text-xs text-primary hover:underline mt-1 block" data-testid="link-upgrade">
-                Compare plans
-              </Link>
-            ) : null}
-          </div>
-        )}
+        {/*
+          * What they actually have: money on the account, and this month's
+          * free Nova actions. It used to be a plan name, a credit bar and a
+          * link to upgrade — three things that stopped being true when
+          * subscriptions went, and the most-seen place in the app to be wrong
+          * about what somebody is paying for.
+          */}
+        <WalletSummary />
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton asChild className="h-12">
