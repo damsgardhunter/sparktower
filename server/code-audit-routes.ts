@@ -10,7 +10,7 @@
  */
 import { parseModelJson, answerUnreadable } from "./ai-json";
 import type { Express, Response } from "express";
-import OpenAI from "openai";
+import { getOpenAI } from "./openai-client";
 import { storage } from "./storage";
 import { scanSecurity, renderSecurityGaps } from "@shared/security-checks";
 import { db } from "./db";
@@ -48,15 +48,14 @@ import { sanitizeLoopClosures } from "@shared/phase-trees";
 import { rereadOpenLoops } from "./audit-loop-reads";
 import { withProjectLock } from "./project-lock";
 
-let _openai: OpenAI | null = null;
-function getOpenAI(): OpenAI {
-  if (!_openai) {
-    const raw = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
-    const baseURL = raw ? (raw.endsWith("/v1") ? raw : `${raw.replace(/\/$/, "")}/v1`) : undefined;
-    _openai = new OpenAI({ apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY, baseURL });
-  }
-  return _openai;
-}
+/*
+ * The shared client, not a second one built here.
+ *
+ * This file used to construct its own, which duplicated the base-URL rule and
+ * — once there was a default ceiling on every answer — quietly opted the
+ * dearest feature in the product out of it. One client, one place that knows
+ * how to build it.
+ */
 
 const str = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
 const strList = (v: unknown, max = 20, len = 300): string[] =>

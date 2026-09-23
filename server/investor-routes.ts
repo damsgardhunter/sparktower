@@ -9,7 +9,7 @@
  *   - Pitch critique (5 credits)
  */
 import type { Express, Response } from "express";
-import OpenAI from "openai";
+import { getOpenAI } from "./openai-client";
 import { storage } from "./storage";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { requireFeature, requireCredits, modelFor, coachingDirectiveFor } from "./entitlements";
@@ -19,15 +19,12 @@ import type { Project } from "@shared/schema";
 import { rateLimit } from "./moderation";
 import { parseModelJson, ModelResponseError, answerUnreadable, respondToAiError } from "./ai-json";
 
-let _openai: OpenAI | null = null;
-function getOpenAI(): OpenAI {
-  if (!_openai) {
-    const raw = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
-    const baseURL = raw ? (raw.endsWith("/v1") ? raw : `${raw.replace(/\/$/, "")}/v1`) : undefined;
-    _openai = new OpenAI({ apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY, baseURL });
-  }
-  return _openai;
-}
+/*
+ * The shared client, not a second one built here: see server/openai-client.ts.
+ * Each of these files used to construct its own, duplicating the base-URL rule
+ * and — once there was a default ceiling on every answer — quietly opting out
+ * of it.
+ */
 
 /** Parses a JSON object out of a model response that may be fenced. */
 function parseJsonObject(raw: string): any {

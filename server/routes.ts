@@ -2442,10 +2442,6 @@ ${sectionContext}`;
 
 YOUR ROLE: You are the user's dedicated project advisor. You guide them through building their project from the ground up — from defining their vision to launching their product.
 
-COACHING DEPTH: ${coachingDirectiveFor(ent)}
-
-${projectContext}
-
 USING THE CODEBASE AUDIT:
 - An audit is the only evidence in this project of what has actually been built. The tasks and milestones are what the builder *intends*; the audit is what the code *shows*.
 - When they ask "where am I", "what's left", or "what should I do next", answer from the audit if there is one — and name it as the source.
@@ -2471,14 +2467,14 @@ READABILITY (this is a narrow chat panel):
 - Say what you did in plain words ("Rewrote three tasks so none mentions the old onboarding flow"), not what you are "going to" do.
 
 GUIDED ONBOARDING FLOW (for new projects):
-1. Welcome them warmly, acknowledge their project "${project.title}"
+1. Welcome them warmly, acknowledging their project by name (it is in PROJECT CONTEXT, below)
 2. Help define their ONE-LINER positioning (who they help, what they do, how)
 3. Help articulate their MISSION (why this exists, what it's working toward)
 4. Help articulate their VALUE PROPOSITION and TARGET CUSTOMER
 5. Work through their PROBLEM STATEMENT and SUCCESS METRICS
 6. Help define their SCOPE (MVP features vs nice-to-have)
 7. Create initial TASKS to get started
-8. ${isPremium ? "Create MILESTONES/ROADMAP for their journey" : "Suggest upgrading to premium for AI-powered roadmap creation"}
+8. Create MILESTONES/ROADMAP for their journey, if this plan has them (see YOUR PLAN, below)
 9. Ask what they want to FOCUS ON FIRST
 
 CONTEXT-AWARE ASSISTANCE (based on current tab):
@@ -2490,7 +2486,7 @@ CONTEXT-AWARE ASSISTANCE (based on current tab):
   it — don't just print the text in chat and leave the field empty.
 - Kanban tab: Help create/prioritize tasks, suggest what to work on next, and
   reword or re-prioritise existing ones via edit_project
-- Milestones tab: ${isPremium ? "Help create milestones and roadmap, and edit existing milestones and roadmap phases in place via edit_project when the user wants one reworded, re-dated or re-scoped" : "Explain milestones, suggest upgrading for AI roadmap creation"}
+- Milestones tab: if this plan has milestones, help create them and the roadmap, and edit existing milestones and roadmap phases in place via edit_project when the user wants one reworded, re-dated or re-scoped. If it does not, explain what milestones are and say the Builder plan unlocks them.
 - Team tab: Advise on roles needed, team structure
 - Research tab: Help plan user interviews, design experiments
 - Strategy tab: Help with pricing strategy, legal document templates
@@ -2522,7 +2518,7 @@ Available actions:
 3. create_tasks: Create kanban tasks
    <nova_action>{"type": "create_tasks", "data": {"tasks": [{"title": "...", "description": "...", "priority": "high|medium|low"}]}}</nova_action>
 
-4. create_milestones: Create project milestones (${canCreateMilestones ? "AVAILABLE" : "NOT AVAILABLE on this plan. Mention that the Builder plan unlocks AI roadmaps and milestones."})
+4. create_milestones: Create project milestones (only on a plan that has them — see YOUR PLAN, below)
    <nova_action>{"type": "create_milestones", "data": {"milestones": [{"title": "...", "description": "...", "targetDate": "YYYY-MM-DD"}]}}</nova_action>
 
 5. complete_onboarding: Mark onboarding as complete
@@ -2541,7 +2537,7 @@ Available actions:
    re-date, or re-sequence something they can already see.
    <nova_action>{"type": "edit_project", "data": {"operations": [ ... ]}}</nova_action>
 ${OPERATION_SCHEMA_INSTRUCTIONS}
-   Milestone and roadmap operations require the Builder plan${canCreateMilestones ? " — this user has it" : " — this user does NOT have it, so say so instead of trying"}.
+   Milestone and roadmap operations require the Builder plan — see YOUR PLAN, below, for whether this user has it.
 
 RULES:
 - NEVER write an id in your visible reply. Ids exist so you can put them inside
@@ -2562,16 +2558,47 @@ RULES:
       // "Nova project memory" — how far back Nova can see. This is the tier
       // difference between Basic / Expanded / Full memory.
       const priorMessages = history.slice(0, -1).slice(-memoryLimitFor(ent));
+
+      /*
+       * Where the project's current state goes, and why it is not in the
+       * system prompt.
+       *
+       * A prompt is cached by exact prefix. The board changes — often inside
+       * a single conversation, because Nova itself edits it — so holding that
+       * state at the top made every message after it uncacheable: the whole
+       * instruction block *and* every turn of the history, re-bought on every
+       * reply. Carried on the live turn instead, the static instructions and
+       * the entire conversation behind them are a stable prefix, and only the
+       * part that actually moved is charged at full price.
+       *
+       * It reads better to the model this way too: the state of the board is
+       * a fact about right now, which is where the question is.
+       */
+      const liveContext = `YOUR PLAN: ${isPremium ? "Premium" : "Free"} (${ent.tier}). Milestones and roadmaps are ${canCreateMilestones ? "AVAILABLE — this user has them" : "NOT AVAILABLE on this plan; say so plainly rather than trying, and mention that the Builder plan unlocks AI roadmaps and milestones"}.
+
+COACHING DEPTH: ${coachingDirectiveFor(ent)}
+${projectContext}`;
+
       const messages = [
         { role: "system" as const, content: systemPrompt },
         ...priorMessages.map((m: any) => ({ role: m.role as "user" | "assistant", content: m.content })),
-        { role: "user" as const, content: message }
+        { role: "user" as const, content: `${liveContext}\n\n---\n\n${message}` }
       ];
 
       const response = await openai.chat.completions.create({
         model: modelFor(ent),
         messages,
         temperature: 0.7,
+        /*
+         * A ceiling on the answer, which this call did not have.
+         *
+         * The prompt tells Nova to stay under 150 words in a narrow chat
+         * panel, and almost every reply does. A ceiling is for the reply that
+         * does not — a loop, a pasted file read back, a model having a bad
+         * day — which is paid for by the token and read by nobody. Set far
+         * above any honest answer, including one carrying several actions.
+         */
+        max_completion_tokens: 2000,
       });
 
       // An empty answer is a failed call: 502, nothing charged. It used to be
