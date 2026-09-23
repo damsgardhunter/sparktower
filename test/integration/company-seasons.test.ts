@@ -219,6 +219,7 @@ describe("a private season's clock", () => {
     expect(await tickSeason(seasonId)).toBeNull();
 
 
+
     // The staff report.
     const report = await owner.agent.get(`/api/companies/${companyId}/seasons/${seasonId}/report`);
     expect(report.status, JSON.stringify(report.body)).toBe(200);
@@ -250,6 +251,19 @@ describe("a private season's clock", () => {
     /*
      * A double-click: two presses at once resolve one year, not two, and the
      * one that lost is told so rather than handed a second result.
+     *
+     * The update in front of the handler looks like a compare-and-swap and
+     * isn't: it tests `year` and doesn't change it, so both requests match the
+     * same row and both get through. The lock inside tickSeason serialises
+     * them, but serialising alone was not enough — by the time the loser held
+     * the lock, next_tick_at was already in the past and the season on the
+     * next year, so it resolved *that* one and answered 200. A double-click
+     * moved the room two years, and the second was resolved by somebody who
+     * was asking about the first. What makes the loser a 409 is the handler
+     * naming the year it means (`onlyYear`), not the update in front of it.
+     *
+     * It only fails in the overlap, which is why this passed locally for
+     * months and failed on a loaded CI runner.
      */
     const [a, b] = await Promise.all([
       owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/resolve-year-now`).send({}),
@@ -260,6 +274,34 @@ describe("a private season's clock", () => {
     expect((a.status === 409 ? a : b).body.code).toBe("already_resolved");
     const [twice] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
     expect(twice.year, "one year resolved, not two").toBe(3);
+    /*
+     * …and year two was written once. One report per company in the market,
+     * so the number to compare against is year one's — a year resolved twice
+     * would have doubled it.
+     */
+    const all = await db.select().from(simReports).where(eq(simReports.seasonId, seasonId));
+    const perYear = (y: number) => all.filter((r) => r.year === y).length;
+    expect(perYear(2), "a year resolved twice writes its reports twice").toBe(perYear(1));
+    expect(perYear(3), "and the year nobody asked for was never resolved").toBe(0);
+
+    /*
+     * The mechanism, tested directly, because the double-click above only
+     * exercises it when the two requests genuinely overlap — which they do on
+     * a loaded runner and don't on a quiet one. This is the loser's position
+     * exactly: holding the lock, with the season already moved on, asking
+     * about a year that has been and gone.
+     *
+     * Without `onlyYear` it resolves whatever it finds, which is how a
+     * double-click used to cost the room two years.
+     */
+    const [nowOn] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    await db.update(simSeasons).set({ nextTickAt: new Date(Date.now() - 1000) }).where(eq(simSeasons.id, seasonId));
+    expect(
+      await tickSeason(seasonId, new Date(), { onlyYear: nowOn.year - 1 }),
+      "asked about a year that is over, it does nothing",
+    ).toBeNull();
+    const [unmoved] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    expect(unmoved.year, "and the season did not move").toBe(nowOn.year);
   }, 180_000);
 
   it("leaves a public season on a day a year", async () => {

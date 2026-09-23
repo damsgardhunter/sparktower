@@ -3732,6 +3732,16 @@ export const simOffers = pgTable("sim_offers", {
   /** One live offer from a buyer to a target in a year. */
   once: unique("sim_offers_once").on(table.fromVentureId, table.toVentureId, table.year),
   byTarget: index("sim_offers_target_idx").on(table.toVentureId, table.status),
+  /*
+   * One sale per company per year, held by the database.
+   *
+   * Drizzle can't describe a partial unique index, so it lives in migration
+   * 0054 and is named here so the next person reading this table knows it
+   * exists. Accepting is conditional on the *offer* still being pending, which
+   * makes each offer atomic with itself and says nothing about the company —
+   * two offers to the same company are two rows, and both acceptances used to
+   * win. See server/simulation-market-routes.ts.
+   */
 }));
 
 /** A recovery move a team has committed to, applied at the start of the next tick. */

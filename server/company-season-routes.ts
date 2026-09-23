@@ -367,12 +367,18 @@ export function registerCompanySeasonRoutes(app: Express): void {
 
       /*
        * Resolved here rather than on the next minute's pass, so the room sees
-       * results while it's still in the room. `tickSeason` holds the season's
-       * own lock, so a double-click or the minute's pass arriving at the same
-       * moment waits for this one and then finds nothing to do — reported as
-       * the 409 below rather than as a second year resolved.
+       * results while it's still in the room.
+       *
+       * `onlyYear` is what makes the double-click safe, and the update above
+       * is not: it tests `year` and doesn't change it, so a second request
+       * matches the same row just as happily and both arrive here. The lock
+       * inside tickSeason serialises them, but serialising is not enough on
+       * its own — by the time the second one has the lock, next_tick_at is in
+       * the past and the season is on the following year, so it would resolve
+       * that one and answer 200. Naming the year turns the loser into the 409
+       * it should always have been.
        */
-      const resolved = await tickSeason(season.id, now);
+      const resolved = await tickSeason(season.id, now, { onlyYear: season.year });
       if (resolved == null) return res.status(409).json({ message: "That year has just been resolved.", code: "already_resolved" });
       const [after] = await db.select({ year: simSeasons.year, status: simSeasons.status, nextTickAt: simSeasons.nextTickAt })
         .from(simSeasons).where(eq(simSeasons.id, season.id));

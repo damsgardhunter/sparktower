@@ -625,18 +625,41 @@ const BID_IS_THE_CEOS = {
      * all of them for a business they handed over once. The second buyer paid
      * for an empty company.
      *
-     * The update is conditional on the offer still being open, so two
-     * acceptances arriving in the same millisecond cannot both win: the
-     * database settles it, exactly as it does for a seat in the lobby.
+     * Two guards, because they answer two different questions.
+     *
+     * The condition on `status` makes each offer atomic with itself: the same
+     * offer answered twice is answered once. What it cannot do is make the
+     * *company* atomic — two offers to the same company are two different
+     * rows, so both acceptances matched their own row and both won, and each
+     * then declined "the other pendings" by which point neither was pending.
+     * The company was paid for twice and handed over once.
+     *
+     * A `not exists` here would not close it either: under READ COMMITTED both
+     * statements read their own snapshot and both find no accepted offer. What
+     * closes it is the partial unique index on (to_venture_id, year) where
+     * status = 'accepted' (migration 0054) — the second acceptance is refused
+     * by the database, and caught below as the 409 it always should have been.
      */
-    const answered = await db.update(simOffers)
-      .set({
-        status: accept ? "accepted" : "declined",
-        respondedById: req.user.id,
-        respondedAt: new Date(),
-      })
-      .where(and(eq(simOffers.id, offer.id), eq(simOffers.status, "pending")))
-      .returning({ id: simOffers.id });
+    let answered: { id: string }[];
+    try {
+      answered = await db.update(simOffers)
+        .set({
+          status: accept ? "accepted" : "declined",
+          respondedById: req.user.id,
+          respondedAt: new Date(),
+        })
+        .where(and(eq(simOffers.id, offer.id), eq(simOffers.status, "pending")))
+        .returning({ id: simOffers.id });
+    } catch (err: any) {
+      // 23505: somebody else's acceptance of this company got there first.
+      if (err?.code === "23505") {
+        return res.status(409).json({
+          message: "This company has already been sold this year — that offer is off the table.",
+          code: "already_sold",
+        });
+      }
+      throw err;
+    }
 
     if (answered.length === 0) {
       return res.status(409).json({

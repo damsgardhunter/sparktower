@@ -379,6 +379,13 @@
       "when": 1790099801639,
       "tag": "0053_image_pass",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1790099861639,
+      "tag": "0054_one_sale_per_company",
+      "breakpoints": true
     }
   ]
 }
