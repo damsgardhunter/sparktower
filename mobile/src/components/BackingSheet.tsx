@@ -54,8 +54,8 @@ function TierBadge({ levelKey, previews, logoUrl, size = 44 }: { levelKey?: stri
   const logo = assetUri(logoUrl);
   return (
     <View style={{ width: size, height: size, borderRadius: size / 2, borderWidth: 2, borderColor: level.hex, overflow: "hidden", alignItems: "center", justifyContent: "center", backgroundColor: colors.surfaceRaised }}>
-      {img ? <Image source={{ uri: img }} style={{ width: size, height: size }} resizeMode="contain" />
-        : logo ? <Image source={{ uri: logo }} style={{ width: size * 0.6, height: size * 0.6 }} resizeMode="contain" />
+      {img ? <Image source={{ uri: assetUri(img)! }} style={{ width: size, height: size }} resizeMode="contain" />
+        : logo ? <Image source={{ uri: assetUri(logo)! }} style={{ width: size * 0.6, height: size * 0.6 }} resizeMode="contain" />
         : <Icon name="heart" size={size * 0.38} color={level.hex} />}
     </View>
   );

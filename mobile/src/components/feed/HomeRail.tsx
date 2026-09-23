@@ -66,7 +66,7 @@ export function ProfileCard() {
     <Box padded={false} testID="home-profile-card">
       <Pressable onPress={() => router.push("/(tabs)/profile")} accessibilityLabel="Your profile">
         {cover
-          ? <Image source={{ uri: cover }} style={s.coverBand} resizeMode="cover" />
+          ? <Image source={{ uri: assetUri(cover)! }} style={s.coverBand} resizeMode="cover" />
           : <LinearGradient colors={coverColors(profile?.userId || name)} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={s.coverBand} />}
         <View style={s.identity}>
           <View style={s.avatarWrap}>

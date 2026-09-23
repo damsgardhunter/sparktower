@@ -39,7 +39,7 @@ export function ProjectHeader({
     <View style={s.wrap}>
       <View style={s.cover} testID="project-cover">
         {cover
-          ? <Image source={{ uri: cover }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+          ? <Image source={{ uri: assetUri(cover)! }} style={StyleSheet.absoluteFill} resizeMode="cover" />
           : <LinearGradient colors={["#EDE4F3", "#E4DEFB", "#F3F2EF"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />}
         {cover ? <LinearGradient colors={["transparent", "rgba(255,255,255,0.35)"]} style={StyleSheet.absoluteFill} /> : null}
       </View>

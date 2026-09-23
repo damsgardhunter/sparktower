@@ -368,7 +368,7 @@ function MerchPreview({ projectId, config }: { projectId: string; config: MerchC
   const garment = (face: string, label: string, size?: number) => (
     <View style={{ flex: size ? undefined : 1, width: size, gap: 4 }}>
       <View style={{ aspectRatio: 200 / 224, borderRadius: radius.md, backgroundColor: GARMENT[config.colorway], borderWidth: 1, borderColor: colors.border, alignItems: "center", justifyContent: "center", padding: "18%" }}>
-        <Image source={{ uri: src(face) }} style={{ width: "100%", height: "100%" }} resizeMode="contain" />
+        <Image source={{ uri: assetUri(src(face))! }} style={{ width: "100%", height: "100%" }} resizeMode="contain" />
       </View>
       {!!label && <Text style={{ fontSize: 10, color: colors.textTertiary, textAlign: "center", fontFamily: fontFamily.medium, textTransform: "uppercase", letterSpacing: 0.6 }}>{label}</Text>}
     </View>

@@ -24,8 +24,9 @@ export const TAB_BAR_SPACE = 112;
 export type IconName = React.ComponentProps<typeof Ionicons>["name"];
 
 /** Uploaded files come back as `/objects/...` paths; the app needs the API host in front. */
-export const assetUri = (uri?: string | null): string | null =>
-  !uri ? null : /^https?:\/\//.test(uri) || uri.startsWith("data:") ? uri : `${API_URL}${uri.startsWith("/") ? "" : "/"}${uri}`;
+// Re-exported so the many call sites that import it from here keep working.
+import { assetUri } from "../assetUri";
+export { assetUri };
 
 // --- Layout --------------------------------------------------------------
 
@@ -425,7 +426,7 @@ export function Avatar({ name, size = 40, uri, ring }: { name?: string | null; s
   return (
     <View style={[s.avatar, frame, ring && { borderWidth: Math.max(2, size / 24), borderColor: colors.background }]}>
       {source
-        ? <Image source={{ uri: source }} style={[frame, { position: "absolute" }]} />
+        ? <Image source={{ uri: assetUri(source)! }} style={[frame, { position: "absolute" }]} />
         : <Text style={{ color: colors.primary, fontSize: size * 0.42, fontFamily: fontFamily.bold }}>{initial}</Text>}
     </View>
   );

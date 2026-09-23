@@ -92,3 +92,41 @@ describe("where the app gets a picture from", () => {
     expect(plugin[1].photosPermission.length).toBeGreaterThan(40);
   });
 });
+
+/**
+ * A picture on the phone has to be an absolute address.
+ *
+ * The server returns `/objects/uploads/<id>` for every image it stores. The
+ * web resolves that against the page; React Native resolves it against
+ * nothing and draws blank space, with no error and no broken-image icon —
+ * which is exactly what the app did, everywhere, for as long as nobody
+ * happened to compare it against the website. `assetUri` is the one thing
+ * that makes those paths fetchable, so an `<Image>` that skips it is a
+ * picture that will not appear.
+ */
+describe("pictures on the phone", () => {
+  const appRoot = join(__dirname, "..", "..", "mobile");
+  const files = (dir: string): { path: string; text: string }[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) return e.name === "node_modules" ? [] : files(p);
+      return /\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name) ? [{ path: p, text: readFileSync(p, "utf8") }] : [];
+    });
+
+  it("every Image is given an absolute address", () => {
+    const offenders: string[] = [];
+    for (const f of [...files(join(appRoot, "src")), ...files(join(appRoot, "app"))]) {
+      // Comments come out first: a comment showing the wrong way (assetUri.ts
+      // explains the bug it exists for) is not the wrong way being done.
+      const code = f.text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/[^\n]*/g, "$1");
+      for (const m of code.matchAll(/source=\{\{\s*uri:?([^}]*)\}\}/g)) {
+        const expr = m[1];
+        // Already absolute (built from API_URL or a literal http) or passed through assetUri.
+        if (/assetUri|API_URL|https?:\/\//.test(expr)) continue;
+        offenders.push(`${f.path.slice(appRoot.length + 1)}: ${m[0].slice(0, 60)}`);
+      }
+    }
+    expect(offenders, "these render nothing on a phone — wrap the value in assetUri()").toEqual([]);
+  });
+});
+

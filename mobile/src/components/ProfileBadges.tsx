@@ -70,7 +70,7 @@ export function BadgeMedal({ level, imageUrl, projectTitle, size }: {
         style={{ width: size, height: size, borderRadius: size / 2, padding: 2 }}>
         <View style={{ width: inner, height: inner, borderRadius: inner / 2, overflow: "hidden", backgroundColor: colors.background, alignItems: "center", justifyContent: "center" }}>
           {uri
-            ? <Image source={{ uri }} style={{ width: inner, height: inner }} resizeMode="contain" />
+            ? <Image source={{ uri: assetUri(uri)! }} style={{ width: inner, height: inner }} resizeMode="contain" />
             : (
               <LinearGradient colors={[...novaGradient]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
                 style={{ width: inner, height: inner, alignItems: "center", justifyContent: "center" }}>
@@ -85,7 +85,7 @@ export function BadgeMedal({ level, imageUrl, projectTitle, size }: {
   return (
     <View style={{ width: size, height: size, borderRadius: size / 2, borderWidth: 2, borderColor: hex, overflow: "hidden", backgroundColor: colors.background, alignItems: "center", justifyContent: "center" }}>
       {uri
-        ? <Image source={{ uri }} style={{ width: size - 4, height: size - 4 }} resizeMode="contain" />
+        ? <Image source={{ uri: assetUri(uri)! }} style={{ width: size - 4, height: size - 4 }} resizeMode="contain" />
         : <Text style={{ color: hex, fontFamily: fontFamily.semibold, fontSize: Math.max(8, size * 0.3) }}>{initialsOf(projectTitle)}</Text>}
     </View>
   );

@@ -93,7 +93,7 @@ export function PersonGridCard({ width, name, headline, avatarUrl, coverUrl, rea
       <Pressable onPress={onOpen} style={({ pressed }) => [{ alignItems: "center" }, pressed && { opacity: 0.8 }]} accessibilityRole="button" accessibilityLabel={`Open ${name}'s profile`}>
         <View style={n.cover}>
           {cover
-            ? <Image source={{ uri: cover }} style={StyleSheet.absoluteFill} />
+            ? <Image source={{ uri: assetUri(cover)! }} style={StyleSheet.absoluteFill} />
             : <LinearGradient colors={[colors.primarySoft, colors.accent]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />}
         </View>
         <View style={n.gridAvatar}>

@@ -286,7 +286,7 @@ function ProjectMark({ project, size }: { project: any; size: number }) {
   const uri = assetUri(project.logoUrl);
   return (
     <View style={{ width: size, height: size, borderRadius: radius.sm + 2, backgroundColor: colors.primarySoft, alignItems: "center", justifyContent: "center", overflow: "hidden", borderWidth: 1, borderColor: colors.border }}>
-      {uri ? <Image source={{ uri }} style={{ width: size, height: size }} resizeMode="cover" />
+      {uri ? <Image source={{ uri: assetUri(uri)! }} style={{ width: size, height: size }} resizeMode="cover" />
         : <Text style={{ color: colors.primary, fontSize: size * 0.42, fontFamily: fontFamily.bold }}>{(project.title || "?").charAt(0).toUpperCase()}</Text>}
     </View>
   );
