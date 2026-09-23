@@ -139,6 +139,21 @@ export function useOpenSurface(surface: PathSurface) {
       requestAnimationFrame(() => ref.current?.scrollIntoView({ behavior: "smooth", block: "center" }));
       window.setTimeout(() => setAsked(false), 4000);
     };
+    /*
+     * `?surface=` in the URL, so the way here can be a link rather than only a
+     * button on the same screen. That is what the home card and the phone
+     * need: they are somewhere else entirely, and "open the roadmap" from
+     * there has to survive a navigation.
+     */
+    const fromUrl = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("surface") : null;
+    if (fromUrl === surface) {
+      // Taken out of the address bar once acted on, so a refresh doesn't do it again.
+      const params = new URLSearchParams(window.location.search);
+      params.delete("surface");
+      const rest = params.toString();
+      window.history.replaceState(null, "", `${window.location.pathname}${rest ? `?${rest}` : ""}${window.location.hash}`);
+      setTimeout(show, 0);
+    }
     // A request made while the dashboard was mounting still counts.
     if (pendingSurface && pendingSurface.surface === surface && Date.now() - pendingSurface.at < 5000) {
       pendingSurface = null;

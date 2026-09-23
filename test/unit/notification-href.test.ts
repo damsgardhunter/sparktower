@@ -31,3 +31,23 @@ describe("path notification links", () => {
     expect(sectionOfTask(["custom"], "ship_mvp")).toBeNull();
   });
 });
+
+describe("linking to a step's own surface", () => {
+  it("carries the surface, so a card somewhere else can open it on arrival", () => {
+    /*
+     * Some steps are finished by a screen of their own rather than by Nova
+     * writing an answer (BackboneMilestone.doneOn). The home card and the
+     * phone are not on that page and cannot scroll to it, so they link — and
+     * the dashboard reads `?surface=` when it mounts.
+     */
+    const href = pathHref("p1", { section: "run_company", surface: "wwit" });
+    expect(href).toContain("surface=wwit");
+    expect(href).toContain("section=run_company");
+    expect(href.startsWith("/projects/p1/manage?")).toBe(true);
+  });
+
+  it("leaves it out when there isn't one, so ordinary links are unchanged", () => {
+    expect(pathHref("p1", { section: "ship_mvp" })).not.toContain("surface");
+    expect(pathHref("p1")).not.toContain("surface");
+  });
+});

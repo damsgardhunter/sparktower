@@ -34,12 +34,25 @@ export interface NotificationShape {
  */
 export const PATH_FOCUS = { next: "next", weekly: "weekly" } as const;
 
-/** The project's dashboard, on a section, focused on its next step. */
-export function pathHref(projectId: string, opts: { section?: ProjectGoal | null; focus?: string | null } = {}): string {
+/**
+ * The project's dashboard, on a section, focused on its next step.
+ *
+ * `surface` is for the steps that are finished by a screen of their own
+ * (BackboneMilestone.doneOn) — the roadmap, the jobs list, the quarter's
+ * goals. A card somewhere else entirely, the home screen or the phone, cannot
+ * scroll to a thing on a page it isn't on, so it links to it instead and the
+ * dashboard reads it on arrival (useOpenSurface). Built here so that every
+ * card that offers the way there builds the same link.
+ */
+export function pathHref(
+  projectId: string,
+  opts: { section?: ProjectGoal | null; focus?: string | null; surface?: string | null } = {},
+): string {
   const params = new URLSearchParams();
   if (opts.section) params.set("section", opts.section);
   params.set("tab", "nova");
   params.set("focus", opts.focus || PATH_FOCUS.next);
+  if (opts.surface) params.set("surface", opts.surface);
   return `/projects/${projectId}/manage?${params.toString()}`;
 }
 
