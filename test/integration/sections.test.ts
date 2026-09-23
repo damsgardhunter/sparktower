@@ -105,9 +105,16 @@ describe("sections", () => {
     expect(sections.tracks.find((s: any) => s.goal === "ship_mvp")).toMatchObject({ started: true, primary: true, done: 0 });
     expect(sections.tracks.find((s: any) => s.goal === "run_company")).toMatchObject({ started: false });
 
-    // The home card: a next step per started section.
+    /*
+     * The home card: one row for the project, on the section it is furthest
+     * along — Systemize here, which has a step done, against Ship's none. The
+     * sections themselves are unaffected and still keep their own progress;
+     * it is the cross-project list that answers once per company rather than
+     * once per section somebody has open.
+     */
     const home = (await agent.get("/api/me/next-steps")).body.items.filter((i: any) => i.project.id === projectId);
-    expect(home.map((i: any) => i.track.goal).sort()).toEqual(["ship_mvp", "systemize_business"]);
+    expect(home).toHaveLength(1);
+    expect(home[0].track.goal).toBe("systemize_business");
   });
 
   it("keeps files and tracked events per section, with shared ones everywhere", async () => {
