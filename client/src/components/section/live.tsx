@@ -6,6 +6,7 @@
  * dashboard.
  */
 import { useEffect, useRef, useState } from "react";
+import { LiveDot } from "@/components/nova";
 import { useToast } from "@/hooks/use-toast";
 import { usePath } from "@/lib/sections";
 import type { ProjectGoal } from "@shared/goals";
@@ -85,10 +86,7 @@ export function SyncDot({ updatedAt, fetching, error, compact }: { updatedAt: nu
   const label = error ? "Offline — retrying" : fetching ? "Syncing…" : updatedAt ? `Synced · ${agoShort(updatedAt, now)}` : "Syncing…";
   return (
     <span className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground whitespace-nowrap" title="This screen re-reads your path every 15 seconds — the board, audits and your editor show up here on their own." data-testid="sync-indicator">
-      <span className="relative flex h-2 w-2">
-        {fetching && <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping" />}
-        <span className={`relative inline-flex h-2 w-2 rounded-full ${error ? "bg-amber-500" : "bg-emerald-500"}`} />
-      </span>
+      <LiveDot active={fetching} tone={error ? "warn" : "nova"} />
       <span className={compact ? "hidden sm:inline" : ""}>{label}</span>
     </span>
   );

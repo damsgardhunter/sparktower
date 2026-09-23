@@ -6,11 +6,15 @@ import { useToast } from "@/hooks/use-toast";
 import { errorText } from "@/lib/api-error";
 import { useConfirmPurchase } from "@/components/payment-dialog";
 import { useNow } from "@/components/section/live";
-import { NOVA_GRADIENT, plural } from "@/components/section/path-types";
+import { plural } from "@/components/section/path-types";
+import { LiveDot, Working } from "@/components/nova";
 import { formatElapsed } from "@/lib/audit-status";
 import {
   useBuildStatus, quietBuildErrors, buildStageLabel, buildStatusKey, STAGE_ORDER,
 } from "@/lib/build-status";
+
+/** The build's stages with the words shown for each, from the same list the status hook reads. */
+const BUILD_STAGES = STAGE_ORDER.map((id) => ({ id, label: buildStageLabel(id) }));
 import { buildSummary } from "@shared/nova-build";
 import { OUTCOME_COPY, OUTCOME_PRICE_CENTS, formatMoney } from "@shared/plans";
 import { AlertTriangle, Check, Loader2, Sparkles, UserRound } from "lucide-react";
@@ -29,15 +33,6 @@ import { AlertTriangle, Check, Loader2, Sparkles, UserRound } from "lucide-react
  * survives a refresh, a second tab and the phone — which matters most here,
  * because somebody who has just spent $30 will absolutely reload the page.
  */
-function LiveDot() {
-  return (
-    <span className="relative flex h-2 w-2 shrink-0">
-      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
-      <span className={`relative inline-flex h-2 w-2 rounded-full ${NOVA_GRADIENT}`} />
-    </span>
-  );
-}
-
 export function NovaBuildsBusiness({ projectId }: { projectId: string }) {
   const { toast } = useToast();
   const confirmPurchase = useConfirmPurchase();
@@ -101,49 +96,30 @@ export function NovaBuildsBusiness({ projectId }: { projectId: string }) {
      * three at a time.
      */
     const elapsed = Math.max(running.elapsedSeconds, Math.round((now - Date.parse(running.startedAt)) / 1000));
-    const stageIndex = Math.max(0, STAGE_ORDER.indexOf(running.stage));
     // Failures count as steps gone through too, or the bar stops moving on a run that is still working.
     const through = running.stepsDone + running.stepsForYou + running.stepsFailed;
     return (
       <div className="rounded-lg border border-primary/30 p-4 space-y-2" data-testid="nova-build-running">
-        {/* One segment per stage, as the code read does it. */}
-        {/* Columns inline rather than as a Tailwind class: the count comes from
-            the stage list, and Tailwind can't generate a class from a variable. */}
-        <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${STAGE_ORDER.length}, minmax(0, 1fr))` }} aria-hidden>
-          {STAGE_ORDER.map((st, i) => (
-            <div key={st} className="h-1.5 overflow-hidden rounded-full bg-muted">
-              <div
-                className={`h-full rounded-full ${NOVA_GRADIENT} transition-all duration-700 ${i === stageIndex ? "animate-pulse" : ""}`}
-                style={{
-                  width: i < stageIndex ? "100%"
-                    // The building stage knows how far along it really is; the others don't, so they breathe.
-                    : i === stageIndex
-                      ? (st === "building" && running.stepsTotal ? `${Math.max(8, Math.round((through / running.stepsTotal) * 100))}%` : "60%")
-                      : "0%",
-                }}
-              />
-            </div>
-          ))}
-        </div>
-
-        <div className="text-xs text-muted-foreground flex items-center justify-between gap-x-3 gap-y-0.5 flex-wrap">
-          <span className="flex items-center gap-1.5 font-medium text-foreground" data-testid="text-build-stage">
-            <LiveDot />
-            {buildStageLabel(running.stage)}…
-          </span>
-          <span className="flex items-center gap-1.5 min-w-0">
-            {running.stepsTotal > 0 && (
-              <span className="tabular-nums" data-testid="text-build-count">step {Math.min(through + 1, running.stepsTotal)} of {running.stepsTotal}</span>
-            )}
-            <span className="tabular-nums" data-testid="text-build-elapsed">· {formatElapsed(elapsed)}</span>
-          </span>
-        </div>
-
-        {running.currentTitle && (
-          <p className="text-xs text-muted-foreground truncate" title={running.currentTitle} data-testid="text-build-current">
-            {running.currentTitle}
-          </p>
-        )}
+        <Working
+          testId="nova-build-progress"
+          stages={BUILD_STAGES}
+          current={running.stage}
+          /*
+           * Only the building stage counts anything, so only it passes a real
+           * figure; the others breathe at the shared default rather than
+           * inventing one. See `progress` in the component.
+           */
+          progress={running.stage === "building" && running.stepsTotal ? through / running.stepsTotal : null}
+          meta={
+            <>
+              {running.stepsTotal > 0 && (
+                <span className="tabular-nums" data-testid="text-build-count">step {Math.min(through + 1, running.stepsTotal)} of {running.stepsTotal}</span>
+              )}
+              <span className="tabular-nums" data-testid="text-build-elapsed">· {formatElapsed(elapsed)}</span>
+            </>
+          }
+          detail={running.currentTitle}
+        />
         {/* "A few minutes" was measured at fourteen on a twenty-seven step path:
             about forty-five seconds a step, since the steps run one after
             another and each is a model call. Better to say the number the

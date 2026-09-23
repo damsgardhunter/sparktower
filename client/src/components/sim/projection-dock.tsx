@@ -16,6 +16,7 @@
  * `--viz-bad`, and never alone — always with an arrow, a sign and words.
  */
 import { useState } from "react";
+import { LiveDot } from "@/components/nova";
 import { cn } from "@/lib/utils";
 import { ArrowDown, ArrowUp, ChevronUp, ShieldAlert, AlertTriangle, Banknote } from "lucide-react";
 import { useProjection, gbp } from "./projection-panel";
@@ -70,10 +71,7 @@ function DockBody({ ventureId, draft, filedStamp, live, customersWord, warnings 
           <p className="text-[11px] text-muted-foreground">Updates as you change your plan</p>
         </div>
         {/* Live: pulses while the next answer is being worked out. */}
-        <span className="relative flex h-2.5 w-2.5 shrink-0" aria-label={isFetching ? "Updating" : "Up to date"} data-testid="dock-live">
-          {isFetching && <span className="absolute inline-flex h-full w-full rounded-full nova-chip opacity-60 animate-ping" />}
-          <span className="relative inline-flex h-2.5 w-2.5 rounded-full nova-chip" />
-        </span>
+        <LiveDot size="md" active={isFetching} aria-label={isFetching ? "Updating" : "Up to date"} data-testid="dock-live" />
       </div>
 
       {!data ? (

@@ -12,6 +12,10 @@ import { useNow } from "./live";
 import { useAuditStatus, auditStageLabel, auditSourceLabel, formatElapsed } from "@/lib/audit-status";
 import { ago, plural, type PathStatus } from "./path-types";
 import { AlertTriangle, ArrowRight, CheckCircle2, GitCommitHorizontal, ScanSearch } from "lucide-react";
+import { NOVA_GRADIENT, Working } from "@/components/nova";
+
+/** The read's three stages, with the words the panel shows — the same list the Codebase tab uses. */
+const AUDIT_STAGES = ["fetching", "reading", "saving"].map((id) => ({ id, label: auditStageLabel(id) }));
 
 interface AuditListItem { id: string; createdAt: string; stage: string | null; completionPercent: number | null; summary: string | null; operationCount: number }
 
@@ -56,15 +60,27 @@ export function CodebaseSync({ projectId, data, onNavigate }: { projectId: strin
       </div>
 
       {reading && (
-        <div className="rounded-lg p-[1px] bg-gradient-to-r from-green-400 via-emerald-500 to-purple-500" data-testid="codebase-sync-reading">
-          <div className="rounded-[7px] bg-background flex items-center gap-2 px-3 py-2 text-xs flex-wrap">
-            <span className="relative flex h-2 w-2 shrink-0">
-              <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60 animate-ping" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-gradient-to-r from-green-400 via-emerald-500 to-purple-500" />
-            </span>
-            <span className="font-medium">Nova is reading your code…</span>
-            <span className="text-muted-foreground">{reading.stage === "reading" ? "Reading" : auditStageLabel(reading.stage)}{auditSourceLabel(reading.source) ? ` · from ${auditSourceLabel(reading.source)}` : ""}</span>
-            <span className="ml-auto tabular-nums text-muted-foreground">{formatElapsed(reading.elapsedSeconds + Math.max(0, Math.round((now - statusAt) / 1000)))}</span>
+        /*
+         * The same panel the Codebase tab shows, rather than a second telling
+         * of the same story. This strip used to say "Nova is reading your
+         * code" whichever of the three stages was running — so a read that was
+         * fetching, or saving, claimed to be doing the one thing it was not.
+         * The gradient keyline stays: this is a live Nova moment, and it is
+         * the one thing on the strip that moves.
+         */
+        <div className={`rounded-lg p-[1px] ${NOVA_GRADIENT}`} data-testid="codebase-sync-reading">
+          <div className="rounded-[7px] bg-background px-3 py-2">
+            <Working
+              testId="codebase-sync-working"
+              stages={AUDIT_STAGES}
+              current={reading.stage}
+              meta={
+                <>
+                  {auditSourceLabel(reading.source) && <span className="truncate">from {auditSourceLabel(reading.source)}</span>}
+                  <span className="tabular-nums">· {formatElapsed(reading.elapsedSeconds + Math.max(0, Math.round((now - statusAt) / 1000)))}</span>
+                </>
+              }
+            />
           </div>
         </div>
       )}

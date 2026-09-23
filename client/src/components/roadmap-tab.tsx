@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Loading } from "@/components/nova";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -278,7 +279,7 @@ function AiRoadmap({ projectId, isOwner }: { projectId: string; isOwner: boolean
   });
 
   if (isLoading) {
-    return <div className="flex justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>;
+    return <Loading what="Reading your roadmap" />;
   }
 
   // Gated: pitch the Builder plan by outcome rather than by entitlement.

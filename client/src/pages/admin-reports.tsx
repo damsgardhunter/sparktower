@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Loading } from "@/components/nova";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { errorText } from "@/lib/api-error";
@@ -304,7 +305,7 @@ export default function AdminReports() {
   });
 
   if (authLoading) {
-    return <div className="flex justify-center py-20"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>;
+    return <Loading what="Reading the queue" />;
   }
   if (!isReviewer) return <NotFound />;
 
@@ -346,7 +347,7 @@ export default function AdminReports() {
       </div>
 
       {isLoading ? (
-        <div className="flex justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
+        <Loading what="Reading the queue" />
       ) : list.length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="py-14 text-center space-y-2">

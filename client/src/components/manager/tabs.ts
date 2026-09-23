@@ -65,4 +65,5 @@ export const ALL_TABS: TabDef[] = [...SECTION_TABS, ...MORE_TABS, ...RAIL_TABS];
 export const isTabId = (v: unknown): v is TabId => ALL_TABS.some((t) => t.id === v);
 export const tabDef = (id: TabId) => ALL_TABS.find((t) => t.id === id)!;
 
-export const NOVA_GRADIENT = "bg-gradient-to-r from-green-400 via-emerald-500 to-purple-500";
+/** Nova's gradient — defined in components/nova/tokens.ts, re-exported so the rail's imports stay put. */
+export { NOVA_GRADIENT } from "@/components/nova/tokens";

@@ -109,5 +109,11 @@ export function projection(p: PathPace) {
 
 export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-/** Nova's gradient, for Nova moments and the "next" highlight. */
-export const NOVA_GRADIENT = "bg-gradient-to-r from-green-400 via-emerald-500 to-purple-500";
+/**
+ * Nova's gradient, for Nova moments and the "next" highlight.
+ *
+ * Re-exported rather than written out again: it lives in components/nova/tokens.ts
+ * with the rest of the look. The dozen files importing it from here do not have
+ * to move, and the string exists once.
+ */
+export { NOVA_GRADIENT } from "@/components/nova/tokens";

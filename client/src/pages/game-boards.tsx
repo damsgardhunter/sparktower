@@ -8,12 +8,12 @@
  * people they came 40th and give them nothing to come back for.
  */
 import { useState } from "react";
+import { Loading } from "@/components/nova";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { Loader2 } from "lucide-react";
 import { money } from "@shared/sprints/budget";
 import { ordinal } from "@/components/game/verdict";
 
@@ -58,7 +58,7 @@ export default function GameBoardsPage() {
       {current?.blurb && <p className="mt-3 text-sm text-muted-foreground">{current.blurb}</p>}
 
       {isLoading ? (
-        <div className="flex justify-center py-16"><Loader2 className="h-6 w-6 animate-spin" /></div>
+        <Loading what="Counting the boards" />
       ) : standings.length === 0 ? (
         <div className="mt-8 rounded-xl border border-dashed p-10 text-center text-muted-foreground">
           <p>Nobody has finished a game yet.</p>

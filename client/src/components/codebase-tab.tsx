@@ -24,6 +24,7 @@ import { SecurityReportPanel } from "@/components/security-report";
 import type { ProjectCodeAudit } from "@shared/schema";
 import { useAuth } from "@/hooks/use-auth";
 import { useAuditStatus, quietAuditErrors, auditStageLabel, auditSourceLabel, formatElapsed, auditStatusKey } from "@/lib/audit-status";
+import { LiveDot, NOVA_GRADIENT, Working } from "@/components/nova";
 
 interface AuditListItem {
   id: string;
@@ -52,9 +53,8 @@ interface RepoCheck {
 const IDLE_POLL_MS = 30_000;
 /** …and while a read is running. */
 const RUNNING_POLL_MS = 4_000;
-/** The three stages a run reports, in order, for the progress bar. */
-const STAGE_ORDER = ["fetching", "reading", "saving"];
-const NOVA_GRADIENT = "bg-gradient-to-r from-green-400 via-emerald-500 to-purple-500";
+/** The three stages a run reports, in order, with the words the panel shows for each. */
+const AUDIT_STAGES = ["fetching", "reading", "saving"].map((id) => ({ id, label: auditStageLabel(id) }));
 
 const STAGE_STYLE: Record<string, { label: string; className: string }> = {
   empty: { label: "Empty", className: "bg-slate-500/10 text-slate-600 border-slate-500/30" },
@@ -127,15 +127,6 @@ function parseSource(source: string | null | undefined, kind?: string | null) {
 const Pill = ({ className = "", children, ...rest }: { className?: string; children: ReactNode } & React.HTMLAttributes<HTMLSpanElement>) => (
   <span className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium ${className}`} {...rest}>{children}</span>
 );
-
-function LiveDot({ active = true }: { active?: boolean }) {
-  return (
-    <span className="relative flex h-2 w-2 shrink-0">
-      {active && <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />}
-      <span className={`relative inline-flex h-2 w-2 rounded-full ${active ? NOVA_GRADIENT : "bg-muted-foreground/40"}`} />
-    </span>
-  );
-}
 
 /** A block of the tab, separated from the next by a line. */
 function Block({ title, count, action, children, testId, innerRef }: {
@@ -276,9 +267,15 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
       // The read moves the path even when nothing was auto-applied: path status reads the audit's waiting changes.
       refreshAfterCatchUp(projectId, result.audit.id);
       const n = result.autoApplied?.changes.length ?? 0;
+      /*
+       * `creditsCharged` is always 0 now and the audit is paid for in dollars
+       * (`chargedCents`), so this printed "72% built · 0 credits" after taking
+       * $5. The server sends both precisely so a client can stop saying
+       * credits; this one had not.
+       */
       toast({
         title: "Code read",
-        description: `${result.audit.completionPercent}% built · ${result.creditsCharged} credits${n ? ` · Nova updated ${n}` : ""}`,
+        description: `${result.audit.completionPercent}% built${n ? ` · Nova updated ${n}` : ""}`,
       });
     },
     onError: (err: any) => {
@@ -457,7 +454,6 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
 
   // Elapsed as the server counted it, ticking on between polls.
   const elapsed = serverRun ? serverRun.elapsedSeconds + Math.max(0, Math.round((now - status.dataUpdatedAt) / 1000)) : 0;
-  const stageIndex = serverRun ? Math.max(0, STAGE_ORDER.indexOf(serverRun.stage)) : -1;
   const runFrom = serverRun ? auditSourceLabel(serverRun.source) : null;
   const runBy = serverRun?.startedBy
     ? serverRun.startedBy.id === user?.id ? "You" : serverRun.startedBy.firstName || "A teammate"
@@ -535,27 +531,23 @@ export function CodebaseTab({ projectId, repoUrl, isOwner = false }: { projectId
         </div>
 
         {running && (
-          <div className="space-y-1.5" data-testid="audit-running">
-            <div className="grid grid-cols-3 gap-1" aria-hidden>
-              {STAGE_ORDER.map((st, i) => (
-                <div key={st} className="h-1.5 overflow-hidden rounded-full bg-muted">
-                  <div className={`h-full rounded-full ${NOVA_GRADIENT} transition-all duration-700 ${i === stageIndex ? "animate-pulse" : ""}`} style={{ width: i < stageIndex ? "100%" : i === stageIndex ? "60%" : "0%" }} />
-                </div>
-              ))}
-            </div>
-            <div className="text-xs text-muted-foreground flex items-center justify-between gap-x-3 gap-y-0.5 flex-wrap">
-              <span className="flex items-center gap-1.5 font-medium text-foreground" data-testid="audit-running-stage">
-                <LiveDot />
-                {isUploading ? "Uploading the zip" : serverRun ? auditStageLabel(serverRun.stage) : "Starting the read"}…
-              </span>
-              {serverRun && (
-                <span className="flex items-center gap-1.5 min-w-0">
-                  <span className="truncate" data-testid="audit-running-who">{runWho}</span>
-                  <span className="tabular-nums" data-testid="audit-running-elapsed">· {formatElapsed(elapsed)}</span>
-                </span>
-              )}
-            </div>
-          </div>
+          <Working
+            testId="audit-running"
+            stages={AUDIT_STAGES}
+            current={serverRun?.stage ?? null}
+            /*
+             * The upload happens in this browser before a run row exists, so
+             * the server has no stage for it and the panel would otherwise
+             * claim the fetch had started.
+             */
+            saying={isUploading ? "Uploading the zip" : serverRun ? null : "Starting the read"}
+            meta={serverRun && (
+              <>
+                <span className="truncate" data-testid="audit-running-who">{runWho}</span>
+                <span className="tabular-nums" data-testid="audit-running-elapsed">· {formatElapsed(elapsed)}</span>
+              </>
+            )}
+          />
         )}
 
         {!isBuilder && (
