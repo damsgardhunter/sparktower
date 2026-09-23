@@ -6,7 +6,7 @@ import {
 import { Stack } from "expo-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import * as DocumentPicker from "expo-document-picker";
+import { pickPhoto } from "../photos";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { api, readPref, uploadFile, writePref } from "../api/client";
 import { colors, font, fontFamily, radius, spacing } from "../theme";
@@ -158,11 +158,10 @@ export function PostComposer({
   const addPhoto = async () => {
     setError(null);
     try {
-      const picked = await DocumentPicker.getDocumentAsync({ type: "image/*", copyToCacheDirectory: true });
-      if (picked.canceled || !picked.assets?.[0]) return;
-      const file = picked.assets[0];
+      const file = await pickPhoto();
+      if (!file) return;
       setUploading(true);
-      const path = await uploadFile({ uri: file.uri, name: file.name, mimeType: file.mimeType || "image/jpeg", size: file.size });
+      const path = await uploadFile(file);
       setMediaUrls((prev) => [...prev, path].slice(0, MAX_POST_MEDIA));
     } catch (e) {
       setError(errText(e, "Upload failed."));

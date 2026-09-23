@@ -42,6 +42,7 @@ export default defineConfig({
       "expo-constants": stub("expo-constants"),
       "expo-secure-store": stub("expo-secure-store"),
       "expo-linking": stub("expo-linking"),
+      "expo-image-picker": stub("expo-image-picker"),
     },
   },
 });

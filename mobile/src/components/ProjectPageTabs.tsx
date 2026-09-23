@@ -10,7 +10,7 @@ import { useState, type ReactNode } from "react";
 import { Image, Modal, Pressable, Text, View, useWindowDimensions } from "react-native";
 import { useRouter } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
-import * as DocumentPicker from "expo-document-picker";
+import { pickPhoto } from "../photos";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, uploadFile } from "../api/client";
 import { colors, font, fontFamily, radius, spacing } from "../theme";
@@ -584,12 +584,11 @@ export function MediaTab({ projectId, mediaUrls, isOwner, notify }: { projectId:
 
   const add = async () => {
     try {
-      const picked = await DocumentPicker.getDocumentAsync({ type: ["image/jpeg", "image/png", "image/gif", "image/webp", "video/mp4", "video/webm"], copyToCacheDirectory: true });
-      if (picked.canceled || !picked.assets?.[0]) return;
-      const file = picked.assets[0];
+      const file = await pickPhoto({ videos: true });
+      if (!file) return;
       if (file.size && file.size > 50 * 1024 * 1024) { notify({ text: "Maximum file size is 50MB.", tone: "error" }); return; }
       setUploading(true);
-      const objectPath = await uploadFile({ uri: file.uri, name: file.name, mimeType: file.mimeType, size: file.size });
+      const objectPath = await uploadFile(file);
       await api(`/api/projects/${projectId}/media`, { method: "POST", body: { objectPath } });
       await refresh();
       notify({ text: "Media uploaded.", tone: "success" });

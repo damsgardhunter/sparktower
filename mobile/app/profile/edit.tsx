@@ -230,7 +230,7 @@ export default function EditProfile() {
         <Section title="Photos">
           <View style={{ borderRadius: radius.md, overflow: "hidden" }}>
             <Pressable onPress={() => photo.mutate("coverUrl")} accessibilityLabel="Change cover photo">
-              {cover ? <Image source={{ uri: cover }} style={{ width: "100%", height: 110 }} /> : <NovaGradient style={{ height: 110, opacity: 0.55 }} />}
+              {cover ? <Image source={{ uri: assetUri(cover)! }} style={{ width: "100%", height: 110 }} /> : <NovaGradient style={{ height: 110, opacity: 0.55 }} />}
               <View style={{ position: "absolute", top: spacing.sm, right: spacing.sm, flexDirection: "row", gap: 6, alignItems: "center", backgroundColor: colors.surface, borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: 5 }}>
                 <Icon name="camera-outline" size={15} color={colors.text} />
                 <Text style={{ fontFamily: fontFamily.semibold, fontSize: font.xs, color: colors.text }}>Cover</Text>

@@ -20,7 +20,7 @@ import { usePlainHeaderSpace } from "../../src/components/AppHeader";
  * (GET /api/surfaces) disappear when it's off, exactly as the sidebar does.
  */
 export default function More() {
-  const headerSpace = usePlainHeaderSpace();
+  const headerSpace = usePlainHeaderSpace({ subtitle: true });
   const router = useRouter();
   const { signOut } = useAuth();
   const { on } = useSurfaces();

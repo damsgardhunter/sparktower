@@ -465,7 +465,7 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
       why: str(m?.why, 400),
     })).filter((m: any) => m.title),
     /** Whether each written loop closes in the code, held to cited files — open ones read again, closely. */
-    loops: await rereadOpenLoops(ent, auditLoops, sanitizeLoopClosures(parsed.loops, auditLoops, new Set(snapshot.files.map((f) => f.path))), snapshot.files, everyRoute(digest)),
+    loops: await rereadOpenLoops(ent, auditLoops, sanitizeLoopClosures(parsed.loops, auditLoops, new Set(snapshot.files.map((f) => f.path)), everyRoute(digest)), snapshot.files, everyRoute(digest)),
     nextThreeThings: strList(parsed.nextThreeThings, 5, 400),
     /** The deterministic checklist, and Nova's prioritised fixes for this codebase. */
     security: {

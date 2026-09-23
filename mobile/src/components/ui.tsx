@@ -17,21 +17,22 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { API_URL } from "../api/client";
 import { colors, font, fontFamily, novaGradient, radius, shadow, spacing } from "../theme";
 import { useHideTabBarOnScroll } from "./tab-bar-visibility";
-import { useHeaderSpace } from "./AppHeader";
+import { useHeaderSpace, usePlainHeaderSpace } from "./AppHeader";
 // The floating bar's footprint, so a list's last row isn't stuck underneath it.
 export const TAB_BAR_SPACE = 112;
 
 export type IconName = React.ComponentProps<typeof Ionicons>["name"];
 
 /** Uploaded files come back as `/objects/...` paths; the app needs the API host in front. */
-export const assetUri = (uri?: string | null): string | null =>
-  !uri ? null : /^https?:\/\//.test(uri) || uri.startsWith("data:") ? uri : `${API_URL}${uri.startsWith("/") ? "" : "/"}${uri}`;
+// Re-exported so the many call sites that import it from here keep working.
+import { assetUri } from "../assetUri";
+export { assetUri };
 
 // --- Layout --------------------------------------------------------------
 
 /** Scrolling screen body with consistent padding and pull-to-refresh. */
 export function Screen({
-  children, onRefresh, refreshing, contentStyle, scroll = true, canvas, hideTabBar,
+  children, onRefresh, refreshing, contentStyle, scroll = true, canvas, hideTabBar, plainHeader,
 }: {
   children: React.ReactNode;
   onRefresh?: () => void;
@@ -40,6 +41,14 @@ export function Screen({
   scroll?: boolean;
   /** The gray feed background, for screens made of stacked cards. */
   canvas?: boolean;
+  /**
+   * This screen sits under a PlainHeader rather than the cover one, so it
+   * needs far less room at the top. Told rather than detected: the navigator
+   * renders the header and the screen renders the content, and neither can see
+   * the other — which is how a screen ends up with a quarter of itself blank
+   * above the first card.
+   */
+  plainHeader?: boolean | { subtitle: boolean };
   /**
    * Let the bottom bar slide away as this screen scrolls, and leave room for
    * it at the end of the content. For screens people read down; not for forms,
@@ -54,7 +63,9 @@ export function Screen({
    * header that owns no layout, and room at the bottom for a bar that doesn't
    * either.
    */
-  const headerSpace = useHeaderSpace();
+  const coverSpace = useHeaderSpace();
+  const plainSpace = usePlainHeaderSpace({ subtitle: typeof plainHeader === "object" && plainHeader.subtitle });
+  const headerSpace = plainHeader ? plainSpace : coverSpace;
   const base = [s.screenBase, canvas && { backgroundColor: colors.canvas }];
   if (!scroll) {
     return <View style={[...base, contentStyle]}>{children}</View>;
@@ -425,7 +436,7 @@ export function Avatar({ name, size = 40, uri, ring }: { name?: string | null; s
   return (
     <View style={[s.avatar, frame, ring && { borderWidth: Math.max(2, size / 24), borderColor: colors.background }]}>
       {source
-        ? <Image source={{ uri: source }} style={[frame, { position: "absolute" }]} />
+        ? <Image source={{ uri: assetUri(source)! }} style={[frame, { position: "absolute" }]} />
         : <Text style={{ color: colors.primary, fontSize: size * 0.42, fontFamily: fontFamily.bold }}>{initial}</Text>}
     </View>
   );

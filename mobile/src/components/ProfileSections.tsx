@@ -52,7 +52,7 @@ export function ProfileHeader({
       {/* The cover photo, or the web's soft primary → accent gradient when there isn't one. */}
       <View style={{ height: 120 }}>
         {cover
-          ? <Image source={{ uri: cover }} style={{ width: "100%", height: 120 }} resizeMode="cover" />
+          ? <Image source={{ uri: assetUri(cover)! }} style={{ width: "100%", height: 120 }} resizeMode="cover" />
           : <LinearGradient colors={["#EADCF0", "#F1EEFF", "#EADCF0"]} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={{ height: 120 }} />}
         {onEditCover && (
           <Pressable onPress={onEditCover} accessibilityLabel="Change cover photo" hitSlop={8}

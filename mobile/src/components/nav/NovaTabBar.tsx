@@ -263,7 +263,15 @@ export function NovaTabBar({ state, navigation }: BottomTabBarProps) {
         * elevation before document order.
         */}
       <Pressable
-        onPress={() => router.push("/more")}
+        /*
+         * navigate, not push. More is a tab, and pushing a tab route stacks
+         * another copy of it every time the dome is pressed: three presses,
+         * three screens deep, and Back walks out through all of them. The
+         * other tabs go through `navigation.navigate` above; this is the same
+         * thing said the way the dome has to say it, since it isn't one of the
+         * bar's own buttons.
+         */
+        onPress={() => router.navigate("/more")}
         accessibilityRole="button"
         accessibilityLabel="More"
         // Renamed with the behaviour: this opens More now, and a testID that

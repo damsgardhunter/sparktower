@@ -86,6 +86,81 @@ export function rowsForArea(area: CapabilityArea, cov: RouteCoverage, max = 140)
 
 
 /**
+ * A file too long to send whole, cut around the question being asked rather
+ * than at the first 60,000 characters.
+ *
+ * `server/moderation.ts` is 85kB and the undo handler starts at character
+ * 72,603 — so the read got the first 70% of the file and honestly reported
+ * that it could not confirm the undo handler, because the undo handler was
+ * not in what it was given. Taking the head is the right default for a file
+ * whose shape is at the top; it is the wrong one for a 2,000-line routes file
+ * where the answer is wherever the route happens to sit.
+ *
+ * So: the head, always, because that is where the module says what it is —
+ * and then the parts that mention what the area was asked about, in file
+ * order, with the cuts marked so nothing reads as contiguous code that isn't.
+ */
+export function clipToQuestion(content: string, maxChars: number, question: string): string {
+  if (content.length <= maxChars) return content;
+  const head = Math.floor(maxChars * 0.45);
+  const terms = [...new Set((question.toLowerCase().match(/[a-z][a-z-]{3,}/g) ?? []))]
+    .filter((w) => !STOP_WORDS.has(w));
+
+  const lines = content.split("\n");
+  /** Where the head ends, in lines, so a region never starts mid-way through it. */
+  let used = 0, headLines = 0;
+  for (const line of lines) { if (used + line.length + 1 > head) break; used += line.length + 1; headLines += 1; }
+
+  /*
+   * A rare word is worth more than a common one. "report" appears on two
+   * hundred lines of a moderation file and says nothing about which of them
+   * matters; "undo" appears on twenty and points straight at the handler the
+   * question was about. Weighting by how often the term occurs is what stops
+   * the densest paragraph in the file eating the whole budget.
+   */
+  const lower = content.toLowerCase();
+  const weight = new Map(terms.map((t) => {
+    const hits = lower.split(t).length - 1;
+    return [t, hits > 0 ? 1 / Math.log2(2 + hits) : 0];
+  }));
+  const scored = lines.map((line, i) => {
+    if (i < headLines) return 0;
+    const text = line.toLowerCase();
+    return terms.reduce((n, t) => n + (text.includes(t) ? weight.get(t)! : 0), 0);
+  });
+  const wanted = new Set<number>();
+  let budget = maxChars - used;
+  /* Whole neighbourhoods rather than single lines: a route's guard and its body are 40 lines apart. */
+  const order = scored.map((score, i) => ({ score, i })).filter((x) => x.score > 0).sort((a, b) => b.score - a.score || a.i - b.i);
+  for (const { i } of order) {
+    if (budget <= 0) break;
+    for (let j = Math.max(headLines, i - 12); j <= Math.min(lines.length - 1, i + 28); j++) {
+      if (wanted.has(j)) continue;
+      const cost = lines[j].length + 1;
+      if (cost > budget) continue;
+      wanted.add(j); budget -= cost;
+    }
+  }
+
+  const out: string[] = lines.slice(0, headLines);
+  let lastKept = headLines - 1;
+  for (const i of [...wanted].sort((a, b) => a - b)) {
+    if (i > lastKept + 1) out.push(`… (${i - lastKept - 1} lines not shown)`);
+    out.push(lines[i]);
+    lastKept = i;
+  }
+  if (lastKept < lines.length - 1) out.push(`… (${lines.length - 1 - lastKept} lines not shown)`);
+  return out.join("\n");
+}
+
+/** Words in a question that say nothing about where an answer lives. */
+const STOP_WORDS = new Set([
+  "each", "step", "name", "that", "this", "with", "from", "what", "which", "does", "have", "into",
+  "only", "else", "there", "where", "when", "they", "them", "then", "than", "about", "every", "some",
+  "complete", "missing", "chain", "anything",
+]);
+
+/**
  * One area, read properly. Given the full text of its evidence files (and
  * a few obvious relatives), the route coverage where it matters, and the
  * area's question. Never throws: a failed read leaves the area at its
@@ -125,7 +200,7 @@ export async function deepReadArea(
     if (f.content && !chosen.includes(f) && hint.test(f.path) && (testsAreTheSubject || !isTest(f.path))) chosen.push(f);
   }
   if (!chosen.length) return null;
-  const fileText = chosen.map((f) => `### ${f.path}\n${f.content!.slice(0, maxChars)}${f.content!.length > maxChars ? "\n… (truncated)" : ""}`).join("\n\n");
+  const fileText = chosen.map((f) => `### ${f.path}\n${clipToQuestion(f.content!, maxChars, AREA_QUESTIONS[entry.area])}`).join("\n\n");
   const cov = [
     RELEVANT_TO_COVERAGE.has(entry.area) && coverage ? [renderRouteCoverage(coverage, 40), rowsForArea(entry.area, coverage)].filter(Boolean).join("\n\n") : null,
     // With the test files to hand, an empty table can be reported as unused rather than unproven.
@@ -133,7 +208,17 @@ export async function deepReadArea(
     // Every test file's path — all of them for the testing and CI areas, the ones named for this area elsewhere — so
     // "is this tested?" is answered from the repository, not from the handful of files whose full text fits.
     summarizeTestInventory(files.map((f) => f.path), testsAreTheSubject ? null : hint ?? null),
-    entry.area === "mobile" ? summarizeMobileScreens(files) : null,
+    /*
+     * The phone's screens, for mobile and for moderation.
+     *
+     * Reporting is something a person does, so "can they do it from the app"
+     * is part of whether the chain is real — and the moderation read had no
+     * way to see the phone at all, so it correctly said it could not confirm
+     * parity and a reader took that for a gap. (The report button is in
+     * mobile/src/components/FeedParts.tsx; the review queue is deliberately
+     * web-only, which is a different sentence from "not found".)
+     */
+    entry.area === "mobile" || entry.area === "moderation" ? summarizeMobileScreens(files) : null,
     // The web's routes with their gating: for auth, because "which screens does a signed-out
     // person reach" is the question; for mobile, because the two apps are only comparable together.
     entry.area === "auth" || entry.area === "mobile" ? summarizeWebScreens(files) : null,

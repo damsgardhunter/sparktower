@@ -157,3 +157,59 @@ describe("the code audit's closure check, held to the files", () => {
     expect(VERIFIERS["SHIP.M2.3"]({ id: "a", signals: {}, findings: { loops: all.map((l, i) => (i ? l : { ...l, closure: "open" })) } })).toBeNull();
   });
 });
+
+/**
+ * A citation that names an endpoint instead of a file.
+ *
+ * This is the sentence that prompted it, about this repository's own admin
+ * loop: "Reported closed, but none of the files it cited are in the repository
+ * (e.g. /api/admin/safety/review)." That route is registered at
+ * server/safety-routes.ts and covered by tests. The read had answered the
+ * question in the more natural currency — the endpoint rather than the file it
+ * sits in — and the reply was to tell a builder to go and rebuild something
+ * they already had.
+ */
+describe("a loop read that cites routes", () => {
+  const files = new Set(["server/safety-routes.ts", "client/src/pages/admin-safety.tsx", "server/moderation.ts"]);
+  const registered = [
+    { label: "GET /api/admin/safety/review", file: "server/safety-routes.ts" },
+    { label: "POST /api/admin/safety/review", file: "server/safety-routes.ts" },
+    { label: "POST /api/admin/reports/:id/act", file: "server/moderation.ts" },
+  ];
+  const loop = [{ key: "L1", taskId: "t-admin", title: "Safety review", type: "product" as LoopType }];
+  const closed = (evidence: string[], ret: string[]) => sanitizeLoopClosures([{
+    key: "L1", closure: "closed",
+    stages: [{ step: "Review the signals", status: "built", evidence }],
+    returnPath: { mechanism: "the completed review moves the window", evidence: ret },
+  }], loop, files, registered)[0];
+
+  it("counts a registered route as the file that registers it", () => {
+    const read = closed(["GET /api/admin/safety/review"], ["POST /api/admin/safety/review"]);
+    expect(read.closure, read.note).toBe("closed");
+    expect(read.stages[0].evidence, "a path a person can open, not the route they typed").toEqual(["server/safety-routes.ts"]);
+    expect(read.note).toBeUndefined();
+  });
+
+  it("matches without the method, and whatever the parameter is called", () => {
+    const read = closed(["/api/admin/safety/review"], ["/api/admin/reports/:reportId/act"]);
+    expect(read.closure, read.note).toBe("closed");
+    expect(read.returnPath?.evidence).toEqual(["server/moderation.ts"]);
+  });
+
+  it("says nothing twice when the route and its file are both cited", () => {
+    const read = closed(["server/safety-routes.ts", "GET /api/admin/safety/review"], ["POST /api/admin/safety/review"]);
+    expect(read.stages[0].evidence).toEqual(["server/safety-routes.ts"]);
+  });
+
+  it("still reports a route nothing registers, which is the true version of that sentence", () => {
+    const read = closed(["POST /api/admin/safety/invented"], ["POST /api/admin/safety/review"]);
+    expect(read.closure).toBe("open");
+    expect(read.note).toMatch(/none of the files it cited are in the repository/);
+    expect(read.note).toContain("/api/admin/safety/invented");
+  });
+
+  it("does not take a bare sentence for a route", () => {
+    const read = closed(["the admin reviews the queue"], ["POST /api/admin/safety/review"]);
+    expect(read.closure).toBe("open");
+  });
+});
