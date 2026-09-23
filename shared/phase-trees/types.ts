@@ -50,8 +50,17 @@ export interface IntakeQuestion {
   placeholder?: string;
 }
 
-/** A screen that finishes a step by being used. Each is somewhere on the project's own dashboard. */
-export type PathSurface = "wwit" | "recurring-jobs" | "quarter-goals";
+/**
+ * A screen that finishes a step by being used. Each is somewhere on the
+ * project's own dashboard.
+ *
+ * A list rather than a bare union so it can be read at runtime: the phone
+ * restates these names (Metro can't resolve @shared) and the mirror test
+ * compares the two, which it can only do against something that exists after
+ * compilation.
+ */
+export const PATH_SURFACES = ["wwit", "recurring-jobs", "quarter-goals"] as const;
+export type PathSurface = (typeof PATH_SURFACES)[number];
 
 export interface BackboneMilestone {
   /** Stable id, e.g. "SHIP.M1.2". Referenced by injected tasks and switching. */

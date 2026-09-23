@@ -414,8 +414,18 @@ export function NextStepRow({ item, onShare, onWeekly }: {
   const novaActs = item.next?.actor.startsWith("nova");
   // The primary section keeps the plain ids; the others add their goal, so each is addressable.
   const idSuffix = item.track && !item.track.primary ? `${item.project.id}-${item.track.goal}` : item.project.id;
-  // Straight to the step, with the card in view (shared/notifications.ts).
-  const href = pathHref(item.project.id, { section: (item.track?.goal as ProjectGoal | undefined) ?? null });
+  /*
+   * Straight to the step, with the card in view (shared/notifications.ts) —
+   * or to the screen that finishes the step, for the ones that are done by
+   * being used rather than by a button. This card can't scroll to something
+   * on a page it isn't on, so it links to it and the dashboard opens it on
+   * arrival.
+   */
+  const doneOn = item.next?.doneOn ?? null;
+  const href = pathHref(item.project.id, {
+    section: (item.track?.goal as ProjectGoal | undefined) ?? null,
+    surface: doneOn?.surface ?? null,
+  });
   return (
     <li className="px-4 py-3 space-y-2" data-testid={`continue-path-${idSuffix}`}>
       <div className="flex items-center gap-2.5">
@@ -430,7 +440,7 @@ export function NextStepRow({ item, onShare, onWeekly }: {
           <p className="text-[11px] text-muted-foreground truncate">{item.phase} · {item.progress.done}/{item.progress.total} steps{item.daysSinceActivity >= 2 ? ` · away ${item.daysSinceActivity} days` : ""}</p>
         </div>
         <Button asChild size="sm" className="h-8 gap-1" data-testid={`button-continue-path-${idSuffix}`}>
-          <Link href={href}>Continue <ArrowRight className="h-3.5 w-3.5" /></Link>
+          <Link href={href}>{doneOn ? `Open ${doneOn.label}` : "Continue"} <ArrowRight className="h-3.5 w-3.5" /></Link>
         </Button>
       </div>
       <div className="h-1 rounded-full bg-muted overflow-hidden"><div className="h-full bg-primary" style={{ width: `${pct}%` }} /></div>
@@ -440,6 +450,8 @@ export function NextStepRow({ item, onShare, onWeekly }: {
           <span className="text-muted-foreground">Next:</span>
           <span className="font-medium">{item.next.step ?? item.next.title}</span>
           <span className="text-[11px] text-muted-foreground">· {ACTOR_SHORT[item.next.actor as keyof typeof ACTOR_SHORT] ?? item.next.actor}{estimate(item.next.estimateMinutes) ? ` · ${estimate(item.next.estimateMinutes)}` : ""}</span>
+          {/* Said once, here: the step ticks itself, so nobody goes looking for the button that would have done it. */}
+          {doneOn && <span className="text-[11px] text-muted-foreground" data-testid={`continue-path-doneon-${idSuffix}`}>· ticks itself once it's done in {doneOn.label}</span>}
         </p>
       ) : item.needsPath ? (
         <StartPath item={item} idSuffix={idSuffix} />

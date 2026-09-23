@@ -264,6 +264,14 @@ export async function nextStepsFor(userId: string): Promise<NextStepItem[]> {
       next: status.next ? {
         id: status.next.id, title: status.next.title, actor: status.next.step?.actor ?? status.next.actor,
         estimateMinutes: status.next.estimateMinutes, step: status.next.step?.title ?? null,
+        /*
+         * Passed through for the two cards that never see the tree. The
+         * project's own page reads the milestone and knows this step is
+         * finished somewhere else; the home card and the phone read this
+         * subset, and without the fact they keep offering a button whose
+         * whole problem was that it ticked the step without doing the work.
+         */
+        ...(status.next.doneOn ? { doneOn: status.next.doneOn } : {}),
       } : null,
       daysSinceActivity: Math.floor(status.pace?.daysSinceActivity ?? 0),
       projectedAt: status.pace?.projectedAt ? new Date(status.pace.projectedAt).toISOString() : null,
