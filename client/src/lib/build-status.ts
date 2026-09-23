@@ -19,15 +19,26 @@ import { queryClient } from "@/lib/queryClient";
 import { toast } from "@/hooks/use-toast";
 import { BUILD_STAGES, BUILD_STAGE_COPY, buildSummary, type BuildRunStatus, type BuildStage } from "@shared/nova-build";
 
+export const STAGE_ORDER: readonly BuildStage[] = BUILD_STAGES;
+
 /** Faster than the audit's while running: this reports a step at a time, and a bar that never moves reads as stuck. */
 export const RUNNING_POLL_MS = 3_000;
 export const IDLE_POLL_MS = 30_000;
 
 export const buildStatusKey = (projectId: string | undefined) => ["/api/projects", projectId, "nova-build"];
 
-export const STAGE_ORDER: readonly BuildStage[] = BUILD_STAGES;
+/*
+ * Checked against the list rather than indexed straight into the map. An
+ * object literal answers `["__proto__"]` with Object.prototype, not undefined,
+ * so the `??` fallback never fires and React is handed an object to render.
+ * The stage is ours and not a client's, so this is not an attack — it is the
+ * lookup being wrong about its own fallback, which is worse, because it only
+ * shows up the day the column holds something unexpected.
+ */
 export const buildStageLabel = (stage: string | null | undefined) =>
-  BUILD_STAGE_COPY[(stage ?? "") as BuildStage] ?? "Working through your path";
+  (STAGE_ORDER as readonly string[]).includes(stage ?? "")
+    ? BUILD_STAGE_COPY[stage as BuildStage]
+    : "Working through your path";
 
 /** What each project's build last looked like, so a finish is acted on once however many copies are mounted. */
 const seen = new Map<string, { runningId: string | null; lastId: string | null; finishedAt: string | null }>();
