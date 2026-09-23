@@ -18,6 +18,10 @@ import {
   messagesOf, pastGamesFor, postMessage, settleIfReady, startGameFor, submitRound, saveDraft,
 } from "./startup-game";
 import { valueGame } from "./startup-game-verdict";
+import { mayValue, PLAY_PRICE_CENTS, PLAYS_PER_PURCHASE_MAX, type PlayAllowance } from "./game-plays";
+import { isStripeConfigured, getUncachableStripeClient } from "./stripeClient";
+import { ensureStripeCustomer } from "./stripe-customer";
+import { storage } from "./storage";
 import { ensureBotUser } from "./bot-accounts";
 import { botsFor } from "@shared/bots";
 import { DECKS, SPEND_OPTIONS, MAX_CUSTOM_CARDS } from "@shared/sprints/cards";
@@ -246,6 +250,69 @@ export function registerStartupGameRoutes(app: Express) {
     res.json({ games: await pastGamesFor(req.user.id, Number(req.query.limit) || 20) });
   });
 
+  /*
+   * Both of these are registered before `/api/games/:id`, which would
+   * otherwise match "plays" as an id and 404 them for ever — the same trap
+   * the history route above is registered early to avoid.
+   */
+  /** Where this person stands: whether today's valuation is still going, and what another costs. */
+  app.get("/api/games/plays", isAuthenticated, async (req: any, res) => {
+    try {
+      res.json(await mayValue(req.user.id));
+    } catch (error) {
+      console.error("[game] plays read failed:", error);
+      res.status(500).json({ message: "Couldn't read your plays." });
+    }
+  });
+
+  /**
+   * Buy another valuation, at a dollar each.
+   *
+   * The game is free and the first valuation of the day is free, because that
+   * is how people meet the product. The second is a model call we pay for and
+   * take no credits against, so it is priced rather than subsidised.
+   */
+  app.post("/api/games/plays/checkout", isAuthenticated, rateLimit("checkout"), async (req: any, res) => {
+    try {
+      const plays = req.body?.plays === undefined ? 1 : Math.round(Number(req.body.plays));
+      if (!Number.isInteger(plays) || plays < 1 || plays > PLAYS_PER_PURCHASE_MAX) {
+        return res.status(400).json({ message: `Buy between 1 and ${PLAYS_PER_PURCHASE_MAX} plays at a time.`, code: "invalid_input", field: "plays" });
+      }
+      if (!isStripeConfigured()) {
+        return res.status(503).json({ code: "billing_unavailable", message: "Payments aren't configured here." });
+      }
+      const stripe = await getUncachableStripeClient();
+      const user = await storage.getUser(req.user.id);
+      const customerId = await ensureStripeCustomer(stripe, { id: req.user.id, email: user?.email, stripeCustomerId: user?.stripeCustomerId });
+
+      const origin = `${req.protocol}://${req.get("host")}`;
+      const session = await stripe.checkout.sessions.create({
+        customer: customerId,
+        payment_method_types: ["card"],
+        mode: "payment",
+        line_items: [{
+          quantity: plays,
+          price_data: {
+            currency: "usd",
+            unit_amount: PLAY_PRICE_CENTS,
+            product_data: {
+              name: "Another valuation",
+              description: "One more Ten Years verdict. The first each day is free; these keep until you use them.",
+            },
+          },
+        }],
+        success_url: `${origin}/games?plays=bought`,
+        cancel_url: `${origin}/games?plays=cancelled`,
+        // Read from the session by the webhook, never from the browser: the browser is not who paid.
+        metadata: { kind: "game_plays", plays: String(plays), userId: req.user.id },
+      });
+      res.json({ url: session.url, plays, total: (plays * PLAY_PRICE_CENTS) / 100 });
+    } catch (error) {
+      console.error("[game] play checkout failed:", error);
+      res.status(500).json({ message: "Couldn't start that purchase." });
+    }
+  });
+
   /**
    * The round, as it stands. Polled by both players, so it also moves the
    * clock on — a game whose rounds only advance when a job runs is a game that
@@ -269,11 +336,26 @@ export function registerStartupGameRoutes(app: Express) {
      * `valueGame` decides whether it is worth asking and paces it, so the
      * five-second poll costs at most one model call a minute.
      */
+    /*
+     * And it is free once a day. The person whose screen asks for the
+     * valuation is the one who spends the allowance; once it is stored, both
+     * players read it without spending anything, which is why the second one
+     * to arrive is never charged for a verdict that already exists.
+     *
+     * The allowance is checked here rather than inside `valueGame` because
+     * that function is about a game and this is about a person — and because
+     * a locked verdict has to be something the screen can explain and offer a
+     * way past, not a call that silently does not happen.
+     */
+    let plays: PlayAllowance | null = null;
     if (state.round === "verdict" && (!state.verdict || (state.verdict as any).fromModel === false)) {
-      void valueGame(req.params.id).catch((e) => console.error("[game] valuation failed:", e));
+      plays = await mayValue(req.user.id);
+      if (plays.allowed) {
+        void valueGame(req.params.id, req.user.id).catch((e) => console.error("[game] valuation failed:", e));
+      }
     }
 
-    res.json(state);
+    res.json(plays && !plays.allowed ? { ...state, plays } : state);
   });
 
   /** Your answer for the open round. Changeable right up to the deadline. */

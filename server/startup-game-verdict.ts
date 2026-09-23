@@ -25,6 +25,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "./db";
 import { startupGames, startupGameVerdicts } from "@shared/schema";
 import { parseModelJson } from "./ai-json";
+import { recordValuation, refundPlay, takePlay } from "./game-plays";
 import { cleanVerdict, overallScore, DIMENSIONS, type Verdict } from "@shared/sprints/scoring";
 import { summariseBudget, money } from "@shared/sprints/budget";
 import { coreClaims, type Claim } from "@shared/sprints/product";
@@ -184,7 +185,7 @@ export function shouldRetry(existing: { fromModel: boolean; summary: string; cre
  */
 const valuing = new Set<string>();
 
-export async function valueGame(gameId: string, model = "gpt-4o"): Promise<Verdict | null> {
+export async function valueGame(gameId: string, askedBy?: string, model = "gpt-4o"): Promise<Verdict | null> {
   if (valuing.has(gameId)) return null;
 
   const [existing] = await db.select().from(startupGameVerdicts)
@@ -196,7 +197,7 @@ export async function valueGame(gameId: string, model = "gpt-4o"): Promise<Verdi
   valuing.add(gameId);
   lastTried.set(gameId, Date.now());
   try {
-    return await runValuation(gameId, model, retrying);
+    return await runValuation(gameId, model, retrying, askedBy);
   } finally {
     /*
      * Released even when it failed, so a transient outage doesn't leave the
@@ -213,7 +214,7 @@ export async function valueGame(gameId: string, model = "gpt-4o"): Promise<Verdi
  * Idempotent twice over: the in-flight set above stops a second model call,
  * and the verdict row's primary key stops a second write.
  */
-async function runValuation(gameId: string, model: string, retrying = false): Promise<Verdict | null> {
+async function runValuation(gameId: string, model: string, retrying = false, askedBy?: string): Promise<Verdict | null> {
   const [game] = await db.select().from(startupGames).where(eq(startupGames.id, gameId));
   if (!game || game.round !== "verdict") return null;
 
@@ -229,6 +230,22 @@ async function runValuation(gameId: string, model: string, retrying = false): Pr
   if (!hasSubstance(game)) {
     await writeVerdict(gameId, emptyGameVerdict(), false);
     return null;
+  }
+
+  /*
+   * The play is taken here and not before, because everything above this can
+   * decide not to call the model at all — a game with nothing in it is
+   * written off without being valued, and charging a person a play for that
+   * would be taking a dollar for a call that never happened.
+   *
+   * `takePlay` is conditional in SQL, so two tabs polling the same finished
+   * game cannot both spend the same bought play.
+   */
+  let paidForIt = false;
+  if (askedBy) {
+    const play = await takePlay(askedBy);
+    if (!play.ok) return null;
+    paidForIt = play.paid;
   }
 
   try {
@@ -250,6 +267,20 @@ async function runValuation(gameId: string, model: string, retrying = false): Pr
     }
   } catch (err) {
     console.error(`[game] valuation for ${gameId} failed, falling back:`, err);
+  }
+
+  /*
+   * What the person actually got decides what they are charged.
+   *
+   * An answer is recorded, which is what spends their free one for the day and
+   * what makes the call visible in `ai_spend`. A failure is not: the free play
+   * is counted from what was recorded, so recording nothing leaves it intact,
+   * and a bought play is handed straight back. Nobody pays a dollar for a
+   * placeholder.
+   */
+  if (askedBy) {
+    if (fromModel) await recordValuation(askedBy, model);
+    else if (paidForIt) await refundPlay(askedBy);
   }
 
   if (retrying) {

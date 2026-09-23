@@ -3427,6 +3427,25 @@ export const simSeatPurchases = pgTable("sim_seat_purchases", {
 }));
 
 /**
+ * Valuations bought for the Ten Years game, a dollar each.
+ *
+ * Exists for the same reason `sim_seat_purchases` does: the unique session id
+ * is what makes a webhook redelivery credit nothing. The rest of the row is
+ * the receipt.
+ */
+export const gamePlayPurchases = pgTable("game_play_purchases", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  plays: integer("plays").notNull(),
+  /** In cents, as Stripe counts it. */
+  amount: integer("amount").notNull(),
+  stripeSessionId: text("stripe_session_id").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  oncePerSession: unique("game_play_purchases_session").on(table.stripeSessionId),
+}));
+
+/**
  * What the last audit read for one area, and what it concluded.
  *
  * A codebase audit re-read the whole repository every time. On a measured day

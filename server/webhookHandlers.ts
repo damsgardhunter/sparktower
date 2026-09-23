@@ -245,6 +245,32 @@ export class WebhookHandlers {
       return;
     }
 
+    /*
+     * Another Ten Years valuation, at a dollar each. Same shape as the seats
+     * above and for the same reason: keyed on the session, so a redelivery
+     * inserts nothing and therefore credits nothing.
+     */
+    if (session.metadata?.kind === 'game_plays') {
+      const userId = session.metadata.userId;
+      const plays = parseInt(session.metadata.plays ?? '0', 10);
+      if (!userId || !Number.isInteger(plays) || plays < 1) return;
+      if (session.payment_status && session.payment_status !== 'paid') return;
+      await db.transaction(async (tx) => {
+        const inserted = await tx.insert(gamePlayPurchases).values({
+          userId,
+          plays,
+          amount: Number(session.amount_total ?? 0),
+          stripeSessionId: session.id,
+        }).onConflictDoNothing({ target: gamePlayPurchases.stripeSessionId }).returning({ id: gamePlayPurchases.id });
+        if (!inserted.length) return;
+        await tx.update(users)
+          .set({ gamePlaysPaid: sql`${users.gamePlaysPaid} + ${plays}` })
+          .where(eq(users.id, userId));
+      });
+      console.log(`Game plays credited: ${plays} to ${userId}`);
+      return;
+    }
+
     if (session.metadata?.type === 'donation') {
       const { projectId, donorId, amount } = session.metadata;
       if (!projectId || !donorId || !amount) return;
