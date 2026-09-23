@@ -11,7 +11,7 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
 } from "@/components/ui/sidebar";
-import { Home, Compass, Telescope, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles, MessageSquare, Handshake, Gamepad2, ShieldCheck, ChevronDown, Banknote, Megaphone, ShieldAlert } from "lucide-react";
+import { Home, Compass, Telescope, FolderKanban, Users, Trophy, LogOut, Plus, Medal, CreditCard, Sparkles, MessageSquare, Handshake, Gamepad2, ShieldCheck, ChevronDown, Banknote, Megaphone, ShieldAlert, LifeBuoy } from "lucide-react";
 import { useState } from "react";
 import { PRIMARY_NAV, SECONDARY_NAV } from "@/lib/navigation";
 import { Badge } from "@/components/ui/badge";
@@ -199,6 +199,25 @@ export function AppSidebar() {
                       <Link href="/admin/security" data-testid="link-security-console">
                         <ShieldAlert className="h-4 w-4" />
                         <span className="flex-1">Security</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                {isAdmin && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={location === "/admin/console"}
+                      className="data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground"
+                    >
+                      {/*
+                        * Where a support request gets answered. Admin to open;
+                        * the money and ownership actions inside it are the
+                        * owner's alone, and the page draws them as such.
+                        */}
+                      <Link href="/admin/console" data-testid="link-customer-console">
+                        <LifeBuoy className="h-4 w-4" />
+                        <span className="flex-1">Customers</span>
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>

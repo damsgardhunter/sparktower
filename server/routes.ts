@@ -69,6 +69,7 @@ import { registerPasswordResetRoutes } from "./password-reset";
 import { recordView, countViews } from "./views";
 import { publicProject, isOnTeam } from "./project-visibility";
 import { registerAdminSecurityRoutes } from "./admin-security-routes";
+import { registerAdminConsoleRoutes } from "./admin-console-routes";
 import { registerSimulationRoutes } from "./simulation-routes";
 import { registerSimulationDeskRoutes } from "./simulation-desk-routes";
 import { registerSimulationMarketRoutes } from "./simulation-market-routes";
@@ -422,6 +423,7 @@ export async function registerRoutes(
   await seedCommunities().catch((err) => console.error("[communities] seed failed (non-fatal):", err));
   registerArtifactRoutes(app);
   registerAdminSecurityRoutes(app);
+  registerAdminConsoleRoutes(app);
   registerPromotionRoutes(app);
   registerAdminContestRoutes(app);
   registerInviteRoutes(app);
