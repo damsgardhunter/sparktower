@@ -31,6 +31,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { errorText } from "@/lib/api-error";
 import { Loader2, CheckCircle2, Circle, Bell, Target, CalendarCheck } from "lucide-react";
 
 export interface TeammateProfileData {
@@ -132,9 +133,14 @@ export function TeammateProfile({ ventureId, userId, onClose }: {
       queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${ventureId}/seats/${userId}`] });
     },
     onError: (err: any) => {
-      // The refusals here are all informative — already filed, a stand-in, no
-      // seat — so the message is the point rather than a generic failure.
-      toast({ title: "No need", description: err?.message ?? "Couldn't send that.", variant: "destructive" });
+      /*
+       * The refusals here are all informative — already filed, a stand-in, no
+       * seat — so the message is the point rather than a generic failure.
+       * Which means it has to be the server's sentence: `err.message` on an
+       * ApiError is `409: {"message":…,"code":…}`, so reading it directly put
+       * a line of JSON in front of the person. `errorText` unwraps the body.
+       */
+      toast({ title: "No need", description: errorText(err, "Couldn't send that."), variant: "destructive" });
     },
   });
 
