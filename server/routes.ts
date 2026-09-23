@@ -4067,15 +4067,13 @@ RULES:
       );
 
       /*
-       * Hold back everyone from the last two runs so this run shows new people.
-       * If that leaves fewer than a full page, show them anyway: on a small or
-       * young community an empty Discover teaches less than a repeat, and the
-       * batch number still moves so the rotation resumes as people join.
+       * Who was shown in the last couple of runs. Held back at *selection*,
+       * below, rather than cut from the pool here — see the note by
+       * `topMatches` for why that distinction turned out to matter.
        */
       const { latestBatch, recentlyShown } = await storage.getMatchBatchState(userId, MATCH_STALE_HOURS);
       const held = new Set(recentlyShown);
-      const unseen = eligible.filter((p) => !held.has(p.id));
-      const otherProfiles = unseen.length >= matchLimit ? unseen : eligible;
+      const otherProfiles = eligible;
       const batch = latestBatch + 1;
 
       if (otherProfiles.length === 0) {
@@ -4134,7 +4132,30 @@ RULES:
       }
 
       scoredMatches.sort((a, b) => b.score - a.score);
-      const topMatches = scoredMatches.slice(0, matchLimit);
+
+      /*
+       * New faces first, and repeats only to fill the page.
+       *
+       * The rotation used to be all-or-nothing: if holding everyone back left
+       * fewer than a full page, it gave up and showed the whole pool. That
+       * reads as a sensible fallback and is, in practice, off nearly always —
+       * a page is twenty (every tier matches at "priority" now that the
+       * entitlements are free for everybody), and a community with twenty
+       * unseen matchable people in it is a large one. Below that threshold the
+       * branch never fired, so the rotation this whole batch mechanism exists
+       * for did nothing at all: Tuesday's Discover was Monday's Discover, for
+       * everyone, which is the exact complaint it was written to answer.
+       *
+       * Sorting fresh ahead of repeats does what the fallback was trying to:
+       * it rotates as far as the pool allows, tops the page up rather than
+       * abandoning the idea, and still cannot return an empty screen. A pool
+       * genuinely smaller than a page repeats because it must — you cannot
+       * rotate eight people through twenty slots — and that is a true answer
+       * rather than a disabled feature.
+       */
+      const fresh = scoredMatches.filter((m) => !held.has(m.id));
+      const repeats = scoredMatches.filter((m) => held.has(m.id));
+      const topMatches = [...fresh, ...repeats].slice(0, matchLimit);
 
       if (topMatches.length === 0) {
         return [];
