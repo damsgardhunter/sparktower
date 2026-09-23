@@ -12,6 +12,7 @@ import { renderRouteCoverage } from "./route-coverage";
 import { renderDataShape, tablesExercisedByTests, type DataShape } from "@shared/data-shape";
 import { CAPABILITY_AREAS, sanitizeDeepRead, type CapabilityEntry, type CapabilityArea, type CapabilityDetail } from "@shared/capabilities";
 import { parseModelJson } from "./ai-json";
+import { fingerprintOf, recallArea, rememberArea } from "./audit-memory";
 import { isTest, summarizeTestInventory, summarizeMobileScreens, summarizeWebScreens, summarizeAuthEndpoints, summarizeEnforcementFilters, summarizeUntestedRoutes } from "./audit-evidence";
 
 // Built on first use, never at import: server/openai-client.ts.
@@ -93,7 +94,13 @@ export function rowsForArea(area: CapabilityArea, cov: RouteCoverage, max = 140)
  */
 export async function deepReadArea(
   ent: UserEntitlements, entry: CapabilityEntry, files: RepoFile[], coverage: RouteCoverage | null,
-  opts: { maxFiles?: number; maxCharsPerFile?: number; timeoutMs?: number; dataShape?: DataShape | null } = {},
+  opts: {
+    maxFiles?: number; maxCharsPerFile?: number; timeoutMs?: number; dataShape?: DataShape | null;
+    /** Whose codebase, so an area whose files have not changed is not read again. */
+    projectId?: string;
+    /** Told when an area was answered from memory rather than from the model. */
+    onRecall?: (area: string) => void;
+  } = {},
 ): Promise<CapabilityDetail | null> {
   const area = CAPABILITY_AREAS.find((a) => a.id === entry.area);
   if (!area) return null;
@@ -125,7 +132,29 @@ export async function deepReadArea(
     if (f.content && !chosen.includes(f) && hint.test(f.path) && (testsAreTheSubject || !isTest(f.path))) chosen.push(f);
   }
   if (!chosen.length) return null;
-  const fileText = chosen.map((f) => `### ${f.path}\n${f.content!.slice(0, maxChars)}${f.content!.length > maxChars ? "\n… (truncated)" : ""}`).join("\n\n");
+  /*
+   * The text as the model will see it, built once and then hashed.
+   *
+   * Hashing what is actually sent rather than the files on disk means a change
+   * past the per-file cap — which the model never saw and could not have
+   * reasoned about — correctly does not invalidate the conclusion.
+   */
+  const sent = chosen.map((f) => ({
+    path: f.path,
+    text: `${f.content!.slice(0, maxChars)}${f.content!.length > maxChars ? "\n… (truncated)" : ""}`,
+  }));
+  const fileText = sent.map((f) => `### ${f.path}\n${f.text}`).join("\n\n");
+
+  /*
+   * If this area would read exactly the bytes it read last time, it already
+   * knows the answer. No model call, no tokens, and the same verdict it would
+   * have reached — because the input is identical.
+   */
+  const fingerprint = fingerprintOf(sent);
+  if (opts.projectId) {
+    const remembered = await recallArea(opts.projectId, entry.area, fingerprint);
+    if (remembered) { opts.onRecall?.(entry.area); return remembered; }
+  }
   const cov = [
     RELEVANT_TO_COVERAGE.has(entry.area) && coverage ? [renderRouteCoverage(coverage, 40), rowsForArea(entry.area, coverage)].filter(Boolean).join("\n\n") : null,
     // With the test files to hand, an empty table can be reported as unused rather than unproven.
@@ -149,16 +178,30 @@ export async function deepReadArea(
   try {
     const completion = await openai.chat.completions.create({
       model: modelFor(ent),
+      /*
+       * Ordered so a re-run of the same repository is mostly cached.
+       *
+       * A prompt caches by exact prefix, so whatever varies between two
+       * audits has to come after whatever does not. The rules are identical
+       * every time; the area and its question are identical for that area;
+       * the files are identical until the code changes — and the files are
+       * almost all of the bill. What genuinely moves run to run is the
+       * first-pass verdict and the route coverage, so those go last.
+       *
+       * Auditing the same repository twice used to re-buy every file at full
+       * price. This is the whole reason the verdict is not in the system
+       * message any more: one changing sentence at the top made the several
+       * hundred thousand tokens beneath it uncacheable.
+       */
       messages: [
-        { role: "system", content: `You are Nova, doing a close read of one area of a builder's codebase. ${coachingDirectiveFor(ent)}
-Area: ${area.label}. What counts: ${area.counts}.
-First-pass verdict: ${entry.status}${entry.summary ? ` — ${entry.summary}` : ""}.
-Answer the question from the FILES, the ROUTE COVERAGE and the TEST FILES, MOBILE SCREENS and WEB SCREENS lists only. Those lists are complete (every test in the repository, or every one named for this area; every mobile route file; every web route declared in the client router): a file on them exists even when its full text isn't in FILES — never call it missing, and count from the lists. Quantify wherever the code lets you ("14 of 19 write routes"). Name gaps as concrete things to change, each with the file it lives in when you can point at one — only paths that appear in the files given or the coverage list. No advice, no generalities: if it isn't in the code in front of you, say it isn't there.
-Respond ONLY with JSON: {"coverage":"one or two sentences, quantified","gaps":[{"item":"","file":"path or omit","severity":"low|medium|high"}],"strengths":["what is done well, one line each, at most three"]}` },
-        { role: "user", content: `QUESTION\n${AREA_QUESTIONS[entry.area]}\n\n${cov ? `${cov}\n\n` : ""}FILES\n${fileText}` },
+        { role: "system", content: DEEP_READ_RULES },
+        { role: "user", content: `AREA: ${area.label}. What counts: ${area.counts}.\nQUESTION\n${AREA_QUESTIONS[entry.area]}\n\nFILES\n${fileText}\n\n${cov ? `${cov}\n\n` : ""}FIRST-PASS VERDICT: ${entry.status}${entry.summary ? ` — ${entry.summary}` : ""}.\n${coachingDirectiveFor(ent)}` },
       ],
     }, { timeout: opts.timeoutMs ?? 120_000 });
-    return sanitizeDeepRead(parseModelJson(completion.choices[0]?.message?.content ?? "{}"), allowed);
+    const detail = sanitizeDeepRead(parseModelJson(completion.choices[0]?.message?.content ?? "{}"), allowed);
+    // Remembered against the bytes that produced it, so the next audit can skip it.
+    if (detail && opts.projectId) await rememberArea(opts.projectId, entry.area, fingerprint, detail);
+    return detail;
   } catch (err) {
     console.error(`[audit] deep read failed for ${entry.area}:`, (err as Error)?.message ?? err);
     return null;
@@ -166,11 +209,31 @@ Respond ONLY with JSON: {"coverage":"one or two sentences, quantified","gaps":[{
 }
 
 /** Second reads for every built or partial area, in parallel, each independent. */
-export async function deepReadAll(ent: UserEntitlements, caps: CapabilityEntry[], files: RepoFile[], coverage: RouteCoverage | null, dataShape: DataShape | null = null): Promise<CapabilityEntry[]> {
-  const results = await Promise.all(caps.map(async (c) => {
+/**
+ * What a close read is, said the same way every time.
+ *
+ * Module-level and free of interpolation on purpose: this is the cached
+ * prefix every deep read shares, so it must be byte-identical across areas,
+ * across runs and across users. Anything that varies — the area, the files,
+ * last pass's verdict — belongs in the user message, in that order.
+ */
+const DEEP_READ_RULES = `You are Nova, doing a close read of one area of a builder's codebase.
+Answer the question from the FILES, the ROUTE COVERAGE and the TEST FILES, MOBILE SCREENS and WEB SCREENS lists only. Those lists are complete (every test in the repository, or every one named for this area; every mobile route file; every web route declared in the client router): a file on them exists even when its full text isn't in FILES — never call it missing, and count from the lists. Quantify wherever the code lets you ("14 of 19 write routes"). Name gaps as concrete things to change, each with the file it lives in when you can point at one — only paths that appear in the files given or the coverage list. No advice, no generalities: if it isn't in the code in front of you, say it isn't there.
+Respond ONLY with JSON: {"coverage":"one or two sentences, quantified","gaps":[{"item":"","file":"path or omit","severity":"low|medium|high"}],"strengths":["what is done well, one line each, at most three"]}`;
+
+export async function deepReadAll(
+  ent: UserEntitlements, caps: CapabilityEntry[], files: RepoFile[], coverage: RouteCoverage | null,
+  dataShape: DataShape | null = null,
+  /** Whose codebase. Without it every area is read from scratch, as it always was. */
+  projectId?: string,
+): Promise<{ caps: CapabilityEntry[]; recalled: string[] }> {
+  const recalled: string[] = [];
+  const caps2 = await Promise.all(caps.map(async (c) => {
     if (c.status !== "built" && c.status !== "partial") return c;
-    const detail = await deepReadArea(ent, c, files, coverage, { dataShape });
+    const detail = await deepReadArea(ent, c, files, coverage, {
+      dataShape, projectId, onRecall: (area) => recalled.push(area),
+    });
     return detail ? { ...c, detail } : c;
   }));
-  return results;
+  return { caps: caps2, recalled };
 }

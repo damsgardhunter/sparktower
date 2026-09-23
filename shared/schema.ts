@@ -3491,6 +3491,20 @@ export const aiSettings = pgTable("ai_settings", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+export const codeAuditMemory = pgTable("code_audit_memory", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  /** The capability area, from shared/capabilities.ts. */
+  area: varchar("area").notNull(),
+  /** Hash of every file this area read, by path and content. */
+  fingerprint: varchar("fingerprint").notNull(),
+  /** What the model concluded last time these exact bytes were read. */
+  detail: jsonb("detail").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  onePerArea: unique("code_audit_memory_area").on(table.projectId, table.area),
+}));
+
 export const simSeasons = pgTable("sim_seasons", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   /** Which market — an id from @shared/simulation/niches. */

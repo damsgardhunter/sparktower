@@ -400,7 +400,7 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
   // the full text of its evidence files and the exact route coverage.
   // Independent and fault-tolerant; a failed read leaves the first-pass
   // verdict, which is honest.
-  const firstPass = await deepReadAll(
+  const deep = await deepReadAll(
     ent,
     sanitizeCapabilities(parsed.capabilities, {
       files: new Set(snapshot.files.map((f) => f.path)),
@@ -409,7 +409,14 @@ async function runCodeAuditInner(opts: Parameters<typeof runCodeAudit>[0] & { on
     snapshot.files,
     digest.signals.routeCoverage,
     dataShape,
+    // What makes a re-audit cheap: an area whose files have not changed since
+    // the last one is answered from memory rather than from the model.
+    projectId,
   );
+  const firstPass = deep.caps;
+  if (deep.recalled.length) {
+    console.log(`[audit] ${deep.recalled.length} of ${firstPass.length} areas unchanged since the last audit: ${deep.recalled.join(", ")}`);
+  }
   /*
    * The deterministic half of "don't grade what you didn't read".
    *
@@ -905,7 +912,7 @@ export function registerCodeAuditRoutes(app: Express) {
       // Charged only once the code is in hand — a repo that can't be fetched
       // costs nothing. Kept at the route rather than inside the run, so what
       // this endpoint costs and what stops it is readable from the route table.
-      if (!(await requireCredits(res, userId, CREDIT_COSTS.codeAudit, "a codebase audit"))) { await run?.finish({ error: "Not enough credits for an audit." }); return; }
+      if (!(await requireCredits(res, userId, CREDIT_COSTS.codeAudit, "a codebase audit", "codeAudit"))) { await run?.finish({ error: "Not enough credits for an audit." }); return; }
 
       await runCodeAudit({ projectId, userId, project, ent, res, snapshot, sourceKind, repoMeta, githubToken: token?.trim() || undefined, run });
     } catch (error: any) {
