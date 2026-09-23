@@ -25,6 +25,7 @@ import { weekStartOf } from "@shared/weeks";
 import { notify } from "./notifications";
 import { notifyScouts } from "./scouting-alerts";
 import type { NextStepItem, WeeklyUpdate, NeedsPath } from "@shared/next-step";
+import { buildIsWorking } from "./build-quiet";
 
 /** Away this many days with a step waiting, and the path sends one nudge for that step. */
 export const NUDGE_AFTER_DAYS = 2;
@@ -128,15 +129,42 @@ export async function afterPathStepDone(task: { id: string; projectId: string; t
    * project finishes a dozen sub-steps a day, and a company that follows ten
    * of them would learn to ignore the whole feed.
    */
+  /*
+   * A build is working through this path right now, so this step is one of
+   * dozens it will finish in a quarter of an hour. It says so itself when it
+   * is done, in one notification; eighteen more would bury that one.
+   */
+  if (buildIsWorking(task.projectId)) return;
+
   if (task.tags?.some((t) => t.startsWith("backbone:"))) {
     void notifyScouts(task.projectId, { key: `step:${task.id}`, text: `finished "${task.title}"` });
   }
   try {
     const team = await teamOf(task.projectId);
     if (!team) return;
-    const everyone = [team.ownerId, ...team.members];
+    /*
+     * Deduplicated, because the owner is a `project_members` row too — so a
+     * one-person project counted two people, and "is anyone else here?" was
+     * answered yes for every solo builder in the product. It also stops the
+     * owner being listed twice as a recipient.
+     */
+    const everyone = [...new Set([team.ownerId, ...team.members])];
     const actor = task.completedById && everyone.includes(task.completedById) ? task.completedById : null;
-    if (actor && everyone.length === 1) return; // A solo builder finished their own step: nothing to tell anyone.
+    /*
+     * Somebody on the project finished it and there is nobody else here: they
+     * were watching themselves do it.
+     *
+     * The rule is deliberate and worth keeping — a step that completes with no
+     * person behind it (an audit recognising work, a build writing it) still
+     * tells everyone, because otherwise nobody knows it happened. What was
+     * broken is what counts as "with a person behind it": choosing Nova's
+     * option is a click, and it wrote no `completedById`, so twenty-four steps
+     * picked by hand in one sitting sent their own builder twenty-four
+     * notifications about work they had just done. `chooseWork` and the intake
+     * now record who clicked (see server/phase-trees.ts), which is what makes
+     * this line mean what it always said.
+     */
+    if (actor && everyone.length === 1) return;
     const next = await nextOpenMilestone(task.projectId);
     const excerpt = next ? `${task.title} — next: ${next}` : `${task.title} — that was the last step on the main line`;
     await notify({

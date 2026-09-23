@@ -62,6 +62,8 @@ export interface BuildRunStatus {
     stepsDone: number;
     stepsTotal: number;
     stepsForYou: number;
+    /** Steps that threw. Not the same thing as a step handed back on purpose. */
+    stepsFailed: number;
     currentTitle: string | null;
     startedAt: string;
     elapsedSeconds: number;
@@ -71,18 +73,53 @@ export interface BuildRunStatus {
     stepsDone: number;
     stepsTotal: number;
     stepsForYou: number;
+    stepsFailed: number;
     finishedAt: string | null;
     error: string | null;
+  } | null;
+  /**
+   * What is open on the path right now, counted at read time rather than
+   * remembered from the run — see `whatIsWaiting` in server/nova-build.ts for
+   * the three ways a finished run's own numbers go stale. Null while a build
+   * is running (it is changing under us) and when the count failed.
+   */
+  waiting: {
+    /** Steps Nova could write and hasn't — the cap, an interrupted run, or steps that appeared since. */
+    novaCanWrite: number;
+    /** Decisions with Nova's options already on them: open one and pick. */
+    optionsReady: number;
+    /** Questions only the builder can answer, and steps another surface finishes. Nova leaves these alone. */
+    yoursAlone: number;
   } | null;
   /** Whether this project has been paid for, which is what shows the button at all. */
   paid: boolean;
 }
 
-/** What the builder is told when a build ends, in the words of what they got. */
-export function buildSummary(done: number, forYou: number): string {
-  if (done === 0 && forYou === 0) return "There was nothing left to build — your path is already answered.";
+/**
+ * What the builder is told when a build ends, in the words of what they got.
+ *
+ * `failed` is kept apart from `forYou` on purpose. They were one number, so a
+ * run where six model calls threw reported that it had "left 6 steps for you —
+ * the decisions only you can make", which is a sentence about a failure
+ * written as though it were the feature working. A step that broke is said to
+ * have broken, and the sentence points at the re-run, which is free.
+ */
+export function buildSummary(done: number, forYou: number, failed = 0): string {
+  const broke = failed === 0 ? ""
+    : ` ${failed === 1 ? "1 step" : `${failed} steps`} hit an error and stayed open — running the build again picks those up, and it won't charge you twice.`;
+  if (done === 0 && forYou === 0 && failed === 0) return "There was nothing left to build — your path is already answered.";
+  if (done === 0 && forYou === 0) return `Nothing was written.${broke}`;
   const built = done === 1 ? "1 step" : `${done} steps`;
-  if (forYou === 0) return `Nova wrote ${built}. Every one of them is yours to change.`;
+  if (forYou === 0) return `Nova wrote ${built}. Every one of them is yours to change.${broke}`;
   const yours = forYou === 1 ? "1 step" : `${forYou} steps`;
-  return `Nova wrote ${built}, and left ${yours} for you — those are the decisions only you can make, with the options already researched.`;
+  /*
+   * What it left is named, not characterised. This sentence used to end "those
+   * are the decisions only you can make, with the options already researched",
+   * which is true of some of them and flatly untrue of the rest: a question
+   * about the builder's own numbers has no options on it, and is not supposed
+   * to. The card under this line counts the two apart from a live read of the
+   * path (`waiting` in BuildRunStatus), which is the honest place for the
+   * claim — a run's own tally cannot know which is which.
+   */
+  return `Nova wrote ${built}, and left ${yours} for you.${broke}`;
 }

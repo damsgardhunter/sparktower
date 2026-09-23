@@ -386,6 +386,20 @@
       "when": 1790099861639,
       "tag": "0054_one_sale_per_company",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1790099921639,
+      "tag": "0055_build_failed_steps",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1790099981639,
+      "tag": "0056_decision_simulations",
+      "breakpoints": true
     }
   ]
 }

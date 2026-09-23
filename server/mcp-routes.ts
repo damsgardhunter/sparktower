@@ -555,7 +555,7 @@ export function registerMcpRoutes(app: Express) {
         index: Number.isInteger(req.body?.index) ? Number(req.body.index) : undefined,
         text: typeof req.body?.text === "string" ? req.body.text.slice(0, 8000) : undefined,
         done: req.body?.done,
-      });
+      }, ctx.userId);
       res.json({ taskId: result.task.id, status: result.task.status, answer: result.answer });
     } catch (error: any) {
       if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });

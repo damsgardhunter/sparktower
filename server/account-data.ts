@@ -145,6 +145,21 @@ export const CHOICE: Owned[] = [
 export const KEPT: Owned[] = [
   // Money: kept for accounting and refunds, pointing at the tombstone.
   { table: "project_backings", column: "backer_id" },
+  /*
+   * The pay-per-use money, which arrived (migrations 0051–0053) without ever
+   * being listed here — so an export left it out and closing an account left
+   * every dollar movement behind, keyed to a user nobody had accounted for.
+   * All four are records of what was charged: the ledger is the truth behind
+   * the balance column (server/wallet.ts), a build pass is the receipt that
+   * makes a project's later outcomes free, and the image runs are the evidence
+   * behind what an image cost. Kept for the same reason every other payment
+   * record is, and exported so somebody leaving can see what they paid.
+   */
+  { table: "nova_ledger", column: "user_id" },
+  { table: "nova_build_passes", column: "user_id" },
+  { table: "ai_image_runs", column: "user_id" },
+  // A build is a project's work, like an audit run two lines down.
+  { table: "nova_build_runs", column: "started_by_id" },
   // Moderation: a report and its outcome outlive the account, or deleting is a way to wipe a ban.
   { table: "moderation_log", column: "actor_id" },
   { table: "moderation_log", column: "target_user_id" },

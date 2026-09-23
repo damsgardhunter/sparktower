@@ -116,6 +116,9 @@ import {
   setLoopType, loopsForAudit, renderLoopsForPrompt, saveLoopAudit, applyLoopDrafts, listTracks, startTrack, trackState, renderPathForAudit,
 } from "./phase-trees";
 import { draftExpansionSteps, proposeInjections, readExistingProgress, draftArtifact, produceWork, auditLoopsAgainstCompetition, draftLoops } from "./phase-trees-nova";
+import { produceWorkForTask, readSurroundings } from "./nova-work";
+import { collectPathWriting, exportGoal, exportPages, exportMarkdown, exportFileName } from "./path-export";
+import { renderDocumentPdf } from "./document-pdf";
 import { workKindFor, sanitizeLoopAudit, loopTypeOf, LOOP_TYPE_INFO, type WorkPayload } from "@shared/phase-trees";
 import { resolveTree, treeFor } from "@shared/phase-trees";
 import { creditState, lowCreditsAt, checkoutReturnUrls, safeReturnPath } from "@shared/credits";
@@ -3116,7 +3119,7 @@ RULES:
       let read = "";
       let loops: { created: string[]; updated: string[]; found: { title: string; steps: string; state: string; evidence: string }[] } = { created: [], updated: [], found: [] };
       if (req.body?.read !== false) {
-        const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova reading your progress");
+        const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova reading your progress", { projectId });
         if (!ent) return;
         const state = await buildOperableProjectState(projectId, { includeIds: false, includeAudit: true });
         const ship = project.goal === "ship_mvp";
@@ -3226,23 +3229,11 @@ RULES:
           code: "done_on_surface", surface: ctx.milestone.doneOn.surface, label: ctx.milestone.doneOn.label,
         });
       }
-      const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova working on a milestone");
+      const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova working on a milestone", { projectId });
       if (!ent) return;
-      const [state, artifacts] = await Promise.all([
-        buildOperableProjectState(projectId, { includeIds: false, includeAudit: true }),
-        collectArtifacts(projectId),
-      ]);
-      const all = await storage.getProjectKanbanTasks(projectId);
-      const loops = all.filter((t) => t.tags?.includes("kind:loop") && !t.tags.some((x) => x.startsWith("archived:")))
-        .map((t) => ({ title: t.title, description: t.description ?? "", status: t.status, type: loopTypeOf(t.tags) }));
-      const full = await storage.getProject(projectId);
-      // A loop's task carries its name and (maybe) its steps; what the kind asks for rides along so Nova writes that kind.
-      const loopKind = ctx.task.tags?.includes("kind:loop") ? LOOP_TYPE_INFO[loopTypeOf(ctx.task.tags)] : null;
-      const payload = await produceWork(ent, kind,
-        loopKind
-          ? { title: `${loopKind.label}: ${ctx.task.title}`, description: `Write this ${loopKind.label.toLowerCase()} as 3–5 steps in the product's own words. ${loopKind.asks} It closes when: ${loopKind.closes} For example: ${loopKind.example} Give each option a 2–5 word name as its title.${ctx.task.description?.trim() ? `\n\nWhat's written so far: ${ctx.task.description.trim()}` : ""}`, tier: ctx.tier }
-          : { title: ctx.task.title, description: ctx.task.description ?? ctx.milestone?.description ?? "", tier: ctx.tier },
-        { goal: ctx.project.goal, subcategory: ctx.project.subcategory, state, artifacts, loops, rejectedLoops: full?.rejectedLoops ?? [] });
+      // Assembled in server/nova-work.ts, which the $30 build uses too — the
+      // two had drifted, and the paid one was the one missing the loops.
+      const payload = await produceWorkForTask(ent, ctx, await readSurroundings(projectId));
       const row = await saveWork(projectId, ctx.task.id, payload);
       await storage.deductCredits(userId, CREDIT_COSTS.taskAssist);
       res.json({ id: row.id, kind: row.kind, payload: row.payload, chosenIndex: null, createdAt: row.createdAt });
@@ -3250,6 +3241,66 @@ RULES:
       if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
       console.error("Path work error:", error);
       res.status(500).json({ message: "Nova couldn't finish that. Try again in a moment." });
+    }
+  });
+
+  /**
+   * The path's writing, as one thing somebody can send.
+   *
+   * Free, and deliberately: every word in it is already on the path, and a
+   * second copy of what you have is not a product. `?format=md` for Markdown,
+   * anything else for a PDF; `?goal=` picks the section, defaulting to the
+   * project's own. See server/path-export.ts.
+   */
+  app.get("/api/projects/:id/path/export", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+      if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
+      const goal = await exportGoal(projectId, req.query.goal);
+      if (!goal) return res.status(404).json({ message: "Project not found" });
+      const written = await collectPathWriting(projectId, goal);
+      if (!written) return res.status(404).json({ message: "That section isn't on this project." });
+      if (!written.steps) {
+        return res.status(409).json({
+          message: "There's nothing written on this path yet — finish a step and it goes in here.",
+          code: "nothing_written",
+        });
+      }
+
+      if (String(req.query.format) === "md") {
+        res.setHeader("Content-Type", "text/markdown; charset=utf-8");
+        res.setHeader("Content-Disposition", `attachment; filename="${exportFileName(written, "md")}"`);
+        return res.send(exportMarkdown(written));
+      }
+
+      const { pages, settings } = exportPages(written);
+      const { buffer } = await renderDocumentPdf({ title: written.title, pages, settings, projectTitle: written.projectTitle });
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${exportFileName(written, "pdf")}"`);
+      res.send(buffer);
+    } catch (error) {
+      console.error("Path export error:", error);
+      res.status(500).json({ message: "Couldn't put that together." });
+    }
+  });
+
+  /** What an export would contain, so a screen can offer it honestly (or not at all). */
+  app.get("/api/projects/:id/path/export/summary", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const projectId = req.params.id;
+      if (!(await isProjectMember(userId, projectId))) return res.status(403).json({ message: "Not a project member" });
+      const goal = await exportGoal(projectId, req.query.goal);
+      const written = goal ? await collectPathWriting(projectId, goal) : null;
+      res.json({
+        steps: written?.steps ?? 0,
+        phases: written?.phases.length ?? 0,
+        goalLabel: written?.goalLabel ?? null,
+      });
+    } catch (error) {
+      console.error("Path export summary error:", error);
+      res.status(500).json({ message: "Couldn't read that." });
     }
   });
 
@@ -3282,8 +3333,9 @@ RULES:
   /** Tapped answers to a step's questions. Free: no model runs. */
   app.post("/api/projects/:id/path/intake", isAuthenticated, rateLimit("post"), async (req: any, res) => {
     try {
-      if (!(await isProjectMember((req.user as any).id, req.params.id))) return res.status(403).json({ message: "Not a project member" });
-      const result = await saveIntake(req.params.id, String(req.body?.taskId ?? ""), req.body?.answers);
+      const userId = (req.user as any).id;
+      if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
+      const result = await saveIntake(req.params.id, String(req.body?.taskId ?? ""), req.body?.answers, userId);
       res.json({ answers: result.answers, summary: result.summary, workId: result.work.id, route: result.route });
     } catch (error: any) {
       if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code, field: error.field });
@@ -3333,7 +3385,7 @@ RULES:
       if (!(await isProjectMember(userId, req.params.id))) return res.status(403).json({ message: "Not a project member" });
       const result = await chooseWork(req.params.id, req.params.workId, {
         index: req.body?.index, text: typeof req.body?.text === "string" ? req.body.text : undefined, done: req.body?.done,
-      });
+      }, userId);
       res.json(result);
     } catch (error: any) {
       if (error?.status) return res.status(error.status).json({ message: error.message, code: error.code });
@@ -3364,7 +3416,7 @@ RULES:
          * source task and becomes the thing the steps are built from.
          */
         if (req.body?.draft === true) {
-          const ent = await requireCredits(res, userId, CREDIT_COSTS.novaGuide, "Nova drafting your answer");
+          const ent = await requireCredits(res, userId, CREDIT_COSTS.novaGuide, "Nova drafting your answer", { projectId });
           if (!ent) return;
           const state = await buildOperableProjectState(projectId, { includeIds: false, includeAudit: true });
           const kind = loopTaskId ? LOOP_TYPE_INFO[loopTypeOf(src.source!.tags)] : null;
@@ -3380,7 +3432,7 @@ RULES:
         });
       }
 
-      const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova path steps");
+      const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova path steps", { projectId });
       if (!ent) return;
       // What they confirmed is the artifact; keep it on the source task so
       // the rest of the path (injections, the next expansion) can read it.
@@ -3448,7 +3500,7 @@ RULES:
         return res.status(400).json({ message: asked ? "Those loops are already written. Rewrite one yourself, or clear it first." : "Every loop is already written.", code: "nothing_to_write" });
       }
 
-      const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova writing your loops");
+      const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova writing your loops", { projectId });
       if (!ent) return;
       const state = await buildOperableProjectState(projectId, { includeIds: false, includeAudit: true });
       let drafts: Awaited<ReturnType<typeof draftLoops>>;
@@ -3516,7 +3568,7 @@ RULES:
         return res.status(400).json({ message: `Write every loop first — still to do: ${still.join(", ")}.`, code: "loops_incomplete", missing: read.coverage.missing, unwritten: read.coverage.unwritten });
       }
 
-      const ent = await requireCredits(res, userId, CREDIT_COSTS.loopAudit, "Nova auditing your loops");
+      const ent = await requireCredits(res, userId, CREDIT_COSTS.loopAudit, "Nova auditing your loops", { projectId });
       if (!ent) return;
       const brief = [formatProjectBriefForPrompt(project), project.novaNotes ? `THE BUILDER'S STANDING NOTES (these outrank the brief)\n${project.novaNotes}` : ""].filter(Boolean).join("\n\n");
       let result: Awaited<ReturnType<typeof auditLoopsAgainstCompetition>>;
@@ -3646,7 +3698,7 @@ RULES:
       if (artifacts.length === 0) {
         return res.status(400).json({ message: "Nothing to ground a task in yet. Finish a milestone with a written answer, or post an update about the project, and Nova will have something to work from.", code: "no_artifacts" });
       }
-      const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova path additions");
+      const ent = await requireCredits(res, userId, CREDIT_COSTS.taskAssist, "Nova path additions", { projectId });
       if (!ent) return;
       const proposals = await proposeInjections(ent, phase.title, phase.milestones.map((m) => m.title), artifacts, phase.injectRoom);
       const result = await createInjections(projectId, phaseId, proposals, artifacts, status.goal);
@@ -7184,6 +7236,45 @@ Respond ONLY with valid JSON (no markdown, no code fences):
     } catch (error) {
       console.error("Dev set-tier error:", error);
       res.status(500).json({ message: "Failed to set tier" });
+    }
+  });
+
+  /**
+   * Dev-only: put money in the wallet without Stripe.
+   *
+   * Everything priced in this product is bought out of the balance, and the
+   * only way to fill it is a Stripe Checkout session. That makes the paid
+   * paths — the $30 build above, the day pass, the documents — untestable
+   * locally without either real Stripe credentials or somebody writing
+   * `balance_cents` by hand in psql, which skips the ledger and leaves the two
+   * disagreeing. This credits it the way the webhook does, ledger row and all,
+   * so a development balance is a real balance.
+   *
+   * Gated exactly like the tier override, and it refuses a live Stripe key:
+   * a machine that can take real payments has no business minting credit.
+   */
+  app.post("/api/dev/credit-wallet", isAuthenticated, rateLimit("checkout"), async (req: any, res) => {
+    if (process.env.NODE_ENV === "production" && process.env.ALLOW_DEV_TIER_OVERRIDE !== "true") {
+      return res.status(404).json({ message: "Not found" });
+    }
+    if (process.env.STRIPE_SECRET_KEY?.startsWith("sk_live")) {
+      return res.status(403).json({ message: "Refusing to mint credit on a server with live Stripe keys." });
+    }
+    try {
+      const userId = (req.user as any).id;
+      const cents = Math.round(Number(req.body?.amountCents ?? 5000));
+      if (!Number.isFinite(cents) || cents <= 0 || cents > 100_000) {
+        return res.status(400).json({ message: "amountCents must be between 1 and 100000." });
+      }
+      const { creditTopUp } = await import("./wallet");
+      // A unique id per call, in the column the real top-up dedupes on, so a
+      // development credit can never collide with a Stripe session id.
+      await creditTopUp(userId, cents, `dev-${randomUUID()}`, "Development credit (no payment taken)");
+      console.log(`[dev] credited ${cents}¢ to ${userId}`);
+      res.json({ wallet: await walletOf(userId) });
+    } catch (error) {
+      console.error("Dev credit-wallet error:", error);
+      res.status(500).json({ message: "Failed to credit the wallet." });
     }
   });
 

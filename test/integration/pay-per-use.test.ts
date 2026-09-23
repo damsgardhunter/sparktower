@@ -349,6 +349,48 @@ describe("topping up", () => {
   });
 });
 
+describe("the developer's way to have money", () => {
+  /*
+   * Every priced thing in this product is bought out of the balance, and the
+   * only way to fill a balance is Stripe. That left a developer two options
+   * for testing a paid path: real Stripe credentials, or writing
+   * `balance_cents` by hand — which skips the ledger, so the column and the
+   * history disagree from then on, and `walletOf` is documented as treating
+   * the ledger as the truth. Hence a route, which credits it the way the
+   * webhook does.
+   */
+  it("credits a real balance with a real ledger row, without Stripe", async () => {
+    const app = await getTestApp();
+    const b = await builder(app);
+
+    const credited = await b.agent.post("/api/dev/credit-wallet").send({ amountCents: 3000 });
+    expect(credited.status, JSON.stringify(credited.body)).toBe(200);
+    expect(credited.body.wallet.balanceCents).toBe(3000);
+    expect(await balanceOf(b.userId)).toBe(3000);
+
+    const rows = await db.select().from(novaLedger).where(eq(novaLedger.userId, b.userId));
+    const top = rows.filter((r) => r.kind === "topup");
+    expect(top, "a development credit is a ledger movement like any other").toHaveLength(1);
+    expect(top[0].balanceAfter, "the ledger carries the balance it produced").toBe(3000);
+    expect(top[0].amountCents).toBe(3000);
+
+    // And it buys what it says it buys.
+    const bought = await b.agent.post("/api/nova/build-my-business").send({ projectId: b.projectId });
+    expect([200, 201], JSON.stringify(bought.body)).toContain(bought.status);
+    expect(await balanceOf(b.userId)).toBe(3000 - OUTCOME_PRICE_CENTS.business);
+  }, 60_000);
+
+  it("refuses an amount outside its own bounds", async () => {
+    const app = await getTestApp();
+    const b = await builder(app);
+    for (const amountCents of [0, -100, 100_001, "heaps"]) {
+      const res = await b.agent.post("/api/dev/credit-wallet").send({ amountCents });
+      expect(res.status, `${amountCents} → ${res.status}`).toBe(400);
+    }
+    expect(await balanceOf(b.userId)).toBe(0);
+  });
+});
+
 describe("a company's private training season", () => {
   async function company(app: any, balanceCents = 0) {
     const owner = await builder(app, { balanceCents });

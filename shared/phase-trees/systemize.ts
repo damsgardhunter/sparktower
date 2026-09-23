@@ -8,6 +8,12 @@ const h = (n: number) => n * 60;
  * answer: a lot of people start there, and the plan that follows is built for
  * it rather than around it.
  */
+/**
+ * The milestone that asks them, named so the capital profile can find the
+ * answers — see `capitalAnswersFor` in server/phase-trees.ts.
+ */
+export const MONEY_POSITION_MILESTONE = "SYS.F1.1";
+
 export const MONEY_POSITION_QUESTIONS: IntakeQuestion[] = [
   {
     id: "cash", prompt: "How much could you put into this business today?",

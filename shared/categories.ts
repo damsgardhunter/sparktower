@@ -31,6 +31,35 @@ export const PROJECT_CATEGORIES = [
   "DevOps",
   "Research",
   "Nonprofit",
+
+  /*
+   * Businesses that are not software.
+   *
+   * Two of the three paths this product offers — Systemize a business and Run
+   * a company — ask, one step later, whether the thing is a restaurant, a
+   * service business or a retail shop. This list offered none of those: a
+   * landscaper filing an eleven-year-old company had Web App, SaaS, Fintech,
+   * IoT, Blockchain and DevOps to choose from, and "Other". The category is
+   * what Discover filters on and what Nova reads for tone and examples, so
+   * "Other" is not a harmless answer — it is a business the rest of the
+   * product cannot recognise.
+   *
+   * Appended rather than interleaved: these strings are stored on every
+   * existing project row, and reordering the list is free while renaming one
+   * is a migration.
+   */
+  "Food & Drink",
+  "Retail & Shops",
+  "Trades & Home Services",
+  "Professional Services",
+  "Health & Wellness",
+  "Beauty & Personal Care",
+  "Construction & Property",
+  "Transport & Logistics",
+  "Events & Hospitality",
+  "Agriculture & Food Production",
+  "Manufacturing",
+
   "Other",
 ] as const;
 

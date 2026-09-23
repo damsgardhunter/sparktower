@@ -41,17 +41,23 @@ export const MORE_TABS: TabDef[] = [
 /**
  * The project-wide tabs, always on the right.
  *
- * Simulations sits directly under Team because it is a thing you do *with*
- * the team on this project: a company's people take the five seats of one
- * company in a market and run it for a fortnight. It shows for every project
- * — a project no company owns says so, and points at the public market
- * instead of pretending the panel is broken.
+ * Simulations holds two things. The first is the owner's own business run
+ * month by month — what happens if you hire, borrow, or put prices up — which
+ * needs nobody but the person looking at it. The second is the market season:
+ * five people take the five seats of one company in an invented market and run
+ * it for a fortnight, which is why the tab sits directly under Team.
+ *
+ * It carries no `surface`, and that is deliberate. The season half is behind
+ * the `sprints` kill switch inside the panel, where it belongs — that switch
+ * exists for surfaces that need other people, and the simulator does not. A
+ * tab gated on `sprints` would have taken an owner's projections away with
+ * the matchmaking.
  */
 export const RAIL_TABS: TabDef[] = [
   { id: "setup", label: "Setup", icon: LayoutDashboard },
   { id: "codebase", label: "Codebase", icon: ScanSearch, surface: "codeAudit" },
   { id: "team", label: "Team", icon: Users },
-  { id: "simulations", label: "Simulations", icon: Gamepad2, surface: "sprints" },
+  { id: "simulations", label: "Simulations", icon: Gamepad2 },
   { id: "chat", label: "Chat", icon: MessageSquare, surface: "liveChat" },
 ];
 

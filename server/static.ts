@@ -2,6 +2,7 @@ import express, { type Express } from "express";
 import fs from "fs";
 import path from "path";
 import { injectPageMeta, type PageMeta } from "@shared/path-artifacts";
+import { pageStatus } from "./page-status";
 
 export function serveStatic(app: Express) {
   const distPath = path.resolve(__dirname, "public");
@@ -18,6 +19,7 @@ export function serveStatic(app: Express) {
   const indexHtml = fs.readFileSync(path.resolve(distPath, "index.html"), "utf-8");
   app.use("/{*path}", (_req, res) => {
     const meta = res.locals.pageMeta as PageMeta | undefined;
-    res.status(200).set({ "Content-Type": "text/html" }).end(meta ? injectPageMeta(indexHtml, meta) : indexHtml);
+    // See the note in server/vite.ts: a route can ask for a 404 and still get the shell.
+    res.status(pageStatus(res)).set({ "Content-Type": "text/html" }).end(meta ? injectPageMeta(indexHtml, meta) : indexHtml);
   });
 }

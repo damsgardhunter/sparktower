@@ -62,7 +62,15 @@ export function NovaDashboard({
   const isPrimary = sections ? sections.primary === goal : false;
 
   return (
-    <div className="max-w-3xl mx-auto" data-testid="nova-dashboard">
+    /*
+     * Wide enough to use the column it was given. This was `max-w-3xl`, which
+     * held the dashboard to 768px inside a grid cell of around 950 and left a
+     * band of nothing down the right of every path screen — most visible where
+     * Nova's own tables ran off the side of the card while the empty band sat
+     * beside them. `5xl` fills the cell at a normal laptop width and still
+     * stops prose from running to forty words a line on a big monitor.
+     */
+    <div className="max-w-5xl" data-testid="nova-dashboard">
       <PathPanel projectId={projectId} goal={goal} onNavigate={onNavigate} onStartSection={onStartSection} isPrimary={isPrimary} />
       {/* The Run path's setup hands over to a rhythm that doesn't end; it lives under the path, on the same screen. */}
       {goal === "run_company" && <CompanyRhythm projectId={projectId} />}
@@ -121,7 +129,7 @@ function ProjectBriefing({ projectId, onNavigate }: { projectId: string; onNavig
                   <span className={`h-2 w-2 rounded-full shrink-0 ${SEVERITY_DOT[rec.severity]}`} />
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium truncate" title={rec.detail} data-testid={`rec-title-${rec.id}`}>{rec.title}</p>
-                    {cantAfford && <p className="text-[11px] text-destructive">Needs {rec.credits} credits</p>}
+                    {cantAfford && <p className="text-[11px] text-destructive">Not enough left this month</p>}
                   </div>
                   <Button
                     size="sm"

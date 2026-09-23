@@ -91,9 +91,9 @@ export function useBuildStatus(projectId: string | undefined, opts: { expectRunn
     if (data.last?.error) {
       toast({ title: "The build didn't finish", description: data.last.error, variant: "destructive" });
     } else if (data.last) {
-      toast({ title: "Nova finished building your path", description: buildSummary(data.last.stepsDone, data.last.stepsForYou) });
+      toast({ title: "Nova finished building your path", description: buildSummary(data.last.stepsDone, data.last.stepsForYou, data.last.stepsFailed) });
     }
   }, [projectId, data]);
 
-  return { ...query, running: data?.running ?? null, last: data?.last ?? null, paid: data?.paid ?? false };
+  return { ...query, running: data?.running ?? null, last: data?.last ?? null, waiting: data?.waiting ?? null, paid: data?.paid ?? false };
 }

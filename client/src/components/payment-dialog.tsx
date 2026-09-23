@@ -261,7 +261,7 @@ export function PaymentDialog() {
         <DialogFooter className="gap-2 sm:gap-2">
           <Button variant="ghost" onClick={close} disabled={busy} data-testid="button-payment-cancel">Not now</Button>
 
-          {(body.remedy === "buy_pass" || body.remedy === "buy_day_pass") && (
+          {body.remedy === "buy_pass" && (
             <Button onClick={() => dayPass.mutate()} disabled={busy} data-testid="button-buy-day-pass">
               {busy ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Working…</> : `Get ${body.label.toLowerCase()} — ${body.price?.display ?? formatMoney(100)}`}
             </Button>
@@ -360,15 +360,25 @@ export function PurchaseConfirmProvider({ children }: { children: ReactNode }) {
                  * refusal that follows is the one that offers the top-up.
                  */
                 <p className="text-muted-foreground">
-                  That's more than your balance — you'll be asked to add money next.
+                  That's {formatMoney(cents - (wallet.balanceCents ?? 0))} more than your balance. Continuing takes you to
+                  checkout to add it, and brings you straight back here to finish.
                 </p>
               )}
             </div>
 
             <DialogFooter className="gap-2 sm:gap-2">
               <Button variant="ghost" onClick={() => settle(false)} data-testid="button-confirm-cancel">Cancel</Button>
+              {/*
+                * The button says where it goes. "Continue" on a balance that
+                * cannot cover the price reads as "buy it", and what actually
+                * happens is a refusal, a second dialog and a trip to Stripe —
+                * three screens somebody was not expecting when they pressed a
+                * button that said Continue. The trip is still the right design
+                * (the refusal is what captures the request so it can be
+                * finished on the way back); the surprise was not.
+                */}
               <Button onClick={() => settle(true)} data-testid="button-confirm-purchase">
-                {covered ? `Pay ${pending.price.display}` : "Continue"}
+                {covered ? `Pay ${pending.price.display}` : "Add money and continue"}
               </Button>
             </DialogFooter>
           </DialogContent>

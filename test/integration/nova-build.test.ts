@@ -50,7 +50,7 @@ vi.mock("openai", () => {
 const { getTestApp, closeTestApp } = await import("../helpers/app");
 const { verifyEmail } = await import("../helpers/verify-email");
 const { db } = await import("../../server/db");
-const { users, projectKanbanTasks, novaBuildRuns } = await import("@shared/schema");
+const { users, projectKanbanTasks, novaBuildRuns, pathWork } = await import("@shared/schema");
 const { eq, and } = await import("drizzle-orm");
 const { OUTCOME_PRICE_CENTS } = await import("@shared/plans");
 
@@ -118,7 +118,35 @@ describe("Nova builds the whole business", () => {
 
     expect(novaSteps.length, "the path has work of Nova's on it").toBeGreaterThan(0);
     for (const step of novaSteps.slice(0, 10)) {
+      /*
+       * A milestone with children is finished by its children, not by writing
+       * over it: `isDone` in server/phase-trees.ts says a loop source is done
+       * when all five loops are written, and a fan-out when every step is. The
+       * build used to satisfy this assertion on "The core loops" by writing a
+       * paragraph onto the parent and closing it, which left the loop tree
+       * empty and the milestone — by the path's own reckoning — still open.
+       * So the assertion is on the parent's own work only where the parent is
+       * the work.
+       */
+      // Children carry `parent:`, not `backbone:`, so they are not in `path`.
+      const hasChildren = tasks.some((t) => tagged(t, "parent:") === tagged(step, "backbone:"));
+      if (hasChildren) continue;
       expect(step.status, `Nova's own step left unfinished: ${step.title}`).toBe("done");
+    }
+
+    /*
+     * The five loops, which are the children of the milestone skipped above
+     * and the thing the rest of the path orders off. A build that ticks their
+     * parent and leaves them blank has sold the most important milestone on
+     * the path as finished without doing it.
+     */
+    const loops = (await tasksOf(b.projectId)).filter((t) => (t.tags ?? []).includes("kind:loop"));
+    expect(loops.length, "the path has its core loops on it").toBeGreaterThan(0);
+    for (const loop of loops) {
+      expect(
+        loop.status === "done" || !!loop.description?.trim(),
+        `a core loop was left blank by the build: ${loop.title}`,
+      ).toBe(true);
     }
     for (const step of theirSteps.slice(0, 10)) {
       expect(step.status, `a decision answered on the builder's behalf: ${step.title}`).not.toBe("done");
@@ -293,4 +321,102 @@ describe("Nova builds the whole business", () => {
       .where(and(eq(novaBuildRuns.projectId, b.projectId), eq(novaBuildRuns.startedById, b.userId)));
     expect(row.finishedAt).toBeTruthy();
   }, 120_000);
+  it("stays on the paths its owner started, rather than laying out the two they didn't", async () => {
+    const app = await getTestApp();
+    const b = await builder(app, { balanceCents: OUTCOME_PRICE_CENTS.business });
+
+    /*
+     * A project is created on one path and offered the other two. The build
+     * used to instantiate every path `listTracks` returned — started or not —
+     * which put sixty-five milestones from Systemize and Run onto the board of
+     * a project that had chosen Ship, and then touched none of them. They were
+     * invisible in the path panel (which reads started sections only) and very
+     * much present on the task board, and the summary counted none of them.
+     */
+    const before = await tasksOf(b.projectId);
+    const treesIn = (tasks: { tags: string[] | null }[]) =>
+      new Set(tasks.map((t) => tagged(t, "backbone:")?.split(".")[0] ?? tagged(t, "parent:")?.split(".")[0]).filter(Boolean));
+    expect(treesIn(before), "created on the Ship path alone").toEqual(new Set(["SHIP"]));
+
+    const bought = await b.agent.post("/api/nova/build-my-business").send({ projectId: b.projectId });
+    expect(bought.status, JSON.stringify(bought.body)).toBe(201);
+    await settled(b);
+
+    expect(treesIn(await tasksOf(b.projectId)), "the build laid out a path nobody started").toEqual(new Set(["SHIP"]));
+  }, 120_000);
+
+  it("covers the steps it hands back, because the $30 bought the project and not part of it", async () => {
+    const app = await getTestApp();
+    const b = await builder(app, { balanceCents: OUTCOME_PRICE_CENTS.business });
+
+    /*
+     * The build deliberately leaves the builder's decisions open and tells
+     * them to "open one and pick". Picking runs Nova on that step, which is a
+     * small action — and small actions were charged to the free monthly
+     * allowance without ever consulting the build pass. So finishing a project
+     * you had bought outright spent the allowance, and running out asked you
+     * for $5 more to carry on with what you had already paid for.
+     */
+    // `creditsResetAt` too, or the monthly rollover zeroes this the moment it is read.
+    await db.update(users).set({ creditsUsed: 999, creditsResetAt: new Date() }).where(eq(users.id, b.userId));
+
+    const refused = await b.agent.post(`/api/projects/${b.projectId}/path/work`).send({ taskId: "not-a-task" });
+    expect(refused.status, "an exhausted allowance still refuses on a project with no pass").not.toBe(402);
+
+    const bought = await b.agent.post("/api/nova/build-my-business").send({ projectId: b.projectId });
+    expect(bought.status, JSON.stringify(bought.body)).toBe(201);
+    await settled(b);
+
+    const open = (await tasksOf(b.projectId)).find(
+      (t) => t.status !== "done" && ["user-decides", "user-does"].includes(tagged(t, "actor:") ?? ""),
+    );
+    expect(open, "the build left something for the builder").toBeTruthy();
+
+    const work = await b.agent.post(`/api/projects/${b.projectId}/path/work`).send({ taskId: open!.id });
+    expect(work.status, `a step on a paid project was charged again: ${JSON.stringify(work.body)}`).not.toBe(402);
+
+    const [after] = await db.select().from(users).where(eq(users.id, b.userId));
+    expect(after.creditsUsed, "the allowance moved on a project already paid for").toBe(999);
+  }, 180_000);
+  it("says what is actually still open, rather than what the run happened to count", async () => {
+    const app = await getTestApp();
+    const b = await builder(app, { balanceCents: OUTCOME_PRICE_CENTS.business });
+
+    const bought = await b.agent.post("/api/nova/build-my-business").send({ projectId: b.projectId });
+    expect(bought.status, JSON.stringify(bought.body)).toBe(201);
+    await settled(b);
+
+    const status = await b.agent.get(`/api/projects/${b.projectId}/nova-build`);
+    const waiting = status.body.waiting;
+    expect(waiting, "a finished build says what is waiting").toBeTruthy();
+
+    /*
+     * The card used to describe every open step as "a decision only you can
+     * make, with the options already researched". Two different things hide in
+     * that number: a decision Nova has researched three options for, and a
+     * question only the builder can answer, which Nova is supposed to leave
+     * untouched. They are counted apart so the card can say which is which.
+     */
+    const tasks = await tasksOf(b.projectId);
+    const open = tasks.filter((t) => t.status !== "done" && (t.tags ?? []).some((x) => x.startsWith("backbone:")));
+    const withWork = [] as string[];
+    for (const task of open) {
+      const [row] = await db.select().from(pathWork).where(eq(pathWork.taskId, task.id)).limit(1);
+      if (row) withWork.push(task.id);
+    }
+    expect(waiting.optionsReady, "steps counted as having options really have them").toBeLessThanOrEqual(withWork.length);
+    expect(waiting.optionsReady + waiting.yoursAlone + waiting.novaCanWrite).toBeGreaterThan(0);
+
+    // And it is a live read, not the run's memory: answering one moves it.
+    const before = waiting.optionsReady;
+    if (before > 0) {
+      const pick = open.find((t) => withWork.includes(t.id));
+      const [row] = await db.select().from(pathWork).where(eq(pathWork.taskId, pick!.id)).limit(1);
+      if (row && (row.payload as any).kind === "options") {
+        await b.agent.post(`/api/projects/${b.projectId}/path/work/${row.id}/choose`).send({ index: 0 });
+        const after = await b.agent.get(`/api/projects/${b.projectId}/nova-build`);
+        expect(after.body.waiting.optionsReady, "answering a decision takes it off the count").toBeLessThan(before);
+      }
+    }
+  }, 180_000);
 });

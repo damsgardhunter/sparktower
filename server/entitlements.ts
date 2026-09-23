@@ -184,7 +184,24 @@ export async function requireCredits(
     return null;
   }
 
-  // --- A small action: the allowance, then the pass. ---
+  /*
+   * --- A small action: the build pass on this project, the allowance, the pass. ---
+   *
+   * The $30 build comes first, and used to not be consulted here at all.
+   * That purchase buys a project outright — the route that sells it says so:
+   * "from here on every priced outcome on it is already paid for". But it was
+   * only ever checked for *priced* outcomes, and the step work is a small
+   * action, so the nine decisions the build deliberately hands back were each
+   * charged to the free monthly allowance. Someone who bought the build and
+   * then did what the build told them to do — "open one and pick" — spent
+   * their allowance finishing a project they had already paid for, and once it
+   * ran out was asked for $5 more to carry on. Paying for the whole business
+   * has to cover the whole business.
+   */
+  if (await hasBuildPass(userId, projectId)) {
+    holdCovered(res, userId);
+    return ent;
+  }
   if (await storage.chargeCredits(userId, 1)) {
     holdCredits(res, userId, 1);
     return ent;

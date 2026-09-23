@@ -205,6 +205,11 @@ describe("the price list", () => {
       // because it is the same kind of thing: one commissioned piece of work
       // with an answer at the end.
       wwit: 300,
+      // Simulating this company's own decisions, and where it lands in ten
+      // years. One price for the project rather than one per question: the
+      // second scenario is where the learning is, and charging for it would be
+      // charging somebody to compare.
+      simulations: 300,
       // A day of pictures. Its own price rather than a small action, because
       // an image is the most expensive thing here per press.
       imagePass: 500,

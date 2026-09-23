@@ -271,6 +271,90 @@ export interface CapitalAnswers {
   target?: IntakeAnswers;
 }
 
+/**
+ * The money questions the Systemize path opens with, in the words this file
+ * scores in.
+ *
+ * `SYS.F1.1` ("Where you stand") is the first thing a builder on the Systemize
+ * path answers — six questions about cash, credit and experience, asked in the
+ * very first minute. The fundability score reads `FUND.C1.1`–`C1.5`, which are
+ * asked later, so the opening answers counted for nothing: a builder could
+ * answer "cash $25k–$100k, credit 740+, eleven years in the industry" and
+ * watch the Fundability card say "Not fundable yet — not answered yet" on
+ * every part. The same three subjects were then asked again, in different
+ * words, further down the path.
+ *
+ * Both sets stay — the later ones ask more (income, debt payments, the most
+ * senior role held) and the score needs that detail. What this does is carry
+ * the first answers forward so they count until the fuller ones arrive, and so
+ * the second asking starts from what was already said.
+ *
+ * ## Why the vocabularies differ, and what that costs
+ *
+ * The two sets were written apart and their option ids never matched: `zero`
+ * against `0`, `under_5k` against `lt5k`, `740_plus` against `740_799` and
+ * `800_plus`. Where a band in the opening set spans two in the scorer's, the
+ * lower is taken — a score that flatters somebody into an application they
+ * will fail is worse than one that waits for the precise answer. Anything
+ * genuinely ambiguous ("Not sure yet", "I've managed or owned one", which is
+ * about a role rather than years) is left out entirely: the later step asks it
+ * properly, and a guess written into somebody's fundability is a guess they
+ * will never know was made.
+ */
+const FROM_MONEY_POSITION: Record<string, Record<string, Record<string, string>>> = {
+  // money-position question id → capital group → { its option id → the scorer's }
+  cash: { money: { zero: "0", under_5k: "lt5k", "5k_25k": "5k_25k", "25k_100k": "25k_100k", "100k_250k": "100k_250k", "250k_plus": "250k_500k" } },
+  credit: { money: { unknown: "unknown", under_580: "lt580", "580_669": "580_669", "670_739": "670_739", "740_plus": "740_799" } },
+  assets: { money: { home_equity: "home_equity", retirement: "retirement", equipment: "equipment" } },
+  experience: { experience: { none: "0", under_2: "lt2", "2_5": "2_5", "5_plus": "5_10" } },
+};
+
+/** The question each translated answer lands on, when it isn't the same id. */
+const LANDS_ON: Record<string, string> = { experience: "industry_years" };
+
+/**
+ * What the opening money questions say, in the scorer's terms. Answers it
+ * cannot translate without guessing are dropped rather than approximated.
+ */
+export function capitalAnswersFromMoneyPosition(answers: IntakeAnswers | undefined): CapitalAnswers {
+  if (!answers) return {};
+  const out: CapitalAnswers = {};
+  for (const [asked, groups] of Object.entries(FROM_MONEY_POSITION)) {
+    const given = answers[asked];
+    if (!given?.length) continue;
+    for (const [group, ids] of Object.entries(groups)) {
+      const translated = given.map((id) => ids[id]).filter(Boolean);
+      if (!translated.length) continue;
+      const question = LANDS_ON[asked] ?? asked;
+      (out as any)[group] = { ...((out as any)[group] ?? {}), [question]: translated };
+    }
+  }
+  return out;
+}
+
+/**
+ * Two sets of answers, the later winning question by question.
+ *
+ * Question by question rather than group by group: somebody who has answered
+ * two of the five questions in "Your money today" should keep the cash and
+ * credit they gave at the start for the three they haven't reached yet.
+ */
+export function mergeCapitalAnswers(base: CapitalAnswers, over: CapitalAnswers): CapitalAnswers {
+  const out: CapitalAnswers = { ...base };
+  for (const group of Object.keys(over) as (keyof CapitalAnswers)[]) {
+    const later = over[group];
+    if (!later) continue;
+    const earlier = out[group] ?? {};
+    const merged: IntakeAnswers = { ...earlier };
+    for (const [question, value] of Object.entries(later)) {
+      // An empty array is "asked and left blank", which must not erase what was said earlier.
+      if (value?.length) merged[question] = value;
+    }
+    out[group] = merged;
+  }
+  return out;
+}
+
 /** Which milestone holds which set. */
 export const CAPITAL_MILESTONES = {
   goal: "FUND.C1.1",

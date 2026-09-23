@@ -15,6 +15,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
+import { ConfirmEmailFirst, useEmailUnconfirmed } from "@/components/verify-email";
 import { errorText } from "@/lib/api-error";
 import { MAX_ASKS } from "@shared/feedback-loop";
 import { ArrowRight, ChevronDown, Compass, EyeOff, Globe, Loader2, Plus, Share2, Sparkles, User } from "lucide-react";
@@ -160,6 +161,7 @@ export function PublishArtifactDialog({ projectId, projectTitle, step, open, onC
     },
     onError: (e) => toast({ title: "Couldn't take it down", description: errorText(e), variant: "destructive" }),
   });
+  const unconfirmed = useEmailUnconfirmed();
   // Just published, or opened on a step that was published earlier — the same page either way.
   const liveUrl = published ?? (draft.data?.visibility === "public" ? `${window.location.origin}${artifactPath(draft.data.id)}` : null);
   return (
@@ -217,6 +219,7 @@ export function PublishArtifactDialog({ projectId, projectTitle, step, open, onC
           <p className="text-sm text-destructive" data-testid="text-artifact-error">{errorText(draft.error)}</p>
         ) : draft.data && (
           <div className="space-y-2">
+            {unconfirmed && <ConfirmEmailFirst what="publish a public page" />}
             <label className="block text-xs font-medium">Public title
               <input className="mt-1 w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm" value={title} maxLength={ARTIFACT_TITLE_MAX} onChange={(e) => setTitle(e.target.value)} data-testid="input-artifact-title" />
             </label>
@@ -233,7 +236,7 @@ export function PublishArtifactDialog({ projectId, projectTitle, step, open, onC
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>{liveUrl ? "Done" : "Not now"}</Button>
           {!liveUrl && (
-            <Button disabled={!draft.data || title.trim().length < 5 || publish.isPending} onClick={() => publish.mutate()} data-testid="button-publish-artifact">
+            <Button disabled={!draft.data || unconfirmed || title.trim().length < 5 || publish.isPending} onClick={() => publish.mutate()} data-testid="button-publish-artifact">
               {publish.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe className="h-4 w-4 mr-1.5" />}Publish
             </Button>
           )}

@@ -12,6 +12,7 @@ import { registerScoutingRoutes } from "./scouting-routes";
 import { registerChallengeRoutes } from "./challenge-routes";
 import { registerCompanyRhythmRoutes } from "./company-rhythm-routes";
 import { registerWhatWouldItTakeRoutes } from "./what-would-it-take";
+import { registerDecisionSimRoutes } from "./decision-sim-routes";
 
 export function registerCompanyFeatures(app: Express): void {
   registerCompanyRoutes(app);
@@ -21,4 +22,5 @@ export function registerCompanyFeatures(app: Express): void {
   registerChallengeRoutes(app);
   registerCompanyRhythmRoutes(app);
   registerWhatWouldItTakeRoutes(app);
+  registerDecisionSimRoutes(app);
 }

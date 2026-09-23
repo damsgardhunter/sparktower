@@ -27,7 +27,11 @@ import { describeOp } from "@shared/audit-catchup";
 import { afterPathStepDone } from "./path-return";
 import { withProjectLock } from "./project-lock";
 import { PROJECT_GOALS, GOAL_BACKBONE_PREFIX, goalOfBackboneId, isProjectGoal, normaliseGoal } from "@shared/goals";
-import { capitalProfile, renderCapitalProfile, businessHistoryFromResume, CAPITAL_MILESTONES, CAPITAL_ROUTES, type CapitalAnswers } from "@shared/capital";
+import {
+  capitalProfile, renderCapitalProfile, businessHistoryFromResume, CAPITAL_MILESTONES, CAPITAL_ROUTES,
+  capitalAnswersFromMoneyPosition, mergeCapitalAnswers, type CapitalAnswers,
+} from "@shared/capital";
+import { MONEY_POSITION_MILESTONE } from "@shared/phase-trees/systemize";
 import type { ProfileExperience } from "@shared/schema";
 import type { ProjectGoal } from "@shared/goals";
 
@@ -324,7 +328,8 @@ async function syncPathTreeInner(projectId: string, goal: ProjectGoal, subcatego
  * written answer (what Nova reads on every later step), the raw choices as its
  * work so they can be changed, and the milestone done. No model, no credit.
  */
-export async function saveIntake(projectId: string, taskId: string, raw: unknown) {
+/** `by` is who answered — see the note on `chooseWork` for why a completion needs an author. */
+export async function saveIntake(projectId: string, taskId: string, raw: unknown, by?: string | null) {
   const ctx = await pathTaskContext(projectId, taskId);
   if (!ctx) throw Object.assign(new Error("That task isn't on this project's path."), { status: 400, code: "not_on_path" });
   const questions = ctx.milestone?.intake;
@@ -343,9 +348,9 @@ export async function saveIntake(projectId: string, taskId: string, raw: unknown
   const wasDone = ctx.task.status === "done";
   const updated = await storage.updateKanbanTask(ctx.task.id, {
     description: summary,
-    ...(wasDone ? {} : { status: "done", completedAt: new Date(), ...(ctx.task.startedAt ? {} : { startedAt: new Date() }) }),
+    ...(wasDone ? {} : { status: "done", completedAt: new Date(), ...(by ? { completedById: by } : {}), ...(ctx.task.startedAt ? {} : { startedAt: new Date() }) }),
   } as any);
-  if (!wasDone) await onPathTaskDone(updated as any);
+  if (!wasDone) await onPathTaskDone({ ...(updated as any), completedById: (updated as any).completedById ?? by ?? null });
   return { work: row, answers: checked.answers, summary, route };
 }
 
@@ -376,7 +381,22 @@ export async function capitalAnswersFor(projectId: string): Promise<CapitalAnswe
     const work = task ? await latestWork(task.id) : null;
     if (work?.payload.kind === "intake") (out as any)[key] = work.payload.answers;
   }
-  return out;
+
+  /*
+   * What they said in the first minute, under what they have said since.
+   *
+   * The Systemize path opens by asking for cash, credit and industry
+   * experience (SYS.F1.1), and the score reads the fuller set asked later
+   * (FUND.C1.x). Nothing joined the two, so the opening answers scored zero:
+   * the Fundability card read "Not fundable yet — not answered yet" on every
+   * part to somebody who had just answered all six questions. The later
+   * answers still win, question by question — they ask more, and more
+   * precisely — but until they exist, what the builder already told us counts.
+   */
+  const opening = tasks.find((t) => backboneIdOf(t.tags) === MONEY_POSITION_MILESTONE);
+  const openingWork = opening ? await latestWork(opening.id) : null;
+  if (openingWork?.payload.kind !== "intake") return out;
+  return mergeCapitalAnswers(capitalAnswersFromMoneyPosition(openingWork.payload.answers), out);
 }
 
 export async function capitalProfileFor(projectId: string) {
@@ -1082,7 +1102,13 @@ export async function saveWork(projectId: string, taskId: string, payload: WorkP
  * build or template. What they chose becomes the task's written answer —
  * the artifact — and the task is done. Their edit wins over Nova's text.
  */
-export async function chooseWork(projectId: string, workId: string, choice: { index?: number; text?: string; done?: boolean }) {
+/**
+ * `by` is who clicked, and it matters beyond an audit trail: a completion with
+ * a person on it is one that person watched happen, and the team notification
+ * uses exactly that to decide whether anybody needs telling. Left out, every
+ * option a solo builder picked notified them about their own click.
+ */
+export async function chooseWork(projectId: string, workId: string, choice: { index?: number; text?: string; done?: boolean }, by?: string | null) {
   const [row] = await db.select().from(pathWork).where(and(eq(pathWork.id, workId), eq(pathWork.projectId, projectId)));
   if (!row) throw Object.assign(new Error("That work isn't on this project."), { status: 404 });
   const payload = row.payload as WorkPayload;
@@ -1109,9 +1135,13 @@ export async function chooseWork(projectId: string, workId: string, choice: { in
   // A loop still wearing its kind's placeholder name takes the name of the option picked.
   if (isLoop(task.tags) && payload.kind === "options" && index != null && payload.options[index]?.title
     && task.title.trim() === LOOP_TYPE_INFO[loopTypeOf(task.tags)].label) updates.title = payload.options[index].title;
-  if (choice.done !== false) { updates.status = "done"; updates.completedAt = new Date(); if (!task.startedAt) updates.startedAt = new Date(); }
+  if (choice.done !== false) {
+    updates.status = "done"; updates.completedAt = new Date();
+    if (by) updates.completedById = by;
+    if (!task.startedAt) updates.startedAt = new Date();
+  }
   const updated = await storage.updateKanbanTask(row.taskId, updates);
-  if (updates.status === "done") await onPathTaskDone(updated as any);
+  if (updates.status === "done") await onPathTaskDone({ ...(updated as any), completedById: (updated as any).completedById ?? by ?? null });
   return { task: updated, answer };
 }
 

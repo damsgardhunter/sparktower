@@ -5,7 +5,6 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
-import { IntakeView } from "@/components/path-work";
 import type { IntakeQuestion } from "@shared/phase-trees";
 import type { ProjectGoal } from "@shared/goals";
 import { sectionDef } from "@/lib/sections";
@@ -235,7 +234,13 @@ export function NovaGuide({ projectId, currentTab, section, project, onProjectUp
   const { user } = useAuth();
   const { toast } = useToast();
   const [input, setInput] = useState("");
-  const [isOnboarding, setIsOnboarding] = useState(false);
+  /*
+   * Setup is wanted on this project (Nova has never been talked to here), which
+   * is not the same as setup taking over the screen: nothing here takes over
+   * the screen any more.
+   */
+  const [wantsSetup, setWantsSetup] = useState(false);
+  const [setupDismissed, setSetupDismissed] = useState(false);
   const [isWidgetOpen, setIsWidgetOpen] = useState(false);
   const [localMessages, setLocalMessages] = useState<NovaMessage[]>([]);
   const [hasInitialized, setHasInitialized] = useState(false);
@@ -257,7 +262,7 @@ export function NovaGuide({ projectId, currentTab, section, project, onProjectUp
     }
 
     if (serverMessages.length === 0 && !onboardingComplete) {
-      setIsOnboarding(true);
+      setWantsSetup(true);
       const welcomeMsg: NovaMessage = {
         id: "welcome",
         role: "assistant",
@@ -267,7 +272,7 @@ export function NovaGuide({ projectId, currentTab, section, project, onProjectUp
       };
       setLocalMessages([welcomeMsg]);
     } else if (serverMessages.length > 0 && !onboardingComplete) {
-      setIsOnboarding(true);
+      setWantsSetup(true);
       setLocalMessages(serverMessages);
     } else {
       setLocalMessages(serverMessages);
@@ -312,7 +317,7 @@ export function NovaGuide({ projectId, currentTab, section, project, onProjectUp
             }
           }
           if (action.type === "complete_onboarding") {
-            setIsOnboarding(false);
+            setSetupDismissed(true);
           }
         }
         toast({ title: "Nova updated your project", description: `${data.actionsTaken.length} action(s) taken` });
@@ -344,147 +349,37 @@ export function NovaGuide({ projectId, currentTab, section, project, onProjectUp
     sendMutation.mutate(text);
   }, [input, sendMutation]);
 
-  const handleCompleteOnboarding = async () => {
+  /**
+   * Done with the starter buttons — they go, and the server remembers so they
+   * don't come back on the next visit. (This used to be the overlay's "I'm
+   * done, let me explore on my own"; the overlay is gone, the sentiment isn't.)
+   */
+  const dismissSetup = async () => {
+    setSetupDismissed(true);
     try {
       await apiRequest("POST", `/api/projects/${projectId}/nova-guide/complete-onboarding`);
-      setIsOnboarding(false);
       queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId] });
-      toast({ title: "Onboarding complete!", description: "Nova is now available as a widget anytime you need help." });
-    } catch {
-      toast({ title: "Failed to complete onboarding", variant: "destructive" });
-    }
+    } catch { /* it is dismissed for this visit either way */ }
   };
 
   const suggestions = TAB_SUGGESTIONS[currentTab] || (section ? SECTION_SUGGESTIONS[section] : TAB_SUGGESTIONS.setup);
-  const showQuickReplies = localMessages.length <= 1 && isOnboarding;
+  // The starter buttons, for a project Nova has never been asked anything about.
+  const showQuickReplies = localMessages.length <= 1 && wantsSetup && !setupDismissed;
 
   /*
-   * A business starts with money. On the systemize path Nova's first question
-   * isn't "what would you like to focus on" — it's where you stand, asked as
-   * the same bubbles as the path's first step, so answering here answers that.
+   * The setup chat has no full-screen form of its own any more.
+   *
+   * It used to open over a project the moment it was created, and on the
+   * Systemize and Run paths it rendered the path's first step — the money
+   * questions — inside itself, with `work={null}`. The dashboard behind it was
+   * already showing that same step, from the same definition, with the same
+   * `data-testid`s: two live copies of one form, one of which knew what had
+   * been saved and one of which didn't, and whichever the person answered, the
+   * other sat there stale. The step belongs on the path, where it is the next
+   * thing to do and where its answers show afterwards. Nova stays in the
+   * corner, one tap away, which is where it was always going to end up once
+   * the setup chat was done.
    */
-  // A company already running opens on where it stands today, the same way.
-  const FIRST_STEP: Record<string, string> = { systemize_business: "SYS.F1.1", run_company: "RUN.S1.1" };
-  const firstStepId = FIRST_STEP[project?.goal ?? ""];
-  const moneyFirst = isOnboarding && !!firstStepId && localMessages.length <= 1;
-  const { data: pathForMoney } = useQuery<{ adopted: boolean; next?: { id: string; workTaskId: string | null; intake?: IntakeQuestion[] } | null }>({
-    queryKey: ["/api/projects", projectId, "path"],
-    enabled: moneyFirst,
-  });
-  const moneyStep = moneyFirst && pathForMoney?.adopted && pathForMoney.next?.id === firstStepId && pathForMoney.next.workTaskId && pathForMoney.next.intake?.length
-    ? { taskId: pathForMoney.next.workTaskId, questions: pathForMoney.next.intake }
-    : null;
-
-  if (isOnboarding) {
-    return (
-      <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4" data-testid="nova-onboarding-overlay">
-        <div className="w-full max-w-2xl h-[80vh] bg-background border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden">
-          <div className="flex items-center justify-between px-5 py-3 border-b border-border bg-primary/5">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center">
-                <Cpu className="h-5 w-5 text-primary" />
-              </div>
-              <div>
-                <h3 className="font-semibold text-sm">Nova AI Guide</h3>
-                <p className="text-xs text-muted-foreground">Your project partner</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleCompleteOnboarding}
-                data-testid="btn-skip-onboarding"
-              >
-                Skip Setup
-              </Button>
-            </div>
-          </div>
-
-          {moneyStep ? (
-            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4" data-testid="nova-money-first">
-              {project?.goal === "run_company" ? (
-                <div className="rounded-lg bg-muted/50 p-4 space-y-2 text-sm leading-relaxed">
-                  <p className="font-semibold">Let's get your week under control.</p>
-                  <p>
-                    I'm Nova. You already have a business, so we don't start from zero — we start from this week. A quick
-                    picture of the company first, then the five numbers worth watching, and from there a check-in every week
-                    and a report every month on what improved.
-                  </p>
-                  <p>Start with where it stands. Tap what fits.</p>
-                </div>
-              ) : (
-                <div className="rounded-lg bg-muted/50 p-4 space-y-2 text-sm leading-relaxed">
-                  <p className="font-semibold">Starting a business can be scary, but you're not doing it alone.</p>
-                  <p>
-                    I'm Nova. The first thing that decides what's possible is money, so that's where we start —
-                    what it'll cost, where it comes from, and what gets you there, even from zero.
-                  </p>
-                  <p>
-                    Tap the ranges that fit you. There are no wrong answers, and <span className="font-medium">$0</span> is a real starting point.
-                  </p>
-                </div>
-              )}
-              <IntakeView
-                projectId={projectId} taskId={moneyStep.taskId} questions={moneyStep.questions}
-                work={null} done={false} onSaved={handleCompleteOnboarding}
-              />
-            </div>
-          ) : (
-            <ChatMessages messages={localMessages} isLoading={sendMutation.isPending} />
-          )}
-
-          {showQuickReplies && !moneyStep && (
-            <div className="px-4 pb-2 flex flex-wrap gap-2">
-              {QUICK_REPLIES.map((qr, i) => (
-                <Button
-                  key={i}
-                  variant="outline"
-                  size="sm"
-                  className="text-xs"
-                  onClick={() => handleSend(qr.message)}
-                  disabled={sendMutation.isPending}
-                  data-testid={`quick-reply-${i}`}
-                >
-                  {qr.label}
-                </Button>
-              ))}
-            </div>
-          )}
-
-          <div className="px-4 pb-4 pt-2 border-t border-border">
-            <form
-              onSubmit={(e) => { e.preventDefault(); handleSend(); }}
-              className="flex gap-2 items-end"
-            >
-              <NovaComposer
-                value={input}
-                onChange={setInput}
-                onSend={() => handleSend()}
-                placeholder={`Ask Nova anything about ${sectionLabel ?? "your project"}… (Shift+Enter for a new line)`}
-                disabled={sendMutation.isPending}
-                testId="input-nova-message"
-              />
-              <Button
-                type="submit"
-                size="icon"
-                disabled={!input.trim() || sendMutation.isPending}
-                data-testid="btn-send-nova"
-              >
-                {sendMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              </Button>
-            </form>
-            <div className="flex items-center justify-between mt-2">
-              <p className="text-[10px] text-muted-foreground">1 credit per message</p>
-              <Button variant="link" size="sm" className="text-[10px] h-auto p-0" onClick={handleCompleteOnboarding} data-testid="btn-complete-onboarding">
-                I'm done, let me explore on my own →
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <>
@@ -518,7 +413,36 @@ export function NovaGuide({ projectId, currentTab, section, project, onProjectUp
 
           <ChatMessages messages={localMessages} isLoading={sendMutation.isPending} />
 
-          {localMessages.length <= 1 && (
+          {/*
+            * The four big openers, for a project Nova has never been asked
+            * anything about. They used to be the only thing the full-screen
+            * setup was for; with that gone they live here, where they are
+            * offered rather than imposed, and can be sent away for good.
+            */}
+          {showQuickReplies && (
+            <div className="px-3 pb-2 space-y-1.5">
+              <div className="flex flex-wrap gap-1.5">
+                {QUICK_REPLIES.map((qr, i) => (
+                  <Button
+                    key={i}
+                    variant="outline"
+                    size="sm"
+                    className="text-xs h-7"
+                    onClick={() => handleSend(qr.message)}
+                    disabled={sendMutation.isPending}
+                    data-testid={`quick-reply-${i}`}
+                  >
+                    {qr.label}
+                  </Button>
+                ))}
+              </div>
+              <Button variant="link" size="sm" className="h-auto p-0 text-[10px] text-muted-foreground" onClick={dismissSetup} data-testid="btn-complete-onboarding">
+                I'm good, don't show these again
+              </Button>
+            </div>
+          )}
+
+          {localMessages.length <= 1 && !showQuickReplies && (
             <div className="px-3 pb-2 flex flex-wrap gap-1.5">
               {suggestions.map((s, i) => (
                 <Button
@@ -559,7 +483,7 @@ export function NovaGuide({ projectId, currentTab, section, project, onProjectUp
                 {sendMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
               </Button>
             </form>
-            <p className="text-[10px] text-muted-foreground mt-1.5 text-center">1 credit per message • Nova can update your project</p>
+            <p className="text-[10px] text-muted-foreground mt-1.5 text-center">One free Nova action per message • Nova can update your project</p>
           </div>
         </div>
       )}

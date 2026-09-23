@@ -6,7 +6,7 @@ import { useToast } from "@/hooks/use-toast";
 import { errorText } from "@/lib/api-error";
 import { useConfirmPurchase } from "@/components/payment-dialog";
 import { useNow } from "@/components/section/live";
-import { NOVA_GRADIENT } from "@/components/section/path-types";
+import { NOVA_GRADIENT, plural } from "@/components/section/path-types";
 import { formatElapsed } from "@/lib/audit-status";
 import {
   useBuildStatus, quietBuildErrors, buildStageLabel, buildStatusKey, STAGE_ORDER,
@@ -48,7 +48,7 @@ export function NovaBuildsBusiness({ projectId }: { projectId: string }) {
    * somebody is most likely to press it again.
    */
   const [starting, setStarting] = useState(false);
-  const { running, last, paid } = useBuildStatus(projectId, { expectRunning: starting });
+  const { running, last, paid, waiting } = useBuildStatus(projectId, { expectRunning: starting });
   // Ticks the elapsed time every second while it runs, and hardly ever otherwise.
   const now = useNow(running ? 1_000 : 30_000);
 
@@ -102,7 +102,8 @@ export function NovaBuildsBusiness({ projectId }: { projectId: string }) {
      */
     const elapsed = Math.max(running.elapsedSeconds, Math.round((now - Date.parse(running.startedAt)) / 1000));
     const stageIndex = Math.max(0, STAGE_ORDER.indexOf(running.stage));
-    const through = running.stepsDone + running.stepsForYou;
+    // Failures count as steps gone through too, or the bar stops moving on a run that is still working.
+    const through = running.stepsDone + running.stepsForYou + running.stepsFailed;
     return (
       <div className="rounded-lg border border-primary/30 p-4 space-y-2" data-testid="nova-build-running">
         {/* One segment per stage, as the code read does it. */}
@@ -143,8 +144,16 @@ export function NovaBuildsBusiness({ projectId }: { projectId: string }) {
             {running.currentTitle}
           </p>
         )}
+        {/* "A few minutes" was measured at fourteen on a twenty-seven step path:
+            about forty-five seconds a step, since the steps run one after
+            another and each is a model call. Better to say the number the
+            progress line already implies than to be optimistic at someone who
+            has just paid. */}
         <p className="text-xs text-muted-foreground">
-          A few minutes. You can close the page — it keeps going, and the bell will tell you when it's done.
+          {running.stepsTotal > 0
+            ? `Around ${Math.max(1, Math.round((running.stepsTotal * 45) / 60))} minutes for ${running.stepsTotal} steps. `
+            : "This takes a while. "}
+          You can close the page — it keeps going, and the bell will tell you when it's done.
         </p>
       </div>
     );
@@ -164,21 +173,60 @@ export function NovaBuildsBusiness({ projectId }: { projectId: string }) {
             <div className="space-y-1">
               <p className="text-sm font-medium">Nova built out your path</p>
               <p className="text-sm text-muted-foreground" data-testid="text-build-summary">
-                {buildSummary(last.stepsDone, last.stepsForYou)}
+                {buildSummary(last.stepsDone, last.stepsForYou, last.stepsFailed)}
               </p>
             </div>
           </div>
         )}
-        {last.stepsForYou > 0 && !last.error && (
-          <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
-            <UserRound className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-            The steps left open are the ones only you can answer. Each has Nova's options on it already — open one and pick.
+        {/*
+          * What is open now, not what the run happened to count.
+          *
+          * This line used to read "The steps left open are the ones only you
+          * can answer — each has Nova's options on it already" whenever
+          * `stepsForYou` was above zero. On a path whose open steps are mostly
+          * questions about the builder's own business, that was wrong about
+          * most of them: eight of fifteen had nothing on them, because a
+          * question only they can answer is one Nova is *supposed* to leave
+          * blank. The two are now counted and named apart, from a live read.
+          */}
+        {!last.error && waiting && (waiting.optionsReady > 0 || waiting.yoursAlone > 0) && (
+          <div className="space-y-1 text-xs text-muted-foreground">
+            {waiting.optionsReady > 0 && (
+              <p className="flex items-start gap-1.5" data-testid="text-build-options-ready">
+                <Sparkles className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                {plural(waiting.optionsReady, "decision")} waiting with Nova's options on {waiting.optionsReady === 1 ? "it" : "them"} — open one and pick.
+              </p>
+            )}
+            {waiting.yoursAlone > 0 && (
+              <p className="flex items-start gap-1.5" data-testid="text-build-yours-alone">
+                <UserRound className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                {plural(waiting.yoursAlone, "step")} only you can do — your numbers, your calls, and the ones another screen finishes. Nova leaves these alone on purpose.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/*
+          * Steps Nova could still write, counted now.
+          *
+          * A build covers at most BUILD_STEP_CAP steps, and a path can grow
+          * after it finishes — choosing a funding route added seventeen
+          * milestones to one project the moment it was picked. Both left work
+          * Nova would do for free sitting behind a card that said "Nova built
+          * out your path" and a button whose label gave no reason to press it.
+          */}
+        {waiting && waiting.novaCanWrite > 0 && (
+          <p className="text-xs text-muted-foreground" data-testid="text-build-can-write">
+            {plural(waiting.novaCanWrite, "step")} on your path {waiting.novaCanWrite === 1 ? "is" : "are"} still Nova's to write.
           </p>
         )}
+
         {/* Paid once, so running it again is free: a path that grew, or a build that stopped. */}
         <Button size="sm" variant="outline" onClick={() => start.mutate()} disabled={start.isPending} data-testid="button-build-again">
           {start.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 mr-1.5" />}
-          Build what's left — free, you've paid for this one
+          {waiting && waiting.novaCanWrite > 0
+            ? `Write ${waiting.novaCanWrite === 1 ? "it" : "them"} — free, you've paid for this one`
+            : "Build what's left — free, you've paid for this one"}
         </Button>
       </div>
     );

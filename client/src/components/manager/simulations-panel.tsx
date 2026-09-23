@@ -1,17 +1,25 @@
 /**
- * The manager's Simulations tab: a market season for the people on this
- * project.
+ * The manager's Simulations tab: two very different simulations of the same
+ * company, and the difference between them is the point.
  *
- * It sits under Team in the rail because that is what it is — the team you
- * were just looking at, taking the five seats of one company and running it
- * for a fortnight. A company runs these for its own staff: five of them argue
- * over one price, one hiring plan and one factory, and find out on the same
- * day what it cost. That is a different lesson from reading about it, and it
- * is the reason to have your people here rather than on a course.
+ * **Your business** is the one an owner opens first. It runs *their* company —
+ * their revenue, their cost base, their loan — month by month, and answers
+ * "what happens if I hire twelve people right now?" with a cash curve rather
+ * than an opinion. Alongside it, "ten years from now": the company valued a
+ * decade out, on the strength of where the next million would go.
  *
- * The rail belongs to every project, and most projects belong to nobody but
- * their builder. So this panel answers honestly in three states rather than
- * appearing broken in two of them:
+ * **A market season** is the other one, and it was here first. Five people
+ * take the five seats of one company in an invented market and run it for a
+ * fortnight, a day to a year. Nothing in it is anybody's real numbers, which
+ * is exactly what makes it safe to lose — it is how a team learns that
+ * marketing a product you cannot deliver buys churn, without finding out on
+ * their own customers.
+ *
+ * They sit behind two tabs rather than on one page because they answer to
+ * different people. The first belongs to whoever owns the business; the second
+ * belongs to a company with staff to train, and most projects here belong to
+ * nobody but their builder. So the season side answers honestly in three
+ * states rather than appearing broken in two of them:
  *
  *   - A company's project, and you may run seasons: the company's own season
  *     list, from the same component the company page uses. One panel, one set
@@ -27,7 +35,11 @@ import { Link } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Loader2, Gamepad2, ArrowRight, Users } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useSurfaces } from "@/hooks/use-surfaces";
 import { TrainingTab } from "@/components/company/training-tab";
+import { DecisionLab } from "@/components/sim/decision-lab";
+import { TenYearsFromNow } from "@/components/sim/ten-years-from-now";
 
 interface ProjectCompany {
   company: { id: string; name: string } | null;
@@ -36,6 +48,39 @@ interface ProjectCompany {
 }
 
 export function SimulationsPanel({ projectId }: { projectId: string }) {
+  const { on: surfaceOn } = useSurfaces();
+  /*
+   * The season half only. It is the one that needs five other people, so it is
+   * the one the `sprints` kill switch is for; an owner's own projections stay
+   * whatever that switch is doing, and with the season gone there is nothing
+   * to put behind a second tab.
+   */
+  const seasons = surfaceOn("sprints");
+
+  const business = (
+    <div className="space-y-4">
+      <DecisionLab projectId={projectId} />
+      <TenYearsFromNow projectId={projectId} />
+    </div>
+  );
+  if (!seasons) return business;
+
+  return (
+    <Tabs defaultValue="business" className="space-y-4">
+      <TabsList data-testid="simulations-tabs">
+        <TabsTrigger value="business" data-testid="tab-sim-business">Your business</TabsTrigger>
+        <TabsTrigger value="market" data-testid="tab-sim-market">Market season</TabsTrigger>
+      </TabsList>
+      <TabsContent value="business">{business}</TabsContent>
+      <TabsContent value="market">
+        <MarketSeason projectId={projectId} />
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+/** The fortnight-long market game, and the three honest answers about who can run one. */
+function MarketSeason({ projectId }: { projectId: string }) {
   const { data, isLoading } = useQuery<ProjectCompany>({ queryKey: [`/api/projects/${projectId}/company`] });
 
   if (isLoading) {

@@ -1792,6 +1792,17 @@ export const novaBuildRuns = pgTable("nova_build_runs", {
   stepsTotal: integer("steps_total").default(0).notNull(),
   /** Steps left open on purpose, because they are the builder's to answer. */
   stepsForYou: integer("steps_for_you").default(0).notNull(),
+  /**
+   * Steps that were meant to be Nova's and threw.
+   *
+   * Counted apart from `stepsForYou` because they are the opposite of it: one
+   * is a decision deliberately handed back, the other is work that didn't
+   * happen. They used to share a counter, so a build where six model calls
+   * failed told the buyer it had "left 6 steps for you — the decisions only
+   * you can make", which is a sentence about a failure that reads like a
+   * feature.
+   */
+  stepsFailed: integer("steps_failed").default(0).notNull(),
   /** What it is on right now, for the line under the progress bar. */
   currentTitle: text("current_title"),
   startedAt: timestamp("started_at").defaultNow().notNull(),
@@ -3780,4 +3791,97 @@ export const simReports = pgTable("sim_reports", {
    * with two conflicting accounts of year six.
    */
   once: unique("sim_reports_once").on(table.seasonId, table.companyId, table.year),
+}));
+
+/* ── Simulating one real company's decisions ──────────────────────────────── */
+
+/**
+ * Where a project's own business starts from, for the decision simulator.
+ *
+ * One row per project, edited in place, because this is a description of the
+ * company as it is rather than a record of anything that happened: there is
+ * nothing to compare two versions of. It is pre-filled from the weekly
+ * check-ins where they can answer it and corrected by the owner where they
+ * can't — a check-in has no idea what a loan costs or how many people are on
+ * the payroll — and every scenario stores its own copy, so a scenario run in
+ * March still says what March's numbers were after the baseline has moved on.
+ */
+export const simulationBaselines = pgTable("simulation_baselines", {
+  projectId: varchar("project_id").primaryKey().references(() => projects.id, { onDelete: "cascade" }),
+  /** A shared/simulation/decision-sim.ts Baseline. */
+  numbers: jsonb("numbers").notNull(),
+  /** Which fields the owner typed rather than took from the check-ins, so a re-read never overwrites them. */
+  overridden: jsonb("overridden").notNull().default(sql`'[]'::jsonb`),
+  updatedBy: varchar("updated_by").references(() => users.id, { onDelete: "set null" }),
+  updatedAt: timestamp("updated_at").notNull(),
+});
+
+/**
+ * One question asked of the simulator, and what the arithmetic said.
+ *
+ * Kept rather than replaced, for the same reason the roadmaps are: the value
+ * of this is comparing "hire two" against "hire twelve" against "spend it on
+ * marketing instead", and a table that held only the latest answer could not.
+ * Each row carries the baseline it was run against and the levers Nova read
+ * the question as, so a scenario can be re-run with one assumption edited and
+ * the two put side by side.
+ *
+ * `result` is computed, never the model's: the model turns the sentence into
+ * levers and writes the prose, and shared/simulation/decision-sim.ts decides
+ * what happens. See server/decision-sim-routes.ts.
+ */
+export const simulationScenarios = pgTable("simulation_scenarios", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  /** What they typed. */
+  question: text("question").notNull(),
+  /** How far out it was run, in months. */
+  months: integer("months").notNull(),
+  /** The Baseline it was run against, frozen at the moment it ran. */
+  baseline: jsonb("baseline").notNull(),
+  /** The Levers the question was read as — editable, and re-runnable. */
+  levers: jsonb("levers").notNull(),
+  /** Nova's account of what it assumed, one line per assumption. */
+  assumptions: jsonb("assumptions").notNull(),
+  /** The computed Answer: three runs, the do-nothing run, the verdict and the facts. */
+  result: jsonb("result").notNull(),
+  /** What Nova wrote around the numbers. */
+  narrative: jsonb("narrative").notNull(),
+  /** Which scenario this was re-run from, for "the same question with one number changed". */
+  rerunOf: varchar("rerun_of"),
+  createdBy: varchar("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  byProject: index("simulation_scenarios_project_idx").on(t.projectId, t.createdAt),
+}));
+
+/**
+ * "Ten years from now", run against a real company instead of an invented one.
+ *
+ * The game (`startup_games`) asks two strangers to invent a startup and values
+ * what they made up. This asks the same question of a business that exists:
+ * everything already on the project stands in for the five rounds, and the one
+ * thing nobody can read off a check-in — where a million dollars would go — is
+ * the only thing the owner is asked.
+ *
+ * The verdict is the same shape as the game's (shared/sprints/scoring.ts), so
+ * the two are comparable and neither has its own idea of what 780 means.
+ * Kept per run: an owner who does this again in a year should be able to see
+ * what changed.
+ */
+export const tenYearOutlooks = pgTable("ten_year_outlooks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  /** The first million, by shared/sprints/cards.ts option id. */
+  allocation: jsonb("allocation").notNull(),
+  /** The company as it was read: numbers, sections, goals. What the valuation was an answer to. */
+  profile: jsonb("profile").notNull(),
+  /** A shared/sprints/scoring.ts Verdict, cleaned. */
+  verdict: jsonb("verdict").notNull(),
+  /** False when the model couldn't be reached and the row is a placeholder. */
+  fromModel: boolean("from_model").notNull().default(true),
+  createdBy: varchar("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").notNull(),
+}, (t) => ({
+  byProject: index("ten_year_outlooks_project_idx").on(t.projectId, t.createdAt),
 }));

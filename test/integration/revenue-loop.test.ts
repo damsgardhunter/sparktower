@@ -104,7 +104,7 @@ describe("running out of the month's free Nova", () => {
     // Money on the account, and the pass is one tap rather than a redirect.
     await db.update(users).set({ balanceCents: 500 }).where(eq(users.id, me.id));
     const nudged = await me.agent.post(`/api/projects/${project.id}/path/work`).send({ taskId: step.id });
-    expect(nudged.body.remedy, "with money there, the dialog offers the pass itself").toBe("buy_day_pass");
+    expect(nudged.body.remedy, "with money there, the dialog offers the pass itself").toBe("buy_pass");
 
     const pass = await me.agent.post("/api/nova/day-pass").send({});
     expect(pass.status, JSON.stringify(pass.body)).toBe(200);

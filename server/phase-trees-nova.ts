@@ -10,6 +10,8 @@ import type { Artifact, InjectionProposal, WorkPayload, WorkKind } from "@shared
 import { sanitizePlan } from "@shared/phase-trees";
 import { flattenRunGroups, groupRunSteps, sanitizeRunGroups, isLoopType, LOOP_TYPE_INFO, LOOP_ORDER, MAX_PRODUCT_LOOPS, LOOP_CAP, type LoopType } from "@shared/phase-trees";
 import { parseModelJson } from "./ai-json";
+import { clampWritten, lengthRule, WRITTEN_LIMIT, TEMPLATE_LIMIT } from "./written-limits";
+export { clampWritten, WRITTEN_LIMIT } from "./written-limits";
 
 // Built on first use, never at import: server/openai-client.ts.
 import { openai } from "./openai-client";
@@ -79,7 +81,7 @@ Respond ONLY with JSON: {"done":[{"id":"<milestone id>","evidence":"<one line>",
   const ids = new Set(backbone.map((m) => m.id));
   const done = (Array.isArray(parsed.done) ? parsed.done : [])
     .filter((d: any) => d && ids.has(String(d.id)))
-    .map((d: any) => ({ id: String(d.id), evidence: String(d.evidence ?? "").slice(0, 300), answer: d.answer ? String(d.answer).slice(0, 4000) : undefined }));
+    .map((d: any) => ({ id: String(d.id), evidence: String(d.evidence ?? "").slice(0, 300), answer: d.answer ? clampWritten(d.answer) : undefined }));
   const loops = (Array.isArray(parsed.loops) ? parsed.loops : [])
     .map((l: any) => ({ type: (isLoopType(l.type) ? l.type : "product") as LoopType, title: String(l.title ?? "").trim().slice(0, 80), steps: String(l.steps ?? "").trim().slice(0, 1000), state: (["built", "partly", "planned"].includes(l.state) ? l.state : "planned") as "built" | "partly" | "planned", evidence: String(l.evidence ?? "").slice(0, 300) }))
     .filter((l: any) => l.title)
@@ -269,6 +271,7 @@ If THE BUILDER'S STANDING NOTES appear in the state, obey them over everything e
 ${context.loops?.length ? `THE PRODUCT'S LOOPS, as recorded on the path (these ARE the loops — never invent a different "core loop", never reframe the product around anything else):\n${context.loops.map((l) => `- ${LOOP_TYPE_INFO[l.type ?? "product"].label} — ${l.title}${l.description ? `: ${l.description}` : ""} [${l.status === "done" ? "written" : "not written yet"}]`).join("\n")}
 A business runs on five kinds of loop — product, growth, retention, revenue, referral — and each must close: its last step has to restart its first. When writing or building any loop, name what closes it.` : ""}
 ${context.rejectedLoops?.length ? `NOT loops, by the builder's decision — never build an option, a step or a plan around these: ${context.rejectedLoops.join("; ")}.` : ""}
+${lengthRule(WRITTEN_LIMIT)}
 Respond ONLY with valid JSON of exactly this shape (no markdown fences):
 ${shape}`;
   const user = `MILESTONE: ${task.title}\n${task.description}\n\nANSWERS SO FAR\n${context.artifacts.length ? context.artifacts.map((a) => `[${a.label}] ${a.text}`).join("\n") : "(none yet)"}\n\nPROJECT STATE\n${context.state.slice(0, 20000)}`;
@@ -276,7 +279,7 @@ ${shape}`;
   const parsed = parseModelJson(text);
   if (kind === "options") {
     const options = (Array.isArray(parsed.options) ? parsed.options : []).slice(0, 3)
-      .map((o: any) => ({ title: String(o.title ?? "").slice(0, 120), body: String(o.body ?? "").slice(0, 4000), why: o.why ? String(o.why).slice(0, 300) : undefined }))
+      .map((o: any) => ({ title: String(o.title ?? "").slice(0, 120), body: clampWritten(o.body), why: o.why ? String(o.why).slice(0, 300) : undefined }))
       .filter((o: any) => o.body);
     if (!options.length) throw Object.assign(new Error("Nova didn't come back with usable options. Try again."), { status: 502 });
     return { kind: "options", existing: String(parsed.existing ?? "").slice(0, 400) || undefined, intro: String(parsed.intro ?? "").slice(0, 400), options };
@@ -296,5 +299,5 @@ ${shape}`;
   }
   const template = String(parsed.template ?? "");
   if (!template) throw Object.assign(new Error("Nova didn't produce a template. Try again."), { status: 502 });
-  return { kind: "template", intro: String(parsed.intro ?? "").slice(0, 400), template: template.slice(0, 6000), whatNovaDid: String(parsed.whatNovaDid ?? "").slice(0, 300), whatIsLeft: String(parsed.whatIsLeft ?? "").slice(0, 300) };
+  return { kind: "template", intro: String(parsed.intro ?? "").slice(0, 400), template: clampWritten(template, TEMPLATE_LIMIT), whatNovaDid: String(parsed.whatNovaDid ?? "").slice(0, 300), whatIsLeft: String(parsed.whatIsLeft ?? "").slice(0, 300) };
 }

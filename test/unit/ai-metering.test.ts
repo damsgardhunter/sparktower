@@ -31,6 +31,7 @@ const label = (r: { method: string; path: string }) => `${r.method} ${r.path}`;
 /** AI calls that are deliberately free, each with why. */
 const FREE_AI: Record<string, string> = {
   "POST /api/mock-interviews/:id/finish": "the closing verdict — free, once per interview whose questions were paid for, and on the AI burst limit",
+  "POST /api/projects/:id/decision-sim/scenarios/:scenarioId/rerun": "re-running a scenario the project has already bought, with one of the owner's own assumptions changed — free on purpose, and on the AI burst limit",
 };
 
 /** Routes that check in their own body but charge inside a helper: the helper is checked instead. */

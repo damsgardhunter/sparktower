@@ -56,6 +56,7 @@ export type PricedOutcomeId =
   | "business"
   | "seasonSeat"
   | "wwit"
+  | "simulations"
   | "imagePass";
 
 /**
@@ -77,6 +78,14 @@ export type PricedOutcomeId =
  *                month, so they are not covered by the ordinary day pass: the
  *                first generation for a project (or a badge) is free, and
  *                anyone who wants more buys the day.
+ *   simulations— the decision simulator and the ten-year outlook for one
+ *                project: ask what happens if you hire twelve people, or put a
+ *                thousand a month into marketing, and get the answer worked out
+ *                month by month against your own figures. One purchase for the
+ *                project rather than one per question, on the same argument as
+ *                the roadmap: a price per run is a price on checking, and
+ *                checking is the behaviour worth encouraging. Included in
+ *                `business`.
  *   wwit       — "What would it take?": the route from where a company is to a
  *                size it picks, built from its own check-in numbers. Priced
  *                with the roadmap and the document because it is the same kind
@@ -92,6 +101,7 @@ export const OUTCOME_PRICE_CENTS: Record<PricedOutcomeId, number> = {
   business: 3000,
   seasonSeat: 300,
   wwit: 300,
+  simulations: 300,
   imagePass: 500,
 };
 
@@ -196,8 +206,14 @@ export interface PaymentRequiredBody {
    * The one thing to offer. "buy_pass" covers both passes — the dollar one for
    * small actions and the five-dollar one for images — because to a person
    * they are the same press, and `outcome` already says which.
+   *
+   * There used to be a "buy_day_pass" beside it, from before the two passes
+   * were one press. Nothing had produced it since: `paymentRequired` only ever
+   * writes "buy_pass". It stayed in the type long enough for a test to assert
+   * it and fail, and for the payment dialog to check for both — a value that
+   * cannot arrive, tested for in two places and sent by none.
    */
-  remedy: "buy_day_pass" | "buy_pass" | "top_up" | "none";
+  remedy: "buy_pass" | "top_up" | "none";
   topUp: { shortfallCents: number; suggestCents: number; optionsCents: readonly number[] } | null;
   /** So the client never hard-codes a path that moves. */
   endpoints: { wallet: string; dayPass: string; topUp: string; build: string };
@@ -238,7 +254,8 @@ export type NovaActionId =
   | "gapDetection" | "peopleRecommendation" | "nextActions" | "healthCheck"
   | "healthFix" | "strategyRecommendation" | "videoGeneration" | "profileVisuals"
   | "postImage" | "resumeEvaluation" | "matchExplanation" | "reputationEvaluation"
-  | "pricingAnalysis" | "whatWouldItTake" | "pitchDeckOutline"
+  | "pricingAnalysis" | "whatWouldItTake" | "decisionSimulation" | "tenYearOutlook"
+  | "pitchDeckOutline"
   | "investorReadinessScore" | "mockInterviewQuestion" | "mockInterviewGrading"
   | "pitchCritique" | "sprintIdeaSuggestion" | "practiceSprint" | "novaPartnerReply"
   | "novaPartnerAnswers" | "sprintReport"
@@ -313,6 +330,16 @@ export const CHARGE_FOR: Record<NovaActionId, NovaChargeKind> = {
   buildMyBusiness: "business",
 
   whatWouldItTake: "wwit",
+
+  /*
+   * Bought once for a project, then unlimited. Both of these read the same
+   * company profile and answer versions of the same question — where does this
+   * business go from here — so they are one purchase rather than two, and a
+   * second scenario is free because the second scenario is the point. Nobody
+   * learns anything from one projection.
+   */
+  decisionSimulation: "simulations",
+  tenYearOutlook: "simulations",
 };
 
 /** What one action costs and how, ready to put in front of a person. */
@@ -357,6 +384,10 @@ export const OUTCOME_COPY: Record<PricedOutcomeId, { name: string; blurb: string
   wwit: {
     name: "What would it take?",
     blurb: "Pick a size — $1m, $100m, $1bn or $50bn a year — and Nova builds the route there from your own check-in numbers: the gap, the stages, what breaks first, and an honest verdict on whether it's reachable from here.",
+  },
+  simulations: {
+    name: "Simulate a decision",
+    blurb: "Ask what happens if you hire, borrow, put prices up or spend on marketing, and see it month by month against your own numbers — three ways it could go, and against doing nothing. Bought once for a project; every question after that is free.",
   },
   imagePass: {
     name: "A day of images",

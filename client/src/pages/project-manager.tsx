@@ -713,8 +713,27 @@ export default function ProjectManager() {
   const openStart = () => setStartFor(section);
 
   return (
-    <div className="h-full overflow-y-auto pb-20">
-      <div className="border-b border-border bg-background/80 backdrop-blur-sm sticky top-0 z-20">
+    /*
+      * `!pt-0` against App's `[&>*]:pt-6`, which gives every page room under
+      * the hanging logo. This page has a sticky header of its own, and
+      * `sticky top-0` pins to the padding box — so that 24px became a window
+      * the page's content scrolled through, above the project's own name.
+      * The room the rule exists for is put back inside, below the bar.
+      */
+    <div className="h-full overflow-y-auto pb-20 !pt-0">
+      {/*
+        * Opaque, not frosted.
+        *
+        * This was `bg-background/80 backdrop-blur-sm`, and the blur never
+        * arrived: `backdrop-filter` is disabled for an element whose ancestors
+        * include a transform, a filter or an opacity — which this app's shell
+        * has — so what a builder actually saw was a translucent strip with the
+        * page's own form fields showing through the project's name at full
+        * sharpness, scrolling behind it. A `supports-[backdrop-filter]` guard
+        * doesn't help either: the browser supports the property, it is this
+        * element's ancestors that refuse it. So the bar is simply solid.
+        */}
+      <div className="border-b border-border bg-background sticky top-0 z-20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2.5 flex items-center gap-3">
           <Button variant="ghost" size="icon" onClick={() => setLocation(`/projects/${projectId}`)} data-testid="button-back">
             <ArrowLeft className="h-4 w-4" />
@@ -733,7 +752,7 @@ export default function ProjectManager() {
         * the content. On desktop the rail moves to its own column on the right
         * and stays put while everything else changes.
         */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-5 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_14rem] lg:grid-rows-[auto_1fr] gap-x-6 gap-y-3 sm:gap-y-4">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 pt-5 pb-4 sm:pt-6 sm:pb-5 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_14rem] lg:grid-rows-[auto_1fr] gap-x-6 gap-y-3 sm:gap-y-4">
         <div className="min-w-0 space-y-3 sm:space-y-4 lg:col-start-1 lg:row-start-1">
           {/*
             * The first thirty seconds of being on a team. Without this, joining
