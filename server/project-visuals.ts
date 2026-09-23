@@ -19,7 +19,7 @@ import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { openai } from "./replit_integrations/image/client";
 import { ObjectStorageService } from "./replit_integrations/object_storage";
 import { IMAGE_MODEL, IMAGE_QUALITY } from "./aiModels";
-import { requireCredits } from "./entitlements";
+import { requireImages } from "./images";
 import { storage } from "./storage";
 import { CREDIT_COSTS , CHARGEABLE} from "@shared/plans";
 import { rateLimit } from "./moderation";
@@ -168,11 +168,23 @@ export function registerProjectVisualRoutes(app: Express) {
         });
       }
 
-      const cost = only ? CREDIT_COSTS.profileVisualSingle : CREDIT_COSTS.profileVisuals;
-      if (!(await requireCredits(res, userId, cost, only ? "redrawing that image" : "adding visuals to your project page"))) return;
-
       const cover = await readReference(project.coverUrl, "cover");
       const slots = only ? PROJECT_VISUAL_SLOTS.filter((d) => d.slot === only) : PROJECT_VISUAL_SLOTS;
+
+      /*
+       * `wanted` is the real number, which for a full page is five. It used to
+       * be one small action either way, so a dollar day pass drew the whole
+       * page as often as somebody liked; now the hourly ceiling knows what it
+       * is being asked for and the free go covers the first set rather than a
+       * fifth of it.
+       */
+      // metering: priced as pictures, five of them for a whole page — the first
+      // set is free per project, then the image pass. See server/images.ts.
+      const permit = await requireImages(res, userId, {
+        scope: "project", scopeId: project.id, wanted: slots.length,
+        label: only ? "Redrawing that image" : "Adding visuals to your project page",
+      });
+      if (!permit) return;
 
       const results = await Promise.all(slots.map(async (def) => {
         try {
@@ -192,12 +204,13 @@ export function registerProjectVisualRoutes(app: Express) {
       for (const r of made) visuals = unhide({ ...visuals, [r.slot]: r.path! }, r.slot);
       const saved = await saveVisuals(project.id, visuals);
 
-      await storage.deductCredits(userId, cost);
+      // Recorded with what was actually drawn, so a slot that failed isn't billed against the hour.
+      await permit.record(made.length);
 
       res.json({
         visuals: saved,
         failed: results.filter((r) => !r.path).map((r) => r.slot),
-        creditsCharged: CHARGEABLE,
+        free: permit.free,
       });
     } catch (error: any) {
       console.error("Project visuals error:", error);

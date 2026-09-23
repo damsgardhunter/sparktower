@@ -41,6 +41,8 @@ import {
   badgeLogoUrl,
   ensureCreatorBadges,
 } from "./backer-badges";
+import { requireImages } from "./images";
+import { respondToAiError } from "./ai-json";
 import { ObjectStorageService } from "./replit_integrations/object_storage";
 import {
   DEFAULT_MERCH_CONFIG, DEFAULT_TIER_TEMPLATE, DIGITAL_REWARD_KEYS, MERCH_PRODUCT_KEYS,
@@ -1303,11 +1305,28 @@ export function registerBackingRoutes(app: Express) {
         return res.status(403).json({ message: "That isn't your badge" });
       }
 
+      /*
+       * The badge is free — free to earn, free to keep, free to show. Its art
+       * is a picture like any other, so the first go is free and the rest want
+       * the pass. Until now this route had no check of any kind on it: anyone
+       * with a badge could regenerate its art on a loop for nothing.
+       */
+      const permit = await requireImages(res, req.user.id, {
+        scope: "badge", scopeId: badge.id, wanted: 1, label: "Redrawing this badge",
+      });
+      if (!permit) return;
+
+      // metering: priced as a picture, not in credits — requireImages gives the
+      // first go per badge free and asks for the image pass after that, and the
+      // permit records the run once the art exists. See server/images.ts.
       const imageUrl = await generateBadgeArt(badge.id);
-      res.json({ imageUrl, status: "ready" });
+      await permit.record(1);
+      res.json({ imageUrl, status: "ready", free: permit.free });
     } catch (error: any) {
       console.error("Badge generation error:", error);
-      res.status(502).json({ message: error?.message || "Couldn't make that badge" });
+      // The same answer every AI route gives an unreadable one, so a client can
+      // tell "try again" from "we're broken".
+      respondToAiError(res, error, "Couldn't make that badge");
     }
   });
 

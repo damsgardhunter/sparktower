@@ -137,13 +137,26 @@ export function PaymentDialog() {
     },
   });
 
+  /*
+   * Buys whichever pass the refusal named. Two prices, two endpoints, one
+   * button — to the person it is the same press, and the 402 already said
+   * which one it is.
+   */
   const dayPass = useMutation({
-    mutationFn: async () => (await apiRequest("POST", PAY_ENDPOINTS.dayPass)).json() as Promise<{ wallet: Wallet }>,
+    mutationFn: async () => {
+      const endpoint = detail?.body.outcome === "imagePass" ? PAY_ENDPOINTS.imagePass : PAY_ENDPOINTS.dayPass;
+      return (await apiRequest("POST", endpoint)).json() as Promise<{ wallet: Wallet }>;
+    },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: [PAY_ENDPOINTS.wallet] });
       const request = detail?.request;
       if (request) { replay.mutate(request); return; }
-      toast({ title: "Day pass on", description: "Small Nova actions are unlimited for the next 24 hours." });
+      toast({
+        title: detail?.body.outcome === "imagePass" ? "Images are on" : "Day pass on",
+        description: detail?.body.outcome === "imagePass"
+          ? "Unlimited image generation for the next 24 hours."
+          : "Small Nova actions are unlimited for the next 24 hours.",
+      });
       close();
     },
     onError: (e) => toast({ title: "Couldn't buy the day pass", description: errorText(e), variant: "destructive" }),
@@ -248,9 +261,9 @@ export function PaymentDialog() {
         <DialogFooter className="gap-2 sm:gap-2">
           <Button variant="ghost" onClick={close} disabled={busy} data-testid="button-payment-cancel">Not now</Button>
 
-          {body.remedy === "buy_day_pass" && (
+          {(body.remedy === "buy_pass" || body.remedy === "buy_day_pass") && (
             <Button onClick={() => dayPass.mutate()} disabled={busy} data-testid="button-buy-day-pass">
-              {busy ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Working…</> : `Get the day pass — ${body.price?.display ?? formatMoney(100)}`}
+              {busy ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Working…</> : `Get ${body.label.toLowerCase()} — ${body.price?.display ?? formatMoney(100)}`}
             </Button>
           )}
 

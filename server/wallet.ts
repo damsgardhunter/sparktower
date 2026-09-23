@@ -39,7 +39,7 @@ import {
 
 /** Everything a dialog needs to say where somebody stands, in one object. */
 
-export function walletFrom(row: { balanceCents: number; creditsUsed: number; dayPassUntil: Date | null }): Wallet {
+export function walletFrom(row: { balanceCents: number; creditsUsed: number; dayPassUntil: Date | null; imagePassUntil?: Date | null }): Wallet {
   const used = Math.max(0, row.creditsUsed ?? 0);
   const active = !!row.dayPassUntil && row.dayPassUntil.getTime() > Date.now();
   return {
@@ -50,6 +50,8 @@ export function walletFrom(row: { balanceCents: number; creditsUsed: number; day
     allowanceRemaining: Math.max(0, MONTHLY_SMALL_ACTIONS - used),
     dayPassUntil: row.dayPassUntil ? row.dayPassUntil.toISOString() : null,
     dayPassActive: active,
+    imagePassUntil: row.imagePassUntil ? row.imagePassUntil.toISOString() : null,
+    imagePassActive: !!row.imagePassUntil && row.imagePassUntil.getTime() > Date.now(),
   };
 }
 
@@ -62,6 +64,7 @@ export async function walletOf(userId: string): Promise<Wallet> {
   await storage.resetCreditsIfNeeded(userId);
   const [row] = await db.select({
     balanceCents: users.balanceCents, creditsUsed: users.creditsUsed, dayPassUntil: users.dayPassUntil,
+    imagePassUntil: users.imagePassUntil,
   }).from(users).where(eq(users.id, userId));
   if (!row) return walletFrom({ balanceCents: 0, creditsUsed: 0, dayPassUntil: null });
   return walletFrom(row);

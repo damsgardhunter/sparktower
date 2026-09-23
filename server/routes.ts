@@ -94,6 +94,10 @@ import {
 } from "@shared/plans";
 import { walletOf, buyDayPass, spend, recentLedger, hasBuildPass } from "./wallet";
 import { startBusinessBuild, buildInFlight, buildRunStatus } from "./nova-build";
+import { requireImages, buyImagePass, imagePassActive } from "./images";
+
+/** How many scenes a storyboard has, and therefore how many pictures it draws. */
+const STORYBOARD_SCENES = 5;
 import { novaBuildPasses } from "@shared/schema";
 import {
   getUserEntitlements, requireFeature, requireLevel, requireCredits, paymentRequired,
@@ -4380,13 +4384,23 @@ RULES:
   app.post("/api/projects/:id/generate-video", isAuthenticated, async (req: any, res) => {
     try {
       const userId = (req.user as any).id;
-      if (!(await requireCredits(res, userId, CREDIT_COSTS.videoGeneration, "generating a video"))) return;
 
       const project = await storage.getProject(req.params.id);
       if (!project) return res.status(404).json({ message: "Project not found" });
       if (project.ownerId !== (req.user as any).id) return res.status(403).json({ message: "Unauthorized" });
 
       const { prompt, style = "professional", useAiImages = true } = req.body;
+
+      /*
+       * Five scenes, so five pictures — which is what this asks for and what
+       * it used to get for one small action. Membership is checked first now:
+       * the price question comes after "is this yours", or a stranger learns
+       * what the balance is by being refused for the wrong reason.
+       */
+      const permit = useAiImages
+        ? await requireImages(res, userId, { scope: "project", scopeId: project.id, wanted: STORYBOARD_SCENES, label: "A storyboard" })
+        : null;
+      if (useAiImages && !permit) return;
 
       // The brief (one-liner, mission, problem, target user, scope, ...) is the
       // richest description of the project, so it grounds every generation step.
@@ -4474,7 +4488,7 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences),
         const rawContent = scenesResponse.choices[0].message.content || "[]";
         const jsonMatch = rawContent.match(/\[[\s\S]*\]/);
         const parsed = parseModelJson(rawContent);
-        scenes = parsed.slice(0, 5).map((s: any) => {
+        scenes = parsed.slice(0, STORYBOARD_SCENES).map((s: any) => {
           let svgContent = s.svg || "";
           if (svgContent && !svgContent.includes("xmlns")) {
             svgContent = svgContent.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
@@ -4522,6 +4536,8 @@ Respond ONLY with valid JSON in this exact format (no markdown, no code fences),
           })
         );
         scenes = rendered;
+        // What was actually drawn — a scene that fell back to its SVG is not a picture.
+        await permit?.record(rendered.filter((sc) => sc.imageUrl?.startsWith("data:")).length || 1);
         if (imageErrors.length > 0) {
           console.error(`AI image generation failed for ${imageErrors.length}/${scenes.length} scenes:`, imageErrors[0]);
         }
@@ -6860,6 +6876,31 @@ Respond ONLY with valid JSON (no markdown, no code fences):
    * never change are not worth a product catalog to keep in sync, and this way
    * a fresh deployment can take money without a seed step.
    */
+  /** A day of unlimited image generation. Separate from the ordinary pass; see server/images.ts. */
+  app.post("/api/nova/image-pass", isAuthenticated, rateLimit("checkout"), async (req: any, res) => {
+    try {
+      const userId = (req.user as any).id;
+      // Already running: not an error, and not a second charge.
+      if (await imagePassActive(userId)) {
+        return res.status(200).json({ alreadyActive: true, wallet: await walletOf(userId) });
+      }
+      const bought = await buyImagePass(userId);
+      if (!bought) {
+        const wallet = await walletOf(userId);
+        return res.status(402).json(paymentRequired({
+          message:
+            `A day of images is ${formatMoney(OUTCOME_PRICE_CENTS.imagePass)} and your balance is ${wallet.balanceDisplay}. ` +
+            `Add a few dollars and it starts straight away.`,
+          label: OUTCOME_COPY.imagePass.name, outcome: "imagePass", cents: OUTCOME_PRICE_CENTS.imagePass, wallet,
+        }));
+      }
+      res.json({ imagePassUntil: bought.until.toISOString(), wallet: await walletOf(userId) });
+    } catch (error) {
+      console.error("Image pass error:", error);
+      res.status(500).json({ message: "Couldn't start your image pass." });
+    }
+  });
+
   app.post("/api/nova/top-up", isAuthenticated, rateLimit("checkout"), async (req: any, res) => {
     try {
       const userId = (req.user as any).id;

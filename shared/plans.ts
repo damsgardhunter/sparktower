@@ -55,7 +55,8 @@ export type PricedOutcomeId =
   | "codeAudit"
   | "business"
   | "seasonSeat"
-  | "wwit";
+  | "wwit"
+  | "imagePass";
 
 /**
  * What each outcome costs, in cents. Whole dollars on purpose: the point of
@@ -71,6 +72,11 @@ export type PricedOutcomeId =
  *                project. The deliberate "just do it all" purchase.
  *   seasonSeat — one seat in a company's private training season. The public
  *                market stays free for everyone, always.
+ *   imagePass  — a day of unlimited image generation. Pictures are the one
+ *                thing here that costs real money per press rather than per
+ *                month, so they are not covered by the ordinary day pass: the
+ *                first generation for a project (or a badge) is free, and
+ *                anyone who wants more buys the day.
  *   wwit       — "What would it take?": the route from where a company is to a
  *                size it picks, built from its own check-in numbers. Priced
  *                with the roadmap and the document because it is the same kind
@@ -86,6 +92,7 @@ export const OUTCOME_PRICE_CENTS: Record<PricedOutcomeId, number> = {
   business: 3000,
   seasonSeat: 300,
   wwit: 300,
+  imagePass: 500,
 };
 
 /**
@@ -103,6 +110,29 @@ export const NO_CHARGE = 0;
 
 /** What a day pass buys, in hours. Bought at 11pm, still good at 10pm tomorrow. */
 export const DAY_PASS_HOURS = 24;
+
+/** The image pass runs the same day-shaped window as the ordinary one. */
+export const IMAGE_PASS_HOURS = 24;
+
+/**
+ * Unlimited, with a ceiling — the same argument as the AI burst limit, and it
+ * bites harder here. Fifty images an hour is more than any person makes on
+ * purpose and far less than a script makes by accident, and at this model's
+ * prices an unbounded "unlimited" is the one thing on the price list that
+ * could cost us more in a night than everything else earns in a month.
+ */
+export const IMAGE_PASS_HOURLY_LIMIT = 50;
+
+/**
+ * How many generations a thing gets before the pass is needed.
+ *
+ * One, per project and per badge. Enough to see what Nova makes of your
+ * product without deciding anything, and not enough to run the picture
+ * machine for free. Counted per generation rather than per image, so the
+ * first go at a five-slot project page or a five-scene storyboard is the free
+ * one rather than a fifth of it.
+ */
+export const FREE_IMAGE_RUNS = 1;
 
 /**
  * Top-up amounts offered in Stripe Checkout.
@@ -139,6 +169,9 @@ export interface Wallet {
   /** When the current day pass runs out, or null. */
   dayPassUntil: string | null;
   dayPassActive: boolean;
+  /** …and the image pass, which is a different five-dollar thing. */
+  imagePassUntil: string | null;
+  imagePassActive: boolean;
 }
 
 /**
@@ -159,7 +192,12 @@ export interface PaymentRequiredBody {
   outcome: PricedOutcomeId | null;
   price: { cents: number; display: string } | null;
   wallet: Wallet;
-  remedy: "buy_day_pass" | "top_up" | "none";
+  /*
+   * The one thing to offer. "buy_pass" covers both passes — the dollar one for
+   * small actions and the five-dollar one for images — because to a person
+   * they are the same press, and `outcome` already says which.
+   */
+  remedy: "buy_day_pass" | "buy_pass" | "top_up" | "none";
   topUp: { shortfallCents: number; suggestCents: number; optionsCents: readonly number[] } | null;
   /** So the client never hard-codes a path that moves. */
   endpoints: { wallet: string; dayPass: string; topUp: string; build: string };
@@ -168,6 +206,7 @@ export interface PaymentRequiredBody {
 export const PAY_ENDPOINTS = {
   wallet: "/api/nova/wallet",
   dayPass: "/api/nova/day-pass",
+  imagePass: "/api/nova/image-pass",
   topUp: "/api/nova/top-up",
   build: "/api/nova/build-my-business",
 } as const;
@@ -225,9 +264,16 @@ export const CHARGE_FOR: Record<NovaActionId, NovaChargeKind> = {
   healthCheck: "small",
   healthFix: "small",
   strategyRecommendation: "small",
-  videoGeneration: "small",
-  profileVisuals: "small",
-  postImage: "small",
+  /*
+   * The pictures. Not "small": a small action is a paragraph of text and
+   * these are the most expensive thing in the product per press, some of them
+   * five at a time. They have their own rule — a free first go per project or
+   * badge, then the image pass — which is why they name it rather than a
+   * price. See requireImages in server/images.ts.
+   */
+  videoGeneration: "imagePass",
+  profileVisuals: "imagePass",
+  postImage: "imagePass",
   resumeEvaluation: "small",
   matchExplanation: "small",
   pricingAnalysis: "small",
@@ -312,6 +358,10 @@ export const OUTCOME_COPY: Record<PricedOutcomeId, { name: string; blurb: string
     name: "What would it take?",
     blurb: "Pick a size — $1m, $100m, $1bn or $50bn a year — and Nova builds the route there from your own check-in numbers: the gap, the stages, what breaks first, and an honest verdict on whether it's reachable from here.",
   },
+  imagePass: {
+    name: "A day of images",
+    blurb: `Unlimited image generation for ${IMAGE_PASS_HOURS} hours — project pages, post images, storyboards, badges. Up to ${IMAGE_PASS_HOURLY_LIMIT} an hour.`,
+  },
   seasonSeat: {
     name: "Training season seat",
     blurb: "Per seat, when a company runs the market simulation privately. The first season is free, and the public market always is.",
@@ -351,6 +401,8 @@ export const PRICING_ROWS: PricingRow[] = [
   { label: OUTCOME_COPY.document.name, price: formatMoney(OUTCOME_PRICE_CENTS.document), detail: OUTCOME_COPY.document.blurb },
   { label: OUTCOME_COPY.codeAudit.name, price: formatMoney(OUTCOME_PRICE_CENTS.codeAudit), detail: OUTCOME_COPY.codeAudit.blurb },
   { label: OUTCOME_COPY.wwit.name, price: formatMoney(OUTCOME_PRICE_CENTS.wwit), detail: OUTCOME_COPY.wwit.blurb },
+  { label: "Your first images", price: "Free", detail: "The first set of AI images for a project — and the first for each badge — costs nothing. Badges themselves are always free to earn and to keep." },
+  { label: OUTCOME_COPY.imagePass.name, price: formatMoney(OUTCOME_PRICE_CENTS.imagePass), detail: OUTCOME_COPY.imagePass.blurb },
   { label: OUTCOME_COPY.business.name, price: formatMoney(OUTCOME_PRICE_CENTS.business), detail: OUTCOME_COPY.business.blurb },
   { label: OUTCOME_COPY.seasonSeat.name, price: `${formatMoney(OUTCOME_PRICE_CENTS.seasonSeat)}/seat`, detail: OUTCOME_COPY.seasonSeat.blurb },
 ];

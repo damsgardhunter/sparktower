@@ -51,6 +51,13 @@ export const users = pgTable("users", {
    */
   dayPassUntil: timestamp("day_pass_until"),
   /**
+   * While this is in the future, image generation is unlimited — bought for
+   * five dollars a day, and separate from the ordinary pass on purpose.
+   * Pictures are the one thing here that costs real money on every press, and
+   * the dollar pass would have made them free in bulk.
+   */
+  imagePassUntil: timestamp("image_pass_until"),
+  /**
    * The last subscription payment that failed and hasn't been fixed since —
    * set by invoice.payment_failed, cleared by the next paid invoice. What the
    * app shows as "update your card"; the tier itself still follows the

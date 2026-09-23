@@ -94,8 +94,14 @@ export function paymentRequired(opts: {
 }): PaymentRequiredBody {
   const { cents, wallet, outcome } = opts;
   const shortfall = cents == null ? 0 : Math.max(0, cents - wallet.balanceCents);
+  /*
+   * A pass is something the balance can buy outright; anything else that the
+   * balance already covers was refused for a reason money won't fix, so there
+   * is nothing to offer.
+   */
+  const buyable = outcome === "dayPass" || outcome === "imagePass";
   const remedy: PaymentRequiredBody["remedy"] =
-    cents == null ? "none" : shortfall > 0 ? "top_up" : outcome === "dayPass" ? "buy_day_pass" : "top_up";
+    cents == null ? "none" : shortfall > 0 ? "top_up" : buyable ? "buy_pass" : "none";
   return {
     code: "payment_required",
     message: opts.message,
@@ -105,7 +111,7 @@ export function paymentRequired(opts: {
     wallet,
     // A shortfall of zero on a non-day-pass outcome means the caller could
     // afford it and something else refused; there is nothing to suggest buying.
-    remedy: shortfall > 0 ? "top_up" : remedy === "buy_day_pass" ? "buy_day_pass" : "none",
+    remedy,
     topUp: shortfall > 0
       ? { shortfallCents: shortfall, suggestCents: topUpFor(shortfall), optionsCents: TOP_UP_CENTS }
       : null,

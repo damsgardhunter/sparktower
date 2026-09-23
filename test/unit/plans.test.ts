@@ -205,6 +205,9 @@ describe("the price list", () => {
       // because it is the same kind of thing: one commissioned piece of work
       // with an answer at the end.
       wwit: 300,
+      // A day of pictures. Its own price rather than a small action, because
+      // an image is the most expensive thing here per press.
+      imagePass: 500,
     });
     // Whole dollars, on purpose: the point of leaving credits is that nobody
     // has to convert a number into money in their head.

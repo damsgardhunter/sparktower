@@ -169,7 +169,11 @@ describe("the month's free allowance", () => {
     await db.update(users).set({ balanceCents: 500 }).where(eq(users.id, b.userId));
     const affordable = await smallAction(b);
     expect(affordable.status).toBe(402);
-    expect(affordable.body.remedy).toBe("buy_day_pass");
+    // "buy_pass" covers both passes — the dollar one for small actions and the
+    // five-dollar one for images. `outcome` says which; to a person it is the
+    // same press, so it is one button.
+    expect(affordable.body.remedy).toBe("buy_pass");
+    expect(affordable.body.outcome).toBe("dayPass");
     expect(affordable.body.topUp).toBe(null);
   });
 });

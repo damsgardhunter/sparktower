@@ -1752,6 +1752,35 @@ export const novaBuildPasses = pgTable("nova_build_passes", {
  * work, and there can be several — a build that stopped because the path grew
  * is run again, and the pass means it costs nothing the second time.
  */
+/**
+ * Every set of images Nova has generated, and what it was for.
+ *
+ * Two jobs, which is why it is a ledger rather than a counter: it says whether
+ * a project (or a badge) has had its one free go, and it says how many images
+ * an account has made in the last hour, which is the ceiling on the image
+ * pass. A counter on the project would answer the first and not the second,
+ * and an hourly total that resets is a thing to get wrong at midnight.
+ */
+export const aiImageRuns = pgTable("ai_image_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  /** "project" or "badge" — what the free go belongs to. */
+  scope: text("scope").notNull(),
+  /** The project's or badge's id. */
+  scopeId: varchar("scope_id").notNull(),
+  /** How many pictures this run made. One request can make five. */
+  images: integer("images").notNull().default(1),
+  /** True when this was the free one, so a refund or a reset can find it. */
+  free: boolean("free").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [
+  /* "has this project had its free go?" */
+  index("ai_image_runs_scope_idx").on(t.scope, t.scopeId, t.createdAt),
+  /* "how many has this account made in the last hour?" */
+  index("ai_image_runs_user_idx").on(t.userId, t.createdAt),
+]);
+export type AiImageRun = typeof aiImageRuns.$inferSelect;
+
 export const novaBuildRuns = pgTable("nova_build_runs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   projectId: varchar("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),

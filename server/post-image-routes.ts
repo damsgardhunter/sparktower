@@ -16,7 +16,7 @@ import { openai } from "./replit_integrations/image/client";
 import { ObjectStorageService } from "./replit_integrations/object_storage";
 import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { IMAGE_MODEL, IMAGE_QUALITY } from "./aiModels";
-import { requireCredits } from "./entitlements";
+import { requireImages } from "./images";
 import { storage } from "./storage";
 import { CREDIT_COSTS , CHARGEABLE} from "@shared/plans";
 import { MAX_POST_LENGTH, POST_TYPES_BY_KEY } from "@shared/feed";
@@ -81,7 +81,20 @@ export function registerPostImageRoutes(app: Express) {
         project = found;
       }
 
-      if (!(await requireCredits(res, userId, CREDIT_COSTS.postImage, "an image for your post"))) return;
+      /*
+       * Priced as a picture, not as a small action. A post image with no
+       * project behind it is scoped to the account, so the free go is one per
+       * person rather than one per post — which would be no limit at all.
+       */
+      // metering: priced as a picture — the first go is free per project (or per
+      // account for a post with none), then the image pass. See server/images.ts.
+      const permit = await requireImages(res, userId, {
+        scope: project ? "project" : "account",
+        scopeId: project ? project.id : userId,
+        wanted: 1,
+        label: "An image for your post",
+      });
+      if (!permit) return;
 
       const logo = project ? await readReference(project.logoUrl ?? null, "logo") : null;
       const prompt = postImagePrompt({ content, postTypeLabel, project, hasLogo: !!logo });
@@ -102,8 +115,8 @@ export function registerPostImageRoutes(app: Express) {
         owner: userId,
         visibility: "public",
       });
-      await storage.deductCredits(userId, CREDIT_COSTS.postImage);
-      res.json({ url, usedLogo: !!logo, creditsCharged: CHARGEABLE });
+      await permit.record(1);
+      res.json({ url, usedLogo: !!logo, free: permit.free });
     } catch (error: any) {
       console.error("Post image error:", error?.message || error);
       // The image model's refusals carry a message worth passing on; everything else is ours.
