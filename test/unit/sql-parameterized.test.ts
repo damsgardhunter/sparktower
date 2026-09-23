@@ -34,14 +34,82 @@ describe("interval()", () => {
 describe("no string-built SQL", () => {
   const walk = (dir: string): string[] => readdirSync(dir).flatMap((name) => {
     const p = join(dir, name);
-    return statSync(p).isDirectory() ? walk(p) : /\.tsx?$/.test(name) ? [p] : [];
+    return statSync(p).isDirectory() ? walk(p) : /\.(tsx?|mjs|js)$/.test(name) ? [p] : [];
   });
-  const files = ["server", "shared"].flatMap(walk).map((path) => ({ path, content: readFileSync(path, "utf8") }));
+  /*
+   * `scripts/` as well as the server, and .mjs as well as .ts.
+   *
+   * The maintenance scripts were the blind spot: they connect with the same
+   * credentials as the app, they are the things somebody runs at two in the
+   * morning during an incident, and this assertion — the one that claims the
+   * repository has no string-built SQL in it — did not read a line of them.
+   * The one that repairs timestamp skew builds its SQL from table and column
+   * names, which is exactly where the rule needs testing.
+   */
+  const files = ["server", "shared", "scripts"].flatMap(walk).map((path) => ({ path, content: readFileSync(path, "utf8") }));
 
   it("passes the audit's sql-injection check", () => {
     const check = scanSecurity(files).checks.find((c) => c.id === "sql-injection")!;
     expect(check.evidence).toEqual([]);
     expect(check.status).toBe("pass");
+  });
+
+  /**
+   * The skew script, which is the hard case and the reason the rule exists.
+   *
+   * It cannot bind its table and column names — no database binds an
+   * identifier as a parameter — so it checks each one against a list declared
+   * in the file and quotes it, and every value it compares or writes goes as
+   * `$1`. That is the careful way to do it, and the scanner used to report it
+   * as the single injection risk in the repository, which is the kind of
+   * finding that teaches a team to stop reading findings.
+   *
+   * Two assertions, because "it passes" alone would also pass if the scanner
+   * had simply stopped looking at the file.
+   */
+  const SKEW = "scripts/timestamp-skew.mjs";
+  const skew = () => readFileSync(SKEW, "utf8");
+
+  it("reads the skew script and finds nothing to report", () => {
+    const check = scanSecurity([{ path: SKEW, content: skew() }]).checks.find((c) => c.id === "sql-injection")!;
+    expect(check.status, check.detail).toBe("pass");
+  });
+
+  it("would report it the moment a value was spliced into one of those queries", () => {
+    /*
+     * The same file with one identifier swapped for a value read off the
+     * command line — the change somebody would make in a hurry. If this comes
+     * back clean, the exemption for quoted identifiers has grown into a hole.
+     */
+    const tampered = skew().replace("where ${column} is not null ${cutoff}", "where ${column} = '${process.argv[3]}'");
+    expect(tampered, "the line this test tampers with has moved").not.toBe(skew());
+    const check = scanSecurity([{ path: SKEW, content: tampered }]).checks.find((c) => c.id === "sql-injection")!;
+    expect(check.status).not.toBe("pass");
+    expect(check.evidence).toContain(SKEW);
+  });
+
+  it("holds the exemption to names the file actually quoted", () => {
+    const shapes = [
+      // A name that was never checked against a list, interpolated as an identifier.
+      "const t = process.argv[2];\nawait client.query(`select * from ${t}`);",
+      // Quoted identifier and spliced value in the same query: one safe piece must not end the reading.
+      "const col = quoteKnownIdentifier(raw, COLUMNS);\nawait client.query(`select ${col} from t where id = '${id}'`);",
+    ];
+    for (const code of shapes) {
+      const check = scanSecurity([{ path: CONTROL, content: code }]).checks.find((c) => c.id === "sql-injection")!;
+      expect(check.status, `should not have passed: ${code}`).not.toBe("pass");
+    }
+  });
+
+  it("lets the quoted ones through, including a fragment built from them", () => {
+    const safe = [
+      "const table = quoteKnownIdentifier(rawTable, TABLES);",
+      "const column = quoteKnownIdentifier(rawColumn, COLUMNS);",
+      "const cutoff = before ? `and ${column} < $1` : \"\";",
+      "const r = await client.query(`select count(*) from ${table} where ${column} is not null ${cutoff}`, params);",
+    ].join("\n");
+    const check = scanSecurity([{ path: CONTROL, content: safe }]).checks.find((c) => c.id === "sql-injection")!;
+    expect(check.status, check.detail).toBe("pass");
   });
 
 
