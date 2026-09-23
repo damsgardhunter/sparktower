@@ -20,6 +20,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:unit": "vitest run --config vitest.unit.config.ts",
+    "sim:scale": "tsx scripts/season-scale.mjs",
+    "price:model": "tsx scripts/price-model.mjs",
     "lint": "eslint .",
     "audit:deps": "node scripts/audit-dependencies.mjs",
     "check:email-auth": "node scripts/check-email-auth.mjs",
