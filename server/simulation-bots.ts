@@ -22,7 +22,7 @@ import { db } from "./db";
 import { simBids, simDecisions, simSeats, simVentures, users } from "@shared/schema";
 import { LOBBY_SIZE } from "@shared/simulation/lobby";
 import { pick } from "@shared/simulation/random";
-import { BOT_FILL_AFTER_SECONDS, botBids, botDecision, botsForVenture, botsNeeded } from "@shared/simulation/bots";
+import { BOT_FILL_AFTER_SECONDS, botBids, botDecision, botsForVenture, botsNeeded, type BotSkill } from "@shared/simulation/bots";
 import { cleanDecision } from "@shared/simulation/levers";
 import { dealsFor } from "@shared/simulation/world";
 import { valuation } from "@shared/simulation/mergers";
@@ -267,9 +267,14 @@ export async function fileBotDecisions(input: {
   /** The season, so a bot can answer the offers this season put in front of its company. */
   seasonId?: string;
   /** Everyone in the market, for the same reason. */
-  world?: { companies: Company[] };
+  world?: { companies: Company[]; periodsPerYear?: number };
+  /**
+   * How well these companies play. A season can ask for rivals that are
+   * actually trying rather than warm bodies — see `BotSkill`.
+   */
+  skill?: BotSkill;
 }): Promise<number> {
-  const { companies, year, niche, seasonId, world } = input;
+  const { companies, year, niche, seasonId, world, skill = "filler" } = input;
   if (companies.length === 0) return 0;
   const ventureIds = companies.map((c) => c.id);
 
@@ -308,6 +313,15 @@ export async function fileBotDecisions(input: {
       previous: (last as Record<string, any>) ?? undefined,
       // So it can price what a choice costs, and aim at real regions and segments.
       niche,
+      /*
+       * And everyone else in the market. What to charge and who to aim at are
+       * only decisions against somebody; without the rivals a bot files what
+       * it always did, however skilled it is asked to be.
+       */
+      rivals: (world?.companies ?? []).filter((c) => c.id !== seat.ventureId),
+      skill,
+      // Every budget a bot sets is an annual one, and this is how often it is asked.
+      periods: world?.periodsPerYear ?? 1,
     });
 
     /*
@@ -317,7 +331,7 @@ export async function fileBotDecisions(input: {
      * get that call — and a bot in any other chair votes for a partnership and
      * against being bought.
      */
-    if (seasonId && isUnlocked(role, role === "ceo" ? "deals" : "dealVotes", year)) {
+    if (seasonId && isUnlocked(role, role === "ceo" ? "deals" : "dealVotes", year, world?.periodsPerYear ?? 1)) {
       const offers = dealsFor({
         seasonId, year, company, niche,
         incumbents: (world?.companies ?? []).filter((c) => c.kind === "incumbent"),
@@ -337,7 +351,7 @@ export async function fileBotDecisions(input: {
         year,
         // The same cleaning a person's submission goes through, so there is one
         // definition of what a seat may file and no second path that can drift.
-        payload: cleanDecision(role, decision, cityIds, { year, segmentIds: niche.segments.map((s) => s.id) }),
+        payload: cleanDecision(role, decision, cityIds, { year, periods: world?.periodsPerYear ?? 1, segmentIds: niche.segments.map((s) => s.id) }),
         // Passed, not defaulted: the column's DEFAULT now() is the session's clock, not UTC.
         submittedAt: new Date(),
       })

@@ -58,15 +58,17 @@ async function companyWithStaff(app: any, staff: number) {
  * bought the seats or it is testing the paywall rather than the season. The
  * webhook's own path is tested where the webhook is.
  */
-async function giveSeats(companyId: string, count: number, kind: "play" | "nova" = "play") {
-  await db.update(companies)
-    .set(kind === "play" ? { simPlaySeatsPaid: count } : { simNovaSeatsPaid: count })
-    .where(eq(companies.id, companyId));
+async function giveSeats(companyId: string, count: number, kind: "play" | "nova" | "quarterly" | "monthly" = "play") {
+  const field = {
+    play: "simPlaySeatsPaid", nova: "simNovaSeatsPaid",
+    quarterly: "simQuarterlySeatsPaid", monthly: "simMonthlySeatsPaid",
+  }[kind];
+  await db.update(companies).set({ [field]: count }).where(eq(companies.id, companyId));
 }
 
 async function privateSeason(owner: any, companyId: string, body: Record<string, unknown> = {}) {
   const made = await owner.agent.post(`/api/companies/${companyId}/seasons`)
-    .send({ nicheId: NICHE, name: "Leadership away day", yearMinutes: 30, totalYears: 6, ...body });
+    .send({ nicheId: NICHE, name: "Leadership away day", periodMinutes: 30, totalYears: 6, ...body });
   expect(made.status, JSON.stringify(made.body)).toBe(201);
   expect(made.body.inviteCode).toMatch(/^[0-9A-HJKMNP-TV-Z]{8}$/);
   expect(made.body.joinUrl).toBe(`/join-season/${made.body.inviteCode}`);
@@ -303,7 +305,7 @@ describe("who can reach a private season", () => {
 
     const list = await member.agent.get(`/api/companies/${companyId}/seasons`);
     expect(list.status).toBe(200);
-    expect(list.body.seasons[0]).toMatchObject({ id: seasonId, status: "forming", rooms: 0, players: 0, yearMinutes: 30, totalYears: 6 });
+    expect(list.body.seasons[0]).toMatchObject({ id: seasonId, status: "forming", rooms: 0, players: 0, periodMinutes: 30, totalYears: 6 });
   }, 120_000);
 
   it("invites colleagues with a notification that leads to the join page", async () => {
@@ -327,7 +329,7 @@ describe("a private season's clock", () => {
   it("starts when the company starts it, a year lasts minutes, and a year can be resolved early", async () => {
     const app = await getTestApp();
     const { owner, companyId, people } = await companyWithStaff(app, 5);
-    const { seasonId, inviteCode } = await privateSeason(owner, companyId, { yearMinutes: 30 });
+    const { seasonId, inviteCode } = await privateSeason(owner, companyId, { periodMinutes: 30 });
 
     // Nobody has sat down: nothing to start.
     const empty = await owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/start`).send({});
@@ -361,7 +363,7 @@ describe("a private season's clock", () => {
 
     const [started] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
     expect(started.status).toBe("running");
-    expect(started.nextTickAt!.getTime() - started.startsAt!.getTime(), "a year of 30 minutes, not a day").toBe(30 * 60_000);
+    expect(started.nextTickAt!.getTime() - started.startsAt!.getTime(), "a period of 30 minutes, not a day").toBe(30 * 60_000);
 
     // Once it's running, nobody else can sit down.
     const late = await owner.agent.post("/api/sim/join-code").send({ code: inviteCode });
@@ -514,4 +516,109 @@ describe("what a season costs", () => {
     await giveSeats(companyId, 5);
     expect((await owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/start`).send({})).status).toBe(200);
   }, 120_000);
+});
+
+/**
+ * How often the table decides, and what it costs.
+ *
+ * A season run in quarters asks four times as many decisions of the same
+ * people and a monthly one twelve — more of the product, so its own seat at
+ * $6 and $10. The claim worth testing is that the cadence outranks where the
+ * market came from: a monthly season is a monthly season whether Nova wrote
+ * it or we did, and it is the dearer thing.
+ */
+describe("running a season in quarters or months", () => {
+  it("is offered at creation, and refuses anything that is not one of the three", async () => {
+    const app = await getTestApp();
+    const { owner, companyId } = await companyWithStaff(app, 1);
+
+    /*
+     * The span on offer narrows as the cadence gets finer — six simulated
+     * years of monthly decisions is seventy-two of them, which at a day each
+     * is most of a year of real life — so each cadence is asked for a span it
+     * is actually allowed.
+     */
+    const spanFor: Record<string, number> = { yearly: 6, quarterly: 4, monthly: 1 };
+    for (const cadence of ["yearly", "quarterly", "monthly"]) {
+      const made = await owner.agent.post(`/api/companies/${companyId}/seasons`)
+        .send({ nicheId: NICHE, name: `A ${cadence} season`, totalYears: spanFor[cadence], cadence });
+      expect(made.status, `${cadence}: ${made.text?.slice(0, 200)}`).toBe(201);
+      expect(made.body.cadence).toBe(cadence);
+    }
+
+    const silly = await owner.agent.post(`/api/companies/${companyId}/seasons`)
+      .send({ nicheId: NICHE, name: "Fortnightly", totalYears: 6, cadence: "fortnightly" });
+    expect(silly.status, "sold the wrong thing rather than quietly downgraded").toBe(400);
+    expect(silly.body.field).toBe("cadence");
+  }, 120_000);
+
+  it("charges the faster clock's seat, not the ordinary one", async () => {
+    const app = await getTestApp();
+    const { owner, companyId, people } = await companyWithStaff(app, 5);
+    const { seasonId, inviteCode } = await privateSeason(owner, companyId, { cadence: "monthly", totalYears: 1 });
+    await fillTable(people, inviteCode);
+
+    const start = `/api/companies/${companyId}/seasons/${seasonId}/start`;
+
+    // Play seats do not buy a monthly season, however many there are.
+    await giveSeats(companyId, 40, "play");
+    const refused = await owner.agent.post(start).send({});
+    expect(refused.status).toBe(402);
+    expect(refused.body.seatKind).toBe("monthly");
+    expect(refused.body.pricePerSeat).toBe(10);
+
+    await giveSeats(companyId, 5, "monthly");
+    expect((await owner.agent.post(start).send({})).status).toBe(200);
+  }, 120_000);
+
+  it("prices a quarterly season at six dollars", async () => {
+    const app = await getTestApp();
+    const { owner, companyId, people } = await companyWithStaff(app, 5);
+    const { seasonId, inviteCode } = await privateSeason(owner, companyId, { cadence: "quarterly", totalYears: 4 });
+    await fillTable(people, inviteCode);
+
+    const refused = await owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/start`).send({});
+    expect(refused.status).toBe(402);
+    expect(refused.body.seatKind).toBe("quarterly");
+    expect(refused.body.pricePerSeat).toBe(6);
+  }, 120_000);
+
+  /*
+   * The clock, which is the half of this that a unit test cannot reach: the
+   * season row has to be scheduled and finished in *decisions*, not years.
+   * Before this, `seasonOver(year + 1, totalYears)` compared a period counter
+   * against a year count, and a four-year quarterly season would have ended
+   * three quarters into its first year.
+   */
+  it("schedules and ends a quarterly season by the decision, not the year", async () => {
+    const app = await getTestApp();
+    const { owner, companyId, people } = await companyWithStaff(app, 5);
+    const { seasonId, inviteCode } = await privateSeason(owner, companyId, {
+      cadence: "quarterly", totalYears: 1, periodMinutes: 10,
+    });
+    await fillTable(people, inviteCode);
+    await giveSeats(companyId, 5, "quarterly");
+    expect((await owner.agent.post(`/api/companies/${companyId}/seasons/${seasonId}/start`).send({})).status).toBe(200);
+
+    const [started] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    expect(started.cadence).toBe("quarterly");
+    expect(started.periodMinutes).toBe(10);
+    // One tick per quarter, ten minutes apart — not one per year.
+    expect(started.nextTickAt!.getTime() - started.startsAt!.getTime()).toBe(10 * 60_000);
+
+    // A year of trading is four decisions, so the season is not over at two.
+    for (let q = 0; q < 2; q++) {
+      const ended = await owner.agent.post(`/api/sim/seasons/${seasonId}/advance`).send({});
+      expect(ended.status, ended.text?.slice(0, 200)).toBe(200);
+    }
+    const [midway] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    expect(midway.year, "on the third quarter of the first year").toBe(3);
+    expect(midway.status, "a year is four decisions, and only two have been made").toBe("running");
+
+    for (let q = 0; q < 2; q++) {
+      expect((await owner.agent.post(`/api/sim/seasons/${seasonId}/advance`).send({})).status).toBe(200);
+    }
+    const [over] = await db.select().from(simSeasons).where(eq(simSeasons.id, seasonId));
+    expect(over.status, "four quarters make the year, and the season is done").toBe("finished");
+  }, 180_000);
 });

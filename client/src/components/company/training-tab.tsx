@@ -34,7 +34,8 @@ interface SeasonRow {
   niche: { id: string; name: string };
   year: number;
   totalYears: number;
-  yearMinutes: number | null;
+  periodMinutes: number | null;
+  cadence: string | null;
   nextTickAt: string | null;
   rooms: number;
   roomsReady: number;
@@ -55,8 +56,15 @@ interface StaffRow {
   founderValue: number | null; profit: number | null; read: string;
 }
 
-/** The lengths offered for a year. A day is the public game's pace; the rest are for a workshop. */
-const YEAR_OPTIONS: { value: string; label: string }[] = [
+/**
+ * The lengths offered for one decision. A day is the public game's pace; the
+ * rest are for a workshop that only has an afternoon.
+ *
+ * This is how much *real* time a table gets, which is a separate question
+ * from how much simulated time passes — a monthly season still gets a day per
+ * decision, it just covers a month of trading instead of a year.
+ */
+const PERIOD_OPTIONS: { value: string; label: string }[] = [
   { value: "10", label: "10 minutes" },
   { value: "15", label: "15 minutes" },
   { value: "20", label: "20 minutes" },
@@ -68,7 +76,27 @@ const YEAR_OPTIONS: { value: string; label: string }[] = [
   { value: "day", label: "A day (like the public game)" },
 ];
 
-const yearLength = (minutes: number | null) =>
+/** How often the table decides, and what that costs a seat. */
+const CADENCE_OPTIONS = [
+  { value: "yearly", label: "Once a year", note: "The classic season. Fourteen years of trading." },
+  { value: "quarterly", label: "Every quarter", note: "Four decisions a year — you see a bad year in time to fix it. $6 a seat." },
+  { value: "monthly", label: "Every month", note: "Twelve decisions a year, and the most news. $10 a seat." },
+] as const;
+
+/** Simulated years on offer, which narrows as the cadence gets finer. */
+const YEARS_FOR: Record<string, number[]> = {
+  yearly: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+  quarterly: [1, 2, 3, 4, 5, 6],
+  monthly: [1, 2],
+};
+
+const PERIOD_WORD: Record<string, { one: string; many: string }> = {
+  yearly: { one: "year", many: "years" },
+  quarterly: { one: "quarter", many: "quarters" },
+  monthly: { one: "month", many: "months" },
+};
+
+const periodLength = (minutes: number | null) =>
   minutes == null ? "a day" : minutes % 60 === 0 ? `${minutes / 60} hour${minutes === 60 ? "" : "s"}` : `${minutes} minutes`;
 
 const STATUS_LABEL: Record<SeasonRow["status"], string> = {
@@ -231,8 +259,17 @@ function CreateSeason({ companyId, onDone }: { companyId: string; onDone: () => 
   const { data: niches } = useQuery<{ niches: { id: string; name: string; premise: string }[] }>({ queryKey: ["/api/sim/niches"] });
   const [nicheId, setNicheId] = useState("");
   const [name, setName] = useState("");
-  const [year, setYear] = useState("30");
+  const [period, setPeriod] = useState("30");
+  const [cadence, setCadence] = useState("yearly");
   const [totalYears, setTotalYears] = useState("6");
+  /*
+   * A finer cadence covers fewer simulated years, so the span on offer moves
+   * under the choice. Snap to something legal rather than letting the form
+   * post a number the server will reject.
+   */
+  const yearsOnOffer = YEARS_FOR[cadence] ?? YEARS_FOR.yearly;
+  const years = yearsOnOffer.includes(Number(totalYears)) ? totalYears : String(yearsOnOffer[yearsOnOffer.length - 1]);
+  const word = PERIOD_WORD[cadence] ?? PERIOD_WORD.yearly;
   /*
    * How much of the world, and who else is in it. Both open on the game every
    * public season plays, because a company that just wants a season should get
@@ -244,8 +281,8 @@ function CreateSeason({ companyId, onDone }: { companyId: string; onDone: () => 
 
   const create = useMutation({
     mutationFn: () => apiRequest("POST", `/api/companies/${companyId}/seasons`, {
-      nicheId, name, totalYears: Number(totalYears), yearMinutes: year === "day" ? null : Number(year),
-      scope, botTeams: Number(botTeams),
+      nicheId, name, totalYears: Number(years), periodMinutes: period === "day" ? null : Number(period),
+      cadence, scope, botTeams: Number(botTeams),
     }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/companies/${companyId}/seasons`] });
@@ -255,7 +292,7 @@ function CreateSeason({ companyId, onDone }: { companyId: string; onDone: () => 
   });
 
   const picked = niches?.niches.find((n) => n.id === nicheId);
-  const minutes = year === "day" ? null : Number(year);
+  const minutes = period === "day" ? null : Number(period);
 
   return (
     <Card>
@@ -278,20 +315,33 @@ function CreateSeason({ companyId, onDone }: { companyId: string; onDone: () => 
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
-              <Label>Each year lasts</Label>
-              <Select value={year} onValueChange={setYear}>
-                <SelectTrigger data-testid="select-year-length"><SelectValue /></SelectTrigger>
-                <SelectContent>{YEAR_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+              <Label>The table decides</Label>
+              <Select value={cadence} onValueChange={setCadence}>
+                <SelectTrigger data-testid="select-cadence"><SelectValue /></SelectTrigger>
+                <SelectContent>{CADENCE_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
               </Select>
+              <p className="text-xs text-muted-foreground mt-1">{CADENCE_OPTIONS.find((o) => o.value === cadence)?.note}</p>
             </div>
             <div>
-              <Label>Number of years</Label>
-              <Select value={totalYears} onValueChange={setTotalYears}>
+              <Label>Each {word.one} lasts</Label>
+              <Select value={period} onValueChange={setPeriod}>
+                <SelectTrigger data-testid="select-period-length"><SelectValue /></SelectTrigger>
+                <SelectContent>{PERIOD_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground mt-1">How long the table gets to file, in real time.</p>
+            </div>
+            <div>
+              <Label>Years of trading</Label>
+              <Select value={years} onValueChange={setTotalYears}>
                 <SelectTrigger data-testid="select-total-years"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {Array.from({ length: 11 }, (_, i) => i + 4).map((y) => <SelectItem key={y} value={String(y)}>{y} years</SelectItem>)}
+                  {yearsOnOffer.map((y) => <SelectItem key={y} value={String(y)}>{y} {y === 1 ? "year" : "years"}</SelectItem>)}
                 </SelectContent>
               </Select>
+              <p className="text-xs text-muted-foreground mt-1">
+                {Number(years) * (cadence === "monthly" ? 12 : cadence === "quarterly" ? 4 : 1)} {word.many} of decisions
+                {period === "day" ? ", one a day" : ""}.
+              </p>
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -402,7 +452,7 @@ function SeasonCard({ companyId, season, canManage }: { companyId: string; seaso
               <Badge variant={season.status === "running" ? "default" : "secondary"}>{STATUS_LABEL[season.status]}</Badge>
             </div>
             <p className="text-xs text-muted-foreground mt-1">
-              {season.niche.name} · {progress} · each year lasts {yearLength(season.yearMinutes)}
+              {season.niche.name} · {progress} · each {PERIOD_WORD[season.cadence ?? "yearly"]?.one ?? "year"} lasts {periodLength(season.periodMinutes)}
             </p>
             <p className="text-xs text-muted-foreground">
               {season.players} {season.players === 1 ? "person" : "people"} at {season.rooms} {season.rooms === 1 ? "table" : "tables"}

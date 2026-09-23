@@ -21,7 +21,7 @@
  * come down to an upstream timeout, and a placeholder that quietly ranks
  * alongside real scores would be worse than no score at all.
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "./db";
 import { startupGames, startupGameVerdicts } from "@shared/schema";
 import { parseModelJson } from "./ai-json";
@@ -159,15 +159,40 @@ export function fallbackVerdict(): Verdict {
  */
 export const RETRY_EVERY_MS = 60_000;
 export const RETRY_FOR_MS = 24 * 60 * 60_000;
+/**
+ * How many times a game may be asked about before it is left alone.
+ *
+ * The window used to be the only bound: once a minute for a day, which is
+ * 1,440 model calls for one game. Almost none of that is an outage — a
+ * question that has been answered badly fourteen times is usually a question
+ * this game cannot answer, and the cost falls on us either way.
+ *
+ * Eight, with the wait doubling each time, still spans most of a day: a
+ * minute, two, four, and so on to about two hours, which covers an outage
+ * without paying for one every minute of it.
+ */
+export const RETRY_MAX_ATTEMPTS = 8;
+
+/** How long to wait before the nth attempt. Doubles, and stops doubling at two hours. */
+export const retryDelayMs = (attempts: number): number =>
+  Math.min(2 * 60 * 60_000, RETRY_EVERY_MS * 2 ** Math.max(0, attempts));
+
 const lastTried = new Map<string, number>();
 
 /** Whether a stored verdict is a placeholder worth asking about again. */
-export function shouldRetry(existing: { fromModel: boolean; summary: string; createdAt: Date | null } | undefined, now = Date.now()): boolean {
+export function shouldRetry(
+  existing: { fromModel: boolean; summary: string; createdAt: Date | null; attempts?: number } | undefined,
+  now = Date.now(),
+): boolean {
   if (!existing || existing.fromModel) return false;
   // Only the outage placeholder: a game nobody played stays unscored for good.
   if (existing.summary !== FALLBACK_SUMMARY && !existing.summary.startsWith("The valuation couldn't be reached")) return false;
+  const attempts = existing.attempts ?? 0;
+  if (attempts >= RETRY_MAX_ATTEMPTS) return false;
   const since = existing.createdAt ? now - new Date(existing.createdAt).getTime() : 0;
-  return since < RETRY_FOR_MS;
+  if (since >= RETRY_FOR_MS) return false;
+  // And not before this attempt's own wait is up, which lengthens as it fails.
+  return since >= retryDelayMs(attempts);
 }
 
 /**
@@ -192,7 +217,7 @@ export async function valueGame(gameId: string, askedBy?: string, model = "gpt-4
     .where(eq(startupGameVerdicts.gameId, gameId));
   const retrying = !!existing && shouldRetry(existing);
   if (existing && !retrying) return null;
-  if (retrying && Date.now() - (lastTried.get(gameId) ?? 0) < RETRY_EVERY_MS) return null;
+  if (retrying && Date.now() - (lastTried.get(gameId) ?? 0) < retryDelayMs(existing?.attempts ?? 0)) return null;
 
   valuing.add(gameId);
   lastTried.set(gameId, Date.now());
@@ -284,8 +309,21 @@ async function runValuation(gameId: string, model: string, retrying = false, ask
   }
 
   if (retrying) {
-    // A second failure changes nothing: the placeholder is already there.
-    if (!fromModel) return null;
+    /*
+     * A second failure leaves the placeholder where it is, and counts.
+     *
+     * Counting is the point: the retry budget is a number of attempts, not a
+     * stretch of time, because the attempts are what cost. Without this the
+     * bound never bites and a game that cannot be valued is asked about until
+     * the window runs out.
+     */
+    if (!fromModel) {
+      await db.update(startupGameVerdicts)
+        .set({ attempts: sql`${startupGameVerdicts.attempts} + 1` })
+        .where(and(eq(startupGameVerdicts.gameId, gameId), eq(startupGameVerdicts.fromModel, false)))
+        .catch((err) => console.error(`[game] could not count a failed valuation for ${gameId}:`, err));
+      return null;
+    }
     /*
      * The real answer replaces the placeholder — and only the placeholder. The
      * condition on `fromModel` means a real verdict that landed in the
@@ -302,6 +340,8 @@ async function runValuation(gameId: string, model: string, retrying = false, ask
         notes: verdict.notes,
         advice: verdict.advice,
         fromModel: true,
+        // It answered in the end, so the budget it spent getting there is spent.
+        attempts: 0,
         createdAt: new Date(),
       } as any)
       .where(and(eq(startupGameVerdicts.gameId, gameId), eq(startupGameVerdicts.fromModel, false)));

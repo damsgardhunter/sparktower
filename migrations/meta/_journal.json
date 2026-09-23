@@ -428,6 +428,48 @@
       "when": 1790111852714,
       "tag": "0060_ai_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1790111853714,
+      "tag": "0061_custom_market",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1790111854714,
+      "tag": "0062_verdict_attempts",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1790111855714,
+      "tag": "0063_drop_dead_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1790111856714,
+      "tag": "0064_bot_skill",
+      "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1790111857714,
+      "tag": "0065_season_cadence",
+      "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1790188353897,
+      "tag": "0066_period_minutes",
+      "breakpoints": true
     }
   ]
 }

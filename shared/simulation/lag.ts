@@ -49,10 +49,20 @@ export interface BrandLanding {
   landed: number;
 }
 
-export function brandLanding(company: Pick<Company, "brandPipeline">, gained: number): BrandLanding {
-  const landed = Math.max(0, company.brandPipeline ?? 0);
+/**
+ * `per` is one period's share of a year: 1 yearly, 1/4 quarterly, 1/12 monthly.
+ *
+ * A pipeline that emptied itself every call would land a year's worth of brand
+ * in a quarter, so a period releases only its share of what is waiting. The
+ * steady state and the annual throughput come out the same at every cadence —
+ * a quarter adds a quarter of the campaign and releases a quarter of the queue
+ * — and at `per = 1` the arithmetic is exactly what it always was.
+ */
+export function brandLanding(company: Pick<Company, "brandPipeline">, gained: number, per = 1): BrandLanding {
+  const waiting = Math.max(0, company.brandPipeline ?? 0);
+  const landed = waiting * per;
   const thisYear = Math.max(0, gained) * BRAND_NOW;
-  return { now: thisYear + landed, next: Math.max(0, gained) - thisYear, landed };
+  return { now: thisYear + landed, next: waiting - landed + (Math.max(0, gained) - thisYear), landed };
 }
 
 export interface QualityLanding {
@@ -68,11 +78,18 @@ export function qualityLanding(
   company: Pick<Company, "pipeline" | "pipelineLater">,
   shipped: number,
   researched: number,
+  per = 1,
 ): QualityLanding {
+  const near = Math.max(0, company.pipeline ?? 0);
+  const far = Math.max(0, company.pipelineLater ?? 0);
+  // Each stage passes on a period's share, so a two-year research bet still
+  // takes two years however many decisions the table files in one.
+  const landed = near * per;
+  const moved = far * per;
   return {
-    landed: Math.max(0, company.pipeline ?? 0),
-    pipeline: Math.max(0, shipped) + Math.max(0, company.pipelineLater ?? 0),
-    pipelineLater: Math.max(0, researched),
+    landed,
+    pipeline: near - landed + Math.max(0, shipped) + moved,
+    pipelineLater: far - moved + Math.max(0, researched),
   };
 }
 
@@ -87,14 +104,26 @@ export interface Staffing {
   supportEquivalent: number;
 }
 
-export function staffing(company: Pick<Company, "staff">, headcount: number): Staffing {
+export function staffing(company: Pick<Company, "staff">, headcount: number, per = 1): Staffing {
   const wanted = Math.max(0, Math.round(headcount));
-  const established = Math.min(wanted, Math.max(0, company.staff ?? 0));
+  const have = Math.max(0, company.staff ?? 0);
+  const established = Math.min(wanted, have);
   return {
     established,
     newHires: wanted - established,
-    next: wanted,
-    supportEquivalent: established * SALARY * STAFF_LEVERAGE,
+    // A hire settles in over a year, not over whatever a period happens to be.
+    // Whole people. A period's share of a hire is still a fraction of a
+    // person until it is rounded, and "1.5 new hires this month" is not a
+    // sentence a report can print.
+    next: Math.round(have + (wanted - have) * per),
+    /*
+     * A year of what the established staff are worth, as support spend —
+     * scaled, because it is added to a period's support budget and weighed
+     * against a period's threshold. Unscaled, a quarterly season's staff were
+     * worth four years of support a year and service ran away: 75 points
+     * against a yearly season's 60 on the same plan.
+     */
+    supportEquivalent: established * SALARY * STAFF_LEVERAGE * per,
   };
 }
 
@@ -107,13 +136,15 @@ export interface CapacityBuild {
   building: number;
 }
 
-export function capacityBuild(company: Pick<Company, "capacity">, target: number): CapacityBuild {
+export function capacityBuild(company: Pick<Company, "capacity">, target: number, per = 1): CapacityBuild {
   const current = Math.max(0, Math.round(company.capacity));
   const wanted = Math.max(0, Math.round(target));
   return {
-    // A cut is immediate; growth waits a year.
+    // A cut is immediate; growth waits a year — a quarter opens a quarter of it.
     now: Math.min(current, wanted),
-    next: wanted,
+    // Whole units of room, for the same reason — and because capacity feeds
+    // the spill pass, where a fractional seat became a fractional customer.
+    next: wanted > current ? Math.round(current + (wanted - current) * per) : wanted,
     building: Math.max(0, wanted - current),
   };
 }

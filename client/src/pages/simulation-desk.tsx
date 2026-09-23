@@ -54,6 +54,7 @@ import { AdvanceYearCard } from "@/components/sim/advance-year";
 import {
   Loader2, Clock, TrendingUp, TrendingDown, Minus, AlertTriangle, Info,
   CheckCircle2, Circle, Users, ArrowLeft, Target, LifeBuoy, Store, Handshake, Trophy, Newspaper, ChevronDown, Gauge, History, SlidersHorizontal, Telescope,
+  Crosshair,
 } from "lucide-react";
 
 import { WhatTheTableDecided, WhereTheMarketSits, type AuctionRow, type Standing } from "@/components/sim/past-year";
@@ -115,6 +116,11 @@ interface Desk {
   valuation: number;
   /** How fast this market's products move, which scales what research buys. */
   innovationPace: number;
+  /** The niche this table went and found, if they have one. */
+  ours: {
+    id: string; name: string; foundInYear: number; from: string; people: number;
+    premium: number; headStartLeft: number; sharedWith: string[]; held: number;
+  } | null;
   /** The region operations may put to the table this year, and where the vote stands. */
   expansion: ExpansionVoteData | null;
   table: {
@@ -227,8 +233,24 @@ export default function SimulationDeskPage() {
     },
     onError: (err: any) => {
       const body = err?.body ?? err?.response ?? {};
-      if (body?.errors) setErrors(body.errors);
-      else toast({ title: "Couldn't file that", description: body?.message ?? "Try again.", variant: "destructive" });
+      if (body?.errors) { setErrors(body.errors); return; }
+      /*
+       * The year turned over while they were typing.
+       *
+       * `YEAR_CLOSING` exists precisely so this can say "a moment" rather
+       * than "something went wrong" — and nothing checked for it, so the one
+       * refusal the server went out of its way to make gentle arrived as a
+       * red error about a failure that had not happened. The desk is also a
+       * year out of date at this point, so it refetches: what they typed was
+       * for a year that has closed, and next year's screen is the one to be
+       * looking at.
+       */
+      if (body?.code === "year_closing") {
+        toast({ title: "That year just closed", description: "Next year is opening now — your screen is catching up." });
+        queryClient.invalidateQueries({ queryKey: [`/api/sim/ventures/${id}/desk`] });
+        return;
+      }
+      toast({ title: "Couldn't file that", description: body?.message ?? "Try again.", variant: "destructive" });
     },
   });
 
@@ -571,6 +593,9 @@ export default function SimulationDeskPage() {
         )}
         {/* Your own thing to win, and how last year's went. */}
         {desk.challenge && <ChallengeCard challenge={desk.challenge} last={desk.lastChallenge} />}
+        {/* What the year's research bought, if this table went looking. */}
+        {desk.ours && <OurNiche niche={desk.ours} customersWord={v.customers} />}
+
         {/*
           * The region on the table. Shown to every seat, not only the one
           * whose lever it is, because it is the one decision here the five of
@@ -1841,3 +1866,66 @@ function ProductRiskLine({ risk }: { risk: ProductRisk }) {
     </p>
   );
 }
+
+
+/**
+ * The niche this table went and found.
+ *
+ * A year of research money bought these people, and until now nothing on the
+ * screen said so. Three things it has to answer, in the order a table asks
+ * them: who are they, how long do we have them to ourselves, and has anybody
+ * else turned up.
+ *
+ * The last one is the one that stings, so it is said plainly rather than
+ * buried: somebody thinking the same thing at the same time is the most
+ * ordinary event in a market and the most surprising one to be on the
+ * receiving end of.
+ */
+function OurNiche({ niche, customersWord }: {
+  niche: NonNullable<Desk["ours"]>;
+  customersWord: string;
+}) {
+  const shared = niche.sharedWith.length > 0;
+  return (
+    <Card className="rounded-2xl" data-testid="card-our-niche">
+      <CardContent className="p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <Crosshair className="h-4 w-4 text-muted-foreground shrink-0" />
+              <h2 className="font-semibold truncate">{niche.name}</h2>
+              {shared
+                ? <Badge variant="secondary" data-testid="badge-niche-shared">Shared</Badge>
+                : niche.headStartLeft > 0
+                  ? <Badge data-testid="badge-niche-yours">Yours for now</Badge>
+                  : <Badge variant="outline" data-testid="badge-niche-open">Everybody knows</Badge>}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              Found in year {niche.foundInYear}, inside {niche.from.toLowerCase()}.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4">
+          <Stat label={`These ${customersWord}`} value={compact(niche.people)} />
+          <Stat label="Yours" value={compact(niche.held)}
+            sub={niche.people > 0 ? `${Math.round((niche.held / niche.people) * 100)}% of them` : undefined} />
+          <Stat label="They pay" value={`+${niche.premium}%`} sub="against the segment they came from" />
+          <Stat
+            label="Head start"
+            value={niche.headStartLeft > 0 ? `${niche.headStartLeft} year${niche.headStartLeft === 1 ? "" : "s"}` : "Gone"}
+            sub={niche.headStartLeft > 0 ? "before everybody notices" : "an ordinary segment now"}
+          />
+        </div>
+
+        {shared && (
+          <p className="text-xs text-amber-600 mt-3" data-testid="text-niche-shared">
+            {niche.sharedWith.join(" and ")} went looking in the same place and came back with the same
+            people. Neither of you has a head start on the other — you are both selling to them now.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+

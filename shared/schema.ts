@@ -2874,6 +2874,13 @@ export const companies = pgTable("companies", {
    * bought ten of those did not thereby buy ten of these.
    */
   simPlaySeatsPaid: integer("sim_play_seats_paid").default(0).notNull(),
+  /**
+   * And the two that buy a faster clock: a season decided four times a year,
+   * or twelve. More of the product for the same people, so they are their own
+   * seats rather than a surcharge.
+   */
+  simQuarterlySeatsPaid: integer("sim_quarterly_seats_paid").default(0).notNull(),
+  simMonthlySeatsPaid: integer("sim_monthly_seats_paid").default(0).notNull(),
   /*
    * Who did it, for the record — and only for the record. Set null, not
    * cascade, when that account goes: one person closing their account must
@@ -3241,6 +3248,20 @@ export const startupGameVerdicts = pgTable("startup_game_verdicts", {
    * leaves these out, because a placeholder that ranks is a lie.
    */
   fromModel: boolean("from_model").default(true).notNull(),
+  /**
+   * How many times the model has been asked about this game and not answered.
+   *
+   * A placeholder verdict is provisional: while somebody is on the results
+   * page it is asked about again, so an outage does not leave a finished game
+   * unscored for ever. Asking once a minute for a day is 1,440 model calls
+   * for one game, which is a lot of money for a question that has already
+   * been answered wrong fourteen times.
+   *
+   * Counted rather than timed, because the count is what costs. It backs off
+   * from a minute and stops, and it lives on the row rather than in memory so
+   * a restart does not hand a failing game a fresh budget.
+   */
+  attempts: integer("attempts").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   /** Every leaderboard is this index, read five ways. */
@@ -3414,8 +3435,11 @@ export const simSeatPurchases = pgTable("sim_seat_purchases", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
   seats: integer("seats").notNull(),
-  /** Which seat was bought: "play" for a season we wrote, "nova" for one Nova builds. */
-  kind: text("kind", { enum: ["play", "nova"] }).default("nova").notNull(),
+  /**
+   * Which seat was bought: "play" for a season from our markets, "nova" for
+   * one Nova builds, and the two that buy a faster clock.
+   */
+  kind: text("kind", { enum: ["play", "nova", "quarterly", "monthly"] }).default("nova").notNull(),
   /** In cents, as Stripe counts it. */
   amount: integer("amount").notNull(),
   stripeSessionId: text("stripe_session_id").notNull(),
@@ -3548,6 +3572,42 @@ export const simSeasons = pgTable("sim_seasons", {
    * season with a `companyId` passes the gate.
    */
   origin: text("origin", { enum: ["catalogue", "nova"] }).default("catalogue").notNull(),
+  /**
+   * How well the bot-run companies in this season play.
+   *
+   * "filler" is what bots have always been: a warm body in a seat nobody
+   * took, filing the obvious number so the company moves. "survivor" is a
+   * company actually trying to get in — it works out what to charge and who
+   * to aim at rather than inheriting last year's numbers.
+   *
+   * A season for people learning to enter a market wants the second, because
+   * a table cannot learn to survive from rivals who do not. Measured over 112
+   * seasons, survivors came through 68% of the time against 63% for fillers
+   * and earned between a third and twice as much when they did.
+   */
+  botSkill: text("bot_skill", { enum: ["filler", "survivor"] }).default("filler").notNull(),
+  /**
+   * How often the table decides: once a year, four times, or twelve.
+   *
+   * The market and the levers are the same either way; what changes is how
+   * quickly a table can answer a year that is going wrong, which is a real
+   * operating skill an annual season cannot teach. Priced above the ordinary
+   * seat because it is more of the product — see SEAT_PRICE_CENTS.
+   */
+  cadence: text("cadence", { enum: ["yearly", "quarterly", "monthly"] }).default("yearly").notNull(),
+  /**
+   * A market Nova wrote for this company, rather than one of the seven.
+   *
+   * The seven live in code on purpose: they are balanced against each other,
+   * and a season that kept a copy would play last month's game while everyone
+   * else played this month's. A written market is the exception, and it has to
+   * be stored, because there is no code for it — it exists for one company and
+   * nothing else will ever rebalance it.
+   *
+   * Null for every season that plays one of the seven, which is most of them.
+   * See shared/simulation/custom-market.ts.
+   */
+  customMarket: jsonb("custom_market"),
   inviteCode: text("invite_code"),
   /**
    * How long a year lasts, in minutes, when it isn't a real day. A public
@@ -3556,7 +3616,7 @@ export const simSeasons = pgTable("sim_seasons", {
    * room is still there. Null means a day. The company can also resolve the
    * year early — see server/company-season-routes.ts.
    */
-  yearMinutes: integer("year_minutes"),
+  periodMinutes: integer("period_minutes"),
   /**
    * How much of the world this season plays on: "home" for the market's own
    * regions, "world" for the whole map, or a continent's id for that continent
@@ -3613,8 +3673,6 @@ export const simVentures = pgTable("sim_ventures", {
   botOnly: boolean("bot_only").default(false).notNull(),
   /** When the current phase stops waiting and resolves itself. */
   phaseEndsAt: timestamp("phase_ends_at"),
-  /** The engine's Company for this venture, after the last resolved year. */
-  state: jsonb("state"),
   /**
    * When the room left the lobby and sat waiting for its season to start.
    *

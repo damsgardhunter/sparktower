@@ -39,11 +39,12 @@ import { notify } from "./notifications";
 import { companyCan, logCompany } from "./company-access";
 import { companyMembersOf } from "./company-routes";
 import { SEASON_CODE_ALPHABET } from "./simulation-routes";
-import { startSeason, tickSeason, yearMsOf } from "./simulation-tick";
+import { startSeason, tickSeason, periodMsOf } from "./simulation-tick";
 import { nicheById } from "@shared/simulation/niches";
 import { ROLE_TITLES, type Role, type World } from "@shared/simulation/types";
 import type { CompanyReport } from "@shared/simulation/resolve";
 import { isContinent } from "@shared/simulation/geography";
+import { CADENCES, DEFAULT_YEARS, PERIOD_NAME, periodsPerYear, totalPeriods, yearsMax, yearsMin, type Cadence } from "@shared/simulation/cadence";
 import { seatBotCompanies } from "./simulation-bots";
 import { buildSimulationPrompt, parseSimulationBrief } from "./nova-simulation";
 import { getOpenAI, openAiConfigured } from "./openai-client";
@@ -54,11 +55,26 @@ import { storage } from "./storage";
 import { pathStatus } from "./phase-trees";
 import { isStripeConfigured, getUncachableStripeClient } from "./stripeClient";
 import { ensureStripeCustomer } from "./stripe-customer";
+import { marketNameOf } from "./simulation-scope";
 
-/** Shortest and longest year a company can choose, in minutes. Ten is about the least a table can argue a price in; a day is what the public game uses. */
-export const YEAR_MINUTES_MIN = 10;
-export const YEAR_MINUTES_MAX = 1440;
-/** Fewer than four years and nothing a team does has time to come back to them. */
+/**
+ * Shortest and longest *decision* a company can choose, in minutes.
+ *
+ * Ten is about the least a table can argue a price in; a day is what the
+ * public game uses. This is how much real time one decision gets, which is a
+ * separate question from how much simulated time it covers — see
+ * `DEFAULT_YEARS` in cadence.ts for why those two are deliberately unhooked.
+ */
+export const PERIOD_MINUTES_MIN = 10;
+export const PERIOD_MINUTES_MAX = 1440;
+/**
+ * How long a season runs, in simulated years.
+ *
+ * The real rule is counted in decisions, not years — fewer than four and
+ * nothing a team does has time to come back to them — so the bounds depend on
+ * the cadence. See `yearsMin` / `yearsMax`. These two stay for the yearly
+ * season, which is what most callers still mean.
+ */
 export const TRAINING_YEARS_MIN = 4;
 export const TRAINING_YEARS_MAX = 14;
 /**
@@ -78,20 +94,62 @@ export const BOT_TEAMS_MAX = 50;
  * seat is a person at a table in a season Nova built by reading the company's
  * own project — which costs a model call and is worth more, so it costs more.
  *
+ * And two more for how often the table decides. A season run in quarters asks
+ * four times as many decisions of the same people and a monthly one twelve —
+ * more of the product, and more of everything behind it — so they are their
+ * own seats at $6 and $10.
+ *
  * They are separate balances rather than one with a discount: buying ten Nova
  * seats does not leave you ten play seats, and buying ten play seats does not
- * entitle you to have Nova build anything.
+ * entitle you to have Nova build anything. A quarterly seat is the whole of a
+ * play seat and the cadence, so somebody holding one needs nothing else.
  */
-export const SEAT_PRICE_CENTS = { play: 300, nova: 500 } as const;
+export const SEAT_PRICE_CENTS = { play: 300, nova: 500, quarterly: 600, monthly: 1000 } as const;
 export type SeatKind = keyof typeof SEAT_PRICE_CENTS;
+
+/** What each seat is called when somebody is told they need one. */
+export const SEAT_LABEL: Record<SeatKind, string> = {
+  play: "play", nova: "Nova", quarterly: "quarterly", monthly: "monthly",
+};
+export const SEAT_PITCH: Record<SeatKind, string> = {
+  play: "A season from our markets",
+  nova: "A season Nova builds from your project",
+  quarterly: "A season decided four times a year",
+  monthly: "A season decided every month",
+};
+
+/**
+ * Whether a developer may start a season they have not paid for.
+ *
+ * Local development only, never production — the same rule and the same shape
+ * as `devAdvanceOn` in season-control.ts, for the same reason: a switch that
+ * can be left on in production is a paywall that is not one.
+ */
+export const freeSeatsOn = (env: NodeJS.ProcessEnv = process.env): boolean =>
+  env.SIM_DEV_FREE_SEATS === "1" && env.NODE_ENV !== "production";
 export const SEAT_KINDS = Object.keys(SEAT_PRICE_CENTS) as SeatKind[];
 const isSeatKind = (v: unknown): v is SeatKind => SEAT_KINDS.includes(v as SeatKind);
-/** Which balance a season of this origin is paid for from. */
-export const seatKindFor = (origin: string | null | undefined): SeatKind => origin === "nova" ? "nova" : "play";
+/**
+ * Which balance a season is paid for from.
+ *
+ * How often the table decides outranks where the market came from: a monthly
+ * season is a monthly season whether Nova wrote the market or we did, and it
+ * is the dearer thing. A yearly season falls back to what it has always been.
+ */
+export const seatKindFor = (origin: string | null | undefined, cadence?: string | null): SeatKind => {
+  if (cadence === "monthly") return "monthly";
+  if (cadence === "quarterly") return "quarterly";
+  return origin === "nova" ? "nova" : "play";
+};
 /** What a company holds of each seat. */
-export const seatsHeld = (company: { simPlaySeatsPaid?: number | null; simNovaSeatsPaid?: number | null }) => ({
+export const seatsHeld = (company: {
+  simPlaySeatsPaid?: number | null; simNovaSeatsPaid?: number | null;
+  simQuarterlySeatsPaid?: number | null; simMonthlySeatsPaid?: number | null;
+}) => ({
   play: company.simPlaySeatsPaid ?? 0,
   nova: company.simNovaSeatsPaid ?? 0,
+  quarterly: company.simQuarterlySeatsPaid ?? 0,
+  monthly: company.simMonthlySeatsPaid ?? 0,
 });
 /** The most seats one checkout can carry, so a typo is not a four-figure charge. */
 export const SEATS_PER_PURCHASE_MAX = 250;
@@ -99,7 +157,7 @@ export const SEATS_PER_PURCHASE_MAX = 250;
 export const joinPathFor = (code: string) => `/join-season/${code}`;
 
 /** Eight characters of Crockford base32 from the OS's CSPRNG: 40 bits, easy to read off a projector, not worth guessing. */
-function newSeasonCode(): string {
+export function newSeasonCode(): string {
   let code = "";
   for (let i = 0; i < 8; i++) code += SEASON_CODE_ALPHABET[crypto.randomInt(SEASON_CODE_ALPHABET.length)];
   return code;
@@ -142,17 +200,28 @@ export function registerCompanySeasonRoutes(app: Express): void {
       const niche = nicheById(String(body.nicheId ?? ""));
       if (!niche) return res.status(400).json({ message: "Pick one of the markets.", code: "invalid_input", field: "nicheId" });
 
+      /*
+       * How often the table will decide. Refused rather than quietly
+       * downgraded if it is not one of the three: somebody who asked for a
+       * monthly season and got a yearly one has been sold the wrong thing.
+       */
+      const cadence = (body.cadence === undefined || body.cadence === "" ? "yearly" : String(body.cadence)) as Cadence;
+      if (!CADENCES.includes(cadence)) {
+        return res.status(400).json({ message: "A season runs in years, quarters or months.", code: "invalid_input", field: "cadence" });
+      }
+
       const name = String(body.name ?? "").trim() || `${found.company.name} — ${niche.name}`;
       if (name.length < 2 || name.length > 80) return res.status(400).json({ message: "A season name is 2 to 80 characters.", code: "invalid_input", field: "name" });
 
-      let yearMinutes: number | null = null;
-      if (body.yearMinutes != null && body.yearMinutes !== "") {
-        yearMinutes = Number(body.yearMinutes);
-        if (!Number.isInteger(yearMinutes) || yearMinutes < YEAR_MINUTES_MIN || yearMinutes > YEAR_MINUTES_MAX) {
-          return res.status(400).json({ message: `A year lasts between ${YEAR_MINUTES_MIN} and ${YEAR_MINUTES_MAX} minutes, or leave it as a day.`, code: "invalid_input", field: "yearMinutes" });
+      const period = PERIOD_NAME[cadence].one;
+      let periodMinutes: number | null = null;
+      if (body.periodMinutes != null && body.periodMinutes !== "") {
+        periodMinutes = Number(body.periodMinutes);
+        if (!Number.isInteger(periodMinutes) || periodMinutes < PERIOD_MINUTES_MIN || periodMinutes > PERIOD_MINUTES_MAX) {
+          return res.status(400).json({ message: `A ${period} lasts between ${PERIOD_MINUTES_MIN} and ${PERIOD_MINUTES_MAX} minutes, or leave it as a day.`, code: "invalid_input", field: "periodMinutes" });
         }
         // 1440 minutes is a day; storing null keeps "a day" meaning one thing.
-        if (yearMinutes === YEAR_MINUTES_MAX) yearMinutes = null;
+        if (periodMinutes === PERIOD_MINUTES_MAX) periodMinutes = null;
       }
       /*
        * How much of the world, and who else is in it.
@@ -171,9 +240,22 @@ export function registerCompanySeasonRoutes(app: Express): void {
         return res.status(400).json({ message: `A season can seat up to ${BOT_TEAMS_MAX} companies of bots.`, code: "invalid_input", field: "botTeams" });
       }
 
-      const totalYears = body.totalYears == null || body.totalYears === "" ? TRAINING_YEARS_MAX : Number(body.totalYears);
-      if (!Number.isInteger(totalYears) || totalYears < TRAINING_YEARS_MIN || totalYears > TRAINING_YEARS_MAX) {
-        return res.status(400).json({ message: `A season runs ${TRAINING_YEARS_MIN} to ${TRAINING_YEARS_MAX} years.`, code: "invalid_input", field: "totalYears" });
+      /*
+       * How much simulated time the season covers, in years, whatever the
+       * cadence. The bounds are really about how many *decisions* that comes
+       * to, so they narrow as the cadence gets finer: fourteen simulated
+       * years of monthly decisions is a hundred and sixty-eight of them.
+       */
+      const yearsLow = yearsMin(cadence);
+      const yearsHigh = yearsMax(cadence);
+      const totalYears = body.totalYears == null || body.totalYears === "" ? DEFAULT_YEARS[cadence] : Number(body.totalYears);
+      if (!Number.isInteger(totalYears) || totalYears < yearsLow || totalYears > yearsHigh) {
+        return res.status(400).json({
+          message: yearsLow === yearsHigh
+            ? `A ${cadence} season runs ${yearsLow} ${yearsLow === 1 ? "year" : "years"}.`
+            : `A ${cadence} season runs ${yearsLow} to ${yearsHigh} years — that is ${totalPeriods(yearsLow, cadence)} to ${totalPeriods(yearsHigh, cadence)} ${PERIOD_NAME[cadence].many} of decisions.`,
+          code: "invalid_input", field: "totalYears",
+        });
       }
 
       // A code clash is one in a trillion, but the unique index would turn it into a 500; try again instead.
@@ -181,12 +263,12 @@ export function registerCompanySeasonRoutes(app: Express): void {
         const inviteCode = newSeasonCode();
         try {
           const [season] = await db.insert(simSeasons).values({
-            nicheId: niche.id, name, status: "forming", totalYears, yearMinutes,
+            nicheId: niche.id, name, status: "forming", totalYears, periodMinutes,
             companyId: found.company.id, inviteCode, createdAt: new Date(),
-            scope, botTeams, origin: "catalogue",
+            scope, botTeams, origin: "catalogue", cadence,
           }).returning();
-          await logCompany(found.company.id, req.user.id, "season_created", null, { seasonId: season.id, name, nicheId: niche.id, scope, botTeams });
-          return res.status(201).json({ seasonId: season.id, inviteCode, joinUrl: joinPathFor(inviteCode), scope, botTeams });
+          await logCompany(found.company.id, req.user.id, "season_created", null, { seasonId: season.id, name, nicheId: niche.id, scope, botTeams, cadence });
+          return res.status(201).json({ seasonId: season.id, inviteCode, joinUrl: joinPathFor(inviteCode), scope, botTeams, cadence });
         } catch (err) {
           if (!isUniqueViolation(err)) throw err;
         }
@@ -423,7 +505,7 @@ export function registerCompanySeasonRoutes(app: Express): void {
             name: brief.name,
             status: "forming",
             totalYears: brief.totalYears,
-            yearMinutes: null,
+            periodMinutes: null,
             companyId: found.company.id,
             inviteCode,
             createdAt: new Date(),
@@ -476,11 +558,12 @@ export function registerCompanySeasonRoutes(app: Express): void {
             id: s.id,
             name: s.name,
             status: s.status,
-            niche: { id: s.nicheId, name: nicheById(s.nicheId)?.name ?? s.nicheId },
+            niche: { id: s.nicheId, name: marketNameOf(s) },
             /** The year being played now; past the last one once it's over. */
             year: s.year,
             totalYears: s.totalYears,
-            yearMinutes: s.yearMinutes,
+            periodMinutes: s.periodMinutes,
+            cadence: s.cadence,
             nextTickAt: s.nextTickAt,
             rooms: rooms.length,
             roomsReady: rooms.filter((r) => r.phase === "running").length,
@@ -564,7 +647,7 @@ export function registerCompanySeasonRoutes(app: Express): void {
        * one Nova built from the company's own project is the dearer one, and
        * the two balances do not substitute for each other.
        */
-      const kind = seatKindFor(season.origin);
+      const kind = seatKindFor(season.origin, season.cadence);
       const seated = await db
         .selectDistinct({ userId: simSeats.userId })
         .from(simSeats)
@@ -572,11 +655,19 @@ export function registerCompanySeasonRoutes(app: Express): void {
         .innerJoin(users, eq(users.id, simSeats.userId))
         .where(and(eq(simVentures.seasonId, season.id), eq(users.isBot, false)));
       const paid = seatsHeld(found.company)[kind];
-      if (seated.length > paid) {
+      /*
+       * A developer building or demonstrating a season should not have to buy
+       * their way past their own paywall. Mirrors `devAdvanceOn`: local
+       * development only, never production, and it says so in the log so a
+       * season started this way is never mistaken for one somebody paid for.
+       */
+      if (freeSeatsOn() && seated.length > paid) {
+        console.warn(`[sim] SIM_DEV_FREE_SEATS=1 — starting season ${season.id} with ${seated.length} seated and ${paid} ${kind} seat(s) paid for. Development only.`);
+      } else if (seated.length > paid) {
         return res.status(402).json({
           code: "seats_required",
-          message: `${seated.length} ${seated.length === 1 ? "person has" : "people have"} sat down and the company has ${paid} ${kind === "nova" ? "Nova" : "play"} ${paid === 1 ? "seat" : "seats"}. `
-            + `${kind === "nova" ? "A season Nova builds from your project" : "A season from our markets"} is $${SEAT_PRICE_CENTS[kind] / 100} a seat, and seats stay with the company for every season after this one.`,
+          message: `${seated.length} ${seated.length === 1 ? "person has" : "people have"} sat down and the company has ${paid} ${SEAT_LABEL[kind]} ${paid === 1 ? "seat" : "seats"}. `
+            + `${SEAT_PITCH[kind]} is $${SEAT_PRICE_CENTS[kind] / 100} a seat, and seats stay with the company for every season after this one.`,
           seatKind: kind,
           pricePerSeat: SEAT_PRICE_CENTS[kind] / 100,
           people: seated.length,
@@ -646,9 +737,9 @@ export function registerCompanySeasonRoutes(app: Express): void {
         });
       }
       const now = new Date();
-      const yearMs = yearMsOf(season);
+      const periodMs = periodMsOf(season);
       const moved = await db.update(simSeasons)
-        .set({ nextTickAt: now, startsAt: new Date(now.getTime() - season.year * yearMs) })
+        .set({ nextTickAt: now, startsAt: new Date(now.getTime() - season.year * periodMs) })
         // Conditional on the year it read, so a tick landing in between isn't rewound.
         .where(and(eq(simSeasons.id, season.id), eq(simSeasons.year, season.year), eq(simSeasons.status, "running")))
         .returning({ id: simSeasons.id });
@@ -800,7 +891,7 @@ export function registerCompanySeasonRoutes(app: Express): void {
       res.json({
         season: {
           id: season.id, name: season.name, status: season.status, year: season.year,
-          totalYears: season.totalYears, yearsResolved: played, niche: { id: season.nicheId, name: nicheById(season.nicheId)?.name ?? season.nicheId },
+          totalYears: season.totalYears, yearsResolved: played, niche: { id: season.nicheId, name: marketNameOf(season) },
         },
         players: players.sort((a, b) => (a.teamName ?? "").localeCompare(b.teamName ?? "") || a.name.localeCompare(b.name)),
         notPlaying: members.filter((m) => !seated.has(m.userId)).map((m) => ({ userId: m.userId, name: m.name })),

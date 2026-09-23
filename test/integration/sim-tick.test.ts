@@ -375,9 +375,19 @@ describe("resolving a year", () => {
     expect(ours, "the team's own year should be readable back").toBeTruthy();
     expect((ours!.report as any).rank).toBeGreaterThan(0);
 
-    // And the venture carries its own company for the screens.
+    /*
+     * And the venture is still running, with the season's world as the one
+     * source for its company.
+     *
+     * This used to assert that the venture carried a copy of its own company
+     * "for the screens". It did carry one, and no screen ever read it — the
+     * assertion documented a write rather than a behaviour, which is how a
+     * whole engine Company per venture per tick survived being pointless.
+     */
     const [venture] = await db.select().from(simVentures).where(eq(simVentures.id, ventureId));
-    expect(venture.state).toBeTruthy();
+    expect(venture.phase).toBe("running");
+    const world = season.world as any;
+    expect(world.companies.find((c: any) => c.id === ventureId), "the world is where the company is").toBeTruthy();
   }, 120_000);
 
   it("does nothing the second time", async () => {

@@ -225,8 +225,19 @@ export class WebhookHandlers {
        * cannot spend. An old session from before the two tiers carries no
        * `seatKind`, and every seat sold then was a Nova seat.
        */
-      const seatKind = session.metadata?.seatKind === 'play' ? 'play' : 'nova';
-      const column = seatKind === 'play' ? companies.simPlaySeatsPaid : companies.simNovaSeatsPaid;
+      const COLUMNS = {
+        play: companies.simPlaySeatsPaid,
+        nova: companies.simNovaSeatsPaid,
+        quarterly: companies.simQuarterlySeatsPaid,
+        monthly: companies.simMonthlySeatsPaid,
+      } as const;
+      const FIELDS = {
+        play: 'simPlaySeatsPaid', nova: 'simNovaSeatsPaid',
+        quarterly: 'simQuarterlySeatsPaid', monthly: 'simMonthlySeatsPaid',
+      } as const;
+      const asked = session.metadata?.seatKind as keyof typeof COLUMNS | undefined;
+      const seatKind = asked && asked in COLUMNS ? asked : 'nova';
+      const column = COLUMNS[seatKind];
       await db.transaction(async (tx) => {
         const inserted = await tx.insert(simSeatPurchases).values({
           companyId,
@@ -238,7 +249,7 @@ export class WebhookHandlers {
         }).onConflictDoNothing({ target: simSeatPurchases.stripeSessionId }).returning({ id: simSeatPurchases.id });
         if (!inserted.length) return;
         await tx.update(companies)
-          .set({ [seatKind === 'play' ? 'simPlaySeatsPaid' : 'simNovaSeatsPaid']: sql`${column} + ${seats}` })
+          .set({ [FIELDS[seatKind]]: sql`${column} + ${seats}` })
           .where(eq(companies.id, companyId));
       });
       console.log(`Simulation seats credited: ${seats} ${seatKind} to company ${companyId}`);

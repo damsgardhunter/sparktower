@@ -23,6 +23,7 @@ import { isAuthenticated } from "./replit_integrations/auth/replitAuth";
 import { enforceRateLimit } from "./moderation";
 import { nicheById } from "@shared/simulation/niches";
 import { marketOf } from "./simulation-scope";
+import { periodsPerYear, type Cadence } from "@shared/simulation/cadence";
 import type { World, Company, CompanyAsset, Role } from "@shared/simulation/types";
 import { marketListings, resaleValue, biddableFunds } from "@shared/simulation/assets";
 import { distressOf, recoveryOptions, type RecoveryKind } from "@shared/simulation/recovery";
@@ -113,7 +114,7 @@ export function registerSimulationMarketRoutes(app: Express): void {
     const nameOf = (id: string) => world.companies.find((c) => c.id === id)?.name ?? "Another team";
 
     const listings = [
-      ...marketListings({ seasonId: season.id, year, niche }).map((l) => ({
+      ...marketListings({ seasonId: season.id, year, niche, periods: periodsPerYear(season.cadence as Cadence) }).map((l) => ({
         id: l.id,
         name: l.asset.name,
         kind: l.asset.kind,
@@ -241,7 +242,7 @@ const BID_IS_THE_CEOS = {
 
     const niche = marketOf(season)!;
     const year = season.year;
-    const open = marketListings({ seasonId: season.id, year, niche }).map((l) => l.id);
+    const open = marketListings({ seasonId: season.id, year, niche, periods: periodsPerYear(season.cadence as Cadence) }).map((l) => l.id);
     const [fromTeam] = await db.select().from(simListings).where(and(
       eq(simListings.id, listingId),
       eq(simListings.status, "open"),

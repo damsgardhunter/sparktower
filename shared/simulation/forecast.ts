@@ -39,7 +39,7 @@ import { annualPlans, fundYear } from "./responsibilities";
 import { dataEffects } from "./product";
 import { sanitiseDecisions } from "./decisions";
 import type { Company, Economy, World } from "./types";
-import { allocate } from "./market";
+import { allocate, atScale } from "./market";
 import { incumbentYear } from "./incumbents";
 import { lift } from "./decisions";
 import { brandLanding, staffing } from "./lag";
@@ -60,20 +60,22 @@ export interface Forecast {
 }
 
 /** What the drafted spending does to the company before the market sees it. A sketch of the engine, not the engine. */
-function projected(company: Company, d: TeamDecisions | undefined, innovationPace: number): Company {
+function projected(company: Company, d: TeamDecisions | undefined, innovationPace: number, per = 1): Company {
   /*
    * With the same lags the year itself applies (see `lag.ts`), or the forecast
    * would count brand and quality this year that will not arrive until next —
    * and be most wrong for exactly the team that planned ahead.
    */
   void innovationPace; // This year's shipping lands next year, so it does not move this year's demand.
-  const brand = brandLanding(company, lift((d?.cmo?.brandSpend ?? 0) + (d?.cmo?.celebritySpend ?? 0) * 1.4, 220_000, 16));
-  const brandGain = brand.now + lift(d?.cmo?.performanceSpend ?? 0, 180_000, 9);
-  const qualityGain = Math.max(0, company.pipeline ?? 0);
-  const staff = staffing(company, d?.coo?.headcount ?? 0);
+  // Every threshold and ceiling scaled the way the engine scales them, or the
+  // forecast would promise a quarter's spending a year's worth of brand.
+  const brand = brandLanding(company, lift((d?.cmo?.brandSpend ?? 0) + (d?.cmo?.celebritySpend ?? 0) * 1.4, atScale(220_000, company.scale) * per, 16 * per), per);
+  const brandGain = brand.now + lift(d?.cmo?.performanceSpend ?? 0, atScale(180_000, company.scale) * per, 9 * per);
+  const qualityGain = Math.max(0, company.pipeline ?? 0) * per;
+  const staff = staffing(company, d?.coo?.headcount ?? 0, per);
   const serviceGain = lift(
     (d?.coo?.supportSpend ?? 0) + (d?.cto?.reliabilitySpend ?? 0) * 0.5 + staff.supportEquivalent,
-    150_000, 15,
+    150_000 * per, 15 * per,
   );
   const clamp = (n: number) => Math.max(0, Math.min(100, n));
   return {
@@ -82,9 +84,9 @@ function projected(company: Company, d: TeamDecisions | undefined, innovationPac
     // Tiers as drafted, and the annual plans on offer, since both change who stays and who comes.
     tiers: d?.cmo ? d.cmo.tiers : company.tiers,
     retention: annualPlans(d?.cfo?.annualDiscount).retention,
-    brand: clamp(company.brand + brandGain - 4.5),
-    quality: clamp(company.quality + qualityGain - 3),
-    service: clamp(company.service + serviceGain - 3.5),
+    brand: clamp(company.brand + brandGain - 4.5 * per),
+    quality: clamp(company.quality + qualityGain - 3 * per),
+    service: clamp(company.service + serviceGain - 3.5 * per),
     positioning: d?.ceo?.positioning ?? company.positioning,
     /*
      * Added to, never replaced — the same rule the engine applies. Somewhere
@@ -125,7 +127,7 @@ function withIncumbentMoves(world: World, me: Company, economy: Economy): Compan
 
 function demandAt(world: World, me: Company, year: number, economy: Economy): { total: number; bySegment: Record<string, number> } {
   const companies = withIncumbentMoves(world, me, economy);
-  const { held } = allocate(companies, world.niche, year, economy);
+  const { held } = allocate(companies, world.niche, year, economy, Math.max(1, Math.round(world.periodsPerYear ?? 1)));
   const mine = held[me.id] ?? {};
   return { total: Object.values(mine).reduce((sum, n) => sum + n, 0), bySegment: mine };
 }
@@ -149,7 +151,7 @@ export function forecastDemand(input: {
    * marketing it was never going to be able to buy.
    */
   const funded = draft && company.kind === "player" ? sanitiseAndFund(company, draft, world.niche, economy) : draft;
-  const me = projected(company, funded, world.niche.innovationPace);
+  const me = projected(company, funded, world.niche.innovationPace, 1 / Math.max(1, Math.round(world.periodsPerYear ?? 1)));
   const at = demandAt(world, me, year, economy);
 
   const held = Object.values(company.customers).reduce((sum, n) => sum + n, 0);

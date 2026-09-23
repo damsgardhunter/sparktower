@@ -20,14 +20,18 @@ interface SeasonInvite {
   name: string;
   status: "forming" | "running" | "finished" | "abandoned";
   totalYears: number;
-  yearMinutes: number | null;
+  periodMinutes: number | null;
+  cadence: string | null;
   niche: { id: string; name: string; premise: string | null };
   company: { id: string; name: string } | null;
   isMember: boolean;
   ventureId: string | null;
 }
 
-const yearLength = (minutes: number | null) =>
+/** What one decision covers, for the line under the season name. */
+const PERIOD_WORD: Record<string, string> = { yearly: "year", quarterly: "quarter", monthly: "month" };
+
+const periodLength = (minutes: number | null) =>
   minutes == null ? "a day" : minutes % 60 === 0 ? `${minutes / 60} hour${minutes === 60 ? "" : "s"}` : `${minutes} minutes`;
 
 export default function JoinSeasonPage() {
@@ -74,7 +78,7 @@ export default function JoinSeasonPage() {
       <p className="text-sm mt-3"><span className="font-medium">Market:</span> {data.niche.name}</p>
       {data.niche.premise && <p className="text-sm text-muted-foreground mt-1">{data.niche.premise}</p>}
       <div className="flex gap-4 flex-wrap text-sm text-muted-foreground mt-3">
-        <span className="flex items-center gap-1"><Clock className="h-4 w-4" /> {data.totalYears} years, each lasting {yearLength(data.yearMinutes)}</span>
+        <span className="flex items-center gap-1"><Clock className="h-4 w-4" /> {data.totalYears} {data.totalYears === 1 ? "year" : "years"} of trading, decided every {PERIOD_WORD[data.cadence ?? "yearly"]}, each lasting {periodLength(data.periodMinutes)}</span>
         <span className="flex items-center gap-1"><Users className="h-4 w-4" /> Five people run each company</span>
       </div>
 

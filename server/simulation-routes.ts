@@ -24,6 +24,7 @@ import { botsForVenture } from "@shared/simulation/bots";
 import { ensureBotUser } from "./bot-accounts";
 import { NICHES, nicheById } from "@shared/simulation/niches";
 import { ROLES, ROLE_LEVERS, ROLE_TITLES, type Role } from "@shared/simulation/types";
+import { marketNameOf, marketOf } from "./simulation-scope";
 import {
   LOBBY_SIZE, PHASE_SECONDS, assignRemaining, canClaim, nextPhase, openRoles, placeholderName,
   type Phase, type SeatView,
@@ -455,13 +456,14 @@ function pgErrorCode(err: unknown): string | undefined {
       .innerJoin(simVentures, eq(simVentures.id, simSeats.ventureId))
       .where(and(eq(simSeats.userId, req.user.id), eq(simVentures.seasonId, season.id)))
       .limit(1);
-    const niche = nicheById(season.nicheId);
+    const niche = marketOf(season);
     res.json({
       seasonId: season.id,
       name: season.name,
       status: season.status,
       totalYears: season.totalYears,
-      yearMinutes: season.yearMinutes,
+      periodMinutes: season.periodMinutes,
+      cadence: season.cadence,
       niche: { id: season.nicheId, name: niche?.name ?? season.nicheId, premise: niche?.premise ?? null },
       company: company ? { id: company.id, name: company.name } : null,
       isMember: !!member,
@@ -557,7 +559,7 @@ function pgErrorCode(err: unknown): string | undefined {
          * on a row whose whole job is being recognised at a glance.
          */
         roleTitle: r.role ? ROLE_TITLES[r.role as Role] ?? null : null,
-        niche: { id: r.nicheId, name: nicheById(r.nicheId)?.name ?? r.nicheId },
+        niche: { id: r.nicheId, name: marketNameOf(r) },
         /**
          * "forming" | "running" | "finished" | "abandoned". A venture stays in
          * phase "running" after its season ends, so this is the only thing
@@ -620,7 +622,7 @@ function pgErrorCode(err: unknown): string | undefined {
       secondsLeft: venture.phaseEndsAt ? Math.max(0, secondsLeft(venture.phaseEndsAt)) : null,
       name: venture.name,
       product: venture.product,
-      niche: season ? { id: season.nicheId, name: nicheById(season.nicheId)?.name } : null,
+      niche: season ? { id: season.nicheId, name: marketNameOf(season) } : null,
       lobbySize: LOBBY_SIZE,
       openRoles: openRoles(seats),
       /** Who's here, what they hold, and whether they chose it. */

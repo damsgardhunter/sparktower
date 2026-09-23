@@ -21,6 +21,7 @@
     "test:watch": "vitest",
     "test:unit": "vitest run --config vitest.unit.config.ts",
     "sim:scale": "tsx scripts/season-scale.mjs",
+    "sim:balance": "tsx scripts/balance-report.mjs",
     "price:model": "tsx scripts/price-model.mjs",
     "lint": "eslint .",
     "audit:deps": "node scripts/audit-dependencies.mjs",

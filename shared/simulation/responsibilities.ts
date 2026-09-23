@@ -107,6 +107,17 @@ export const UNLOCKS: Unlock[] = [
   { role: "cmo", field: "regionFocus", year: 4 },
   { role: "cmo", field: "segmentFocus", year: 4 },
   /*
+   * Going and finding a niche, from year five.
+   *
+   * Late on purpose. It is the move a company makes once it knows what it is
+   * actually good at, and a table that has not yet built anything
+   * distinctive would only carve out a corner indistinguishable from the
+   * segment it came from — which is what the mechanic would honestly give
+   * them, and a lever whose honest answer is "that did nothing" is a bad
+   * first experience of it.
+   */
+  { role: "cmo", field: "openNiche", year: 5 },
+  /*
    * Year five, the plant and the balance sheet: refinements of decisions the
    * table has already been making for four years. There is no point automating
    * a plant before anybody has built one, or selling receivables before there
@@ -131,12 +142,23 @@ const unlockOf = new Map(UNLOCKS.map((u) => [`${u.role}:${u.field}`, u.year]));
 /** The year a lever first appears, or 1 if it has always been there. */
 export const unlockYear = (role: Role, field: string): number => unlockOf.get(`${role}:${field}`) ?? 1;
 
-/** Whether a seat has this lever yet. */
-export const isUnlocked = (role: Role, field: string, year: number): boolean => year >= unlockYear(role, field);
+/**
+ * Whether a seat has this lever yet.
+ *
+ * `period` counts decisions and `periods` is how many make a year, because
+ * the schedule above is written in years and has to stay written in years. A
+ * quarterly season gated on the raw period counter handed a table every lever
+ * in the game inside nine months, and a monthly one inside three — which is
+ * not a faster game, it is the teaching order thrown away.
+ */
+export const isUnlocked = (role: Role, field: string, period: number, periods = 1): boolean =>
+  Math.floor((period - 1) / Math.max(1, periods)) + 1 >= unlockYear(role, field);
 
 /** What arrives next year, for the "coming up" line on the desk. */
-export const arrivingIn = (role: Role, year: number): string[] =>
-  UNLOCKS.filter((u) => u.role === role && u.year === year).map((u) => u.field);
+export const arrivingIn = (role: Role, period: number, periods = 1): string[] => {
+  const year = Math.floor((period - 1) / Math.max(1, periods)) + 1;
+  return UNLOCKS.filter((u) => u.role === role && u.year === year).map((u) => u.field);
+};
 
 // ─── Capacity: build, lease, sell ────────────────────────────────────────────
 

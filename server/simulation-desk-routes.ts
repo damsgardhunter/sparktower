@@ -20,6 +20,7 @@
  * argument between them rather than an ambush by the engine.
  */
 import type { Express } from "express";
+import { periodsPerYear, type Cadence } from "@shared/simulation/cadence";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db";
 import { simSeasons, simSeats, simVentures, simDecisions, simReports, simChallenges, simRecoveryMoves, users, userProfiles } from "@shared/schema";
@@ -28,6 +29,7 @@ import { enforceRateLimit, rateLimit } from "./moderation";
 import { nicheById } from "@shared/simulation/niches";
 import { marketOf } from "./simulation-scope";
 import { canEnter, continentOf, regionById } from "@shared/simulation/geography";
+import { NICHE_HEAD_START_YEARS } from "@shared/simulation/market";
 import { ROLE_TITLES, ROLE_LEVERS, type Role, type World, type Company, type Niche, type Economy } from "@shared/simulation/types";
 import type { TeamDecisions } from "@shared/simulation/decisions";
 import { LEVER_FIELDS, cleanDecision, defaultDraft, validateDecision, draftPreview, speak } from "@shared/simulation/levers";
@@ -182,6 +184,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
     if (!company) return res.status(404).json({ message: "No such company." });
 
     const year = season.year;
+    const periods = periodsPerYear(season.cadence as Cadence);
     const { decisions, filedBy } = await draftFor(venture.id, year);
     /*
      * And what the table filed last year, which is the only record of it
@@ -325,7 +328,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
        */
       fields: seat.role ? LEVER_FIELDS[seat.role as Role]
         // Only what this seat has by now: responsibilities arrive a year at a time (see UNLOCKS).
-        .filter((base) => isUnlocked(seat.role as Role, base.id, year))
+        .filter((base) => isUnlocked(seat.role as Role, base.id, year, periods))
         .map((base) => {
         // Said in this market's words first, then filled in with the choices
         // that depend on this particular company.
@@ -362,6 +365,28 @@ export function registerSimulationDeskRoutes(app: Express): void {
                 label: `Blame the ${ROLE_TITLES[r].toLowerCase()}`,
                 help: `Wins back about 70% of it, and costs that seat 25 points of loyalty. They are at ${Math.round(personOf(company, r).loyalty)}.`,
               })),
+            ],
+          };
+        }
+        /*
+         * The kinds of customer this company could go looking inside. Its own
+         * niche is left off — one a season — and so is a segment somebody has
+         * already carved this company's corner out of.
+         */
+        if (field.id === "openNiche") {
+          const opened = ((season.world as World | null)?.openedNiches ?? []);
+          if (opened.some((o) => o.openedBy === company.id)) return { ...field, options: [] };
+          return {
+            ...field,
+            options: [
+              { value: "", label: "Not this year", help: "Keep the year's research money." },
+              ...niche.segments
+                .filter((seg) => !opened.some((o) => o.id === seg.id))
+                .map((seg) => ({
+                  value: seg.id,
+                  label: `Look inside ${seg.name.toLowerCase()}`,
+                  help: `${seg.description} Costs ${researchCost(niche).toLocaleString()}, and what you find depends on what you are already better at than everyone else.`,
+                })),
             ],
           };
         }
@@ -520,7 +545,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
       },
       /** The levers this seat gets next year, by label, so nobody is surprised by them. */
       arrivingNextYear: seat.role
-        ? arrivingIn(seat.role as Role, year + 1).map((id) => LEVER_FIELDS[seat.role as Role].find((f) => f.id === id)?.label ?? id)
+        ? arrivingIn(seat.role as Role, year + 1, periods).map((id) => LEVER_FIELDS[seat.role as Role].find((f) => f.id === id)?.label ?? id)
         : [],
       /** What to show in the form: what they filed already, else last year's, else a sensible opening. */
       draft: seat.role
@@ -696,6 +721,41 @@ export function registerSimulationDeskRoutes(app: Express): void {
        * before the year runs and what the engine does when it runs are the
        * same rule. The screen's job is to put a face next to each vote.
        */
+      /*
+       * The niche this table went and found, if they have one.
+       *
+       * Worth its own block rather than being left to be inferred from the
+       * segment list: a table that spent a year's research on this should be
+       * told what it bought, how long the run at those people lasts, and —
+       * the part they will most want to know — whether somebody else has
+       * turned up in the same corner.
+       */
+      ours: (() => {
+        const opened = ((season.world as World | null)?.openedNiches ?? []);
+        const mine = opened.find((o) => o.openedBy === venture.id || (o.alsoFoundBy ?? []).some((a) => a.companyId === venture.id));
+        if (!mine) return null;
+
+        const segment = niche.segments.find((sg) => sg.id === mine.id);
+        const parent = niche.segments.find((sg) => sg.id === mine.parentId);
+        const sharers = [mine.openedBy, ...(mine.alsoFoundBy ?? []).map((a) => a.companyId)].filter((id) => id !== venture.id);
+        const since = year - mine.openedInYear;
+        return {
+          id: mine.id,
+          name: mine.name,
+          foundInYear: mine.openedInYear,
+          from: parent?.name ?? mine.parentId,
+          people: segment?.size ?? 0,
+          /** What they pay against the segment they came from. */
+          premium: Math.round((mine.priceIndex - 1) * 100),
+          /** Years left before everybody else has noticed. Zero means they have. */
+          headStartLeft: Math.max(0, NICHE_HEAD_START_YEARS - since),
+          /** Anybody else who went looking in the same place and found the same people. */
+          sharedWith: sharers.map((id) => world.companies.find((c) => c.id === id)?.name ?? "Another company"),
+          /** How many of these people are yours. */
+          held: Math.round(company.customers?.[mine.id] ?? 0),
+        };
+      })(),
+
       expansion: (() => {
         /*
          * Nothing at all if the operations seat is gone.
@@ -709,7 +769,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
          */
         const announced = company.expanding
           || !company.seats.includes("coo")
-          || !isUnlocked("coo", "expand", year)
+          || !isUnlocked("coo", "expand", year, periods)
           ? null
           : announcedRegion({ niche, seasonId: season.id, year, open: company.cities ?? [] });
         if (!announced) return null;
@@ -744,7 +804,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
       productRisk: {
         security: Math.round(company.security ?? 0),
         data: Math.round(company.data ?? 0),
-        breachChance: isUnlocked("cto", "securitySpend", year) ? Math.round(breachChance(company.security, company.techDebt) * 100) : 0,
+        breachChance: isUnlocked("cto", "securitySpend", year, periods) ? Math.round(breachChance(company.security, company.techDebt) * 100) : 0,
         outageChance: Math.round(outageChance(company.techDebt, 0) * 100),
         features: (company.features ?? []).map((f) => ({
           id: f.id, name: f.name, segment: f.segment, mode: f.mode,
@@ -818,6 +878,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
 
     const niche = marketOf(season)!;
     const year = season.year;
+    const periods = periodsPerYear(season.cadence as Cadence);
     const world = { ...(season.world as World), niche, year };
 
     const { decisions: filed } = await draftFor(venture.id, year);
@@ -834,7 +895,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
     if (seat.role && typeof req.query.draft === "string" && req.query.draft.length < 8_000) {
       try {
         const raw = JSON.parse(req.query.draft);
-        draft = { role: seat.role as Role, decision: cleanDecision(seat.role as Role, raw, niche.cities.map((c) => c.id), { year: season.year, segmentIds: niche.segments.map((s) => s.id) }) };
+        draft = { role: seat.role as Role, decision: cleanDecision(seat.role as Role, raw, niche.cities.map((c) => c.id), { year: season.year, periods: periodsPerYear(season.cadence as Cadence), segmentIds: niche.segments.map((s) => s.id) }) };
       } catch {
         return res.status(400).json({ message: "That draft couldn't be read." });
       }
@@ -902,7 +963,7 @@ export function registerSimulationDeskRoutes(app: Express): void {
 
     // Only the fields this seat owns, taken from the lever list rather than
     // from the request — the same cleaning a bot's decision goes through.
-    const clean = cleanDecision(role, payload, niche.cities.map((c) => c.id), { year: season.year, segmentIds: niche.segments.map((s) => s.id) });
+    const clean = cleanDecision(role, payload, niche.cities.map((c) => c.id), { year: season.year, periods: periodsPerYear(season.cadence as Cadence), segmentIds: niche.segments.map((s) => s.id) });
 
     await db.insert(simDecisions)
       .values({ ventureId: venture.id, userId: req.user.id, role, year: season.year, payload: clean, submittedAt: new Date() })

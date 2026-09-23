@@ -19,6 +19,7 @@
  * actually loses players.
  */
 import { describe, it, expect } from "vitest";
+import { botDecision, type BotSkill } from "@shared/simulation/bots";
 import { resolveYear } from "@shared/simulation/resolve";
 import { forecastDemand } from "@shared/simulation/forecast";
 import { buildWorld, economyFor, decisionsForYear, SEASON_YEARS } from "@shared/simulation/season";
@@ -425,4 +426,60 @@ describe("a season is a story, not a coin flip", () => {
     const keepsGoing = season(niche, grower);
     expect(stopsEarly.share).toBeLessThan(keepsGoing.share);
   });
+});
+
+/*
+ * Skill has to be worth something.
+ *
+ * For a long time it was not: the deliberately weak `filler` bot and the
+ * `survivor` tier built to play better finished 168 seasons within a point of
+ * each other, and on survival the weak one was ahead. A game whose purpose is
+ * teaching people how to enter a market and survive cannot be indifferent to
+ * how well it is played, so this is a guard, not a nicety.
+ */
+describe("does playing well pay", () => {
+  const MARKETS = ["dating_apps", "podcasts", "mmos", "project_saas"] as const;
+  const YEARS = 14;
+
+  const play = (nicheId: string, skill: BotSkill, seed: string) => {
+    const niche = nicheById(nicheId)!;
+    let world: World = buildWorld({ seasonId: seed, niche, teams: [{ id: "us", name: "Us", seats: [...ROLES] }] });
+    let prev: Record<string, unknown> = {};
+    for (let y = 1; y <= YEARS; y++) {
+      const me = world.companies.find((c) => c.id === "us");
+      if (!me || me.bankruptSince) return { alive: false, cash: me?.cash ?? 0 };
+      const d: Record<string, unknown> = { companyId: "us" };
+      for (const r of ROLES) {
+        d[r] = botDecision({
+          ventureId: "us", year: y, role: r, company: me,
+          previous: prev[r] as Record<string, unknown> | undefined,
+          niche, rivals: world.companies.filter((c) => c.id !== "us"), skill,
+        });
+      }
+      prev = d;
+      world = resolveYear({ ...world, year: y }, [d as never]).world;
+    }
+    const e = world.companies.find((c) => c.id === "us");
+    return { alive: !!e && !e.bankruptSince, cash: e?.cash ?? 0 };
+  };
+
+  const sweep = (skill: BotSkill) => {
+    let richer = 0, runs = 0;
+    for (const m of MARKETS) {
+      for (let i = 0; i < 4; i++) {
+        const r = play(m, skill, `skill-${m}-${i}`);
+        runs++;
+        // Started on £6m: ending above it is the plainest test of a good season.
+        if (r.alive && r.cash > 6_000_000) richer++;
+      }
+    }
+    return richer / runs;
+  };
+
+  it("pays a survivor better than a filler, and by a margin worth the name", () => {
+    const good = sweep("survivor");
+    const weak = sweep("filler");
+    // A real gap, not noise. Measured at ~13 points over 84 seasons a side.
+    expect(good).toBeGreaterThan(weak + 0.1);
+  }, 120_000);
 });

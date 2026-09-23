@@ -7,7 +7,10 @@
  * and can change without touching the others. This file only decides which
  * one is showing and what the company is.
  */
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import { useParams, useLocation, useSearch } from "wouter";
 import { Loader2, ArrowLeft, Building2 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -55,11 +58,41 @@ const TAB_ALIASES: Record<string, string> = { simulations: "training", seasons: 
 
 export default function CompanyPage() {
   const { id } = useParams<{ id: string }>();
+  const { toast } = useToast();
   const [, navigate] = useLocation();
   const search = useSearch();
   const initial = new URLSearchParams(search).get("tab");
   const asked = initial ? TAB_ALIASES[initial] ?? initial : null;
   const tab = TABS.some((t) => t.id === asked) ? asked! : "run";
+
+  /*
+   * Coming back from paying for seats.
+   *
+   * The checkout has always appended `?seats=bought`, and nothing read it —
+   * so somebody paid, got redirected, and landed on a page that behaved as
+   * though nothing had happened. The seats were credited by the webhook; the
+   * only thing missing was saying so.
+   *
+   * Said once and then taken out of the address, so a reload or a shared
+   * link does not congratulate somebody on a purchase they did not make.
+   */
+  const seats = new URLSearchParams(search).get("seats");
+  useEffect(() => {
+    if (seats !== "bought" && seats !== "cancelled") return;
+    if (seats === "bought") {
+      toast({
+        title: "Seats added",
+        description: "They stay with the company — every season after this one is already paid for.",
+      });
+      // The balance on screen is a purchase out of date.
+      queryClient.invalidateQueries({ queryKey: [`/api/companies/${id}/simulation-seats`] });
+    } else {
+      toast({ title: "Nothing was charged", description: "You can pick up where you left off whenever you like." });
+    }
+    const rest = new URLSearchParams(search);
+    rest.delete("seats");
+    navigate(`/companies/${id}${rest.toString() ? `?${rest}` : ""}`, { replace: true });
+  }, [seats, search, id, navigate, toast]);
 
   const { data, isLoading, isError } = useQuery<CompanyView>({ queryKey: [`/api/companies/${id}`] });
 

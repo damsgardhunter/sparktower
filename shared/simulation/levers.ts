@@ -108,6 +108,8 @@ export const LEVER_FIELDS: Record<Role, LeverField[]> = {
       help: "The share of this year's marketing aimed at each region you sell in. A region pushed harder than its size is worth up to 40% more there, and one left short is worth up to 40% less — so this is concentration, not extra reach. Regions you leave out share what is left, evenly by size. Who lives where differs: pushing into a region full of the people you are for is worth more than pushing into the biggest one." },
     { id: "segmentFocus", label: "Who the marketing is for", kind: "allocation", min: 0, max: 100, step: 5,
       help: "The share of the year's marketing aimed at each kind of customer. A segment pushed harder than its size is worth up to 25% more, one left short up to 25% less. A campaign aimed at everybody is aimed at nobody — and one aimed at a segment you have priced out of reach is money spent twice on the same mistake." },
+    { id: "openNiche", label: "Go and find a niche", kind: "choice", options: [],
+      help: "Pick a kind of customer and go looking inside it for the people who want what you are already good at. They pay a little more, they are harder to shift once they choose, and for a while nobody else is even describing them as a group. It costs a year of marketing to find them and you only own them while you are the only one who fits — the better you are at something in particular, the more of them there turn out to be." },
     { id: "tiers", label: "Price tiers", kind: "tiers", min: 0, step: 1,
       help: "A price for each segment instead of one for everybody. Nought is a free tier: advertising money and word of mouth, and every paying tier leaks towards it. The wider the gap between a tier and the cheapest one, the more of that segment works out how to pay less." },
   ],
@@ -488,6 +490,8 @@ export function cleanDecision(
      * dropped, so it cannot be filed early by a client that shows it anyway.
      */
     year?: number;
+    /** How many decisions make a year, since `year` counts decisions. */
+    periods?: number;
     /** The market's segments: price tiers can only be set for ones that exist. */
     segmentIds?: readonly string[];
   } = {},
@@ -495,7 +499,7 @@ export function cleanDecision(
   const source = payload ?? {};
   const clean: Record<string, any> = {};
   for (const field of LEVER_FIELDS[role]) {
-    if (context.year !== undefined && !isUnlocked(role, field.id, context.year)) continue;
+    if (context.year !== undefined && !isUnlocked(role, field.id, context.year, context.periods ?? 1)) continue;
     const raw = source[field.id];
     switch (field.kind) {
       case "choice":

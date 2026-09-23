@@ -57,6 +57,7 @@ import { nicheById } from "@shared/simulation/niches";
 import { ROLE_TITLES, ROLE_LEVERS, type Role, type World, type Company, type Niche } from "@shared/simulation/types";
 import { postureBlurb } from "@shared/simulation/incumbents";
 import { notify } from "./notifications";
+import { marketOf } from "./simulation-scope";
 
 /** The seat this person holds in this venture, or nothing. */
 async function seatOf(ventureId: string, userId: string) {
@@ -80,7 +81,7 @@ async function standing(ventureId: string, userId: string) {
   if (!seat) return null;
   const [season] = await db.select().from(simSeasons).where(eq(simSeasons.id, venture.seasonId));
   if (!season?.world) return null;
-  const niche = nicheById(season.nicheId);
+  const niche = marketOf(season);
   if (!niche) return null;
   return { venture, seat, season, niche, world: season.world as World };
 }

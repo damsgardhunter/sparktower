@@ -26,6 +26,7 @@ import {
   simSeasons, simVentures, simSeats, simDecisions, simReports,
   simChallenges, simListings, simBids, simRecoveryMoves, simOffers, users,
 } from "@shared/schema";
+import { periodsPerYear, totalPeriods, type Cadence } from "@shared/simulation/cadence";
 import { nicheById } from "@shared/simulation/niches";
 import { nicheForScope, type Scope } from "@shared/simulation/geography";
 import { resolveYear } from "@shared/simulation/resolve";
@@ -36,6 +37,7 @@ import {
 } from "@shared/simulation/season";
 import { advanceVenture } from "./simulation-routes";
 import { fileBotBids, fileBotDecisions, fillWaitingLobbies } from "./simulation-bots";
+import type { BotSkill } from "@shared/simulation/bots";
 import { marketListings, resolveBids, biddableFunds, type Bid, type Listing } from "@shared/simulation/assets";
 import { applyRecovery, reviewCovenant, type RecoveryKind } from "@shared/simulation/recovery";
 import { challengeFor, checkChallenge, applyReward, discretionarySpend, type Challenge } from "@shared/simulation/challenges";
@@ -44,6 +46,7 @@ import { closeYear, stretchChallenge, whoWasRight } from "@shared/simulation/peo
 import { takings } from "@shared/simulation/responsibilities";
 import { applySeatMoves } from "./simulation-people";
 import type { Company, CompanyAsset } from "@shared/simulation/types";
+import { rawMarketOf } from "./simulation-scope";
 
 /** What the market did to one company in one year. */
 type MarketOutcome = { kind: "won" | "lost" | "sold" | "unsold"; text: string };
@@ -99,16 +102,25 @@ async function withLock<T>(key: number, run: () => Promise<T>): Promise<T | null
 }
 
 /**
- * How long one simulated year lasts in this season.
+ * How much real time one decision gets in this season.
  *
- * A day, unless a company running a private training season asked for
- * minutes (`yearMinutes`, see sim_seasons in shared/schema.ts): a workshop
- * that meets for an afternoon cannot wait a day between years. Public seasons
- * never set it, so they are unchanged. Every place that schedules a year goes
- * through this, so the two clocks cannot drift apart.
+ * A day, unless a company running a private training season asked for minutes
+ * (`periodMinutes`, see sim_seasons in shared/schema.ts): a workshop that
+ * meets for an afternoon cannot wait a day between decisions. Public seasons
+ * never set it, so they are unchanged.
+ *
+ * A *period* is one decision — a year, a quarter or a month of simulated time
+ * depending on the season's cadence — and how long it lasts in the real world
+ * is deliberately unrelated to how much simulated time it covers. A monthly
+ * season still gets a day per decision by default; what it does not get is
+ * fourteen simulated years, because that would be a hundred and sixty-eight
+ * days of play. See `DEFAULT_YEARS` in `cadence.ts`.
+ *
+ * Every place that schedules a tick goes through this, so the two clocks
+ * cannot drift apart.
  */
-export const yearMsOf = (season: { yearMinutes: number | null }): number =>
-  season.yearMinutes ? season.yearMinutes * 60_000 : DAY_MS;
+export const periodMsOf = (season: { periodMinutes: number | null }): number =>
+  season.periodMinutes ? season.periodMinutes * 60_000 : DAY_MS;
 
 /**
  * Push every stalled lobby forward.
@@ -251,6 +263,13 @@ export type StartOutcome =
  * the race before this existed are swept by `retireOrphanedRooms`.
  */
 export async function startSeason(seasonId: string): Promise<StartOutcome> {
+  /*
+   * The season's bot difficulty, read inside the transaction and used after
+   * it: the season row is not in scope once the commit has happened, and the
+   * bots are filed out there so a failure to file cannot roll back a started
+   * season.
+   */
+  let botSkill: BotSkill = "filler";
   const result = await db.transaction(async (tx): Promise<{ outcome: StartOutcome; world?: World; niche?: NonNullable<ReturnType<typeof nicheById>> }> => {
     const [peek] = await tx.select({ nicheId: simSeasons.nicheId, companyId: simSeasons.companyId })
       .from(simSeasons).where(eq(simSeasons.id, seasonId));
@@ -288,7 +307,7 @@ export async function startSeason(seasonId: string): Promise<StartOutcome> {
       console.warn(`[sim] season ${season.id} was abandoned with ${playing.length} company(s) still running; starting it anyway`);
     }
 
-    const market = nicheById(season.nicheId);
+    const market = rawMarketOf(season);
     if (!market) {
       console.error(`[sim] season ${season.id} names a market that no longer exists: ${season.nicheId}`);
       if (season.status !== "abandoned") {
@@ -325,6 +344,7 @@ export async function startSeason(seasonId: string): Promise<StartOutcome> {
     const world = buildWorld({
       seasonId: season.id,
       niche,
+      cadence: season.cadence as Cadence,
       teams: playing.map((v) => ({
         id: v.id,
         name: v.name ?? "Unnamed",
@@ -334,7 +354,7 @@ export async function startSeason(seasonId: string): Promise<StartOutcome> {
     });
 
     const startsAt = new Date(Date.now() + FIRST_YEAR_DELAY_MS);
-    const nextTickAt = tickDueAt(startsAt, 1, yearMsOf(season));
+    const nextTickAt = tickDueAt(startsAt, 1, periodMsOf(season));
     // Conditional on the status still being the one that was read, so two
     // processes starting the same season at the same moment cannot both seed a
     // world. (The season lock already serialises them; this keeps the rule
@@ -346,6 +366,8 @@ export async function startSeason(seasonId: string): Promise<StartOutcome> {
       .returning({ id: simSeasons.id });
     if (claimed.length === 0) return { outcome: { outcome: "not_forming" } };
 
+    // The season row is not in scope after the commit, and the bots are filed there.
+    botSkill = (season.botSkill as BotSkill) ?? "filler";
     return { outcome: { outcome: "started", startsAt, nextTickAt, teams: playing.length }, world, niche };
   });
 
@@ -354,7 +376,7 @@ export async function startSeason(seasonId: string): Promise<StartOutcome> {
     // nothing of their own to aim at. After the commit: these read the seats
     // through their own connections.
     await setChallenges({ world: result.world, year: 1 });
-    await fileBotDecisionsFor(result.world, 1, result.niche, seasonId);
+    await fileBotDecisionsFor(result.world, 1, result.niche, seasonId, botSkill);
     console.log(`[sim] season ${seasonId} (${result.niche.name}) starts with ${result.outcome.teams} team(s)`);
   }
   return result.outcome;
@@ -468,7 +490,7 @@ async function resolveSeasonYear(seasonId: string, now: Date): Promise<number | 
   if (!season || season.status !== "running" || !season.world) return null;
   if (!season.nextTickAt || season.nextTickAt > now) return null;
 
-  const market = nicheById(season.nicheId);
+  const market = rawMarketOf(season);
   if (!market) return null;
   /*
    * Scoped the same way it was when the world was built, for the same reason
@@ -644,6 +666,8 @@ async function resolveSeasonYear(seasonId: string, now: Date): Promise<number | 
     niche,
     seasonId,
     world,
+    // A season can ask for rivals that are actually trying. See `BotSkill`.
+    skill: (season.botSkill as BotSkill) ?? "filler",
   }).catch((err) => console.error(`[sim] bot decisions for season ${seasonId} failed:`, err));
 
   /*
@@ -713,7 +737,7 @@ async function resolveSeasonYear(seasonId: string, now: Date): Promise<number | 
     if (overruled) overrules.set(team.id, overruled);
   }
 
-  const economy = economyFor(seasonId, year);
+  const economy = economyFor(seasonId, year, periodsPerYear(season.cadence as Cadence));
   const { world: nextWorld, reports } = resolveYear(world, decisions, economy);
 
   // Name the empty chairs, so a thin year has an explanation attached to it.
@@ -888,10 +912,14 @@ async function resolveSeasonYear(seasonId: string, now: Date): Promise<number | 
     report.bankrupt = !!company.bankruptSince;
   }
 
-  const finished = seasonOver(year + 1, season.totalYears);
-  const yearMs = yearMsOf(season);
+  /*
+   * `year` counts *periods*, so the finish line is counted in periods too — a
+   * four-year quarterly season is sixteen decisions, not four.
+   */
+  const finished = seasonOver(year + 1, totalPeriods(season.totalYears, season.cadence as Cadence));
+  const periodMs = periodMsOf(season);
   let startsAt = season.startsAt;
-  let nextTickAt = startsAt && !finished ? tickDueAt(startsAt, year + 1, yearMs) : null;
+  let nextTickAt = startsAt && !finished ? tickDueAt(startsAt, year + 1, periodMs) : null;
   /*
    * Never schedule the next year in the past.
    *
@@ -909,8 +937,8 @@ async function resolveSeasonYear(seasonId: string, now: Date): Promise<number | 
    * The years that were missed are not made up; they were never played.
    */
   if (startsAt && nextTickAt && nextTickAt.getTime() <= now.getTime()) {
-    startsAt = new Date(now.getTime() - year * yearMs);
-    nextTickAt = tickDueAt(startsAt, year + 1, yearMs);
+    startsAt = new Date(now.getTime() - year * periodMs);
+    nextTickAt = tickDueAt(startsAt, year + 1, periodMs);
   }
 
   let saved = false;
@@ -966,14 +994,19 @@ async function resolveSeasonYear(seasonId: string, now: Date): Promise<number | 
     }
 
     /*
-     * Each venture keeps a copy of its own company for the screens, written in
-     * the same transaction as the world it came from. Derived, never the
-     * source: the season's world is what the next tick reads.
+     * Each venture's phase, written in the same transaction as the world it
+     * came from.
+     *
+     * This used to write a copy of the company here too, "for the screens" —
+     * a whole engine Company per venture per tick, which nothing has ever
+     * read. Every screen reads the season's world, which is the source. A
+     * derived copy nobody reads is not a cache, it is a second truth waiting
+     * to disagree with the first.
      */
     for (const company of nextWorld.companies) {
       if (company.kind !== "player") continue;
       await tx.update(simVentures)
-        .set({ state: company, phase: finished ? "retired" : "running" })
+        .set({ phase: finished ? "retired" : "running" })
         .where(eq(simVentures.id, company.id));
     }
   });
@@ -986,7 +1019,7 @@ async function resolveSeasonYear(seasonId: string, now: Date): Promise<number | 
 
   // Next year's objectives, set against where each company now stands.
   if (!finished) await setChallenges({ world: nextWorld, year: year + 1 });
-  if (!finished) await fileBotDecisionsFor(nextWorld, year + 1, niche, seasonId);
+  if (!finished) await fileBotDecisionsFor(nextWorld, year + 1, niche, seasonId, (season.botSkill as BotSkill) ?? "filler");
 
   return year;
 }
@@ -1013,9 +1046,9 @@ async function resolveSeasonYear(seasonId: string, now: Date): Promise<number | 
  * Never fatal: a season must start, and a year must open, even if the bots'
  * filing fails. The resolution-time call catches anything missed here.
  */
-async function fileBotDecisionsFor(world: World, year: number, niche: any, seasonId: string): Promise<void> {
+async function fileBotDecisionsFor(world: World, year: number, niche: any, seasonId: string, skill?: BotSkill): Promise<void> {
   const teams = world.companies.filter((c) => c.kind === "player");
-  await fileBotDecisions({ companies: teams.map((t) => ({ id: t.id, company: t })), year, niche, seasonId, world })
+  await fileBotDecisions({ companies: teams.map((t) => ({ id: t.id, company: t })), year, niche, seasonId, world, skill })
     .catch((err) => console.error(`[sim] bot decisions for season ${seasonId} year ${year} failed:`, err));
 }
 
@@ -1171,7 +1204,7 @@ async function settleMarket(input: {
   const forced = new Set(open.filter((row) => row.forced).map((row) => row.id));
 
   const listings: Listing[] = [
-    ...marketListings({ seasonId, year, niche }),
+    ...marketListings({ seasonId, year, niche, periods: world.periodsPerYear ?? 1 }),
     ...open.map((row) => ({
       id: row.id,
       asset: row.asset as CompanyAsset,

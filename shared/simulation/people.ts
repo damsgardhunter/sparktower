@@ -168,9 +168,10 @@ export function payEffect(payPct: number | undefined): { cost: number; output: n
  * market, and more often the further below: at 80% of market, about two years
  * in five. What it takes is a share of what the product team has in flight.
  */
-export function poached(pay: number, seed: string): { hit: boolean; share: number } {
+/** `per` is one period's share of a year: people are poached at an annual rate, not once a quarter. */
+export function poached(pay: number, seed: string, per = 1): { hit: boolean; share: number } {
   if (pay >= 1) return { hit: false, share: 0 };
-  const chance = Math.min(0.9, (1 - pay) * 2);
+  const chance = Math.min(0.9, (1 - pay) * 2) * per;
   const hit = rng(seed)() < chance;
   return { hit, share: hit ? 0.25 : 0 };
 }
