@@ -51,6 +51,7 @@ import {
   tierNeedsShipping, type MerchConfig,
 } from "@shared/backing";
 import { rateLimit } from "./moderation";
+import { isOnTeam } from "./project-visibility";
 import { campaignDecided, pledgeReceived, pledgesReleased } from "./backing-notices";
 import { openPii, sealPii } from "./pii";
 import { ensureStripeCustomer } from "./stripe-customer";
@@ -561,7 +562,7 @@ export function registerBackingRoutes(app: Express) {
    * Rendered by the same function that produces the print file, so what's on
    * screen is what goes on the shirt.
    */
-  app.get("/api/projects/:id/merch/preview.png", async (req, res) => {
+  app.get("/api/projects/:id/merch/preview.png", rateLimit("render"), async (req: any, res) => {
     try {
       const face = String(req.query.face || "front");
       if (!["front", "back", "creator"].includes(face)) {
@@ -573,10 +574,28 @@ export function registerBackingRoutes(app: Express) {
         campaign: projectBackingCampaigns,
         title: projects.title,
         logoUrl: projects.logoUrl,
+        ownerId: projects.ownerId,
+        isPrivate: projects.isPrivate,
       }).from(projects)
         .leftJoin(projectBackingCampaigns, eq(projectBackingCampaigns.projectId, projects.id))
         .where(eq(projects.id, req.params.id));
       if (!row) return res.status(404).json({ message: "Project not found" });
+
+      /*
+       * A private project is private, including its name and its logo.
+       *
+       * This route read the projects table by id with no condition on it at
+       * all, so anybody holding a project id — and an id is in every URL its
+       * owner has ever pasted to a collaborator — could have this render a
+       * private project's branding into a PNG. Private projects are the one
+       * thing this product tells somebody is not visible.
+       *
+       * The same silence the rest of the product gives: a stranger is told the
+       * project is not there, not that it is and they may not look.
+       */
+      if (row.isPrivate && !(await isOnTeam(req.user?.id, { id: req.params.id, ownerId: row.ownerId }))) {
+        return res.status(404).json({ message: "Project not found" });
+      }
 
       const config = effectiveMerchConfig(row.campaign?.merchConfig, row.logoUrl);
 
@@ -603,7 +622,7 @@ export function registerBackingRoutes(app: Express) {
    * campaign's current config — a creator who swaps their logo after someone
    * ordered must not change what that person already bought.
    */
-  app.get("/api/merch-orders/:orderId/print/:face.png", async (req, res) => {
+  app.get("/api/merch-orders/:orderId/print/:face.png", rateLimit("render"), async (req, res) => {
     try {
       const face = String(req.params.face);
       if (!["front", "back", "creator"].includes(face)) {
@@ -618,7 +637,7 @@ export function registerBackingRoutes(app: Express) {
       }).from(projectMerchOrders)
         .innerJoin(projects, eq(projects.id, projectMerchOrders.projectId))
         .leftJoin(projectBackingCampaigns, eq(projectBackingCampaigns.projectId, projectMerchOrders.projectId))
-        .where(eq(projectMerchOrders.id, req.params.orderId));
+        .where(eq(projectMerchOrders.id, String(req.params.orderId)));
       if (!row) return res.status(404).json({ message: "Not found" });
 
       const snapshot = (row.order.items as { artwork?: Record<string, unknown> }[])?.[0]?.artwork;

@@ -235,6 +235,23 @@ export const RATE_LIMITS = {
     max: 20, windowMinutes: 60,
     message: "You've sent a lot of applications this hour. Try again later.",
   },
+  /**
+   * Drawing an image on demand: the merch preview and the print file.
+   *
+   * Both are reads, so the global write floor never sees them, and both are
+   * deliberately open — Printful is not going to sign in. What they cost is
+   * the problem: each one composites with sharp and lays out text with
+   * opentype, and the print file does it at 4500×5400. On one instance that
+   * also runs the background loops, an unauthenticated loop over either is a
+   * cheap way to take the site down.
+   *
+   * Generous enough that a creator dragging a slider in the campaign editor
+   * never sees it, and low enough that a script does.
+   */
+  render: {
+    max: 60, windowMinutes: 10,
+    message: "That's a lot of images to draw at once. Try again in a few minutes.",
+  },
   /** Starting or queueing co-founder sprints, and turning one into a project. */
   sprint: {
     max: 10, windowMinutes: 60,
