@@ -201,6 +201,10 @@ describe("the price list", () => {
       codeAudit: 500,
       business: 3000,
       seasonSeat: 300,
+      // "What would it take?", priced with the roadmap and the document
+      // because it is the same kind of thing: one commissioned piece of work
+      // with an answer at the end.
+      wwit: 300,
     });
     // Whole dollars, on purpose: the point of leaving credits is that nobody
     // has to convert a number into money in their head.

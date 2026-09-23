@@ -54,7 +54,8 @@ export type PricedOutcomeId =
   | "document"
   | "codeAudit"
   | "business"
-  | "seasonSeat";
+  | "seasonSeat"
+  | "wwit";
 
 /**
  * What each outcome costs, in cents. Whole dollars on purpose: the point of
@@ -70,6 +71,12 @@ export type PricedOutcomeId =
  *                project. The deliberate "just do it all" purchase.
  *   seasonSeat — one seat in a company's private training season. The public
  *                market stays free for everyone, always.
+ *   wwit       — "What would it take?": the route from where a company is to a
+ *                size it picks, built from its own check-in numbers. Priced
+ *                with the roadmap and the document because it is the same kind
+ *                of thing — one commissioned piece of work with an answer at
+ *                the end — and it is included in `business`, which buys the
+ *                lot. A project that already ran it on credits keeps it.
  */
 export const OUTCOME_PRICE_CENTS: Record<PricedOutcomeId, number> = {
   dayPass: 100,
@@ -78,6 +85,7 @@ export const OUTCOME_PRICE_CENTS: Record<PricedOutcomeId, number> = {
   codeAudit: 500,
   business: 3000,
   seasonSeat: 300,
+  wwit: 300,
 };
 
 /**
@@ -223,7 +231,6 @@ export const CHARGE_FOR: Record<NovaActionId, NovaChargeKind> = {
   resumeEvaluation: "small",
   matchExplanation: "small",
   pricingAnalysis: "small",
-  whatWouldItTake: "small",
   pitchDeckOutline: "small",
   investorReadinessScore: "small",
   mockInterviewQuestion: "small",
@@ -258,6 +265,8 @@ export const CHARGE_FOR: Record<NovaActionId, NovaChargeKind> = {
 
   /** The whole path, once, for one project. Everything on it is free afterwards. */
   buildMyBusiness: "business",
+
+  whatWouldItTake: "wwit",
 };
 
 /** What one action costs and how, ready to put in front of a person. */
@@ -299,6 +308,10 @@ export const OUTCOME_COPY: Record<PricedOutcomeId, { name: string; blurb: string
     name: "Nova builds the whole business",
     blurb: "Every section of the path built out, end to end, for one project.",
   },
+  wwit: {
+    name: "What would it take?",
+    blurb: "Pick a size — $1m, $100m, $1bn or $50bn a year — and Nova builds the route there from your own check-in numbers: the gap, the stages, what breaks first, and an honest verdict on whether it's reachable from here.",
+  },
   seasonSeat: {
     name: "Training season seat",
     blurb: "Per seat, when a company runs the market simulation privately. The first season is free, and the public market always is.",
@@ -337,6 +350,7 @@ export const PRICING_ROWS: PricingRow[] = [
   { label: OUTCOME_COPY.roadmap.name, price: formatMoney(OUTCOME_PRICE_CENTS.roadmap), detail: OUTCOME_COPY.roadmap.blurb },
   { label: OUTCOME_COPY.document.name, price: formatMoney(OUTCOME_PRICE_CENTS.document), detail: OUTCOME_COPY.document.blurb },
   { label: OUTCOME_COPY.codeAudit.name, price: formatMoney(OUTCOME_PRICE_CENTS.codeAudit), detail: OUTCOME_COPY.codeAudit.blurb },
+  { label: OUTCOME_COPY.wwit.name, price: formatMoney(OUTCOME_PRICE_CENTS.wwit), detail: OUTCOME_COPY.wwit.blurb },
   { label: OUTCOME_COPY.business.name, price: formatMoney(OUTCOME_PRICE_CENTS.business), detail: OUTCOME_COPY.business.blurb },
   { label: OUTCOME_COPY.seasonSeat.name, price: `${formatMoney(OUTCOME_PRICE_CENTS.seasonSeat)}/seat`, detail: OUTCOME_COPY.seasonSeat.blurb },
 ];

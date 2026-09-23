@@ -64,9 +64,21 @@ export function openPayment(detail: PaymentEventDetail) {
   window.dispatchEvent(new CustomEvent<PaymentEventDetail>(PAYMENT_EVENT, { detail }));
 }
 
-/** What the account has, for anything that wants to show it before a price is refused. */
+/**
+ * What the account has, for anything that wants to show it before a price is
+ * refused.
+ *
+ * The route answers with the wallet *and* the price list, the notice and the
+ * recent ledger, so this unwraps it. Typed as the envelope rather than as the
+ * wallet, because getting that wrong is silent: every balance on screen simply
+ * renders empty.
+ */
 export function useWallet(enabled = true) {
-  return useQuery<Wallet>({ queryKey: [PAY_ENDPOINTS.wallet], enabled });
+  return useQuery({
+    queryKey: [PAY_ENDPOINTS.wallet],
+    enabled,
+    select: (d: { wallet: Wallet }) => d.wallet,
+  });
 }
 
 function AllowanceLine({ wallet }: { wallet: Wallet }) {

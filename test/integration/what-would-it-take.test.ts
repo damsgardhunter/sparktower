@@ -51,9 +51,10 @@ vi.mock("openai", () => {
 const { getTestApp, closeTestApp } = await import("../helpers/app");
 const { verifyEmail } = await import("../helpers/verify-email");
 const { db } = await import("../../server/db");
-const { projectKanbanTasks, whatWouldItTakeRoadmaps } = await import("@shared/schema");
+const { projectKanbanTasks, users, whatWouldItTakeRoadmaps } = await import("@shared/schema");
 const { weekOf, todayYmd, addDays } = await import("@shared/company-rhythm");
-const { CREDIT_COSTS } = await import("@shared/plans");
+const { OUTCOME_PRICE_CENTS } = await import("@shared/plans");
+const { eq: eqOp } = await import("drizzle-orm");
 
 afterAll(async () => { await closeTestApp(); });
 
@@ -68,6 +69,12 @@ async function person(app: any) {
     .send({ email, password: "a-good-passphrase-here", firstName: `W${n}` });
   expect(res.status, `${res.status}: ${(res.text ?? "").slice(0, 300)}`).toBe(201);
   await verifyEmail(app, email, ip);
+  /*
+   * Enough to buy a few roadmaps. Everyone starts funded so that a test which
+   * is about margins or stages doesn't fail for want of a balance; the tests
+   * that are about money say so, and check what moved.
+   */
+  await db.update(users).set({ balanceCents: OUTCOME_PRICE_CENTS.wwit * 4 }).where(eqOp(users.id, res.body.id));
   return { agent, id: res.body.id as string };
 }
 
@@ -89,7 +96,13 @@ async function fileWeeks(agent: any, id: string, weeks: number, numbers: Record<
   }
 }
 
-const creditsUsed = async (agent: any) => (await agent.get("/api/subscription")).body.creditsUsed as number;
+/**
+ * Money, not credits. The roadmap is a priced outcome now — bought once for a
+ * project, free to re-run for ever after — so what these tests watch is the
+ * balance.
+ */
+const balanceOf = async (userId: string) =>
+  (await db.select({ c: users.balanceCents }).from(users).where(eqOp(users.id, userId)))[0].c as number;
 
 const milestoneStatus = async (projectId: string, milestoneId: string) => {
   const [task] = await db.select().from(projectKanbanTasks)
@@ -118,7 +131,7 @@ describe("before anything has been filed", () => {
     const owner = await person(app);
     const id = await runProject(owner);
 
-    const before = await creditsUsed(owner.agent);
+    const before = await balanceOf(owner.id);
     const view = await owner.agent.get(`/api/projects/${id}/what-would-it-take`);
     expect(view.status).toBe(200);
     expect(view.body.notReady).toMatch(/haven't filed a weekly check-in/);
@@ -131,7 +144,7 @@ describe("before anything has been filed", () => {
     const res = await owner.agent.post(`/api/projects/${id}/what-would-it-take/b1`);
     expect(res.status).toBe(409);
     expect(res.body.code).toBe("no_numbers_yet");
-    expect(await creditsUsed(owner.agent)).toBe(before);
+    expect(await balanceOf(owner.id)).toBe(before);
   });
 
   it("says which number is missing when the check-ins have no revenue in them", async () => {
@@ -157,7 +170,7 @@ describe("a roadmap built from the company's own numbers", () => {
     // 400 covers a week at $25 = $10,000 a week = $520,000 a year.
     await fileWeeks(owner.agent, id, 4, { covers: 400, avg_spend: 25, cash: 20_000 });
 
-    const before = await creditsUsed(owner.agent);
+    const before = await balanceOf(owner.id);
     const res = await owner.agent.post(`/api/projects/${id}/what-would-it-take/m100`);
     expect(res.status, res.text).toBe(200);
     const { roadmap } = res.body;
@@ -179,7 +192,7 @@ describe("a roadmap built from the company's own numbers", () => {
     expect(roadmap.roadmap.body.marginNote).toMatch(/no profit number in your check-ins/i);
     expect(roadmap.roadmap.body.tightenedByMargin).toBe(false);
     expect(roadmap.roadmap.body.verdictText).toMatch(/Add a number of your own called "Profit"/);
-    expect(await creditsUsed(owner.agent)).toBe(before + 1);
+    expect(await balanceOf(owner.id), "the roadmap costs three dollars").toBe(before - OUTCOME_PRICE_CENTS.wwit);
 
     /*
      * The model returned eight stages for a shorter ladder. Zipped onto the
@@ -226,13 +239,18 @@ describe("a roadmap built from the company's own numbers", () => {
     const id = await runProject(owner, "retail", "The Shop");
     await fileWeeks(owner.agent, id, 2, { sales: 9000, avg_basket: 30 });
 
-    const before = await creditsUsed(owner.agent);
+    /*
+     * Funded on purpose: "charges nothing" has to mean the money came back,
+     * not that there was never any to take. The charge happens before the
+     * model is called, so an unreadable answer is a refund.
+     */
+    const before = await balanceOf(owner.id);
     mode = "garbage";
     const res = await owner.agent.post(`/api/projects/${id}/what-would-it-take/m1`);
     mode = "ok";
     expect(res.status).toBe(502);
     expect(res.body.code).toBe("model_unreadable");
-    expect(await creditsUsed(owner.agent)).toBe(before);
+    expect(await balanceOf(owner.id)).toBe(before);
     expect(await db.select().from(whatWouldItTakeRoadmaps).where(eq(whatWouldItTakeRoadmaps.projectId, id))).toHaveLength(0);
   });
 
@@ -334,6 +352,77 @@ describe("running it again, and comparing", () => {
       .toBeLessThan(both.body.roadmaps.b1.latest.roadmap.gap.multiple);
     expect(both.body.roadmaps.b1.movement).toBeNull();
     expect(both.body.roadmaps.b50.latest).toBeNull();
+  });
+});
+
+/**
+ * The price, and the two ways it must not be charged twice.
+ *
+ * This is the thing you are told to re-run in six months to see whether the
+ * gap moved, so a price per run would be a price on checking — the one
+ * behaviour worth encouraging. And it charged credits long before it had a
+ * price, so a company that has already built one has already paid for it.
+ */
+describe("what it costs", () => {
+  it("is bought once for the project, and every run after that is free — including the other three sizes", async () => {
+    mode = "ok";
+    const app = await getTestApp();
+    const owner = await person(app);
+    const id = await runProject(owner);
+    await fileWeeks(owner.agent, id, 4, { covers: 400, avg_spend: 25, cash: 20_000 });
+
+    // Quoted before anything is pressed, so the button can name it.
+    const quoted = await owner.agent.get(`/api/projects/${id}/what-would-it-take`);
+    expect(quoted.body.price).toMatchObject({ cents: OUTCOME_PRICE_CENTS.wwit, unlocked: false });
+
+    const start = await balanceOf(owner.id);
+    expect((await owner.agent.post(`/api/projects/${id}/what-would-it-take/m1`)).status).toBe(200);
+    const afterFirst = await balanceOf(owner.id);
+    expect(afterFirst).toBe(start - OUTCOME_PRICE_CENTS.wwit);
+
+    // Re-running the same size: free, and the quote says so.
+    const now = await owner.agent.get(`/api/projects/${id}/what-would-it-take`);
+    expect(now.body.price).toMatchObject({ cents: 0, unlocked: true });
+    expect((await owner.agent.post(`/api/projects/${id}/what-would-it-take/m1`)).status).toBe(200);
+    expect(await balanceOf(owner.id), "re-running is checking, and checking is free").toBe(afterFirst);
+
+    /*
+     * …and so is a different size. The purchase is "this company can ask the
+     * question", not "this company may ask about $1m".
+     */
+    expect((await owner.agent.post(`/api/projects/${id}/what-would-it-take/m100`)).status).toBe(200);
+    expect(await balanceOf(owner.id)).toBe(afterFirst);
+
+    // Nothing leaked into the month's free Nova actions either.
+    const wallet = await owner.agent.get("/api/nova/wallet");
+    expect(wallet.body.wallet.allowanceUsed, "a free re-run must not quietly eat an allowance action").toBe(0);
+  });
+
+  it("does not ask a company that already built one before there was a price", async () => {
+    mode = "ok";
+    const app = await getTestApp();
+    const owner = await person(app);
+    const id = await runProject(owner, "retail", "The Shop");
+    await fileWeeks(owner.agent, id, 2, { sales: 9000, avg_basket: 30 });
+
+    /*
+     * A roadmap from the credits era, written straight to the table. With an
+     * empty balance the next build must still go through: asking these owners
+     * to buy what they have already paid for is the kind of thing people write
+     * posts about.
+     */
+    await db.insert(whatWouldItTakeRoadmaps).values({
+      projectId: id, target: "m1", grounding: {} as any, roadmap: {} as any,
+      annualRevenue: 468_000, generatedBy: owner.id, generatedAt: new Date(),
+    } as any);
+    await db.update(users).set({ balanceCents: 0 }).where(eqOp(users.id, owner.id));
+
+    const quoted = await owner.agent.get(`/api/projects/${id}/what-would-it-take`);
+    expect(quoted.body.price).toMatchObject({ cents: 0, unlocked: true });
+
+    const res = await owner.agent.post(`/api/projects/${id}/what-would-it-take/m1`);
+    expect(res.status, res.text).toBe(200);
+    expect(await balanceOf(owner.id)).toBe(0);
   });
 });
 
